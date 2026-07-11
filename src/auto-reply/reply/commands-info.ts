@@ -44,6 +44,8 @@ async function resolveSkillCommands(
   return listSkillCommandsForAgents({
     cfg: params.cfg,
     agentIds: agentId ? [agentId] : undefined,
+    sessionEntry: params.sessionEntry,
+    sessionKey: params.sessionKey,
   });
 }
 

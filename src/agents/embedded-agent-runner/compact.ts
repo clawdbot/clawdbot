@@ -774,6 +774,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
     params.sandboxSessionKey?.trim() || params.sessionKey?.trim() || params.sessionId;
   const sandbox = await resolveSandboxContext({
     config: params.config,
+    execOverrides: params.execOverrides,
     sessionKey: sandboxSessionKey,
     workspaceDir: resolvedWorkspace,
   });

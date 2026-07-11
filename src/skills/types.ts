@@ -99,9 +99,14 @@ export type SkillEntry = {
   exposure?: SkillExposure;
   syncSourceDir?: string;
   syncDirName?: string;
+  disableCommandDispatch?: boolean;
 };
 
 export type SkillEligibilityContext = {
+  nodeSkills?: {
+    canExec: boolean;
+    node?: string;
+  };
   remote?: {
     platforms: string[];
     hasBin: (bin: string) => boolean;
@@ -117,6 +122,8 @@ export type SkillSnapshot = {
   skills: Array<{ name: string; primaryEnv?: string; requiredEnv?: string[] }>;
   /** Normalized agent-level filter used to build this snapshot; undefined means unrestricted. */
   skillFilter?: string[];
+  /** Effective node-exec eligibility used to select connected node-hosted skills. */
+  nodeSkillsEligibility?: SkillEligibilityContext["nodeSkills"];
   resolvedSkills?: Skill[];
   version?: number;
   promptFormatVersion?: number;

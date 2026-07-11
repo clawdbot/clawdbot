@@ -1007,6 +1007,7 @@ export async function runPreparedReply(
             isFirstTurnInSession,
             workspaceDir,
             cfg,
+            execOverrides,
             skillFilter: opts?.skillFilter,
           });
         });

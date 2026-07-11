@@ -8,6 +8,11 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { createOpenClawCodingTools } from "./agent-tools.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
+type TestPluginMeta = Record<
+  string,
+  { pluginId: string; mcp?: { serverName: string } } | undefined
+>;
+
 function mockTool(params: {
   name: string;
   label: string;
@@ -29,7 +34,7 @@ const effectiveInventoryState = vi.hoisted(() => ({
     mockTool({ name: "exec", label: "Exec", description: "Run shell commands" }),
     mockTool({ name: "docs_lookup", label: "Docs Lookup", description: "Search docs" }),
   ] as AnyAgentTool[],
-  pluginMeta: {} as Record<string, { pluginId: string } | undefined>,
+  pluginMeta: {} as TestPluginMeta,
   channelMeta: {} as Record<string, { channelId: string } | undefined>,
   effectivePolicy: {} as { profile?: string; providerProfile?: string },
   normalizeToolsMock: vi.fn((options: { tools: AnyAgentTool[] }) => options.tools),
@@ -114,7 +119,7 @@ let resolveEffectiveToolInventory: typeof import("./tools-effective-inventory.js
 async function loadHarness(options?: {
   tools?: AnyAgentTool[];
   createToolsMock?: typeof effectiveInventoryState.createToolsMock;
-  pluginMeta?: Record<string, { pluginId: string } | undefined>;
+  pluginMeta?: TestPluginMeta;
   channelMeta?: Record<string, { channelId: string } | undefined>;
   effectivePolicy?: { profile?: string; providerProfile?: string };
   normalizeToolsMock?: typeof effectiveInventoryState.normalizeToolsMock;
@@ -257,6 +262,41 @@ describe("resolveEffectiveToolInventory", () => {
             rawDescription: "Probe MCP",
             source: "mcp",
             pluginId: "bundle-mcp",
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("groups plugin tools with MCP metadata separately from generic plugin tools", async () => {
+    const { resolveEffectiveToolInventory: resolveEffectiveToolInventoryLocal11 } =
+      await loadHarness({
+        tools: [
+          mockTool({ name: "remote_echo", label: "Remote Echo", description: "Probe node MCP" }),
+        ],
+        pluginMeta: {
+          remote_echo: {
+            pluginId: "remote-demo",
+            mcp: { serverName: "remote-demo" },
+          },
+        },
+      });
+
+    const result = resolveEffectiveToolInventoryLocal11({ cfg: {} });
+
+    expect(result.groups).toEqual([
+      {
+        id: "mcp",
+        label: "MCP server tools",
+        source: "mcp",
+        tools: [
+          {
+            id: "remote_echo",
+            label: "Remote Echo",
+            description: "Probe node MCP",
+            rawDescription: "Probe node MCP",
+            source: "mcp",
+            pluginId: "remote-demo",
           },
         ],
       },

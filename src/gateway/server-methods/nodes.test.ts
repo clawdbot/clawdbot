@@ -12,6 +12,7 @@ import {
   type DiagnosticSecurityEvent,
 } from "../../infra/diagnostic-events.js";
 import { approveNodePairing, requestNodePairing } from "../../infra/node-pairing.js";
+import { resetRemoteNodeSkillsForTests } from "../../skills/runtime/remote-skills.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -29,6 +30,7 @@ async function createState(label: string): Promise<OpenClawTestState> {
 
 afterEach(async () => {
   resetDiagnosticEventsForTest();
+  resetRemoteNodeSkillsForTests();
   vi.clearAllMocks();
   while (createdStates.length > 0) {
     await createdStates.pop()?.cleanup();
@@ -62,6 +64,7 @@ function createContext() {
     nodeRegistry: {
       listConnected: vi.fn(() => []),
       updateSurface: vi.fn(),
+      updateNodeSkills: vi.fn(),
     },
   };
 }
@@ -95,6 +98,39 @@ function createOptions(
   } as unknown as GatewayRequestHandlerOptions;
   return { context, opts };
 }
+
+describe("nodeHandlers node.skills.update", () => {
+  it("stores and publishes a validated replacement catalog for the calling node", async () => {
+    const skill = {
+      name: "release-helper",
+      description: "Prepare a release",
+      content: "---\nname: release-helper\ndescription: Prepare a release\n---\n",
+    };
+    const { context, opts } = createOptions(
+      { skills: [skill] },
+      {
+        client: {
+          connId: "conn-1",
+          connect: { device: { id: "node-1" }, client: { id: "node-client" } },
+        } as never,
+      },
+    );
+    context.nodeRegistry.updateNodeSkills.mockReturnValue({
+      nodeId: "node-1",
+      displayName: "Build Mac",
+      nodeSkills: [skill],
+    });
+
+    await nodeHandlers["node.skills.update"](opts);
+
+    expect(context.nodeRegistry.updateNodeSkills).toHaveBeenCalledWith("node-1", "conn-1", [skill]);
+    expect(opts.respond).toHaveBeenCalledWith(
+      true,
+      { nodeId: "node-1", skills: [skill] },
+      undefined,
+    );
+  });
+});
 
 async function pairAndroidNodeDevice(stateDir: string, nodeId: string): Promise<void> {
   const pending = await requestDevicePairing(

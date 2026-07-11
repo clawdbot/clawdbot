@@ -3727,6 +3727,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Client capabilities
   - H3: Node connect example
   - H2: Roles and scopes
+  - H3: Caps/commands/permissions (node)
   - H2: Presence
   - H3: Node background alive event
   - H2: Broadcast event scoping
@@ -4847,6 +4848,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Remote gateway via SSH tunnel (loopback bind)
   - H3: Start a node host (service)
   - H3: Pair + name
+  - H3: Node-hosted MCP servers
+  - H3: Node-hosted skills
   - H3: Headless identity state
   - H3: Allowlist the commands
   - H3: Point exec at the node
@@ -9832,6 +9835,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /tools/skills
 - Headings:
   - H2: Loading order
+  - H2: Node-hosted skills
   - H2: Per-agent vs shared skills
   - H2: Agent allowlists
   - H2: Plugins and skills

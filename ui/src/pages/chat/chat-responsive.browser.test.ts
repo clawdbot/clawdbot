@@ -614,6 +614,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       });
       expect(await context.isVisible()).toBe(false);
 
+      // Travel like a real pointer: the footer overlay is pointer-gated until
+      // the group is hovered, so enter through the message body first.
+      await page.locator(".chat-text").first().hover();
       await page.locator(".msg-meta__summary").hover();
       expect(await context.isVisible()).toBe(true);
       const hoverLayout = await page.evaluate(() => {
@@ -635,6 +638,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       await page.mouse.move(0, 0);
       expect(await context.isVisible()).toBe(false);
 
+      await page.locator(".chat-text").first().hover();
       await page.locator(".msg-meta__summary").click();
       await page.mouse.move(0, 0);
       expect(await details.getAttribute("open")).toBe("");

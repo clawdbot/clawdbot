@@ -279,6 +279,7 @@ function buildEffectiveKnownNode(entry: {
     commands: live
       ? uniqueSortedStrings(live.commands)
       : uniqueSortedStrings(nodePairing?.commands),
+    nodePluginTools: live?.nodePluginTools,
     pathEnv: live?.pathEnv,
     permissions: live?.permissions ?? nodePairing?.permissions,
     approvalState: pendingNodePairing

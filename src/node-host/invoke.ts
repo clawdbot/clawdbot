@@ -2,9 +2,11 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import type { ContentBlock } from "@modelcontextprotocol/sdk/types.js";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { mcpContentBlockToAgentContent } from "../agents/mcp-content.js";
 import { GatewayClient } from "../gateway/client.js";
 import {
   analyzeArgvCommand,
@@ -35,11 +37,13 @@ import {
   sanitizeHostExecEnv,
   sanitizeSystemRunEnvOverrides,
 } from "../infra/host-env-security.js";
+import { NODE_MCP_TOOLS_CALL_COMMAND } from "../infra/node-commands.js";
 import {
   decodeWindowsOutputBuffer,
   resolveWindowsConsoleEncoding,
 } from "../infra/windows-encoding.js";
 import { logWarn } from "../logger.js";
+import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import {
   buildSystemRunApprovalPlan,
   handleSystemRunInvoke,
@@ -52,9 +56,15 @@ import type {
   SkillBinsProvider,
   SystemRunParams,
 } from "./invoke-types.js";
+import { NodeHostMcpError, type NodeHostMcpManager } from "./mcp.js";
 import { invokeRegisteredNodeHostCommand } from "./plugin-node-host.js";
 
 const OUTPUT_CAP = 200_000;
+const MCP_TEXT_CONTENT_MAX_BYTES = 1024 * 1024;
+const MCP_TEXT_TRUNCATION_MARKER = "\n[truncated: MCP text content exceeded 1 MB]";
+const MCP_INVOKE_PAYLOAD_MAX_BYTES = 20 * 1024 * 1024;
+const MCP_PAYLOAD_TRUNCATION_MARKER = "[truncated: MCP result exceeded 20 MB]";
+const MCP_ERROR_MESSAGE_MAX_CHARS = 1_024;
 const OUTPUT_EVENT_TAIL = 20_000;
 const STREAM_ERROR_KILL_GRACE_MS = 1_000;
 const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
@@ -67,6 +77,12 @@ const preferMacAppExecHost = process.platform === "darwin" && execHostEnforced;
 
 type SystemWhichParams = {
   bins: string[];
+};
+
+type McpToolsCallParams = {
+  server: string;
+  tool: string;
+  arguments?: Record<string, unknown>;
 };
 
 type SystemExecApprovalsSetParams = {
@@ -557,6 +573,14 @@ async function sendJsonPayloadResult(
   });
 }
 
+async function sendMcpPayloadResult(
+  client: GatewayClient,
+  frame: NodeInvokeRequestPayload,
+  payload: unknown,
+) {
+  await sendInvokeResult(client, frame, { ok: true, payload });
+}
+
 async function sendRawPayloadResult(
   client: GatewayClient,
   frame: NodeInvokeRequestPayload,
@@ -607,9 +631,10 @@ export async function handleInvoke(
   frame: NodeInvokeRequestPayload,
   client: GatewayClient,
   skillBins: SkillBinsProvider,
+  mcpManager?: NodeHostMcpManager,
 ) {
   try {
-    await dispatchInvoke(frame, client, skillBins);
+    await dispatchInvoke(frame, client, skillBins, mcpManager);
   } catch (err) {
     // Gateway events launch this handler without awaiting it. Consume unexpected
     // failures here so one bad request cannot terminate the node-host process.
@@ -632,6 +657,7 @@ async function dispatchInvoke(
   frame: NodeInvokeRequestPayload,
   client: GatewayClient,
   skillBins: SkillBinsProvider,
+  mcpManager?: NodeHostMcpManager,
 ) {
   const command = frame.command ?? "";
   if (command === "system.execApprovals.get") {
@@ -723,6 +749,11 @@ async function dispatchInvoke(
     } catch (err) {
       await sendInvalidRequestResult(client, frame, err);
     }
+    return;
+  }
+
+  if (command === NODE_MCP_TOOLS_CALL_COMMAND) {
+    await handleMcpToolsCall(frame, client, mcpManager);
     return;
   }
 
@@ -843,6 +874,184 @@ async function dispatchInvoke(
   });
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function decodeMcpToolsCallParams(raw?: string | null): McpToolsCallParams {
+  const value = decodeParams<unknown>(raw);
+  if (!isRecord(value)) {
+    throw new Error("INVALID_REQUEST: MCP tool params must be an object");
+  }
+  const server = typeof value.server === "string" ? value.server.trim() : "";
+  const tool = typeof value.tool === "string" ? value.tool.trim() : "";
+  if (!server || !tool) {
+    throw new Error("INVALID_REQUEST: server and tool required");
+  }
+  if (value.arguments !== undefined && !isRecord(value.arguments)) {
+    throw new Error("INVALID_REQUEST: arguments must be an object");
+  }
+  return {
+    server,
+    tool,
+    ...(value.arguments ? { arguments: value.arguments } : {}),
+  };
+}
+
+type McpInvokeContentBlock =
+  | { type: "text"; text: string }
+  | { type: "image"; data: string; mimeType: string };
+
+function normalizeMcpContentBlock(block: unknown): McpInvokeContentBlock | null {
+  if (!isRecord(block)) {
+    return null;
+  }
+  return mcpContentBlockToAgentContent(block as ContentBlock);
+}
+
+function serializedJsonBytes(value: unknown): number {
+  return Buffer.byteLength(JSON.stringify(value));
+}
+
+/** Keeps MCP text/image content while bounding text sent through node.invoke. */
+export function boundMcpToolResultPayload(result: {
+  content: readonly unknown[];
+  structuredContent?: Record<string, unknown>;
+}): { content: McpInvokeContentBlock[]; structuredContent?: Record<string, unknown> } {
+  const normalizedBlocks = result.content
+    .map(normalizeMcpContentBlock)
+    .filter((block): block is McpInvokeContentBlock => block !== null);
+  const totalTextBytes = normalizedBlocks.reduce<number>(
+    (total, block) =>
+      total +
+      (isRecord(block) && block.type === "text" && typeof block.text === "string"
+        ? Buffer.byteLength(block.text)
+        : 0),
+    0,
+  );
+  let remainingTextBytes =
+    totalTextBytes > MCP_TEXT_CONTENT_MAX_BYTES
+      ? MCP_TEXT_CONTENT_MAX_BYTES - Buffer.byteLength(MCP_TEXT_TRUNCATION_MARKER)
+      : MCP_TEXT_CONTENT_MAX_BYTES;
+  let markedTruncated = false;
+  const textBoundedContent: McpInvokeContentBlock[] = [];
+  for (const block of normalizedBlocks) {
+    if (
+      block.type === "image" &&
+      typeof block.data === "string" &&
+      typeof block.mimeType === "string"
+    ) {
+      textBoundedContent.push(block);
+      continue;
+    }
+    if (block.type !== "text" || typeof block.text !== "string") {
+      continue;
+    }
+    if (totalTextBytes <= MCP_TEXT_CONTENT_MAX_BYTES) {
+      textBoundedContent.push(block);
+      continue;
+    }
+    if (markedTruncated) {
+      continue;
+    }
+    const text = truncateUtf8Prefix(block.text, remainingTextBytes);
+    remainingTextBytes -= Buffer.byteLength(text);
+    const blockWasTruncated = text.length < block.text.length;
+    if (text || blockWasTruncated) {
+      textBoundedContent.push({
+        ...block,
+        text: blockWasTruncated ? `${text}${MCP_TEXT_TRUNCATION_MARKER}` : text,
+      });
+    }
+    if (blockWasTruncated || remainingTextBytes === 0) {
+      if (!blockWasTruncated) {
+        textBoundedContent.push({ type: "text", text: MCP_TEXT_TRUNCATION_MARKER.trimStart() });
+      }
+      markedTruncated = true;
+    }
+  }
+  const payloadMarker = { type: "text" as const, text: MCP_PAYLOAD_TRUNCATION_MARKER };
+  const reservedMarkerBytes = serializedJsonBytes(payloadMarker) + 1;
+  let usedBytes = Buffer.byteLength('{"content":[]}');
+  let payloadTruncated = false;
+  const content: McpInvokeContentBlock[] = [];
+  for (const block of textBoundedContent) {
+    const blockBytes = serializedJsonBytes(block) + (content.length > 0 ? 1 : 0);
+    if (usedBytes + blockBytes + reservedMarkerBytes > MCP_INVOKE_PAYLOAD_MAX_BYTES) {
+      payloadTruncated = true;
+      continue;
+    }
+    content.push(block);
+    usedBytes += blockBytes;
+  }
+  let structuredContent: Record<string, unknown> | undefined;
+  if (result.structuredContent) {
+    const structuredBytes =
+      Buffer.byteLength(',"structuredContent":') + serializedJsonBytes(result.structuredContent);
+    if (usedBytes + structuredBytes + reservedMarkerBytes <= MCP_INVOKE_PAYLOAD_MAX_BYTES) {
+      structuredContent = result.structuredContent;
+    } else {
+      payloadTruncated = true;
+    }
+  }
+  if (payloadTruncated) {
+    content.push(payloadMarker);
+  }
+  return { content, ...(structuredContent ? { structuredContent } : {}) };
+}
+
+function mcpToolErrorMessage(result: { content: readonly unknown[] }): string {
+  const text = result.content
+    .filter(
+      (block): block is { type: "text"; text: string } =>
+        isRecord(block) && block.type === "text" && typeof block.text === "string",
+    )
+    .map((block) => block.text.trim())
+    .filter(Boolean)
+    .join("\n");
+  return truncateUtf16Safe(text || "MCP tool returned an error", 1_024);
+}
+
+async function handleMcpToolsCall(
+  frame: NodeInvokeRequestPayload,
+  client: GatewayClient,
+  mcpManager: NodeHostMcpManager | undefined,
+): Promise<void> {
+  if (!mcpManager) {
+    await sendErrorResult(client, frame, "MCP_SERVER_UNAVAILABLE", "node host MCP is unavailable");
+    return;
+  }
+  let params: McpToolsCallParams;
+  try {
+    params = decodeMcpToolsCallParams(frame.paramsJSON);
+  } catch (error) {
+    await sendInvalidRequestResult(client, frame, error);
+    return;
+  }
+  try {
+    const result = await mcpManager.callMcpTool({
+      ...params,
+      timeoutMs: frame.timeoutMs ?? undefined,
+    });
+    if (result.isError) {
+      await sendErrorResult(client, frame, "MCP_TOOL_ERROR", mcpToolErrorMessage(result));
+      return;
+    }
+    await sendMcpPayloadResult(client, frame, boundMcpToolResultPayload(result));
+  } catch (error) {
+    if (error instanceof NodeHostMcpError) {
+      await sendErrorResult(client, frame, error.code, error.message);
+      return;
+    }
+    await sendErrorResult(
+      client,
+      frame,
+      "MCP_TOOL_ERROR",
+      truncateUtf16Safe(String(error), MCP_ERROR_MESSAGE_MAX_CHARS),
+    );
+  }
+}
+
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- CLI JSON params are typed by the invoked method.
 function decodeParams<T>(raw?: string | null): T {
   if (!raw) {
@@ -961,6 +1170,8 @@ async function sendNodeEvent(client: GatewayClient, event: string, payload: unkn
 }
 
 export const testing = {
+  MCP_TEXT_CONTENT_MAX_BYTES,
+  MCP_INVOKE_PAYLOAD_MAX_BYTES,
   STREAM_ERROR_KILL_GRACE_MS,
   clarifyNodeExecCwdSpawnError,
   runCommand,

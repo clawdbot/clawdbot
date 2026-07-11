@@ -16,6 +16,7 @@ const {
   resolveAgentConfigMock,
   resolveSessionAgentIdMock,
   resolveAgentIdFromSessionKeyMock,
+  resolveNodeExecEligibilityMock,
 } = vi.hoisted(() => ({
   buildWorkspaceSkillSnapshotMock: vi.fn((..._args: unknown[]) => ({
     prompt: "",
@@ -33,11 +34,16 @@ const {
   resolveAgentConfigMock: vi.fn(() => undefined),
   resolveSessionAgentIdMock: vi.fn(() => "writer"),
   resolveAgentIdFromSessionKeyMock: vi.fn(() => "main"),
+  resolveNodeExecEligibilityMock: vi.fn(() => ({ canExec: false })),
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentConfig: resolveAgentConfigMock,
   resolveSessionAgentId: resolveSessionAgentIdMock,
+}));
+
+vi.mock("../../agents/exec-defaults.js", () => ({
+  resolveNodeExecEligibility: resolveNodeExecEligibilityMock,
 }));
 
 vi.mock("../../skills/runtime/remote.js", () => ({
@@ -86,6 +92,7 @@ describe("ensureSkillSnapshot", () => {
     resolveAgentConfigMock.mockReturnValue(undefined);
     resolveSessionAgentIdMock.mockReturnValue("writer");
     resolveAgentIdFromSessionKeyMock.mockReturnValue("main");
+    resolveNodeExecEligibilityMock.mockReturnValue({ canExec: false });
   });
 
   afterEach(() => {
@@ -104,6 +111,7 @@ describe("ensureSkillSnapshot", () => {
           list: [{ id: "writer", default: true }],
         },
       },
+      execOverrides: { host: "node", node: "build-node", security: "allowlist" },
     });
 
     expect(resolveSessionAgentIdMock).toHaveBeenCalledWith({
@@ -120,6 +128,11 @@ describe("ensureSkillSnapshot", () => {
     expect(workspaceDir).toBe(TEST_WORKSPACE_DIR);
     expect(snapshotParams.agentId).toBe("writer");
     expect(resolveAgentIdFromSessionKeyMock).not.toHaveBeenCalled();
+    expect(resolveNodeExecEligibilityMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        execOverrides: { host: "node", node: "build-node", security: "allowlist" },
+      }),
+    );
   });
 
   it("keeps a concurrent rename and unpin while persisting a skill snapshot", async () => {

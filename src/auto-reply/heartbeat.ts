@@ -61,6 +61,7 @@ function stripHeartbeatHtmlComments(content: string): string[] {
  * - Whitespace / empty lines
  * - Markdown/HTML comments
  * - Markdown ATX headers (`#`, `##`, ...)
+ * - One-line HTML comments (`<!-- ... -->`)
  * - Markdown fence markers such as ``` or ```markdown
  * - Empty list item stubs (`- `, `- [ ]`, `* `, `+ `)
  *
@@ -90,6 +91,9 @@ export function isHeartbeatContentEffectivelyEmpty(content: string | undefined |
     // This intentionally does NOT skip lines like "#TODO" or "#hashtag" which might be content
     // (Those aren't valid markdown headers - ATX headers require space after #)
     if (/^#+(\s|$)/.test(trimmed)) {
+      continue;
+    }
+    if (/^<!--.*-->$/.test(trimmed)) {
       continue;
     }
     // Skip empty markdown list items like "- [ ]" or "* [ ]" or just "- "

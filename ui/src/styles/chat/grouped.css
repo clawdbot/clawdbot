@@ -2,12 +2,16 @@
    GROUPED CHAT LAYOUT (Slack-style)
    ============================================= */
 
-/* Chat Group Layout - default (assistant/other on left) */
+/* Chat Group Layout - default (assistant/other on left). The bottom PADDING
+   is the thread's rhythm unit and doubles as the reveal zone for the
+   overlaid hover footer: padding (not margin) keeps the gap inside the
+   group's hover box so the pointer can travel to the footer without it
+   vanishing mid-way. */
 .chat-group {
   display: flex;
   gap: 10px;
   align-items: flex-start;
-  margin-bottom: 14px;
+  padding-bottom: 26px;
   margin-left: 4px;
   margin-right: 16px;
 }
@@ -19,6 +23,7 @@
 }
 
 .chat-group-messages {
+  position: relative; /* anchors the overlaid hover footer */
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -43,17 +48,27 @@
 }
 
 /* Footer at bottom of message group (role + time). Hidden until the group is
-   hovered/focused so the thread reads as a clean stream; opacity (not
-   display) keeps the height reserved and avoids layout shift on reveal. */
+   hovered/focused so the thread reads as a clean stream; overlaid into the
+   group's bottom margin (no reserved flow height) so message rhythm stays
+   even. Touch devices restore the in-flow always-visible footer below. */
 .chat-group-footer {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 1; /* revealed overlay paints above the next group's leading edge */
   display: flex;
+  /* Wrap instead of clipping in narrow lanes (extreme chatMessageMaxWidth,
+     slim split panes): a wrapped revealed footer may transiently overlap the
+     next group, but every control stays reachable. Hidden overlays must not
+     intercept pointer input, so hit-testing is gated on the reveal. */
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
-  width: 100%;
   min-width: 0;
-  margin-top: 4px;
+  margin-top: 1px;
   opacity: 0;
+  pointer-events: none;
   transition: opacity 120ms ease-out;
 }
 
@@ -61,6 +76,7 @@
 .chat-group:focus-within .chat-group-footer,
 .chat-group-footer:has(details.msg-meta[open]) {
   opacity: 1;
+  pointer-events: auto;
 }
 
 .chat-group-footer__meta {
@@ -89,10 +105,16 @@
   margin-top: 4px;
 }
 
+/* Single line, ellipsized: the footer overlays a fixed 26px rhythm gap, so
+   long configurable sender names must never wrap it taller than the gap. */
 .chat-sender-name {
   font-weight: 500;
   font-size: 12px;
   color: var(--muted);
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .chat-group-timestamp {
@@ -339,8 +361,20 @@ img.chat-avatar {
 @media (hover: none),
   (max-width: 768px),
   (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  /* No hover to reveal an overlay: restore the in-flow always-visible footer
+     and the tighter rhythm that accounts for its height. */
+  .chat-group {
+    padding-bottom: 0;
+    margin-bottom: 14px;
+  }
+
   .chat-group-footer {
+    position: static;
+    flex-wrap: wrap;
+    width: 100%;
+    margin-top: 4px;
     opacity: 1;
+    pointer-events: auto;
   }
 
   .chat-group-footer-actions button,

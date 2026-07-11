@@ -136,6 +136,81 @@ Naming options:
 - `--display-name` on `openclaw node run` / `openclaw node install` (persists in `~/.openclaw/node.json` on the node, alongside the client instance ID and Gateway connection metadata).
 - `openclaw nodes rename --node <id|name|ip> --name "Build Node"` (gateway override).
 
+### Node-hosted MCP servers
+
+Configure MCP servers in `openclaw.json` on the node machine, not on the
+Gateway:
+
+```json5
+{
+  nodeHost: {
+    mcp: {
+      servers: {
+        localDocs: {
+          command: "npx",
+          args: ["-y", "@modelcontextprotocol/server-filesystem", "/srv/docs"],
+          toolFilter: {
+            include: ["read_*", "search"],
+          },
+        },
+        internalApi: {
+          url: "https://mcp.internal.example/mcp",
+          transport: "streamable-http",
+          headers: {
+            Authorization: "Bearer ${INTERNAL_MCP_TOKEN}",
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+The headless node host starts these servers, lists their tools, and publishes
+the descriptors after connecting. Tool calls return to that node through
+`mcp.tools.call.v1`; the Gateway does not need matching MCP config or a JS
+plugin. OAuth MCP servers are not supported by this node-hosted v1 path.
+
+The first time the node declares the `mcp.tools.call.v1` command family, approve
+the pending node command-surface upgrade. Adding, removing, or filtering servers
+after that does not require re-pairing because the approved command family is
+unchanged. Restart `openclaw node run` or `openclaw node restart` to apply node
+MCP config changes; the node host does not watch this config.
+
+Gateway operators can ignore all agent-visible tools published by paired nodes,
+including node-hosted MCP tools, with
+`gateway.nodes.pluginTools.enabled: false`. Exact command denies such as
+`gateway.nodes.denyCommands: ["mcp.tools.call.v1"]` also block execution.
+
+### Node-hosted skills
+
+Install skills under the node machine's active OpenClaw skills directory,
+`~/.openclaw/skills` by default. `OPENCLAW_HOME`, `OPENCLAW_STATE_DIR`, and
+`OPENCLAW_CONFIG_PATH` move that active profile. `OPENCLAW_STATE_DIR` takes
+precedence for skills; otherwise, `skills/` is beside the path printed by
+`openclaw config file`. The headless node host publishes valid `SKILL.md` files
+after it connects, and the Gateway adds them to agent skill snapshots only while
+that node remains connected. Each skill directory name must match the `name`
+frontmatter field so the abstract node locator maps to one entry without adding
+another protocol field.
+
+The initial node-role pairing approves skill publication. Adding, removing, or
+changing skills does not require another pairing or Gateway configuration
+change. Restart `openclaw node run` or `openclaw node restart` after changing
+node skill files; the node host does not watch the skills directory.
+
+Node-hosted skill entries identify their node and carry their execution
+location. Skill files, referenced relative paths, and binaries remain on that
+node. Load instructions and run commands with
+`exec host=node node=<node-id>` so relative paths resolve on the node rather
+than the Gateway machine. The publishing node must have approved `system.run`,
+and the agent's exec policy must allow `host=node`; otherwise the skill stays
+out of that agent's snapshot.
+
+Set `nodeHost.skills.enabled: false` on the node to stop publication. Gateway
+operators can ignore skills from every paired node with
+`gateway.nodes.skills.enabled: false`.
+
 ### Headless identity state
 
 The headless node keeps three separate state files:
@@ -278,7 +353,7 @@ These rows describe the Gateway policy ceiling, not the commands implemented by 
 
 `talk.ptt.start`, `talk.ptt.stop`, `talk.ptt.cancel`, and `talk.ptt.once` are allowed by default for any node that advertises the `talk` capability or declares `talk.*` commands, independent of platform label.
 
-Desktop host commands (`system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `screen.snapshot` on macOS/Windows) are not part of the static platform-default table above. They become available once the operator approves a pairing request that declares them, after which the node's approved command set carries them forward on reconnect.
+Desktop host commands (`system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `mcp.tools.call.v1`, and `screen.snapshot` on macOS/Windows) are not part of the static platform-default table above. They become available once the operator approves a pairing request that declares them, after which the node's approved command set carries them forward on reconnect.
 
 Dangerous or privacy-heavy commands still require explicit opt-in with `gateway.nodes.allowCommands`, even if a node declares them: `camera.snap`, `camera.clip`, `screen.record`, `computer.act`, `contacts.add`, `calendar.add`, `reminders.add`, `sms.send`, `sms.search`. `gateway.nodes.denyCommands` always wins over defaults and extra allowlist entries. See [Computer use](/nodes/computer-use) for the additional macOS, tool-policy, and arming gates around desktop input.
 
@@ -303,6 +378,10 @@ Node-related settings live under `gateway.nodes` and `tools.exec`:
         // node pairing on an exact device-key match read back over SSH.
         sshVerify: true,
       },
+      // Trust agent-visible plugin tools published by paired nodes (default: true).
+      pluginTools: {
+        enabled: true,
+      },
       // Opt into dangerous/privacy-heavy node commands (camera.snap, etc.).
       allowCommands: ["camera.snap", "screen.record"],
       // Block exact command names even if defaults or allowCommands include them.
@@ -322,7 +401,7 @@ Node-related settings live under `gateway.nodes` and `tools.exec`:
 }
 ```
 
-Use exact node command names. `denyCommands` removes a command even when a platform default or `allowCommands` entry would otherwise allow it. See [Gateway configuration reference](/gateway/configuration-reference#gateway) for gateway node pairing and command-policy field details.
+Use exact node command names. `denyCommands` removes a command even when a platform default or `allowCommands` entry would otherwise allow it. Paired nodes may publish agent-visible plugin tool descriptors by default, but each descriptor's command must still be in the node's approved command surface. Set `gateway.nodes.pluginTools.enabled: false` to ignore all such descriptors. See [Gateway configuration reference](/gateway/configuration-reference#gateway) for gateway node pairing and command-policy field details.
 
 Per-agent exec node override:
 

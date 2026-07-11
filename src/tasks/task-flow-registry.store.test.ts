@@ -6,7 +6,6 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-syn
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createManagedTaskFlow as createManagedTaskFlowOrNull,
@@ -69,14 +68,25 @@ async function withFlowRegistryTempDir<T>(run: (root: string) => Promise<T>): Pr
     },
     async (state) => {
       const root = state.stateDir;
+      process.env.OPENCLAW_STATE_DIR = root;
       resetTaskFlowRegistryForTests();
       try {
-        return await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => await run(root));
+        return await run(root);
       } finally {
         resetTaskFlowRegistryForTests();
       }
     },
   );
+}
+
+const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
+
+function restoreOriginalStateDir(): void {
+  if (ORIGINAL_STATE_DIR === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
+  }
 }
 
 describe("task-flow-registry store runtime", () => {
@@ -86,6 +96,7 @@ describe("task-flow-registry store runtime", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    restoreOriginalStateDir();
     resetTaskFlowRegistryForTests();
   });
 

@@ -1895,6 +1895,90 @@ public struct NodeRenameParams: Codable, Sendable {
 
 public struct NodeListParams: Codable, Sendable {}
 
+public struct NodePluginToolDescriptor: Codable, Sendable {
+    public let pluginid: String
+    public let name: String
+    public let description: String
+    public let parameters: [String: AnyCodable]?
+    public let command: String?
+    public let mcp: [String: AnyCodable]?
+
+    public init(
+        pluginid: String,
+        name: String,
+        description: String,
+        parameters: [String: AnyCodable]? = nil,
+        command: String? = nil,
+        mcp: [String: AnyCodable]? = nil)
+    {
+        self.pluginid = pluginid
+        self.name = name
+        self.description = description
+        self.parameters = parameters
+        self.command = command
+        self.mcp = mcp
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case pluginid = "pluginId"
+        case name
+        case description
+        case parameters
+        case command
+        case mcp
+    }
+}
+
+public struct NodePluginToolsUpdateParams: Codable, Sendable {
+    public let tools: [NodePluginToolDescriptor]
+
+    public init(
+        tools: [NodePluginToolDescriptor])
+    {
+        self.tools = tools
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case tools
+    }
+}
+
+public struct NodeSkillDescriptor: Codable, Sendable {
+    public let name: String
+    public let description: String
+    public let content: String
+
+    public init(
+        name: String,
+        description: String,
+        content: String)
+    {
+        self.name = name
+        self.description = description
+        self.content = content
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case description
+        case content
+    }
+}
+
+public struct NodeSkillsUpdateParams: Codable, Sendable {
+    public let skills: [NodeSkillDescriptor]
+
+    public init(
+        skills: [NodeSkillDescriptor])
+    {
+        self.skills = skills
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case skills
+    }
+}
+
 public struct NodePendingAckParams: Codable, Sendable {
     public let ids: [String]
 

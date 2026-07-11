@@ -619,8 +619,10 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
         ${footerStartedAt !== null
           ? html`
               <div class="chat-group-footer">
-                <span class="chat-sender-name">${name}</span>
-                ${renderChatTimestamp(footerStartedAt)}
+                <div class="chat-group-footer__meta">
+                  <span class="chat-sender-name">${name}</span>
+                  ${renderChatTimestamp(footerStartedAt)}
+                </div>
               </div>
             `
           : nothing}

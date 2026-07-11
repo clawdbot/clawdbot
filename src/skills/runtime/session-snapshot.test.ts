@@ -101,6 +101,21 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(2);
   });
 
+  it("refreshes when effective node-skill eligibility changes", () => {
+    const result = resolveReusableWorkspaceSkillSnapshot({
+      workspaceDir: TEST_WORKSPACE_DIR,
+      config: {},
+      eligibility: { nodeSkills: { canExec: false } },
+      existingSnapshot: {
+        ...strippedSnapshot(),
+        nodeSkillsEligibility: { canExec: true, node: "build-node" },
+      },
+    });
+
+    expect(result.shouldRefresh).toBe(true);
+    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
+  });
+
   it("reads the skills snapshot version after watcher-side invalidation", () => {
     getSkillsSnapshotVersionMock.mockReturnValue(1);
     ensureSkillsWatcherMock.mockImplementation(() => {

@@ -20,6 +20,8 @@ import {
   validateNodePairListParams,
   validateNodePairRejectParams,
   validateNodePairRemoveParams,
+  validateNodePluginToolsUpdateParams,
+  validateNodeSkillsUpdateParams,
   validateNodeRenameParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../../config/io.js";
@@ -47,6 +49,7 @@ import {
   resolveApnsRelayConfigFromEnv,
 } from "../../infra/push-apns.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
+import { replaceRemoteNodeSkills } from "../../skills/runtime/remote-skills.js";
 import {
   recordRemoteNodeInfo,
   refreshRemoteNodeBins,
@@ -1147,6 +1150,61 @@ export const nodeHandlers: GatewayRequestHandlers = {
       client,
       respond,
     });
+  },
+  "node.pluginTools.update": async ({ params, respond, client, context }) => {
+    if (!validateNodePluginToolsUpdateParams(params)) {
+      respondInvalidParams({
+        respond,
+        method: "node.pluginTools.update",
+        validator: validateNodePluginToolsUpdateParams,
+      });
+      return;
+    }
+    const nodeId = normalizeOptionalString(
+      client?.connect?.device?.id ?? client?.connect?.client?.id,
+    );
+    if (!nodeId) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
+      return;
+    }
+    const updated = context.nodeRegistry.updateNodePluginTools(
+      nodeId,
+      client?.connId,
+      params.tools,
+    );
+    if (!updated) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
+      return;
+    }
+    respond(true, { nodeId, tools: updated.nodePluginTools }, undefined);
+  },
+  "node.skills.update": async ({ params, respond, client, context }) => {
+    if (!validateNodeSkillsUpdateParams(params)) {
+      respondInvalidParams({
+        respond,
+        method: "node.skills.update",
+        validator: validateNodeSkillsUpdateParams,
+      });
+      return;
+    }
+    const nodeId = normalizeOptionalString(
+      client?.connect?.device?.id ?? client?.connect?.client?.id,
+    );
+    if (!nodeId) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
+      return;
+    }
+    const updated = context.nodeRegistry.updateNodeSkills(nodeId, client?.connId, params.skills);
+    if (!updated) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
+      return;
+    }
+    replaceRemoteNodeSkills({
+      nodeId,
+      displayName: updated.displayName,
+      skills: updated.nodeSkills,
+    });
+    respond(true, { nodeId, skills: updated.nodeSkills }, undefined);
   },
   "node.pending.pull": async ({ params, respond, client, context }) => {
     if (!validateNodeListParams(params)) {

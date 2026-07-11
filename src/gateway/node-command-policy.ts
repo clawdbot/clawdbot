@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   NODE_BROWSER_PROXY_COMMAND,
   NODE_EXEC_APPROVALS_COMMANDS,
+  NODE_MCP_TOOLS_CALL_COMMAND,
   NODE_SYSTEM_NOTIFY_COMMAND,
   NODE_SYSTEM_RUN_COMMANDS,
 } from "../infra/node-commands.js";
@@ -62,11 +63,13 @@ const SYSTEM_COMMANDS = [
   ...NODE_EXEC_APPROVALS_COMMANDS,
   NODE_SYSTEM_NOTIFY_COMMAND,
   NODE_BROWSER_PROXY_COMMAND,
+  NODE_MCP_TOOLS_CALL_COMMAND,
 ];
 const DESKTOP_HOST_COMMANDS = new Set<string>([
   ...NODE_SYSTEM_RUN_COMMANDS,
   ...NODE_EXEC_APPROVALS_COMMANDS,
   NODE_BROWSER_PROXY_COMMAND,
+  NODE_MCP_TOOLS_CALL_COMMAND,
   ...SCREEN_COMMANDS,
 ]);
 const UNKNOWN_PLATFORM_COMMANDS = [
@@ -266,14 +269,23 @@ function listDefaultPluginNodeCommands(platformId: PlatformId): string[] {
   if (!registry) {
     return [];
   }
-  const commands = registry.nodeInvokePolicies.flatMap((entry) => {
+  const policyCommands = registry.nodeInvokePolicies.flatMap((entry) => {
     if (entry.policy.dangerous === true) {
       return [];
     }
     const defaults = entry.policy.defaultPlatforms ?? [];
     return defaults.includes(platformId) ? entry.policy.commands : [];
   });
-  return normalizeUniqueStringEntries(commands);
+  const nodeHostCommands = registry.nodeHostCommands
+    .filter((entry) => {
+      if (entry.command.dangerous === true) {
+        return false;
+      }
+      const defaults = entry.command.agentTool?.defaultPlatforms ?? [];
+      return defaults.includes(platformId);
+    })
+    .map((entry) => entry.command.command);
+  return normalizeUniqueStringEntries([...policyCommands, ...nodeHostCommands]);
 }
 
 export function isForegroundRestrictedPluginNodeCommand(command: string): boolean {

@@ -280,6 +280,8 @@ export async function resolveReplyDirectives(params: {
           cfg,
           agentId,
           skillFilter,
+          sessionEntry: targetSessionEntry,
+          sessionKey,
         })
       : [];
   reserveSkillCommandNames({ reservedCommands, skillCommands });

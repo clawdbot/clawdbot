@@ -18,6 +18,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { logDebug, logWarn } from "../../logger.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
+import { getConnectedNodePluginToolsVersion } from "../node-plugin-tool-snapshot.js";
 import {
   applyFinalEffectiveToolPolicy,
   buildBundleMcpToolsFromCatalog,
@@ -56,6 +57,7 @@ type TrustedToolsEffectiveContext = {
   runtimeConfigCacheKey: string;
   pluginRegistryVersion: number;
   channelRegistryVersion: number;
+  nodePluginToolsVersion: number;
   modelProvider?: string;
   modelId?: string;
   messageProvider?: string;
@@ -94,6 +96,7 @@ function buildToolsEffectiveCacheKey(params: {
     config: context.runtimeConfigCacheKey,
     pluginRegistry: context.pluginRegistryVersion,
     channelRegistry: context.channelRegistryVersion,
+    nodePluginTools: context.nodePluginToolsVersion,
     // MCP fingerprint/server names intentionally stay out of this key: the MCP
     // layer is applied after the base cache, so warm/stale runtime state alone
     // never invalidates base entries.
@@ -509,6 +512,7 @@ function resolveTrustedToolsEffectiveContext(params: {
   const runtimeConfigCacheKey = resolveRuntimeConfigCacheKey(loaded.cfg);
   const pluginRegistryVersion = getActivePluginRegistryVersion();
   const channelRegistryVersion = getActivePluginChannelRegistryVersion();
+  const nodePluginToolsVersion = getConnectedNodePluginToolsVersion();
   return {
     cfg: loaded.cfg,
     agentId: sessionAgentId,
@@ -518,6 +522,7 @@ function resolveTrustedToolsEffectiveContext(params: {
     runtimeConfigCacheKey,
     pluginRegistryVersion,
     channelRegistryVersion,
+    nodePluginToolsVersion,
     modelProvider: resolvedModel.provider,
     modelId: resolvedModel.model,
     messageProvider:

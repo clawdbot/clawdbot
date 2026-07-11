@@ -2,7 +2,10 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { canExecRequestNode } from "../../agents/exec-defaults.js";
+import {
+  type ExecPolicyOverrides,
+  resolveNodeExecEligibility,
+} from "../../agents/exec-defaults.js";
 import { resolveCompactionSessionFile, type SessionEntry } from "../../config/sessions.js";
 import { patchSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -136,6 +139,7 @@ export async function ensureSkillSnapshot(params: {
   isFirstTurnInSession: boolean;
   workspaceDir: string;
   cfg: OpenClawConfig;
+  execOverrides?: ExecPolicyOverrides;
   /** If provided, only load skills with these names (for per-channel skill filtering) */
   skillFilter?: string[];
 }): Promise<{
@@ -169,13 +173,15 @@ export async function ensureSkillSnapshot(params: {
   let nextEntry = sessionEntryHandle?.getCurrent() ?? sessionEntry;
   let systemSent = sessionEntry?.systemSent ?? false;
   const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
+  const nodeSkillsEligibility = resolveNodeExecEligibility({
+    cfg,
+    sessionEntry,
+    sessionKey,
+    agentId: sessionAgentId,
+    execOverrides: params.execOverrides,
+  });
   const remoteEligibility = getRemoteSkillEligibility({
-    advertiseExecNode: canExecRequestNode({
-      cfg,
-      sessionEntry,
-      sessionKey,
-      agentId: sessionAgentId,
-    }),
+    advertiseExecNode: nodeSkillsEligibility.canExec,
   });
   const existingSnapshot = nextEntry?.skillsSnapshot;
   const resolveSnapshot = (snapshot: SessionEntry["skillsSnapshot"]) =>
@@ -184,7 +190,7 @@ export async function ensureSkillSnapshot(params: {
       config: cfg,
       agentId: sessionAgentId,
       skillFilter,
-      eligibility: { remote: remoteEligibility },
+      eligibility: { nodeSkills: nodeSkillsEligibility, remote: remoteEligibility },
       existingSnapshot: snapshot,
     });
   const initialSnapshotState = resolveSnapshot(existingSnapshot);

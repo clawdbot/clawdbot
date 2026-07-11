@@ -13,6 +13,7 @@ const syncSkillsToWorkspaceMock = vi.hoisted(() =>
   vi.fn<() => Promise<SkillUsagePath[]>>(async () => []),
 );
 const ensureSandboxBrowserMock = vi.hoisted(() => vi.fn(async () => null));
+const resolveNodeExecEligibilityMock = vi.hoisted(() => vi.fn(() => ({ canExec: false })));
 const browserControlAuthMock = vi.hoisted(() => ({
   ensureBrowserControlAuth: vi.fn(async () => ({ auth: { token: "test-browser-token" } })),
   resolveBrowserControlAuth: vi.fn(() => ({ token: "test-browser-token" })),
@@ -39,6 +40,7 @@ vi.mock("../plugin-sdk/browser-profiles.js", () => browserProfilesMock);
 
 vi.mock("./exec-defaults.js", () => ({
   canExecRequestNode: vi.fn(() => false),
+  resolveNodeExecEligibility: resolveNodeExecEligibilityMock,
 }));
 
 vi.mock("../skills/runtime/remote.js", () => ({
@@ -204,6 +206,7 @@ describe("resolveSandboxContext", () => {
   }, 15_000);
 
   it("resolves a registered non-docker backend", async () => {
+    resolveNodeExecEligibilityMock.mockClear();
     const restore = registerSandboxBackend("test-backend", {
       factory: async () => ({
         id: "test-backend",
@@ -240,6 +243,7 @@ describe("resolveSandboxContext", () => {
 
       const result = await resolveSandboxContext({
         config: cfg,
+        execOverrides: { host: "node", node: "build-node", security: "allowlist" },
         sessionKey: "agent:worker:task",
         workspaceDir: "/tmp/openclaw-test",
       });
@@ -248,6 +252,11 @@ describe("resolveSandboxContext", () => {
       expect(result?.runtimeId).toBe("test-runtime");
       expect(result?.containerName).toBe("test-runtime");
       expect(result?.backend?.id).toBe("test-backend");
+      expect(resolveNodeExecEligibilityMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          execOverrides: { host: "node", node: "build-node", security: "allowlist" },
+        }),
+      );
 
       const workspace = await ensureSandboxWorkspaceForSession({
         config: cfg,
@@ -367,7 +376,10 @@ describe("resolveSandboxContext", () => {
     expect(syncOptions?.targetWorkspaceDir).toBe(result.workspaceDir);
     expect(syncOptions?.config).toBe(cfg);
     expect(syncOptions?.agentId).toBe("main");
-    expect(syncOptions?.eligibility).toEqual({ remote: { note: "test-remote" } });
+    expect(syncOptions?.eligibility).toEqual({
+      nodeSkills: { canExec: false },
+      remote: { note: "test-remote" },
+    });
     expect(result.skillUsagePaths).toEqual(skillUsagePaths);
   }, 15_000);
 
@@ -431,10 +443,16 @@ describe("resolveSandboxContext", () => {
     );
     expect(syncOptions?.config).toBe(cfg);
     expect(syncOptions?.agentId).toBe("main");
-    expect(syncOptions?.eligibility).toEqual({ remote: { note: "test-remote" } });
+    expect(syncOptions?.eligibility).toEqual({
+      nodeSkills: { canExec: false },
+      remote: { note: "test-remote" },
+    });
     expect(result?.skillsWorkspaceDir).toBe(syncOptions?.targetWorkspaceDir);
     expect(result?.workspaceAccess).toBe("rw");
-    expect(result?.skillsEligibility).toEqual({ remote: { note: "test-remote" } });
+    expect(result?.skillsEligibility).toEqual({
+      nodeSkills: { canExec: false },
+      remote: { note: "test-remote" },
+    });
     await expect(
       fs.readFile(path.join(userOwnedSandboxSkillsDir, "SKILL.md"), "utf8"),
     ).resolves.toBe("# User owned\n");

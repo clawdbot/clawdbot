@@ -15,6 +15,7 @@ import {
 } from "../../plugin-sdk/browser-profiles.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { SkillEligibilityContext, SkillUsagePath } from "../../skills/types.js";
+import type { ExecPolicyOverrides } from "../exec-defaults.js";
 import { getSandboxBackendWorkdirResolver, requireSandboxBackendFactory } from "./backend.js";
 import { ensureSandboxBrowser } from "./browser.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
@@ -31,21 +32,28 @@ async function syncSandboxSkillsToWorkspace(params: {
   config?: OpenClawConfig;
   agentId: string;
   rawSessionKey: string;
+  execOverrides?: ExecPolicyOverrides;
 }): Promise<{ eligibility?: SkillEligibilityContext; skillUsagePaths?: SkillUsagePath[] }> {
   try {
-    const [{ syncSkillsToWorkspace }, { getRemoteSkillEligibility }, { canExecRequestNode }] =
-      await Promise.all([
-        import("../../skills/loading/workspace.js"),
-        import("../../skills/runtime/remote.js"),
-        import("../exec-defaults.js"),
-      ]);
+    const [
+      { syncSkillsToWorkspace },
+      { getRemoteSkillEligibility },
+      { resolveNodeExecEligibility },
+    ] = await Promise.all([
+      import("../../skills/loading/workspace.js"),
+      import("../../skills/runtime/remote.js"),
+      import("../exec-defaults.js"),
+    ]);
+    const nodeSkills = resolveNodeExecEligibility({
+      cfg: params.config,
+      sessionKey: params.rawSessionKey,
+      agentId: params.agentId,
+      execOverrides: params.execOverrides,
+    });
     const eligibility: SkillEligibilityContext = {
+      nodeSkills,
       remote: getRemoteSkillEligibility({
-        advertiseExecNode: canExecRequestNode({
-          cfg: params.config,
-          sessionKey: params.rawSessionKey,
-          agentId: params.agentId,
-        }),
+        advertiseExecNode: nodeSkills.canExec,
       }),
     };
     const skillUsagePaths = await syncSkillsToWorkspace({
@@ -68,6 +76,7 @@ async function ensureSandboxWorkspaceLayout(params: {
   agentId: string;
   rawSessionKey: string;
   config?: OpenClawConfig;
+  execOverrides?: ExecPolicyOverrides;
   workspaceDir?: string;
 }): Promise<{
   agentWorkspaceDir: string;
@@ -100,6 +109,7 @@ async function ensureSandboxWorkspaceLayout(params: {
       config: params.config,
       agentId: params.agentId,
       rawSessionKey,
+      execOverrides: params.execOverrides,
     });
   } else {
     await fs.mkdir(workspaceDir, { recursive: true });
@@ -109,6 +119,7 @@ async function ensureSandboxWorkspaceLayout(params: {
       config: params.config,
       agentId: params.agentId,
       rawSessionKey,
+      execOverrides: params.execOverrides,
     });
   }
 
@@ -184,6 +195,7 @@ function resolveSandboxWorkspaceInfoWorkdir(params: {
 
 export async function resolveSandboxContext(params: {
   config?: OpenClawConfig;
+  execOverrides?: ExecPolicyOverrides;
   sessionKey?: string;
   workspaceDir?: string;
 }): Promise<SandboxContext | null> {
@@ -209,6 +221,7 @@ export async function resolveSandboxContext(params: {
     agentId: runtime.agentId,
     rawSessionKey,
     config: params.config,
+    execOverrides: params.execOverrides,
     workspaceDir: params.workspaceDir,
   });
 

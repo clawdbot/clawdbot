@@ -1976,6 +1976,8 @@ describe("WorkboardStore", () => {
 
     expect(repeatedOps.id).toBe(ops.id);
     expect(product.id).not.toBe(ops.id);
+    expect(ops.position).toBe(1000);
+    expect(product.position).toBe(1000);
     await expect(store.list({ boardId: "ops" })).resolves.toHaveLength(1);
     await expect(store.listBoards()).resolves.toMatchObject({
       boards: expect.arrayContaining([
@@ -1989,13 +1991,24 @@ describe("WorkboardStore", () => {
       byStatus: { todo: 1 },
     });
     const prototypeAgentId = ["__", "proto__"].join("");
-    await store.create({
+    const secondProduct = await store.create({
       title: "Prototype safe",
       boardId: "product",
       agentId: prototypeAgentId,
     });
+    expect(secondProduct.position).toBe(2000);
     const stats = await store.stats({ boardId: "product" });
     expect(stats.byAgent[prototypeAgentId]).toBe(1);
+    const metadataBoardFirst = await store.create({
+      title: "Metadata board first",
+      metadata: { automation: { boardId: "metadata-board" } },
+    });
+    const metadataBoardSecond = await store.create({
+      title: "Metadata board second",
+      metadata: { automation: { boardId: "metadata-board" } },
+    });
+    expect(metadataBoardFirst.position).toBe(1000);
+    expect(metadataBoardSecond.position).toBe(2000);
   });
 
   it("rejects completed manifests for cards not created from the parent", async () => {

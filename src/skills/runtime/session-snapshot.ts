@@ -68,9 +68,13 @@ export function resolveReusableWorkspaceSkillSnapshot(
     params.existingSnapshot?.version,
     snapshotVersion,
   );
+  const nodeSkillsEligibilityChanged =
+    stableStringify(params.existingSnapshot?.nodeSkillsEligibility) !==
+    stableStringify(params.eligibility?.nodeSkills);
   const shouldRefresh =
     promptFormatChanged ||
     skillVersionChanged ||
+    nodeSkillsEligibilityChanged ||
     !matchesSkillFilter(params.existingSnapshot?.skillFilter, params.skillFilter);
   const buildSnapshot = () => {
     return buildWorkspaceSkillSnapshot(params.workspaceDir, {

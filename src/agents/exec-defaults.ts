@@ -131,16 +131,26 @@ export function canExecRequestNode(params: {
   sessionKey?: string;
   sandboxAvailable?: boolean;
 }): boolean {
-  const { cfg, host } = resolveExecConfigState(params);
-  return isRequestedExecTargetAllowed({
-    configuredTarget: host,
-    requestedTarget: "node",
-    sandboxAvailable: resolveExecSandboxAvailability({
-      cfg,
-      sessionKey: params.sessionKey,
-      sandboxAvailable: params.sandboxAvailable,
-    }),
-  });
+  return resolveNodeExecEligibility(params).canExec;
+}
+
+/** Resolves whether node exec is usable and any effective node binding. */
+export function resolveNodeExecEligibility(params: {
+  cfg?: OpenClawConfig;
+  sessionEntry?: ExecSessionDefaults;
+  execOverrides?: ExecPolicyOverrides;
+  agentId?: string;
+  sessionKey?: string;
+  sandboxAvailable?: boolean;
+}): { canExec: boolean; node?: string } {
+  const defaults = resolveExecDefaults(params);
+  const systemRunDenied = params.cfg?.gateway?.nodes?.denyCommands?.some(
+    (command) => command.trim() === "system.run",
+  );
+  return {
+    canExec: defaults.canRequestNode && defaults.security !== "deny" && !systemRunDenied,
+    ...(defaults.node ? { node: defaults.node } : {}),
+  };
 }
 
 /** Resolves effective exec host, mode, approval policy, and node availability. */

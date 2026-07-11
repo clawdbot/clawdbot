@@ -5,6 +5,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { collectTextContentBlocks } from "../../agents/content-blocks.js";
 import type { BlockReplyChunking } from "../../agents/embedded-agent-block-chunker.js";
+import type { ExecPolicyOverrides } from "../../agents/exec-defaults.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -203,6 +204,7 @@ export async function handleInlineActions(params: {
   resolvedVerboseLevel: VerboseLevel | undefined;
   resolvedReasoningLevel: ReasoningLevel;
   resolvedElevatedLevel: ElevatedLevel;
+  execOverrides?: ExecPolicyOverrides;
   blockReplyChunking?: BlockReplyChunking;
   resolvedBlockStreamingBreak?: "text_end" | "message_end";
   resolveDefaultThinkingLevel: Awaited<
@@ -246,6 +248,7 @@ export async function handleInlineActions(params: {
     resolvedVerboseLevel,
     resolvedReasoningLevel,
     resolvedElevatedLevel,
+    execOverrides,
     blockReplyChunking,
     resolvedBlockStreamingBreak,
     resolveDefaultThinkingLevel,
@@ -317,8 +320,12 @@ export async function handleInlineActions(params: {
     slashCommandName !== null &&
     // `/skill …` needs the full skill command list.
     (slashCommandName === "skill" || !getBuiltinSlashCommands().has(slashCommandName));
+  const canReusePreloadedSkillCommands = execOverrides === undefined;
   const skillCommands =
-    shouldLoadSkillCommands && params.skillCommands && params.skillCommands.length > 0
+    shouldLoadSkillCommands &&
+    canReusePreloadedSkillCommands &&
+    params.skillCommands &&
+    params.skillCommands.length > 0
       ? params.skillCommands
       : shouldLoadSkillCommands
         ? (await loadSkillCommandsRuntime()).listSkillCommandsForWorkspace({
@@ -326,6 +333,9 @@ export async function handleInlineActions(params: {
             cfg,
             agentId,
             skillFilter,
+            sessionEntry: targetSessionEntry,
+            sessionKey,
+            execOverrides,
           })
         : [];
 

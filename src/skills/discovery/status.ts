@@ -22,6 +22,7 @@ import {
   resolveSkillsInstallPreferences,
 } from "../loading/config.js";
 import { loadWorkspaceSkillEntries } from "../loading/workspace.js";
+import { mergeRemoteNodeSkillEntries } from "../runtime/remote-skills.js";
 import type {
   SkillEntry,
   SkillEligibilityContext,
@@ -348,14 +349,21 @@ export function buildWorkspaceSkillStatus(
   const agentSkillFilter = opts?.agentId
     ? resolveEffectiveAgentSkillFilter(opts.config, opts.agentId)
     : undefined;
-  const skillEntries =
+  // Status reports every skill (disabled/ineligible included) with flags, so
+  // the loader must stay unfiltered; node-hosted skills merge in separately.
+  const skillEntries = mergeRemoteNodeSkillEntries(
     opts?.entries ??
-    loadWorkspaceSkillEntries(workspaceDir, {
-      config: opts?.config,
-      managedSkillsDir,
-      bundledSkillsDir: bundledContext.dir,
-      includeArchived: true,
-    });
+      loadWorkspaceSkillEntries(workspaceDir, {
+        config: opts?.config,
+        managedSkillsDir,
+        bundledSkillsDir: bundledContext.dir,
+        includeArchived: true,
+      }),
+    {
+      canExec: opts?.eligibility?.nodeSkills?.canExec,
+      node: opts?.eligibility?.nodeSkills?.node,
+    },
+  );
   const prefs = resolveSkillsInstallPreferences(opts?.config);
   const allowBundled = resolveBundledAllowlist(opts?.config);
   const clawhubLockRead = readClawHubSkillsLockfileStatusSync(workspaceDir);

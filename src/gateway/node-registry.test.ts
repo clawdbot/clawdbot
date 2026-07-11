@@ -6,11 +6,20 @@ import {
   MAX_DATE_TIMESTAMP_MS,
   MAX_TIMER_TIMEOUT_MS,
 } from "@openclaw/normalization-core/number-coercion";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import {
+  listConnectedNodePluginTools,
+  resetConnectedNodePluginToolsForTest,
+} from "./node-plugin-tool-snapshot.js";
 import { NodeRegistry, serializeEventPayload } from "./node-registry.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+
+let testNodeHostCommands: NonNullable<
+  ReturnType<typeof createEmptyPluginRegistry>["nodeHostCommands"]
+> = [];
 
 function makeClient(
   connId: string,
@@ -71,6 +80,45 @@ function makeClient(
   };
 }
 
+afterEach(() => {
+  testNodeHostCommands = [];
+  resetConnectedNodePluginToolsForTest();
+});
+
+function registerDemoNodePluginTool(params: {
+  name: string;
+  command: string;
+  description?: string;
+  parameters?: Record<string, unknown>;
+  dangerous?: boolean;
+}) {
+  const registry = createEmptyPluginRegistry();
+  registry.nodeHostCommands ??= [];
+  registry.nodeHostCommands.push({
+    pluginId: "demo",
+    pluginName: "Demo",
+    source: "test",
+    rootDir: "test",
+    command: {
+      command: params.command,
+      ...(params.dangerous ? { dangerous: true } : {}),
+      agentTool: {
+        name: params.name,
+        description: params.description ?? "Demo node-host tool",
+        ...(params.parameters ? { parameters: params.parameters } : {}),
+      },
+      handle: async () => "{}",
+    },
+  });
+  testNodeHostCommands = registry.nodeHostCommands;
+}
+
+function createTestNodeRegistry(): NodeRegistry {
+  return new NodeRegistry({
+    listRegisteredNodePluginToolCommands: () => testNodeHostCommands,
+  });
+}
+
 function makeConnectivitySocket(emitPong: boolean) {
   const socket = new EventEmitter() as EventEmitter & {
     readyState: number;
@@ -92,6 +140,31 @@ function registerNode(registry: NodeRegistry, opts: Parameters<typeof makeClient
   const frames: string[] = [];
   registry.register(makeClient("conn-1", "node-1", frames, opts), {});
   return frames;
+}
+
+function publishNodePluginTools(
+  registry: NodeRegistry,
+  tools: Parameters<NodeRegistry["updateNodePluginTools"]>[2],
+  connId = "conn-1",
+) {
+  return registry.updateNodePluginTools("node-1", connId, tools);
+}
+
+function publishNodeSkills(
+  registry: NodeRegistry,
+  skills: Parameters<NodeRegistry["updateNodeSkills"]>[2],
+  connId = "conn-1",
+) {
+  return registry.updateNodeSkills("node-1", connId, skills);
+}
+
+function nodeSkill(name: string, body = "# Instructions") {
+  const description = `${name} description`;
+  return {
+    name,
+    description,
+    content: `---\nname: ${name}\ndescription: ${description}\n---\n\n${body}\n`,
+  };
 }
 
 function registerLinuxNode(registry: NodeRegistry) {
@@ -133,7 +206,7 @@ function authorizeSystemRun(registry: NodeRegistry, overrides: Partial<SystemRun
 
 describe("gateway/node-registry", () => {
   it("checks node websocket connectivity with ping/pong", async () => {
-    const registry = new NodeRegistry();
+    const registry = createTestNodeRegistry();
     registry.register(
       makeClient("conn-1", "node-1", [], {
         socket: makeConnectivitySocket(true),
@@ -145,7 +218,7 @@ describe("gateway/node-registry", () => {
   });
 
   it("reports stale node websocket connectivity before invoke timeout", async () => {
-    const registry = new NodeRegistry();
+    const registry = createTestNodeRegistry();
     registry.register(
       makeClient("conn-1", "node-1", [], {
         socket: makeConnectivitySocket(false),
@@ -162,7 +235,7 @@ describe("gateway/node-registry", () => {
   });
 
   it("keeps a reconnected node when the old connection unregisters", async () => {
-    const registry = new NodeRegistry();
+    const registry = createTestNodeRegistry();
     const oldFrames: string[] = [];
     const newClient = makeClient("conn-new", "node-1");
 
@@ -209,7 +282,7 @@ describe("gateway/node-registry", () => {
   });
 
   it("matches pending system.run events to the issuing connection", async () => {
-    const registry = new NodeRegistry();
+    const registry = createTestNodeRegistry();
     const frames = registerLinuxNode(registry);
     const { invoke, request } = invokeSystemRun(registry, frames, {
       runId: "run-1",
@@ -264,7 +337,7 @@ describe("gateway/node-registry", () => {
 
   it("keeps no-timeout system.run event authorization after invoke timeout", async () => {
     vi.useFakeTimers();
-    const registry = new NodeRegistry();
+    const registry = createTestNodeRegistry();
     try {
       const frames = registerNode(registry);
       const { invoke, request } = invokeSystemRun(
@@ -349,7 +422,7 @@ describe("gateway/node-registry", () => {
   it("caps oversized invoke and system.run authorization timers", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
-    const registry = new NodeRegistry();
+    const registry = createTestNodeRegistry();
     try {
       const frames = registerNode(registry);
       const { invoke } = invokeSystemRun(
@@ -388,7 +461,7 @@ describe("gateway/node-registry", () => {
 
   it("expires system.run authorization when the process clock is invalid", () => {
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
-    const registry = new NodeRegistry();
+    const registry = createTestNodeRegistry();
     const frames = registerNode(registry);
     const { invoke } = invokeSystemRun(registry, frames, {
       runId: "run-invalid-clock",
@@ -412,7 +485,7 @@ describe("gateway/node-registry", () => {
   it("expires system.run authorization when the expiry would exceed the Date range", () => {
     vi.useFakeTimers();
     vi.setSystemTime(MAX_DATE_TIMESTAMP_MS);
-    const registry = new NodeRegistry();
+    const registry = createTestNodeRegistry();
     try {
       const frames = registerNode(registry);
       const { invoke } = invokeSystemRun(registry, frames, {
@@ -434,7 +507,7 @@ describe("gateway/node-registry", () => {
   });
 
   it("matches a single system.run event when legacy payload omits runId", () => {
-    const registry = new NodeRegistry();
+    const registry = createTestNodeRegistry();
     const frames = registerNode(registry);
     const { invoke } = invokeSystemRun(registry, frames, {
       runId: "run-legacy",
@@ -447,7 +520,7 @@ describe("gateway/node-registry", () => {
   });
 
   it("rejects runId-less system.run events for non-legacy nodes", () => {
-    const registry = new NodeRegistry();
+    const registry = createTestNodeRegistry();
     const frames = registerLinuxNode(registry);
     const { invoke } = invokeSystemRun(registry, frames, {
       runId: "run-required",
@@ -460,7 +533,7 @@ describe("gateway/node-registry", () => {
   });
 
   it("generates and forwards a runId when system.run params omit it", () => {
-    const registry = new NodeRegistry();
+    const registry = createTestNodeRegistry();
     const frames = registerNode(registry);
     const { invoke, request } = invokeSystemRun(registry, frames, {
       command: ["/bin/sh", "-lc", "printf ok"],
@@ -479,7 +552,7 @@ describe("gateway/node-registry", () => {
   });
 
   it("clears system.run event authorization when invoke result fails", async () => {
-    const registry = new NodeRegistry();
+    const registry = createTestNodeRegistry();
     const frames = registerNode(registry);
     const { invoke, request } = invokeSystemRun(registry, frames, {
       runId: "run-failed",
@@ -510,7 +583,7 @@ describe("gateway/node-registry", () => {
   });
 
   it("matches legacy macOS exec events with runtime-generated runId when single pending run matches", () => {
-    const registry = new NodeRegistry();
+    const registry = createTestNodeRegistry();
     const frames = registerNode(registry);
     const { invoke } = invokeSystemRun(registry, frames, {
       runId: "gateway-run",
@@ -527,7 +600,7 @@ describe("gateway/node-registry", () => {
   });
 
   it("rejects mismatched runId fallback for non-macOS nodes", () => {
-    const registry = new NodeRegistry();
+    const registry = createTestNodeRegistry();
     const frames = registerLinuxNode(registry);
     const { invoke } = invokeSystemRun(registry, frames, {
       runId: "gateway-run",
@@ -544,7 +617,7 @@ describe("gateway/node-registry", () => {
   });
 
   it("matches system.run events with emitted session key when invoke omitted sessionKey", () => {
-    const registry = new NodeRegistry();
+    const registry = createTestNodeRegistry();
     const frames = registerNode(registry);
     const { invoke } = invokeSystemRun(registry, frames, {
       runId: "run-without-session",
@@ -560,7 +633,7 @@ describe("gateway/node-registry", () => {
   });
 
   it("rejects runId-less system.run events when the connection has multiple matches", () => {
-    const registry = new NodeRegistry();
+    const registry = createTestNodeRegistry();
     const frames = registerNode(registry);
     const { invoke: first } = invokeSystemRun(registry, frames, {
       runId: "run-a",
@@ -578,7 +651,7 @@ describe("gateway/node-registry", () => {
   });
 
   it("sends raw event payload JSON without changing the envelope shape", () => {
-    const registry = new NodeRegistry();
+    const registry = createTestNodeRegistry();
     const frames: string[] = [];
     registry.register(makeClient("conn-1", "node-1", frames), {});
     const payload = serializeEventPayload({ foo: "bar" });
@@ -623,7 +696,7 @@ describe("gateway/node-registry", () => {
     resetDiagnosticEventsForTest();
     const diagnosticEvents: unknown[] = [];
     const stopDiagnostics = onDiagnosticEvent((event) => diagnosticEvents.push(event));
-    const registry = new NodeRegistry();
+    const registry = createTestNodeRegistry();
     const socket = {
       bufferedAmount: MAX_BUFFERED_BYTES + 1,
       send: vi.fn(),
@@ -660,7 +733,7 @@ describe("gateway/node-registry", () => {
   });
 
   it("refreshes effective live surface within the declared surface", () => {
-    const registry = new NodeRegistry();
+    const registry = createTestNodeRegistry();
     const client = makeClient("conn-1", "node-1", [], {
       caps: [],
       commands: [],
@@ -686,8 +759,331 @@ describe("gateway/node-registry", () => {
     expect((client.connect as { commands?: string[] }).commands).toEqual(["talk.ptt.start"]);
   });
 
+  it("keeps node-hosted plugin tools inside the approved command surface", () => {
+    registerDemoNodePluginTool({ name: "demo_echo", command: "demo.echo" });
+    const registry = createTestNodeRegistry();
+    const client = makeClient("conn-1", "node-1", [], {
+      commands: ["demo.echo"],
+    });
+
+    const session = registry.register(client, {});
+    publishNodePluginTools(registry, [
+      {
+        pluginId: "demo",
+        name: "demo_echo",
+        description: "Echo through the node",
+        command: "demo.echo",
+      },
+      {
+        pluginId: "demo",
+        name: "demo_blocked",
+        description: "Blocked command",
+        command: "demo.blocked",
+      },
+    ]);
+
+    expect(session.nodePluginTools.map((tool) => tool.name)).toEqual(["demo_echo"]);
+    expect(listConnectedNodePluginTools().map((entry) => entry.descriptor.name)).toEqual([
+      "demo_echo",
+    ]);
+
+    registry.updateSurface("node-1", {
+      caps: [],
+      commands: [],
+    });
+
+    expect(registry.get("node-1")?.nodePluginTools).toEqual([]);
+    expect(listConnectedNodePluginTools()).toEqual([]);
+  });
+
+  it("keeps dangerous node-hosted plugin tools once explicitly approved", () => {
+    registerDemoNodePluginTool({
+      name: "demo_dangerous",
+      command: "demo.dangerous",
+      dangerous: true,
+    });
+    const registry = createTestNodeRegistry();
+    const client = makeClient("conn-1", "node-1", [], {
+      commands: ["demo.dangerous"],
+    });
+
+    const session = registry.register(client, {});
+    publishNodePluginTools(registry, [
+      {
+        pluginId: "demo",
+        name: "demo_dangerous",
+        description: "Dangerous command",
+        command: "demo.dangerous",
+      },
+    ]);
+
+    expect(session.nodePluginTools.map((tool) => tool.name)).toEqual(["demo_dangerous"]);
+    expect(listConnectedNodePluginTools().map((entry) => entry.descriptor.name)).toEqual([
+      "demo_dangerous",
+    ]);
+  });
+
+  it("drops node-hosted plugin tools with provider-unsafe names", () => {
+    registerDemoNodePluginTool({ name: "demo_echo", command: "demo.echo" });
+    const registry = createTestNodeRegistry();
+    const client = makeClient("conn-1", "node-1", [], {
+      commands: ["demo.echo"],
+    });
+
+    const session = registry.register(client, {});
+    publishNodePluginTools(registry, [
+      {
+        pluginId: "demo",
+        name: "demo.echo",
+        description: "Invalid provider tool name",
+        command: "demo.echo",
+      },
+      {
+        pluginId: "demo",
+        name: "demo_echo",
+        description: "Valid provider tool name",
+        command: "demo.echo",
+      },
+    ]);
+
+    expect(session.nodePluginTools.map((tool) => tool.name)).toEqual(["demo_echo"]);
+    expect(listConnectedNodePluginTools().map((entry) => entry.descriptor.name)).toEqual([
+      "demo_echo",
+    ]);
+  });
+
+  it("accepts unregistered descriptors only inside the approved command surface", () => {
+    const registry = createTestNodeRegistry();
+    const client = makeClient("conn-1", "node-1", [], {
+      commands: ["system.run"],
+    });
+
+    const session = registry.register(client, {});
+    publishNodePluginTools(registry, [
+      {
+        pluginId: "demo",
+        name: "demo_echo",
+        description: "Allowed command",
+        command: "system.run",
+      },
+      {
+        pluginId: "demo",
+        name: "demo_blocked",
+        description: "Blocked command",
+        command: "demo.blocked",
+      },
+    ]);
+
+    expect(session.nodePluginTools.map((tool) => tool.name)).toEqual(["demo_echo"]);
+    expect(listConnectedNodePluginTools().map((entry) => entry.descriptor.name)).toEqual([
+      "demo_echo",
+    ]);
+  });
+
+  it("uses registry metadata for node-hosted plugin tool descriptors", () => {
+    registerDemoNodePluginTool({
+      name: "demo_echo",
+      command: "demo.echo",
+      description: "Trusted registry description",
+      parameters: {
+        type: "object",
+        properties: { text: { type: "string" } },
+      },
+    });
+    const registry = createTestNodeRegistry();
+    const client = makeClient("conn-1", "node-1", [], {
+      commands: ["demo.echo"],
+    });
+
+    const session = registry.register(client, {});
+    publishNodePluginTools(registry, [
+      {
+        pluginId: "demo",
+        name: "demo_echo",
+        description: "Injected node description",
+        parameters: {
+          type: "object",
+          properties: { secret: { type: "string" } },
+        },
+        command: "demo.echo",
+      },
+    ]);
+
+    expect(session.nodePluginTools).toEqual([
+      {
+        pluginId: "demo",
+        name: "demo_echo",
+        description: "Trusted registry description",
+        parameters: {
+          type: "object",
+          properties: { text: { type: "string" } },
+        },
+        command: "demo.echo",
+      },
+    ]);
+  });
+
+  it("keeps declared node-hosted plugin tools for later command approval", () => {
+    registerDemoNodePluginTool({ name: "demo_echo", command: "demo.echo" });
+    const registry = createTestNodeRegistry();
+    const client = makeClient("conn-1", "node-1", [], {
+      commands: [],
+      declaredCommands: ["demo.echo"],
+    });
+
+    const session = registry.register(client, {});
+    publishNodePluginTools(registry, [
+      {
+        pluginId: "demo",
+        name: "demo_echo",
+        description: "Echo through the node",
+        command: "demo.echo",
+      },
+    ]);
+    expect(session.nodePluginTools).toEqual([]);
+    expect(listConnectedNodePluginTools()).toEqual([]);
+
+    registry.updateSurface("node-1", {
+      caps: [],
+      commands: ["demo.echo"],
+    });
+
+    expect(registry.get("node-1")?.nodePluginTools.map((tool) => tool.name)).toEqual(["demo_echo"]);
+    expect(listConnectedNodePluginTools().map((entry) => entry.descriptor.name)).toEqual([
+      "demo_echo",
+    ]);
+  });
+
+  it("enriches published node tools after matching plugin descriptors load", () => {
+    const registry = createTestNodeRegistry();
+    registry.register(
+      makeClient("conn-1", "node-1", [], {
+        commands: ["demo.echo"],
+      }),
+      {},
+    );
+    publishNodePluginTools(registry, [
+      {
+        pluginId: "demo",
+        name: "demo_echo",
+        description: "Published description",
+        command: "demo.echo",
+      },
+    ]);
+
+    expect(registry.get("node-1")?.nodePluginTools[0]?.description).toBe("Published description");
+
+    registerDemoNodePluginTool({
+      name: "demo_echo",
+      command: "demo.echo",
+      description: "Registered description",
+    });
+    registry.refreshNodePluginTools();
+
+    expect(registry.get("node-1")?.nodePluginTools[0]?.description).toBe("Registered description");
+  });
+
+  it("ignores published node tools when gateway publication is disabled", () => {
+    const registry = new NodeRegistry({ nodePluginToolsEnabled: false });
+    registry.register(
+      makeClient("conn-1", "node-1", [], {
+        commands: ["demo.echo"],
+      }),
+      {},
+    );
+
+    const updated = publishNodePluginTools(registry, [
+      {
+        pluginId: "demo",
+        name: "demo_echo",
+        description: "Echo through the node",
+        command: "demo.echo",
+      },
+    ]);
+
+    expect(updated?.declaredNodePluginTools).toEqual([]);
+    expect(updated?.nodePluginTools).toEqual([]);
+    expect(listConnectedNodePluginTools()).toEqual([]);
+  });
+
+  it("ignores node plugin tool updates from stale connections", () => {
+    registerDemoNodePluginTool({ name: "demo_echo", command: "demo.echo" });
+    const registry = createTestNodeRegistry();
+    registry.register(
+      makeClient("conn-old", "node-1", [], {
+        commands: ["demo.echo"],
+      }),
+      {},
+    );
+    registry.register(
+      makeClient("conn-new", "node-1", [], {
+        commands: ["demo.echo"],
+      }),
+      {},
+    );
+
+    const updated = registry.updateNodePluginTools("node-1", "conn-old", [
+      {
+        pluginId: "demo",
+        name: "demo_echo",
+        description: "Echo through the old node connection",
+        command: "demo.echo",
+      },
+    ]);
+
+    expect(updated).toBeNull();
+    expect(registry.get("node-1")?.nodePluginTools).toEqual([]);
+    expect(listConnectedNodePluginTools()).toEqual([]);
+  });
+
+  it("stores bounded node-hosted skill updates on the current session", () => {
+    const registry = createTestNodeRegistry();
+    const session = registry.register(makeClient("conn-1", "node-1"), {});
+
+    const updated = publishNodeSkills(registry, [
+      nodeSkill("release-helper"),
+      { ...nodeSkill("broken"), content: "x".repeat(64 * 1024 + 1) },
+    ]);
+
+    expect(updated).toBe(session);
+    expect(session.nodeSkills.map((skill) => skill.name)).toEqual(["release-helper"]);
+  });
+
+  it("enforces node skill count and total-content caps", () => {
+    const registry = createTestNodeRegistry();
+    registry.register(makeClient("conn-1", "node-1"), {});
+
+    const countUpdate = publishNodeSkills(
+      registry,
+      Array.from({ length: 65 }, (_, index) =>
+        nodeSkill(`count-${String(index).padStart(2, "0")}`),
+      ),
+    );
+    expect(countUpdate?.nodeSkills).toHaveLength(64);
+
+    const totalUpdate = publishNodeSkills(
+      registry,
+      Array.from({ length: 9 }, (_, index) =>
+        nodeSkill(`large-${String(index).padStart(2, "0")}`, "x".repeat(60 * 1024)),
+      ),
+    );
+    expect(totalUpdate?.nodeSkills).toHaveLength(8);
+  });
+
+  it("ignores node skills when publication is disabled or the connection is stale", () => {
+    const disabled = new NodeRegistry({ nodeSkillsEnabled: false });
+    disabled.register(makeClient("conn-1", "node-1"), {});
+    expect(publishNodeSkills(disabled, [nodeSkill("disabled")])?.nodeSkills).toEqual([]);
+
+    const registry = createTestNodeRegistry();
+    registry.register(makeClient("conn-old", "node-1"), {});
+    registry.register(makeClient("conn-new", "node-1"), {});
+    expect(publishNodeSkills(registry, [nodeSkill("stale")], "conn-old")).toBeNull();
+    expect(registry.get("node-1")?.nodeSkills).toEqual([]);
+  });
+
   it("clears effective permissions when explicitly removed", () => {
-    const registry = new NodeRegistry();
+    const registry = createTestNodeRegistry();
     const client = makeClient("conn-1", "node-1", [], {
       permissions: { camera: false },
       declaredPermissions: { camera: false },

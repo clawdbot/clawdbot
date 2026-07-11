@@ -56,6 +56,21 @@ function directOnlyTool(name: string, description: string): AnyAgentTool {
   return { ...fakeTool(name, description), catalogMode: "direct-only" };
 }
 
+function mcpPluginTool(name: string, description: string, pluginId = "fake-catalog"): AnyAgentTool {
+  const tool = fakeTool(name, description);
+  setPluginToolMeta(tool, {
+    pluginId,
+    optional: true,
+    mcp: {
+      serverName: "remote-demo",
+      safeServerName: "remoteDemo",
+      toolName: "echo",
+      operation: "tool",
+    },
+  });
+  return tool;
+}
+
 function resultDetails(result: { details?: unknown }): Record<string, unknown> {
   if (!result.details || typeof result.details !== "object") {
     throw new Error("Expected result details");
@@ -1094,6 +1109,31 @@ describe("Tool Search", () => {
     expect(thirdCall[2]).toBeInstanceOf(AbortSignal);
     expect(thirdCall[3]).toBeUndefined();
     expect(thirdCall[4]).toBeUndefined();
+  });
+
+  it("classifies plugin tools with MCP metadata as MCP catalog entries", () => {
+    const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
+    const target = mcpPluginTool("remote_echo", "Echo through remote MCP", "remote-demo");
+
+    applyToolSearchCatalog({
+      tools: [codeTool, target],
+      config: { tools: { toolSearch: true } } as never,
+      sessionId: "session-mcp-node",
+    });
+
+    const entry = testing.sessionCatalogs
+      .get("session:session-mcp-node")
+      ?.entries.find((candidate) => candidate.name === "remote_echo");
+    expect(entry).toMatchObject({
+      id: "mcp:remoteDemo:remote_echo",
+      source: "mcp",
+      sourceName: "remoteDemo",
+      mcp: {
+        serverName: "remote-demo",
+        safeServerName: "remoteDemo",
+        toolName: "echo",
+      },
+    });
   });
 
   it("routes bridged calls through the configured catalog executor", async () => {

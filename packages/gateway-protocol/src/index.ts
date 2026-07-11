@@ -418,6 +418,14 @@ import {
   NodePairRejectParamsSchema,
   type NodePairRemoveParams,
   NodePairRemoveParamsSchema,
+  type NodePluginToolDescriptor,
+  NodePluginToolDescriptorSchema,
+  type NodePluginToolsUpdateParams,
+  NodePluginToolsUpdateParamsSchema,
+  type NodeSkillDescriptor,
+  NodeSkillDescriptorSchema,
+  type NodeSkillsUpdateParams,
+  NodeSkillsUpdateParamsSchema,
   type NodeRenameParams,
   NodeRenameParamsSchema,
   type PollParams,
@@ -857,6 +865,12 @@ export const validateNodePairRemoveParams = lazyCompile<NodePairRemoveParams>(
 );
 export const validateNodeRenameParams = lazyCompile<NodeRenameParams>(NodeRenameParamsSchema);
 export const validateNodeListParams = lazyCompile<NodeListParams>(NodeListParamsSchema);
+export const validateNodePluginToolsUpdateParams = lazyCompile<NodePluginToolsUpdateParams>(
+  NodePluginToolsUpdateParamsSchema,
+);
+export const validateNodeSkillsUpdateParams = lazyCompile<NodeSkillsUpdateParams>(
+  NodeSkillsUpdateParamsSchema,
+);
 export const validateEnvironmentsCreateParams = lazyCompile<EnvironmentsCreateParams>(
   EnvironmentsCreateParamsSchema,
 );
@@ -1335,6 +1349,10 @@ export {
   NodePairRejectParamsSchema,
   NodePairRemoveParamsSchema,
   NodeListParamsSchema,
+  NodePluginToolDescriptorSchema,
+  NodePluginToolsUpdateParamsSchema,
+  NodeSkillDescriptorSchema,
+  NodeSkillsUpdateParamsSchema,
   NodePendingAckParamsSchema,
   NodeInvokeParamsSchema,
   NodeEventResultSchema,
@@ -1818,6 +1836,10 @@ export type {
   NodePairRejectParams,
   NodePairRemoveParams,
   NodeListParams,
+  NodePluginToolDescriptor,
+  NodePluginToolsUpdateParams,
+  NodeSkillDescriptor,
+  NodeSkillsUpdateParams,
   NodeInvokeParams,
   NodeInvokeResultParams,
   NodeEventParams,

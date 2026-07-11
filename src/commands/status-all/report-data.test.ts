@@ -5,7 +5,10 @@ const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(async () => ({ path: "/tmp/openclaw.json" })),
 }));
 
-vi.mock("../../agents/exec-defaults.js", () => ({ canExecRequestNode: () => false }));
+vi.mock("../../agents/exec-defaults.js", () => ({
+  canExecRequestNode: () => false,
+  resolveNodeExecEligibility: () => ({ canExec: false }),
+}));
 vi.mock("../../config/config.js", () => ({
   readConfigFileSnapshot: mocks.readConfigFileSnapshot,
   resolveGatewayPort: () => 18789,

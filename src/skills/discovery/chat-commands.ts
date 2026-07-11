@@ -4,9 +4,12 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
-import { canExecRequestNode } from "../../agents/exec-defaults.js";
+import {
+  type ExecPolicyOverrides,
+  type ExecSessionDefaults,
+  resolveNodeExecEligibility,
+} from "../../agents/exec-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { getRemoteSkillEligibility } from "../runtime/remote.js";
@@ -24,17 +27,25 @@ export function listSkillCommandsForWorkspace(params: {
   cfg: OpenClawConfig;
   agentId?: string;
   skillFilter?: string[];
+  sessionEntry?: ExecSessionDefaults;
+  sessionKey?: string;
+  execOverrides?: ExecPolicyOverrides;
 }): SkillCommandSpec[] {
+  const nodeSkills = resolveNodeExecEligibility({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    sessionEntry: params.sessionEntry,
+    sessionKey: params.sessionKey,
+    execOverrides: params.execOverrides,
+  });
   return buildWorkspaceSkillCommandSpecs(params.workspaceDir, {
     config: params.cfg,
     agentId: params.agentId,
     skillFilter: params.skillFilter,
     eligibility: {
+      nodeSkills,
       remote: getRemoteSkillEligibility({
-        advertiseExecNode: canExecRequestNode({
-          cfg: params.cfg,
-          agentId: params.agentId,
-        }),
+        advertiseExecNode: nodeSkills.canExec,
       }),
     },
     reservedNames: listReservedChatSlashCommandNames(),
@@ -60,63 +71,58 @@ function dedupeBySkillName(commands: SkillCommandSpec[]): SkillCommandSpec[] {
 export function listSkillCommandsForAgents(params: {
   cfg: OpenClawConfig;
   agentIds?: string[];
+  sessionEntry?: ExecSessionDefaults;
+  sessionKey?: string;
+  execOverrides?: ExecPolicyOverrides;
 }): SkillCommandSpec[] {
-  const mergeSkillFilters = (existing?: string[], incoming?: string[]): string[] | undefined => {
-    // undefined = no allowlist (unrestricted); [] = explicit empty allowlist (no skills).
-    // If any agent is unrestricted for this workspace, keep command discovery unrestricted.
-    if (existing === undefined || incoming === undefined) {
-      return undefined;
-    }
-    // An empty allowlist contributes no skills but does not widen the merge to unrestricted.
-    if (existing.length === 0) {
-      return uniqueStrings(incoming);
-    }
-    if (incoming.length === 0) {
-      return uniqueStrings(existing);
-    }
-    return uniqueStrings([...existing, ...incoming]);
-  };
-
   const agentIds = params.agentIds ?? listAgentIds(params.cfg);
   const used = listReservedChatSlashCommandNames();
   const entries: SkillCommandSpec[] = [];
-  // Group by canonical workspace to avoid duplicate registration when multiple
-  // agents share the same directory (#5717), while still honoring per-agent filters.
-  const workspaceFilters = new Map<string, { workspaceDir: string; skillFilter?: string[] }>();
+  const hasSingleAgentContext = agentIds.length === 1;
+  const workspaceAgents: Array<{
+    agentId: string;
+    workspaceDir: string;
+    skillFilter?: string[];
+  }> = [];
   for (const agentId of agentIds) {
     const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
     if (!fs.existsSync(workspaceDir)) {
       logVerbose(`Skipping agent "${agentId}": workspace does not exist: ${workspaceDir}`);
       continue;
     }
-    let canonicalDir: string;
     try {
-      canonicalDir = fs.realpathSync(workspaceDir);
+      fs.realpathSync(workspaceDir);
     } catch {
       logVerbose(`Skipping agent "${agentId}": cannot resolve workspace: ${workspaceDir}`);
       continue;
     }
-    const skillFilter = resolveEffectiveAgentSkillFilter(params.cfg, agentId);
-    const existing = workspaceFilters.get(canonicalDir);
-    if (existing) {
-      existing.skillFilter = mergeSkillFilters(existing.skillFilter, skillFilter);
-      continue;
-    }
-    workspaceFilters.set(canonicalDir, {
+    workspaceAgents.push({
+      agentId,
       workspaceDir,
-      skillFilter,
+      skillFilter: resolveEffectiveAgentSkillFilter(params.cfg, agentId),
     });
   }
 
-  for (const { workspaceDir, skillFilter } of workspaceFilters.values()) {
+  for (const { agentId, workspaceDir, skillFilter } of workspaceAgents) {
+    const nodeSkills = resolveNodeExecEligibility({
+      cfg: params.cfg,
+      agentId,
+      ...(hasSingleAgentContext
+        ? {
+            sessionEntry: params.sessionEntry,
+            sessionKey: params.sessionKey,
+            execOverrides: params.execOverrides,
+          }
+        : {}),
+    });
     const commands = buildWorkspaceSkillCommandSpecs(workspaceDir, {
       config: params.cfg,
+      agentId,
       skillFilter,
       eligibility: {
+        nodeSkills,
         remote: getRemoteSkillEligibility({
-          advertiseExecNode: canExecRequestNode({
-            cfg: params.cfg,
-          }),
+          advertiseExecNode: nodeSkills.canExec,
         }),
       },
       reservedNames: used,
@@ -126,7 +132,9 @@ export function listSkillCommandsForAgents(params: {
       entries.push(command);
     }
   }
-  return dedupeBySkillName(entries);
+  return dedupeBySkillName(entries).toSorted((left, right) =>
+    left.skillName.localeCompare(right.skillName, "en"),
+  );
 }
 
 export const testing = {

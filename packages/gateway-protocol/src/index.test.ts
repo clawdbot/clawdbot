@@ -13,6 +13,8 @@ import {
   validateConnectParams,
   validateModelsListParams,
   validateNodeEventResult,
+  validateNodePluginToolsUpdateParams,
+  validateNodeSkillsUpdateParams,
   validateNodePresenceAlivePayload,
   validateSessionsUsageParams,
   validateTasksCancelParams,
@@ -84,6 +86,90 @@ describe("lazy protocol validators", () => {
       }),
     ).toBe(true);
     expect(validateConnectParams.errors).toBeNull();
+  });
+
+  it("rejects the removed connect-time node plugin tools surface", () => {
+    expect(
+      validateConnectParams({
+        minProtocol: 1,
+        maxProtocol: 1,
+        client: {
+          id: "test",
+          version: "1.0.0",
+          platform: "test",
+          mode: "test",
+        },
+        nodePluginTools: [],
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects provider-unsafe node plugin tool names", () => {
+    expect(
+      validateNodePluginToolsUpdateParams({
+        tools: [
+          {
+            pluginId: "demo",
+            name: "demo_echo",
+            description: "Echo through a node",
+            command: "demo.echo",
+          },
+        ],
+      }),
+    ).toBe(true);
+
+    expect(
+      validateNodePluginToolsUpdateParams({
+        tools: [
+          {
+            pluginId: "demo",
+            name: "demo.echo",
+            description: "Invalid tool name",
+            command: "demo.echo",
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  it("validates bounded node skill updates", () => {
+    expect(
+      validateNodeSkillsUpdateParams({
+        skills: [
+          {
+            name: "release-helper",
+            description: "Prepare a release",
+            content: "---\nname: release-helper\ndescription: Prepare a release\n---\n\n# Release",
+          },
+        ],
+      }),
+    ).toBe(true);
+
+    expect(
+      validateNodeSkillsUpdateParams({
+        skills: [{ name: "Release Helper", description: "Invalid", content: "invalid" }],
+      }),
+    ).toBe(false);
+    expect(
+      validateNodeSkillsUpdateParams({
+        skills: [
+          {
+            name: "oversized",
+            description: "Too large",
+            content: "x".repeat(64 * 1024 + 1),
+          },
+        ],
+      }),
+    ).toBe(false);
+    expect(
+      validateNodeSkillsUpdateParams({
+        skills: Array.from({ length: 65 }, (_, index) => ({
+          name: `skill-${index}`,
+          description: "Too many",
+          content: "content",
+        })),
+      }),
+    ).toBe(false);
   });
 
   it("accepts selected-agent scope on chat send, history, and abort params", () => {

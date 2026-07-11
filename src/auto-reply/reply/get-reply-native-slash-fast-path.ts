@@ -223,6 +223,8 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
       cfg: params.cfg,
       agentId: params.agentId,
       skillFilter: params.skillFilter,
+      sessionEntry: sessionState.sessionEntry,
+      sessionKey: sessionState.sessionKey,
     });
     return loadedSkillCommands;
   };
@@ -343,6 +345,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     resolvedVerboseLevel: directiveResult.result.resolvedVerboseLevel,
     resolvedReasoningLevel: directiveResult.result.resolvedReasoningLevel,
     resolvedElevatedLevel: directiveResult.result.resolvedElevatedLevel,
+    execOverrides: directiveResult.result.execOverrides,
     blockReplyChunking: directiveResult.result.blockReplyChunking,
     resolvedBlockStreamingBreak: directiveResult.result.resolvedBlockStreamingBreak,
     resolveDefaultThinkingLevel: directiveResult.result.modelState.resolveDefaultThinkingLevel,

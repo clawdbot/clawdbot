@@ -22,6 +22,7 @@ import {
 } from "../discovery/agent-filter.js";
 import { normalizeSkillFilter } from "../discovery/filter.js";
 import { filterPromptVisibleSkillEntries } from "../discovery/skill-index.js";
+import { mergeRemoteNodeSkillEntries } from "../runtime/remote-skills.js";
 import type {
   OpenClawSkillMetadata,
   ParsedSkillFrontmatter,
@@ -1349,6 +1350,9 @@ export function formatSkillsCompact(
       }
     }
     lines.push(`    <location>${escapeXml(skill.filePath)}</location>`);
+    if (skill.locationNote) {
+      lines.push(`    <location_note>${escapeXml(skill.locationNote)}</location_note>`);
+    }
     if (skill.promptVersion) {
       lines.push(`    <version>${escapeXml(skill.promptVersion)}</version>`);
     }
@@ -1486,6 +1490,9 @@ export function buildWorkspaceSkillSnapshot(
       requiredEnv: entry.metadata?.requires?.env?.slice(),
     })),
     ...(skillFilter === undefined ? {} : { skillFilter }),
+    ...(opts?.eligibility?.nodeSkills
+      ? { nodeSkillsEligibility: opts.eligibility.nodeSkills }
+      : {}),
     resolvedSkills,
     version: opts?.snapshotVersion,
     promptFormatVersion: WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION,
@@ -1540,7 +1547,10 @@ function resolveWorkspaceSkillPromptState(
   }
   const skillEntries = opts?.entries
     ? filterArchivedSkillEntries(opts.entries)
-    : loadSkillEntries(workspaceDir, opts);
+    : mergeRemoteNodeSkillEntries(loadSkillEntries(workspaceDir, opts), {
+        canExec: opts?.eligibility?.nodeSkills?.canExec,
+        node: opts?.eligibility?.nodeSkills?.node,
+      });
   const eligible = filterSkillEntries(
     skillEntries,
     opts?.config,
@@ -1610,7 +1620,10 @@ export function loadWorkspaceSkillEntries(
     includeArchived?: boolean;
   },
 ): SkillEntry[] {
-  const entries = loadSkillEntries(workspaceDir, opts);
+  const entries = mergeRemoteNodeSkillEntries(loadSkillEntries(workspaceDir, opts), {
+    canExec: opts?.eligibility?.nodeSkills?.canExec,
+    node: opts?.eligibility?.nodeSkills?.node,
+  });
   const effectiveSkillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
   if (effectiveSkillFilter === undefined && opts?.eligibility === undefined) {
     return entries;
@@ -1629,7 +1642,10 @@ export function loadVisibleWorkspaceSkillEntries(
     eligibility?: SkillEligibilityContext;
   },
 ): SkillEntry[] {
-  const entries = loadSkillEntries(workspaceDir, opts);
+  const entries = mergeRemoteNodeSkillEntries(loadSkillEntries(workspaceDir, opts), {
+    canExec: opts?.eligibility?.nodeSkills?.canExec,
+    node: opts?.eligibility?.nodeSkills?.node,
+  });
   const effectiveSkillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
   return filterSkillEntries(entries, opts?.config, effectiveSkillFilter, opts?.eligibility);
 }

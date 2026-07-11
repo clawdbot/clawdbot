@@ -129,42 +129,48 @@ export function buildWorkspaceSkillCommandSpecs(
     }
     used.add(normalizeLowercaseStringOrEmpty(unique));
     const description = entry.skill.description?.trim() || rawName;
-    const dispatch = (() => {
-      const kindRaw = normalizeLowercaseStringOrEmpty(
-        entry.frontmatter?.["command-dispatch"] ?? entry.frontmatter?.["command_dispatch"] ?? "",
-      );
-      if (!kindRaw || kindRaw !== "tool") {
-        return undefined;
-      }
+    const dispatch = entry.disableCommandDispatch
+      ? undefined
+      : (() => {
+          const kindRaw = normalizeLowercaseStringOrEmpty(
+            entry.frontmatter?.["command-dispatch"] ??
+              entry.frontmatter?.["command_dispatch"] ??
+              "",
+          );
+          if (!kindRaw || kindRaw !== "tool") {
+            return undefined;
+          }
 
-      const toolName = (
-        entry.frontmatter?.["command-tool"] ??
-        entry.frontmatter?.["command_tool"] ??
-        ""
-      ).trim();
-      if (!toolName) {
-        debugSkillCommandOnce(
-          `dispatch:missingTool:${rawName}`,
-          `Skill command "/${unique}" requested tool dispatch but did not provide command-tool. Ignoring dispatch.`,
-          { skillName: rawName, command: unique },
-        );
-        return undefined;
-      }
+          const toolName = (
+            entry.frontmatter?.["command-tool"] ??
+            entry.frontmatter?.["command_tool"] ??
+            ""
+          ).trim();
+          if (!toolName) {
+            debugSkillCommandOnce(
+              `dispatch:missingTool:${rawName}`,
+              `Skill command "/${unique}" requested tool dispatch but did not provide command-tool. Ignoring dispatch.`,
+              { skillName: rawName, command: unique },
+            );
+            return undefined;
+          }
 
-      const argModeRaw = normalizeOptionalLowercaseString(
-        entry.frontmatter?.["command-arg-mode"] ?? entry.frontmatter?.["command_arg_mode"] ?? "",
-      );
-      const argMode = !argModeRaw || argModeRaw === "raw" ? "raw" : null;
-      if (!argMode) {
-        debugSkillCommandOnce(
-          `dispatch:badArgMode:${rawName}:${argModeRaw}`,
-          `Skill command "/${unique}" requested tool dispatch but has unknown command-arg-mode. Falling back to raw.`,
-          { skillName: rawName, command: unique, argMode: argModeRaw },
-        );
-      }
+          const argModeRaw = normalizeOptionalLowercaseString(
+            entry.frontmatter?.["command-arg-mode"] ??
+              entry.frontmatter?.["command_arg_mode"] ??
+              "",
+          );
+          const argMode = !argModeRaw || argModeRaw === "raw" ? "raw" : null;
+          if (!argMode) {
+            debugSkillCommandOnce(
+              `dispatch:badArgMode:${rawName}:${argModeRaw}`,
+              `Skill command "/${unique}" requested tool dispatch but has unknown command-arg-mode. Falling back to raw.`,
+              { skillName: rawName, command: unique, argMode: argModeRaw },
+            );
+          }
 
-      return { kind: "tool", toolName, argMode: "raw" } as const;
-    })();
+          return { kind: "tool", toolName, argMode: "raw" } as const;
+        })();
 
     specs.push({
       name: unique,

@@ -77,7 +77,7 @@ export function isSensitiveUrlConfigPath(path: string): boolean {
   if (path.endsWith(".request.proxy.url")) {
     return true;
   }
-  return /^mcp\.servers\.(?:\*|[^.]+)\.url$/.test(path);
+  return /^(?:nodeHost\.)?mcp\.servers\.(?:\*|[^.]+)\.url$/.test(path);
 }
 
 /** True when a config UI hint explicitly marks a URL-like value as secret-bearing. */

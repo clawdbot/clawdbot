@@ -42,6 +42,9 @@ function createNodeSession(): NodeSession {
     caps: [],
     declaredCommands: ["demo.read"],
     commands: ["demo.read"],
+    declaredNodePluginTools: [],
+    nodePluginTools: [],
+    nodeSkills: [],
     connectedAtMs: 0,
   };
 }

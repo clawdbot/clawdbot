@@ -1375,8 +1375,14 @@ async function agentCommandInternal(
       const currentSkillsSnapshot = sessionEntry?.skillsSnapshot;
       const [
         { getRemoteSkillEligibility, resolveReusableWorkspaceSkillSnapshot },
-        { canExecRequestNode },
+        { resolveNodeExecEligibility },
       ] = await Promise.all([loadSkillsRuntime(), loadExecDefaultsRuntime()]);
+      const nodeSkillsEligibility = resolveNodeExecEligibility({
+        cfg,
+        sessionEntry,
+        sessionKey,
+        agentId: sessionAgentId,
+      });
       const skillSnapshotState = resolveReusableWorkspaceSkillSnapshot({
         workspaceDir,
         config: cfg,
@@ -1384,13 +1390,9 @@ async function agentCommandInternal(
         existingSnapshot: isNewSession ? undefined : currentSkillsSnapshot,
         skillFilter,
         eligibility: {
+          nodeSkills: nodeSkillsEligibility,
           remote: getRemoteSkillEligibility({
-            advertiseExecNode: canExecRequestNode({
-              cfg,
-              sessionEntry,
-              sessionKey,
-              agentId: sessionAgentId,
-            }),
+            advertiseExecNode: nodeSkillsEligibility.canExec,
           }),
         },
         watch: false,

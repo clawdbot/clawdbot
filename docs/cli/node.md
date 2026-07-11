@@ -25,6 +25,21 @@ Common use cases:
 Execution is still guarded by **exec approvals** and per-agent allowlists on the
 node host, so you can keep command access scoped and explicit.
 
+`openclaw node run` can publish plugin or MCP-backed tools after it connects.
+The Gateway trusts descriptors from the paired node by default, while requiring
+each descriptor's command to remain in the node's approved command surface. The
+agent sees each accepted descriptor as a normal plugin tool, but execution still
+goes through `node.invoke`, so disconnecting the node removes the tool from new
+agent runs. Gateway operators can disable publication with
+`gateway.nodes.pluginTools.enabled: false`.
+
+For declarative MCP tools, add the normal MCP server shape under
+`nodeHost.mcp.servers` in `openclaw.json` on the node machine, then restart the
+node host. The node declares the approval-gated `mcp.tools.call.v1` command
+family and publishes listed tools after connecting; changing the server list
+later does not require re-pairing. See
+[Node-hosted MCP servers](/nodes#node-hosted-mcp-servers).
+
 ## Browser proxy (zero-config)
 
 Node hosts automatically advertise a browser proxy if `browser.enabled` is not

@@ -1212,6 +1212,18 @@ describe("GatewayClient connect auth payload", () => {
     client.stop();
   });
 
+  it("does not advertise node plugin tools in the initial connect frame", () => {
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      deviceIdentity: null,
+    });
+
+    const { connect } = startClientAndConnect({ client });
+
+    expect(connect.params).not.toHaveProperty("nodePluginTools");
+    client.stop();
+  });
+
   function emitConnectChallenge(ws: MockWebSocket, nonce = "nonce-1") {
     ws.emitMessage(
       JSON.stringify({

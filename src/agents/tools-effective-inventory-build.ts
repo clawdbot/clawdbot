@@ -41,7 +41,7 @@ function resolveEffectiveToolSource(
   const pluginMeta =
     getPluginToolMeta(tool) ?? (fallbackTool ? getPluginToolMeta(fallbackTool) : undefined);
   if (pluginMeta) {
-    if (pluginMeta.pluginId === "bundle-mcp") {
+    if (pluginMeta.mcp || pluginMeta.pluginId === "bundle-mcp") {
       return { source: "mcp", pluginId: pluginMeta.pluginId };
     }
     return { source: "plugin", pluginId: pluginMeta.pluginId };

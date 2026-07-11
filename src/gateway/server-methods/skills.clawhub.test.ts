@@ -122,7 +122,9 @@ describe("skills gateway handlers (clawhub)", () => {
       expect.objectContaining({
         agentId: "research",
         config: {},
-        eligibility: expect.any(Object),
+        eligibility: expect.objectContaining({
+          nodeSkills: expect.objectContaining({ canExec: expect.any(Boolean) }),
+        }),
       }),
     );
   });

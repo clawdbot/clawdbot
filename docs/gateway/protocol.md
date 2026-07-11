@@ -264,6 +264,35 @@ method scope (`operator.pairing`), based on the pending request's declared
 | non-exec commands                                              | `operator.pairing` + `operator.write` |
 | includes `system.run`, `system.run.prepare`, or `system.which` | `operator.pairing` + `operator.admin` |
 
+### Caps/commands/permissions (node)
+
+Nodes declare capability claims at connect time:
+
+- `caps`: high-level capability categories such as `camera`, `canvas`, `screen`,
+  `location`, `voice`, and `talk`.
+- `commands`: command allowlist for invoke.
+- `permissions`: granular toggles (e.g. `screen.record`, `camera.capture`).
+
+The Gateway treats these as **claims** and enforces server-side allowlists.
+Connected nodes can publish optional agent-visible plugin or MCP tool
+descriptors with `node.pluginTools.update` after a successful connect or
+reconnect. Headless node hosts restart to apply declarative MCP inventory
+changes. This update method is the only publication path; plugin tool descriptors are not accepted in
+`connect` params. Each descriptor must use a provider-safe tool `name` and name
+a `command` in the node's current command allowlist. The Gateway trusts descriptor
+metadata from the paired node, filters descriptors outside the approved command
+surface, removes them when the node disconnects, and rejects operator attempts
+to mutate another node's catalog. Set `gateway.nodes.pluginTools.enabled: false`
+to ignore node-published descriptors.
+
+Connected node hosts publish their complete skill replacement catalog with
+`node.skills.update`. This node-role method is the only node skill publication
+path; skills are not accepted in `connect` params. Each descriptor contains a
+safe name, description, and bounded `SKILL.md` content. The Gateway parses that
+content with the normal skills loader, includes it in agent skill snapshots
+while the node is connected, and removes it on disconnect. Set
+`gateway.nodes.skills.enabled: false` to ignore node-published skills.
+
 ## Presence
 
 - `system-presence` returns entries keyed by device identity, including
@@ -499,7 +528,9 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `node.rename` updates a paired node label.
     - `node.invoke` forwards a command to a connected node.
     - `node.invoke.result` returns the result for an invoke request.
+    - `mcp.tools.call.v1` is the headless node-host command for calling a configured node-local MCP tool. It is carried through `node.invoke`, requires the node to declare the command, and remains subject to pairing approval and `gateway.nodes.denyCommands`.
     - `node.event` carries node-originated events back into the gateway.
+    - `node.pluginTools.update` is the only publication path for replacing the connected node's agent-visible plugin/MCP tool descriptors; `connect` params do not carry them.
     - `node.pending.pull` and `node.pending.ack` are the connected-node queue APIs.
     - `node.pending.enqueue` and `node.pending.drain` manage durable pending work for offline/disconnected nodes.
 

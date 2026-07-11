@@ -14,6 +14,7 @@ import { resolvePluginTools } from "../plugins/tools.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { resolveApiKeyForProfile, resolveAuthProfileOrder } from "./auth-profiles.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { createNodePluginTools } from "./node-plugin-tools.js";
 import {
   resolveOpenClawPluginToolInputs,
   type OpenClawPluginToolOptions,
@@ -117,6 +118,7 @@ export function resolveOpenClawPluginToolsForOptions(params: {
     runtimeConfig: resolveCurrentRuntimeConfig(),
     getRuntimeConfig: resolveCurrentRuntimeConfig,
   });
+  const existingToolNames = new Set(params.existingToolNames ?? []);
   const pluginTools = resolvePluginTools({
     ...pluginToolInputs,
     context: {
@@ -124,12 +126,22 @@ export function resolveOpenClawPluginToolsForOptions(params: {
       ...(hasAuthForProvider ? { hasAuthForProvider } : {}),
       ...(resolveApiKeyForProvider ? { resolveApiKeyForProvider } : {}),
     },
-    existingToolNames: params.existingToolNames ?? new Set<string>(),
+    existingToolNames,
     toolAllowlist: params.options?.pluginToolAllowlist,
     toolDenylist: params.options?.pluginToolDenylist,
     allowGatewaySubagentBinding: params.options?.allowGatewaySubagentBinding,
     ...(hasAuthForProvider ? { hasAuthForProvider } : {}),
   });
+  for (const tool of pluginTools) {
+    existingToolNames.add(tool.name);
+  }
+  pluginTools.push(
+    ...createNodePluginTools({
+      existingToolNames,
+      toolAllowlist: params.options?.pluginToolAllowlist,
+      toolDenylist: params.options?.pluginToolDenylist,
+    }),
+  );
 
   return applyPluginToolDeliveryDefaults({
     tools: pluginTools,

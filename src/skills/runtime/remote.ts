@@ -12,6 +12,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { loadWorkspaceSkillEntries } from "../loading/workspace.js";
 import type { SkillEligibilityContext, SkillEntry } from "../types.js";
 import { bumpSkillsSnapshotVersion } from "./refresh-state.js";
+import { recordRemoteSkillNodeInfo, removeRemoteNodeSkills } from "./remote-skills.js";
 
 type RemoteNodeRecord = {
   nodeId: string;
@@ -339,6 +340,12 @@ export function recordRemoteNodeInfo(node: {
     remoteNodeProbeStates.delete(node.nodeId);
   }
   upsertNode({ ...node, connected: true });
+  recordRemoteSkillNodeInfo({
+    nodeId: node.nodeId,
+    connId: node.connId,
+    displayName: node.displayName,
+    commands: node.commands,
+  });
 }
 
 export function recordRemoteNodeBins(nodeId: string, bins: string[]) {
@@ -348,6 +355,7 @@ export function recordRemoteNodeBins(nodeId: string, bins: string[]) {
 export function removeRemoteNodeInfo(nodeId: string) {
   const existing = remoteNodes.get(nodeId);
   remoteNodes.delete(nodeId);
+  removeRemoteNodeSkills(nodeId);
   const probeState = remoteNodeProbeStates.get(nodeId);
   if (probeState && !probeState.bins) {
     // A new connection is a new recovery opportunity. Keep successful bin

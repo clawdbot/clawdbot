@@ -139,10 +139,11 @@ Use [`defineToolPlugin`](/plugins/tool-plugins) for simple tool-only plugins
 with fixed tool names. Use `api.registerTool(...)` directly for mixed plugins
 or fully dynamic tool registration.
 
-| Method                          | What it registers                             |
-| ------------------------------- | --------------------------------------------- |
-| `api.registerTool(tool, opts?)` | Agent tool (required or `{ optional: true }`) |
-| `api.registerCommand(def)`      | Custom command (bypasses the LLM)             |
+| Method                                 | What it registers                                                                                                                        |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `api.registerTool(tool, opts?)`        | Agent tool (required or `{ optional: true }`)                                                                                            |
+| `api.registerCommand(def)`             | Custom command (bypasses the LLM)                                                                                                        |
+| `api.registerNodeHostCommand(command)` | Command handled by `openclaw node run`; optional `agentTool` metadata can expose it as an agent-visible tool while the node is connected |
 
 Plugin commands can set `agentPromptGuidance` when the agent needs a short,
 command-owned routing hint. Keep that text about the command itself; do not add
@@ -168,6 +169,19 @@ Native Codex app-server developer instructions are stricter than other prompt
 surfaces: only guidance explicitly scoped to `codex_app_server` is promoted into
 that higher-priority lane. Legacy string guidance and unscoped structured
 guidance remain available to non-Codex prompt surfaces for compatibility.
+
+Node-host commands run on the connected node host, not inside the Gateway
+process. If `agentTool` is present, the node publishes a descriptor after a
+successful Gateway connect; the Gateway exposes it to agent runs only while that
+node is connected and only if the descriptor's `command` is in the node's
+approved command surface. Set `agentTool.defaultPlatforms` to opt a
+non-dangerous command into the default node command allowlist; otherwise require
+explicit `gateway.nodes.allowCommands` or a node-invoke policy. `agentTool.name`
+must be provider-safe: start with a letter, use only letters, digits,
+underscores, or hyphens, and stay within 64 characters. MCP-backed node tools
+can set `agentTool.mcp` metadata so catalog and tool-search surfaces can show
+the remote MCP server/tool identity, but execution still goes through the
+advertised node command.
 
 ### Infrastructure
 

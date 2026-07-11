@@ -777,6 +777,37 @@ describe("handleInlineActions", () => {
     expect(commandArgs.skillCommands).toEqual(skillCommands);
   });
 
+  it("reloads preloaded skill commands when final exec overrides are present", async () => {
+    const typing = createTypingController();
+    handleCommandsMock.mockResolvedValue({ shouldContinue: false, reply: { text: "done" } });
+    const ctx = buildTestCtx({ Body: "/office_hours help", CommandBody: "/office_hours help" });
+    const skillCommands = officeHoursSkillCommands();
+    listSkillCommandsForWorkspaceMock.mockReturnValue(skillCommands);
+
+    await handleInlineActions(
+      createHandleInlineActionsInput({
+        ctx,
+        typing,
+        cleanedBody: "/office_hours help",
+        command: {
+          isAuthorizedSender: true,
+          rawBodyNormalized: "/office_hours help",
+          commandBodyNormalized: "/office_hours help",
+        },
+        overrides: {
+          allowTextCommands: true,
+          cfg: { commands: { text: true } },
+          execOverrides: { security: "deny" },
+          skillCommands,
+        },
+      }),
+    );
+
+    expect(listSkillCommandsForWorkspaceMock).toHaveBeenCalledWith(
+      expect.objectContaining({ execOverrides: { security: "deny" } }),
+    );
+  });
+
   it("passes requesterAgentIdOverride into inline tool runtimes", async () => {
     const typing = createTypingController();
     const toolExecute = vi.fn(async () => ({ text: "spawned" }));
