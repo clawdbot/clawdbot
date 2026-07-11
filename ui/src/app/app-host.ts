@@ -923,6 +923,7 @@ class OpenClawShell extends OpenClawLightDomElement {
                 .gatewayVersion=${context.config.current.serverVersion ??
                 gatewaySnapshot.hello?.server?.version ??
                 null}
+                .devGitBranch=${context.config.current.devGitBranch}
                 .onOpenPalette=${this.openPalette}
                 .onToggleSidebar=${() => this.toggleNavigationSurface()}
                 .onOpenNewSession=${(agentId: string) => {

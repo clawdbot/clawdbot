@@ -195,6 +195,53 @@
   color: var(--accent-2, #14b8a6);
 }
 
+/* Active-task text wave: a subtle left-to-right color sweep across the
+   running row's primary text (same shimmer language as the skeleton/usage
+   loaders, clipped to glyphs). The band fades text toward --bg so it stays
+   correct in both themes. Scoped to no-preference so reduced-motion users
+   keep plain static text and syntax colors. */
+@media (prefers-reduced-motion: no-preference) {
+  .chat-tool-row--running :is(
+      .chat-tool-msg-summary__label,
+      .chat-tool-row__title,
+      .chat-tool-row__verb,
+      .chat-tool-row__target,
+      .chat-tool-row__cmd:not(.chat-tool-row__cmd--secondary)
+    ) {
+    background-image: linear-gradient(
+      90deg,
+      var(--text) 0%,
+      var(--text) 35%,
+      color-mix(in srgb, var(--text) 42%, var(--bg) 58%) 50%,
+      var(--text) 65%,
+      var(--text) 100%
+    );
+    background-size: 200% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: chatToolRowTextWave 2.2s ease-in-out infinite;
+  }
+
+  /* Syntax-highlight tokens go transparent while running so the parent's
+     clipped gradient paints their glyphs; token colors return on completion. */
+  .chat-tool-row--running .chat-tool-row__cmd:not(.chat-tool-row__cmd--secondary) > span {
+    color: transparent;
+  }
+}
+
+/* Gradient is 2x element width with identical end stops, so one full period
+   per cycle wraps seamlessly and the band sweeps left to right. */
+@keyframes chatToolRowTextWave {
+  0% {
+    background-position: 100% 0;
+  }
+
+  100% {
+    background-position: -100% 0;
+  }
+}
+
 .chat-tool-row__spinner {
   flex-shrink: 0;
   margin-left: auto;

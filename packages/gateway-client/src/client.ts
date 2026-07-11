@@ -1537,7 +1537,12 @@ export class GatewayClient {
       if (!this.lastTick) {
         return;
       }
-      if (this.pending.size > 0) {
+      const allPendingRequestsHaveTimeouts =
+        this.pending.size > 0 &&
+        [...this.pending.values()].every((pending) => pending.timeout !== null);
+      // Finite requests own their deadline. One unbounded request keeps the
+      // transport watchdog active so a dead socket cannot strand it forever.
+      if (allPendingRequestsHaveTimeouts) {
         return;
       }
       const gap = Date.now() - this.lastTick;

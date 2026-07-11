@@ -74,6 +74,43 @@ function trackSettlement(promise: Promise<unknown>): () => boolean {
   return () => settled;
 }
 
+function createWatchedGatewayClient(): {
+  client: GatewayClient;
+  close: ReturnType<typeof vi.fn>;
+  send: ReturnType<typeof vi.fn>;
+} {
+  const client = new GatewayClient({
+    requestTimeoutMs: 100,
+    tickWatchMinIntervalMs: 5,
+    tickWatchTimeoutMs: 10,
+  });
+  const close = vi.fn();
+  const send = vi.fn();
+  Object.assign(client as unknown as { ws: unknown; tickIntervalMs: number; lastTick: number }, {
+    ws: {
+      readyState: WebSocket.OPEN,
+      send,
+      close,
+      terminate: vi.fn(),
+    },
+    tickIntervalMs: 5,
+    lastTick: Date.now(),
+  });
+  (client as unknown as { startTickWatch: () => void }).startTickWatch();
+  return { client, close, send };
+}
+
+function handleGatewayMessage(client: GatewayClient, payload: Record<string, unknown>): void {
+  (client as unknown as { handleMessage: (raw: string) => void }).handleMessage(
+    JSON.stringify(payload),
+  );
+}
+
+async function stopSyntheticClient(client: GatewayClient): Promise<void> {
+  client.stop();
+  await vi.advanceTimersByTimeAsync(250);
+}
+
 describe("GatewayClient", () => {
   let wss: WebSocketServer | null = null;
   let httpsServer: ReturnType<typeof createHttpsServer> | null = null;
@@ -169,96 +206,226 @@ describe("GatewayClient", () => {
     });
   });
 
-  test("closes on missing ticks", async () => {
-    const port = await getFreePort();
-    wss = new WebSocketServer({ port, host: "127.0.0.1" });
-
-    wss.on("connection", (socket) => {
-      socket.once("message", (data) => {
-        const first = JSON.parse(rawDataToString(data)) as { id?: string };
-        const id = first.id ?? "connect";
-        // Respond with tiny tick interval to trigger watchdog quickly.
-        const helloOk = {
-          type: "hello-ok",
-          protocol: 2,
-          server: { version: "dev", connId: "c1" },
-          features: { methods: [], events: [] },
-          snapshot: {
-            presence: [],
-            health: {},
-            stateVersion: { presence: 1, health: 1 },
-            uptimeMs: 1,
-          },
-          policy: {
-            maxPayload: 512 * 1024,
-            maxBufferedBytes: 1024 * 1024,
-            tickIntervalMs: 5,
-          },
-        };
-        socket.send(JSON.stringify({ type: "res", id, ok: true, payload: helloOk }));
-      });
+  test("rejects an unbounded request, reconnects, and does not replay it", async () => {
+    const server = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+    wss = server;
+    await new Promise<void>((resolve) => {
+      server.once("listening", resolve);
     });
-
-    const closed = new Promise<{ code: number; reason: string }>((resolve) => {
-      const client = new GatewayClient({
-        url: `ws://127.0.0.1:${port}`,
-        connectChallengeTimeoutMs: 0,
-        tickWatchMinIntervalMs: 5,
-        onClose: (code, reason) => resolve({ code, reason }),
-      });
-      client.start();
-    });
-
-    const res = await closed;
-    // Depending on auth/challenge timing in the harness, the client can either
-    // hit the tick watchdog (4000) or close with policy violation (1008).
-    expect([4000, 1008]).toContain(res.code);
-    if (res.code === 4000) {
-      expect(res.reason).toContain("tick timeout");
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("websocket server address unavailable");
     }
-  }, 4000);
 
-  test("lets pending requests own their timeout when ticks are missing", async () => {
-    vi.useFakeTimers();
-    try {
-      const client = new GatewayClient({
-        requestTimeoutMs: 10_000,
-        tickWatchMinIntervalMs: 5,
+    let connectionCount = 0;
+    const methodsByConnection = new Map<number, string[]>();
+    server.on("connection", (socket) => {
+      connectionCount += 1;
+      const connectionNumber = connectionCount;
+      methodsByConnection.set(connectionNumber, []);
+      socket.send(
+        JSON.stringify({
+          type: "event",
+          event: "connect.challenge",
+          seq: connectionNumber,
+          payload: { nonce: `nonce-${connectionNumber}` },
+        }),
+      );
+      socket.on("message", (data) => {
+        const frame = JSON.parse(rawDataToString(data)) as { id: string; method: string };
+        methodsByConnection.get(connectionNumber)?.push(frame.method);
+        if (frame.method === "connect") {
+          socket.send(
+            JSON.stringify({
+              type: "res",
+              id: frame.id,
+              ok: true,
+              payload: {
+                type: "hello-ok",
+                protocol: 4,
+                server: { version: "watchdog-test", connId: `c${connectionNumber}` },
+                features: { methods: ["chat.send", "status"], events: ["tick"] },
+                snapshot: {
+                  presence: [],
+                  health: {},
+                  stateVersion: { presence: 1, health: 1 },
+                  uptimeMs: 1,
+                },
+                auth: { role: "operator", scopes: ["operator.admin"] },
+                policy: {
+                  maxPayload: 512 * 1024,
+                  maxBufferedBytes: 1024 * 1024,
+                  tickIntervalMs: 20,
+                },
+              },
+            }),
+          );
+          return;
+        }
+        if (frame.method === "status") {
+          socket.send(
+            JSON.stringify({
+              type: "res",
+              id: frame.id,
+              ok: true,
+              payload: { status: "ok" },
+            }),
+          );
+        }
       });
-      const close = vi.fn();
-      const pending = (client as unknown as { pending: Map<string, unknown> }).pending;
-      Object.assign(
-        client as unknown as { ws: unknown; tickIntervalMs: number; lastTick: number },
+    });
+
+    let resolveFirstHello!: () => void;
+    let resolveSecondHello!: () => void;
+    const firstHello = new Promise<void>((resolve) => {
+      resolveFirstHello = resolve;
+    });
+    const secondHello = new Promise<void>((resolve) => {
+      resolveSecondHello = resolve;
+    });
+    const closeEvents: Array<{ code: number; reason: string }> = [];
+    let helloCount = 0;
+    const client = new GatewayClient({
+      url: `ws://127.0.0.1:${address.port}`,
+      tickWatchMinIntervalMs: 5,
+      onHelloOk: () => {
+        helloCount += 1;
+        if (helloCount === 1) {
+          // Keep the real reconnect lifecycle fast without changing production defaults.
+          (client as unknown as { backoffMs: number }).backoffMs = 10;
+          resolveFirstHello();
+          return;
+        }
+        resolveSecondHello();
+      },
+      onClose: (code, reason) => closeEvents.push({ code, reason }),
+    });
+
+    try {
+      client.start();
+      await firstHello;
+
+      const stalledRequest = client.request(
+        "chat.send",
+        { text: "send once" },
         {
-          ws: {
-            readyState: WebSocket.OPEN,
-            send: vi.fn(),
-            close,
-          },
-          tickIntervalMs: 5,
-          lastTick: Date.now(),
+          expectFinal: true,
         },
       );
-      pending.set("long-rpc", {
-        resolve: vi.fn(),
-        reject: vi.fn(),
-        expectFinal: false,
-        timeout: null,
-      });
+      void stalledRequest.catch(() => {});
 
-      (
-        client as unknown as {
-          startTickWatch: () => void;
-        }
-      ).startTickWatch();
+      await expect(stalledRequest).rejects.toThrow("gateway closed (4000): tick timeout");
+      await secondHello;
+      await expect(client.request("status")).resolves.toEqual({ status: "ok" });
+
+      expect(closeEvents[0]).toEqual({ code: 4000, reason: "tick timeout" });
+      expect(methodsByConnection.get(1)).toEqual(["connect", "chat.send"]);
+      expect(methodsByConnection.get(2)).toEqual(["connect", "status"]);
+      expect(
+        [...methodsByConnection.values()].flat().filter((method) => method === "chat.send"),
+      ).toHaveLength(1);
+    } finally {
+      await client.stopAndWait();
+    }
+  }, 5000);
+
+  test("lets finite pending requests own their timeout when ticks are missing", async () => {
+    vi.useFakeTimers();
+    try {
+      const { client, close } = createWatchedGatewayClient();
+      const request = client.request("status", undefined, { timeoutMs: 100 });
+      const requestExpectation = expect(request).rejects.toThrow(
+        "gateway request timeout for status",
+      );
       await vi.advanceTimersByTimeAsync(20);
 
       expect(close).not.toHaveBeenCalled();
 
-      pending.clear();
+      await vi.advanceTimersByTimeAsync(80);
+      await requestExpectation;
       await vi.advanceTimersByTimeAsync(5);
 
       expect(close).toHaveBeenCalledWith(4000, "tick timeout");
+      await stopSyntheticClient(client);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test.each([
+    {
+      label: "an explicit timeoutMs: null",
+      method: "status",
+      options: { timeoutMs: null },
+    },
+    {
+      label: "an implicit expectFinal",
+      method: "chat.send",
+      options: { expectFinal: true },
+    },
+  ])("keeps the watchdog active for $label request", async ({ method, options }) => {
+    vi.useFakeTimers();
+    try {
+      const { client, close } = createWatchedGatewayClient();
+      const request = client.request(method, undefined, options);
+      const requestExpectation = expect(request).rejects.toThrow("gateway client stopped");
+
+      await vi.advanceTimersByTimeAsync(20);
+
+      expect(close).toHaveBeenCalledWith(4000, "tick timeout");
+      await stopSyntheticClient(client);
+      await requestExpectation;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("keeps the watchdog active for mixed finite and unbounded requests", async () => {
+    vi.useFakeTimers();
+    try {
+      const { client, close } = createWatchedGatewayClient();
+      const requests = [
+        client.request("status", undefined, { timeoutMs: 100 }),
+        client.request("chat.send", undefined, { expectFinal: true }),
+      ];
+      const settlements = Promise.allSettled(requests);
+
+      await vi.advanceTimersByTimeAsync(20);
+
+      expect(close).toHaveBeenCalledWith(4000, "tick timeout");
+      await stopSyntheticClient(client);
+      await expect(settlements).resolves.toEqual([
+        expect.objectContaining({ status: "rejected" }),
+        expect.objectContaining({ status: "rejected" }),
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("keeps an unbounded request alive while inbound ticks continue", async () => {
+    vi.useFakeTimers();
+    try {
+      const { client, close, send } = createWatchedGatewayClient();
+      const request = client.request<{ status: string }>("chat.send", undefined, {
+        expectFinal: true,
+      });
+      const requestFrame = JSON.parse(String(send.mock.calls[0]?.[0])) as { id: string };
+
+      for (let seq = 1; seq <= 4; seq += 1) {
+        await vi.advanceTimersByTimeAsync(5);
+        handleGatewayMessage(client, { type: "event", event: "tick", seq, payload: {} });
+      }
+
+      expect(close).not.toHaveBeenCalled();
+      handleGatewayMessage(client, {
+        type: "res",
+        id: requestFrame.id,
+        ok: true,
+        payload: { status: "ok" },
+      });
+      await expect(request).resolves.toEqual({ status: "ok" });
+      await stopSyntheticClient(client);
     } finally {
       vi.useRealTimers();
     }

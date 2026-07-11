@@ -175,4 +175,98 @@ describeControlUiE2e("Control UI autonomous tool-turn outcomes", () => {
     await captureToolActivityProof(page, "parallel-multifile-expanded");
     await context.close();
   });
+
+  it("sweeps a text wave over the active tool row and stops it on the result", async () => {
+    const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      historyMessages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Ready for the running tool wave proof." }],
+          timestamp: Date.now(),
+        },
+      ],
+    });
+
+    await page.goto(`${server.baseUrl}chat`);
+    await page.getByText("Ready for the running tool wave proof.").waitFor();
+    await page.locator(".agent-chat__input textarea").fill("run a long command");
+    await page.getByRole("button", { name: "Send message" }).click();
+    const send = await gateway.waitForRequest("chat.send");
+    const runId = (send.params as { idempotencyKey?: string }).idempotencyKey as string;
+
+    await gateway.emitGatewayEvent("agent", {
+      runId,
+      seq: 1,
+      stream: "tool",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: {
+        toolCallId: "call-wave",
+        name: "exec",
+        phase: "start",
+        args: { command: "pnpm check:changed" },
+      },
+    });
+    // Start-phase sync is throttled and repaints on the next event, so follow
+    // with a delta (as real runs do) to surface the live card.
+    await page.waitForTimeout(200);
+    await gateway.emitGatewayEvent("chat", {
+      deltaText: "Working on it.",
+      message: {
+        content: [{ text: "Working on it.", type: "text" }],
+        role: "assistant",
+        timestamp: Date.now(),
+      },
+      runId,
+      sessionKey: "main",
+      state: "delta",
+    });
+    await page.getByText("Working on it.").waitFor();
+
+    const runningRow = page.locator(".chat-tool-row--running");
+    await runningRow.waitFor();
+    // Visual-regression guard for the active-task text wave: the running
+    // command text must carry the glyph-clipped gradient animation.
+    const wave = await runningRow.locator(".chat-tool-row__cmd").evaluate((node) => {
+      const style = getComputedStyle(node);
+      return {
+        animationName: style.animationName,
+        backgroundClip: style.getPropertyValue("-webkit-background-clip") || style.backgroundClip,
+        color: style.color,
+      };
+    });
+    expect(wave.animationName).toBe("chatToolRowTextWave");
+    expect(wave.backgroundClip).toBe("text");
+    expect(wave.color).toBe("rgba(0, 0, 0, 0)");
+    await captureToolActivityProof(page, "tool-row-running-text-wave");
+
+    await gateway.emitGatewayEvent("agent", {
+      runId,
+      seq: 2,
+      stream: "tool",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: {
+        toolCallId: "call-wave",
+        name: "exec",
+        phase: "result",
+        result: { text: "done" },
+      },
+    });
+    // The wave is a live-run marker only: the result event must end it and
+    // restore plain text color even though the run has not finished yet.
+    await expect.poll(() => page.locator(".chat-tool-row--running").count()).toBe(0);
+    const settled = await page
+      .locator(".chat-tool-row__cmd")
+      .first()
+      .evaluate((node) => {
+        const style = getComputedStyle(node);
+        return { animationName: style.animationName, color: style.color };
+      });
+    expect(settled.animationName).toBe("none");
+    expect(settled.color).not.toBe("rgba(0, 0, 0, 0)");
+    await context.close();
+  });
 });

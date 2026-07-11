@@ -1621,6 +1621,20 @@ openclaw-session-menu[popover] {
   flex: 1 1 auto;
 }
 
+/* Dev-checkout branch badge: only rendered when the gateway runs from a git
+   checkout off main, so operators notice non-release gateway code at a glance. */
+.sidebar-footer-branch {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-left: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--danger);
+}
+
 /* Footer icons mix in-app anchors, buttons, and one external docs link: the
    chrome gets the default arrow; only the external (target=_blank) anchor is
    a real hyperlink and keeps the pointer. */

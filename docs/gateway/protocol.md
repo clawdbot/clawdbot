@@ -788,6 +788,14 @@ The server advertises the effective `policy.tickIntervalMs`,
 `policy.maxPayload`, and `policy.maxBufferedBytes` in `hello-ok`; clients
 should honor those values rather than the pre-handshake defaults.
 
+The reference client lets finite requests own their configured deadline when
+every pending request has one. An `expectFinal` request without a finite
+`timeoutMs`, any request with `timeoutMs: null`, or a mix of finite and
+unbounded requests keeps the tick watchdog active. If inbound events and
+responses remain silent past the tick-timeout threshold, the client closes the
+socket with code `4000`, rejects every pending request, and reconnects. It does
+not replay rejected requests after reconnecting.
+
 ## Auth
 
 - Shared-secret gateway auth uses `connect.params.auth.token` or

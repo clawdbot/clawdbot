@@ -54,6 +54,8 @@ export type ControlUiMockGatewayScenario = {
   }>;
   defaultAgentId?: string;
   deferredMethods?: string[];
+  /** Non-release gateway checkout branch surfaced in the sidebar footer. */
+  devGitBranch?: string;
   deviceToken?: string;
   featureMethods?: string[];
   historyMessages?: unknown[];
@@ -228,6 +230,7 @@ function normalizeScenario(
     controlUiTabs: scenario.controlUiTabs ?? [],
     defaultAgentId,
     deferredMethods: scenario.deferredMethods ?? [],
+    devGitBranch: scenario.devGitBranch?.trim() || "",
     deviceToken: scenario.deviceToken?.trim() || "e2e-device-token",
     featureMethods: scenario.featureMethods ?? ["chat.metadata", "chat.startup"],
     historyMessages: scenario.historyMessages ?? [],
@@ -248,6 +251,7 @@ export function createControlUiMockBootstrapConfig(scenario: ControlUiMockGatewa
     assistantAvatar: "",
     assistantName: normalizedScenario.assistantName,
     basePath: "/",
+    devGitBranch: normalizedScenario.devGitBranch || undefined,
     embedSandbox: "scripts",
     localMediaPreviewRoots: [],
     serverVersion: "e2e",

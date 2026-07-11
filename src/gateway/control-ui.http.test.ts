@@ -29,6 +29,13 @@ import {
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
+// Keeps bootstrap payload tests deterministic: the real resolver reports the
+// git branch of this checkout, which varies across CI and dev machines.
+const devInstallBranchMock = vi.hoisted(() => ({ branch: null as string | null }));
+vi.mock("../infra/dev-install-branch.js", () => ({
+  resolveDevInstallGitBranch: async () => devInstallBranchMock.branch,
+}));
+
 const REAL_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
   "base64",
@@ -77,6 +84,7 @@ describe("handleControlUiHttpRequest", () => {
       assistantAvatarStatus?: "none" | "local" | "remote" | "data" | null;
       assistantAvatarReason?: string | null;
       assistantAgentId: string;
+      devGitBranch?: string;
       localMediaPreviewRoots?: string[];
       chatMessageMaxWidth?: string;
       seamColor?: string;
@@ -995,9 +1003,30 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.seamColor).toBe("#1A2b3C");
         expect(parsed.timeFormat).toBe("24");
         expect(parsed.terminalEnabled).toBe(false);
+        expect(parsed.devGitBranch).toBeUndefined();
         expect(Array.isArray(parsed.localMediaPreviewRoots)).toBe(true);
       },
     });
+  });
+
+  it("includes the dev checkout branch in bootstrap config", async () => {
+    devInstallBranchMock.branch = "feat/dev-branch-badge";
+    try {
+      await withControlUiRoot({
+        fn: async (tmp) => {
+          const { res, end } = makeMockHttpResponse();
+          const handled = await handleControlUiHttpRequest(
+            { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
+            res,
+            { root: { kind: "resolved", path: tmp }, config: {} },
+          );
+          expect(handled).toBe(true);
+          expect(parseBootstrapPayload(end).devGitBranch).toBe("feat/dev-branch-badge");
+        },
+      });
+    } finally {
+      devInstallBranchMock.branch = null;
+    }
   });
 
   it("inlines a workspace-local assistant avatar in bootstrap config (#97602)", async () => {

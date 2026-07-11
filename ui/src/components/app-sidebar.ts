@@ -207,6 +207,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) lobsterPetVisits = true;
   @property({ attribute: false }) lobsterPetSounds = false;
   @property({ attribute: false }) gatewayVersion: string | null = null;
+  @property({ attribute: false }) devGitBranch: string | null = null;
   @property({ attribute: false }) onOpenPalette?: () => void;
   @property({ attribute: false }) onToggleSidebar?: () => void;
   @property({ attribute: false }) onOpenNewSession?: (agentId: string) => void;
@@ -1942,6 +1943,11 @@ class AppSidebar extends OpenClawLightDomContentsElement {
                   aria-label=${gatewayStatus}
                 ></span>
               </openclaw-tooltip>
+              ${this.devGitBranch
+                ? html`<span class="sidebar-footer-branch" title=${this.devGitBranch}
+                    >${this.devGitBranch}</span
+                  >`
+                : nothing}
               <span class="sidebar-footer-bar__spacer"></span>
               <openclaw-tooltip .content=${settingsTooltip}>
                 <a

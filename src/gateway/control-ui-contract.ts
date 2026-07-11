@@ -79,6 +79,12 @@ export type ControlUiBootstrapConfig = {
   assistantAvatarReason?: string | null;
   assistantAgentId: string;
   serverVersion?: string;
+  /**
+   * Git branch of a source-checkout (non-release) gateway install. Omitted for
+   * package installs and mainline (main/master) checkouts so the UI only flags
+   * gateways running unreleased branch code.
+   */
+  devGitBranch?: string;
   localMediaPreviewRoots?: string[];
   embedSandbox?: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
