@@ -49,7 +49,7 @@ const clickClackMessageAdapter = defineChannelMessageAdapter({
   },
   send: {
     text: async (ctx) => {
-      const result = await sendClickClackText({
+      const messageId = await sendClickClackText({
         cfg: ctx.cfg as CoreConfig,
         accountId: ctx.accountId,
         to: ctx.to,
@@ -60,9 +60,9 @@ const clickClackMessageAdapter = defineChannelMessageAdapter({
       const threadId = ctx.threadId == null ? undefined : String(ctx.threadId);
       const replyToId = ctx.replyToId ?? undefined;
       return {
-        messageId: result.messageId,
+        ...(messageId ? { messageId } : {}),
         receipt: createMessageReceiptFromOutboundResults({
-          results: [{ channel: CHANNEL_ID, messageId: result.messageId }],
+          results: messageId ? [{ channel: CHANNEL_ID, messageId }] : [],
           threadId,
           replyToId,
           kind: "text",
@@ -177,15 +177,18 @@ export const clickClackPlugin: ChannelPlugin<ResolvedClickClackAccount> = create
     },
     attachedResults: {
       channel: CHANNEL_ID,
-      sendText: async ({ cfg, to, text, accountId, threadId, replyToId }) =>
-        await sendClickClackText({
+      sendText: async ({ cfg, to, text, accountId, threadId, replyToId }) => {
+        const messageId = await sendClickClackText({
           cfg: cfg as CoreConfig,
           accountId,
           to,
           text,
           threadId,
           replyToId,
-        }),
+        });
+        // Legacy outbound results use an empty id to report an intentional no-send.
+        return { messageId: messageId ?? "" };
+      },
     },
   },
 });
