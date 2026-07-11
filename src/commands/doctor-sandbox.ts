@@ -18,6 +18,7 @@ import {
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
+import { resolveOpenClawPackageRootsSync } from "../infra/openclaw-root.js";
 import { runCommandWithTimeout, runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
@@ -30,23 +31,25 @@ type SandboxScriptInfo = {
   cwd: string;
 };
 
-function resolveSandboxScript(scriptRel: string): SandboxScriptInfo | null {
-  const candidates = new Set<string>();
-  candidates.add(process.cwd());
-  const argv1 = process.argv[1];
-  if (argv1) {
-    const normalized = path.resolve(argv1);
-    candidates.add(path.resolve(path.dirname(normalized), ".."));
-    candidates.add(path.resolve(path.dirname(normalized)));
-  }
-
-  for (const root of candidates) {
+export function resolveSandboxScript(
+  scriptRel: string,
+  options: { argv1?: string; cwd?: string } = {},
+): SandboxScriptInfo | null {
+  // Scan every openclaw package root the shared resolver finds (symlinked launcher via realpath,
+  // then cwd) and return the first that actually holds the script. The resolver follows npm/pnpm
+  // global bins and version-manager links, but a published package root can resolve first and ship
+  // without scripts/sandbox-setup.sh (the npm files allowlist drops scripts/); stopping at the
+  // first root would then skip a valid source-checkout cwd that still has it.
+  const roots = resolveOpenClawPackageRootsSync({
+    cwd: options.cwd ?? process.cwd(),
+    argv1: options.argv1 ?? process.argv[1],
+  });
+  for (const root of roots) {
     const scriptPath = path.join(root, scriptRel);
     if (fs.existsSync(scriptPath)) {
       return { scriptPath, cwd: root };
     }
   }
-
   return null;
 }
 

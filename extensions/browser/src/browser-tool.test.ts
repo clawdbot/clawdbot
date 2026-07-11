@@ -17,8 +17,19 @@ const browserClientMocks = vi.hoisted(() => ({
     },
   })),
   browserFocusTab: vi.fn(async (..._args: unknown[]) => ({})),
+  browserImportProfile: vi.fn(async (..._args: unknown[]) => ({
+    ok: true,
+    systemProfile: "Default",
+    into: "imported",
+    browser: "chrome",
+    cookies: { total: 1, imported: 1, failed: 0, skipped: 0 },
+    domains: [".example.com"],
+  })),
   browserOpenTab: vi.fn(async (..._args: unknown[]) => ({})),
   browserProfiles: vi.fn(
+    async (..._args: unknown[]): Promise<Array<Record<string, unknown>>> => [],
+  ),
+  browserSystemProfiles: vi.fn(
     async (..._args: unknown[]): Promise<Array<Record<string, unknown>>> => [],
   ),
   browserSnapshot: vi.fn(
@@ -327,10 +338,12 @@ function resetBrowserToolMocks() {
     browserCloseTab: browserClientMocks.browserCloseTab as never,
     browserDoctor: browserClientMocks.browserDoctor as never,
     browserFocusTab: browserClientMocks.browserFocusTab as never,
+    browserImportProfile: browserClientMocks.browserImportProfile as never,
     browserNavigate: browserActionsMocks.browserNavigate as never,
     browserOpenTab: browserClientMocks.browserOpenTab as never,
     browserPdfSave: browserActionsMocks.browserPdfSave as never,
     browserProfiles: browserClientMocks.browserProfiles as never,
+    browserSystemProfiles: browserClientMocks.browserSystemProfiles as never,
     browserScreenshotAction: browserActionsMocks.browserScreenshotAction as never,
     browserStart: browserClientMocks.browserStart as never,
     browserStatus: browserClientMocks.browserStatus as never,

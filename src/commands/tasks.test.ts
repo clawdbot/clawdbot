@@ -21,6 +21,7 @@ import * as taskRegistryMaintenance from "../tasks/task-registry.maintenance.js"
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import type { TaskSystemAuditCode, TaskSystemAuditSeverity } from "./tasks-audit-system.js";
 import {
   tasksAuditCommand,
   tasksCancelCommand,
@@ -198,6 +199,50 @@ describe("tasks commands", () => {
       });
       expect(limitedFinding?.ageMs).toBeGreaterThanOrEqual(45 * 60_000);
       expect(limitedFinding?.ageMs).toBeLessThan(45 * 60_000 + 1_000);
+    });
+  });
+
+  it("reports blank list filters as absent in command JSON output", async () => {
+    await withTaskCommandStateDir(async () => {
+      const task = createTaskRecord({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "run-cli",
+        status: "running",
+        task: "Inspect issue backlog",
+      });
+
+      const runtime = createRuntime();
+      await tasksListCommand({ json: true, runtime: "   ", status: "\t" }, runtime);
+
+      expect(readFirstJsonLog(runtime)).toStrictEqual({
+        count: 1,
+        runtime: null,
+        status: null,
+        tasks: [jsonRoundTrip(task)],
+      });
+    });
+  });
+
+  it("reports blank audit filters as absent in command JSON output", async () => {
+    await withTaskCommandStateDir(async () => {
+      const runtime = createRuntime();
+      await tasksAuditCommand(
+        {
+          json: true,
+          severity: "  " as TaskSystemAuditSeverity,
+          code: "\t" as TaskSystemAuditCode,
+        },
+        runtime,
+      );
+
+      expect(readFirstJsonLog(runtime)).toMatchObject({
+        filters: {
+          severity: null,
+          code: null,
+        },
+      });
     });
   });
 

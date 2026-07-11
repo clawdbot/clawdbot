@@ -234,34 +234,25 @@ function renderFeishuPresentationPayload({
   };
 }
 
-function resolveReplyToMessageId(params: {
+type FeishuReplyMode =
+  | { replyToMessageId: string; replyInThread: false }
+  | { replyToMessageId: string; replyInThread: true }
+  | { replyToMessageId: undefined; replyInThread: false };
+
+// Target selection and thread mode are one decision; all payload parts reuse this result.
+function resolveFeishuReplyMode(params: {
   replyToId?: string | null;
   threadId?: string | number | null;
-}): string | undefined {
-  const replyToId = params.replyToId?.trim();
-  if (replyToId) {
-    return replyToId;
+}): FeishuReplyMode {
+  const replyToMessageId = params.replyToId?.trim();
+  if (replyToMessageId) {
+    return { replyToMessageId, replyInThread: false };
   }
-  if (params.threadId == null) {
-    return undefined;
-  }
-  const trimmed = String(params.threadId).trim();
-  return trimmed || undefined;
-}
 
-type FeishuMediaReplyMode = {
-  replyToMessageId: string | undefined;
-  replyInThread: boolean;
-};
-
-function resolveFeishuMediaReplyMode(params: {
-  replyToId?: string | null;
-  threadId?: string | number | null;
-}): FeishuMediaReplyMode {
-  const trimmedReplyToId = params.replyToId?.trim() || undefined;
-  const replyToMessageId = resolveReplyToMessageId(params);
-  const replyInThread = params.threadId != null && !trimmedReplyToId;
-  return { replyToMessageId, replyInThread };
+  const threadId = params.threadId == null ? undefined : String(params.threadId).trim();
+  return threadId
+    ? { replyToMessageId: threadId, replyInThread: true }
+    : { replyToMessageId: undefined, replyInThread: false };
 }
 
 async function sendCommentThreadReply(params: {
@@ -384,7 +375,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       });
     }
 
-    const replyToMessageId = resolveReplyToMessageId({
+    const { replyToMessageId, replyInThread } = resolveFeishuReplyMode({
       replyToId: ctx.replyToId,
       threadId: ctx.threadId,
     });
@@ -451,6 +442,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
             accountId: ctx.accountId ?? undefined,
             mediaLocalRoots: ctx.mediaLocalRoots,
             replyToMessageId,
+            replyInThread,
             ...(ctx.payload.audioAsVoice === true || ctx.audioAsVoice === true
               ? { audioAsVoice: true }
               : {}),
@@ -461,7 +453,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
             to: ctx.to,
             card,
             replyToMessageId,
-            replyInThread: ctx.threadId != null && !ctx.replyToId,
+            replyInThread,
             accountId: ctx.accountId ?? undefined,
           }),
       }),
@@ -479,7 +471,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       mediaLocalRoots,
       identity,
     }) => {
-      const { replyToMessageId, replyInThread } = resolveFeishuMediaReplyMode({
+      const { replyToMessageId, replyInThread } = resolveFeishuReplyMode({
         replyToId,
         threadId,
       });
@@ -568,7 +560,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       threadId,
       onDeliveryResult,
     }) => {
-      const { replyToMessageId, replyInThread } = resolveFeishuMediaReplyMode({
+      const { replyToMessageId, replyInThread } = resolveFeishuReplyMode({
         replyToId,
         threadId,
       });

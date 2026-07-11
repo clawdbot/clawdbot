@@ -4,6 +4,7 @@ import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-run
 import { getTelegramRuntime } from "./runtime.js";
 import { normalizeTelegramStateAccountId } from "./state-account-id.js";
 import { fingerprintTelegramBotToken } from "./token-fingerprint.js";
+import { resolveTelegramBotUserIdFromToken } from "./token.js";
 
 const STORE_VERSION = 3;
 export const TELEGRAM_UPDATE_OFFSET_NAMESPACE = "telegram.update-offsets";
@@ -40,15 +41,8 @@ function openUpdateOffsetStore(env?: NodeJS.ProcessEnv): TelegramUpdateOffsetSto
 }
 
 function extractBotIdFromToken(token?: string): string | null {
-  const trimmed = token?.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const [rawBotId] = trimmed.split(":", 1);
-  if (!rawBotId || !/^\d+$/.test(rawBotId)) {
-    return null;
-  }
-  return rawBotId;
+  const botUserId = resolveTelegramBotUserIdFromToken(token);
+  return botUserId === undefined ? null : String(botUserId);
 }
 
 function fingerprintFromToken(token?: string): string | null {

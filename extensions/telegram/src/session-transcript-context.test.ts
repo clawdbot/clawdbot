@@ -1,6 +1,6 @@
 import { readRecentUserAssistantTextForSession } from "openclaw/plugin-sdk/session-store-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildTelegramSessionTranscriptPromptMessages } from "./session-transcript-context.js";
+import { buildTelegramSessionTranscriptPromptEntries } from "./session-transcript-context.js";
 
 vi.mock("openclaw/plugin-sdk/session-store-runtime", () => ({
   readRecentUserAssistantTextForSession: vi.fn(),
@@ -8,7 +8,7 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", () => ({
 
 const readRecentUserAssistantTextForSessionMock = vi.mocked(readRecentUserAssistantTextForSession);
 
-describe("buildTelegramSessionTranscriptPromptMessages", () => {
+describe("buildTelegramSessionTranscriptPromptEntries", () => {
   beforeEach(() => {
     readRecentUserAssistantTextForSessionMock.mockReset();
   });
@@ -31,7 +31,7 @@ describe("buildTelegramSessionTranscriptPromptMessages", () => {
     ]);
 
     await expect(
-      buildTelegramSessionTranscriptPromptMessages({
+      buildTelegramSessionTranscriptPromptEntries({
         agentId: "main",
         sessionKey: "agent:main:main",
         storePath: "/tmp/sessions.json",
@@ -40,17 +40,25 @@ describe("buildTelegramSessionTranscriptPromptMessages", () => {
       }),
     ).resolves.toEqual([
       {
-        message_id: "session:u1",
-        sender: "User (gateway)",
-        timestamp_ms: 1_000,
-        body: "Analyze this chart",
-        source_channel: "gateway",
+        role: "user",
+        transcriptMessageId: "u1",
+        message: {
+          message_id: "session:u1",
+          sender: "User (gateway)",
+          timestamp_ms: 1_000,
+          body: "Analyze this chart",
+          source_channel: "gateway",
+        },
       },
       {
-        message_id: "session:a1",
-        sender: "OpenClaw",
-        timestamp_ms: 2_000,
-        body: "The chart is range-bound; want an alert?",
+        role: "assistant",
+        transcriptMessageId: "a1",
+        message: {
+          message_id: "session:a1",
+          sender: "OpenClaw",
+          timestamp_ms: 2_000,
+          body: "The chart is range-bound; want an alert?",
+        },
       },
     ]);
     expect(readRecentUserAssistantTextForSessionMock).toHaveBeenCalledWith({
@@ -65,7 +73,7 @@ describe("buildTelegramSessionTranscriptPromptMessages", () => {
   it("forwards topic-enabled DM session keys unchanged to the SDK reader", async () => {
     readRecentUserAssistantTextForSessionMock.mockResolvedValue([]);
 
-    await buildTelegramSessionTranscriptPromptMessages({
+    await buildTelegramSessionTranscriptPromptEntries({
       agentId: "main",
       sessionKey: "agent:main:main:thread:1234:42",
       storePath: "/tmp/sessions.json",

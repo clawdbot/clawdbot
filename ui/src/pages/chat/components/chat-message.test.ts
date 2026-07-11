@@ -6,6 +6,7 @@ import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { setUiTimeFormatPreference } from "../../../lib/format.ts";
 import {
+  formatChatRelativeTimestampLabel,
   formatChatTimestampForDisplay,
   renderMessageGroup,
   renderStreamGroup,
@@ -905,7 +906,10 @@ describe("grouped chat rendering", () => {
     const time = container.querySelector<HTMLTimeElement>(".chat-group-timestamp");
     expect(time).not.toBeNull();
     expect(time?.closest("details.msg-meta")).toBeNull();
-    expect(time?.title).not.toBe("");
+    // Absolute time lives in the styled tooltip around the relative label.
+    expect(time?.closest("openclaw-tooltip")?.getAttribute("content")).toBe(
+      formatChatTimestampForDisplay(1000).label,
+    );
   });
 
   it("uses the largest single assistant call for grouped context usage", () => {
@@ -934,36 +938,71 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".msg-meta__tokens")?.textContent).toBe("↑214.5k");
   });
 
-  it("renders full dates with message and streaming timestamps", () => {
-    const container = document.createElement("div");
+  it("renders relative labels with absolute datetimes for message and streaming timestamps", () => {
+    vi.useFakeTimers();
+    try {
+      const timestamp = Date.UTC(2026, 3, 24, 18, 30);
+      vi.setSystemTime(timestamp + 5 * 60 * 1000);
+      const container = document.createElement("div");
+
+      renderAssistantMessage(container, {
+        role: "assistant",
+        content: "Done",
+        timestamp,
+      });
+
+      const time = container.querySelector<HTMLTimeElement>(".chat-group-timestamp");
+      const display = formatChatTimestampForDisplay(timestamp);
+      expect(time?.dateTime).toBe(display.dateTime);
+      expect(time?.textContent?.trim()).toBe("5m ago");
+
+      render(
+        renderStreamGroup([
+          {
+            kind: "stream",
+            key: `stream:${timestamp}`,
+            text: "Working",
+            startedAt: timestamp,
+            isStreaming: true,
+          },
+        ]),
+        container,
+      );
+
+      const streamingTime = container.querySelector<HTMLTimeElement>(".chat-group-timestamp");
+      expect(streamingTime?.textContent?.trim()).toBe("5m ago");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("falls back to compact dates for footer labels older than a week", () => {
     const timestamp = Date.UTC(2026, 3, 24, 18, 30);
-
-    renderAssistantMessage(container, {
-      role: "assistant",
-      content: "Done",
-      timestamp,
-    });
-
-    const time = container.querySelector<HTMLTimeElement>(".chat-group-timestamp");
-    const display = formatChatTimestampForDisplay(timestamp);
-    expect(time?.dateTime).toBe(display.dateTime);
-    expect(time?.textContent?.trim()).toBe(display.label);
-
-    render(
-      renderStreamGroup([
-        {
-          kind: "stream",
-          key: `stream:${timestamp}`,
-          text: "Working",
-          startedAt: timestamp,
-          isStreaming: true,
-        },
-      ]),
-      container,
+    const sameYearNow = Date.UTC(2026, 5, 24, 18, 30);
+    const nextYearNow = Date.UTC(2027, 0, 2, 18, 30);
+    expect(formatChatRelativeTimestampLabel(timestamp, sameYearNow)).toBe(
+      new Date(timestamp).toLocaleDateString([], { month: "short", day: "numeric" }),
     );
+    expect(formatChatRelativeTimestampLabel(timestamp, nextYearNow)).toBe(
+      new Date(timestamp).toLocaleDateString([], {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      }),
+    );
+  });
 
-    const streamingTime = container.querySelector<HTMLTimeElement>(".chat-group-timestamp");
-    expect(streamingTime?.textContent?.trim()).toBe(display.label);
+  it("clamps skewed-future footer labels but dates far-future ones", () => {
+    const nowMs = Date.UTC(2026, 3, 24, 18, 30);
+    expect(formatChatRelativeTimestampLabel(nowMs + 30 * 1000, nowMs)).toBe("just now");
+    const nextYear = Date.UTC(2027, 3, 24, 18, 30);
+    expect(formatChatRelativeTimestampLabel(nextYear, nowMs)).toBe(
+      new Date(nextYear).toLocaleDateString([], {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      }),
+    );
   });
 
   it("omits streaming bubble class for completed stream segments", () => {
@@ -1039,9 +1078,8 @@ describe("grouped chat rendering", () => {
     // One bubble per segment, all under the single group.
     expect(container.querySelectorAll(".chat-bubble")).toHaveLength(3);
     // Footer time anchors to the earliest segment start, not render order.
-    const display = formatChatTimestampForDisplay(10);
-    expect(container.querySelector(".chat-group-timestamp")?.textContent?.trim()).toBe(
-      display.label,
+    expect(container.querySelector<HTMLTimeElement>(".chat-group-timestamp")?.dateTime).toBe(
+      formatChatTimestampForDisplay(10).dateTime,
     );
   });
 

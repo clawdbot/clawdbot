@@ -54,6 +54,8 @@ export type McpServerConfig = {
   auth?: "oauth";
   /** Optional OAuth client metadata overrides for HTTP MCP servers. */
   oauth?: {
+    /** Refresh-capable auth profile used to inject the current bearer token. */
+    authProfileId?: string;
     scope?: string;
     redirectUrl?: string;
     clientMetadataUrl?: string;

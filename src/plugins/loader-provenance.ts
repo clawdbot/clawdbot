@@ -220,6 +220,7 @@ export function warnWhenAllowlistIsOpen(params: {
   allow: string[];
   warningCacheKey: string;
   warningCache: OpenAllowlistWarningCache;
+  explicitlyEnabledPluginIds?: ReadonlySet<string>;
   discoverablePlugins: Array<{ id: string; source: string; origin: PluginRecord["origin"] }>;
 }) {
   if (!params.emitWarning) {
@@ -229,7 +230,9 @@ export function warnWhenAllowlistIsOpen(params: {
     return;
   }
   const autoDiscoverable = params.discoverablePlugins.filter(
-    (entry) => entry.origin === "workspace" || entry.origin === "global",
+    (entry) =>
+      (entry.origin === "workspace" || entry.origin === "global") &&
+      !params.explicitlyEnabledPluginIds?.has(entry.id),
   );
   if (autoDiscoverable.length === 0) {
     return;

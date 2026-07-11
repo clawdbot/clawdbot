@@ -748,6 +748,7 @@ extension MacNodeRuntime {
         let validatedCommand: ExecHostValidatedRequest
         let evaluation: ExecApprovalEvaluation
         let security: ExecSecurity
+        let delayedPolicySnapshot: ExecApprovalPolicySnapshot?
         let sessionKey: String
         let runId: String
     }
@@ -859,7 +860,8 @@ extension MacNodeRuntime {
             effectiveSecurity: security,
             approvalSource: approvalSource,
             explicitlyApproved: approvedByAsk,
-            persistAllowlist: persistAllowlist)
+            persistAllowlist: persistAllowlist,
+            delayedPolicySnapshot: prepared.delayedPolicySnapshot)
         let timeoutSec = params.timeoutMs.flatMap { Double($0) / 1000.0 }
         let cwd = params.cwd
         let executionEnv = evaluation.env
@@ -906,6 +908,10 @@ extension MacNodeRuntime {
                     code: .invalidRequest,
                     message: "INVALID_REQUEST: approvalSource cannot be combined with explicit approval"))
         }
+        let explicitDecision = ExecApprovalHelpers.parseDecision(params.approvalDecision)
+        let explicitApproval = params.approved == true ||
+            explicitDecision == .allowOnce ||
+            explicitDecision == .allowAlways
         let validatedCommand: ExecHostValidatedRequest
         switch ExecHostRequestEvaluator.validateCommand(
             command: params.command,
@@ -918,6 +924,45 @@ extension MacNodeRuntime {
                 ? error.message
                 : "INVALID_REQUEST: \(error.message)"
             return .response(Self.errorResponse(req, code: .invalidRequest, message: message))
+        }
+        if approvalSource != nil || explicitApproval {
+            guard let plan = params.systemRunPlan,
+                  MacSystemRunApprovalPlanValidator.matches(
+                      plan,
+                      params: params,
+                      validatedCommand: validatedCommand)
+            else {
+                let message = approvalSource != nil
+                    ? "approvalSource requires matching systemRunPlan"
+                    : "explicit approval requires matching systemRunPlan"
+                return .response(Self.errorResponse(req, code: .invalidRequest, message: message))
+            }
+        }
+        let carriesDelayedAuthority = approvalSource == .autoReview || explicitApproval
+        let delayedPolicySnapshot: ExecApprovalPolicySnapshot?
+        if carriesDelayedAuthority {
+            if let operand = params.systemRunPlan?.mutableFileOperand,
+               !MacSystemRunApprovalPlanValidator.revalidateMutableFileOperand(
+                   operand,
+                   command: validatedCommand.command,
+                   cwd: params.cwd)
+            {
+                return .response(
+                    Self.errorResponse(
+                        req,
+                        code: .unavailable,
+                        message: "SYSTEM_RUN_DENIED: approval script operand changed before execution"))
+            }
+            guard let policySnapshot = params.systemRunPlan?.policySnapshot else {
+                return .response(
+                    Self.errorResponse(
+                        req,
+                        code: .invalidRequest,
+                        message: "INVALID_REQUEST: delayed approval requires a prepared policy snapshot"))
+            }
+            delayedPolicySnapshot = ExecApprovalPolicySnapshot(portable: policySnapshot)
+        } else {
+            delayedPolicySnapshot = nil
         }
         let sessionKey = (params.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
             ? params.sessionKey!.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -991,6 +1036,7 @@ extension MacNodeRuntime {
             validatedCommand: validatedCommand,
             evaluation: evaluation,
             security: security,
+            delayedPolicySnapshot: delayedPolicySnapshot,
             sessionKey: sessionKey,
             runId: runId))
     }

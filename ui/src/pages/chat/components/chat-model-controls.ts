@@ -2,9 +2,13 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import type { ModelCatalogEntry, SessionsListResult } from "../../../api/types.ts";
-import { inferControlUiPublicAssetPath } from "../../../app/public-assets.ts";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
+import {
+  formatRawProviderLabel,
+  providerDisplayLabel,
+  renderProviderBrandIcon,
+} from "../../../components/provider-icon.ts";
 import { t } from "../../../i18n/index.ts";
 import { normalizeChatModelProviderId } from "../../../lib/chat/model-ref.ts";
 import {
@@ -45,15 +49,6 @@ type ChatModelProviderOption = ChatModelSelectOption & {
   provider: string;
 };
 
-const CHAT_MODEL_PROVIDER_LABELS: Readonly<Record<string, string>> = {
-  anthropic: "Anthropic",
-  google: "Google",
-  "github-copilot": "GitHub",
-  openai: "OpenAI",
-  opencode: "OpenCode",
-  openrouter: "OpenRouter",
-};
-
 const CHAT_MODEL_PROVIDER_GROUP_ALIASES: Readonly<Record<string, string>> = {
   "google-gemini-cli": "google",
   "opencode-go": "opencode",
@@ -65,119 +60,10 @@ function normalizeChatModelProviderGroupId(provider: string): string {
   return CHAT_MODEL_PROVIDER_GROUP_ALIASES[normalized] ?? normalized;
 }
 
-const CHAT_MODEL_PROVIDER_ICON_NAMES = new Set([
-  "abacus",
-  "alibaba",
-  "amp",
-  "antigravity",
-  "augment",
-  "bedrock",
-  "chutes",
-  "claude",
-  "clawrouter",
-  "codebuff",
-  "codex",
-  "commandcode",
-  "copilot",
-  "crof",
-  "crossmodel",
-  "cursor",
-  "deepgram",
-  "deepseek",
-  "devin",
-  "doubao",
-  "elevenlabs",
-  "factory",
-  "gemini",
-  "grok",
-  "groq",
-  "jetbrains",
-  "kilo",
-  "kimi",
-  "kiro",
-  "litellm",
-  "llmproxy",
-  "manus",
-  "mimo",
-  "minimax",
-  "mistral",
-  "ollama",
-  "opencode",
-  "opencodego",
-  "openrouter",
-  "perplexity",
-  "poe",
-  "qoder",
-  "sakana",
-  "stepfun",
-  "synthetic",
-  "t3chat",
-  "venice",
-  "vertexai",
-  "warp",
-  "windsurf",
-  "zai",
-  "zed",
-]);
-
-const CHAT_MODEL_PROVIDER_ICON_ALIASES: Readonly<Record<string, string>> = {
-  anthropic: "claude",
-  "amazon-bedrock": "bedrock",
-  "aws-bedrock": "bedrock",
-  google: "gemini",
-  "google-gemini-cli": "gemini",
-  "github-copilot": "copilot",
-  openai: "codex",
-  "opencode-go": "opencodego",
-  "opencode-zen": "opencode",
-  xai: "grok",
-  "vertex-ai": "vertexai",
-  "z-ai": "zai",
-};
-
-function formatChatModelProviderLabel(provider: string): string {
-  const known = CHAT_MODEL_PROVIDER_LABELS[provider];
-  if (known) {
-    return known;
-  }
-  return formatRawChatModelProviderLabel(provider);
-}
-
-function formatRawChatModelProviderLabel(provider: string): string {
-  return provider
-    .split(/[-_]+/u)
-    .filter(Boolean)
-    .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
-    .join(" ");
-}
-
-function resolveChatModelProviderIcon(provider: string): string | null {
-  const normalized = normalizeChatModelProviderId(provider);
-  const icon = CHAT_MODEL_PROVIDER_ICON_ALIASES[normalized] ?? normalized;
-  return CHAT_MODEL_PROVIDER_ICON_NAMES.has(icon) ? icon : null;
-}
-
 function renderChatModelProviderIcon(provider: string) {
-  const icon = resolveChatModelProviderIcon(provider);
-  if (!icon) {
-    return html`
-      <span
-        class="chat-controls__provider-icon chat-controls__provider-icon--fallback"
-        aria-hidden="true"
-      >
-        ${formatChatModelProviderLabel(provider).charAt(0)}
-      </span>
-    `;
-  }
-  const iconUrl = inferControlUiPublicAssetPath(`provider-icons/ProviderIcon-${icon}.svg`);
-  return html`
-    <span
-      class="chat-controls__provider-icon"
-      data-provider-icon=${icon}
-      style=${`--provider-icon-url: url("${iconUrl}")`}
-      aria-hidden="true"
-    ></span>
-  `;
+  return renderProviderBrandIcon(normalizeChatModelProviderId(provider), {
+    className: "chat-controls__provider-icon",
+  });
 }
 
 function resolveChatModelProvider(
@@ -385,8 +271,8 @@ function formatCombinedPickerModelLabel(label: string): string {
 function formatCombinedPickerModelOptionLabel(option: ChatModelProviderOption): string {
   const label = option.label;
   const providerPrefixes = [
-    formatRawChatModelProviderLabel(option.provider),
-    formatChatModelProviderLabel(option.provider),
+    formatRawProviderLabel(option.provider),
+    providerDisplayLabel(option.provider),
   ].toSorted((left, right) => right.length - left.length);
   for (const prefix of providerPrefixes) {
     if (label.toLowerCase().startsWith(`${prefix.toLowerCase()} `)) {
@@ -549,7 +435,8 @@ function renderChatModelReasoningSelect(params: {
     (selectedModelValue === ""
       ? defaultModelOption
       : modelOptions.find((option) => option.value === selectedModelValue)) ?? modelOptions[0];
-  const selectedProvider = selectedModelOption?.provider ?? orderedProviderGroups[0]?.[0] ?? "other";
+  const selectedProvider =
+    selectedModelOption?.provider ?? orderedProviderGroups[0]?.[0] ?? "other";
   const renderModelOption = (entry: ChatModelProviderOption) => {
     const selected =
       entry.value === selectedModelValue || (entry.isDefault && selectedModelValue === "");
@@ -584,7 +471,7 @@ function renderChatModelReasoningSelect(params: {
                   : ""}
               </span>
               <span class="chat-controls__model-option-provider">
-                ${formatChatModelProviderLabel(entry.provider)}
+                ${providerDisplayLabel(entry.provider)}
               </span>
             </span>
             ${selected
@@ -646,7 +533,7 @@ function renderChatModelReasoningSelect(params: {
                     @click=${(event: MouseEvent) => selectChatModelProvider(event, provider)}
                   >
                     ${renderChatModelProviderIcon(provider)}
-                    <span>${formatChatModelProviderLabel(provider)}</span>
+                    <span>${providerDisplayLabel(provider)}</span>
                   </button>
                 `;
               },
@@ -664,7 +551,7 @@ function renderChatModelReasoningSelect(params: {
                 <div
                   class="chat-controls__provider-model-group"
                   data-chat-model-provider-group=${provider}
-                  aria-label=${`${formatChatModelProviderLabel(provider)} models`}
+                  aria-label=${`${providerDisplayLabel(provider)} models`}
                   ?hidden=${provider !== selectedProvider}
                 >
                   ${repeat(

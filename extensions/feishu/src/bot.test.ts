@@ -2036,6 +2036,7 @@ describe("handleFeishuMessage command authorization", () => {
       From?: string;
       OriginatingChannel?: string;
       OriginatingTo?: string;
+      NativeChannelId?: string;
       SenderId?: string;
       To?: string;
     }>(mockFinalizeInboundContext, 0, 0);
@@ -2044,6 +2045,7 @@ describe("handleFeishuMessage command authorization", () => {
     expect(finalized.To).toBe("chat:oc-group");
     expect(finalized.OriginatingChannel).toBe("feishu");
     expect(finalized.OriginatingTo).toBe("chat:oc-group");
+    expect(finalized.NativeChannelId).toBe("oc-group");
     expect(finalized.SenderId).toBe("ou-allowed");
     const groupSessionKey = resolveGroupSessionKey(finalized as never);
     if (!groupSessionKey) {

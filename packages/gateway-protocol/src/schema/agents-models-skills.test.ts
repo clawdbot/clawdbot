@@ -7,6 +7,7 @@ import {
   SkillsProposalInspectResultSchema,
   SkillsProposalRequestRevisionResultSchema,
   ToolsEffectiveResultSchema,
+  ToolsInvokeParamsSchema,
 } from "./agents-models-skills.js";
 
 /**
@@ -96,6 +97,23 @@ describe("ToolsEffectiveResultSchema", () => {
     };
 
     expect(Value.Check(ToolsEffectiveResultSchema, result)).toBe(false);
+  });
+});
+
+describe("ToolsInvokeParamsSchema", () => {
+  it("accepts only the operation-local direct-operator marker", () => {
+    expect(
+      Value.Check(ToolsInvokeParamsSchema, {
+        name: "message",
+        conversationReadOrigin: "direct-operator",
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(ToolsInvokeParamsSchema, {
+        name: "message",
+        conversationReadOrigin: "delegated",
+      }),
+    ).toBe(false);
   });
 });
 

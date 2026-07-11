@@ -96,7 +96,7 @@ final class ShareViewController: UIViewController {
             "share payload title=\(payload.title?.count ?? 0) text=\(payload.text?.count ?? 0)")
         self.logger.info(
             "share attachments hasURL=\(payload.url != nil) images=\(self.pendingAttachments.count)")
-        let message = self.composeDraft(from: payload)
+        let message = ShareDraftComposer.compose(from: payload)
         await MainActor.run {
             self.draftTextView.text = message
             self.sendButton.isEnabled = true
@@ -346,40 +346,6 @@ final class ShareViewController: UIViewController {
         }
     }
 
-    private func composeDraft(from payload: SharedContentPayload) -> String {
-        var lines: [String] = []
-        let title = self.sanitizeDraftFragment(payload.title)
-        let text = self.sanitizeDraftFragment(payload.text)
-        let url = payload.url?.absoluteString.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-
-        if let title, !title.isEmpty { lines.append(title) }
-        if let text, !text.isEmpty { lines.append(text) }
-        if !url.isEmpty { lines.append(url) }
-
-        return lines.joined(separator: "\n\n")
-    }
-
-    private func sanitizeDraftFragment(_ raw: String?) -> String? {
-        guard let raw else { return nil }
-        let banned = [
-            "shared from ios.",
-            "text:",
-            "shared attachment(s):",
-            "please help me with this.",
-            "please help me with this.w",
-        ]
-        let cleanedLines = raw
-            .components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { line in
-                guard !line.isEmpty else { return false }
-                let lowered = line.lowercased()
-                return !banned.contains { lowered == $0 || lowered.hasPrefix($0) }
-            }
-        let cleaned = cleanedLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-        return cleaned.isEmpty ? nil : cleaned
-    }
-
     private func extractSharedContent() async -> ExtractedShareContent {
         guard let items = self.extensionContext?.inputItems as? [NSExtensionItem] else {
             return ExtractedShareContent(
@@ -390,6 +356,7 @@ final class ShareViewController: UIViewController {
         var title: String?
         var sharedURL: URL?
         var sharedText: String?
+        var attributedContentText: String?
         var imageCount = 0
         var videoCount = 0
         var fileCount = 0
@@ -399,7 +366,10 @@ final class ShareViewController: UIViewController {
 
         for item in items {
             if title == nil {
-                title = item.attributedTitle?.string ?? item.attributedContentText?.string
+                title = item.attributedTitle?.string
+            }
+            if attributedContentText == nil {
+                attributedContentText = item.attributedContentText?.string
             }
 
             for provider in item.attachments ?? [] {
@@ -433,8 +403,14 @@ final class ShareViewController: UIViewController {
         _ = fileCount
         _ = unknownCount
 
+        // Share hosts often mirror provider text in attributedContentText.
+        // Preserve distinct content as the historical title, but do not duplicate provider data.
+        let supplementalTitle = SharePayloadNormalizer.distinctAttributedText(
+            attributedContentText,
+            sharedText: sharedText,
+            sharedURL: sharedURL)
         return ExtractedShareContent(
-            payload: SharedContentPayload(title: title, url: sharedURL, text: sharedText),
+            payload: SharedContentPayload(title: title ?? supplementalTitle, url: sharedURL, text: sharedText),
             attachments: attachments)
     }
 
@@ -493,8 +469,7 @@ final class ShareViewController: UIViewController {
 
         if provider.hasItemConformingToTypeIdentifier(UTType.text.identifier) {
             if let text = await self.loadTextValue(from: provider, typeIdentifier: UTType.text.identifier),
-               let url = URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines)),
-               url.scheme != nil
+               let url = SharePayloadNormalizer.webURL(from: text)
             {
                 return url
             }

@@ -82,6 +82,8 @@ export type PluginToolRegistration = {
   names: string[];
   declaredNames?: string[];
   optional: boolean;
+  /** Loader-owned provenance. Missing values are conservative legacy registrations. */
+  origin?: PluginOrigin;
   source: string;
   rootDir?: string;
 };
@@ -126,6 +128,8 @@ export type PluginChannelRegistration = {
   pluginId: string;
   pluginName?: string;
   plugin: ChannelPlugin;
+  /** Loader-owned provenance. Missing values are conservative legacy registrations. */
+  origin?: PluginOrigin;
   source: string;
   rootDir?: string;
 };
@@ -134,6 +138,8 @@ export type PluginChannelSetupRegistration = {
   pluginId: string;
   pluginName?: string;
   plugin: ChannelPlugin;
+  /** Loader-owned provenance. Missing values are conservative legacy registrations. */
+  origin?: PluginOrigin;
   source: string;
   enabled: boolean;
   rootDir?: string;

@@ -241,7 +241,7 @@
     "tools": [
       {
         "deferLoading": true,
-        "description": "Discover/control paired nodes: status, describe, pairing, notify, camera/photos/screen/location/notifications/invoke. Use file_fetch for files.",
+        "description": "List paired nodes with status; describe/control a specific node by passing node. Supports pairing, notify, camera/photos/screen/location/notifications/invoke. Use file_fetch for files.",
         "inputSchema": {
           "properties": {
             "action": {
@@ -341,6 +341,7 @@
               "type": "integer"
             },
             "node": {
+              "description": "Node ID, name, or IP. Required for describe and node-targeted actions; use status to discover nodes.",
               "type": "string"
             },
             "notificationAction": {

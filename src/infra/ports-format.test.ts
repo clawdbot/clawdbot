@@ -8,6 +8,7 @@ import {
   formatPortListener,
   isDualStackLoopbackGatewayListeners,
   isExpectedGatewayListeners,
+  isSameProcessSpecificIpv4WithLoopbackListeners,
   isSingleExpectedGatewayListener,
 } from "./ports-format.js";
 
@@ -84,6 +85,76 @@ describe("ports-format", () => {
     expect(isDualStackLoopbackGatewayListeners(listeners, 18789)).toBe(true);
     expect(isExpectedGatewayListeners(listeners, 18789)).toBe(true);
     expect(buildPortHints(listeners, 18789)).toEqual([]);
+  });
+
+  it("treats a single-process specific IPv4 plus loopback alias as benign", () => {
+    const listeners = [
+      { pid: 4242, commandLine: "openclaw-gateway", address: "100.64.0.1:18789" },
+      { pid: 4242, commandLine: "openclaw-gateway", address: "127.0.0.1:18789" },
+    ];
+
+    expect(isExpectedGatewayListeners(listeners, 18789)).toBe(true);
+    expect(isSameProcessSpecificIpv4WithLoopbackListeners(listeners, 18789, "100.64.0.1")).toBe(
+      true,
+    );
+    expect(isSameProcessSpecificIpv4WithLoopbackListeners(listeners, 18789, "10.0.0.5")).toBe(
+      false,
+    );
+    expect(buildPortHints(listeners, 18789)).toEqual([]);
+  });
+
+  it("checks exact alias ownership without relying on process display metadata", () => {
+    const listeners = [
+      { pid: 4242, commandLine: "opaque-wrapper", address: "100.64.0.1:18789" },
+      { pid: 4242, commandLine: "opaque-wrapper", address: "127.0.0.1:18789" },
+    ];
+
+    expect(isExpectedGatewayListeners(listeners, 18789)).toBe(false);
+    expect(isSameProcessSpecificIpv4WithLoopbackListeners(listeners, 18789, "100.64.0.1")).toBe(
+      true,
+    );
+  });
+
+  it.each([
+    [
+      "mixed process ids",
+      [
+        { pid: 4242, commandLine: "openclaw-gateway", address: "100.64.0.1:18789" },
+        { pid: 4243, commandLine: "openclaw-gateway", address: "127.0.0.1:18789" },
+      ],
+    ],
+    [
+      "an IPv6 selected address",
+      [
+        { pid: 4242, commandLine: "openclaw-gateway", address: "[fd7a:115c:a1e0::1]:18789" },
+        { pid: 4242, commandLine: "openclaw-gateway", address: "127.0.0.1:18789" },
+      ],
+    ],
+    [
+      "a missing loopback alias",
+      [{ pid: 4242, commandLine: "openclaw-gateway", address: "100.64.0.1:18789" }],
+    ],
+    [
+      "missing process metadata",
+      [
+        { commandLine: "openclaw-gateway", address: "100.64.0.1:18789" },
+        { commandLine: "openclaw-gateway", address: "127.0.0.1:18789" },
+      ],
+    ],
+    [
+      "an extra listener",
+      [
+        { pid: 4242, commandLine: "openclaw-gateway", address: "100.64.0.1:18789" },
+        { pid: 4242, commandLine: "openclaw-gateway", address: "127.0.0.1:18789" },
+        { pid: 4242, commandLine: "openclaw-gateway", address: "[::1]:18789" },
+      ],
+    ],
+  ])("rejects specific-address ownership with %s", (_label, listeners) => {
+    expect(isExpectedGatewayListeners(listeners, 18789)).toBe(false);
+    expect(isSameProcessSpecificIpv4WithLoopbackListeners(listeners, 18789, "100.64.0.1")).toBe(
+      false,
+    );
+    expect(buildPortHints(listeners, 18789)).toContain(gatewayAlreadyRunningHint);
   });
 
   it.each([

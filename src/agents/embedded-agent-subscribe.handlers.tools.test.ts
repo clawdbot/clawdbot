@@ -2171,10 +2171,12 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
         result: {
           details: {
             status: "approval-unavailable",
-            reason: "initiating-platform-disabled",
+            reason: "no-approval-route",
             channel: "discord",
             channelLabel: "Discord",
             accountId: "work",
+            host: "node",
+            nodeId: "node-mac-1",
           },
         },
       } as never,
@@ -2184,7 +2186,13 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
       requireMockCallArg(onToolResult, 0, "tool result").text,
       "tool result text",
     );
-    expect(text).toContain("native chat exec approvals are not configured on Discord");
+    expect(text).toContain("no interactive approval client is currently available");
+    expect(text).toContain(
+      "Print the Control UI URL with `openclaw dashboard --no-open`, open it in a browser, then use the approval inbox.",
+    );
+    expect(text).toContain(
+      "Inspect the node's effective exec policy with `openclaw approvals get --node node-mac-1`.",
+    );
     expect(text).not.toContain("/approve");
     expect(text).not.toContain("Pending command:");
     expect(text).not.toContain("Host:");

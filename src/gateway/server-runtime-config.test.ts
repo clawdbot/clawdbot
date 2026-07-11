@@ -175,6 +175,12 @@ describe("resolveGatewayRuntimeConfig", () => {
         expectedMessage: "gateway bind=loopback resolved to non-loopback host",
       },
       {
+        name: "tailnet binding that falls through to wildcard",
+        cfg: { gateway: { bind: "tailnet" as const, auth: TOKEN_AUTH } },
+        host: "0.0.0.0",
+        expectedMessage: "gateway bind=tailnet could not resolve a Tailscale or loopback address",
+      },
+      {
         name: "custom bind without customBindHost",
         cfg: { gateway: { bind: "custom" as const, auth: TOKEN_AUTH } },
         expectedMessage: "gateway.bind=custom requires gateway.customBindHost",

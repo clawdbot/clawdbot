@@ -10,6 +10,7 @@ import "../components/exec-approval.ts";
 import "../components/gateway-url-confirmation.ts";
 import "../components/github-link-hovercard.ts";
 import "../components/login-gate.ts";
+import "../components/browser/browser-panel.ts";
 import "../components/resizable-divider.ts";
 import "../components/terminal/terminal-panel.ts";
 import "../components/tooltip.ts";
@@ -40,6 +41,7 @@ import {
   type ApplicationContext,
   type ApplicationNavigationOptions,
 } from "./context.ts";
+import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
 import { hasOperatorAdminAccess } from "./operator-access.ts";
 import { controlUiPublicAssetPath } from "./public-assets.ts";
 import { selectRenderedRouteMatch } from "./router-outlet.ts";
@@ -119,6 +121,16 @@ function isTerminalAvailable(
   return (
     hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
     isGatewayMethodAdvertised(snapshot, "terminal.open") === true
+  );
+}
+
+function isBrowserPanelAvailable(snapshot: ApplicationContext["gateway"]["snapshot"]): boolean {
+  if (!snapshot.connected) {
+    return false;
+  }
+  return (
+    hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
+    isGatewayMethodAdvertised(snapshot, "browser.request") === true
   );
 }
 
@@ -805,6 +817,7 @@ class OpenClawShell extends OpenClawLightDomElement {
       gatewaySnapshot,
       context.config.current.terminalEnabled ?? false,
     );
+    const browserPanelAvailable = isBrowserPanelAvailable(gatewaySnapshot);
     const activeRoute = this.routeState.routeId ?? "chat";
     // Plugin tabs share one route; the search picks the active item.
     const activePluginTabId =
@@ -985,6 +998,16 @@ class OpenClawShell extends OpenClawLightDomElement {
           .available=${terminalAvailable}
           .themeMode=${resolveTerminalThemeMode()}
         ></openclaw-terminal-panel>
+        <openclaw-browser-panel
+          .client=${gatewaySnapshot.connected ? gatewaySnapshot.client : null}
+          .available=${browserPanelAvailable}
+          .basePath=${context.basePath}
+          .authToken=${resolveControlUiAuthToken({
+            hello: gatewaySnapshot.hello,
+            settings: { token: context.gateway.connection.token },
+            password: context.gateway.connection.password,
+          })}
+        ></openclaw-browser-panel>
         <openclaw-exec-approval
           .props=${{
             queue: overlaySnapshot.approvalQueue,

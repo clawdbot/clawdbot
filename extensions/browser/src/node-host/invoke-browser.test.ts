@@ -114,6 +114,12 @@ vi.mock("../browser/request-policy.js", () => ({
     }
     return method === "DELETE" && /^\/profiles\/[^/]+$/.test(path);
   }),
+  isBrowserHostLocalRoute: vi.fn((method: string, path: string) => {
+    if (method === "POST" && path === "/profiles/import") {
+      return true;
+    }
+    return method === "GET" && path === "/system-profiles";
+  }),
   normalizeBrowserRequestPath: vi.fn((path: string) => path),
   resolveRequestedBrowserProfile: vi.fn(
     ({
@@ -562,6 +568,20 @@ describe("runBrowserProxyCommand", () => {
         }),
       ),
     ).rejects.toThrow("INVALID_REQUEST: browser.proxy cannot mutate persistent browser profiles");
+    expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("rejects host-local system profile listing on a browser node", async () => {
+    configMocks.loadConfig.mockReturnValue({
+      browser: {},
+      nodeHost: { browserProxy: { enabled: true, allowProfiles: [] } },
+    });
+
+    await expect(
+      runBrowserProxyCommand(
+        JSON.stringify({ method: "GET", path: "/system-profiles", timeoutMs: 50 }),
+      ),
+    ).rejects.toThrow("INVALID_REQUEST: browser.proxy cannot run host-local browser routes");
     expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
   });
 

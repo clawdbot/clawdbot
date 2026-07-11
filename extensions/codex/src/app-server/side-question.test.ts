@@ -478,8 +478,11 @@ describe("runCodexAppServerSideQuestion", () => {
       sideParams({
         messageChannel: "discord",
         messageProvider: "discord-voice",
+        chatId: "discord-native-room",
+        chatType: "channel",
         sessionKey: "agent:main:conversation",
         sandboxSessionKey: "agent:main:runtime-policy",
+        messageActionTurnCapability: "turn-capability-1",
         currentChannelId: "voice-room",
         agentAccountId: "account-1",
         messageTo: "channel-1",
@@ -594,7 +597,9 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(toolOptions).toHaveProperty("modelId", "gpt-5.5");
     expect(toolOptions).toHaveProperty("messageProvider", "discord");
     expect(toolOptions).toHaveProperty("toolPolicyMessageProvider", "discord-voice");
+    expect(toolOptions).toHaveProperty("chatType", "channel");
     expect(toolOptions).toHaveProperty("currentChannelId", "voice-room");
+    expect(toolOptions).toHaveProperty("nativeChannelId", "discord-native-room");
     expect(toolOptions).toMatchObject({
       agentAccountId: "account-1",
       sessionKey: "agent:main:runtime-policy",
@@ -610,6 +615,7 @@ describe("runCodexAppServerSideQuestion", () => {
       senderUsername: "rosita",
       senderE164: "+15550001",
       senderIsOwner: true,
+      messageActionTurnCapability: "turn-capability-1",
     });
     expect(toolOptions).toHaveProperty("requireExplicitMessageTarget", true);
   });

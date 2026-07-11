@@ -272,12 +272,15 @@ enum ExecApprovalsConditionalSaveResult {
 
 enum ExecApprovalsMutationError: Error, Equatable, Sendable {
     case invalidPattern(ExecAllowlistPatternValidationReason)
+    case entryNotOwned
     case unavailable
 
     var message: String {
         switch self {
         case let .invalidPattern(reason):
             reason.message
+        case .entryNotOwned:
+            "This allowlist entry is inherited. Edit its owning scope and retry."
         case .unavailable:
             "Could not save exec approvals. Last known settings are shown; retry the change."
         }

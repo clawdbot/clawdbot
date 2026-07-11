@@ -1,10 +1,11 @@
 // Imessage tests cover monitor reply cache plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  resetIMessageShortIdState,
   findLatestIMessageEntryForChat,
+  isIMessageCurrentMessageInChat,
   isKnownFromMeIMessageMessageId,
   rememberIMessageReplyCache,
+  resetIMessageShortIdState,
   resolveIMessageMessageId,
 } from "./monitor-reply-cache.js";
 import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
@@ -380,6 +381,70 @@ describe("hydrate-on-resolve (post-restart short-id persistence)", () => {
     });
 
     expect(second.shortId).toBe("2");
+  });
+});
+
+describe("current-message chat binding", () => {
+  it.each([{ chatGuid: "any;-;+12069106512" }, { chatIdentifier: "+12069106512" }, { chatId: 42 }])(
+    "matches a trusted current message through $chatGuid$chatIdentifier$chatId",
+    (chatContext) => {
+      const entry = rememberIMessageReplyCache({
+        accountId: "work",
+        messageId: "current-guid",
+        chatGuid: "any;-;+12069106512",
+        chatIdentifier: "+12069106512",
+        chatId: 42,
+        timestamp: Date.now(),
+      });
+
+      expect(
+        isIMessageCurrentMessageInChat({
+          accountId: "work",
+          currentMessageId: entry.shortId,
+          chatContext,
+        }),
+      ).toBe(true);
+      expect(
+        isIMessageCurrentMessageInChat({
+          accountId: "work",
+          currentMessageId: "current-guid",
+          chatContext,
+        }),
+      ).toBe(true);
+    },
+  );
+
+  it("fails closed for wrong accounts, chats, and unknown current messages", () => {
+    rememberIMessageReplyCache({
+      accountId: "work",
+      messageId: "current-guid",
+      chatGuid: "any;-;+12069106512",
+      chatIdentifier: "+12069106512",
+      chatId: 42,
+      timestamp: Date.now(),
+    });
+
+    expect(
+      isIMessageCurrentMessageInChat({
+        accountId: "other",
+        currentMessageId: "current-guid",
+        chatContext: { chatId: 42 },
+      }),
+    ).toBe(false);
+    expect(
+      isIMessageCurrentMessageInChat({
+        accountId: "work",
+        currentMessageId: "current-guid",
+        chatContext: { chatId: 99 },
+      }),
+    ).toBe(false);
+    expect(
+      isIMessageCurrentMessageInChat({
+        accountId: "work",
+        currentMessageId: "unknown-guid",
+        chatContext: { chatId: 42 },
+      }),
+    ).toBe(false);
   });
 });
 

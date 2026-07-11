@@ -317,6 +317,62 @@ describe("runMessageAction media behavior", () => {
     expect(sendArgs.asVoice).toBe(true);
   });
 
+  it("rejects plugin-declined attachment actions before loading media", async () => {
+    const handleAction = vi.fn(async () => jsonResult({ ok: true }));
+    const textOnlyPlugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({
+        id: "textonly",
+        label: "TextOnly",
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => ({ enabled: true }),
+          isConfigured: () => true,
+        },
+      }),
+      outbound: {
+        deliveryMode: "direct",
+        resolveTarget: ({ to }) => ({ ok: true, to: to?.trim() ?? "" }),
+        sendText: async () => ({ channel: "textonly", messageId: "msg-test" }),
+        sendMedia: async () => ({ channel: "textonly", messageId: "msg-test" }),
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"] }),
+        supportsAction: ({ action }) => action === "send",
+        handleAction,
+      },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "textonly",
+          source: "test",
+          plugin: textOnlyPlugin,
+        },
+      ]),
+    );
+    vi.mocked(loadWebMedia).mockResolvedValue({
+      buffer: Buffer.from("should not load"),
+      contentType: "image/png",
+      kind: "image",
+      fileName: "pic.png",
+    });
+
+    await expect(
+      runMessageAction({
+        cfg: { channels: { textonly: { enabled: true } } } as OpenClawConfig,
+        action: "upload-file",
+        params: {
+          channel: "textonly",
+          target: "room-1",
+          media: "https://example.com/pic.png",
+        },
+      }),
+    ).rejects.toThrow("Message action upload-file not supported for channel textonly.");
+
+    expect(loadWebMedia).not.toHaveBeenCalled();
+    expect(handleAction).not.toHaveBeenCalled();
+  });
+
   it("materializes buffer-only send attachments into outbound media paths", async () => {
     setActivePluginRegistry(
       createTestRegistry([

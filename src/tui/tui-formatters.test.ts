@@ -382,6 +382,12 @@ describe("sanitizeRenderableText", () => {
     expectTokenWidthUnderLimit(input);
   });
 
+  it("keeps surrogate pairs intact when breaking long prose tokens", () => {
+    const input = `${"a".repeat(31)}😀b`;
+
+    expect(sanitizeRenderableText(input)).toBe(`${"a".repeat(31)} 😀b`);
+  });
+
   it("preserves long CJK prose without inserting display spaces", () => {
     const input =
       "特蕾莎修女是一个极端投入极有宗教信念愿意亲身服务底层苦难者的人但她不是现代公共卫生意义上的慈善改革者";

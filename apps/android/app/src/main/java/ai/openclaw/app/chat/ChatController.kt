@@ -2,6 +2,7 @@ package ai.openclaw.app.chat
 
 import ai.openclaw.app.GatewayModelSummary
 import ai.openclaw.app.gateway.GatewayRequestDefinitiveFailure
+import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.parseChatSendAck
@@ -27,6 +28,7 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
@@ -111,6 +113,9 @@ class ChatController internal constructor(
   private val _thinkingLevel = MutableStateFlow("off")
   val thinkingLevel: StateFlow<String> = _thinkingLevel.asStateFlow()
 
+  private val _thinkingLevelSelection = MutableStateFlow(defaultChatThinkingLevelSelection)
+  val thinkingLevelSelection: StateFlow<ChatThinkingLevelSelection> = _thinkingLevelSelection.asStateFlow()
+
   private val _selectedModelRef = MutableStateFlow<String?>(null)
   val selectedModelRef: StateFlow<String?> = _selectedModelRef.asStateFlow()
 
@@ -189,21 +194,25 @@ class ChatController internal constructor(
   private val _outboxItems = MutableStateFlow<List<ChatOutboxItem>>(emptyList())
   val outboxItems: StateFlow<List<ChatOutboxItem>> = _outboxItems.asStateFlow()
 
+  // Flush requests are level-triggered: the owner clears one per pass and rechecks after release.
   private val outboxFlushInFlight = AtomicBoolean(false)
+  private val outboxFlushRequested = AtomicBoolean(false)
+  private val outboxRecoveryMutex = Mutex()
+  private var outboxRecoveryComplete = false
 
-  init {
-    if (commandOutbox != null) {
+  private val outboxRecoveryJob =
+    commandOutbox?.let { outbox ->
       scope.launch {
-        // Crash safety: a process killed mid-flush leaves rows in 'sending'; requeue them so
-        // they are retried instead of being stuck invisible to the flush loop forever.
-        runCatching { commandOutbox.requeueSendingAfterRestart() }
-        currentCacheScope()?.let { outboxScope ->
-          runCatching { commandOutbox.expireStale(outboxScope.gatewayId, System.currentTimeMillis()) }
+        // A killed process can lose the local delete after the gateway accepted a command.
+        // Keep that delivery ambiguous and user-visible instead of replaying it automatically.
+        if (recoverInterruptedOutboxSends(outbox)) {
+          currentCacheScope()?.let { outboxScope ->
+            runCatching { outbox.expireStale(outboxScope.gatewayId, System.currentTimeMillis()) }
+          }
         }
         publishOutbox()
       }
     }
-  }
 
   /** Clears transient chat state when the operator gateway session disconnects. */
   fun onDisconnected(message: String) {
@@ -261,6 +270,7 @@ class ChatController internal constructor(
       )
       clearLiveHistoryMarker()
       _sessions.value = emptyList()
+      applyThinkingMetadata(null)
       sessionsListArchived = false
       unreadPatchSessionKey = null
       unreadPatchRequested = false
@@ -588,6 +598,10 @@ class ChatController internal constructor(
   /** Persists the normalized thinking level used for subsequent chat sends. */
   fun setThinkingLevel(thinkingLevel: String) {
     val normalized = normalizeThinking(thinkingLevel)
+    val selection = _thinkingLevelSelection.value
+    if (selection.isGatewayProvided && selection.options.none { it.id == normalized }) {
+      return
+    }
     if (normalized == _thinkingLevel.value) return
     _thinkingLevel.value = normalized
   }
@@ -622,8 +636,10 @@ class ChatController internal constructor(
                 put("key", JsonPrimitive(key))
                 put("model", normalizedModelRef?.let(::JsonPrimitive) ?: JsonNull)
               }
-            requestGateway("sessions.patch", params.toString())
+            val response = requestGateway("sessions.patch", params.toString())
+            val resolution = parseSessionModelPatchResolution(response)
             normalizedModelRef?.let(recordModelRecent)
+            applyAcceptedModelPatch(key = key, modelRef = normalizedModelRef, resolution = resolution)
             if (_sessionKey.value == key) {
               modelSelectionGeneration.incrementAndGet()
               _selectedModelRef.value = normalizedModelRef
@@ -669,6 +685,7 @@ class ChatController internal constructor(
   ): Long {
     val generation = historyLoadGeneration.incrementAndGet()
     _sessionKey.value = key
+    applyThinkingMetadata(_sessions.value.firstOrNull { it.key == key })
     _selectedModelRef.value = null
     lastHandledTerminalRunId = null
     val nextAgentId = resolveAgentIdForSessionKey(key)
@@ -762,7 +779,7 @@ class ChatController internal constructor(
     // Applied at enqueue time too so durable rows never persist a level the selected model
     // rejects; reconnect flushes with a cleared catalog fail open, matching pre-gating behavior.
     val thinking =
-      if (thinkingSupportedForSelection(_selectedModelRef.value, _modelCatalog.value)) {
+      if (thinkingSupportedForCurrentSelection()) {
         normalizeThinking(thinkingLevel)
       } else {
         "off"
@@ -1272,6 +1289,9 @@ class ChatController internal constructor(
           if (requestCacheScope != currentCacheScope()) return
           if (requestSequence != sessionsRequestSequence.get()) return
           _sessions.value = result.sessions
+          result.sessions
+            .firstOrNull { it.key == _sessionKey.value }
+            ?.let(::applyThinkingMetadata)
           sessionsListArchived = archived
           val activeSessionKey = _sessionKey.value
           val activeOutsideLocalWindow =
@@ -1369,7 +1389,7 @@ class ChatController internal constructor(
     val wasOk = _healthOk.value
     _healthOk.value = true
     if (!wasOk && commandOutbox != null) {
-      scope.launch { flushOutbox() }
+      requestOutboxFlush()
     }
   }
 
@@ -1427,11 +1447,13 @@ class ChatController internal constructor(
     val outbox = commandOutbox ?: return
     scope.launch {
       val outboxScope = currentCacheScope() ?: return@launch
-      // requeueForRetry (not a plain status flip) refreshes createdAt so retrying an expired
-      // row does not get re-expired by the flush sweep before it can send.
-      runCatching { outbox.requeueForRetry(gatewayId = outboxScope.gatewayId, id = id, nowMs = System.currentTimeMillis()) }
+      // requeueForRetry refreshes createdAt and requires this gateway's Failed state. The
+      // compare-and-set keeps stale gateway or double Retry taps from reviving an in-flight row.
+      val requeued =
+        runCatching { outbox.requeueForRetry(gatewayId = outboxScope.gatewayId, id = id, nowMs = System.currentTimeMillis()) }
+          .getOrDefault(0)
       publishOutbox()
-      if (_healthOk.value) flushOutbox()
+      if (requeued > 0 && _healthOk.value) requestOutboxFlush()
     }
   }
 
@@ -1463,9 +1485,35 @@ class ChatController internal constructor(
    * Sends queued outbox rows strictly createdAt-ordered. Single-flight: health events can fire
    * repeatedly while a flush is already draining the queue.
    */
-  private suspend fun flushOutbox() {
-    val outbox = commandOutbox ?: return
+  private fun requestOutboxFlush() {
+    if (commandOutbox == null) return
+    outboxFlushRequested.set(true)
+    scope.launch { drainOutboxFlushRequests() }
+  }
+
+  private suspend fun drainOutboxFlushRequests() {
     if (!outboxFlushInFlight.compareAndSet(false, true)) return
+    try {
+      while (outboxFlushRequested.getAndSet(false)) {
+        flushOutboxPass()
+      }
+    } finally {
+      outboxFlushInFlight.set(false)
+      // Close the release race: a requester that observed in-flight ownership leaves this bit set.
+      if (outboxFlushRequested.get()) requestOutboxFlush()
+    }
+  }
+
+  private suspend fun flushOutboxPass() {
+    val outbox = commandOutbox ?: return
+    // The unscoped recovery sweep must succeed before this process claims a row. A transient
+    // storage failure stays retryable, but never lets younger queued work bypass an ambiguous send.
+    outboxRecoveryJob?.join()
+    if (!recoverInterruptedOutboxSends(outbox)) {
+      _healthOk.value = false
+      publishOutbox()
+      return
+    }
     var flushedAny = false
     try {
       // The whole flush is bound to one gateway scope; a connection switch mid-flush stops it
@@ -1480,12 +1528,11 @@ class ChatController internal constructor(
             .firstOrNull { it.status == ChatOutboxStatus.Queued } ?: break
         when (sendOutboxItem(outbox, next, flushScope)) {
           OutboxSendOutcome.Sent -> flushedAny = true
-          OutboxSendOutcome.Failed, OutboxSendOutcome.Skipped -> {}
+          OutboxSendOutcome.Continue -> {}
           OutboxSendOutcome.Stop -> break
         }
       }
     } finally {
-      outboxFlushInFlight.set(false)
       publishOutbox()
       if (flushedAny) {
         // Durable history replaces the queued bubbles; reconciliation matches by idempotency key.
@@ -1494,23 +1541,39 @@ class ChatController internal constructor(
     }
   }
 
-  // Sent: acked and removed. Failed: parked as failed. Skipped: row vanished (user delete).
-  // Stop: flush must halt (offline or gateway scope changed); the row stays queued.
-  private enum class OutboxSendOutcome { Sent, Failed, Skipped, Stop }
+  // Sent: acked and removed. Continue: row vanished or failed after a gateway response.
+  // Stop: transport or persistence state cannot safely advance to younger work.
+  private enum class OutboxSendOutcome { Sent, Continue, Stop }
+
+  private enum class GatewayResponseState { Received, Unknown }
 
   private sealed interface OutboxSendResult {
     data object Accepted : OutboxSendResult
 
-    /** Gateway responded with a terminal failure ack; the message reached it but was rejected. */
-    data class Rejected(
+    /** The request never entered the socket queue, so reconnect may retry it automatically. */
+    data class NotDispatched(
       val error: String,
     ) : OutboxSendResult
 
-    /** Request never got an ack (socket drop, timeout); delivery state is unknown. */
-    data class TransportFailure(
-      val error: String,
+    /** Dispatch may have succeeded, so only explicit user intent may retry the command. */
+    data class DeliveryUnconfirmed(
+      val gatewayResponse: GatewayResponseState,
     ) : OutboxSendResult
   }
+
+  private suspend fun updateOutboxStatusOrNull(
+    outbox: ChatCommandOutbox,
+    item: ChatOutboxItem,
+    status: ChatOutboxStatus,
+    lastError: String?,
+  ): Int? =
+    try {
+      outbox.updateStatus(item.id, status, item.retryCount, lastError)
+    } catch (err: CancellationException) {
+      throw err
+    } catch (_: Throwable) {
+      null
+    }
 
   private suspend fun sendOutboxItem(
     outbox: ChatCommandOutbox,
@@ -1518,69 +1581,77 @@ class ChatController internal constructor(
     flushScope: ChatCacheScope,
   ): OutboxSendOutcome {
     // Claim the row before sending: 0 updated rows means it was deleted since the load, and a
-    // deleted command must never be sent. Skipped (like Failed) lets the flush continue.
-    val claimed = runCatching { outbox.updateStatus(item.id, ChatOutboxStatus.Sending, item.retryCount, item.lastError) }.getOrDefault(0)
+    // deleted command must never be sent. Continue (like an acknowledged failure) lets the
+    // flush advance to younger rows without replaying this one.
+    val claimed = updateOutboxStatusOrNull(outbox, item, ChatOutboxStatus.Sending, item.lastError)
     publishOutbox()
-    if (claimed == 0) return OutboxSendOutcome.Skipped
-    var attempts = item.retryCount
-    while (true) {
-      val error =
-        when (val result = attemptOutboxSend(item, flushScope.gatewayId)) {
-          OutboxSendResult.Accepted -> {
-            // Ack received: delete the row so the flushed history copy is the only bubble left.
-            runCatching { outbox.delete(item.id) }
-            publishOutbox()
-            return OutboxSendOutcome.Sent
+    if (claimed == null) {
+      // Never bypass an older row when its claim could not be made durable.
+      _healthOk.value = false
+      return OutboxSendOutcome.Stop
+    }
+    if (claimed == 0) return OutboxSendOutcome.Continue
+    return when (val result = attemptOutboxSend(item, flushScope.gatewayId)) {
+      OutboxSendResult.Accepted -> {
+        // Ack received: delete the row so the flushed history copy is the only bubble left.
+        val deleted =
+          try {
+            outbox.delete(item.id)
+            true
+          } catch (err: CancellationException) {
+            throw err
+          } catch (_: Throwable) {
+            false
           }
-          is OutboxSendResult.TransportFailure -> {
-            // No ack means the gateway is effectively unreachable even if healthOk has not
-            // flipped yet. Keep the row queued without burning attempts and drop health so
-            // the next successful health poll/event re-triggers the flush.
-            runCatching { outbox.updateStatus(item.id, ChatOutboxStatus.Queued, attempts, result.error) }
-            publishOutbox()
-            _healthOk.value = false
-            return OutboxSendOutcome.Stop
-          }
-          is OutboxSendResult.Rejected -> result.error
+        if (!deleted) rearmOutboxRecovery()
+        publishOutbox()
+        if (deleted) {
+          OutboxSendOutcome.Sent
+        } else {
+          _healthOk.value = false
+          OutboxSendOutcome.Stop
         }
-      attempts += 1
-      if (attempts >= OUTBOX_MAX_SEND_ATTEMPTS) {
-        runCatching { outbox.updateStatus(item.id, ChatOutboxStatus.Failed, attempts, error) }
+      }
+      is OutboxSendResult.NotDispatched -> {
+        // This frame never entered the socket queue, so reconnect may retry it safely.
+        val requeued = updateOutboxStatusOrNull(outbox, item, ChatOutboxStatus.Queued, result.error)
+        if (requeued == null) rearmOutboxRecovery()
         publishOutbox()
-        return OutboxSendOutcome.Failed
+        _healthOk.value = false
+        OutboxSendOutcome.Stop
       }
-      // The row stays 'sending' through the backoff: Sending rows expose no Delete/Retry
-      // actions, so the user cannot delete a row this loop is about to resend.
-      runCatching { outbox.updateStatus(item.id, ChatOutboxStatus.Sending, attempts, error) }
-      publishOutbox()
-      // Losing health or the gateway scope mid-flush means this item must not retry now:
-      // requeue it for the next reconnect under the right scope. Without the scope check,
-      // a pairing switch during backoff could replay the captured text into the new gateway.
-      if (!_healthOk.value || currentCacheScope() != flushScope) {
-        return requeueAndStop(outbox, item.id, attempts, error)
-      }
-      delay(OUTBOX_RETRY_BACKOFF_MS * attempts)
-      if (!_healthOk.value || currentCacheScope() != flushScope) {
-        return requeueAndStop(outbox, item.id, attempts, error)
-      }
-      // Re-claim after the delay: a row deleted through any non-UI path must not be resent.
-      val reclaimed = runCatching { outbox.updateStatus(item.id, ChatOutboxStatus.Sending, attempts, error) }.getOrDefault(0)
-      if (reclaimed == 0) {
+      is OutboxSendResult.DeliveryUnconfirmed -> {
+        // Every transmitted failure is ambiguous: gateway error responses can be cached after
+        // agent dispatch, and gateway dedupe is process-local and time-bounded.
+        val persisted =
+          updateOutboxStatusOrNull(
+            outbox,
+            item,
+            ChatOutboxStatus.Failed,
+            OUTBOX_DELIVERY_UNCONFIRMED_ERROR,
+          )
+        if (persisted == null) rearmOutboxRecovery()
         publishOutbox()
-        return OutboxSendOutcome.Skipped
+        when {
+          persisted == null -> {
+            // The ambiguous row is still Sending. Stop before younger work; the re-armed
+            // recovery sweep will park it after storage becomes available again.
+            _healthOk.value = false
+            OutboxSendOutcome.Stop
+          }
+          result.gatewayResponse == GatewayResponseState.Unknown -> {
+            _healthOk.value = false
+            OutboxSendOutcome.Stop
+          }
+          else -> {
+            // Sending is controller-owned and Retry only transitions Failed. A zero update can
+            // only mean a concurrent delete removed the claimed row; a received response makes
+            // either zero or a durable Failed transition safe to advance past.
+            OutboxSendOutcome.Continue
+          }
+        }
       }
     }
-  }
-
-  private suspend fun requeueAndStop(
-    outbox: ChatCommandOutbox,
-    id: String,
-    attempts: Int,
-    error: String,
-  ): OutboxSendOutcome {
-    runCatching { outbox.updateStatus(id, ChatOutboxStatus.Queued, attempts, error) }
-    publishOutbox()
-    return OutboxSendOutcome.Stop
   }
 
   private suspend fun attemptOutboxSend(
@@ -1593,8 +1664,7 @@ class ChatController internal constructor(
       // open, preserving the thinking level captured when they were enqueued.
       val thinking =
         if (
-          queuedSessionKey == _sessionKey.value &&
-          !thinkingSupportedForSelection(_selectedModelRef.value, _modelCatalog.value)
+          queuedSessionKey == _sessionKey.value && !thinkingSupportedForCurrentSelection()
         ) {
           "off"
         } else {
@@ -1613,18 +1683,48 @@ class ChatController internal constructor(
           put("idempotencyKey", JsonPrimitive(item.id))
         }
       val ack = parseChatSendAck(json, requestGatewayBound(gatewayId, "chat.send", params.toString()))
-      if (ack.isTerminalFailure) {
-        OutboxSendResult.Rejected("Chat failed before the run started")
-      } else {
-        OutboxSendResult.Accepted
+      when (ack.normalizedStatus) {
+        "ok", "started", "in_flight" ->
+          if (ack.runId.isNullOrBlank()) {
+            OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Received)
+          } else {
+            OutboxSendResult.Accepted
+          }
+        "timeout", "error" -> OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Received)
+        else -> OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Received)
       }
     } catch (err: CancellationException) {
       // Teardown must not be recorded as a send failure; the row stays 'sending' and the
-      // next startup recovery requeues it.
+      // next startup recovery parks it as delivery-unconfirmed.
       throw err
-    } catch (err: Throwable) {
-      OutboxSendResult.TransportFailure(err.message ?: "send failed")
+    } catch (err: GatewayRequestNotEnqueued) {
+      OutboxSendResult.NotDispatched(err.message ?: "send failed")
+    } catch (_: GatewayRequestDefinitiveFailure) {
+      // An ok:false response proves transmission, not that this idempotency key was never run.
+      OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Received)
+    } catch (_: GatewayRequestOutcomeUnknown) {
+      OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Unknown)
+    } catch (_: Throwable) {
+      OutboxSendResult.DeliveryUnconfirmed(GatewayResponseState.Unknown)
     }
+
+  private suspend fun recoverInterruptedOutboxSends(outbox: ChatCommandOutbox): Boolean =
+    outboxRecoveryMutex.withLock {
+      if (outboxRecoveryComplete) return@withLock true
+      try {
+        outbox.failSendingAfterRestart()
+        outboxRecoveryComplete = true
+        true
+      } catch (err: CancellationException) {
+        throw err
+      } catch (_: Throwable) {
+        false
+      }
+    }
+
+  private suspend fun rearmOutboxRecovery() {
+    outboxRecoveryMutex.withLock { outboxRecoveryComplete = false }
+  }
 
   private fun handleChatEvent(payloadJson: String) {
     val payload = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return
@@ -2133,6 +2233,13 @@ class ChatController internal constructor(
     val isTruncated: Boolean,
   )
 
+  private data class SessionModelPatchResolution(
+    val modelProvider: String?,
+    val model: String?,
+    val thinkingLevel: String?,
+    val thinkingLevels: List<ChatThinkingLevelOption>?,
+  )
+
   private fun parseSessions(jsonString: String): SessionListResult {
     val root =
       json.parseToJsonElement(jsonString).asObjectOrNull()
@@ -2181,12 +2288,116 @@ class ChatController internal constructor(
       totalTokensFresh = obj["totalTokensFresh"].asBooleanOrNull(),
       modelProvider = obj["modelProvider"].asStringOrNull()?.trim(),
       model = obj["model"].asStringOrNull()?.trim(),
+      thinkingLevel = obj["thinkingLevel"].asStringOrNull()?.trim(),
+      thinkingLevels = parseThinkingLevels(obj["thinkingLevels"]),
+      thinkingDefault = obj["thinkingDefault"].asStringOrNull()?.trim(),
       contextTokens = obj["contextTokens"].asLongOrNull(),
       hasContextUsageMetadata =
         "totalTokens" in obj ||
           "totalTokensFresh" in obj ||
           "contextTokens" in obj,
     )
+  }
+
+  private fun parseSessionModelPatchResolution(jsonString: String): SessionModelPatchResolution? {
+    val root = json.parseToJsonElement(jsonString).asObjectOrNull() ?: return null
+    val resolved = root["resolved"].asObjectOrNull() ?: return null
+    return SessionModelPatchResolution(
+      modelProvider = resolved["modelProvider"].asStringOrNull()?.trim(),
+      model = resolved["model"].asStringOrNull()?.trim(),
+      thinkingLevel = resolved["thinkingLevel"].asStringOrNull()?.trim(),
+      thinkingLevels = parseThinkingLevels(resolved["thinkingLevels"]),
+    )
+  }
+
+  private fun parseThinkingLevels(element: JsonElement?): List<ChatThinkingLevelOption>? {
+    val array = element.asArrayOrNull() ?: return null
+    return array
+      .mapNotNull { item ->
+        val obj = item.asObjectOrNull() ?: return@mapNotNull null
+        val rawId = obj["id"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+        val id = normalizeThinking(rawId)
+        val label = obj["label"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: id
+        ChatThinkingLevelOption(id = id, label = label)
+      }.distinctBy { it.id }
+  }
+
+  private fun applyAcceptedModelPatch(
+    key: String,
+    modelRef: String?,
+    resolution: SessionModelPatchResolution?,
+  ) {
+    val fallbackProvider = modelRef?.substringBefore('/', missingDelimiterValue = "")?.takeIf { it.isNotEmpty() }
+    val fallbackModel =
+      modelRef?.let { ref -> ref.substringAfter('/', missingDelimiterValue = ref) }?.takeIf { it.isNotEmpty() }
+    val current = _sessions.value
+    val index = current.indexOfFirst { it.key == key }
+    val existing = current.getOrNull(index)
+    val applied =
+      (existing ?: ChatSessionEntry(key = key, updatedAtMs = null)).copy(
+        modelProvider = resolution?.modelProvider ?: fallbackProvider ?: existing?.modelProvider,
+        model = resolution?.model ?: fallbackModel ?: existing?.model,
+        thinkingLevel = resolution?.thinkingLevel,
+        thinkingLevels = resolution?.thinkingLevels,
+        thinkingDefault = null,
+      )
+    if (index >= 0) {
+      _sessions.value = current.toMutableList().also { it[index] = applied }
+    }
+    if (_sessionKey.value == key) {
+      applyThinkingMetadata(applied)
+    }
+  }
+
+  private fun applyThinkingMetadata(entry: ChatSessionEntry?) {
+    val advertised = entry?.thinkingLevels
+    if (advertised == null) {
+      _thinkingLevelSelection.value = defaultChatThinkingLevelSelection
+      val requestedLevel =
+        entry
+          ?.thinkingLevel
+          ?.takeIf { it.isNotBlank() }
+          ?.let(::normalizeThinking)
+          ?: normalizeThinking(_thinkingLevel.value)
+      _thinkingLevel.value =
+        requestedLevel.takeIf { candidate ->
+          defaultChatThinkingLevelSelection.options.any { it.id == candidate }
+        } ?: "off"
+      return
+    }
+    val options =
+      advertised
+        .map { option ->
+          val id = normalizeThinking(option.id)
+          ChatThinkingLevelOption(
+            id = id,
+            label = option.label.trim().takeIf { it.isNotEmpty() } ?: id,
+          )
+        }.distinctBy { it.id }
+        .ifEmpty { listOf(ChatThinkingLevelOption(id = "off", label = "off")) }
+    _thinkingLevelSelection.value =
+      ChatThinkingLevelSelection(
+        options = options,
+        isGatewayProvided = true,
+      )
+    val selected = entry.thinkingLevel?.let(::normalizeThinking)
+    val currentLevel = normalizeThinking(_thinkingLevel.value)
+    val defaultLevel = entry.thinkingDefault?.let(::normalizeThinking)
+    // Lightweight picker metadata can omit a Gateway-validated effective level.
+    // Preserve that send state; only local/default fallbacks require picker membership.
+    _thinkingLevel.value =
+      selected
+        ?: listOf(currentLevel, defaultLevel).firstOrNull { candidate -> options.any { it.id == candidate } }
+        ?: options.first().id
+  }
+
+  private fun thinkingSupportedForCurrentSelection(): Boolean {
+    val selection = _thinkingLevelSelection.value
+    return if (selection.isGatewayProvided) {
+      selection.options.any { it.id != "off" }
+    } else {
+      thinkingSupportedForSelection(_selectedModelRef.value, _modelCatalog.value)
+    }
   }
 
   private fun updateSessionFromHistory(history: ChatHistory) {
@@ -2223,6 +2434,9 @@ class ChatController internal constructor(
       } else {
         listOf(entry) + current
       }
+    if (applied.key == _sessionKey.value) {
+      applyThinkingMetadata(applied)
+    }
     acknowledgeUnreadIfNeeded(applied.key, applied, requireActive = true)
   }
 
@@ -2289,13 +2503,7 @@ class ChatController internal constructor(
     return if (gatewayId == scope.gatewayId) scope else scope.copy(gatewayId = gatewayId)
   }
 
-  private fun normalizeThinking(raw: String): String =
-    when (raw.trim().lowercase()) {
-      "low" -> "low"
-      "medium" -> "medium"
-      "high" -> "high"
-      else -> "off"
-    }
+  private fun normalizeThinking(raw: String): String = raw.trim().lowercase(Locale.US).ifEmpty { "off" }
 }
 
 private enum class ChatMetadataLoadState {
@@ -2670,6 +2878,9 @@ internal fun mergeChatSessionEntry(
       },
     modelProvider = next.modelProvider ?: existing.modelProvider,
     model = next.model ?: existing.model,
+    thinkingLevel = next.thinkingLevel ?: existing.thinkingLevel,
+    thinkingLevels = next.thinkingLevels ?: existing.thinkingLevels,
+    thinkingDefault = next.thinkingDefault ?: existing.thinkingDefault,
     contextTokens =
       when {
         preserveExistingContextUsage -> next.contextTokens ?: existing.contextTokens

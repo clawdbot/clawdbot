@@ -23,6 +23,7 @@ import {
 } from "../shared-interactive.js";
 import { resolveDiscordChannelId } from "../targets.js";
 import { tryHandleDiscordMessageActionGuildAdmin } from "./handle-action.guild-admin.js";
+import type { DiscordMessagingActionOptions } from "./runtime.messaging.shared.js";
 
 const providerId = "discord";
 
@@ -44,6 +45,7 @@ export async function handleDiscordMessageAction(
     | "params"
     | "cfg"
     | "accountId"
+    | "requesterAccountId"
     | "requesterSenderId"
     | "senderIsOwner"
     | "toolContext"
@@ -52,14 +54,35 @@ export async function handleDiscordMessageAction(
     | "mediaReadFile"
     | "sessionKey"
     | "inboundEventKind"
+    | "conversationReadOrigin"
   >,
 ): Promise<AgentToolResult<unknown>> {
   const { action, params, cfg } = ctx;
   const accountId = ctx.accountId ?? readStringParam(params, "accountId");
+  const readContext =
+    ctx.requesterAccountId &&
+    ctx.toolContext?.currentChannelProvider &&
+    ctx.toolContext.currentChannelId
+      ? {
+          requesterAccountId: ctx.requesterAccountId,
+          currentChannelProvider: ctx.toolContext.currentChannelProvider,
+          currentChannelId: ctx.toolContext.currentChannelId,
+        }
+      : undefined;
+  const readPolicyOptions: DiscordMessagingActionOptions | undefined =
+    ctx.conversationReadOrigin || readContext
+      ? {
+          ...(ctx.conversationReadOrigin
+            ? { conversationReadOrigin: ctx.conversationReadOrigin }
+            : {}),
+          ...(readContext ? { readContext } : {}),
+        }
+      : undefined;
   const actionOptions = {
     mediaAccess: ctx.mediaAccess,
     mediaLocalRoots: ctx.mediaLocalRoots,
     mediaReadFile: ctx.mediaReadFile,
+    ...readPolicyOptions,
   } as const;
   const notifyVisibleOutbound = (to: string, fallbackSessionKey?: string) =>
     notifyDiscordInboundEventOutboundSuccess({
@@ -397,6 +420,7 @@ export async function handleDiscordMessageAction(
   const adminResult = await tryHandleDiscordMessageActionGuildAdmin({
     ctx,
     resolveChannelId,
+    readPolicyOptions,
   });
   if (adminResult !== undefined) {
     if (action === "thread-reply") {

@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
 import {
   readCodexAppServerBinding,
+  registerCodexTestSessionIdentity,
   resetCodexTestBindingStore,
   testCodexAppServerBindingStore,
   writeCodexAppServerBinding,
@@ -479,6 +480,109 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     });
 
     expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);
+    const startParams = request.mock.calls[0]?.[1] as {
+      config?: { mcp_servers?: Record<string, unknown> };
+    };
+    expect(startParams?.config?.mcp_servers).toBeUndefined();
+  });
+
+  it("starts a new thread when a user MCP Authorization bearer changes without storing the bearer", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const createConfig = (authorization: string) =>
+      ({
+        mcp: {
+          servers: {
+            ducktape: {
+              transport: "streamable-http",
+              url: "https://agents.ducktape.xyz/mcp",
+              headers: {
+                Authorization: authorization,
+                "x-tenant": "keep",
+              },
+            },
+          },
+        },
+      }) as unknown as EmbeddedRunAttemptParams["config"];
+    const request = vi.fn(async (method: string, _params: unknown) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-with-current-bearer");
+      }
+      if (method === "thread/resume") {
+        return threadResumeResult("thread-with-stale-bearer");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params: createParams(sessionFile, workspaceDir, createConfig("Bearer access-token-one")),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createAppServerOptions(),
+    });
+    const firstBinding = await readCodexAppServerBinding(sessionFile);
+    expect(firstBinding?.userMcpServersFingerprint).toContain("<redacted:sha256:");
+    expect(firstBinding?.userMcpServersFingerprint).not.toContain("access-token-one");
+
+    request.mockClear();
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params: createParams(sessionFile, workspaceDir, createConfig("Bearer access-token-two")),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createAppServerOptions(),
+    });
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);
+    const startParams = request.mock.calls[0]?.[1] as {
+      config?: { mcp_servers?: Record<string, { http_headers?: Record<string, string> }> };
+    };
+    expect(startParams?.config?.mcp_servers?.ducktape?.http_headers?.Authorization).toBe(
+      "Bearer access-token-two",
+    );
+    const secondBinding = await readCodexAppServerBinding(sessionFile);
+    expect(secondBinding?.userMcpServersFingerprint).toContain("<redacted:sha256:");
+    expect(secondBinding?.userMcpServersFingerprint).not.toContain("access-token-two");
+    expect(secondBinding?.userMcpServersFingerprint).not.toBe(
+      firstBinding?.userMcpServersFingerprint,
+    );
+  });
+
+  it("omits MCP OAuth servers instead of sending bearers to a remote app-server", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const request = vi.fn(async (method: string, _params: unknown) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-without-oauth-mcp");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params: createParams(sessionFile, workspaceDir, {
+        mcp: {
+          servers: {
+            ducktape: {
+              transport: "streamable-http",
+              url: "https://agents.ducktape.xyz/mcp",
+              auth: "oauth",
+              oauth: { authProfileId: "ducktape:mcp" },
+            },
+          },
+        },
+      } as unknown as EmbeddedRunAttemptParams["config"]),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: {
+        ...createAppServerOptions(),
+        connectionClass: "remote",
+      },
+    });
+
     const startParams = request.mock.calls[0]?.[1] as {
       config?: { mcp_servers?: Record<string, unknown> };
     };

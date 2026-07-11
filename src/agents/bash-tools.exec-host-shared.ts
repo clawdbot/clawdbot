@@ -523,6 +523,8 @@ export function buildExecApprovalPendingToolResult(params: {
                 channelLabel: params.initiatingSurface.channelLabel,
                 accountId: params.initiatingSurface.accountId,
                 sentApproverDms: params.sentApproverDms,
+                host: params.host,
+                nodeId: params.nodeId,
               }).text ?? "")
             : buildApprovalPendingMessage({
                 warningText: params.warningText,

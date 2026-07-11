@@ -247,6 +247,32 @@ export const ExecApprovalGetParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const ExecApprovalPolicySecuritySchema = Type.Union([
+  Type.Literal("deny"),
+  Type.Literal("allowlist"),
+  Type.Literal("full"),
+]);
+
+const ExecApprovalPolicySnapshotSchema = Type.Object(
+  {
+    security: ExecApprovalPolicySecuritySchema,
+    ask: Type.Union([Type.Literal("off"), Type.Literal("on-miss"), Type.Literal("always")]),
+    askFallback: ExecApprovalPolicySecuritySchema,
+    autoAllowSkills: Type.Boolean(),
+    allowlistRules: Type.Array(
+      Type.Object(
+        {
+          pattern: Type.String(),
+          argPattern: Type.Optional(Type.String()),
+          source: Type.Optional(Type.Literal("allow-always")),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+  },
+  { additionalProperties: false },
+);
+
 /** Pending command execution approval request shown to reviewers. */
 export const ExecApprovalRequestParamsSchema = Type.Object(
   {
@@ -262,6 +288,7 @@ export const ExecApprovalRequestParamsSchema = Type.Object(
           commandPreview: Type.Optional(Type.Union([Type.String(), Type.Null()])),
           agentId: Type.Union([Type.String(), Type.Null()]),
           sessionKey: Type.Union([Type.String(), Type.Null()]),
+          policySnapshot: Type.Optional(ExecApprovalPolicySnapshotSchema),
           mutableFileOperand: Type.Optional(
             Type.Union([
               Type.Object(

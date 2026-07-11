@@ -4,18 +4,20 @@ import { html, nothing, type TemplateResult } from "lit";
 import { guard } from "lit/directives/guard.js";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
+import { classifySessionKind } from "../../../../../src/sessions/classify-session-kind.js";
 import type { SessionsListResult } from "../../../api/types.ts";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
 import { icons } from "../../../components/icons.ts";
+import "../../../components/tooltip.ts";
 import {
   handleMarkdownCodeBlockCopy,
   markdownFileLinkFromEvent,
 } from "../../../components/markdown.ts";
-import "../../../components/tooltip.ts";
 import { CHAT_HISTORY_RENDER_LIMIT } from "../../../lib/chat/chat-types.ts";
 import type { ChatQueueItem, ChatStreamSegment } from "../../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
+import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
 import {
   buildCachedChatItems,
   coalesceStreamRuns,
@@ -29,6 +31,7 @@ import { DeletedMessages } from "../deleted-messages.ts";
 import { PinnedMessages } from "../pinned-messages.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
 import { getOrCreateSessionCacheValue } from "../session-cache.ts";
+import { getToolTitlesVersion } from "../tool-titles.ts";
 import {
   getAssistantAttachmentAvailabilityRenderVersion,
   renderMessageGroup,
@@ -65,6 +68,9 @@ type ChatThreadState = {
     scrollTop: number;
   } | null;
   historyRenderAnchorFrame: number | null;
+  relativeTimeTimer: ReturnType<typeof setInterval> | null;
+  relativeTimeRequestUpdate: (() => void) | null;
+  relativeTimeVersion: number;
 };
 
 type ChatThreadProps = {
@@ -127,7 +133,24 @@ function createChatThreadState(): ChatThreadState {
     historyRenderExpansionFrame: null,
     historyRenderAnchorAdjustment: null,
     historyRenderAnchorFrame: null,
+    relativeTimeTimer: null,
+    relativeTimeRequestUpdate: null,
+    relativeTimeVersion: 0,
   };
+}
+
+const RELATIVE_TIME_REFRESH_MS = 60_000;
+
+// Footer timestamps render relative labels ("5m ago") that go stale on idle
+// panes; one per-pane minute tick keeps them fresh without per-message timers.
+// The version bump must accompany requestUpdate: the message subtree is
+// memoized by guard(), so a tick only re-renders it via this dependency.
+function ensureRelativeTimeRefresh(state: ChatThreadState, requestUpdate: () => void) {
+  state.relativeTimeRequestUpdate = requestUpdate;
+  state.relativeTimeTimer ??= setInterval(() => {
+    state.relativeTimeVersion = (state.relativeTimeVersion + 1) % Number.MAX_SAFE_INTEGER;
+    state.relativeTimeRequestUpdate?.();
+  }, RELATIVE_TIME_REFRESH_MS);
 }
 
 const threadStates = new Map<string, ChatThreadState>();
@@ -173,6 +196,11 @@ export function resetChatThreadPresentationState(paneId?: string) {
     }
     if (state.historyRenderAnchorFrame != null) {
       cancelAnimationFrame(state.historyRenderAnchorFrame);
+    }
+    if (state.relativeTimeTimer != null) {
+      clearInterval(state.relativeTimeTimer);
+      state.relativeTimeTimer = null;
+      state.relativeTimeRequestUpdate = null;
     }
   }
   if (paneId) {
@@ -649,8 +677,13 @@ function renderLoadingSkeleton() {
 export function renderChatThread(props: ChatThreadProps) {
   const state = getChatThreadState(props.paneId);
   const requestUpdate = props.onRequestUpdate ?? (() => {});
+  ensureRelativeTimeRefresh(state, requestUpdate);
   const displayStream = props.stream ?? null;
-  const activeSession = props.sessions?.sessions?.find((row) => row.key === props.sessionKey);
+  // Equivalence, not exact match: the default session travels under alias
+  // keys ("main" vs "agent:main:main") depending on the caller.
+  const activeSession = props.sessions?.sessions?.find((row) =>
+    areUiSessionKeysEquivalent(row.key, props.sessionKey),
+  );
   const reasoningLevel = activeSession?.reasoningLevel ?? "off";
   const showReasoning = props.showThinking && reasoningLevel !== "off";
   const assistantIdentity = {
@@ -680,6 +713,21 @@ export function renderChatThread(props: ChatThreadProps) {
   };
   const hasRealtimeTalkConversation = (props.realtimeTalkConversation?.length ?? 0) > 0;
   const isEmpty = chatItems.length === 0 && !props.loading && !hasRealtimeTalkConversation;
+  // 1:1 sessions drop the avatar gutter entirely; group threads keep avatars
+  // as the always-visible identity marker. The canonical session kind decides;
+  // the sessions list is capped, so absent/unknown rows classify by key shape
+  // via the same core helper the gateway uses. Message senderLabels are not a
+  // signal here: gateway sanitization labels 1:1 channel DM rows too.
+  const rowKind = activeSession?.kind;
+  const sessionKind =
+    rowKind && rowKind !== "unknown" ? rowKind : classifySessionKind(props.sessionKey);
+  // Only agent-solo kinds qualify: "global" aggregates every inbound context
+  // under session.scope="global" (including group/channel senders), so it
+  // keeps avatars like "group" and "unknown" do. Known limitation: global
+  // aliases (agent:<id>:main under scope=global) need host context to detect
+  // (resolveUiGlobalAliasAgentId) and classify as direct here; follow-up.
+  const isDirectThread =
+    sessionKind === "direct" || sessionKind === "cron" || sessionKind === "spawn-child";
   const showLoadingSkeleton = props.loading && chatItems.length === 0;
   const threadContextWindow =
     activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null;
@@ -690,7 +738,7 @@ export function renderChatThread(props: ChatThreadProps) {
 
   return html`
     <div
-      class="chat-thread"
+      class="chat-thread ${isDirectThread ? "chat-thread--direct" : ""}"
       role="log"
       aria-live="polite"
       ${ref((element) => {
@@ -724,6 +772,8 @@ export function renderChatThread(props: ChatThreadProps) {
             deletedChatItemsSignature(deleted, chatItems),
             stableBooleanMapSignature(expandedToolCards),
             getAssistantAttachmentAvailabilityRenderVersion(),
+            state.relativeTimeVersion,
+            getToolTitlesVersion(),
             props.sessionKey,
             props.fullMessageAgentId,
             showReasoning,

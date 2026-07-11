@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import OpenClawDiscovery
 import OpenClawIPC
@@ -15,6 +16,19 @@ struct OnboardingViewSmokeTests {
             permissionMonitor: PermissionMonitor.shared,
             discoveryModel: GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName))
         _ = view.body
+    }
+
+    @Test func `onboarding window resizes vertically and gives the page the extra height`() {
+        #expect(OnboardingController.windowStyleMask.contains(.resizable))
+
+        let baseline = OnboardingView.contentHeight(
+            for: OnboardingView.windowHeight,
+            usesCompactHero: false)
+        let taller = OnboardingView.contentHeight(
+            for: OnboardingView.windowHeight + 200,
+            usesCompactHero: false)
+
+        #expect(taller - baseline == 200)
     }
 
     @Test func `page order omits workspace and identity steps`() {
@@ -101,6 +115,7 @@ struct OnboardingViewSmokeTests {
             isLocal: true,
             visible: true,
             statusKnown: false,
+            executableReady: false,
             installed: false,
             installing: false))
         #expect(OnboardingView.shouldAutoInstallCLI(
@@ -108,6 +123,7 @@ struct OnboardingViewSmokeTests {
             isLocal: true,
             visible: true,
             statusKnown: true,
+            executableReady: false,
             installed: false,
             installing: false))
         #expect(!OnboardingView.shouldAutoInstallCLI(
@@ -115,8 +131,32 @@ struct OnboardingViewSmokeTests {
             isLocal: true,
             visible: false,
             statusKnown: true,
+            executableReady: false,
             installed: false,
             installing: false))
+        #expect(!OnboardingView.shouldAutoInstallCLI(
+            onCLIPage: true,
+            isLocal: true,
+            visible: true,
+            statusKnown: true,
+            executableReady: true,
+            installed: false,
+            installing: false))
+    }
+
+    @Test func `detected CLI starts its gateway after this Mac is selected`() {
+        #expect(!OnboardingView.shouldStartExistingCLIActivation(
+            isLocal: false,
+            executableReady: true,
+            installing: false))
+        #expect(OnboardingView.shouldStartExistingCLIActivation(
+            isLocal: true,
+            executableReady: true,
+            installing: false))
+        #expect(!OnboardingView.shouldStartExistingCLIActivation(
+            isLocal: true,
+            executableReady: true,
+            installing: true))
     }
 
     @Test func `connection mode change restarts full page monitoring`() {

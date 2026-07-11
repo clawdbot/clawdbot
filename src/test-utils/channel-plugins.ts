@@ -14,6 +14,7 @@ export type TestChannelRegistration = {
   pluginId: string;
   plugin: unknown;
   source: string;
+  origin?: "bundled" | "global" | "workspace" | "config";
 };
 
 export const createTestRegistry = (channels: TestChannelRegistration[] = []): PluginRegistry => ({
@@ -22,6 +23,7 @@ export const createTestRegistry = (channels: TestChannelRegistration[] = []): Pl
   channelSetups: channels.map((entry) => ({
     pluginId: entry.pluginId,
     plugin: entry.plugin as PluginRegistry["channelSetups"][number]["plugin"],
+    ...(entry.origin ? { origin: entry.origin } : {}),
     source: entry.source,
     enabled: true,
   })),

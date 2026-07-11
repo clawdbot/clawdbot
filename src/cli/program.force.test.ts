@@ -86,8 +86,13 @@ describe("gateway --force helpers", () => {
     expect(listPortListeners(18789)).toStrictEqual([]);
   });
 
-  it("skips lsof when the port is already bindable", async () => {
+  it("returns without cleanup when lsof and the bind probe find no listener", async () => {
     probePortUsageMock.mockResolvedValue("free");
+    (execFileSync as unknown as Mock).mockImplementation(() => {
+      const err = new Error("no matches") as NodeJS.ErrnoException & { status?: number };
+      err.status = 1;
+      throw err;
+    });
 
     const result = await forceFreePortAndWait(18789, { timeoutMs: 500, intervalMs: 100 });
 
@@ -96,7 +101,46 @@ describe("gateway --force helpers", () => {
       waitedMs: 0,
       escalatedToSigkill: false,
     });
-    expect(execFileSync).not.toHaveBeenCalled();
+    expect(execFileSync).toHaveBeenCalledOnce();
+    expect(probePortUsageMock).toHaveBeenCalledWith(18789);
+  });
+
+  it("kills an interface-specific listener even when the bind probe would report free", async () => {
+    probePortUsageMock.mockResolvedValue("free");
+    (execFileSync as unknown as Mock)
+      .mockReturnValueOnce(["p42", "cnode", ""].join("\n"))
+      .mockReturnValue("");
+    const killMock = vi.fn();
+    process.kill = killMock;
+
+    const result = await forceFreePortAndWait(18789, { timeoutMs: 500, intervalMs: 100 });
+
+    expect(killMock).toHaveBeenCalledWith(42, "SIGTERM");
+    expect(result).toEqual({
+      killed: [{ pid: 42, command: "node" }],
+      waitedMs: 0,
+      escalatedToSigkill: false,
+    });
+    expect(probePortUsageMock).not.toHaveBeenCalled();
+  });
+
+  it("returns without fuser when lsof is unavailable and the bind probe reports free", async () => {
+    probePortUsageMock.mockResolvedValue("free");
+    (execFileSync as unknown as Mock).mockImplementation(() => {
+      const err = new Error("not found") as NodeJS.ErrnoException;
+      err.code = "ENOENT";
+      throw err;
+    });
+
+    const result = await forceFreePortAndWait(18789, { timeoutMs: 500, intervalMs: 100 });
+
+    expect(result).toEqual({
+      killed: [],
+      waitedMs: 0,
+      escalatedToSigkill: false,
+    });
+    expect(execFileSync).toHaveBeenCalledOnce();
+    expect(probePortUsageMock).toHaveBeenCalledWith(18789);
   });
 
   it("fails closed when lsof has a malformed PID and fuser cannot identify one", async () => {

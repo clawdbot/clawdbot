@@ -6,6 +6,7 @@
  */
 
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveBoundAgentIdForSession } from "../agents/session-agent-binding.js";
 import { resolveConversationBindingContext } from "../channels/conversation-binding-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -122,14 +123,9 @@ function sanitizeArgs(args: string | undefined): string | undefined {
     return undefined;
   }
 
-  // Enforce length limit
-  if (args.length > MAX_ARGS_LENGTH) {
-    return args.slice(0, MAX_ARGS_LENGTH);
-  }
-
   // Remove control characters (except newlines and tabs which may be intentional)
   let sanitized = "";
-  for (const char of args) {
+  for (const char of truncateUtf16Safe(args, MAX_ARGS_LENGTH)) {
     const code = char.charCodeAt(0);
     const isControl = (code <= 0x1f && code !== 0x09 && code !== 0x0a) || code === 0x7f;
     if (!isControl) {

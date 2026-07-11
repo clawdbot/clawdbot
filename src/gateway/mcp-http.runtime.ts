@@ -97,6 +97,7 @@ export function resolveMcpLoopbackScopedTools(params: McpLoopbackScopeParams): {
   }
   const scoped = resolveGatewayScopedTools({
     ...params,
+    conversationReadOrigin: "delegated",
     surface: "loopback",
     excludeToolNames,
     includeNodeExecTool: params.nodeExecAllowed === true,

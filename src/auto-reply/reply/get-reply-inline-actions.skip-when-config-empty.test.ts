@@ -847,6 +847,7 @@ describe("handleInlineActions", () => {
     const ctx = buildTestCtx({
       Body: "/set_profile display name",
       CommandBody: "/set_profile display name",
+      NativeChannelId: "oc_native_chat",
     });
     const skillCommands: SkillCommandSpec[] = [
       {
@@ -887,6 +888,7 @@ describe("handleInlineActions", () => {
     expect(result).toEqual({ kind: "reply", reply: { text: "✅ Done." } });
     const toolsArgs = mockObjectArg(createOpenClawToolsMock, "createOpenClawTools");
     expect(toolsArgs).not.toHaveProperty("senderIsOwner");
+    expect(toolsArgs.nativeChannelId).toBe("oc_native_chat");
     expect(toolsArgs.beforeToolCallHookContext).toMatchObject({
       cwd: "/tmp",
       workspaceDir: "/tmp",

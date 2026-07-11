@@ -18,11 +18,13 @@ import {
   shortenHomePath,
   type BrowserCreateProfileResult,
   type BrowserDeleteProfileResult,
+  type BrowserImportProfileResult,
   type BrowserResetProfileResult,
   type BrowserStatus,
   type BrowserTab,
   type BrowserTransport,
   type ProfileStatus,
+  type SystemProfileInfo,
 } from "./core-api.js";
 
 const BROWSER_MANAGE_REQUEST_TIMEOUT_MS = 45_000;
@@ -53,6 +55,12 @@ function printJsonResult(parent: BrowserParentOpts, payload: unknown): boolean {
   }
   defaultRuntime.writeJson(payload);
   return true;
+}
+
+function sanitizeTableCell(value: string): string {
+  // Strip C0/C1 control characters (Unicode Cc) so profile names cannot inject
+  // terminal escapes into the printed table.
+  return value.replace(/\p{Cc}/gu, " ");
 }
 
 async function callTabAction(
@@ -716,6 +724,84 @@ export function registerBrowserManageCommands(
         );
       });
     });
+
+  browser
+    .command("system-profiles")
+    .description("List Chrome-family profiles available for cookie import")
+    .option("--browser <browser>", "System browser (chrome|brave|edge|chromium); omit to list all")
+    .action(async (opts: { browser?: string }, cmd) => {
+      const parent = parentOpts(cmd);
+      await runBrowserCommand(async () => {
+        const result = await callBrowserRequest<{ systemProfiles: SystemProfileInfo[] }>(
+          parent,
+          {
+            method: "GET",
+            path: "/system-profiles",
+            query: opts.browser ? { browser: opts.browser } : undefined,
+          },
+          { timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS },
+        );
+        const systemProfiles = result.systemProfiles ?? [];
+        if (printJsonResult(parent, { systemProfiles })) {
+          return;
+        }
+        if (systemProfiles.length === 0) {
+          defaultRuntime.log("No system browser profiles found.");
+          return;
+        }
+        defaultRuntime.log("browser\tid\tname\thasCookies");
+        defaultRuntime.log(
+          systemProfiles
+            .map((profile) =>
+              [profile.browser, profile.id, profile.name, profile.hasCookies ? "yes" : "no"]
+                .map(sanitizeTableCell)
+                .join("\t"),
+            )
+            .join("\n"),
+        );
+      });
+    });
+
+  browser
+    .command("import-profile")
+    .description("Import cookies from a macOS Chrome-family profile")
+    .option("--browser <browser>", "System browser (chrome|brave|edge|chromium)", "chrome")
+    .option("--system <profile>", "System profile directory", "Default")
+    .option("--into <profile>", "Managed target profile", "imported")
+    .option("--domains <domains>", "Comma-separated domain filter")
+    .action(
+      async (opts: { browser: string; system: string; into: string; domains?: string }, cmd) => {
+        const parent = parentOpts(cmd);
+        await runBrowserCommand(async () => {
+          const domains = opts.domains
+            ?.split(",")
+            .map((domain) => domain.trim())
+            .filter(Boolean);
+          const result = await callBrowserRequest<BrowserImportProfileResult>(
+            parent,
+            {
+              method: "POST",
+              path: "/profiles/import",
+              body: {
+                browser: opts.browser,
+                systemProfile: opts.system,
+                into: opts.into,
+                domains,
+              },
+            },
+            { timeoutMs: 120_000 },
+          );
+          if (printJsonResult(parent, result)) {
+            return;
+          }
+          defaultRuntime.log(
+            info(
+              `Imported cookies into "${result.into}": ${result.cookies.imported}/${result.cookies.total} imported, ${result.cookies.failed} failed, ${result.cookies.skipped} skipped; ${result.domains.length} domains`,
+            ),
+          );
+        });
+      },
+    );
 
   browser
     .command("create-profile")

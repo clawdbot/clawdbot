@@ -33,6 +33,7 @@ type PersistedCacheEntry = {
   key: string;
   node: {
     sourceMessage: Message;
+    threadId?: string;
   };
 };
 
@@ -131,9 +132,33 @@ describe("telegram state migrations", () => {
     const persistedPath = resolveTelegramMessageCachePath(storePath);
     try {
       await mkdir(path.dirname(persistedPath), { recursive: true });
+      const arrayEntry = persistedCacheEntry(9201, 'doctor preserves ]{"key": text');
+      arrayEntry.key = "default:7:9999";
+      arrayEntry.node.sourceMessage = {
+        ...arrayEntry.node.sourceMessage,
+        openclaw_prompt_context_projection: {
+          transcriptMessageId: "must-not-be-inferred",
+          partIndex: 0,
+          finalPart: true,
+        },
+      } as Message;
+      const appendedEntry = persistedCacheEntry(9202, "doctor imports appended JSONL");
+      appendedEntry.node.threadId = "42";
+      const invalidKeyEntry = persistedCacheEntry(9203, "invalid key");
+      invalidKeyEntry.key = "orphan";
+      const invalidDateEntry = persistedCacheEntry(9204, "invalid date");
+      invalidDateEntry.node.sourceMessage = {
+        ...invalidDateEntry.node.sourceMessage,
+        date: Number.NaN,
+      } as Message;
       await writeFile(
         persistedPath,
-        JSON.stringify([persistedCacheEntry(9201, "doctor imports this")]),
+        [
+          `${JSON.stringify([arrayEntry])}${JSON.stringify(appendedEntry)}`,
+          JSON.stringify(invalidKeyEntry),
+          JSON.stringify(invalidDateEntry),
+          '{"key":"default:7:9205","node":',
+        ].join("\n"),
       );
 
       const cfg = {
@@ -158,10 +183,23 @@ describe("telegram state migrations", () => {
       if (!messageCachePlan || messageCachePlan.kind !== "plugin-state-import") {
         throw new Error("expected Telegram message-cache plugin-state import plan");
       }
-
       const entries = await messageCachePlan.readEntries();
-      expect(entries).toHaveLength(1);
-      expect(entries[0]?.key).toBe("default:7:9201");
+      expect(entries).toHaveLength(2);
+      expect(entries[0]).toMatchObject({
+        key: "default:7:9201",
+        value: { version: 1, sourceMessage: { text: 'doctor preserves ]{"key": text' } },
+      });
+      expect(entries[1]).toMatchObject({
+        key: "default:7:9202",
+        value: {
+          version: 1,
+          sourceMessage: { text: "doctor imports appended JSONL" },
+          threadId: "42",
+        },
+      });
+      expect(entries[0]?.value).not.toHaveProperty(
+        "sourceMessage.openclaw_prompt_context_projection",
+      );
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

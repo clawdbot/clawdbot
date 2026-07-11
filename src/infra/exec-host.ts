@@ -1,5 +1,6 @@
 // Sends HMAC-protected exec host requests over the local socket.
 import crypto from "node:crypto";
+import type { ExecApprovalPolicySnapshot } from "./exec-approvals.js";
 import { requestJsonlSocket } from "./jsonl-socket.js";
 
 // Exec host requests cross the local JSONL socket boundary into a privileged
@@ -15,6 +16,7 @@ export type ExecHostRequest = {
   sessionKey?: string | null;
   approvalDecision?: "allow-once" | "allow-always" | null;
   approvalSource?: "ask-fallback" | "auto-review" | null;
+  policySnapshot?: ExecApprovalPolicySnapshot | null;
 };
 
 export type ExecHostRunResult = {

@@ -22,7 +22,16 @@ import {
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import { isValidProfileName } from "./profiles.js";
 import type { BrowserRouteContext, ProfileStatus } from "./server-context.js";
+import {
+  importSystemProfileCookies,
+  listSystemProfiles as discoverSystemProfiles,
+  type ImportSystemProfileParams,
+  type ImportSystemProfileResult,
+  type SystemProfileInfo,
+} from "./system-profiles.js";
 import { movePathToTrash } from "./trash.js";
+
+export type { ImportSystemProfileParams, ImportSystemProfileResult, SystemProfileInfo };
 
 /** Input accepted when creating a browser profile. */
 type CreateProfileParams = {
@@ -141,6 +150,19 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
     };
   };
 
+  const listSystemProfiles = async (browser?: string): Promise<SystemProfileInfo[]> => {
+    if (process.platform !== "darwin") {
+      return [];
+    }
+    return discoverSystemProfiles(browser);
+  };
+
+  const importSystemProfile = async (
+    params: ImportSystemProfileParams,
+  ): Promise<ImportSystemProfileResult> => {
+    return await importSystemProfileCookies(params, { ctx, createProfile });
+  };
+
   const deleteProfile = async (nameRaw: string): Promise<DeleteProfileResult> => {
     const name = nameRaw.trim();
     if (!name) {
@@ -191,7 +213,9 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
 
   return {
     listProfiles,
+    listSystemProfiles,
     createProfile,
+    importSystemProfile,
     deleteProfile,
   };
 }

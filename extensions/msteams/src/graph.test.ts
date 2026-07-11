@@ -44,7 +44,7 @@ vi.mock("../runtime-api.js", async (importOriginal) => {
   };
 });
 
-import { searchGraphUsers } from "./graph-users.js";
+import { findGraphUsersByExactIdentity, searchGraphUsers } from "./graph-users.js";
 import {
   deleteGraphRequest,
   escapeOData,
@@ -52,7 +52,9 @@ import {
   fetchGraphAbsoluteUrl,
   fetchGraphJson,
   listChannelsForTeam,
+  listChannelsForTeamWithPageInfo,
   listTeamsByName,
+  listTeamsByNameWithPageInfo,
   normalizeQuery,
   postGraphBetaJson,
   postGraphJson,
@@ -220,6 +222,17 @@ describe("msteams graph helpers", () => {
     expect(normalizeQuery("  Team Alpha  ")).toBe("Team Alpha");
     expect(normalizeQuery("   ")).toBe("");
     expect(escapeOData("alice.o'hara")).toBe("alice.o''hara");
+  });
+
+  it("lets the shared SSRF guard select the Graph transport", async () => {
+    mockGraphCollection();
+
+    await fetchGraphJson({
+      token: graphToken,
+      path: "/groups",
+    });
+
+    expect(fetchWithSsrFGuardMock.mock.calls[0]?.[0]).not.toHaveProperty("fetchImpl");
   });
 
   it("fetches Graph JSON and surfaces Graph errors with response text", async () => {
@@ -424,6 +437,51 @@ describe("msteams graph helpers", () => {
     );
     expect(fetchCallSearchParam(0, "$select")).toBe("id,displayName");
     expectFetchPathContains(1, "/teams/team%2Fops/channels?$select=id,displayName");
+  });
+
+  it("exposes pagination completeness for authorization lookups", async () => {
+    mockFetch(async (input) => {
+      const url = requestUrl(input);
+      if (url.includes("/groups?$skip=1")) {
+        return jsonResponse(graphCollection({ id: "team-2", displayName: "Ops" }));
+      }
+      if (url.includes("/groups?")) {
+        return jsonResponse({
+          value: [opsTeam],
+          "@odata.nextLink": "https://graph.microsoft.com/v1.0/groups?$skip=1",
+        });
+      }
+      if (url.includes("/channels?$skip=1")) {
+        return jsonResponse(graphCollection({ id: "channel-2", displayName: "Incidents" }));
+      }
+      return jsonResponse({
+        value: [deploymentsChannel],
+        "@odata.nextLink": "https://graph.microsoft.com/v1.0/teams/team-1/channels?$skip=1",
+      });
+    });
+
+    await expect(listTeamsByNameWithPageInfo(graphToken, "Ops")).resolves.toEqual({
+      items: [opsTeam, { id: "team-2", displayName: "Ops" }],
+      truncated: false,
+    });
+    await expect(listChannelsForTeamWithPageInfo(graphToken, "team-1")).resolves.toEqual({
+      items: [deploymentsChannel, { id: "channel-2", displayName: "Incidents" }],
+      truncated: false,
+    });
+  });
+
+  it("builds an exact identity filter for authorization user lookup", async () => {
+    mockGraphCollection(userOne);
+
+    await expect(
+      findGraphUsersByExactIdentity({
+        token: graphToken,
+        query: "Alice O'Hara",
+      }),
+    ).resolves.toEqual({ items: [userOne], truncated: false });
+    expect(fetchCallSearchParam(0, "$filter")).toBe(
+      "(displayName eq 'Alice O''Hara' or mail eq 'Alice O''Hara' or userPrincipalName eq 'Alice O''Hara')",
+    );
   });
 
   it("returns no graph users for blank queries", async () => {

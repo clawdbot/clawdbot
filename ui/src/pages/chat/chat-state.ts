@@ -89,6 +89,10 @@ import {
 } from "./chat-session.ts";
 import type { ChatProps } from "./chat-view.ts";
 import {
+  handleBackgroundTasksEvent,
+  type BackgroundTasksHost,
+} from "./components/chat-background-tasks.ts";
+import {
   clearSessionWorkspaceTimers,
   type SessionWorkspaceHost,
 } from "./components/chat-session-workspace.ts";
@@ -163,7 +167,8 @@ type ChatComposerRouteResetResult = {
 export type ChatPageHost = ChatHost &
   ChatState &
   ChatRealtimeState &
-  SessionWorkspaceHost & {
+  SessionWorkspaceHost &
+  BackgroundTasksHost & {
     sessions: SessionCapability;
     settings: UiSettings;
     password: string;
@@ -1246,6 +1251,7 @@ export function createPageState(
     connectionEpoch: 0,
     hello: null,
     terminalAvailable: false,
+    browserPanelAvailable: false,
     assistantAgentId: context.agentSelection.state.selectedId,
     sessionKey: settings.sessionKey,
     chatLoading: false,
@@ -1335,6 +1341,7 @@ export function createPageState(
     requestUpdate: () => renderLifecycle.invalidate(),
     sessionWorkspaceState: undefined,
     sessionWorkspaceOpenRequest: undefined,
+    backgroundTasksState: undefined,
     querySelector: page.querySelector.bind(page),
   } as unknown as ChatPageHost;
 
@@ -1470,6 +1477,10 @@ export function handlePageGatewayEvent(state: ChatPageHost, event: GatewayEventF
     handleSessionsChangedEvent(state, event.payload);
     void resumeStoredChatOutboxes(state);
     requestPageUpdate(state);
+    return;
+  }
+  if (event.event === "task") {
+    handleBackgroundTasksEvent(state, event.payload);
   }
 }
 

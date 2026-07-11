@@ -4,7 +4,20 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveTelegramToken } from "./token.js";
+import { resolveTelegramBotUserIdFromToken, resolveTelegramToken } from "./token.js";
+
+describe("resolveTelegramBotUserIdFromToken", () => {
+  it.each([
+    ["123456:secret", 123456],
+    ["not-a-bot:secret", undefined],
+    ["0:secret", undefined],
+    ["9007199254740992:secret", undefined],
+    ["+123:secret", undefined],
+    ["123 :secret", undefined],
+  ])("parses %j as %j", (token, expected) => {
+    expect(resolveTelegramBotUserIdFromToken(token)).toBe(expected);
+  });
+});
 
 describe("resolveTelegramToken", () => {
   const tempDirs: string[] = [];

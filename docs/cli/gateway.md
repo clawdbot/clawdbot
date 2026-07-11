@@ -100,7 +100,7 @@ openclaw gateway run   # equivalent, explicit form
 
 `--claude-cli-logs` is a deprecated alias for `--cli-backend-logs`.
 
-For `--bind custom`, set `gateway.customBindHost` to an IPv4 address; the Gateway falls back to `0.0.0.0` if that address is unavailable. IPv6-only bring-your-own-host setups need an IPv4 sidecar or proxy in front of the Gateway.
+For `--bind custom`, set `gateway.customBindHost` to an IPv4 address. Any address other than `127.0.0.1` or `0.0.0.0` also requires `127.0.0.1` on the same port for same-host clients; startup fails if either listener cannot bind. Wildcard `0.0.0.0` does not add a separate required alias. IPv6-only bring-your-own-host setups need an IPv4 sidecar or proxy in front of the Gateway.
 
 ## Restart the Gateway
 

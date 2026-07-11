@@ -31,6 +31,43 @@ describe("openclaw plugin tool context", () => {
     expect(result.context.senderIsOwner).toBe(true);
   });
 
+  it("forwards the trusted native conversation id", () => {
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        nativeChannelId: "oc_native_chat",
+      },
+    });
+
+    expect(result.context.nativeChannelId).toBe("oc_native_chat");
+  });
+
+  it("defaults missing and unknown conversation-read origins to delegated", () => {
+    const missing = resolveOpenClawPluginToolInputs({
+      options: { config: {} as never },
+    });
+    const unknown = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        conversationReadOrigin: "forged" as never,
+      },
+    });
+
+    expect(missing.context.conversationReadOrigin).toBe("delegated");
+    expect(unknown.context.conversationReadOrigin).toBe("delegated");
+  });
+
+  it("preserves a server-owned direct-operator origin", () => {
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        conversationReadOrigin: "direct-operator",
+      },
+    });
+
+    expect(result.context.conversationReadOrigin).toBe("direct-operator");
+  });
+
   it("forwards fs policy for plugin tool sandbox enforcement", () => {
     const result = resolveOpenClawPluginToolInputs({
       options: {

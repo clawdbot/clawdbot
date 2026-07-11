@@ -121,15 +121,25 @@ describe("memory search citations", () => {
 
   it("clamps decorated snippets to qmd injected budget", async () => {
     setMemoryBackend("qmd");
+    setMemorySearchImpl(async () => [
+      {
+        path: "MEMORY.md",
+        startLine: 5,
+        endLine: 7,
+        score: 0.9,
+        snippet: "abc😀tail",
+        source: "memory" as const,
+      },
+    ]);
     const cfg = asOpenClawConfig({
-      memory: { citations: "on", backend: "qmd", qmd: { limits: { maxInjectedChars: 20 } } },
+      memory: { citations: "on", backend: "qmd", qmd: { limits: { maxInjectedChars: 4 } } },
       agents: { list: [{ id: "main", default: true }] },
     });
     const tool = createMemorySearchToolOrThrow({ config: cfg });
     const result = await tool.execute("call_citations_qmd", { query: "notes" });
     const details = result.details as { results: Array<{ snippet: string; citation?: string }> };
     const firstResult = expectFirstMemoryResult(details);
-    expect(firstResult.snippet.length).toBeLessThanOrEqual(20);
+    expect(firstResult.snippet).toBe("abc");
   });
 
   it("honors auto mode for direct chats", async () => {

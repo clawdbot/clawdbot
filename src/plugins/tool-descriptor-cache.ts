@@ -6,7 +6,7 @@ import type { JsonObject, ToolDescriptor } from "../tools/types.js";
 import type { PluginLoadOptions } from "./loader.js";
 import type { OpenClawPluginToolContext } from "./types.js";
 
-const PLUGIN_TOOL_DESCRIPTOR_CACHE_VERSION = 1;
+const PLUGIN_TOOL_DESCRIPTOR_CACHE_VERSION = 3;
 const PLUGIN_TOOL_DESCRIPTOR_CACHE_LIMIT = 256;
 
 /** Cached display descriptor for one plugin-created tool. */
@@ -111,6 +111,7 @@ function buildDescriptorContextCacheKey(params: {
     browser: ctx.browser ?? null,
     messageChannel: ctx.messageChannel ?? null,
     agentAccountId: ctx.agentAccountId ?? null,
+    nativeChannelId: ctx.nativeChannelId ?? null,
     deliveryContext: ctx.deliveryContext ?? null,
     requesterSenderId: ctx.requesterSenderId ?? null,
     senderIsOwner: ctx.senderIsOwner ?? null,

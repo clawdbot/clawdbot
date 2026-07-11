@@ -1,10 +1,39 @@
 name: OpenClaw Release Telegram QA
 
+run-name: ${{ github.event_name == 'workflow_dispatch' && format('OpenClaw Release Telegram QA {0}', inputs.dispatch_id) || 'OpenClaw Release Telegram QA' }}
+
 on:
+  # Transitional compatibility for supported release refs whose parent still calls @main.
+  # Current main dispatches this workflow so qa-live-shared secrets stay in this run.
   workflow_call:
     inputs:
       expected_trusted_workflow_sha:
-        description: Resolved main SHA authorized for this trusted reusable workflow
+        description: Resolved main SHA authorized for this trusted workflow
+        required: true
+        type: string
+      target_ref:
+        description: Trusted release ref whose exact candidate SHA should be validated
+        required: true
+        type: string
+      target_sha:
+        description: Exact full candidate commit SHA
+        required: true
+        type: string
+    secrets:
+      OPENCLAW_QA_CONVEX_SECRET_CI:
+        description: Credential-lease coordinator secret supplied by qa-live-shared
+        required: false
+      OPENCLAW_QA_CONVEX_SITE_URL:
+        description: Credential-lease coordinator URL supplied by qa-live-shared
+        required: false
+  workflow_dispatch:
+    inputs:
+      dispatch_id:
+        description: Unique parent release-check dispatch identifier
+        required: true
+        type: string
+      expected_trusted_workflow_sha:
+        description: Resolved main SHA authorized for this trusted workflow
         required: true
         type: string
       target_ref:
@@ -24,7 +53,7 @@ env:
 
 jobs:
   trusted_identity:
-    name: Resolve trusted reusable workflow identity
+    name: Resolve trusted dispatched workflow identity
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -36,7 +65,7 @@ jobs:
       workflow_repository: ${{ steps.identity.outputs.workflow_repository }}
       workflow_sha: ${{ steps.identity.outputs.workflow_sha }}
     steps:
-      - name: Verify called-main identity
+      - name: Verify dispatched-main identity
         id: identity
         env:
           CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
@@ -45,6 +74,8 @@ jobs:
           JOB_CONTEXT: ${{ toJSON(job) }}
           TARGET_REF: ${{ inputs.target_ref }}
           TARGET_SHA: ${{ inputs.target_sha }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         shell: bash
         run: |
           set -euo pipefail
@@ -55,9 +86,18 @@ jobs:
                 ! "$EXPECTED_TRUSTED_WORKFLOW_SHA" =~ ^[a-f0-9]{40}$ ||
                 ! "$TARGET_SHA" =~ ^[a-f0-9]{40}$ ||
                 -z "${TARGET_REF// }" ]]; then
-            echo "Reusable Telegram QA identity or target is malformed." >&2
+            echo "Telegram QA identity or target is malformed." >&2
             exit 1
           fi
+          INVOCATION_MODE=reusable
+          if [[ "$WORKFLOW_REF" == "$expected_ref" ]]; then
+            INVOCATION_MODE=dispatch
+            [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" &&
+               "$GITHUB_REF" == "refs/heads/main" &&
+               "$GITHUB_SHA" == "$EXPECTED_TRUSTED_WORKFLOW_SHA" &&
+               "$WORKFLOW_SHA" == "$EXPECTED_TRUSTED_WORKFLOW_SHA" ]]
+          fi
+          export INVOCATION_MODE
 
           oidc_json="$(
             curl --fail --silent --show-error \
@@ -65,7 +105,7 @@ jobs:
               "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=openclaw-release-telegram-qa"
           )"
           oidc_token="$(jq -er '.value' <<<"$oidc_json")"
-          EXPECTED_JOB_WORKFLOW_REF="$expected_ref" OIDC_TOKEN="$oidc_token" \
+          EXPECTED_WORKFLOW_REF="$expected_ref" OIDC_TOKEN="$oidc_token" \
             node --input-type=module <<'NODE'
           import { appendFileSync } from "node:fs";
 
@@ -78,12 +118,12 @@ jobs:
               "utf8",
             ),
           );
-          const job = JSON.parse(process.env.JOB_CONTEXT ?? "{}");
           const expectedTrustedWorkflowSha = process.env.EXPECTED_TRUSTED_WORKFLOW_SHA;
+          const eventName = process.env.GITHUB_EVENT_NAME;
           const expected = {
             aud: "openclaw-release-telegram-qa",
+            event_name: eventName,
             iss: "https://token.actions.githubusercontent.com",
-            job_workflow_ref: process.env.EXPECTED_JOB_WORKFLOW_REF,
             ref: process.env.GITHUB_REF,
             repository: process.env.GITHUB_REPOSITORY,
             runner_environment: "github-hosted",
@@ -96,28 +136,36 @@ jobs:
               throw new Error(`OIDC ${key} mismatch`);
             }
           }
-          const expectedJob = {
-            workflow_ref: payload.job_workflow_ref,
-            workflow_repository: payload.repository,
-            workflow_sha: expectedTrustedWorkflowSha,
-          };
-          for (const [key, value] of Object.entries(expectedJob)) {
-            if (job[key] !== value) {
-              throw new Error(`job context ${key} mismatch`);
+          if (process.env.INVOCATION_MODE === "reusable") {
+            const job = JSON.parse(process.env.JOB_CONTEXT ?? "{}");
+            const reusableExpected = {
+              job_workflow_ref: process.env.EXPECTED_WORKFLOW_REF,
+              job_workflow_sha: expectedTrustedWorkflowSha,
+            };
+            for (const [key, value] of Object.entries(reusableExpected)) {
+              if (payload[key] !== value) {
+                throw new Error(`OIDC ${key} mismatch`);
+              }
             }
-          }
-          if (!/^[a-f0-9]{40}$/.test(payload.job_workflow_sha ?? "")) {
-            throw new Error("OIDC job_workflow_sha is malformed");
-          }
-          if (payload.job_workflow_sha !== expectedTrustedWorkflowSha) {
-            throw new Error("OIDC job_workflow_sha does not match the frozen trusted workflow SHA");
+            if (
+              job.workflow_ref !== reusableExpected.job_workflow_ref ||
+              job.workflow_repository !== payload.repository ||
+              job.workflow_sha !== expectedTrustedWorkflowSha
+            ) {
+              throw new Error("job context reusable workflow identity mismatch");
+            }
+          } else if (
+            payload.workflow_ref !== process.env.EXPECTED_WORKFLOW_REF ||
+            payload.workflow_sha !== expectedTrustedWorkflowSha
+          ) {
+            throw new Error("OIDC dispatched workflow identity mismatch");
           }
           appendFileSync(
             process.env.GITHUB_OUTPUT,
             [
-              `workflow_ref=${job.workflow_ref}`,
-              `workflow_repository=${job.workflow_repository}`,
-              `workflow_sha=${job.workflow_sha}`,
+              `workflow_ref=${process.env.EXPECTED_WORKFLOW_REF}`,
+              `workflow_repository=${payload.repository}`,
+              `workflow_sha=${expectedTrustedWorkflowSha}`,
               "",
             ].join("\n"),
           );
@@ -157,7 +205,7 @@ jobs:
       manifest_sha256: ${{ steps.archive.outputs.manifest_sha256 }}
       status: ${{ steps.record_status.outputs.status }}
     steps:
-      - name: Require trusted reusable workflow identity
+      - name: Require trusted dispatched workflow identity
         id: require_identity
         env:
           IDENTITY_STATUS: ${{ needs.trusted_identity.outputs.status }}
@@ -645,7 +693,13 @@ jobs:
 
           const sourceRoot = process.env.SOURCE_ROOT;
           const candidateRoot = process.env.CANDIDATE_ROOT;
-          const records = execFileSync("git", ["-C", sourceRoot, "ls-files", "-s", "-z"])
+          // Node defaults to 1 MiB, smaller than this repo's tracked-file index output.
+          const trackedFileOutput = execFileSync(
+            "git",
+            ["-C", sourceRoot, "ls-files", "-s", "-z"],
+            { maxBuffer: 16 * 1024 * 1024 },
+          );
+          const records = trackedFileOutput
             .toString("utf8")
             .split("\0")
             .filter(Boolean);
@@ -992,6 +1046,16 @@ jobs:
           CANDIDATE_ROOT="$candidate_runtime_root"
           sudo install -d -o root -g root -m 0755 "$runtime_root"
           sudo install -d -o "$runner_uid" -g "$runner_gid" -m 0711 "$runtime_root/tmp"
+          # Frozen candidates prefer /tmp/openclaw before TMPDIR. Make that shared path
+          # unavailable to the runner so they use the isolated runtime fallback instead.
+          sudo rm -rf -- /tmp/openclaw
+          sudo install -d -o root -g root -m 0700 /tmp/openclaw
+          sudo install \
+            -d \
+            -o "$runner_uid" \
+            -g "$runner_gid" \
+            -m 0711 \
+            "${runtime_root}/tmp/openclaw-${runner_uid}"
           sudo chown -R root:root "$CANDIDATE_ROOT"
           sudo chmod -R go-w "$CANDIDATE_ROOT"
           sudo chmod -R a+rX "$CANDIDATE_ROOT"
@@ -1083,7 +1147,9 @@ jobs:
 
           sudo tee "$launcher" >/dev/null <<'LAUNCHER'
           #!/bin/bash
-          set -euo pipefail
+          set -Eeuo pipefail
+          launcher_stage=entry
+          trap 'exit_status=$?; trap - ERR; printf "Telegram SUT launcher failed: stage=%s line=%s status=%s\n" "$launcher_stage" "$LINENO" "$exit_status" >&2; exit "$exit_status"' ERR
 
           transport_keys=(
             HOME
@@ -1129,7 +1195,8 @@ jobs:
             source /etc/openclaw-telegram-sut.conf
             identity_file="$(realpath -e "$1")"
             case "$identity_file" in
-              "$RUNTIME_ROOT"/tmp/openclaw-qa-suite-*/process-boundary/identity-*.json) ;;
+              "$RUNTIME_ROOT"/tmp/openclaw-qa-suite-*/process-boundary/identity-*.json | \
+              "$RUNTIME_ROOT"/tmp/openclaw-"$RUNNER_UID"/openclaw-qa-suite-*/process-boundary/identity-*.json) ;;
               *) echo "Telegram SUT identity escaped the runtime root." >&2; exit 1 ;;
             esac
             [[ "$(stat -c '%F:%a:%u:%g' "$identity_file")" == "regular file:640:0:${RUNNER_GID}" ]]
@@ -1460,6 +1527,7 @@ jobs:
             exec sudo "${sudo_args[@]}" -- "$0" --root-run "$@"
           fi
           shift
+          launcher_stage=root-run-setup
           [[ "$EUID" == "0" ]]
           source /etc/openclaw-telegram-sut.conf
 
@@ -1477,7 +1545,8 @@ jobs:
 
           temp_root="$(realpath -e "${OPENCLAW_QA_TEMP_ROOT:?}")"
           case "$temp_root" in
-            "$RUNTIME_ROOT"/tmp/openclaw-qa-suite-*) ;;
+            "$RUNTIME_ROOT"/tmp/openclaw-qa-suite-* | \
+            "$RUNTIME_ROOT"/tmp/openclaw-"$RUNNER_UID"/openclaw-qa-suite-*) ;;
             *) echo "SUT temp root escaped the workflow runtime root." >&2; exit 1 ;;
           esac
           config_path="${temp_root}/openclaw.json"
@@ -1581,11 +1650,14 @@ jobs:
           export boundary_mode generation command_file identity_file sandbox_file
           export command_sha256 expected_env_keys_b64 sandbox_payload_b64
 
-          exec /usr/bin/unshare \
+          launcher_stage=enter-mount-namespace
+          /usr/bin/unshare \
             --mount \
             --fork \
             --propagation private \
             /bin/bash -ceu '
+              launcher_stage=mask-host-paths
+              trap "exit_status=\$?; trap - ERR; printf \"Telegram SUT launcher failed: stage=%s line=%s status=%s\\n\" \"\$launcher_stage\" \"\$LINENO\" \"\$exit_status\" >&2; exit \"\$exit_status\"" ERR
               for masked_path in "$RUNNER_HOME" /tmp /var/tmp /dev/shm; do
                 [[ -d "$masked_path" ]]
                 mount \
@@ -1594,8 +1666,10 @@ jobs:
                   openclaw-telegram-mask \
                   "$masked_path"
               done
+              launcher_stage=mount-proc
               mount -t proc proc /proc -o nosuid,nodev,noexec,hidepid=2
               if [[ "$boundary_mode" == "true" ]]; then
+                launcher_stage=write-identity
                 pid="$$"
                 proc_stat="$(cat "/proc/${pid}/stat")"
                 proc_tail="${proc_stat##*) }"
@@ -1847,7 +1921,7 @@ jobs:
           {
             printf 'trusted_harness_sha=%s\n' "${{ needs.trusted_identity.outputs.workflow_sha }}"
             printf 'candidate_runtime_plugin_sha=%s\n' "$TARGET_SHA"
-            printf 'trusted_scenario_source=oidc.job_workflow_sha\n'
+            printf 'trusted_scenario_source=verified_trusted_workflow_sha\n'
           } >"${output_dir}/source-attestation.txt"
           echo "output_dir=$output_dir" >>"$GITHUB_OUTPUT"
 

@@ -895,6 +895,7 @@ export class ToolsNamespace extends RpcNamespace {
   async invoke(name: string, params?: ToolInvokeParams): Promise<ToolInvokeResult> {
     return await this.call("invoke", {
       name,
+      conversationReadOrigin: "direct-operator",
       ...(params?.args ? { args: params.args } : {}),
       ...(params?.sessionKey ? { sessionKey: params.sessionKey } : {}),
       ...(params?.agentId ? { agentId: params.agentId } : {}),

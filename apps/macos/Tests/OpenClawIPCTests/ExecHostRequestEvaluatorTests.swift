@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 import Testing
 @testable import OpenClaw
 
@@ -163,13 +164,105 @@ struct ExecHostRequestEvaluatorTests {
             agentId: nil,
             sessionKey: nil,
             approvalDecision: nil,
-            approvalSource: "auto-review")
+            approvalSource: "auto-review",
+            policySnapshot: Self.portablePolicySnapshot)
 
         switch ExecHostRequestEvaluator.validateRequest(request) {
         case let .success(validated):
             #expect(validated.approvalSource == .autoReview)
+            #expect(validated.delayedPolicySnapshot == ExecApprovalPolicySnapshot(
+                portable: Self.portablePolicySnapshot))
         case let .failure(error):
             Issue.record("unexpected invalid request: \(error.message)")
+        }
+    }
+
+    @Test func `validate request requires snapshots only for forwarded delayed authority`() {
+        let delayedRequests = [
+            ExecHostRequest(
+                command: ["/usr/bin/printf", "ok"],
+                rawCommand: nil,
+                cwd: nil,
+                env: nil,
+                timeoutMs: nil,
+                needsScreenRecording: nil,
+                agentId: nil,
+                sessionKey: nil,
+                approvalDecision: .allowOnce),
+            ExecHostRequest(
+                command: ["/usr/bin/printf", "ok"],
+                rawCommand: nil,
+                cwd: nil,
+                env: nil,
+                timeoutMs: nil,
+                needsScreenRecording: nil,
+                agentId: nil,
+                sessionKey: nil,
+                approvalDecision: .allowAlways),
+            ExecHostRequest(
+                command: ["/usr/bin/printf", "ok"],
+                rawCommand: nil,
+                cwd: nil,
+                env: nil,
+                timeoutMs: nil,
+                needsScreenRecording: nil,
+                agentId: nil,
+                sessionKey: nil,
+                approvalDecision: nil,
+                approvalSource: "auto-review"),
+        ]
+        for request in delayedRequests {
+            switch ExecHostRequestEvaluator.validateRequest(request) {
+            case .success:
+                Issue.record("expected delayed approval without snapshot to fail")
+            case let .failure(error):
+                #expect(error.code == "INVALID_REQUEST")
+                #expect(error.message == "delayed approval requires a prepared policy snapshot")
+                #expect(error.reason == "invalid")
+            }
+        }
+
+        let nonDelayedRequests = [
+            ExecHostRequest(
+                command: ["/usr/bin/printf", "ok"],
+                rawCommand: nil,
+                cwd: nil,
+                env: nil,
+                timeoutMs: nil,
+                needsScreenRecording: nil,
+                agentId: nil,
+                sessionKey: nil,
+                approvalDecision: nil,
+                policySnapshot: Self.portablePolicySnapshot),
+            ExecHostRequest(
+                command: ["/usr/bin/printf", "ok"],
+                rawCommand: nil,
+                cwd: nil,
+                env: nil,
+                timeoutMs: nil,
+                needsScreenRecording: nil,
+                agentId: nil,
+                sessionKey: nil,
+                approvalDecision: nil,
+                approvalSource: "ask-fallback"),
+            ExecHostRequest(
+                command: ["/usr/bin/printf", "ok"],
+                rawCommand: nil,
+                cwd: nil,
+                env: nil,
+                timeoutMs: nil,
+                needsScreenRecording: nil,
+                agentId: nil,
+                sessionKey: nil,
+                approvalDecision: .deny),
+        ]
+        for request in nonDelayedRequests {
+            switch ExecHostRequestEvaluator.validateRequest(request) {
+            case let .success(validated):
+                #expect(validated.delayedPolicySnapshot == nil)
+            case let .failure(error):
+                Issue.record("unexpected invalid request: \(error.message)")
+            }
         }
     }
 
@@ -300,12 +393,20 @@ struct ExecHostRequestEvaluatorTests {
             ask: .off,
             allowlistSatisfied: false,
             skillAllow: false)
+        let forwardedSnapshot = ExecApprovalPolicySnapshot(
+            security: .allowlist,
+            ask: .always,
+            askFallback: .allowlist,
+            autoAllowSkills: true,
+            allowlist: [ExecAllowlistEntry(pattern: "/usr/bin/printf")])
+        #expect(forwardedSnapshot != currentContext.policySnapshot)
         let current = ExecApprovalExecutionCommit.build(
             context: currentContext,
             effectiveSecurity: .full,
             approvalSource: nil,
             explicitlyApproved: false,
-            persistAllowlist: false)
+            persistAllowlist: false,
+            delayedPolicySnapshot: forwardedSnapshot)
         if case let .currentPolicy(security, ask, basis) = current.authorization {
             #expect(security == .full)
             #expect(ask == .off)
@@ -319,9 +420,11 @@ struct ExecHostRequestEvaluatorTests {
             effectiveSecurity: .full,
             approvalSource: nil,
             explicitlyApproved: true,
-            persistAllowlist: false)
-        if case let .explicitOnce(security) = explicit.authorization {
+            persistAllowlist: false,
+            delayedPolicySnapshot: forwardedSnapshot)
+        if case let .explicitOnce(security, policySnapshot) = explicit.authorization {
             #expect(security == .full)
+            #expect(policySnapshot == forwardedSnapshot)
         } else {
             Issue.record("expected explicit authorization")
         }
@@ -337,7 +440,8 @@ struct ExecHostRequestEvaluatorTests {
             effectiveSecurity: .full,
             approvalSource: .askFallback,
             explicitlyApproved: false,
-            persistAllowlist: false)
+            persistAllowlist: false,
+            delayedPolicySnapshot: forwardedSnapshot)
         if case let .askFallback(security, basis) = fallback.authorization {
             #expect(security == .full)
             #expect(basis == nil)
@@ -355,11 +459,35 @@ struct ExecHostRequestEvaluatorTests {
             effectiveSecurity: .allowlist,
             approvalSource: .autoReview,
             explicitlyApproved: true,
-            persistAllowlist: false)
-        if case let .autoReview(security) = autoReview.authorization {
+            persistAllowlist: false,
+            delayedPolicySnapshot: forwardedSnapshot)
+        if case let .autoReview(security, policySnapshot) = autoReview.authorization {
             #expect(security == .allowlist)
+            #expect(policySnapshot == forwardedSnapshot)
         } else {
             Issue.record("expected auto-review authorization")
+        }
+
+        let durableContext = Self.makeContext(
+            security: .allowlist,
+            ask: .onMiss,
+            allowlistSatisfied: false,
+            skillAllow: false,
+            boundCommand: ["/usr/bin/printf", "ok"],
+            allowAlwaysPatterns: ["/usr/bin/printf"])
+        let durable = ExecApprovalExecutionCommit.build(
+            context: durableContext,
+            effectiveSecurity: .allowlist,
+            approvalSource: nil,
+            explicitlyApproved: true,
+            persistAllowlist: true,
+            delayedPolicySnapshot: forwardedSnapshot)
+        if case let .explicitAlways(security, policySnapshot, grants) = durable.authorization {
+            #expect(security == .allowlist)
+            #expect(policySnapshot == forwardedSnapshot)
+            #expect(grants.map(\.match.pattern) == ["/usr/bin/printf"])
+        } else {
+            Issue.record("expected durable explicit authorization")
         }
     }
 
@@ -408,7 +536,9 @@ struct ExecHostRequestEvaluatorTests {
         ask: ExecAsk,
         askFallback: ExecSecurity = .deny,
         allowlistSatisfied: Bool,
-        skillAllow: Bool) -> ExecApprovalEvaluation
+        skillAllow: Bool,
+        boundCommand: [String]? = nil,
+        allowAlwaysPatterns: [String] = []) -> ExecApprovalEvaluation
     {
         ExecApprovalEvaluation(
             displayCommand: "/usr/bin/echo hi",
@@ -419,8 +549,8 @@ struct ExecHostRequestEvaluatorTests {
             env: [:],
             resolution: nil,
             allowlistResolutions: [],
-            boundCommand: nil,
-            allowAlwaysPatterns: [],
+            boundCommand: boundCommand,
+            allowAlwaysPatterns: allowAlwaysPatterns,
             allowlistMatches: [],
             allowlistAuthorizationSatisfied: allowlistSatisfied,
             allowlistSatisfied: allowlistSatisfied,
@@ -433,4 +563,11 @@ struct ExecHostRequestEvaluatorTests {
                 autoAllowSkills: false,
                 allowlist: []))
     }
+
+    private static let portablePolicySnapshot = OpenClawSystemRunApprovalPolicySnapshot(
+        security: .full,
+        ask: .off,
+        askFallback: .deny,
+        autoAllowSkills: false,
+        allowlistRules: [])
 }

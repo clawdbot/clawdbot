@@ -466,7 +466,7 @@ export type GatewayServerOptions = {
    * Bind address policy for the Gateway WebSocket/HTTP server.
    * - loopback: 127.0.0.1
    * - lan: 0.0.0.0
-   * - tailnet: bind only to the Tailscale IPv4 address (100.64.0.0/10)
+   * - tailnet: bind to the Tailscale IPv4 address (100.64.0.0/10) and local 127.0.0.1
    * - auto: prefer loopback, else LAN
    */
   bind?: import("../config/config.js").GatewayBindMode;

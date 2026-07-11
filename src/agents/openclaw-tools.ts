@@ -9,7 +9,9 @@ import type {
   SourceReplyDeliveryMode,
   TaskSuggestionDeliveryMode,
 } from "../auto-reply/get-reply-options.types.js";
+import type { ChatType } from "../channels/chat-type.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
+import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import { getRuntimeConfig, selectApplicableRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
@@ -133,6 +135,10 @@ export function createOpenClawTools(
     agentTo?: string;
     /** Thread/topic identifier for routing replies to the originating thread. */
     agentThreadId?: string | number;
+    /** Trusted platform-native conversation id for the active inbound turn. */
+    nativeChannelId?: string;
+    /** Opaque host-issued capability for current-turn channel message actions. */
+    messageActionTurnCapability?: string;
     agentDir?: string;
     sandboxRoot?: string;
     sandboxContainerWorkdir?: string;
@@ -148,6 +154,8 @@ export function createOpenClawTools(
     cronCreatorToolAllowlist?: CronCreatorToolAllowlistEntry[];
     /** Current channel ID for auto-threading. */
     currentChannelId?: string;
+    /** Trusted normalized conversation kind for the active inbound turn. */
+    currentChatType?: ChatType;
     /** Routable target for the current conversation when it differs from the native channel ID. */
     currentMessagingTarget?: string;
     /** Current thread timestamp for auto-threading. */
@@ -183,6 +191,8 @@ export function createOpenClawTools(
     requesterAgentIdOverride?: string;
     /** Trusted sender identity bit for channel action auth. */
     senderIsOwner?: boolean;
+    /** Server-owned operation-local origin for conversation-read visibility policy. */
+    conversationReadOrigin?: ConversationReadInvocationOrigin;
     /** Restrict the cron tool to self-removing this active cron job. */
     cronSelfRemoveOnlyJobId?: string;
     /** Require explicit message targets (no implicit last-route sends). */
@@ -418,8 +428,10 @@ export function createOpenClawTools(
         runId: options?.runId,
         agentId: sessionAgentId,
         sessionId: options?.sessionId,
+        messageActionTurnCapability: options?.messageActionTurnCapability,
         config: options?.config,
         currentChannelId: options?.currentChannelId,
+        currentChatType: options?.currentChatType,
         currentMessagingTarget: options?.currentMessagingTarget,
         currentChannelProvider: options?.agentChannel,
         currentThreadTs: options?.currentThreadTs,
@@ -436,6 +448,7 @@ export function createOpenClawTools(
         inboundEventKind: options?.inboundEventKind,
         requesterSenderId: options?.requesterSenderId ?? undefined,
         senderIsOwner: options?.senderIsOwner,
+        conversationReadOrigin: options?.conversationReadOrigin,
       });
   const heartbeatTool = options?.enableHeartbeatTool ? createHeartbeatResponseTool() : null;
   options?.recordToolPrepStage?.("openclaw-tools:message-tool");

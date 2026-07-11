@@ -540,7 +540,11 @@ export function resolveMatrixAuthContext(params: {
 } {
   const cfg = requireRuntimeConfig(params.cfg, "Matrix auth context") as CoreConfig;
   const env = params?.env ?? process.env;
+  const requestedAccountId = params?.accountId?.trim();
   const explicitAccountId = normalizeOptionalAccountId(params?.accountId);
+  if (requestedAccountId && !explicitAccountId) {
+    throw new Error(`Matrix account id "${requestedAccountId}" is invalid.`);
+  }
   const effectiveAccountId = explicitAccountId ?? resolveImplicitMatrixAccountId(cfg, env);
   if (!effectiveAccountId) {
     throw new Error(
@@ -556,6 +560,11 @@ export function resolveMatrixAuthContext(params: {
     throw new Error(
       `Matrix account "${explicitAccountId}" is not configured. Add channels.matrix.accounts.${explicitAccountId} or define scoped ${getMatrixScopedEnvVarNames(explicitAccountId).accessToken.replace(/_ACCESS_TOKEN$/, "")}_* variables.`,
     );
+  }
+  const matrix = resolveMatrixBaseConfig(cfg);
+  const account = findMatrixAccountConfig(cfg, effectiveAccountId);
+  if (matrix.enabled === false || account?.enabled === false) {
+    throw new Error(`Matrix account "${effectiveAccountId}" is disabled.`);
   }
   const resolved = resolveMatrixConfigForAccount(cfg, effectiveAccountId, env);
 

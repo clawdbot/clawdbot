@@ -238,3 +238,105 @@ struct PairingCardPresentationTests {
         #expect(PairingApprovalCenter.shouldAutoPresent(cardIds: ["a", "b"], snoozedIds: ["a"]))
     }
 }
+
+@MainActor
+struct PairingApprovalCenterBulkDecisionTests {
+    @MainActor
+    private final class DecisionRecorder {
+        var decided: [String] = []
+
+        func record(_ kind: String, _ card: PairingApprovalCenter.Card, _ decision: PairingApprovalCenter.Decision) {
+            self.decided.append("\(kind):\(card.requestId):\(decision == .approve ? "approve" : "reject")")
+        }
+    }
+
+    private func card(
+        kind: PairingApprovalCenter.Kind,
+        requestId: String) -> PairingApprovalCenter.Card
+    {
+        PairingApprovalCenter.Card(
+            kind: kind,
+            requestId: requestId,
+            subjectId: "subject-\(requestId)",
+            displayName: nil,
+            platform: nil,
+            deviceFamily: nil,
+            modelIdentifier: nil,
+            version: nil,
+            coreVersion: nil,
+            remoteIp: nil,
+            role: nil,
+            scopes: [],
+            caps: [],
+            commands: [],
+            isRepair: false,
+            previouslyPaired: false,
+            requestedAt: Date(timeIntervalSince1970: 1_700_000_000))
+    }
+
+    @Test func `decide all routes every card to its kind handler exactly once`() async {
+        let center = PairingApprovalCenter()
+        let recorder = DecisionRecorder()
+        center.register(kind: .node) { recorder.record("node", $0, $1) }
+        center.register(kind: .device) { recorder.record("device", $0, $1) }
+        let rendered = [
+            self.card(kind: .node, requestId: "req-1"),
+            self.card(kind: .device, requestId: "req-2"),
+        ]
+
+        center.decideAll(rendered, .approve)
+        #expect(center.decisionsInFlight == ["req-1", "req-2"])
+        // A second bulk click while decisions are in flight must not re-fire.
+        center.decideAll(rendered, .approve)
+
+        var attempts = 0
+        while recorder.decided.count < 2 || !center.decisionsInFlight.isEmpty, attempts < 10_000 {
+            attempts += 1
+            await Task.yield()
+        }
+        #expect(recorder.decided.sorted() == ["device:req-2:approve", "node:req-1:approve"])
+        #expect(center.decisionsInFlight.isEmpty)
+    }
+
+    @Test func `reject all delivers reject to every handler`() async {
+        let center = PairingApprovalCenter()
+        let recorder = DecisionRecorder()
+        center.register(kind: .device) { recorder.record("device", $0, $1) }
+        let rendered = [
+            self.card(kind: .device, requestId: "req-1"),
+            self.card(kind: .device, requestId: "req-2"),
+        ]
+
+        center.decideAll(rendered, .reject)
+
+        var attempts = 0
+        while recorder.decided.count < 2, attempts < 10_000 {
+            attempts += 1
+            await Task.yield()
+        }
+        #expect(recorder.decided.sorted() == ["device:req-1:reject", "device:req-2:reject"])
+    }
+
+    @Test func `bulk decisions resolve only the rendered snapshot`() async {
+        // Security invariant: a request that arrives after the footer was
+        // rendered but before the click lands must never be resolved by the
+        // stale bulk button — only what the user actually saw gets decided.
+        let center = PairingApprovalCenter()
+        let recorder = DecisionRecorder()
+        center.register(kind: .node) { recorder.record("node", $0, $1) }
+        center.register(kind: .device) { recorder.record("device", $0, $1) }
+        let rendered = [self.card(kind: .node, requestId: "req-seen")]
+        // "req-unseen" lands in the live queue after render, before the click.
+        center._testSetCards(rendered + [self.card(kind: .device, requestId: "req-unseen")])
+
+        center.decideAll(rendered, .approve)
+
+        var attempts = 0
+        while recorder.decided.isEmpty, attempts < 10_000 {
+            attempts += 1
+            await Task.yield()
+        }
+        #expect(recorder.decided == ["node:req-seen:approve"])
+        #expect(!center.decisionsInFlight.contains("req-unseen"))
+    }
+}

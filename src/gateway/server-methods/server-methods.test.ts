@@ -3915,6 +3915,13 @@ describe("exec approval handlers", () => {
           commandPreview: "echo ok",
           agentId: "main",
           sessionKey: "agent:main:main",
+          policySnapshot: {
+            security: "allowlist",
+            ask: "on-miss",
+            askFallback: "deny",
+            autoAllowSkills: false,
+            allowlistRules: [{ pattern: "/usr/bin/echo" }],
+          },
         },
       },
     });
@@ -3932,6 +3939,13 @@ describe("exec approval handlers", () => {
       commandPreview: "echo ok",
       agentId: "main",
       sessionKey: "agent:main:main",
+      policySnapshot: {
+        security: "allowlist",
+        ask: "on-miss",
+        askFallback: "deny",
+        autoAllowSkills: false,
+        allowlistRules: [{ pattern: "/usr/bin/echo" }],
+      },
     });
   });
 

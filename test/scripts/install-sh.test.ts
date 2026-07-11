@@ -1,6 +1,14 @@
 // Install Sh tests cover install sh script behavior.
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -54,6 +62,30 @@ describe("install.sh", () => {
 
       expect(result.status).toBe(0);
       expect(result.stdout).toBe("leaked=0\n");
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+  });
+
+  it("removes a downloaded script temp file when remote execution fails", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-remote-cleanup-"));
+    const tempFile = join(tmp, "remote-script.sh");
+
+    try {
+      const result = runInstallShell(
+        [
+          "set -euo pipefail",
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          'mktemp() { : > "$PROBE_PATH"; printf \'%s\\n\' "$PROBE_PATH"; }',
+          "download_file() { printf '#!/bin/bash\\nexit 42\\n' > \"$2\"; }",
+          'run_remote_bash "https://example.invalid/setup.sh"',
+        ].join("\n"),
+        { PROBE_PATH: tempFile },
+      );
+
+      expect(result.status).toBe(42);
+      expect(existsSync(tempFile)).toBe(false);
+      expect(script).not.toMatch(/\$\(\s*mktempfile\s*\)/);
     } finally {
       rmSync(tmp, { force: true, recursive: true });
     }

@@ -35,13 +35,14 @@ describe("scripts/pr wrappers", () => {
     expect(script).toContain('exec "$base" merge-run "$pr"');
   });
 
-  it("uses the repository-approved squash landing method", () => {
+  it("defaults to squash and allows commit-preserving merge methods", () => {
     const script = readScript("scripts/pr-lib/merge.sh");
 
+    expect(script).toContain("OPENCLAW_PR_MERGE_METHOD:-squash");
     expect(script).toContain("--squash");
-    expect(script).not.toContain("--rebase");
-    expect(script).toContain("Merged via squash.");
-    expect(script).not.toContain("Merged via rebase.");
+    expect(script).toContain("--merge");
+    expect(script).toContain("--rebase");
+    expect(script).toContain('echo "Merged via $merge_label."');
   });
 
   it("keeps prepare wrapper modes delegated to the main PR helper", () => {

@@ -94,6 +94,22 @@ export type ProfileStatus = {
   reconcileReason?: string | null;
 };
 
+export type SystemProfileInfo = {
+  browser: "chrome" | "brave" | "edge" | "chromium";
+  id: string;
+  name: string;
+  hasCookies: boolean;
+};
+
+export type BrowserImportProfileResult = {
+  ok: true;
+  systemProfile: string;
+  into: string;
+  browser: SystemProfileInfo["browser"];
+  cookies: { total: number; imported: number; failed: number; skipped: number };
+  domains: string[];
+};
+
 /** Result returned when a managed browser profile directory is reset. */
 export type BrowserResetProfileResult = {
   ok: true;
@@ -183,6 +199,35 @@ export async function browserProfiles(
     },
   );
   return res.profiles ?? [];
+}
+
+/** List Chrome-family profiles available on the local macOS host. */
+export async function browserSystemProfiles(
+  baseUrl?: string,
+  opts?: { browser?: string; timeoutMs?: number },
+): Promise<SystemProfileInfo[]> {
+  const query = opts?.browser ? `?browser=${encodeURIComponent(opts.browser)}` : "";
+  const res = await fetchBrowserJson<{ systemProfiles: SystemProfileInfo[] }>(
+    withBaseUrl(baseUrl, `/system-profiles${query}`),
+    { timeoutMs: resolveBrowserClientTimeoutMs(opts, 3000) },
+  );
+  return res.systemProfiles ?? [];
+}
+
+/** Import system-profile cookies into a managed browser profile. */
+export async function browserImportProfile(
+  baseUrl: string | undefined,
+  opts: { browser?: string; systemProfile?: string; into?: string; domains?: string[] },
+): Promise<BrowserImportProfileResult> {
+  return await fetchBrowserJson<BrowserImportProfileResult>(
+    withBaseUrl(baseUrl, "/profiles/import"),
+    {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify(opts),
+      timeoutMs: 120_000,
+    },
+  );
 }
 
 /** Start the selected browser profile. */

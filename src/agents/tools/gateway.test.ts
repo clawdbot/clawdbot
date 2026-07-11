@@ -1,11 +1,21 @@
 // Gateway call helper tests pin URL override, token, and RPC scope behavior for
 // agent tools that route through the local gateway client.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { verifyAgentRuntimeIdentityToken } from "../../gateway/agent-runtime-identity-token.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
+import {
+  mintMessageActionTurnCapability,
+  resetMessageActionTurnCapabilitiesForTest,
+} from "../../gateway/message-action-turn-capability.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
-import { callGatewayTool, readGatewayCallOptions, resolveGatewayOptions } from "./gateway.js";
+import {
+  callGatewayTool,
+  readGatewayCallOptions,
+  resolveGatewayOptions,
+  resolveMessageActionAgentRuntimeIdentityToken,
+} from "./gateway.js";
 
 const mocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
@@ -67,6 +77,7 @@ describe("gateway tool defaults", () => {
     mocks.deviceIdentityError = undefined;
     mocks.persistedDeviceIdentity = undefined;
     mocks.configState.value = {};
+    resetMessageActionTurnCapabilitiesForTest();
     setActivePluginRegistry(createEmptyPluginRegistry());
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_URL;
@@ -460,6 +471,69 @@ describe("gateway tool defaults", () => {
     const call = capturedGatewayCall();
     expect(call.method).toBe("wake");
     expect(call.agentRuntimeIdentityToken).toEqual(expect.any(String));
+  });
+
+  it("mints message action identity only for an admitted turn on the managed local gateway", async () => {
+    const turnCapability = mintMessageActionTurnCapability({
+      agentId: "ops",
+      runId: "run-1",
+      sessionKey: "agent:ops:telegram:group:room-1",
+      sessionId: "session-1",
+      requesterAccountId: "default",
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "room-1",
+        currentChatType: "group",
+      },
+    });
+    await withGatewayToolCallerIdentity(
+      { agentId: "ops", sessionKey: "agent:ops:telegram:group:room-1" },
+      async () => {
+        const token = await resolveMessageActionAgentRuntimeIdentityToken({
+          opts: {},
+          target: "local",
+          turnCapability,
+          runId: "run-1",
+          sessionId: "session-1",
+        });
+        expect(token).toEqual(expect.any(String));
+        expect(verifyAgentRuntimeIdentityToken(token)).toMatchObject({
+          messageActionContext: {
+            sessionId: "session-1",
+            requesterAccountId: "default",
+            toolContext: {
+              currentChannelProvider: "telegram",
+              currentChannelId: "room-1",
+              currentChatType: "group",
+            },
+          },
+        });
+        expect(
+          await resolveMessageActionAgentRuntimeIdentityToken({
+            opts: {},
+            target: "local",
+          }),
+        ).toBeUndefined();
+        expect(
+          await resolveMessageActionAgentRuntimeIdentityToken({
+            opts: {},
+            target: "remote",
+            turnCapability,
+            runId: "run-1",
+            sessionId: "session-1",
+          }),
+        ).toBeUndefined();
+        expect(
+          await resolveMessageActionAgentRuntimeIdentityToken({
+            opts: { gatewayToken: "explicit" },
+            target: "local",
+            turnCapability,
+            runId: "run-1",
+            sessionId: "session-1",
+          }),
+        ).toBeUndefined();
+      },
+    );
   });
 
   it("explains stale gateway cron connection metadata rejections", async () => {

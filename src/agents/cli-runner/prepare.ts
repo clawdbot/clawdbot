@@ -786,6 +786,7 @@ export async function prepareCliRunContext(
       backend: backendResolved.config,
       workspaceDir,
       config: params.config,
+      agentDir,
       ...(crestodianMcpConfig ? { exclusiveConfig: crestodianMcpConfig } : {}),
       additionalConfig: mcpLoopbackRuntime
         ? prepareDeps.createMcpLoopbackServerConfig(mcpLoopbackRuntime.port)

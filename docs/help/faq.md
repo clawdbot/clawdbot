@@ -1220,12 +1220,12 @@ Model Q&A - defaults, selection, aliases, switching, failover, auth profiles - l
 
   </Accordion>
 
-  <Accordion title="I set gateway.bind tailnet but it cannot bind and nothing listens">
-    `tailnet` bind picks a Tailscale IP from your network interfaces (100.64.0.0/10). If the machine is not on Tailscale (or the interface is down), there is nothing to bind to.
+  <Accordion title="I set gateway.bind tailnet but it listens only on loopback">
+    `tailnet` bind picks a Tailscale IP from your network interfaces (100.64.0.0/10). If the machine is not on Tailscale (or the interface is down), the Gateway falls back to loopback instead of exposing another network interface.
 
-    Fix: start Tailscale on that host, or switch to `gateway.bind: "loopback"` / `"lan"`.
+    Fix: start Tailscale on that host and restart the Gateway, or switch explicitly to `gateway.bind: "loopback"` / `"lan"`.
 
-    `tailnet` is explicit; `auto` prefers loopback. Use `gateway.bind: "tailnet"` for a tailnet-only bind.
+    `tailnet` is explicit; `auto` prefers loopback. Use `gateway.bind: "tailnet"` to limit non-loopback exposure to the Tailnet while retaining the required same-host `127.0.0.1` listener.
 
   </Accordion>
 

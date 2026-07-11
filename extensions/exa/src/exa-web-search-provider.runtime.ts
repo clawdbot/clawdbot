@@ -453,6 +453,8 @@ function buildExaCacheKey(params: {
   dateBefore?: string;
   contents?: ExaContentsArgs;
 }): string {
+  const contents = params.contents ?? { highlights: true };
+
   return buildSearchCacheKey([
     "exa",
     params.endpoint,
@@ -462,9 +464,7 @@ function buildExaCacheKey(params: {
     params.freshness,
     params.dateAfter,
     params.dateBefore,
-    params.contents?.highlights ? JSON.stringify(params.contents.highlights) : undefined,
-    params.contents?.text ? JSON.stringify(params.contents.text) : undefined,
-    params.contents?.summary ? JSON.stringify(params.contents.summary) : undefined,
+    JSON.stringify(contents),
   ]);
 }
 

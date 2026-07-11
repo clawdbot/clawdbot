@@ -538,6 +538,34 @@ function isPositiveChatMatch(entry: IMessageReplyCacheEntry, ctx: IMessageChatCo
   return false;
 }
 
+export function isIMessageCurrentMessageInChat(params: {
+  accountId: string;
+  currentMessageId: string | number;
+  chatContext: IMessageChatContext;
+}): boolean {
+  if (!params.accountId || !hasChatScope(params.chatContext)) {
+    return false;
+  }
+  const currentMessageId = normalizeOptionalString(String(params.currentMessageId));
+  if (!currentMessageId) {
+    return false;
+  }
+  hydrateFromStoreOnce();
+  const fullMessageId = /^\d+$/.test(currentMessageId)
+    ? imessageShortIdToUuid.get(currentMessageId)
+    : currentMessageId;
+  if (!fullMessageId) {
+    return false;
+  }
+  const entry = imessageReplyCacheByMessageId.get(fullMessageId);
+  return Boolean(
+    entry &&
+    entry.accountId === params.accountId &&
+    Date.now() - entry.timestamp <= REPLY_CACHE_TTL_MS &&
+    isPositiveChatMatch(entry, params.chatContext),
+  );
+}
+
 export function resetIMessageShortIdState(options: { clearPersistent?: boolean } = {}): void {
   imessageReplyCacheByMessageId.clear();
   imessageShortIdToUuid.clear();

@@ -4395,6 +4395,75 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("keeps per-result and aggregate QMD snippet limits UTF-16 safe", async () => {
+    const expectedDocId = "unicode-boundary";
+    const snippet = "@@ -1,1\nabc😀tail";
+    spawnMock.mockImplementation((cmd: string, args: string[]) => {
+      const child = createMockChild({ autoClose: false });
+      if (isMcporterCommand(cmd) && args[0] === "call") {
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify({
+            results: [
+              {
+                docid: expectedDocId,
+                score: 0.91,
+                collection: "workspace-main",
+                snippet,
+              },
+            ],
+          }),
+        );
+        return child;
+      }
+      emitAndClose(child, "stdout", "[]");
+      return child;
+    });
+
+    const searchWithLimits = async (limits: {
+      maxSnippetChars: number;
+      maxInjectedChars: number;
+    }) => {
+      const testConfig = {
+        ...cfg,
+        memory: {
+          backend: "qmd",
+          qmd: {
+            includeDefaultMemory: false,
+            searchMode: "query",
+            update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+            paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+            limits,
+            mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
+          },
+        },
+      } as OpenClawConfig;
+      const { manager } = await createManager({ cfg: testConfig });
+      const inner = manager as unknown as {
+        db: { prepare: () => { all: () => unknown }; close: () => void };
+      };
+      inner.db = {
+        prepare: () => ({
+          all: () => [{ collection: "workspace-main", path: "notes/unicode.md" }],
+        }),
+        close: () => {},
+      };
+      const results = await manager.search("unicode", {
+        sessionKey: "agent:main:slack:dm:u123",
+      });
+      await manager.close();
+      return results;
+    };
+
+    await expect(searchWithLimits({ maxSnippetChars: 12, maxInjectedChars: 100 })).resolves.toEqual(
+      [expect.objectContaining({ snippet: "@@ -1,1\nabc" })],
+    );
+    await expect(searchWithLimits({ maxSnippetChars: 100, maxInjectedChars: 12 })).resolves.toEqual(
+      [expect.objectContaining({ snippet: "@@ -1,1\nabc" })],
+    );
+  });
+
   it("uses snippet header width when mcporter only returns a start line", async () => {
     const expectedDocId = "line-456";
     cfg = {

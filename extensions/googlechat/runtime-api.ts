@@ -33,11 +33,6 @@ export {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/runtime-group-policy";
 export { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
-export {
-  readRemoteMediaBuffer,
-  resolveChannelMediaMaxBytes,
-} from "openclaw/plugin-sdk/media-runtime";
-export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 export type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 export { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 export type {

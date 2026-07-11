@@ -106,6 +106,7 @@ export async function messageCommand(
       deps: outboundDeps,
       agentId: resolveDefaultAgentId(cfg),
       senderIsOwner: opts.senderIsOwner !== false,
+      conversationReadOrigin: "direct-operator",
       gateway: {
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,

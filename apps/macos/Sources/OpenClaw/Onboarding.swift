@@ -19,6 +19,7 @@ enum RemoteOnboardingProbeState: Equatable {
 @MainActor
 final class OnboardingController: NSObject, NSWindowDelegate {
     static let shared = OnboardingController()
+    static let windowStyleMask: NSWindow.StyleMask = [.titled, .closable, .resizable, .fullSizeContentView]
     private var window: NSWindow?
     /// Human description of work in flight ("Installing the Gateway…").
     /// While set, closing the window asks for confirmation instead of quitting
@@ -47,7 +48,10 @@ final class OnboardingController: NSObject, NSWindowDelegate {
         let window = NSWindow(contentViewController: hosting)
         window.title = UIStrings.welcomeTitle
         window.setContentSize(NSSize(width: OnboardingView.windowWidth, height: OnboardingView.windowHeight))
-        window.styleMask = [.titled, .closable, .fullSizeContentView]
+        window.styleMask = Self.windowStyleMask
+        // Keep the focused dialog width while letting taller displays give setup more breathing room.
+        window.contentMinSize = NSSize(width: OnboardingView.windowWidth, height: OnboardingView.windowHeight)
+        window.contentMaxSize = NSSize(width: OnboardingView.windowWidth, height: .greatestFiniteMagnitude)
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.isMovableByWindowBackground = true
@@ -110,6 +114,7 @@ struct OnboardingView: View {
     @State var copied = false
     @State var monitoringPermissions = false
     @State var monitoringDiscovery = false
+    @State var cliExecutableReady = false
     @State var cliInstalled = false
     @State var cliStatusKnown = false
     @State var onboardingVisible = false
@@ -166,10 +171,16 @@ struct OnboardingView: View {
         self.usesCompactHero ? 64 : 130
     }
 
-    /// Sized so the permissions page fits all capabilities without scrolling:
-    /// heroFrameHeight + contentHeight + ~72 (nav bar) fills windowHeight 752.
-    var contentHeight: CGFloat {
-        Self.windowHeight - self.heroFrameHeight - 72
+    /// The baseline fits every setup control. Taller windows donate all extra room
+    /// to the active page instead of leaving the content pinned to a fixed canvas.
+    func contentHeight(for windowHeight: CGFloat) -> CGFloat {
+        Self.contentHeight(for: windowHeight, usesCompactHero: self.usesCompactHero)
+    }
+
+    static func contentHeight(for windowHeight: CGFloat, usesCompactHero: Bool) -> CGFloat {
+        let availableHeight = max(Self.windowHeight, windowHeight)
+        let heroHeight: CGFloat = usesCompactHero ? 78 : 145
+        return availableHeight - heroHeight - 72
     }
 
     static func pageOrder(

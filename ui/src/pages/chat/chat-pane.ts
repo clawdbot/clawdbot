@@ -1,6 +1,6 @@
 import { consume } from "@lit/context";
 import { html, nothing } from "lit";
-import { property } from "lit/decorators.js";
+import { property, state as litState } from "lit/decorators.js";
 import type {
   TaskSuggestion,
   TaskSuggestionEvent,
@@ -18,7 +18,12 @@ import {
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
+import { beginNativeWindowDrag } from "../../app/native-window-drag.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
+import {
+  BROWSER_ANNOTATION_EVENT,
+  type BrowserAnnotationDraft,
+} from "../../components/browser/browser-annotation.ts";
 import {
   COMMAND_PALETTE_TARGET_EVENT,
   type CommandPaletteTargetDetail,
@@ -76,6 +81,12 @@ import {
   type ChatPageHost,
 } from "./chat-state.ts";
 import { renderChat, resetChatViewState, type ChatProps } from "./chat-view.ts";
+import {
+  createBackgroundTasksProps,
+  renderBackgroundTasksToggle,
+  type BackgroundTasksProps,
+} from "./components/chat-background-tasks.ts";
+import { chatAttachmentFromDataUrl } from "./components/chat-composer.ts";
 import { renderChatControls } from "./components/chat-controls.ts";
 import {
   chatPullRequestId,
@@ -108,6 +119,7 @@ import {
 } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 import { clearChatMessagesFromCache } from "./session-message-cache.ts";
+import { configureToolTitleFetcher } from "./tool-titles.ts";
 
 type ChatPageContext = ApplicationContext;
 type PaneSessionChangeOptions = { replace?: boolean };
@@ -127,6 +139,18 @@ const CHAT_TEXT_ENTRY_SELECTOR =
 const CHAT_SPACE_ACTIVATION_SELECTOR =
   "a[href], button, summary, [role='button'], [role='checkbox'], [role='link'], [role='radio'], [role='switch']";
 const CHAT_MODAL_SELECTOR = "dialog[open], [aria-modal='true']";
+
+/* Pane-width thresholds (CSS px). Split panes and compact windows can be far
+ * narrower than the viewport, so side-by-side layouts key off the pane's own
+ * measured width, never viewport media queries. */
+// Side rail (230-280px) plus a readable thread; below this the rail docks bottom.
+const WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH = 800;
+// Widest the rail's grid column gets; a side-docked rail takes this from the
+// width available to the chat + detail-panel split.
+const WORKSPACE_RAIL_MAX_WIDTH = 280;
+// .chat-main min-width (312) + divider + .chat-sidebar min-width (300) + slack;
+// below this the detail panel stacks under the thread.
+const DETAIL_SIDEBAR_SIDE_MIN_WIDTH = 680;
 
 const NEW_SESSION_ACTIVE_RUN_MESSAGE =
   "Start a new session after the active run or queued messages finish.";
@@ -169,6 +193,10 @@ class ChatPane extends OpenClawLightDomElement {
 
   private readonly chatState = new ChatStateController<ChatPageHost>(this);
   private state: ChatPageHost | undefined;
+  /* Infinity until the first ResizeObserver tick so an unmeasured pane keeps
+   * the wide side-by-side layout instead of flashing the stacked one. */
+  @litState() private paneWidth = Number.POSITIVE_INFINITY;
+  private paneResizeObserver: ResizeObserver | null = null;
   private connectedClient: GatewayBrowserClient | null = null;
   private connectionGeneration = 0;
   private nativeDraftCleanup: (() => void) | null = null;
@@ -689,6 +717,34 @@ class ChatPane extends OpenClawLightDomElement {
     this.onFocusPane?.(this.paneId);
   };
 
+  /** Receives a browser-panel annotation: attach the marked-up screenshot and append the prepackaged prompt. */
+  private receiveBrowserAnnotation(event: Event): void {
+    const state = this.state;
+    // Only the active pane consumes the annotation; defaultPrevented tells the
+    // browser panel it landed (and stops sibling panes from double-adding).
+    if (!state || !this.active || event.defaultPrevented || !(event instanceof CustomEvent)) {
+      return;
+    }
+    const detail = event.detail as BrowserAnnotationDraft | null;
+    if (!detail || typeof detail.text !== "string" || typeof detail.dataUrl !== "string") {
+      return;
+    }
+    const attachment = chatAttachmentFromDataUrl(detail.dataUrl, detail.fileName || "annotation");
+    if (!attachment) {
+      return;
+    }
+    event.preventDefault();
+    state.chatAttachments = [...state.chatAttachments, attachment];
+    const current = state.chatMessage.trimEnd();
+    state.handleChatDraftChange(current ? `${current}\n\n${detail.text}` : detail.text);
+    state.requestUpdate?.();
+    void this.updateComplete.then(() => {
+      this.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR)?.focus({
+        preventScroll: true,
+      });
+    });
+  }
+
   private sendPendingSkillWorkshopRevision(expectedSessionKey: string) {
     const state = this.state;
     if (!this.active || !state || !state.connected || state.sessionKey !== expectedSessionKey) {
@@ -804,6 +860,16 @@ class ChatPane extends OpenClawLightDomElement {
 
   override connectedCallback() {
     super.connectedCallback();
+    if (typeof ResizeObserver === "function") {
+      this.paneResizeObserver = new ResizeObserver((entries) => {
+        const width = entries.at(-1)?.contentRect.width;
+        // Hidden panes (narrow split view) report 0; keep the last real width.
+        if (typeof width === "number" && width > 0 && width !== this.paneWidth) {
+          this.paneWidth = width;
+        }
+      });
+      this.paneResizeObserver.observe(this);
+    }
     this.addEventListener("pointerdown", this.handlePaneFocus);
     this.addEventListener("focusin", this.handlePaneFocus);
     document.addEventListener("keydown", this.handleDocumentKeydown, true);
@@ -847,6 +913,11 @@ class ChatPane extends OpenClawLightDomElement {
     if (this.draft !== undefined) {
       this.state.handleChatDraftChange(this.draft);
     }
+    const handleBrowserAnnotation = (event: Event) => this.receiveBrowserAnnotation(event);
+    window.addEventListener(BROWSER_ANNOTATION_EVENT, handleBrowserAnnotation);
+    chatState.addCleanup(() =>
+      window.removeEventListener(BROWSER_ANNOTATION_EVENT, handleBrowserAnnotation),
+    );
     chatState.addCleanup(
       this.context.gateway.subscribe((snapshot) => {
         this.applyGatewaySnapshot(snapshot);
@@ -910,6 +981,8 @@ class ChatPane extends OpenClawLightDomElement {
   }
 
   override disconnectedCallback() {
+    this.paneResizeObserver?.disconnect();
+    this.paneResizeObserver = null;
     this.connectionGeneration += 1;
     this.taskSuggestionsRequestVersion += 1;
     this.taskSuggestions = [];
@@ -1037,6 +1110,10 @@ class ChatPane extends OpenClawLightDomElement {
       snapshot.connected &&
       hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
       isGatewayMethodAdvertised(snapshot, "terminal.open") === true;
+    state.browserPanelAvailable =
+      snapshot.connected &&
+      hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
+      isGatewayMethodAdvertised(snapshot, "browser.request") === true;
     state.assistantAgentId = snapshot.assistantAgentId;
     const routeSessionKey = this.sessionKey.trim();
     const canonicalRouteSessionKey = routeSessionKey
@@ -1114,14 +1191,21 @@ class ChatPane extends OpenClawLightDomElement {
     state.requestUpdate?.();
   }
 
-  private renderPaneHeader(sessionWorkspace: SessionWorkspaceProps) {
+  private renderPaneHeader(
+    sessionWorkspace: SessionWorkspaceProps,
+    backgroundTasks: BackgroundTasksProps,
+  ) {
     return html`
-      <div class="chat-pane__header ${this.active ? "chat-pane__header--active" : ""}">
+      <div
+        class="chat-pane__header ${this.active ? "chat-pane__header--active" : ""}"
+        @mousedown=${beginNativeWindowDrag}
+      >
         <!-- Static text on purpose: an interactive session picker here would
              fight pane focus. Panes change sessions via the sidebar or
              drag-and-drop. -->
         <span class="chat-pane__session-title" title=${this.paneTitle}>${this.paneTitle}</span>
         <div class="chat-pane__actions">
+          ${renderBackgroundTasksToggle(backgroundTasks, "pane-header")}
           ${renderSessionWorkspaceToggle(sessionWorkspace, "pane-header")}
           ${!this.narrow
             ? html`
@@ -1168,6 +1252,15 @@ class ChatPane extends OpenClawLightDomElement {
       return html`<main class="app-shell app-shell--booting" aria-busy="true"></main>`;
     }
     const currentAgentId = resolveChatAgentId(state);
+    // Tool rows consult the global title store while rendering; point its
+    // fetcher at this pane's connection. Requests capture session + agent at
+    // schedule time, so later renders of other panes cannot re-route them.
+    configureToolTitleFetcher({
+      client: state.connected ? state.client : null,
+      sessionKey: state.sessionKey || null,
+      agentId: currentAgentId || null,
+      onTitlesChanged: () => state.requestUpdate?.(),
+    });
     const agentDefaultModel = this.context.agents.state.agentsList?.agents.find(
       (agent) => agent.id === currentAgentId,
     )?.model?.primary;
@@ -1180,7 +1273,22 @@ class ChatPane extends OpenClawLightDomElement {
     const canOpenRealtimeTalkSettings = hasOperatorAdminAccess(
       this.context.gateway.snapshot.hello?.auth ?? null,
     );
-    const sessionWorkspace = createSessionWorkspaceProps(state);
+    const sessionWorkspace = createSessionWorkspaceProps(state, {
+      narrowLayout: this.paneWidth < WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH,
+    });
+    const backgroundTasks = createBackgroundTasksProps(state, {
+      onOpenSession: (sessionKey) => {
+        this.onPaneSessionChange?.(this.paneId, sessionKey);
+      },
+    });
+    const railSideDocked =
+      !sessionWorkspace.collapsed &&
+      !sessionWorkspace.narrowLayout &&
+      sessionWorkspace.dock !== "bottom";
+    // Every open side rail (workspace and/or background tasks) narrows the
+    // room left for the chat + detail split.
+    const sideRailCount = (railSideDocked ? 1 : 0) + (backgroundTasks.collapsed ? 0 : 1);
+    const detailSplitWidth = this.paneWidth - sideRailCount * WORKSPACE_RAIL_MAX_WIDTH;
     const props: ChatProps = {
       paneId: this.paneId,
       sessionKey: state.sessionKey,
@@ -1286,6 +1394,7 @@ class ChatPane extends OpenClawLightDomElement {
         },
       }),
       sessionWorkspace,
+      backgroundTasks,
       paneHeaderActive: this.showPaneHeader,
       taskSuggestions: this.taskSuggestions,
       pullRequests: this.sessionPullRequests.filter(
@@ -1390,6 +1499,7 @@ class ChatPane extends OpenClawLightDomElement {
       },
       sidebarOpen: state.sidebarOpen,
       sidebarContent: state.sidebarContent,
+      sidebarStacked: detailSplitWidth < DETAIL_SIDEBAR_SIDE_MIN_WIDTH,
       splitRatio: state.splitRatio,
       canvasPluginSurfaceUrl: state.hello?.pluginSurfaceUrls?.canvas ?? null,
       onOpenSidebar: state.handleOpenSidebar,
@@ -1410,7 +1520,7 @@ class ChatPane extends OpenClawLightDomElement {
     if (!this.showPaneHeader) {
       return renderChat(props);
     }
-    return html`${this.renderPaneHeader(sessionWorkspace)}${renderChat(props)}`;
+    return html`${this.renderPaneHeader(sessionWorkspace, backgroundTasks)}${renderChat(props)}`;
   }
 }
 

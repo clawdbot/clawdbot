@@ -245,6 +245,30 @@ describe("parseStandalonePlainTextToolCallBlocks", () => {
     });
   });
 
+  it("preserves __proto__ as an own XML argument property", () => {
+    const raw = "<function=write><parameter=__proto__>value</parameter></function>";
+    const args = parseStandalonePlainTextToolCallBlocks(raw)?.[0]?.arguments;
+
+    expect(Object.getPrototypeOf(args)).toBe(Object.prototype);
+    expect(Object.hasOwn(args ?? {}, "__proto__")).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(args ?? {}, "__proto__")?.value).toBe("value");
+  });
+
+  it("materializes one-shot tool-name iterables once per parse", () => {
+    function* allowedNames() {
+      yield "exec";
+    }
+    const legacy = "[tool:exec]<parameter=command>pwd</parameter>";
+    expect(
+      parseStandalonePlainTextToolCallBlocks(legacy, { allowedToolNames: allowedNames() }),
+    ).toMatchObject([{ name: "exec", arguments: { command: "pwd" } }]);
+
+    const adjacent = "<function=exec></function><function=exec></function>";
+    expect(
+      parseStandalonePlainTextToolCallBlocks(adjacent, { allowedToolNames: allowedNames() }),
+    ).toHaveLength(2);
+  });
+
   it("rejects serialized XML parameter calls without a function close", () => {
     const raw = ["<function=exec>", "<parameter=command>", "pwd", "</parameter>"].join("\n");
 
@@ -433,6 +457,41 @@ describe("stripPlainTextToolCallBlocks", () => {
       ),
     ).toBe("before\nafter");
   });
+
+  it.each(["<function=read></function>", '[tool:read] {"path":"/tmp"}'])(
+    "strips adjacent same-line calls after an initial XML call: %s",
+    (second) => {
+      const calls = `<function=read></function>${second}`;
+      expect(stripPlainTextToolCallBlocks(`before\n${calls}\nafter`)).toBe("before\nafter");
+    },
+  );
+
+  it.each(["\u00a0", "\u000b", "\u000c"])(
+    "strips calls indented with non-linebreak whitespace %#",
+    (indent) => {
+      expect(
+        stripPlainTextToolCallBlocks(`before\n${indent}<function=read></function>\nafter`),
+      ).toBe("before\nafter");
+    },
+  );
+
+  it.each(["x".repeat(256_001), "é".repeat(128_001)])(
+    "strips complete JSON payloads over the UTF-8 cap",
+    (value) => {
+      const call = `[tool:read] ${JSON.stringify({ value })}`;
+      expect(stripPlainTextToolCallBlocks(`before\n${call}\nafter`)).toBe("before\nafter");
+    },
+  );
+
+  it.each(["</func", "<param"])(
+    "strips a complete optional-close call before an ambiguous %s prefix",
+    (suffix) => {
+      const block = ["[tool:exec]", "<parameter=command>", "pwd", "</parameter>"].join("\n");
+      expect(stripPlainTextToolCallBlocks(["before", block, suffix].join("\n"))).toBe(
+        `before\n${suffix}`,
+      );
+    },
+  );
 
   it("strips oversized XML parameter tool calls without promoting them", () => {
     const largeValue = "x".repeat(140_000);

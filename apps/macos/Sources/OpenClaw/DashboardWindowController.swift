@@ -28,8 +28,18 @@ private final class DashboardLinkMessageHandler: NSObject, WKScriptMessageHandle
 }
 
 @MainActor
+private final class DashboardWindowDragMessageHandler: NSObject, WKScriptMessageHandler {
+    weak var owner: DashboardWindowController?
+
+    func userContentController(_: WKUserContentController, didReceive message: WKScriptMessage) {
+        self.owner?.receiveWindowDragMessage(message)
+    }
+}
+
+@MainActor
 final class DashboardWindowController: NSWindowController, WKNavigationDelegate, WKUIDelegate, NSWindowDelegate {
     private static let linkMessageHandlerName = "openclawLink"
+    private static let windowDragMessageHandlerName = "openclawWindowDrag"
 
     private let webView: WKWebView
     private let linkBrowser: DashboardLinkBrowserView
@@ -55,6 +65,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         config.userContentController = WKUserContentController()
         let linkMessageHandler = DashboardLinkMessageHandler()
         config.userContentController.add(linkMessageHandler, name: Self.linkMessageHandlerName)
+        let windowDragMessageHandler = DashboardWindowDragMessageHandler()
+        config.userContentController.add(windowDragMessageHandler, name: Self.windowDragMessageHandlerName)
         Self.installNativeChromeScript(into: config.userContentController)
         Self.installNativeAuthScript(into: config.userContentController, url: url, auth: auth)
 
@@ -104,6 +116,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         // optional browser collapsed until a link explicitly opens it.
         self.linkBrowserItem.isCollapsed = true
         linkMessageHandler.owner = self
+        windowDragMessageHandler.owner = self
         self.webView.navigationDelegate = self
         self.webView.uiDelegate = self
         self.linkBrowser.webViewNavigationDelegate = self
@@ -229,7 +242,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.refreshNativeAuthScript(url: self.currentURL, auth: self.auth)
         self.webView.stopLoading()
         self.webView.loadHTMLString(
-            Self.failureHTML(title: title, message: message, detail: detail, url: nil),
+            DashboardFailurePage.html(title: title, message: message, detail: detail, url: nil),
             baseURL: nil)
         self.show()
     }
@@ -276,6 +289,36 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         case .external:
             self.openExternal(request.url)
         }
+    }
+
+    /// The Control UI posts this from mousedown on passive pane-header chrome
+    /// (split-view session titles). WKWebView swallows titlebar-style drags, so
+    /// the web side asks the window to take over the in-flight mouse gesture.
+    fileprivate func receiveWindowDragMessage(_ message: WKScriptMessage) {
+        guard message.name == Self.windowDragMessageHandlerName,
+              message.webView === self.webView,
+              message.frameInfo.isMainFrame,
+              Self.isTrustedLinkSource(message.frameInfo.request.url, dashboardURL: self.currentURL),
+              Self.isWindowDragRequest(message.body),
+              let window
+        else {
+            return
+        }
+        // The script message arrives async; during a press the app's current
+        // event is still the initiating left-mouse-down (or a later drag). A
+        // finished click leaves left-mouse-up here and starts no drag.
+        guard let event = NSApp.currentEvent,
+              event.type == .leftMouseDown || event.type == .leftMouseDragged,
+              event.window === window
+        else {
+            return
+        }
+        window.performDrag(with: event)
+    }
+
+    static func isWindowDragRequest(_ body: Any) -> Bool {
+        guard let payload = body as? [String: Any] else { return false }
+        return payload["type"] as? String == "window-drag"
     }
 
     static func linkRequest(from body: Any) -> DashboardLinkRequest? {
@@ -803,120 +846,12 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             dashboard load failed url=\(dashboardLogString(for: self.currentURL), privacy: .public) \
             error=\(error.localizedDescription, privacy: .public)
             """)
-        let html = Self.failureHTML(
+        let html = DashboardFailurePage.html(
             title: "Dashboard unavailable",
             message: error.localizedDescription,
             detail: "The dashboard window is open, but the web UI could not load from this endpoint.",
             url: self.currentURL)
         self.webView.loadHTMLString(html, baseURL: nil)
-    }
-
-    private static func failureHTML(title: String, message: String, detail: String?, url: URL?) -> String {
-        let detailHTML = detail.map { "<p class=\"detail\">\(self.htmlEscape($0))</p>" } ?? ""
-        let urlHTML = url.map { "<code>\(self.htmlEscape($0.absoluteString))</code>" } ?? ""
-        return """
-        <!doctype html>
-        <html>
-        <head>
-          <meta charset="utf-8">
-          <style>
-            :root { color-scheme: light dark; }
-            * { box-sizing: border-box; }
-            body {
-              margin: 0;
-              min-height: 100vh;
-              display: grid;
-              place-items: center;
-              background: #101114;
-              color: rgba(255,255,255,.92);
-              font: 15px -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
-            }
-            main {
-              width: min(540px, calc(100vw - 72px));
-              padding: 34px;
-              border: 1px solid rgba(255,255,255,.12);
-              border-radius: 22px;
-              background: rgba(255,255,255,.035);
-              box-shadow: 0 28px 90px rgba(0,0,0,.36);
-              line-height: 1.45;
-            }
-            .badge {
-              width: 44px;
-              height: 44px;
-              display: grid;
-              place-items: center;
-              margin-bottom: 20px;
-              border-radius: 14px;
-              background: rgba(255,255,255,.07);
-              color: #ff746b;
-              font-size: 24px;
-            }
-            h1 {
-              margin: 0 0 12px;
-              font-size: 24px;
-              line-height: 1.16;
-              font-weight: 700;
-              letter-spacing: 0;
-            }
-            p {
-              margin: 0;
-              color: rgba(255,255,255,.76);
-              font-size: 16px;
-            }
-            .detail {
-              margin-top: 14px;
-              color: rgba(255,255,255,.56);
-              font-size: 13px;
-            }
-            code {
-              display: block;
-              margin-top: 18px;
-              padding: 12px;
-              border: 1px solid rgba(255,255,255,.08);
-              border-radius: 10px;
-              background: rgba(0,0,0,.26);
-              color: rgba(255,255,255,.76);
-              overflow-wrap: anywhere;
-              font: 12px ui-monospace, SFMono-Regular, Menlo, monospace;
-            }
-            @media (prefers-color-scheme: light) {
-              body { background: #f5f6f8; color: rgba(0,0,0,.86); }
-              main {
-                background: rgba(255,255,255,.84);
-                border-color: rgba(0,0,0,.1);
-                box-shadow: 0 28px 90px rgba(0,0,0,.12);
-              }
-              .badge { background: rgba(0,0,0,.06); }
-              p { color: rgba(0,0,0,.68); }
-              .detail { color: rgba(0,0,0,.54); }
-              code {
-                background: rgba(0,0,0,.05);
-                border-color: rgba(0,0,0,.08);
-                color: rgba(0,0,0,.68);
-              }
-            }
-          </style>
-        </head>
-        <body>
-          <main>
-            <div class="badge">!</div>
-            <h1>\(self.htmlEscape(title))</h1>
-            <p>\(self.htmlEscape(message))</p>
-            \(detailHTML)
-            \(urlHTML)
-          </main>
-        </body>
-        </html>
-        """
-    }
-
-    private static func htmlEscape(_ value: String) -> String {
-        value
-            .replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
-            .replacingOccurrences(of: "\"", with: "&quot;")
-            .replacingOccurrences(of: "'", with: "&#39;")
     }
 }
 

@@ -38,7 +38,6 @@ const {
   sendMessageMSTeamsMock: vi.fn(),
   unpinMessageMSTeamsMock: vi.fn(),
 }));
-
 vi.mock("./channel.runtime.js", () => ({
   msTeamsChannelRuntime: {
     addParticipantMSTeams: addParticipantMSTeamsMock,
@@ -79,6 +78,9 @@ const actionMocks = [
   unpinMessageMSTeamsMock,
 ];
 const currentChannelId = "conversation:19:ctx@thread.tacv2";
+const graphTeamId = "11111111-1111-1111-1111-111111111111";
+const graphChannelId = "19:channel-1@thread.tacv2";
+const graphChannelTarget = `${graphTeamId}/${graphChannelId}`;
 const reactChannelId = "conversation:19:react@thread.tacv2";
 const targetChannelId = "conversation:19:target@thread.tacv2";
 const editedConversationId = "19:edited@thread.tacv2";
@@ -124,6 +126,8 @@ function requireMSTeamsHandleAction() {
 async function runAction(params: {
   action: string;
   cfg?: Record<string, unknown>;
+  accountId?: string;
+  requesterAccountId?: string;
   params?: Record<string, unknown>;
   toolContext?: Record<string, unknown>;
   mediaLocalRoots?: readonly string[];
@@ -137,6 +141,8 @@ async function runAction(params: {
     channel: "msteams",
     action: params.action,
     cfg: params.cfg ?? {},
+    accountId: params.accountId,
+    requesterAccountId: params.requesterAccountId,
     params: params.params ?? {},
     mediaLocalRoots: params.mediaLocalRoots,
     mediaReadFile: params.mediaReadFile,
@@ -187,9 +193,10 @@ function expectActionSuccess(
 function expectActionRuntimeCall(
   mockFn: ReturnType<typeof vi.fn>,
   params: Record<string, unknown>,
+  cfg: Record<string, unknown> = {},
 ) {
   expect(mockFn).toHaveBeenCalledWith({
-    cfg: {},
+    cfg,
     ...params,
   });
 }
@@ -198,6 +205,9 @@ async function expectSuccessfulAction(params: {
   mockFn: ReturnType<typeof vi.fn>;
   mockResult: unknown;
   action: Parameters<typeof runAction>[0]["action"];
+  cfg?: Parameters<typeof runAction>[0]["cfg"];
+  accountId?: Parameters<typeof runAction>[0]["accountId"];
+  requesterAccountId?: Parameters<typeof runAction>[0]["requesterAccountId"];
   actionParams?: Parameters<typeof runAction>[0]["params"];
   toolContext?: Parameters<typeof runAction>[0]["toolContext"];
   mediaLocalRoots?: Parameters<typeof runAction>[0]["mediaLocalRoots"];
@@ -212,6 +222,9 @@ async function expectSuccessfulAction(params: {
   params.mockFn.mockResolvedValue(params.mockResult);
   const result = await runAction({
     action: params.action,
+    cfg: params.cfg,
+    accountId: params.accountId,
+    requesterAccountId: params.requesterAccountId,
     params: params.actionParams,
     mediaLocalRoots: params.mediaLocalRoots,
     mediaReadFile: params.mediaReadFile,
@@ -220,11 +233,19 @@ async function expectSuccessfulAction(params: {
     senderIsOwner: params.senderIsOwner,
     gatewayClientScopes: params.gatewayClientScopes,
   });
-  expectActionRuntimeCall(params.mockFn, params.runtimeParams);
+  expectActionRuntimeCall(params.mockFn, params.runtimeParams, params.cfg);
   expectActionSuccess(result, params.details, params.contentDetails);
 }
 
 describe("msteamsPlugin message actions", () => {
+  const unrestrictedReadCfg = {
+    channels: {
+      msteams: {
+        groupPolicy: "open",
+        dmPolicy: "open",
+      },
+    },
+  };
   beforeEach(() => {
     for (const mockFn of actionMocks) {
       mockFn.mockReset();
@@ -241,7 +262,18 @@ describe("msteamsPlugin message actions", () => {
       },
       toolContext: {
         currentChannelId: padded(currentChannelId),
+        currentChannelProvider: "msteams",
       },
+      cfg: {
+        channels: {
+          msteams: {
+            groupPolicy: "allowlist",
+            dmPolicy: "pairing",
+          },
+        },
+      },
+      accountId: "default",
+      requesterAccountId: "default",
       runtimeParams: {
         to: currentChannelId,
         messageId: "msg-1",
@@ -256,6 +288,287 @@ describe("msteamsPlugin message actions", () => {
         message: readMessage,
       },
     });
+  });
+
+  it("allows the trusted current paired DM target", async () => {
+    await expectSuccessfulAction({
+      mockFn: getMessageMSTeamsMock,
+      mockResult: readMessage,
+      action: "read",
+      actionParams: {
+        to: "user:aad-user-1",
+        messageId: "msg-1",
+      },
+      toolContext: {
+        currentChannelId: "user:aad-user-1",
+        currentChannelProvider: "msteams",
+      },
+      cfg: {
+        channels: {
+          msteams: {
+            groupPolicy: "allowlist",
+            dmPolicy: "pairing",
+          },
+        },
+      },
+      accountId: "default",
+      requesterAccountId: "default",
+      runtimeParams: {
+        to: "user:aad-user-1",
+        messageId: "msg-1",
+      },
+      details: okMSTeamsActionDetails("read", {
+        message: readMessage,
+      }),
+      contentDetails: {
+        ok: true,
+        channel: "msteams",
+        action: "read",
+        message: readMessage,
+      },
+    });
+  });
+
+  it("uses the global group policy when Teams does not override it", async () => {
+    await expectSuccessfulAction({
+      mockFn: getMessageMSTeamsMock,
+      mockResult: readMessage,
+      action: "read",
+      actionParams: {
+        to: graphChannelTarget,
+        messageId: "msg-1",
+      },
+      cfg: {
+        channels: {
+          defaults: { groupPolicy: "open" },
+          msteams: {},
+        },
+      },
+      runtimeParams: {
+        to: graphChannelTarget,
+        messageId: "msg-1",
+      },
+      details: okMSTeamsActionDetails("read", {
+        message: readMessage,
+      }),
+      contentDetails: {
+        ok: true,
+        channel: "msteams",
+        action: "read",
+        message: readMessage,
+      },
+    });
+  });
+
+  it("allows the trusted current channel under allowlist policy", async () => {
+    await expectSuccessfulAction({
+      mockFn: getMessageMSTeamsMock,
+      mockResult: readMessage,
+      action: "read",
+      actionParams: {
+        messageId: "msg-1",
+      },
+      toolContext: {
+        currentChannelProvider: "msteams",
+        currentMessagingTarget: "team-1/channel-1",
+      },
+      cfg: {
+        channels: {
+          msteams: {
+            groupPolicy: "allowlist",
+            groupAllowFrom: ["aad-user-1"],
+          },
+        },
+      },
+      accountId: "default",
+      requesterAccountId: "default",
+      runtimeParams: {
+        to: "team-1/channel-1",
+        messageId: "msg-1",
+      },
+      details: okMSTeamsActionDetails("read", {
+        message: readMessage,
+      }),
+      contentDetails: {
+        ok: true,
+        channel: "msteams",
+        action: "read",
+        message: readMessage,
+      },
+    });
+  });
+
+  it("does not route channel Graph actions through a Bot Framework conversation id", async () => {
+    await expectActionError(
+      {
+        action: "read",
+        params: { messageId: "msg-1" },
+        toolContext: {
+          currentChannelId: "conversation:19:channel@thread.tacv2",
+          currentChatType: "channel",
+        },
+      },
+      "Read requires a target (to) and messageId.",
+    );
+    expect(getMessageMSTeamsMock).not.toHaveBeenCalled();
+  });
+
+  it("allows the trusted current group chat when DMs are disabled", async () => {
+    await expectSuccessfulAction({
+      mockFn: getMessageMSTeamsMock,
+      mockResult: readMessage,
+      action: "read",
+      actionParams: {
+        messageId: "msg-1",
+      },
+      toolContext: {
+        currentChannelProvider: "msteams",
+        currentChannelId: "conversation:19:group@thread.v2",
+        currentChatType: "group",
+      },
+      cfg: {
+        channels: {
+          msteams: {
+            groupPolicy: "open",
+            dmPolicy: "disabled",
+          },
+        },
+      },
+      accountId: "default",
+      requesterAccountId: "default",
+      runtimeParams: {
+        to: "conversation:19:group@thread.v2",
+        messageId: "msg-1",
+      },
+      details: okMSTeamsActionDetails("read", {
+        message: readMessage,
+      }),
+      contentDetails: {
+        ok: true,
+        channel: "msteams",
+        action: "read",
+        message: readMessage,
+      },
+    });
+  });
+
+  it("allows a bare trusted current group target when DMs are disabled", async () => {
+    await expectSuccessfulAction({
+      mockFn: getMessageMSTeamsMock,
+      mockResult: readMessage,
+      action: "read",
+      actionParams: {
+        messageId: "msg-1",
+      },
+      toolContext: {
+        currentChannelProvider: "msteams",
+        currentChannelId: "19:group@thread.v2",
+        currentChatType: "group",
+      },
+      cfg: {
+        channels: {
+          msteams: {
+            groupPolicy: "open",
+            dmPolicy: "disabled",
+          },
+        },
+      },
+      accountId: "default",
+      requesterAccountId: "default",
+      runtimeParams: {
+        to: "19:group@thread.v2",
+        messageId: "msg-1",
+      },
+      details: okMSTeamsActionDetails("read", {
+        message: readMessage,
+      }),
+      contentDetails: {
+        ok: true,
+        channel: "msteams",
+        action: "read",
+        message: readMessage,
+      },
+    });
+  });
+
+  it("requires both scopes for a non-current opaque chat target", async () => {
+    getMessageMSTeamsMock.mockResolvedValue(readMessage);
+
+    await expect(
+      runAction({
+        action: "read",
+        params: {
+          to: "conversation:19:direct@thread.v2",
+          messageId: "msg-1",
+        },
+        cfg: {
+          channels: {
+            msteams: {
+              groupPolicy: "open",
+              dmPolicy: "pairing",
+            },
+          },
+        },
+      }),
+    ).rejects.toThrow("Microsoft Teams read target is not allowed.");
+    expect(getMessageMSTeamsMock).not.toHaveBeenCalled();
+  });
+
+  it("allows a non-current opaque chat target when both scopes are open", async () => {
+    await expectSuccessfulAction({
+      mockFn: getMessageMSTeamsMock,
+      mockResult: readMessage,
+      action: "read",
+      actionParams: {
+        to: "conversation:19:opaque@thread.v2",
+        messageId: "msg-1",
+      },
+      cfg: {
+        channels: {
+          msteams: {
+            groupPolicy: "open",
+            dmPolicy: "open",
+          },
+        },
+      },
+      runtimeParams: {
+        to: "conversation:19:opaque@thread.v2",
+        messageId: "msg-1",
+      },
+      details: okMSTeamsActionDetails("read", {
+        message: readMessage,
+      }),
+      contentDetails: {
+        ok: true,
+        channel: "msteams",
+        action: "read",
+        message: readMessage,
+      },
+    });
+  });
+
+  it("does not treat per-DM history config as read authorization", async () => {
+    getMessageMSTeamsMock.mockResolvedValue(readMessage);
+
+    await expect(
+      runAction({
+        action: "read",
+        params: {
+          to: "user:aad-user-1",
+          messageId: "msg-1",
+        },
+        cfg: {
+          channels: {
+            msteams: {
+              dmPolicy: "allowlist",
+              allowFrom: [],
+              dms: { "aad-user-1": { historyLimit: 5 } },
+            },
+          },
+        },
+      }),
+    ).rejects.toThrow("Microsoft Teams read target is not allowed.");
+    expect(getMessageMSTeamsMock).not.toHaveBeenCalled();
   });
 
   it("advertises upload-file in the message tool surface", () => {
@@ -319,8 +632,48 @@ describe("msteamsPlugin message actions", () => {
       mockFn: getMemberInfoMSTeamsMock,
       mockResult: { member: { id: "user-1" } },
       action: "member-info",
-      actionParams: { userId: " user-1 " },
-      runtimeParams: { userId: "user-1" },
+      cfg: unrestrictedReadCfg,
+      actionParams: { userId: " user-1 ", to: graphChannelTarget },
+      runtimeParams: {
+        to: graphChannelTarget,
+        userId: "user-1",
+        currentRequesterId: undefined,
+      },
+      details: okMSTeamsActionDetails("member-info", {
+        member: { id: "user-1" },
+      }),
+      contentDetails: {
+        ok: true,
+        channel: "msteams",
+        action: "member-info",
+        member: { id: "user-1" },
+      },
+    });
+  });
+
+  it("passes the trusted requester only for current Teams chats", async () => {
+    await expectSuccessfulAction({
+      mockFn: getMemberInfoMSTeamsMock,
+      mockResult: { member: { id: "user-1" } },
+      action: "member-info",
+      cfg: unrestrictedReadCfg,
+      accountId: "default",
+      requesterAccountId: "default",
+      requesterSenderId: "user-1",
+      toolContext: {
+        currentChannelProvider: "msteams",
+        currentChannelId: "conversation:19:group@thread.v2",
+        currentChatType: "group",
+      },
+      actionParams: {
+        userId: "user-1",
+        to: "conversation:19:group@thread.v2",
+      },
+      runtimeParams: {
+        to: "conversation:19:group@thread.v2",
+        userId: "user-1",
+        currentRequesterId: "user-1",
+      },
       details: okMSTeamsActionDetails("member-info", {
         member: { id: "user-1" },
       }),
@@ -338,8 +691,9 @@ describe("msteamsPlugin message actions", () => {
       mockFn: listChannelsMSTeamsMock,
       mockResult: { channels: [{ id: "channel-1" }] },
       action: "channel-list",
-      actionParams: { teamId: " team-1 " },
-      runtimeParams: { teamId: "team-1" },
+      cfg: unrestrictedReadCfg,
+      actionParams: { teamId: ` ${graphTeamId} ` },
+      runtimeParams: { teamId: graphTeamId },
       details: okMSTeamsActionDetails("channel-list", {
         channels: [{ id: "channel-1" }],
       }),
@@ -357,13 +711,14 @@ describe("msteamsPlugin message actions", () => {
       mockFn: getChannelInfoMSTeamsMock,
       mockResult: { channel: { id: "channel-1" } },
       action: "channel-info",
+      cfg: unrestrictedReadCfg,
       actionParams: {
-        teamId: " team-1 ",
-        channelId: " channel-1 ",
+        teamId: ` ${graphTeamId} `,
+        channelId: ` ${graphChannelId} `,
       },
       runtimeParams: {
-        teamId: "team-1",
-        channelId: "channel-1",
+        teamId: graphTeamId,
+        channelId: graphChannelId,
       },
       details: okMSTeamsActionDetails("channel-info", {
         channelInfo: { id: "channel-1" },
@@ -523,6 +878,7 @@ describe("msteamsPlugin message actions", () => {
       mockFn: pinMessageMSTeamsMock,
       mockResult: { ok: true, pinnedMessageId: "pin-1" },
       action: "pin",
+      cfg: unrestrictedReadCfg,
       actionParams: {
         target: padded(targetChannelId),
         messageId: padded("msg-2"),
@@ -542,6 +898,7 @@ describe("msteamsPlugin message actions", () => {
       mockFn: editMessageMSTeamsMock,
       mockResult: { conversationId: editedConversationId },
       action: "edit",
+      cfg: unrestrictedReadCfg,
       actionParams: {
         to: targetChannelId,
         messageId: editedMessageId,
@@ -569,6 +926,7 @@ describe("msteamsPlugin message actions", () => {
       mockFn: unpinMessageMSTeamsMock,
       mockResult: { ok: true },
       action: "unpin",
+      cfg: unrestrictedReadCfg,
       actionParams: {
         target: padded(targetChannelId),
         messageId: padded("pin-2"),
@@ -586,6 +944,7 @@ describe("msteamsPlugin message actions", () => {
       mockFn: unpinMessageMSTeamsMock,
       mockResult: { ok: true },
       action: "unpin",
+      cfg: unrestrictedReadCfg,
       actionParams: {
         target: padded(targetChannelId),
         pinnedMessageId: padded("pinned-resource-99"),
@@ -634,6 +993,9 @@ describe("msteamsPlugin message actions", () => {
       mockFn: reactMessageMSTeamsMock,
       mockResult: { ok: true },
       action: "react",
+      cfg: unrestrictedReadCfg,
+      accountId: "default",
+      requesterAccountId: "default",
       actionParams: {
         messageId: padded("msg-3"),
         emoji: padded(reactionType),
@@ -786,36 +1148,116 @@ describe("msteamsPlugin message actions", () => {
   });
 
   it("requires a non-empty search query after trimming", async () => {
-    await expectActionParamError(
-      "search",
+    await expectActionError(
       {
-        to: targetChannelId,
-        query: "   ",
+        action: "search",
+        cfg: unrestrictedReadCfg,
+        params: {
+          to: targetChannelId,
+          query: "   ",
+        },
       },
       searchMissingQueryError,
     );
   });
 
-  it("routes channel fallback targets via teamId/channelId for react actions", async () => {
-    // When an action is invoked in a Teams channel context and `target` is
-    // omitted, the action handler falls back to `toolContext.currentChannelId`.
-    // For channel turns, buildToolContext populates that field with the
-    // compound `teamId/channelId` form (see buildToolContext below), so the
-    // runtime call must receive that compound form — NOT a bare
-    // `conversation:<id>` — so Graph API routes through
-    // `/teams/{teamId}/channels/{channelId}` rather than `/chats/{id}`.
+  it("rejects reads outside configured Teams channels before calling Graph", async () => {
+    await expect(
+      runAction({
+        action: "read",
+        cfg: {
+          channels: {
+            msteams: {
+              groupPolicy: "allowlist",
+              teams: {
+                "team-1": {
+                  channels: {
+                    "channel-1": { enabled: true },
+                  },
+                },
+              },
+            },
+          },
+        },
+        params: { to: "team-1/channel-2", messageId: "msg-1" },
+      }),
+    ).rejects.toThrow("Microsoft Teams read target is not allowed.");
+    expect(getMessageMSTeamsMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      action: "edit",
+      params: { to: targetChannelId, messageId: "msg-1", content: "updated" },
+      runtimeMock: editMessageMSTeamsMock,
+    },
+    {
+      action: "delete",
+      params: { to: targetChannelId, messageId: "msg-1" },
+      runtimeMock: deleteMessageMSTeamsMock,
+    },
+    {
+      action: "pin",
+      params: { to: targetChannelId, messageId: "msg-1" },
+      runtimeMock: pinMessageMSTeamsMock,
+    },
+    {
+      action: "unpin",
+      params: { to: targetChannelId, pinnedMessageId: "pin-1" },
+      runtimeMock: unpinMessageMSTeamsMock,
+    },
+    {
+      action: "react",
+      params: { to: targetChannelId, messageId: "msg-1", emoji: "like" },
+      runtimeMock: reactMessageMSTeamsMock,
+    },
+  ])("rejects a blocked $action target before the provider operation", async (testCase) => {
+    await expect(
+      runAction({
+        action: testCase.action,
+        cfg: {
+          channels: {
+            msteams: {
+              groupPolicy: "allowlist",
+              dmPolicy: "pairing",
+            },
+          },
+        },
+        accountId: "default",
+        requesterAccountId: "default",
+        params: testCase.params,
+        toolContext: {
+          currentChannelProvider: "msteams",
+          currentChannelId,
+          currentChatType: "group",
+        },
+      }),
+    ).rejects.toThrow("Microsoft Teams read target is not allowed.");
+    expect(testCase.runtimeMock).not.toHaveBeenCalled();
+  });
+
+  it("restores the Graph route from a core-materialized channel target", async () => {
+    // Core materializes an omitted target from currentChannelId before plugin
+    // dispatch. Teams must restore the prepared Graph target for channel turns.
     const teamChannelTarget = "team-1/19:channel-abc@thread.tacv2";
+    const conversationTarget = "conversation:19:channel-abc@thread.tacv2";
     await expectSuccessfulAction({
       mockFn: reactMessageMSTeamsMock,
       mockResult: { ok: true },
       action: "react",
+      cfg: unrestrictedReadCfg,
+      accountId: "default",
+      requesterAccountId: "default",
       actionParams: {
+        target: conversationTarget,
         messageId: "msg-channel-react",
         emoji: reactionType,
       },
       toolContext: {
-        currentChannelId: "conversation:19:channel-abc@thread.tacv2",
-        currentGraphChannelId: teamChannelTarget,
+        currentChannelProvider: "msteams",
+        currentChannelId: conversationTarget,
+        currentChatType: "channel",
+        currentMessagingTarget: teamChannelTarget,
       },
       runtimeParams: {
         to: teamChannelTarget,
@@ -837,12 +1279,13 @@ describe("msteamsPlugin message actions", () => {
   it("preserves explicit teamId/channelId target over toolContext fallback", async () => {
     // Even in a channel context with a compound currentChannelId, an
     // explicit `target` param must take precedence.
-    const teamChannelTarget = "team-2/19:channel-def@thread.tacv2";
-    const explicitTarget = "team-explicit/19:other@thread.tacv2";
+    const teamChannelTarget = "22222222-2222-2222-2222-222222222222/19:channel-def@thread.tacv2";
+    const explicitTarget = "33333333-3333-3333-3333-333333333333/19:other@thread.tacv2";
     await expectSuccessfulAction({
       mockFn: reactMessageMSTeamsMock,
       mockResult: { ok: true },
       action: "react",
+      cfg: unrestrictedReadCfg,
       actionParams: {
         target: explicitTarget,
         messageId: "msg-explicit",
@@ -878,12 +1321,14 @@ describe("msteamsPlugin message actions", () => {
       mockFn: reactMessageMSTeamsMock,
       mockResult: { ok: true },
       action: "react",
+      cfg: unrestrictedReadCfg,
       actionParams: {
         messageId: "msg-dm-react",
         emoji: reactionType,
       },
       toolContext: {
         currentChannelId: dmFallback,
+        currentChatType: "direct",
       },
       runtimeParams: {
         to: dmFallback,
@@ -905,6 +1350,7 @@ describe("msteamsPlugin message actions", () => {
 
 describe("msteamsPlugin.threading.buildToolContext", () => {
   function callBuildToolContext(context: {
+    ChatType?: string;
     To?: string;
     NativeChannelId?: string;
     ReplyToId?: string;
@@ -920,34 +1366,43 @@ describe("msteamsPlugin.threading.buildToolContext", () => {
     });
   }
 
-  it("uses NativeChannelId for channel turns so actions route via teamId/channelId", () => {
-    // Teams channel inbound messages carry the compound `teamId/channelId`
+  it("uses NativeChannelId for channel turns so actions route via Graph team/channel ids", () => {
+    // Teams channel inbound messages carry the compound Graph target
     // on NativeChannelId. buildToolContext must prefer it over the bare
     // `conversation:<id>` in To so action fallbacks route via
     // `/teams/{teamId}/channels/{channelId}`.
     const result = callBuildToolContext({
+      ChatType: "channel",
       To: "conversation:19:channel-abc@thread.tacv2",
-      NativeChannelId: "team-1/19:channel-abc@thread.tacv2",
+      NativeChannelId: "graph-team-1/19:channel-abc@thread.tacv2",
       ReplyToId: "reply-1",
     });
     expect(result?.currentChannelId).toBe("conversation:19:channel-abc@thread.tacv2");
-    expect(result?.currentGraphChannelId).toBe("team-1/19:channel-abc@thread.tacv2");
+    expect(result?.currentChatType).toBe("channel");
+    expect(result?.currentMessagingTarget).toBe("graph-team-1/19:channel-abc@thread.tacv2");
+    expect(result?.currentGraphChannelId).toBe("graph-team-1/19:channel-abc@thread.tacv2");
     expect(result?.currentThreadTs).toBe("reply-1");
   });
 
   it("falls back to To for DM turns (no NativeChannelId)", () => {
     const result = callBuildToolContext({
+      ChatType: "direct",
       To: "user:aad-user-1",
     });
     expect(result?.currentChannelId).toBe("user:aad-user-1");
+    expect(result?.currentChatType).toBe("direct");
+    expect(result?.currentMessagingTarget).toBeUndefined();
     expect(result?.currentGraphChannelId).toBeUndefined();
   });
 
   it("falls back to To for group chat turns (no NativeChannelId)", () => {
     const result = callBuildToolContext({
+      ChatType: "group",
       To: "conversation:19:groupchat@thread.v2",
     });
     expect(result?.currentChannelId).toBe("conversation:19:groupchat@thread.v2");
+    expect(result?.currentChatType).toBe("group");
+    expect(result?.currentMessagingTarget).toBeUndefined();
     expect(result?.currentGraphChannelId).toBeUndefined();
   });
 
@@ -960,6 +1415,7 @@ describe("msteamsPlugin.threading.buildToolContext", () => {
       NativeChannelId: "19:chat@thread.v2",
     });
     expect(result?.currentChannelId).toBe("conversation:19:chat@thread.v2");
+    expect(result?.currentMessagingTarget).toBeUndefined();
     expect(result?.currentGraphChannelId).toBeUndefined();
   });
 });

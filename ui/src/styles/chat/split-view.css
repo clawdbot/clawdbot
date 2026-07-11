@@ -136,6 +136,10 @@ openclaw-chat-pane {
   padding: 0 6px 0 12px;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
   background: color-mix(in srgb, var(--panel) 62%, transparent);
+  /* Chrome row, not content: a selectable title would fight the native
+     window drag the macOS app starts from this row. */
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .chat-pane__header--active {

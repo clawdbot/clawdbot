@@ -987,15 +987,32 @@ jobs:
           export OPENCLAW_CURRENT_PACKAGE_TGZ="$PWD/.artifacts/qa-e2e/smoke-ci-package/openclaw-current.tgz"
           PROFILE_RUNS_TSV="$(
             node --import tsx --input-type=module <<'EOF'
-          import { createQaSmokeCiPart } from "./extensions/qa-lab/src/ci-smoke-plan.ts";
-
-          const part = createQaSmokeCiPart(process.env.PROFILE_PART ?? "");
-          for (const run of part.runs) {
+          const smokePlan = await import("./extensions/qa-lab/src/ci-smoke-plan.ts");
+          const partId = process.env.PROFILE_PART ?? "";
+          let runs;
+          if (typeof smokePlan.createQaSmokeCiPart === "function") {
+            runs = smokePlan.createQaSmokeCiPart(partId).runs;
+          } else if (typeof smokePlan.createQaSmokeCiMatrix === "function") {
+            const partIndex = partId === "profile-1" ? 0 : partId === "profile-2" ? 1 : -1;
+            if (partIndex < 0) {
+              throw new Error(`unknown QA smoke CI profile part: ${partId}`);
+            }
+            runs = smokePlan
+              .createQaSmokeCiMatrix()
+              .include.filter((_, index) => index % 2 === partIndex);
+          } else {
+            throw new Error("QA smoke plan does not expose a supported CI planner.");
+          }
+          for (const run of runs) {
             const scenarioIds = Buffer.from(JSON.stringify(run.scenario_ids)).toString("base64");
             process.stdout.write(`${run.slug}\t${scenarioIds}\n`);
           }
           EOF
           )"
+          if [[ -z "${PROFILE_RUNS_TSV//[[:space:]]/}" ]]; then
+            echo "No QA smoke runs assigned to ${PROFILE_PART}; skipping this compatibility shard."
+            exit 0
+          fi
           qa_exit_code=0
           while IFS=$'\t' read -r run_slug scenario_ids_base64; do
             export SCENARIO_IDS_BASE64="$scenario_ids_base64"
@@ -1832,12 +1849,17 @@ jobs:
       - name: Install XcodeGen / SwiftLint / SwiftFormat
         run: |
           brew update
-          brew install xcodegen
-          swift_tools_dir="$RUNNER_TEMP/openclaw-swift-tools"
-          ./scripts/install-swift-tools.sh "$swift_tools_dir"
-          echo "$swift_tools_dir" >> "$GITHUB_PATH"
-          "$swift_tools_dir/swiftformat" --version
-          "$swift_tools_dir/swiftlint" version
+          if [[ -x ./scripts/install-swift-tools.sh ]]; then
+            brew install xcodegen
+            swift_tools_dir="$RUNNER_TEMP/openclaw-swift-tools"
+            ./scripts/install-swift-tools.sh "$swift_tools_dir"
+            echo "$swift_tools_dir" >> "$GITHUB_PATH"
+            "$swift_tools_dir/swiftformat" --version
+            "$swift_tools_dir/swiftlint" version
+          else
+            # Frozen release targets before the pinned installer used Homebrew directly.
+            brew install xcodegen swiftlint swiftformat
+          fi
 
       - name: Detect Swift toolchain cache key
         id: swift-toolchain
@@ -1900,8 +1922,14 @@ jobs:
 
       - name: Swift lint
         run: |
-          ./scripts/lint-swift.sh macos
-          ./scripts/format-swift.sh macos
+          if [[ -x ./scripts/lint-swift.sh && -x ./scripts/format-swift.sh ]]; then
+            ./scripts/lint-swift.sh macos
+            ./scripts/format-swift.sh macos
+          else
+            # Frozen release targets before the shared wrappers used these commands directly.
+            swiftlint lint --config config/swiftlint.yml
+            swiftformat --lint apps/macos/Sources --config config/swiftformat --exclude '**/OpenClawProtocol,**/HostEnvSecurityPolicy.generated.swift'
+          fi
 
       - name: Swift build (release)
         run: |
@@ -1987,17 +2015,27 @@ jobs:
       - name: Install iOS Swift tooling
         run: |
           brew update
-          brew install xcodegen
-          swift_tools_dir="$RUNNER_TEMP/openclaw-swift-tools"
-          ./scripts/install-swift-tools.sh "$swift_tools_dir"
-          echo "$swift_tools_dir" >> "$GITHUB_PATH"
-          "$swift_tools_dir/swiftformat" --version
-          "$swift_tools_dir/swiftlint" version
+          if [[ -x ./scripts/install-swift-tools.sh ]]; then
+            brew install xcodegen
+            swift_tools_dir="$RUNNER_TEMP/openclaw-swift-tools"
+            ./scripts/install-swift-tools.sh "$swift_tools_dir"
+            echo "$swift_tools_dir" >> "$GITHUB_PATH"
+            "$swift_tools_dir/swiftformat" --version
+            "$swift_tools_dir/swiftlint" version
+          else
+            # Frozen release targets before the pinned installer used Homebrew directly.
+            brew install xcodegen swiftlint swiftformat
+          fi
 
       - name: Swift lint
         run: |
-          ./scripts/lint-swift.sh ios
-          ./scripts/format-swift.sh ios
+          if [[ -x ./scripts/lint-swift.sh && -x ./scripts/format-swift.sh ]]; then
+            ./scripts/lint-swift.sh ios
+            ./scripts/format-swift.sh ios
+          else
+            # Frozen release targets before the iOS lint lane have no equivalent target-owned step.
+            echo "Swift lint wrappers are absent; skipping iOS lint for this frozen target."
+          fi
 
       - name: Build iOS app
         run: pnpm ios:build

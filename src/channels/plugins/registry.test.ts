@@ -3,7 +3,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import { getChannelPlugin, listChannelPlugins } from "./registry.js";
+import {
+  getChannelPlugin,
+  listChannelPlugins,
+  resolveChannelPluginRegistration,
+} from "./registry.js";
 
 vi.mock("./bundled.js", () => ({
   getBundledChannelPlugin: (id: string) =>
@@ -37,6 +41,37 @@ describe("listChannelPlugins", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
 
     expect(getChannelPlugin("fallback")?.meta.label).toBe("fallback");
+    expect(resolveChannelPluginRegistration("fallback")).toMatchObject({
+      origin: "bundled",
+      plugin: {
+        id: "fallback",
+      },
+    });
+  });
+
+  it("does not let a loaded external override inherit bundled fallback provenance", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.channels = [
+      {
+        pluginId: "external-fallback",
+        plugin: {
+          id: "fallback",
+          meta: { label: "external fallback" },
+        } as never,
+        origin: "config",
+        source: "test",
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    expect(resolveChannelPluginRegistration("fallback")).toMatchObject({
+      origin: "config",
+      plugin: {
+        meta: {
+          label: "external fallback",
+        },
+      },
+    });
   });
 
   it("rebuilds channel lookups when the active registry object changes without a version bump", () => {

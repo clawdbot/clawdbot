@@ -385,14 +385,11 @@ describe("exec approvals store helpers", () => {
     });
 
     createHomeDir();
-    expect(
-      mergeExecApprovalsSocketDefaults({
-        normalized: normalizeExecApprovals({ version: 1, agents: {} }),
-      }).socket,
-    ).toEqual({
-      path: resolveExecApprovalsSocketPath(),
-      token: "",
+    const initialized = mergeExecApprovalsSocketDefaults({
+      normalized: normalizeExecApprovals({ version: 1, agents: {} }),
     });
+    expect(initialized.socket?.path).toBe(resolveExecApprovalsSocketPath());
+    expect(initialized.socket?.token).toMatch(/^[A-Za-z0-9_-]{32}$/);
   });
 
   it("distinguishes a missing approvals file from malformed persisted policy", () => {
@@ -1761,6 +1758,37 @@ describe("exec approvals store helpers", () => {
     ).rejects.toThrow("Exec approval changed before execution");
   });
 
+  it("normalizes legacy allowlist sources in portable policy snapshots", () => {
+    const dir = createHomeDir();
+    const approvalsPath = approvalsFilePath(dir);
+    fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
+    fs.writeFileSync(
+      approvalsPath,
+      JSON.stringify({
+        version: 1,
+        defaults: { security: "allowlist", ask: "always" },
+        agents: {
+          main: {
+            allowlist: [
+              { pattern: "/usr/bin/jq", source: "legacy" },
+              { pattern: "/usr/bin/rg", source: "allow-always" },
+            ],
+          },
+        },
+      }),
+    );
+
+    const policySnapshot = createExecApprovalPolicySnapshot({
+      file: readExecApprovalsSnapshot().file,
+      agentId: "main",
+    });
+
+    expect(policySnapshot.allowlistRules).toEqual([
+      { pattern: "/usr/bin/jq" },
+      { pattern: "/usr/bin/rg", source: "allow-always" },
+    ]);
+  });
+
   it("rejects an explicit approval after policy changes to deny without persisting its grant", async () => {
     const dir = createHomeDir();
     saveExecApprovals({
@@ -1967,7 +1995,7 @@ describe("exec approvals store helpers", () => {
     expect(allowlist.every((entry) => entry.source === "allow-always")).toBe(true);
   });
 
-  it("rejects a persistent explicit allow-always grant without a policy snapshot", async () => {
+  it("rejects explicit allow-once without a policy snapshot", async () => {
     const dir = createHomeDir();
     saveExecApprovals({
       version: 1,
@@ -1986,13 +2014,32 @@ describe("exec approvals store helpers", () => {
           ask: "always",
           allowlistSatisfied: false,
         },
-        allowAlwaysDecision: {
-          kind: "exact-command",
-          commandText: "printf approved",
+      }),
+    ).rejects.toThrow("Delayed exec authorization requires a policy snapshot");
+    expect(allowlistEntries(dir, "main")).toEqual([]);
+  });
+
+  it("rejects auto-review without a policy snapshot", async () => {
+    createHomeDir();
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "full", ask: "on-miss" },
+      agents: { main: {} },
+    });
+
+    await expect(
+      commitExecAuthorization({
+        agentId: "main",
+        matches: [],
+        command: "printf reviewed",
+        authorization: {
+          source: "auto-review",
+          security: "full",
+          ask: "on-miss",
+          allowlistSatisfied: false,
         },
       }),
-    ).rejects.toThrow("Allow-always persistence requires a policy snapshot");
-    expect(allowlistEntries(dir, "main")).toEqual([]);
+    ).rejects.toThrow("Delayed exec authorization requires a policy snapshot");
   });
 
   it("does not let current policy create an allow-always grant", async () => {
@@ -2074,8 +2121,18 @@ describe("exec approvals store helpers", () => {
     createHomeDir();
     saveExecApprovals({
       version: 1,
-      defaults: { security: "full", ask: "always" },
+      defaults: { security: "full", ask: "on-miss" },
       agents: { main: {} },
+    });
+    const policySnapshot = createExecApprovalPolicySnapshot({
+      file: readExecApprovalsSnapshot().file,
+      agentId: "main",
+    });
+    await updateExecApprovals({
+      update: (current) => ({
+        ...current,
+        defaults: { ...current.defaults, ask: "always" },
+      }),
     });
 
     await expect(
@@ -2088,6 +2145,75 @@ describe("exec approvals store helpers", () => {
           security: "full",
           ask: "on-miss",
           allowlistSatisfied: false,
+          policySnapshot,
+        },
+      }),
+    ).rejects.toThrow("Exec approval changed before execution");
+  });
+
+  it("rejects auto-review when current ask tightens from off to on-miss", async () => {
+    createHomeDir();
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "full", ask: "off" },
+      agents: { main: {} },
+    });
+    const policySnapshot = createExecApprovalPolicySnapshot({
+      file: readExecApprovalsSnapshot().file,
+      agentId: "main",
+    });
+    await updateExecApprovals({
+      update: (current) => ({
+        ...current,
+        defaults: { ...current.defaults, ask: "on-miss" },
+      }),
+    });
+
+    await expect(
+      commitExecAuthorization({
+        agentId: "main",
+        matches: [],
+        command: "printf reviewed",
+        authorization: {
+          source: "auto-review",
+          security: "full",
+          ask: "off",
+          allowlistSatisfied: false,
+          policySnapshot,
+        },
+      }),
+    ).rejects.toThrow("Exec approval changed before execution");
+  });
+
+  it("rejects auto-review when current security tightens from full to allowlist", async () => {
+    createHomeDir();
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "full", ask: "off" },
+      agents: { main: {} },
+    });
+    const policySnapshot = createExecApprovalPolicySnapshot({
+      file: readExecApprovalsSnapshot().file,
+      agentId: "main",
+    });
+    await updateExecApprovals({
+      update: (current) => ({
+        ...current,
+        defaults: { ...current.defaults, security: "allowlist" },
+      }),
+    });
+
+    await expect(
+      commitExecAuthorization({
+        agentId: "main",
+        matches: [],
+        command: "printf reviewed",
+        authorization: {
+          source: "auto-review",
+          security: "full",
+          ask: "off",
+          allowlistSatisfied: false,
+          policySnapshot,
         },
       }),
     ).rejects.toThrow("Exec approval changed before execution");

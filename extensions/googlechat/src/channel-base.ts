@@ -96,8 +96,9 @@ export function createGoogleChatPluginBase(
     setupWizard: googlechatSetupWizard,
     capabilities: {
       chatTypes: ["direct", "group", "thread"],
-      reactions: true,
       threads: true,
+      // Inbound attachment download remains supported even though service-account
+      // authentication cannot use Google Chat's user-auth-only upload endpoint.
       media: true,
       nativeCommands: false,
       blockStreaming: true,

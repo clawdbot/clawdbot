@@ -1,5 +1,4 @@
 // Telegram tests cover message cache plugin behavior.
-import { rm, writeFile } from "node:fs/promises";
 import type { Message } from "grammy/types";
 import { describe, expect, it } from "vitest";
 import { isTelegramHistoryEntryAfterAmbientWatermark } from "./group-history-window.js";
@@ -7,26 +6,25 @@ import {
   buildTelegramConversationContext,
   buildTelegramReplyChain,
   createTelegramMessageCache,
-  listTelegramLegacyMessageCacheEntries,
   resetTelegramMessageCacheBucketsForTest,
-  resolveTelegramMessageCachePath,
+  resolveTelegramMessageCachePersistentScopeKey,
   TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES,
   type TelegramMessageCachePersistentStore,
 } from "./message-cache.js";
 
-type PersistedCacheEntry = {
-  key: string;
-  node: {
-    sourceMessage: Message;
-  };
-};
-
 type PersistedCacheValue = {
+  version: 1;
   sourceMessage: Message;
+  botUserId?: number;
+  promptContextProjection?: unknown;
   threadId?: string;
 };
 
 let persistentStoreId = 0;
+
+function clonePersistedCacheValue(value: PersistedCacheValue): PersistedCacheValue {
+  return structuredClone(value);
+}
 
 function createMemoryPersistentStore(maxEntries = TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES): {
   bucketKey: string;
@@ -40,7 +38,7 @@ function createMemoryPersistentStore(maxEntries = TELEGRAM_MESSAGE_CACHE_PERSIST
     store: {
       async register(key, value) {
         entries.delete(key);
-        entries.set(key, value);
+        entries.set(key, clonePersistedCacheValue(value));
         while (entries.size > maxEntries) {
           const oldest = entries.keys().next().value;
           if (oldest === undefined) {
@@ -50,23 +48,11 @@ function createMemoryPersistentStore(maxEntries = TELEGRAM_MESSAGE_CACHE_PERSIST
         }
       },
       async entries() {
-        return Array.from(entries, ([key, value]) => ({ key, value }));
+        return Array.from(entries, ([key, value]) => ({
+          key,
+          value: clonePersistedCacheValue(value),
+        }));
       },
-    },
-  };
-}
-
-function persistedCacheEntry(messageId: number, text: string): PersistedCacheEntry {
-  return {
-    key: `default:7:${messageId}`,
-    node: {
-      sourceMessage: {
-        chat: { id: 7, type: "group", title: "Ops" },
-        message_id: messageId,
-        date: 1736380000 + messageId,
-        text,
-        from: { id: messageId, is_bot: false, first_name: `User ${messageId}` },
-      } as Message,
     },
   };
 }
@@ -384,6 +370,426 @@ describe("telegram message cache", () => {
     expect(recent.map((entry) => entry.messageId)).toEqual(["9122", "9123", "9124"]);
   });
 
+  it("persists prompt-context projection provenance across cache restart", async () => {
+    const { bucketKey, entries, store } = createMemoryPersistentStore();
+    const projection = {
+      transcriptMessageId: "assistant-projection-restart",
+      partIndex: 0,
+      finalPart: true,
+    };
+    const cache = createTelegramMessageCache({ bucketKey, persistentStore: store });
+    await cache.record({
+      accountId: "default",
+      chatId: 7,
+      msg: {
+        chat: { id: 7, type: "private", first_name: "Nora" },
+        message_id: 9125,
+        date: 1736380725,
+        text: "Projection-aware state message",
+        from: { id: 999, is_bot: true, first_name: "OpenClaw" },
+      } as Message,
+      promptContextProjection: projection,
+    });
+
+    expect(entries.values().next().value).toMatchObject({
+      version: 1,
+      promptContextProjection: projection,
+    });
+
+    resetTelegramMessageCacheBucketsForTest();
+    const reloadedCache = createTelegramMessageCache({ bucketKey, persistentStore: store });
+    const reloaded = await reloadedCache.get({
+      accountId: "default",
+      chatId: 7,
+      messageId: "9125",
+    });
+
+    expect(reloaded?.promptContextProjectionMarker).toEqual({
+      kind: "valid",
+      projection,
+    });
+
+    const edited = await reloadedCache.record({
+      accountId: "default",
+      chatId: 7,
+      msg: {
+        chat: { id: 7, type: "private", first_name: "Nora" },
+        message_id: 9125,
+        date: 1736380725,
+        edit_date: 1736380730,
+        text: "Edited projection-aware state message",
+        from: { id: 999, is_bot: true, first_name: "OpenClaw" },
+      } as Message,
+    });
+    expect(edited).toMatchObject({
+      body: "Edited projection-aware state message",
+      promptContextProjectionMarker: { kind: "valid", projection },
+    });
+
+    resetTelegramMessageCacheBucketsForTest();
+    const editedReloadedCache = createTelegramMessageCache({ bucketKey, persistentStore: store });
+    const editedReloaded = await editedReloadedCache.get({
+      accountId: "default",
+      chatId: 7,
+      messageId: "9125",
+    });
+    expect(editedReloaded).toMatchObject({
+      body: "Edited projection-aware state message",
+      promptContextProjectionMarker: { kind: "valid", projection },
+    });
+
+    const malformedStore: TelegramMessageCachePersistentStore = {
+      register: (key, value) => store.register(key, value),
+      async entries() {
+        return [
+          {
+            key: entries.keys().next().value!,
+            value: {
+              ...entries.values().next().value,
+              promptContextProjection: {
+                transcriptMessageId: projection.transcriptMessageId,
+                partIndex: -1,
+                finalPart: true,
+              },
+            },
+          },
+        ];
+      },
+    };
+    resetTelegramMessageCacheBucketsForTest();
+    const malformedCache = createTelegramMessageCache({
+      bucketKey,
+      persistentStore: malformedStore,
+    });
+    const malformed = await malformedCache.get({
+      accountId: "default",
+      chatId: 7,
+      messageId: "9125",
+    });
+    expect(malformed?.promptContextProjectionMarker).toEqual({
+      kind: "invalid",
+      transcriptMessageId: projection.transcriptMessageId,
+    });
+
+    await malformedCache.record({
+      accountId: "default",
+      chatId: 7,
+      msg: {
+        chat: { id: 7, type: "private", first_name: "Nora" },
+        message_id: 9125,
+        date: 1736380725,
+        edit_date: 1736380731,
+        text: "Edited malformed projection state message",
+        from: { id: 999, is_bot: true, first_name: "OpenClaw" },
+      } as Message,
+    });
+    expect(entries.values().next().value?.promptContextProjection).toEqual({
+      transcriptMessageId: projection.transcriptMessageId,
+    });
+
+    resetTelegramMessageCacheBucketsForTest();
+    const malformedReloaded = await createTelegramMessageCache({
+      bucketKey,
+      persistentStore: store,
+    }).get({ accountId: "default", chatId: 7, messageId: "9125" });
+    expect(malformedReloaded?.promptContextProjectionMarker).toEqual({
+      kind: "invalid",
+      transcriptMessageId: projection.transcriptMessageId,
+    });
+  });
+
+  it("recognizes projected messages sent on behalf of a Telegram Business account", async () => {
+    const { bucketKey, entries, store } = createMemoryPersistentStore();
+    const projection = {
+      transcriptMessageId: "assistant-business-projection",
+      partIndex: 0,
+      finalPart: true,
+    };
+    const businessMessage = {
+      chat: { id: 7, type: "private", first_name: "Business User" },
+      message_id: 9128,
+      date: 1736380728,
+      text: "Business reply",
+      from: { id: 700, is_bot: false, first_name: "Business User" },
+      sender_business_bot: { id: 42, is_bot: true, first_name: "OpenClaw" },
+    } as Message;
+    const cache = createTelegramMessageCache({ bucketKey, persistentStore: store });
+
+    const live = await cache.record({
+      accountId: "default",
+      botUserId: 42,
+      chatId: 7,
+      msg: businessMessage,
+      promptContextProjection: projection,
+    });
+    expect(live.promptContextProjectionMarker).toEqual({ kind: "valid", projection });
+    expect(entries.values().next().value).toMatchObject({ botUserId: 42 });
+
+    resetTelegramMessageCacheBucketsForTest();
+    const reloaded = await createTelegramMessageCache({
+      bucketKey,
+      persistentStore: store,
+    }).get({ accountId: "default", chatId: 7, messageId: "9128" });
+    expect(reloaded?.promptContextProjectionMarker).toEqual({ kind: "valid", projection });
+
+    const persistedKey = entries.keys().next().value;
+    const persistedValue = entries.values().next().value;
+    if (!persistedKey || !persistedValue) {
+      throw new Error("expected persisted Telegram Business cache value");
+    }
+    entries.set(persistedKey, { ...persistedValue, botUserId: 99 });
+    resetTelegramMessageCacheBucketsForTest();
+    const mismatched = await createTelegramMessageCache({
+      bucketKey,
+      persistentStore: store,
+    }).get({ accountId: "default", chatId: 7, messageId: "9128" });
+    expect(mismatched?.promptContextProjectionMarker).toBeUndefined();
+  });
+
+  it("preserves projected message whitespace across cache restart", async () => {
+    const { bucketKey, store } = createMemoryPersistentStore();
+    const projection = {
+      transcriptMessageId: "assistant-whitespace-projection",
+      partIndex: 0,
+      finalPart: true,
+    };
+    const text = "  indented\nnext  \n";
+    const cache = createTelegramMessageCache({ bucketKey, persistentStore: store });
+    const live = await cache.record({
+      accountId: "default",
+      botUserId: 42,
+      chatId: 7,
+      msg: {
+        chat: { id: 7, type: "private", first_name: "OpenClaw" },
+        message_id: 9132,
+        date: 1736380732,
+        text,
+        from: { id: 42, is_bot: true, first_name: "OpenClaw" },
+      } as Message,
+      promptContextProjection: projection,
+    });
+    expect(live.body).toBe(text);
+
+    resetTelegramMessageCacheBucketsForTest();
+    const reloaded = await createTelegramMessageCache({
+      bucketKey,
+      persistentStore: store,
+    }).get({ accountId: "default", chatId: 7, messageId: "9132" });
+    expect(reloaded?.body).toBe(text);
+    expect(reloaded?.promptContextProjectionMarker).toEqual({ kind: "valid", projection });
+  });
+
+  it("poisons projection provenance when its durable cache write fails", async () => {
+    const bucketKey = `test:${process.pid}:${Date.now()}:${persistentStoreId++}`;
+    const persistentStore: TelegramMessageCachePersistentStore = {
+      async register() {
+        throw new Error("state store unavailable");
+      },
+      async entries() {
+        return [];
+      },
+    };
+    const cache = createTelegramMessageCache({ bucketKey, persistentStore });
+    await expect(
+      cache.record({
+        accountId: "default",
+        chatId: 7,
+        msg: {
+          chat: { id: 7, type: "private", first_name: "Nora" },
+          message_id: 9126,
+          date: 1736380726,
+          text: "Markerless context",
+          from: { id: 1, is_bot: false, first_name: "Nora" },
+        } as Message,
+      }),
+    ).resolves.toMatchObject({ messageId: "9126" });
+
+    const projection = {
+      transcriptMessageId: "assistant-persistence-failure",
+      partIndex: 0,
+      finalPart: true,
+    };
+    await expect(
+      cache.record({
+        accountId: "default",
+        chatId: 7,
+        msg: {
+          chat: { id: 7, type: "private", first_name: "OpenClaw" },
+          message_id: 9127,
+          date: 1736380727,
+          text: "Projected context",
+          from: { id: 999, is_bot: true, first_name: "OpenClaw" },
+        } as Message,
+        promptContextProjection: projection,
+      }),
+    ).rejects.toThrow("state store unavailable");
+    await expect(
+      cache.get({ accountId: "default", chatId: 7, messageId: "9127" }),
+    ).resolves.toMatchObject({
+      promptContextProjectionMarker: {
+        kind: "invalid",
+        transcriptMessageId: projection.transcriptMessageId,
+      },
+    });
+  });
+
+  it.each([
+    ["projected row first", ["projected", "parent"]],
+    ["embedding parent first", ["parent", "projected"]],
+  ])("keeps projected bot provenance when hydrating $0", async (_name, order) => {
+    const { bucketKey, entries, store } = createMemoryPersistentStore();
+    const scopeKey = resolveTelegramMessageCachePersistentScopeKey("default");
+    const projection = {
+      transcriptMessageId: "assistant-embedded-order",
+      partIndex: 0,
+      finalPart: true,
+    };
+    const botMessage = {
+      chat: { id: 7, type: "private", first_name: "OpenClaw" },
+      message_id: 9130,
+      date: 1736380730,
+      text: "Projected answer",
+      from: { id: 999, is_bot: true, first_name: "OpenClaw" },
+    } as Message;
+    const values: Record<string, [string, PersistedCacheValue]> = {
+      projected: [
+        `${scopeKey}:default:7:9130`,
+        { version: 1, sourceMessage: botMessage, promptContextProjection: projection },
+      ],
+      parent: [
+        `${scopeKey}:default:7:9131`,
+        {
+          version: 1,
+          sourceMessage: {
+            chat: { id: 7, type: "private", first_name: "Nora" },
+            message_id: 9131,
+            date: 1736380731,
+            text: "Replying to the answer",
+            from: { id: 1, is_bot: false, first_name: "Nora" },
+            reply_to_message: botMessage as Message["reply_to_message"],
+          } as Message,
+        },
+      ],
+    };
+    for (const name of order) {
+      const [key, value] = values[name]!;
+      entries.set(key, value);
+    }
+
+    const hydrated = await createTelegramMessageCache({ bucketKey, persistentStore: store }).get({
+      accountId: "default",
+      chatId: 7,
+      messageId: "9130",
+    });
+    expect(hydrated?.promptContextProjectionMarker).toEqual({ kind: "valid", projection });
+  });
+
+  it("ignores persisted projection metadata on inbound messages", async () => {
+    const { bucketKey, entries, store } = createMemoryPersistentStore();
+    const scopeKey = resolveTelegramMessageCachePersistentScopeKey("default");
+    entries.set(`${scopeKey}:default:7:9140`, {
+      version: 1,
+      sourceMessage: {
+        chat: { id: 7, type: "private", first_name: "Nora" },
+        message_id: 9140,
+        date: 1736380740,
+        text: "Inbound text",
+        from: { id: 1, is_bot: false, first_name: "Nora" },
+      } as Message,
+      promptContextProjection: {
+        transcriptMessageId: "must-not-be-trusted",
+        partIndex: 0,
+        finalPart: true,
+      },
+    });
+
+    const hydrated = await createTelegramMessageCache({ bucketKey, persistentStore: store }).get({
+      accountId: "default",
+      chatId: 7,
+      messageId: "9140",
+    });
+    expect(hydrated?.promptContextProjectionMarker).toBeUndefined();
+  });
+
+  it("hydrates unversioned pre-projection rows without inferring provenance", async () => {
+    const { bucketKey, entries, store } = createMemoryPersistentStore();
+    const cache = createTelegramMessageCache({ bucketKey, persistentStore: store });
+    await cache.record({
+      accountId: "default",
+      chatId: 7,
+      msg: {
+        chat: { id: 7, type: "private", first_name: "OpenClaw" },
+        message_id: 9126,
+        date: 1736380726,
+        text: "Pre-projection state message",
+        from: { id: 999, is_bot: true, first_name: "OpenClaw" },
+      } as Message,
+    });
+
+    const persistedKey = entries.keys().next().value;
+    const persistedValue = entries.values().next().value;
+    if (!persistedKey || !persistedValue) {
+      throw new Error("expected persisted Telegram message cache value");
+    }
+    const unversionedValue = {
+      sourceMessage: persistedValue.sourceMessage,
+      promptContextProjection: {
+        transcriptMessageId: "must-not-be-inferred",
+        partIndex: 0,
+        finalPart: true,
+      },
+      ...(persistedValue.threadId ? { threadId: persistedValue.threadId } : {}),
+    };
+    const legacyStore: TelegramMessageCachePersistentStore = {
+      register: (key, value) => store.register(key, value),
+      async entries() {
+        return [{ key: persistedKey, value: unversionedValue }];
+      },
+    };
+
+    resetTelegramMessageCacheBucketsForTest();
+    const reloadedCache = createTelegramMessageCache({ bucketKey, persistentStore: legacyStore });
+
+    const reloaded = await reloadedCache.get({
+      accountId: "default",
+      chatId: 7,
+      messageId: "9126",
+    });
+    expect(reloaded).toMatchObject({
+      body: "Pre-projection state message",
+      messageId: "9126",
+    });
+    expect(reloaded?.promptContextProjectionMarker).toBeUndefined();
+  });
+
+  it("rejects unknown future persisted cache versions", async () => {
+    const { bucketKey, store } = createMemoryPersistentStore();
+    const scopeKey = resolveTelegramMessageCachePersistentScopeKey("default");
+    const futureStore: TelegramMessageCachePersistentStore = {
+      register: (key, value) => store.register(key, value),
+      async entries() {
+        return [
+          {
+            key: `${scopeKey}:default:7:9127`,
+            value: {
+              version: 2,
+              sourceMessage: {
+                chat: { id: 7, type: "group", title: "Ops" },
+                message_id: 9127,
+                date: 1736380727,
+                text: "Future state message",
+                from: { id: 1, is_bot: false, first_name: "Nora" },
+              },
+            },
+          },
+        ];
+      },
+    };
+
+    const cache = createTelegramMessageCache({ bucketKey, persistentStore: futureStore });
+    expect(await cache.get({ accountId: "default", chatId: 7, messageId: "9127" })).toBeNull();
+  });
+
   it("does not partially parse malformed persisted thread ids", async () => {
     const { bucketKey, entries, store } = createMemoryPersistentStore();
     const cache = createTelegramMessageCache({ bucketKey, persistentStore: store });
@@ -486,35 +892,6 @@ describe("telegram message cache", () => {
     });
 
     expect(recent).toEqual([]);
-  });
-
-  it("parses legacy sidecar records for doctor migration only", async () => {
-    const storePath = `/tmp/openclaw-telegram-message-cache-legacy-${process.pid}-${Date.now()}.json`;
-    const persistedPath = resolveTelegramMessageCachePath(storePath);
-    await rm(persistedPath, { force: true });
-    try {
-      const legacyEntries = [
-        persistedCacheEntry(35033, "ocdbg-5818 one"),
-        persistedCacheEntry(35034, "ocdbg-5818 two"),
-        persistedCacheEntry(35035, "ocdbg-5818 three"),
-      ];
-      const appendedEntries = [
-        persistedCacheEntry(35036, "ocdbg-5818 four"),
-        persistedCacheEntry(35037, "ocdbg-5818 five"),
-      ];
-      await writeFile(
-        persistedPath,
-        `${JSON.stringify(legacyEntries)}${appendedEntries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
-      );
-
-      expect(
-        listTelegramLegacyMessageCacheEntries({ persistedPath }).map(
-          (entry) => entry.value.sourceMessage.message_id,
-        ),
-      ).toEqual([35033, 35034, 35035, 35036, 35037]);
-    } finally {
-      await rm(persistedPath, { force: true });
-    }
   });
 
   it("returns recent chat messages before the current message", async () => {

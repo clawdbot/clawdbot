@@ -24,6 +24,7 @@ import {
   resolveToolDisplay,
   type EmbedSandboxMode,
 } from "../../../lib/chat/tool-display.ts";
+import { getToolCallTitle } from "../tool-titles.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 
 type FullMessageRequest = NonNullable<SidebarContent["fullMessageRequest"]>;
@@ -415,6 +416,13 @@ export function renderDiffStatChips(stat: DiffStat) {
 function renderToolRowContent(card: ToolCard, view: ToolCallView, outcome: ToolCardOutcome) {
   if (view.kind === "command" && view.command) {
     const commandPreview = firstCommandLine(view.command);
+    const aiTitle = getToolCallTitle(card.name, card.args);
+    if (aiTitle) {
+      return html`
+        <span class="chat-tool-row__title">${aiTitle}</span>
+        <code class="chat-tool-row__cmd chat-tool-row__cmd--secondary">${commandPreview}</code>
+      `;
+    }
     return html`
       <span class="chat-tool-row__prompt" aria-hidden="true">$</span>
       <code class="chat-tool-row__cmd">${renderHighlightedCommand(commandPreview)}</code>
@@ -443,6 +451,13 @@ function renderToolRowContent(card: ToolCard, view: ToolCallView, outcome: ToolC
   });
   const displayLabel = formatCollapsedToolSummaryText(summary.label) ?? summary.label;
   const displayName = formatDistinctCollapsedToolSummaryText(summary.name, displayLabel);
+  const aiTitle = getToolCallTitle(card.name, card.args);
+  if (aiTitle) {
+    return html`
+      <span class="chat-tool-row__title">${aiTitle}</span>
+      <span class="chat-tool-row__detail">${displayLabel}</span>
+    `;
+  }
   return html`
     <span class="chat-tool-msg-summary__label">${displayLabel}</span>
     ${displayName

@@ -115,6 +115,29 @@ describe("tasks JSON commands", () => {
     });
   });
 
+  it("reports blank list filters as absent in JSON output", async () => {
+    await withTaskJsonStateDir(async () => {
+      const task = createTaskRecord({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "run-cli",
+        status: "running",
+        task: "Inspect issue backlog",
+      });
+
+      const runtime = createRuntime();
+      await tasksListJsonCommand({ json: true, runtime: "   ", status: "\t" }, runtime);
+
+      expect(readJsonLog(runtime)).toStrictEqual({
+        count: 1,
+        runtime: null,
+        status: null,
+        tasks: [jsonRoundTrip(task)],
+      });
+    });
+  });
+
   it("keeps audit JSON shape and combined task-flow sorting", async () => {
     await withTaskJsonStateDir(async () => {
       const now = Date.now();
@@ -199,6 +222,20 @@ describe("tasks JSON commands", () => {
             flow: jsonRoundTrip(runningFlow),
           },
         ],
+      });
+    });
+  });
+
+  it("reports blank audit filters as absent in JSON output", async () => {
+    await withTaskJsonStateDir(async () => {
+      const runtime = createRuntime();
+      await tasksAuditJsonCommand({ json: true, severity: "  ", code: "\t" }, runtime);
+
+      expect(readJsonLog(runtime)).toMatchObject({
+        filters: {
+          severity: null,
+          code: null,
+        },
       });
     });
   });

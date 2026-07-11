@@ -16,7 +16,9 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { sendDurableMessageBatch } from "../../channels/message/runtime.js";
+import type { ConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
+import type { ChannelThreadingToolContext } from "../../channels/plugins/types.public.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
 import {
   getRuntimeConfigSnapshot,
@@ -44,22 +46,16 @@ import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.j
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
-import {
-  getPluginRuntimeGatewayRequestScope,
-  withPluginRuntimeGatewayRequestScope,
-} from "../../plugins/runtime/gateway-request-scope.js";
 import { normalizePollInput } from "../../polls.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import {
   normalizeSessionKeyPreservingOpaquePeerIds,
+  parseAgentSessionKey,
   parseThreadSessionSuffix,
 } from "../../sessions/session-key-utils.js";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-  INTERNAL_MESSAGE_CHANNEL,
-  normalizeMessageChannel,
-} from "../../utils/message-channel.js";
-import { ADMIN_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
+import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
+import { resolveGatewayConversationReadOrigin } from "../conversation-read-origin.js";
+import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
@@ -71,30 +67,77 @@ type InflightResult = {
   meta?: Record<string, unknown>;
 };
 
+type MessageActionToolContext = Omit<ChannelThreadingToolContext, "currentChatType">;
+
+function resolveTrustedMessageActionToolContext(params: {
+  client: Parameters<GatewayRequestHandlers["message.action"]>[0]["client"];
+  request: {
+    agentId?: string;
+    sessionKey?: string;
+    sessionId?: string;
+  };
+}):
+  | {
+      ok: true;
+      toolContext: ChannelThreadingToolContext | undefined;
+      requesterAccountId: string | undefined;
+      requesterSenderId: string | undefined;
+    }
+  | { ok: false; error: ReturnType<typeof errorShape> } {
+  // Current-turn metadata can relax channel read policy. It must come from the
+  // signed ingress-issued turn context, never from message.action request fields.
+  const identity = params.client?.internal?.agentRuntimeIdentity;
+  const messageActionContext = identity?.messageActionContext;
+  if (!identity || !messageActionContext) {
+    return {
+      ok: true,
+      toolContext: undefined,
+      requesterAccountId: undefined,
+      requesterSenderId: undefined,
+    };
+  }
+  if (Date.now() >= messageActionContext.expiresAtMs) {
+    return {
+      ok: false,
+      error: errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "message.action agent runtime context has expired",
+      ),
+    };
+  }
+  const requestSessionKey = normalizeSessionKeyPreservingOpaquePeerIds(params.request.sessionKey);
+  const identitySessionKey = normalizeSessionKeyPreservingOpaquePeerIds(identity.sessionKey);
+  const identityAgentId = normalizeAgentId(identity.agentId);
+  const requestAgentId = normalizeOptionalString(params.request.agentId);
+  const sessionAgentId = parseAgentSessionKey(requestSessionKey)?.agentId;
+  const requestSessionId = normalizeOptionalString(params.request.sessionId);
+  if (
+    !requestSessionKey ||
+    requestSessionKey !== identitySessionKey ||
+    (requestAgentId && normalizeAgentId(requestAgentId) !== identityAgentId) ||
+    (sessionAgentId && normalizeAgentId(sessionAgentId) !== identityAgentId) ||
+    (messageActionContext.sessionId && requestSessionId !== messageActionContext.sessionId)
+  ) {
+    return {
+      ok: false,
+      error: errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "message.action agent runtime identity does not match the requested session",
+      ),
+    };
+  }
+  return {
+    ok: true,
+    toolContext: messageActionContext.toolContext,
+    requesterAccountId: messageActionContext.requesterAccountId,
+    requesterSenderId: messageActionContext.requesterSenderId,
+  };
+}
+
 const inflightByContext = new WeakMap<
   GatewayRequestContext,
   Map<string, Promise<InflightResult>>
 >();
-
-const TRUSTED_MESSAGE_ACTION_BRIDGE_SCOPES = [WRITE_SCOPE];
-
-async function withMessageActionGatewayClientScopes<T>(
-  scopes: readonly string[],
-  run: () => Promise<T>,
-): Promise<T> {
-  const current = getPluginRuntimeGatewayRequestScope();
-  if (!current?.client?.connect) {
-    return await run();
-  }
-  const client = {
-    ...current.client,
-    connect: {
-      ...current.client.connect,
-      scopes: [...scopes],
-    },
-  };
-  return await withPluginRuntimeGatewayRequestScope({ ...current, client }, run);
-}
 
 const getInflightMap = (context: GatewayRequestContext) => {
   let inflight = inflightByContext.get(context);
@@ -136,6 +179,7 @@ function resolveGatewayInflightRequest(params: {
   prefix: "message.action" | "poll" | "send";
   idempotencyKey: string;
   respond: RespondFn;
+  conversationReadOrigin?: ConversationReadInvocationOrigin;
 }):
   | {
       kind: "ready";
@@ -148,7 +192,10 @@ function resolveGatewayInflightRequest(params: {
       done: Promise<void>;
     } {
   const idem = params.idempotencyKey;
-  const dedupeKey = `${params.prefix}:${idem}`;
+  const dedupeKey =
+    params.prefix === "message.action"
+      ? `${params.prefix}:${params.conversationReadOrigin ?? "delegated"}:${idem}`
+      : `${params.prefix}:${idem}`;
   const inflight = resolveGatewayInflightMap({
     context: params.context,
     dedupeKey,
@@ -487,25 +534,25 @@ export const sendHandlers: GatewayRequestHandlers = {
       sessionId?: string;
       inboundTurnKind?: "user_request" | "room_event";
       agentId?: string;
-      toolContext?: {
-        currentChannelId?: string;
-        currentMessagingTarget?: string;
-        currentGraphChannelId?: string;
-        currentChannelProvider?: string;
-        currentThreadTs?: string;
-        currentMessageId?: string | number;
-        replyToMode?: "off" | "first" | "all" | "batched";
-        hasRepliedRef?: { value: boolean };
-        sameChannelThreadRequired?: boolean;
-        skipCrossContextDecoration?: boolean;
-      };
+      toolContext?: MessageActionToolContext;
+      conversationReadOrigin?: "direct-operator";
       idempotencyKey: string;
     };
+    const trustedContext = resolveTrustedMessageActionToolContext({ client, request });
+    if (!trustedContext.ok) {
+      respond(false, undefined, trustedContext.error);
+      return;
+    }
+    const conversationReadOrigin = resolveGatewayConversationReadOrigin({
+      client,
+      requestedOrigin: request.conversationReadOrigin,
+    });
     const inflight = resolveGatewayInflightRequest({
       context,
       prefix: "message.action",
       idempotencyKey: request.idempotencyKey,
       respond,
+      conversationReadOrigin,
     });
     if (inflight.kind === "handled") {
       await inflight.done;
@@ -554,50 +601,27 @@ export const sendHandlers: GatewayRequestHandlers = {
           });
         }
         const gatewayClientScopes = client?.connect?.scopes ?? [];
-        // Requester provenance is trusted channel context, not public RPC input.
-        // Only full-scope callers may bridge server-injected sender identity.
-        const canSupplyTrustedRequester = gatewayClientScopes.includes(ADMIN_SCOPE);
-        const requesterAccountId = canSupplyTrustedRequester
-          ? (normalizeOptionalString(request.requesterAccountId) ?? undefined)
-          : undefined;
-        const requesterSenderId = canSupplyTrustedRequester
-          ? (normalizeOptionalString(request.requesterSenderId) ?? undefined)
-          : undefined;
-        const senderIsOwner = canSupplyTrustedRequester ? request.senderIsOwner === true : false;
-        const hasTrustedRequesterProvenance =
-          requesterAccountId !== undefined ||
-          requesterSenderId !== undefined ||
-          (canSupplyTrustedRequester && request.senderIsOwner !== undefined);
-        const isTrustedBackendBridge =
-          canSupplyTrustedRequester &&
-          client?.connect?.client?.id === GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT &&
-          client.connect.client.mode === GATEWAY_CLIENT_MODES.BACKEND &&
-          hasTrustedRequesterProvenance;
-        const dispatchGatewayClientScopes = isTrustedBackendBridge
-          ? TRUSTED_MESSAGE_ACTION_BRIDGE_SCOPES
-          : gatewayClientScopes;
-        const handled = await withMessageActionGatewayClientScopes(
-          dispatchGatewayClientScopes,
-          async () =>
-            await dispatchChannelMessageAction({
-              channel,
-              action: request.action as never,
-              cfg,
-              params: request.params,
-              accountId,
-              requesterAccountId,
-              requesterSenderId,
-              senderIsOwner,
-              sessionKey,
-              sessionId: normalizeOptionalString(request.sessionId) ?? undefined,
-              inboundEventKind: request.inboundTurnKind,
-              agentId,
-              mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, agentId),
-              toolContext: request.toolContext,
-              dryRun: false,
-              gatewayClientScopes: dispatchGatewayClientScopes,
-            }),
-        );
+        const handled = await dispatchChannelMessageAction({
+          channel,
+          action: request.action as never,
+          cfg,
+          params: request.params,
+          accountId,
+          requesterAccountId: trustedContext.requesterAccountId,
+          requesterSenderId: trustedContext.requesterSenderId,
+          senderIsOwner: gatewayClientScopes.includes(ADMIN_SCOPE)
+            ? request.senderIsOwner === true
+            : false,
+          conversationReadOrigin,
+          sessionKey,
+          sessionId: normalizeOptionalString(request.sessionId) ?? undefined,
+          inboundEventKind: request.inboundTurnKind,
+          agentId,
+          mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, agentId),
+          toolContext: trustedContext.toolContext,
+          dryRun: false,
+          gatewayClientScopes,
+        });
         if (!handled) {
           const error = errorShape(
             ErrorCodes.INVALID_REQUEST,
@@ -616,7 +640,7 @@ export const sendHandlers: GatewayRequestHandlers = {
             cfg,
             sessionKey,
             agentId,
-            toolContext: request.toolContext,
+            toolContext: trustedContext.toolContext,
             idempotencyKey: request.idempotencyKey,
             deliveredPayload: payload,
           },

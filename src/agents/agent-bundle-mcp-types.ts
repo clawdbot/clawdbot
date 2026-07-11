@@ -67,6 +67,7 @@ export type SessionMcpRuntime = {
   sessionId: string;
   sessionKey?: string;
   workspaceDir: string;
+  agentDir?: string;
   configFingerprint: string;
   createdAt: number;
   lastUsedAt: number;
@@ -91,6 +92,7 @@ export type SessionMcpRuntimeManager = {
     sessionId: string;
     sessionKey?: string;
     workspaceDir: string;
+    agentDir?: string;
     cfg?: OpenClawConfig;
   }) => Promise<SessionMcpRuntime>;
   bindSessionKey: (sessionKey: string, sessionId: string) => void;

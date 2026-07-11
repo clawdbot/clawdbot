@@ -1107,13 +1107,16 @@ function chatAttachmentFromFile(file: File, dataUrl: string): ChatAttachment {
   return registerChatAttachmentPayload({ attachment, dataUrl, file });
 }
 
-function dataImageClipboardFile(dataUrl: string): { file: File; dataUrl: string } | null {
+function dataImageClipboardFile(
+  dataUrl: string,
+  baseName = "pasted-image",
+): { file: File; dataUrl: string } | null {
   const match = /^\s*data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/=\s]+)\s*$/i.exec(dataUrl);
   if (!match) {
     return null;
   }
   const mimeType = match[1].toLowerCase();
-  if (!isSupportedChatAttachmentFile({ name: "pasted-image", type: mimeType })) {
+  if (!isSupportedChatAttachmentFile({ name: baseName, type: mimeType })) {
     return null;
   }
   const base64 = match[2].replace(/\s+/g, "");
@@ -1125,12 +1128,22 @@ function dataImageClipboardFile(dataUrl: string): { file: File; dataUrl: string 
     }
     const extension = mimeType.split("/")[1]?.replace(/[^a-z0-9.+-]/gi, "") || "png";
     return {
-      file: new File([bytes], `pasted-image.${extension}`, { type: mimeType }),
+      file: new File([bytes], `${baseName}.${extension}`, { type: mimeType }),
       dataUrl: `data:${mimeType};base64,${base64}`,
     };
   } catch {
     return null;
   }
+}
+
+/** Builds a registered chat attachment from a base64 image data URL (e.g. a browser-panel annotation). */
+export function chatAttachmentFromDataUrl(
+  dataUrl: string,
+  fileName: string,
+): ChatAttachment | null {
+  const baseName = fileName.replace(/\.[a-z0-9]+$/i, "") || "image";
+  const parsed = dataImageClipboardFile(dataUrl, baseName);
+  return parsed ? chatAttachmentFromFile(parsed.file, parsed.dataUrl) : null;
 }
 
 function isImageAttachment(att: ChatAttachment): boolean {

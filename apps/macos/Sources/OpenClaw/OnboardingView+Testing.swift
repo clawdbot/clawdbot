@@ -38,13 +38,14 @@ extension OnboardingView {
         view.workspacePath = "/tmp/openclaw"
         view.workspaceStatus = "Saved workspace"
         view.state.connectionMode = .local
+        let contentHeight = view.contentHeight(for: OnboardingView.windowHeight)
         _ = view.welcomePage()
         _ = view.connectionPage()
-        _ = view.aiSetupPage()
-        _ = view.permissionsPage()
+        _ = view.aiSetupPage(contentHeight: contentHeight)
+        _ = view.permissionsPage(contentHeight: contentHeight)
         _ = view.cliPage()
         _ = view.workspacePage()
-        _ = view.onboardingChatPage()
+        _ = view.onboardingChatPage(contentHeight: contentHeight)
         _ = view.readyPage()
 
         view.selectLocalGateway()

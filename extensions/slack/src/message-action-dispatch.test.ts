@@ -456,6 +456,36 @@ describe("handleSlackMessageAction", () => {
     expect(firstInvokeCall(invoke)[1]).toEqual({});
   });
 
+  it.each(["react", "reactions", "read", "list-pins"] as const)(
+    "forwards trusted tool context for %s authorization",
+    async (action) => {
+      const invoke = createInvokeSpy();
+      const toolContext = {
+        currentChannelProvider: "slack",
+        currentChannelId: "C1",
+      };
+
+      await handleSlackMessageAction({
+        providerId: "slack",
+        ctx: {
+          action,
+          cfg: {},
+          params: {
+            channelId: "C1",
+            ...(action === "react"
+              ? { messageId: "1712345678.654321", emoji: "white_check_mark" }
+              : {}),
+            ...(action === "reactions" ? { messageId: "1712345678.654321" } : {}),
+          },
+          toolContext,
+        } as never,
+        invoke: invoke as never,
+      });
+
+      expect(firstInvokeCall(invoke)[2]).toBe(toolContext);
+    },
+  );
+
   it("rejects fractional read limits before invoking Slack actions", async () => {
     const invoke = createInvokeSpy();
 
@@ -640,6 +670,7 @@ describe("handleSlackMessageAction", () => {
     expect(invoke).toHaveBeenCalledWith(
       expect.objectContaining({ action: "memberInfo", userId: "U123" }),
       expect.any(Object),
+      expect.objectContaining({ currentChannelProvider: " Slack " }),
     );
   });
 
@@ -662,6 +693,7 @@ describe("handleSlackMessageAction", () => {
     expect(invoke).toHaveBeenCalledWith(
       expect.objectContaining({ action: "memberInfo", userId: "U123" }),
       expect.any(Object),
+      expect.objectContaining({ currentChannelProvider: "slack" }),
     );
   });
 
@@ -711,6 +743,7 @@ describe("handleSlackMessageAction", () => {
         accountId: "other",
         requesterAccountId: "default",
         requesterSenderId: "U123",
+        conversationReadOrigin: "direct-operator",
         toolContext: { currentChannelProvider: "telegram" },
       } as never,
       invoke: invoke as never,
@@ -719,6 +752,7 @@ describe("handleSlackMessageAction", () => {
     expect(invoke).toHaveBeenCalledWith(
       expect.objectContaining({ action: "memberInfo", userId: "U999" }),
       expect.any(Object),
+      expect.objectContaining({ currentChannelProvider: "telegram" }),
     );
   });
 });

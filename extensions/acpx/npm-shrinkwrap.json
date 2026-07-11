@@ -1,12 +1,12 @@
 {
   "name": "@openclaw/acpx",
-  "version": "2026.6.11",
+  "version": "2026.7.2",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/acpx",
-      "version": "2026.6.11",
+      "version": "2026.7.2",
       "dependencies": {
         "@agentclientprotocol/claude-agent-acp": "0.55.0",
         "@zed-industries/codex-acp": "0.16.0",

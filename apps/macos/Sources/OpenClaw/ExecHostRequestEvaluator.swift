@@ -5,6 +5,7 @@ struct ExecHostValidatedRequest {
     let displayCommand: String
     let evaluationRawCommand: String?
     let approvalSource: ExecApprovalRequestSource?
+    let delayedPolicySnapshot: ExecApprovalPolicySnapshot?
 }
 
 enum ExecHostPolicyDecision {
@@ -35,13 +36,29 @@ enum ExecHostRequestEvaluator {
                 message: "approvalSource cannot be combined with explicit approval",
                 reason: "invalid"))
         }
+        let carriesDelayedAuthority = approvalSource == .autoReview ||
+            request.approvalDecision == .allowOnce ||
+            request.approvalDecision == .allowAlways
+        let delayedPolicySnapshot: ExecApprovalPolicySnapshot?
+        if carriesDelayedAuthority {
+            guard let policySnapshot = request.policySnapshot else {
+                return .failure(ExecHostError(
+                    code: "INVALID_REQUEST",
+                    message: "delayed approval requires a prepared policy snapshot",
+                    reason: "invalid"))
+            }
+            delayedPolicySnapshot = ExecApprovalPolicySnapshot(portable: policySnapshot)
+        } else {
+            delayedPolicySnapshot = nil
+        }
         switch self.validateCommand(command: request.command, rawCommand: request.rawCommand) {
         case let .success(validated):
             return .success(ExecHostValidatedRequest(
                 command: validated.command,
                 displayCommand: validated.displayCommand,
                 evaluationRawCommand: validated.evaluationRawCommand,
-                approvalSource: approvalSource))
+                approvalSource: approvalSource,
+                delayedPolicySnapshot: delayedPolicySnapshot))
         case let .failure(error):
             return .failure(error)
         }
@@ -77,7 +94,8 @@ enum ExecHostRequestEvaluator {
                 command: command,
                 displayCommand: resolved.displayCommand,
                 evaluationRawCommand: resolved.evaluationRawCommand,
-                approvalSource: nil))
+                approvalSource: nil,
+                delayedPolicySnapshot: nil))
         case let .invalid(message):
             return .failure(
                 ExecHostError(

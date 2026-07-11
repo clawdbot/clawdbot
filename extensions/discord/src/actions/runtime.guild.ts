@@ -37,7 +37,10 @@ import {
   uploadStickerDiscord,
   resolveEventCoverImage,
 } from "../send.js";
-import { createDiscordMessagingActionContext } from "./runtime.messaging.shared.js";
+import {
+  createDiscordMessagingActionContext,
+  type DiscordMessagingActionOptions,
+} from "./runtime.messaging.shared.js";
 import {
   createDiscordActionOptions,
   readDiscordChannelCreateParams,
@@ -357,7 +360,7 @@ export async function handleDiscordGuildAction(
   params: Record<string, unknown>,
   isActionEnabled: ActionGate<DiscordActionConfig>,
   cfg: OpenClawConfig,
-  options?: { mediaLocalRoots?: readonly string[] },
+  options?: DiscordMessagingActionOptions,
 ): Promise<AgentToolResult<unknown>> {
   const accountId = readStringParam(params, "accountId");
   if (!cfg) {
@@ -374,9 +377,13 @@ export async function handleDiscordGuildAction(
   });
   const withOpts = (extra?: Record<string, unknown>) =>
     createDiscordActionOptions({ cfg, accountId, extra });
-  const assertGuildMetadataReadAllowed = async (guildId: string) => {
+  const assertGuildMetadataReadAllowed = async (
+    guildId: string,
+    readOptions?: { filteredResults?: boolean },
+  ) => {
     await readTargetGate.assertGuildReadTargetAllowed({
       guildId,
+      filteredResults: readOptions?.filteredResults,
       channelTargetRequiredMessage:
         "Discord guild metadata reads require a wildcard channel allowlist for this guild.",
     });
@@ -521,12 +528,13 @@ export async function handleDiscordGuildAction(
       const guildId = readStringParam(params, "guildId", {
         required: true,
       });
-      await assertGuildMetadataReadAllowed(guildId);
+      await assertGuildMetadataReadAllowed(guildId, { filteredResults: true });
       const channels = await discordGuildActionRuntime.listGuildChannelsDiscord(
         guildId,
         withOpts(),
       );
-      return jsonResult({ ok: true, channels });
+      const visibleChannels = await readTargetGate.filterGuildChannelList({ guildId, channels });
+      return jsonResult({ ok: true, channels: visibleChannels });
     }
     case "voiceStatus": {
       if (!isActionEnabled("voiceStatus")) {

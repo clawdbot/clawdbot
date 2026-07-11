@@ -247,10 +247,8 @@ function runReleasePublishInputValidation(overrides: Record<string, string>) {
 }
 
 function runReleaseChecksSummary(params: {
-  artifactAttempt?: string;
-  artifactStatus?: "cancelled" | "failure" | "skipped" | "success";
   currentAttempt: string;
-  currentResult: "cancelled" | "skipped" | "success";
+  currentResult: "cancelled" | "failure" | "skipped" | "success";
   resolveResult?: "failure" | "success";
   telegramSelected?: boolean;
   workflowRef?: string;
@@ -263,24 +261,6 @@ function runReleaseChecksSummary(params: {
   const runId = "123456";
   const targetSha = "a".repeat(40);
   const workdir = tempDirs.make("openclaw-release-check-status-");
-  const statusDir = join(workdir, ".artifacts", "release-check-status");
-  if (params.artifactAttempt) {
-    mkdirSync(statusDir, { recursive: true });
-    writeFileSync(
-      join(statusDir, `qa_live_telegram_release_checks-${runId}-${params.artifactAttempt}.env`),
-      [
-        `run_id=${runId}`,
-        `run_attempt=${params.artifactAttempt}`,
-        `target_sha=${targetSha}`,
-        "job=qa_live_telegram_release_checks",
-        "variant=",
-        `status=${params.artifactStatus ?? "success"}`,
-        "job_status=success",
-        "step_outcomes=success success",
-        "",
-      ].join("\n"),
-    );
-  }
   return spawnSync("bash", ["-c", script], {
     cwd: workdir,
     encoding: "utf8",
@@ -2633,14 +2613,18 @@ describe("package artifact reuse", () => {
     }
 
     const telegramCaller = workflowJob(RELEASE_CHECKS_WORKFLOW, "qa_live_telegram_release_checks");
-    expect(telegramCaller.uses).toBe(
-      "openclaw/openclaw/.github/workflows/openclaw-release-telegram-qa.yml@main",
+    const telegramDispatch = workflowStep(telegramCaller, "Dispatch and await trusted Telegram QA");
+    expect(telegramDispatch.run).toContain('workflow="openclaw-release-telegram-qa.yml"');
+    expect(telegramDispatch.run).toContain('--repo "$GITHUB_REPOSITORY"');
+    expect(telegramDispatch.run).toContain("--ref main");
+    expect(telegramDispatch.run).toContain(
+      '-f expected_trusted_workflow_sha="$expected_trusted_workflow_sha"',
     );
-    expect(telegramCaller.with?.expected_trusted_workflow_sha).toBe(
-      "${{ needs.resolve_target.outputs.trusted_workflow_sha }}",
+    expect(telegramDispatch.run).toContain(
+      '[[ "$child_head_sha" == "$expected_trusted_workflow_sha" ]]',
     );
     expect(telegramCaller["continue-on-error"]).toBeUndefined();
-    expect(telegramCaller.steps).toBeUndefined();
+    expect(telegramCaller["timeout-minutes"]).toBe(210);
 
     const telegramStatus = workflowJob(RELEASE_TELEGRAM_QA_WORKFLOW, "advisory_status");
     expect(telegramStatus["continue-on-error"]).toBeUndefined();
@@ -2725,28 +2709,8 @@ describe("package artifact reuse", () => {
     );
   });
 
-  it.each(["skipped", "cancelled"] as const)(
-    "rejects attempt-1 advisory success when attempt 2 is %s",
-    (currentResult) => {
-      const result = runReleaseChecksSummary({
-        artifactAttempt: "1",
-        currentAttempt: "2",
-        currentResult,
-      });
-
-      expect(result.status).toBe(1);
-      const output = `${result.stdout}\n${result.stderr}`;
-      if (currentResult === "skipped") {
-        expect(output).toContain("attempt 2");
-      } else {
-        expect(output).toContain("qa_live_telegram_release_checks-123456-2.env");
-      }
-    },
-  );
-
-  it("accepts an exact current-attempt advisory status artifact", () => {
+  it("accepts a successful dispatched Telegram child", () => {
     const result = runReleaseChecksSummary({
-      artifactAttempt: "2",
       currentAttempt: "2",
       currentResult: "success",
     });
@@ -2755,18 +2719,23 @@ describe("package artifact reuse", () => {
     expect(result.stderr).toBe("");
   });
 
-  it("rejects a skipped selected Telegram reusable call", () => {
-    const result = runReleaseChecksSummary({
-      currentAttempt: "2",
-      currentResult: "skipped",
-      telegramSelected: true,
-    });
+  it.each(["cancelled", "failure", "skipped"] as const)(
+    "rejects a %s selected Telegram child",
+    (currentResult) => {
+      const result = runReleaseChecksSummary({
+        currentAttempt: "2",
+        currentResult,
+        telegramSelected: true,
+      });
 
-    expect(result.status).toBe(1);
-    expect(result.stdout).toContain("::error::qa_live_telegram_release_checks ended with skipped");
-  });
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain(
+        `::error::qa_live_telegram_release_checks ended with ${currentResult}`,
+      );
+    },
+  );
 
-  it("accepts a skipped unselected Telegram reusable call", () => {
+  it("accepts a skipped unselected Telegram dispatch", () => {
     const result = runReleaseChecksSummary({
       currentAttempt: "2",
       currentResult: "skipped",
@@ -2774,19 +2743,6 @@ describe("package artifact reuse", () => {
     });
 
     expect(result.status).toBe(0);
-  });
-
-  it("rejects skipped terminal evidence for a selected Telegram call", () => {
-    const result = runReleaseChecksSummary({
-      artifactAttempt: "2",
-      artifactStatus: "skipped",
-      currentAttempt: "2",
-      currentResult: "success",
-      telegramSelected: true,
-    });
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toContain("::error::qa_live_telegram_release_checks ended with skipped");
   });
 
   it("keeps target resolution blocking before release children", () => {
@@ -2801,7 +2757,7 @@ describe("package artifact reuse", () => {
     expect(result.stdout).toContain("::error::resolve_target ended with failure");
   });
 
-  it("keeps missing current-attempt advisory status non-blocking for Tideclaw alpha", () => {
+  it("keeps a cancelled Telegram child non-blocking for Tideclaw alpha", () => {
     const result = runReleaseChecksSummary({
       currentAttempt: "2",
       currentResult: "cancelled",
@@ -2810,7 +2766,7 @@ describe("package artifact reuse", () => {
 
     expect(result.status).toBe(0);
     const output = `${result.stdout}\n${result.stderr}`;
-    expect(output).toContain("Expected 1 advisory status artifacts");
+    expect(output).toContain("qa_live_telegram_release_checks ended with cancelled");
     expect(output).toContain("Tideclaw alpha");
   });
 

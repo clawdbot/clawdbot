@@ -190,6 +190,24 @@ describe("monitorQaGatewayChildFailure", () => {
   });
 });
 
+describe("formatQaGatewayProcessBoundaryStartupFailure", () => {
+  it("includes only a bounded, redacted launcher log tail", () => {
+    const prefix = "x".repeat(9_000);
+    const longSecret = "s".repeat(9_000);
+    const message = testing.formatQaGatewayProcessBoundaryStartupFailure(
+      new Error("launcher exited before identity"),
+      `${prefix}\nAuthorization: Bearer ${longSecret}\nlauncher stage=mount-proc`,
+    );
+
+    expect(message).toContain("launcher exited before identity");
+    expect(message).toContain("Gateway logs:");
+    expect(message).toContain("Authorization: Bearer <redacted>");
+    expect(message).toContain("launcher stage=mount-proc");
+    expect(message).not.toContain("s".repeat(100));
+    expect(message).not.toContain(prefix);
+  });
+});
+
 describe("Gateway child fixture helpers", () => {
   it("creates an empty transport config seam", () => {
     expect(testing.createQaGatewayEmptyTransport()).toEqual({

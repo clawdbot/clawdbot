@@ -3,6 +3,7 @@
 import type { AgentToolResult } from "../../agents/runtime/index.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
+import type { ConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import type {
   ChannelId,
@@ -52,6 +53,7 @@ export type OutboundSendContext = {
   requesterSenderUsername?: string;
   requesterSenderE164?: string;
   senderIsOwner?: boolean;
+  conversationReadOrigin?: ConversationReadInvocationOrigin;
   mediaAccess?: OutboundMediaAccess;
   mediaReadFile?: OutboundMediaReadFile;
   accountId?: string | null;
@@ -213,6 +215,7 @@ function createChannelActionContext(params: {
     requesterAccountId: params.ctx.requesterAccountId,
     requesterSenderId: params.ctx.requesterSenderId,
     senderIsOwner: params.ctx.senderIsOwner,
+    conversationReadOrigin: params.ctx.conversationReadOrigin,
     sessionKey: params.ctx.sessionKey,
     sessionId: params.ctx.sessionId,
     inboundEventKind: params.ctx.inboundEventKind,

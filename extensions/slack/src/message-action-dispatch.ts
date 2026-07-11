@@ -123,6 +123,7 @@ export async function handleSlackMessageAction(params: {
         accountId,
       },
       cfg,
+      ctx.toolContext,
     );
   }
 
@@ -142,6 +143,7 @@ export async function handleSlackMessageAction(params: {
         accountId,
       },
       cfg,
+      ctx.toolContext,
     );
   }
 
@@ -161,7 +163,7 @@ export async function handleSlackMessageAction(params: {
     if (includeReadThreadId) {
       readAction.threadId = readStringParam(actionParams, "threadId");
     }
-    return await invoke(readAction, cfg);
+    return await invoke(readAction, cfg, ctx.toolContext);
   }
 
   if (action === "edit") {
@@ -185,6 +187,7 @@ export async function handleSlackMessageAction(params: {
         accountId,
       },
       cfg,
+      ctx.toolContext,
     );
   }
 
@@ -200,6 +203,7 @@ export async function handleSlackMessageAction(params: {
         accountId,
       },
       cfg,
+      ctx.toolContext,
     );
   }
 
@@ -216,6 +220,7 @@ export async function handleSlackMessageAction(params: {
         accountId,
       },
       cfg,
+      ctx.toolContext,
     );
   }
 
@@ -234,7 +239,7 @@ export async function handleSlackMessageAction(params: {
     if (!userId) {
       throw new Error("member-info requires a userId outside a current Slack conversation.");
     }
-    return await invoke({ action: "memberInfo", userId, accountId }, cfg);
+    return await invoke({ action: "memberInfo", userId, accountId }, cfg, ctx.toolContext);
   }
 
   if (action === "emoji-list") {

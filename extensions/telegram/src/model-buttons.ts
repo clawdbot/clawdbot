@@ -9,6 +9,7 @@
  * - mdl_back              - back to providers list
  */
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { fitsTelegramCallbackData } from "./approval-callback-data.js";
 
 export type ButtonRow = Array<{ text: string; callback_data: string }>;
@@ -41,6 +42,7 @@ export type ModelsKeyboardParams = {
 };
 
 const MODELS_PAGE_SIZE = 8;
+const MODEL_BUTTON_LABEL_MAX_LENGTH = 38;
 const CALLBACK_PREFIX = {
   providers: "mdl_prov",
   back: "mdl_back",
@@ -220,7 +222,7 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
     const isCurrentModel = isCurrentModelSelection({ currentModel, provider, model });
     const fallbackLabel = model.includes("/") ? `${provider}/${model}` : model;
     const displayLabel = modelNames?.get(`${provider}/${model}`) ?? fallbackLabel;
-    const displayText = truncateModelId(displayLabel, 38);
+    const displayText = truncateModelLabel(displayLabel, MODEL_BUTTON_LABEL_MAX_LENGTH);
     const text = isCurrentModel ? `${displayText} ✓` : displayText;
 
     rows.push([
@@ -271,14 +273,13 @@ export function buildBrowseProvidersButton(): ButtonRow[] {
 }
 
 /**
- * Truncate model ID for display, preserving end if too long.
+ * Truncate a model label for display, preserving its end if too long.
  */
-function truncateModelId(modelId: string, maxLen: number): string {
-  if (modelId.length <= maxLen) {
-    return modelId;
+function truncateModelLabel(modelLabel: string, maxLen: number): string {
+  if (modelLabel.length <= maxLen) {
+    return modelLabel;
   }
-  // Show last part with ellipsis prefix
-  return `…${modelId.slice(-(maxLen - 1))}`;
+  return `…${sliceUtf16Safe(modelLabel, -(maxLen - 1))}`;
 }
 
 /**

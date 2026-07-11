@@ -19,6 +19,7 @@ import type { PollInput } from "../../polls.js";
 import type { ChatType } from "../chat-type.js";
 import type { InboundEventKind } from "../inbound-event/kind.js";
 import type { ChannelId } from "./channel-id.types.js";
+import type { ConversationReadInvocationOrigin } from "./conversation-read-origin.js";
 import type { ChannelMessageActionName as ChannelMessageActionNameFromList } from "./message-action-names.js";
 import type { ChannelMessageCapability } from "./message-capabilities.js";
 
@@ -474,6 +475,8 @@ export type ChannelThreadingContext = {
 
 export type ChannelThreadingToolContext = {
   currentChannelId?: string;
+  /** Trusted normalized conversation kind for the active inbound turn. */
+  currentChatType?: ChatType;
   /** Routable messaging target when it differs from the platform-native channel id. */
   currentMessagingTarget?: string;
   currentGraphChannelId?: string;
@@ -714,6 +717,11 @@ export type ChannelMessageActionContext = {
   requesterSenderId?: string | null;
   /** Trusted owner identity bit from command/channel-action auth. */
   senderIsOwner?: boolean;
+  /**
+   * Server-owned origin for this operation. Missing values are delegated.
+   * Plugins must use it only for conversation-read visibility policy.
+   */
+  conversationReadOrigin?: ConversationReadInvocationOrigin;
   sessionKey?: string | null;
   sessionId?: string | null;
   inboundEventKind?: InboundEventKind;
@@ -777,6 +785,15 @@ export type ChannelMessageActionAdapter = {
         deliveryTargetAliases?: string[];
         /** Convert typed owner fields such as chatId into the canonical shared target shape. */
         resolveDeliveryTarget?: (params: { args: Record<string, unknown> }) => string | undefined;
+        /**
+         * Prove that provider-native aliases name the trusted current conversation.
+         * Core consults this only for host-owned bundled registrations.
+         */
+        matchesCurrentConversation?: (params: {
+          args: Record<string, unknown>;
+          accountId: string;
+          toolContext: ChannelThreadingToolContext;
+        }) => boolean;
       }
     >
   >;

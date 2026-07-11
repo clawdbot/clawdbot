@@ -116,6 +116,24 @@ describe("exec approval reply helpers", () => {
     );
   });
 
+  it("distinguishes node approval-inbox access from policy inspection", () => {
+    const text = buildExecApprovalUnavailableReplyPayload({
+      reason: "no-approval-route",
+      host: "node",
+      nodeId: "mac-1",
+    }).text;
+
+    expect(text).toContain(
+      "Print the Control UI URL with `openclaw dashboard --no-open`, open it in a browser, then use the approval inbox.",
+    );
+    expect(text).toContain(
+      "Inspect the node's effective exec policy with `openclaw approvals get --node mac-1`.",
+    );
+    expect(text).not.toContain("`openclaw dashboard --no-open` or `openclaw approvals get");
+    expect(text).not.toContain("Open the approval inbox with");
+    expect(text).not.toContain("exec-approvals list");
+  });
+
   it("explains how to enable Matrix native approvals when Matrix is the initiating platform", () => {
     const text = buildExecApprovalUnavailableReplyPayload({
       reason: "initiating-platform-disabled",

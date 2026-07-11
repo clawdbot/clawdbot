@@ -159,20 +159,36 @@ struct ExecApprovalsSocketPathGuardTests {
     }
 
     @Test
-    func `harden canonical parent directory creates it with0700 permissions`() async throws {
+    func `socket path resolves under the configured state directory`() async throws {
         let stateDir = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-socket-guard-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager().removeItem(at: stateDir) }
 
+        // String-level assertion only. The isolation lock serializes env
+        // mutation but not env consumption: concurrent suites that resolve
+        // OPENCLAW_STATE_DIR mid-window would create this directory and the
+        // old filesystem assertions here flaked on their 0755 default
+        // (#104019). Creation-with-0700 is covered by the explicit-path
+        // tests in this suite.
         try await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": stateDir.path]) {
             let socketPath = ExecApprovalsStore.socketPath()
-            try ExecApprovalsSocketPathGuard.hardenParentDirectory(for: socketPath)
-
-            #expect(FileManager().fileExists(atPath: stateDir.path))
-            let attrs = try FileManager().attributesOfItem(atPath: stateDir.path)
-            let permissions = (attrs[.posixPermissions] as? NSNumber)?.intValue ?? -1
-            #expect(permissions & 0o777 == 0o700)
+            #expect(socketPath == stateDir.appendingPathComponent("exec-approvals.sock").path)
         }
+    }
+
+    @Test
+    func `harden canonical parent directory creates it with 0700 permissions`() throws {
+        let root = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-socket-guard-\(UUID().uuidString)", isDirectory: true)
+        let stateDir = root.appendingPathComponent("state", isDirectory: true)
+        defer { try? FileManager().removeItem(at: root) }
+
+        try ExecApprovalsSocketPathGuard.hardenParentDirectory(
+            for: stateDir.appendingPathComponent("exec-approvals.sock").path)
+
+        let attrs = try FileManager().attributesOfItem(atPath: stateDir.path)
+        let permissions = (attrs[.posixPermissions] as? NSNumber)?.intValue ?? -1
+        #expect(permissions & 0o777 == 0o700)
     }
 
     @Test

@@ -29,7 +29,9 @@ import {
   type MSTeamsPollStore,
 } from "./polls.js";
 import {
-  resolveMSTeamsChannelAllowlist,
+  projectStableMSTeamsUserAllowlist,
+  projectStableMSTeamsTeamsConfig,
+  resolveMSTeamsTeamsConfig,
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
 import { getMSTeamsRuntime } from "./runtime.js";
@@ -86,9 +88,11 @@ export async function monitorMSTeamsProvider(
     },
   };
 
-  let allowFrom = msteamsCfg.allowFrom;
-  let groupAllowFrom = msteamsCfg.groupAllowFrom;
-  let teamsConfig = msteamsCfg.teams;
+  const configuredAllowFrom = msteamsCfg.allowFrom;
+  const configuredGroupAllowFrom = msteamsCfg.groupAllowFrom;
+  let allowFrom = projectStableMSTeamsUserAllowlist(configuredAllowFrom);
+  let groupAllowFrom = projectStableMSTeamsUserAllowlist(configuredGroupAllowFrom);
+  let teamsConfig = projectStableMSTeamsTeamsConfig(msteamsCfg.teams);
   const allowNameMatching = isDangerousNameMatchingEnabled(msteamsCfg);
 
   const cleanAllowEntry = (entry: string) =>
@@ -99,10 +103,8 @@ export async function monitorMSTeamsProvider(
   const isStableUserId = (entry: string) => /^[0-9a-fA-F-]{16,}$/.test(entry);
   const cleanAllowEntries = (entries?: string[]) =>
     entries?.map((entry) => cleanAllowEntry(entry)).filter((entry) => entry && entry !== "*") ?? [];
-  const mergeStableUserIds = (entries?: string[]) => {
-    const additions = cleanAllowEntries(entries).filter((entry) => isStableUserId(entry));
-    return additions.length > 0 ? mergeAllowlist({ existing: entries, additions }) : entries;
-  };
+  const isMutableUserEntry = (entry: string) =>
+    !isStableUserId(entry) && !/^accessGroup:/i.test(entry);
 
   const resolveAllowlistUsers = async (label: string, entries: string[]) => {
     if (entries.length === 0) {
@@ -126,22 +128,15 @@ export async function monitorMSTeamsProvider(
   };
 
   try {
-    allowFrom = mergeStableUserIds(allowFrom);
-    if (Array.isArray(groupAllowFrom) && groupAllowFrom.length > 0) {
-      groupAllowFrom = mergeStableUserIds(groupAllowFrom);
-    }
-
     if (allowNameMatching) {
-      const allowEntries = cleanAllowEntries(allowFrom).filter((entry) => !isStableUserId(entry));
+      const allowEntries = cleanAllowEntries(configuredAllowFrom).filter(isMutableUserEntry);
       if (allowEntries.length > 0) {
         const { additions } = await resolveAllowlistUsers("msteams users", allowEntries);
         allowFrom = mergeAllowlist({ existing: allowFrom, additions });
       }
 
-      if (Array.isArray(groupAllowFrom) && groupAllowFrom.length > 0) {
-        const groupEntries = cleanAllowEntries(groupAllowFrom).filter(
-          (entry) => !isStableUserId(entry),
-        );
+      if (Array.isArray(configuredGroupAllowFrom) && configuredGroupAllowFrom.length > 0) {
+        const groupEntries = cleanAllowEntries(configuredGroupAllowFrom).filter(isMutableUserEntry);
         if (groupEntries.length > 0) {
           const { additions } = await resolveAllowlistUsers("msteams group users", groupEntries);
           groupAllowFrom = mergeAllowlist({ existing: groupAllowFrom, additions });
@@ -149,85 +144,20 @@ export async function monitorMSTeamsProvider(
       }
     }
 
-    if (teamsConfig && Object.keys(teamsConfig).length > 0) {
-      const entries: Array<{ input: string; teamKey: string; channelKey?: string }> = [];
-      for (const [teamKey, teamCfg] of Object.entries(teamsConfig)) {
-        if (teamKey === "*") {
-          continue;
-        }
-        const channels = teamCfg?.channels ?? {};
-        const channelKeys = Object.keys(channels).filter((key) => key !== "*");
-        if (channelKeys.length === 0) {
-          entries.push({ input: teamKey, teamKey });
-          continue;
-        }
-        for (const channelKey of channelKeys) {
-          entries.push({
-            input: `${teamKey}/${channelKey}`,
-            teamKey,
-            channelKey,
-          });
-        }
-      }
-
-      if (entries.length > 0) {
-        const resolved = await resolveMSTeamsChannelAllowlist({
-          cfg,
-          entries: entries.map((entry) => entry.input),
-        });
-        const mapping: string[] = [];
-        const unresolved: string[] = [];
-        const nextTeams = { ...teamsConfig };
-
-        resolved.forEach((entry, idx) => {
-          const source = entries[idx];
-          if (!source) {
-            return;
-          }
-          const sourceTeam = teamsConfig?.[source.teamKey] ?? {};
-          if (!entry.resolved || !entry.teamId) {
-            unresolved.push(entry.input);
-            return;
-          }
-          mapping.push(
-            entry.channelId
-              ? `${entry.input}→${entry.teamId}/${entry.channelId}`
-              : `${entry.input}→${entry.teamId}`,
-          );
-          const existing = nextTeams[entry.teamId] ?? {};
-          const mergedChannels = {
-            ...sourceTeam.channels,
-            ...existing.channels,
-          };
-          const mergedTeam = { ...sourceTeam, ...existing, channels: mergedChannels };
-          nextTeams[entry.teamId] = mergedTeam;
-          if (source.channelKey && entry.channelId) {
-            const sourceChannel = sourceTeam.channels?.[source.channelKey];
-            if (sourceChannel) {
-              nextTeams[entry.teamId] = {
-                ...mergedTeam,
-                channels: {
-                  ...mergedChannels,
-                  [entry.channelId]: {
-                    ...sourceChannel,
-                    ...mergedChannels?.[entry.channelId],
-                  },
-                },
-              };
-            }
-          }
-        });
-
-        teamsConfig = nextTeams;
-        summarizeMapping("msteams channels", mapping, unresolved, runtime);
-      }
+    if (msteamsCfg.teams && Object.keys(msteamsCfg.teams).length > 0) {
+      const resolved = await resolveMSTeamsTeamsConfig({
+        cfg,
+        teamIdMode: "bot-framework",
+        teams: msteamsCfg.teams,
+      });
+      teamsConfig = resolved.teams;
+      summarizeMapping("msteams channels", resolved.mapping, resolved.unresolved, runtime);
     }
   } catch (err) {
-    // Allowlist Graph resolution is security-sensitive — surface failures at
-    // error level so operators notice the degraded state where Graph-resolved
-    // IDs are missing (#77674).
+    // Graph-resolved aliases are authorization inputs. Keep only the stable
+    // projection when resolution fails so mutable names never become active.
     runtime.error?.(
-      `msteams resolve failed; falling back to raw config entries — allowlist members resolved via Graph may be missing. ${formatUnknownError(err)}`,
+      `msteams resolve failed; mutable allowlist entries are disabled. ${formatUnknownError(err)}`,
     );
   }
 

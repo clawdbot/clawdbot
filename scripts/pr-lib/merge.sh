@@ -233,8 +233,30 @@ merge_run() {
     return 0
   }
 
+  local merge_method="${OPENCLAW_PR_MERGE_METHOD:-squash}"
+  local merge_flag
+  local merge_label
+  case "$merge_method" in
+    squash)
+      merge_flag="--squash"
+      merge_label="squash"
+      ;;
+    merge)
+      merge_flag="--merge"
+      merge_label="merge commit"
+      ;;
+    rebase)
+      merge_flag="--rebase"
+      merge_label="rebase"
+      ;;
+    *)
+      echo "Invalid OPENCLAW_PR_MERGE_METHOD: $merge_method (expected squash, merge, or rebase)."
+      exit 2
+      ;;
+  esac
+
   if ! gh pr merge "$pr" \
-    --squash \
+    "$merge_flag" \
     --match-head-commit "$PREP_HEAD_SHA" \
     >.local/merge-output.log 2>&1
   then
@@ -299,7 +321,7 @@ merge_run() {
   for attempt in 1 2 3; do
     if comment_output=$(
       {
-        echo "Merged via squash."
+        echo "Merged via $merge_label."
         echo
         echo "- Prepared head SHA: [$PREP_HEAD_SHA]($prep_sha_url)"
         echo "- Landed commit: [$landed_sha]($landed_sha_url)"

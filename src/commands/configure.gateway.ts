@@ -70,7 +70,7 @@ export async function promptGatewayConfig(
         {
           value: "tailnet",
           label: "Tailnet (Tailscale IP)",
-          hint: "Bind to your Tailscale IP only (100.x.x.x)",
+          hint: "Bind to your Tailscale IP plus local loopback",
         },
         {
           value: "auto",
@@ -85,7 +85,7 @@ export async function promptGatewayConfig(
         {
           value: "custom",
           label: "Custom IP",
-          hint: "Specify a specific IP address, with 0.0.0.0 fallback if unavailable",
+          hint: "Specific IPv4s also bind 127.0.0.1",
         },
       ],
     }),

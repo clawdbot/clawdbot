@@ -77,6 +77,7 @@ describe("gateway-watch tmux wrapper", () => {
         OPENCLAW_GATEWAY_PORT: "19001",
         OPENCLAW_GATEWAY_RESTART_TRACE: "1",
         OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
+        OPENCLAW_GATEWAY_WATCH_AUTO_DOCTOR: "0",
         OPENCLAW_PROFILE: "Dev Profile",
         OPENCLAW_TRACE_SYNC_IO: "0",
         SHELL: "/bin/zsh",
@@ -94,8 +95,10 @@ describe("gateway-watch tmux wrapper", () => {
     expect(command).toContain("'OPENCLAW_GATEWAY_PORT=19001'");
     expect(command).toContain("'OPENCLAW_GATEWAY_RESTART_TRACE=1'");
     expect(command).toContain("'OPENCLAW_GATEWAY_STARTUP_TRACE=1'");
+    expect(command).toContain("'OPENCLAW_GATEWAY_WATCH_AUTO_DOCTOR=0'");
     expect(command).toContain("'OPENCLAW_PROFILE=Dev Profile'");
     expect(command).toContain("'OPENCLAW_TRACE_SYNC_IO=0'");
+    expect(command).toContain("'\\''-u'\\'' '\\''OPENCLAW_SKIP_CHANNELS'\\''");
     expect(command).toContain("/opt/node");
     expect(command).toContain("scripts/watch-node.mjs");
     expect(command).toContain("gateway");
@@ -320,7 +323,7 @@ describe("gateway-watch tmux wrapper", () => {
     const code = runGatewayWatchTmuxMain({
       args: ["gateway", "--force"],
       cwd: "/repo",
-      env: { SHELL: "/bin/zsh" },
+      env: { SHELL: "/bin/zsh", TERM: "xterm-256color" },
       nodePath: "/node",
       spawnSync,
       stderr: stderr.stream,
@@ -337,6 +340,36 @@ describe("gateway-watch tmux wrapper", () => {
     expect(stdout.chunks.join("")).not.toContain("tmux attach -t");
   });
 
+  it.each([undefined, "", "dumb", "DUMB"])(
+    "keeps a capability-limited TERM=%s pseudo-terminal detached",
+    (term) => {
+      const stdout = createOutput();
+      const stderr = createOutput();
+      const spawnSync = vi
+        .fn()
+        .mockReturnValueOnce({ status: 1, stdout: "", stderr: "" })
+        .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+        .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+        .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" });
+
+      const code = runGatewayWatchTmuxMain({
+        args: ["gateway", "--force"],
+        cwd: "/repo",
+        env: { SHELL: "/bin/zsh", TERM: term },
+        nodePath: "/node",
+        spawnSync,
+        stderr: stderr.stream,
+        stdinIsTTY: true,
+        stdout: stdout.stream,
+        stdoutIsTTY: true,
+      });
+
+      expect(code).toBe(0);
+      expect(spawnSync).toHaveBeenCalledTimes(4);
+      expect(stdout.chunks.join("")).toContain("tmux attach -t openclaw-gateway-watch-main");
+    },
+  );
+
   it("switches tmux clients instead of nesting attach when already inside tmux", () => {
     const stdout = createOutput();
     const stderr = createOutput();
@@ -351,7 +384,7 @@ describe("gateway-watch tmux wrapper", () => {
     const code = runGatewayWatchTmuxMain({
       args: ["gateway", "--force"],
       cwd: "/repo",
-      env: { SHELL: "/bin/zsh", TMUX: "/tmp/tmux-501/default,1,0" },
+      env: { SHELL: "/bin/zsh", TERM: "dumb", TMUX: "/tmp/tmux-501/default,1,0" },
       nodePath: "/node",
       spawnSync,
       stderr: stderr.stream,
@@ -407,7 +440,11 @@ describe("gateway-watch tmux wrapper", () => {
     const code = runGatewayWatchTmuxMain({
       args: ["gateway", "--force", "--port=19001"],
       cwd: "/repo",
-      env: { OPENCLAW_PROFILE: "dev", SHELL: "/bin/zsh" },
+      env: {
+        OPENCLAW_GATEWAY_WATCH_AUTO_DOCTOR: "0",
+        OPENCLAW_PROFILE: "dev",
+        SHELL: "/bin/zsh",
+      },
       nodePath: "/node",
       spawnSync,
       stderr: stderr.stream,
@@ -427,6 +464,8 @@ describe("gateway-watch tmux wrapper", () => {
       "/repo",
     ]);
     expect(String(respawnArgs[6])).toContain("scripts/watch-node.mjs");
+    expect(String(respawnArgs[6])).toContain("OPENCLAW_GATEWAY_WATCH_AUTO_DOCTOR=0");
+    expect(String(respawnArgs[6])).toContain("OPENCLAW_SKIP_CHANNELS");
     expect(requireRecord(respawnCall[2], "spawn options").encoding).toBe("utf8");
     expect(stderr.chunks.join("")).toContain(
       "gateway:watch restarted in tmux session openclaw-gateway-watch-dev-19001",

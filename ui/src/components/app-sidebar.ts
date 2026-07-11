@@ -1511,6 +1511,8 @@ class AppSidebar extends OpenClawLightDomContentsElement {
             : t("chat.sidebar.chats");
     // Smart channel/work sections classify rows automatically; only custom
     // groups and Chats accept manual drops (a drop means category assignment).
+    // Custom group headers drag as a whole (mirroring whole-row session drags);
+    // the dot handle inside is a pure visual affordance.
     const acceptsSessions =
       !isPinned &&
       this.sessionsGrouping === "category" &&
@@ -1518,6 +1520,9 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     const sectionClass = [
       "sidebar-recent-sessions__group",
       collapsed ? "sidebar-recent-sessions__group--collapsed" : "",
+      group && this.draggingSessionGroup === group
+        ? "sidebar-recent-sessions__group--dragging"
+        : "",
       this.sessionDropTarget === section.id ? "sidebar-recent-sessions__group--session-drop" : "",
       group && this.sessionGroupDropTarget?.group === group
         ? `sidebar-recent-sessions__group--group-drop-${this.sessionGroupDropTarget.position}`
@@ -1542,7 +1547,24 @@ class AppSidebar extends OpenClawLightDomContentsElement {
         ${showHeader
           ? html`
               <div
-                class="sidebar-recent-sessions__head"
+                class="sidebar-recent-sessions__head ${group
+                  ? "sidebar-recent-sessions__head--draggable"
+                  : ""}"
+                draggable=${group ? "true" : "false"}
+                @dragstart=${group
+                  ? (event: DragEvent) => {
+                      if (event.dataTransfer) {
+                        writeSessionGroupDragData(event.dataTransfer, group);
+                        this.draggingSessionGroup = group;
+                      }
+                    }
+                  : nothing}
+                @dragend=${group
+                  ? () => {
+                      this.draggingSessionGroup = null;
+                      this.sessionGroupDropTarget = null;
+                    }
+                  : nothing}
                 @contextmenu=${group
                   ? (event: MouseEvent) => {
                       event.preventDefault();
@@ -1552,21 +1574,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
               >
                 ${group
                   ? html`
-                      <span
-                        class="sidebar-session-group-drag-handle"
-                        draggable="true"
-                        aria-hidden="true"
-                        @dragstart=${(event: DragEvent) => {
-                          if (event.dataTransfer) {
-                            writeSessionGroupDragData(event.dataTransfer, group);
-                            this.draggingSessionGroup = group;
-                          }
-                        }}
-                        @dragend=${() => {
-                          this.draggingSessionGroup = null;
-                          this.sessionGroupDropTarget = null;
-                        }}
-                      ></span>
+                      <span class="sidebar-session-group-drag-handle" aria-hidden="true"></span>
                     `
                   : nothing}
                 <button

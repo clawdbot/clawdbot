@@ -1,12 +1,12 @@
 {
   "name": "@openclaw/kilocode-provider",
-  "version": "2026.6.11",
+  "version": "2026.7.2",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/kilocode-provider",
-      "version": "2026.6.11"
+      "version": "2026.7.2"
     }
   }
 }

@@ -23,7 +23,7 @@ import {
 } from "./reply-run-registry.js";
 
 /** Kinds of turns that compete for one reply run slot per session. */
-export type ReplyTurnKind = "visible" | "heartbeat" | "queued_followup" | "control_abort";
+export type ReplyTurnKind = "visible" | "heartbeat" | "queued_followup";
 
 /** Admission result for a reply turn attempting to own the session run slot. */
 export type ReplyTurnAdmission =
@@ -282,10 +282,10 @@ export async function admitReplyTurn(params: {
       if (params.kind === "visible" && expireVisibleStaleOperation(activeOperation)) {
         continue;
       }
-      if (params.kind === "heartbeat" || params.kind === "control_abort") {
+      if (params.kind === "heartbeat") {
         return { status: "skipped", reason: "active-run", activeOperation };
       }
-      // Visible and queued turns may wait for active runs; control turns must stay immediate.
+      // Visible and queued turns may wait for active runs when waitForActive is set.
       if (params.waitForActive === false) {
         return { status: "skipped", reason: "active-run", activeOperation };
       }

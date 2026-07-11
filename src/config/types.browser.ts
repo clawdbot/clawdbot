@@ -54,6 +54,8 @@ export type BrowserSsrFPolicyConfig = {
 };
 export type BrowserConfig = {
   enabled?: boolean;
+  /** Allow importing cookies from the user's real Chrome-family profile into a managed profile (macOS). Default: true. */
+  allowSystemProfileImport?: boolean;
   /** If false, disable browser act:evaluate (arbitrary JS). Default: true */
   evaluateEnabled?: boolean;
   /** Base URL of the CDP endpoint (for remote browsers). Default: loopback CDP on the derived port. */

@@ -96,6 +96,23 @@ function validateCommandResult(value, label) {
   check(result.status === 0 && result.timedOut === false, `${label} failed`);
 }
 
+function validateCollectorOnlyPhase(phase) {
+  check(
+    phase.driverKind === "none" && phase.collectionIntent === "post-ready-health",
+    "commandless phase was not a collector-only phase",
+  );
+  const evidence = array(phase.evidence, "collector-only phase evidence");
+  check(
+    evidence.length > 0 &&
+      evidence.every((entry) => typeof entry === "string" && entry.trim().length > 0),
+    "collector-only phase evidence was invalid",
+  );
+  check(
+    object(phase.metrics, "collector-only phase metrics").schemaVersion === "kova.envMetrics.v1",
+    "collector-only phase metrics schema was invalid",
+  );
+}
+
 function alreadyAbsent(result, noun) {
   check(
     Number.isSafeInteger(result.status) && result.status !== 0,
@@ -128,9 +145,23 @@ function validateRecord(recordValue) {
   const phases = array(record.phases, "record phases");
   check(phases.length > 0, "record had no phases");
   for (const phaseValue of phases) {
-    const results = array(object(phaseValue, "phase").results, "phase results");
-    check(results.length > 0, "phase had no command results");
-    results.forEach((result, index) => validateCommandResult(result, `phase result ${index}`));
+    const phase = object(phaseValue, "phase");
+    const commands = array(phase.commands, "phase commands");
+    const results = array(phase.results, "phase results");
+    check(commands.length === results.length, "phase command/result counts did not match");
+    if (commands.length === 0) {
+      validateCollectorOnlyPhase(phase);
+      continue;
+    }
+    results.forEach((resultValue, index) => {
+      const result = object(resultValue, `phase result ${index}`);
+      check(
+        text(result.command, `phase result ${index} command`) ===
+          text(commands[index], `phase command ${index}`),
+        `phase command ${index} did not match its result`,
+      );
+      validateCommandResult(result, `phase result ${index}`);
+    });
   }
   validateCleanup(
     record.cleanup,

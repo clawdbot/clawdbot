@@ -3,34 +3,42 @@ import SwiftUI
 
 extension OnboardingView {
     var body: some View {
-        VStack(spacing: 0) {
-            // Chat-heavy pages shrink the mascot so the content gets the room.
-            GlowingOpenClawIcon(size: self.heroSize)
-                .offset(y: self.usesCompactHero ? 4 : 10)
-                .frame(height: self.heroFrameHeight)
+        GeometryReader { windowGeometry in
+            let contentHeight = self.contentHeight(for: windowGeometry.size.height)
+            VStack(spacing: 0) {
+                // Chat-heavy pages shrink the mascot so the content gets the room.
+                GlowingOpenClawIcon(size: self.heroSize)
+                    .offset(y: self.usesCompactHero ? 4 : 10)
+                    .frame(height: self.heroFrameHeight)
+                    .animation(.spring(response: 0.45, dampingFraction: 0.85), value: self.usesCompactHero)
+
+                GeometryReader { _ in
+                    HStack(spacing: 0) {
+                        ForEach(self.pageOrder, id: \.self) { pageIndex in
+                            self.pageView(for: pageIndex, contentHeight: contentHeight)
+                                .frame(width: self.pageWidth)
+                        }
+                    }
+                    .offset(x: CGFloat(-self.currentPage) * self.pageWidth)
+                    .animation(
+                        .interactiveSpring(response: 0.5, dampingFraction: 0.86, blendDuration: 0.25),
+                        value: self.currentPage)
+                    .frame(height: contentHeight, alignment: .top)
+                    .clipped()
+                }
+                .frame(height: contentHeight)
                 .animation(.spring(response: 0.45, dampingFraction: 0.85), value: self.usesCompactHero)
 
-            GeometryReader { _ in
-                HStack(spacing: 0) {
-                    ForEach(self.pageOrder, id: \.self) { pageIndex in
-                        self.pageView(for: pageIndex)
-                            .frame(width: self.pageWidth)
-                    }
-                }
-                .offset(x: CGFloat(-self.currentPage) * self.pageWidth)
-                .animation(
-                    .interactiveSpring(response: 0.5, dampingFraction: 0.86, blendDuration: 0.25),
-                    value: self.currentPage)
-                .frame(height: self.contentHeight, alignment: .top)
-                .clipped()
+                Spacer(minLength: 0)
+                self.navigationBar
             }
-            .frame(height: self.contentHeight)
-            .animation(.spring(response: 0.45, dampingFraction: 0.85), value: self.usesCompactHero)
-
-            Spacer(minLength: 0)
-            self.navigationBar
+            .frame(maxHeight: .infinity)
         }
-        .frame(width: pageWidth, height: Self.windowHeight)
+        .frame(
+            minWidth: pageWidth,
+            maxWidth: pageWidth,
+            minHeight: Self.windowHeight,
+            maxHeight: .infinity)
         .background(Color(NSColor.windowBackgroundColor))
         .onAppear {
             self.onboardingVisible = true
@@ -89,6 +97,7 @@ extension OnboardingView {
         self.resetGatewayBoundAIState()
         let oldActive = self.activePageIndex
         self.reconcilePageForModeChange(previousActivePageIndex: oldActive)
+        self.startExistingCLIActivationIfNeeded()
         self.returnToInferenceSetupIfNeeded()
         if let updatePageMonitoring {
             updatePageMonitoring(self.activePageIndex)
@@ -210,19 +219,21 @@ extension OnboardingView {
         .frame(minHeight: 60, alignment: .bottom)
     }
 
-    func onboardingPage(@ViewBuilder _ content: () -> some View) -> some View {
+    func onboardingPage(@ViewBuilder _ content: @escaping () -> some View) -> some View {
         let scrollIndicatorGutter: CGFloat = 18
-        return ScrollView {
-            VStack(spacing: 16) {
-                content()
-                Spacer(minLength: 0)
+        return GeometryReader { geometry in
+            ScrollView {
+                VStack(spacing: 16) {
+                    content()
+                }
+                .frame(maxWidth: .infinity)
+                .frame(minHeight: geometry.size.height, alignment: .center)
+                .padding(.trailing, scrollIndicatorGutter)
             }
-            .frame(maxWidth: .infinity, alignment: .top)
-            .padding(.trailing, scrollIndicatorGutter)
+            .scrollIndicators(.automatic)
+            .padding(.horizontal, 28)
+            .frame(width: pageWidth, alignment: .top)
         }
-        .scrollIndicators(.automatic)
-        .padding(.horizontal, 28)
-        .frame(width: pageWidth, alignment: .top)
     }
 
     func onboardingCard(

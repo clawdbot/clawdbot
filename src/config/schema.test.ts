@@ -267,6 +267,41 @@ describe("config schema", () => {
     }
   });
 
+  it("accepts MCP OAuth auth profile bindings for refreshable bearer projection", () => {
+    expect(() =>
+      OpenClawSchema.parse({
+        mcp: {
+          servers: {
+            ducktape: {
+              url: "https://agents.ducktape.xyz/mcp",
+              transport: "streamable-http",
+              auth: "oauth",
+              oauth: {
+                authProfileId: "ducktape:mcp",
+              },
+            },
+          },
+        },
+      }),
+    ).not.toThrow();
+    expect(() =>
+      OpenClawSchema.parse({
+        mcp: {
+          servers: {
+            ducktape: {
+              url: "https://agents.ducktape.xyz/mcp",
+              transport: "streamable-http",
+              auth: "oauth",
+              oauth: {
+                authProfileId: "  ",
+              },
+            },
+          },
+        },
+      }),
+    ).toThrow();
+  });
+
   it("accepts stdio transport for command-bearing MCP servers", () => {
     const result = OpenClawSchema.safeParse({
       mcp: {

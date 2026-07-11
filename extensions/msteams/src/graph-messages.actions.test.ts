@@ -133,7 +133,7 @@ describe("reactMessageMSTeams", () => {
     expect(mockState.postGraphBetaJson).toHaveBeenCalledWith({
       token: TOKEN,
       path: `/chats/${encodeURIComponent(CHAT_ID)}/messages/msg-1/setReaction`,
-      body: { reactionType: "like" },
+      body: { reactionType: "👍" },
     });
   });
 
@@ -151,11 +151,11 @@ describe("reactMessageMSTeams", () => {
     expect(mockState.postGraphBetaJson).toHaveBeenCalledWith({
       token: TOKEN,
       path: "/teams/team-id-1/channels/channel-id-1/messages/msg-2/setReaction",
-      body: { reactionType: "heart" },
+      body: { reactionType: "❤️" },
     });
   });
 
-  it("normalizes reaction type to lowercase", async () => {
+  it("normalizes a case-insensitive reaction name to Unicode", async () => {
     mockState.postGraphBetaJson.mockResolvedValue(undefined);
 
     await reactMessageMSTeams({
@@ -168,14 +168,12 @@ describe("reactMessageMSTeams", () => {
     expect(mockState.postGraphBetaJson).toHaveBeenCalledWith({
       token: TOKEN,
       path: `/chats/${encodeURIComponent(CHAT_ID)}/messages/msg-1/setReaction`,
-      body: { reactionType: "laugh" },
+      body: { reactionType: "😆" },
     });
   });
 
   it("passes through non-well-known reaction types (e.g. Unicode emoji)", async () => {
-    // Graph setReaction accepts arbitrary Unicode emoji plus the legacy
-    // well-known types; normalizeReactionType only lowercases the legacy set
-    // and lets any other non-empty value through unchanged.
+    // Graph setReaction accepts Unicode values outside the named convenience set.
     mockState.postGraphBetaJson.mockResolvedValue(undefined);
 
     await reactMessageMSTeams({
@@ -210,7 +208,7 @@ describe("reactMessageMSTeams", () => {
     expect(mockState.postGraphBetaJson).toHaveBeenCalledWith({
       token: TOKEN,
       path: `/chats/${encodeURIComponent("19:dm-chat@thread.tacv2")}/messages/msg-1/setReaction`,
-      body: { reactionType: "like" },
+      body: { reactionType: "👍" },
     });
   });
 });
@@ -230,7 +228,7 @@ describe("unreactMessageMSTeams", () => {
     expect(mockState.postGraphBetaJson).toHaveBeenCalledWith({
       token: TOKEN,
       path: `/chats/${encodeURIComponent(CHAT_ID)}/messages/msg-1/unsetReaction`,
-      body: { reactionType: "sad" },
+      body: { reactionType: "😢" },
     });
   });
 
@@ -248,7 +246,7 @@ describe("unreactMessageMSTeams", () => {
     expect(mockState.postGraphBetaJson).toHaveBeenCalledWith({
       token: TOKEN,
       path: "/teams/team-id-1/channels/channel-id-1/messages/msg-2/unsetReaction",
-      body: { reactionType: "angry" },
+      body: { reactionType: "😡" },
     });
   });
 });

@@ -33,6 +33,8 @@ function sessionRow(
     hasActiveRun?: boolean;
     status?: string;
     spawnedBy?: string;
+    execNode?: string;
+    worktree?: { branch?: string; repoRoot?: string };
   } = {},
 ) {
   return {
@@ -657,6 +659,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
         "sessions.patch": {},
       },
       sessionKey: "agent:main:main",
+      sessionGroups: ["Apps", "Research"],
     });
 
     try {
@@ -669,8 +672,8 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await expect.poll(() => researchGroup.locator(".sidebar-recent-session").count()).toBe(2);
       await captureUiProof(page, "sidebar-session-groups.png");
 
-      // Rename group: every member session is patched, including the archived
-      // row that only the unbounded archived list window can see.
+      // Rename group: the gateway renames the catalog entry and repoints every
+      // member session server-side (sessions.groups.rename), no per-member patches.
       const groupMenuButton = researchGroup.getByRole("button", {
         name: "Group options for Research",
       });
@@ -680,13 +683,11 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await captureUiProof(page, "sidebar-group-menu.png");
       page.once("dialog", (dialog) => void dialog.accept("Projects"));
       await page.getByRole("menuitem", { name: "Rename group…" }).click();
-      for (const key of ["agent:main:paper-a", "agent:main:paper-b", "agent:main:old-notes"]) {
-        const patch = await waitForPatch(
-          gateway,
-          (params) => params.key === key && params.category === "Projects",
-        );
-        expect(requireRecord(patch.params)).toMatchObject({ category: "Projects", key });
-      }
+      const renameRequest = await gateway.waitForRequest("sessions.groups.rename");
+      expect(requireRecord(renameRequest.params)).toMatchObject({
+        name: "Research",
+        to: "Projects",
+      });
       await expect
         .poll(() =>
           page
@@ -696,10 +697,11 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
             ),
         )
         .toEqual(["category:Apps", "category:Projects"]);
-
-      // Delete group: sessions survive and move back to Ungrouped.
       const projectsGroup = groups.filter({ hasText: "Projects" });
-      await projectsGroup.waitFor({ state: "visible" });
+      await expect.poll(() => projectsGroup.locator(".sidebar-recent-session").count()).toBe(2);
+
+      // Delete group: the gateway drops the catalog entry and moves member
+      // sessions back to Chats server-side (sessions.groups.delete).
       const projectsMenuButton = projectsGroup.getByRole("button", {
         name: "Group options for Projects",
       });
@@ -707,14 +709,22 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       page.once("dialog", (dialog) => void dialog.accept());
       await projectsMenuButton.click();
       await page.getByRole("menuitem", { name: "Delete group…" }).click();
-      const dissolvePatch = await waitForPatch(
-        gateway,
-        (params) => params.key === "agent:main:paper-a" && params.category === null,
-      );
-      expect(requireRecord(dissolvePatch.params)).toMatchObject({
-        category: null,
-        key: "agent:main:paper-a",
-      });
+      const deleteRequest = await gateway.waitForRequest("sessions.groups.delete");
+      expect(requireRecord(deleteRequest.params)).toMatchObject({ name: "Projects" });
+      await expect
+        .poll(() =>
+          page
+            .locator('[data-session-section^="category:"]')
+            .evaluateAll((elements) =>
+              elements.map((element) => element.getAttribute("data-session-section")),
+            ),
+        )
+        .toEqual(["category:Apps"]);
+      await expect
+        .poll(() =>
+          page.locator('[data-session-section="ungrouped"] .sidebar-recent-session').count(),
+        )
+        .toBe(3);
 
       // Group by "None" flattens the category sections into the plain list.
       const sortSessionsButton = page.getByRole("button", { name: "Sort sessions" });
@@ -755,6 +765,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
         "sessions.patch": {},
       },
       sessionKey: "agent:main:session-0",
+      sessionGroups: ["Alpha", "Beta"],
     });
 
     try {
@@ -764,10 +775,28 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await expect.poll(() => page.getByText("All sessions", { exact: true }).count()).toBe(0);
       await captureUiProof(page, "sidebar-all-sessions.png");
 
+      // New groups are created from a session's menu (Move to group → New group…),
+      // which files that session into the new group.
+      const sessionTen = page.locator(
+        '.sidebar-recent-session[data-session-key="agent:main:session-10"]',
+      );
+      await sessionTen.hover();
+      await sessionTen.getByRole("button", { name: "Open session menu" }).click();
+      // The submenu opens on pointerenter; clicking the host item would toggle
+      // the hover-opened submenu straight back closed.
+      await page.getByRole("menuitem", { name: "Move to group" }).hover();
       page.once("dialog", (dialog) => void dialog.accept("Gamma"));
-      await page.getByRole("button", { name: "New group…" }).click();
+      await page.getByRole("menuitem", { name: "New group…" }).click();
       const gamma = page.locator('[data-session-section="category:Gamma"]');
       await gamma.waitFor({ state: "visible" });
+      const createdPatch = await waitForPatch(
+        gateway,
+        (params) => params.key === "agent:main:session-10" && params.category === "Gamma",
+      );
+      expect(requireRecord(createdPatch.params)).toMatchObject({
+        category: "Gamma",
+        key: "agent:main:session-10",
+      });
 
       const sessionEleven = page.locator(
         '.sidebar-recent-session[data-session-key="agent:main:session-11"]',
@@ -783,11 +812,13 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       });
       await expect
         .poll(() => gamma.locator(".sidebar-recent-session").count(), { timeout: 10_000 })
-        .toBe(1);
+        .toBe(2);
       await captureUiProof(page, "sidebar-session-dropped-into-group.png");
 
       const ungrouped = page.locator('[data-session-section="ungrouped"]');
-      await gamma.locator(".sidebar-recent-session").dragTo(ungrouped);
+      await gamma
+        .locator('.sidebar-recent-session[data-session-key="agent:main:session-11"]')
+        .dragTo(ungrouped);
       const ungroupedPatch = await waitForPatch(
         gateway,
         (params) => params.key === "agent:main:session-11" && params.category === null,
@@ -798,7 +829,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       });
       await expect
         .poll(() => ungrouped.locator(".sidebar-recent-session").count(), { timeout: 10_000 })
-        .toBe(10);
+        .toBe(9);
 
       const alpha = page.locator('[data-session-section="category:Alpha"]');
       const alphaToggle = alpha.getByRole("button", { name: "Alpha", exact: true });
@@ -810,7 +841,8 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await alphaToggle.click();
       await expect.poll(() => alpha.locator(".sidebar-recent-session").count()).toBe(0);
 
-      await gamma.locator(".sidebar-session-group-drag-handle").dragTo(alpha, {
+      // Reorder by dragging the whole group header (not just the dot handle).
+      await gamma.locator(".sidebar-recent-sessions__head").dragTo(alpha, {
         targetPosition: { x: 4, y: 2 },
       });
       const customGroupOrder = () =>
@@ -858,22 +890,34 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
-    await installMockGateway(page, {
+    const gateway = await installMockGateway(page, {
       methodResponses: {
         "sessions.list": sessionsListResponse([]),
       },
       sessionKey: "agent:main:main",
+      // Stored-but-empty catalog groups stay visible as sections/move targets.
+      sessionGroups: ["First group"],
     });
 
     try {
       await page.goto(`${server.baseUrl}chat`);
-      page.once("dialog", (dialog) => void dialog.accept("First group"));
-      await page.getByRole("button", { name: "New group…" }).click();
-      await page.locator('[data-session-section="category:First group"]').waitFor({
-        state: "visible",
-      });
+      const firstGroup = page.locator('[data-session-section="category:First group"]');
+      await firstGroup.waitFor({ state: "visible" });
       await page.locator('[data-session-section="ungrouped"] .sidebar-recent-session').waitFor({
         state: "visible",
+      });
+
+      // A header-menu-created group starts empty and still gets a section.
+      await firstGroup.locator(".sidebar-recent-sessions__head").hover();
+      await firstGroup.getByRole("button", { name: "Group options for First group" }).click();
+      page.once("dialog", (dialog) => void dialog.accept("Second group"));
+      await page.getByRole("menuitem", { name: "New group…" }).click();
+      await page.locator('[data-session-section="category:Second group"]').waitFor({
+        state: "visible",
+      });
+      const putRequest = await gateway.waitForRequest("sessions.groups.put");
+      expect(requireRecord(putRequest.params)).toMatchObject({
+        names: ["First group", "Second group"],
       });
     } finally {
       await context.close();
@@ -922,6 +966,119 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       });
       await expect.poll(() => pinnedGroup.locator(".sidebar-recent-session").count()).toBe(0);
       await expect.poll(() => chatsGroup.locator(".sidebar-recent-session").count()).toBe(1);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps raw ids out of work rows and survives rows growing subtitles in place", async () => {
+    const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
+    const nodeHash = "11c38726acc6fac280357576c87acc6fac280357";
+    const rows = (withWork: boolean) => {
+      const ts = baseTime + (withWork ? 5_000 : 0);
+      return [
+        sessionRow("agent:main:main", "Main", ts),
+        sessionRow(
+          "agent:main:dashboard:0f9d5c1e-6d0f-4c9a-9d84-1c2f3a4b5c6d",
+          "",
+          ts - 60_000,
+          withWork ? { execNode: nodeHash } : {},
+        ),
+        sessionRow(
+          "agent:main:dashboard:0f9d5c1e-6d0f-4c9a-9d84-1c2f3a4b5c6e",
+          "",
+          ts - 120_000,
+          withWork
+            ? {
+                execNode: nodeHash,
+                worktree: { branch: "openclaw/wt-1", repoRoot: "/Users/dev/Projects/clawdbot" },
+              }
+            : {},
+        ),
+        sessionRow("agent:main:node-mcp-debug-4de003fbff138fcb9239c9378b2e", "", ts - 180_000),
+      ];
+    };
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse(rows(false)),
+      },
+      // Defer every list request; the test resolves them per phase so rows
+      // first paint single-line and only then grow a subtitle line in place.
+      deferredMethods: Array.from({ length: 12 }, () => "sessions.list"),
+      sessionKey: "agent:main:main",
+    });
+    const resolveNextList = async (withWork: boolean) => {
+      try {
+        await gateway.resolveDeferred("sessions.list", sessionsListResponse(rows(withWork)));
+      } catch {
+        // No list request queued yet; the poll below retries.
+      }
+    };
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await expect
+        .poll(
+          async () => {
+            await resolveNextList(false);
+            return page.locator(".sidebar-recent-session").count();
+          },
+          { timeout: 15_000 },
+        )
+        .toBeGreaterThan(0);
+      // Rows grow a second subtitle line only after first layout: the WebKit
+      // overlap regression needs in-place growth, not a static two-line list.
+      await gateway.emitGatewayEvent("sessions.changed", {});
+      await expect
+        .poll(
+          async () => {
+            await resolveNextList(true);
+            return page.locator(".sidebar-recent-session__subtitle").count();
+          },
+          { timeout: 15_000 },
+        )
+        .toBeGreaterThan(0);
+
+      // Names and subtitles never show raw node ids or raw agent keys.
+      const names = await trimmedTextContents(page.locator(".sidebar-recent-session__name"));
+      expect(names).toContain("New session");
+      expect(names).toContain("clawdbot ⎇ wt-1 · …0357");
+      expect(names).toContain("node-mcp-debug-…8b2e");
+      const subtitles = await trimmedTextContents(
+        page.locator(".sidebar-recent-session__subtitle"),
+      );
+      expect(subtitles).toContain("…0357");
+      for (const text of [...names, ...subtitles]) {
+        expect(text).not.toContain(nodeHash);
+        expect(text).not.toContain("agent:main:");
+      }
+
+      // Sections must lay out below the rows above them, not paint over them.
+      const overlaps = await page.evaluate(() => {
+        const rects = [
+          ...document.querySelectorAll(".sidebar-recent-session, .sidebar-recent-sessions__head"),
+        ]
+          .map((element) => {
+            const rect = element.getBoundingClientRect();
+            return { top: rect.top, bottom: rect.bottom };
+          })
+          .filter((rect) => rect.bottom > rect.top)
+          .toSorted((a, b) => a.top - b.top);
+        let bad = 0;
+        for (let index = 1; index < rects.length; index += 1) {
+          if (rects[index].top < rects[index - 1].bottom - 2) {
+            bad += 1;
+          }
+        }
+        return bad;
+      });
+      expect(overlaps).toBe(0);
     } finally {
       await context.close();
     }

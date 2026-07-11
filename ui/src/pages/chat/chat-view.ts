@@ -18,6 +18,11 @@ import type { ChatSideResult } from "../../lib/chat/side-result.ts";
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import type { ProviderUsageDisplayProps } from "../../lib/provider-quota-summary.ts";
 import {
+  renderBackgroundTasksRail,
+  renderBackgroundTasksToggle,
+  type BackgroundTasksProps,
+} from "./components/chat-background-tasks.ts";
+import {
   handleChatAttachmentDrop,
   renderChatComposer,
   resetChatComposerState,
@@ -90,6 +95,9 @@ export type ChatProps = {
   ) => Promise<DetailFullMessageResult | null | undefined>;
   sidebarOpen?: boolean;
   sidebarContent?: SidebarContent | null;
+  /** Pane too narrow for side-by-side chat + detail panel: stack them
+   * vertically instead (the divider flips to a horizontal handle). */
+  sidebarStacked?: boolean;
   splitRatio?: number;
   canvasPluginSurfaceUrl?: string | null;
   embedSandboxMode?: EmbedSandboxMode;
@@ -150,6 +158,7 @@ export type ChatProps = {
   onClearReply?: () => void;
   onSetReply?: (target: { messageId: string; text: string; senderLabel?: string | null }) => void;
   sessionWorkspace?: SessionWorkspaceProps;
+  backgroundTasks?: BackgroundTasksProps;
   /** True when a split pane header hosts the workspace toggle; suppresses the
    * single-pane floating opener so only one affordance renders. */
   paneHeaderActive?: boolean;
@@ -175,6 +184,11 @@ export function renderChat(props: ChatProps) {
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const splitRatio = props.splitRatio ?? 0.6;
   const sidebarOpen = Boolean(props.sidebarOpen && props.onCloseSidebar);
+  const sidebarStacked = props.sidebarStacked === true;
+  const workspaceDockBottom = Boolean(
+    props.sessionWorkspace &&
+    (props.sessionWorkspace.dock === "bottom" || props.sessionWorkspace.narrowLayout),
+  );
   const canCompose = props.canSend;
   let chatSection: HTMLElement | null = null;
 
@@ -357,12 +371,13 @@ export function renderChat(props: ChatProps) {
       <div
         class="chat-workbench ${props.sessionWorkspace?.collapsed
           ? "chat-workbench--workspace-collapsed"
-          : ""} ${props.sessionWorkspace?.dock === "bottom" ? "chat-workbench--dock-bottom" : ""}"
+          : ""} ${workspaceDockBottom ? "chat-workbench--dock-bottom" : ""} ${props.backgroundTasks
+          ?.collapsed === false
+          ? "chat-workbench--tasks-open"
+          : ""}"
       >
         ${renderSessionWorkspaceRail(props.sessionWorkspace)}
-        ${props.sessionWorkspace?.collapsed && !props.paneHeaderActive
-          ? renderSessionWorkspaceToggle(props.sessionWorkspace, "floating")
-          : nothing}
+        ${renderBackgroundTasksRail(props.backgroundTasks)}
         ${props.sessionWorkspace?.dockDragging
           ? html`
               <div class="chat-workbench__dock-zones" aria-hidden="true">
@@ -386,7 +401,17 @@ export function renderChat(props: ChatProps) {
             `
           : nothing}
         <div class="chat-workbench__main">
-          <div class="chat-split-container ${sidebarOpen ? "chat-split-container--open" : ""}">
+          ${props.sessionWorkspace?.collapsed && !props.paneHeaderActive
+            ? renderSessionWorkspaceToggle(props.sessionWorkspace, "floating")
+            : nothing}
+          ${props.backgroundTasks?.collapsed && !props.paneHeaderActive
+            ? renderBackgroundTasksToggle(props.backgroundTasks, "floating")
+            : nothing}
+          <div
+            class="chat-split-container ${sidebarOpen
+              ? "chat-split-container--open"
+              : ""} ${sidebarOpen && sidebarStacked ? "chat-split-container--stacked" : ""}"
+          >
             <div
               class="chat-main"
               style="flex: ${sidebarOpen ? `0 1 ${splitRatio * 100}%` : "1 1 100%"}"
@@ -415,6 +440,7 @@ export function renderChat(props: ChatProps) {
                   <resizable-divider
                     .splitRatio=${splitRatio}
                     .label=${t("nav.resize")}
+                    .orientation=${sidebarStacked ? "horizontal" : "vertical"}
                     @resize=${(event: CustomEvent) =>
                       props.onSplitRatioChange?.(event.detail.splitRatio)}
                   ></resizable-divider>

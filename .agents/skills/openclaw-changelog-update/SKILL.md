@@ -49,6 +49,13 @@ every human `Thanks @...` attribution.
      --write-ledger
    ```
 
+   The verifier automatically reuses public GitHub GraphQL responses from an
+   exact base/target SHA snapshot under the worktree's git metadata. Iterative
+   rewrites at the same target avoid repeated network discovery. Use
+   `--refresh-github-snapshot` after suspect API data, `--github-snapshot
+   <path>` for an explicit artifact, or `--no-github-snapshot` for a live-only
+   audit. GitHub release bodies are always read live.
+
    - the manifest is the required input to the rewrite, not an after-the-fact
      audit; it contains every referenced PR, eligible contributor credit,
      inline issue context, every direct commit, and an editorial-eligibility

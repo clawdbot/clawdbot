@@ -1,9 +1,28 @@
 // Canvas tests cover index plugin behavior.
-import type { AnyAgentTool, OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  AnyAgentTool,
+  OpenClawPluginApi,
+  OpenClawPluginNodeInvokePolicyContext,
+} from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import canvasPlugin from "./index.js";
 import { SHOW_WIDGET_REQUIRED_CLIENT_CAPS } from "./src/tool-schema.js";
+
+const VALID_A2UI_V08_JSONL = [
+  JSON.stringify({
+    surfaceUpdate: {
+      surfaceId: "main",
+      components: [
+        {
+          id: "root",
+          component: { Text: { text: { literalString: "Canvas proof" }, usageHint: "body" } },
+        },
+      ],
+    },
+  }),
+  JSON.stringify({ beginRendering: { surfaceId: "main", root: "root" } }),
+].join("\n");
 
 const mocks = vi.hoisted(() => {
   const httpHandler = {
@@ -71,6 +90,8 @@ function registerCanvas() {
     registrar: Parameters<OpenClawPluginApi["registerNodeCliFeature"]>[0];
     opts: Parameters<OpenClawPluginApi["registerNodeCliFeature"]>[1];
   }> = [];
+  const nodeInvokePolicies: Array<Parameters<OpenClawPluginApi["registerNodeInvokePolicy"]>[0]> =
+    [];
   canvasPlugin.register?.(
     createTestPluginApi({
       id: "canvas",
@@ -81,10 +102,23 @@ function registerCanvas() {
       registerHostedMediaResolver: (resolver) => resolvers.push(resolver),
       registerTool: (tool, opts) => tools.push({ tool, opts }),
       registerNodeCliFeature: (registrar, opts) => cliFeatures.push({ registrar, opts }),
-      registerNodeInvokePolicy: vi.fn(),
+      registerNodeInvokePolicy: (policy) => nodeInvokePolicies.push(policy),
     }),
   );
-  return { routes, services, resolvers, tools, cliFeatures };
+  return { routes, services, resolvers, tools, cliFeatures, nodeInvokePolicies };
+}
+
+function createNodeInvokeContext(
+  params: Partial<OpenClawPluginNodeInvokePolicyContext>,
+): OpenClawPluginNodeInvokePolicyContext {
+  return {
+    nodeId: "node-1",
+    command: "canvas.a2ui.pushJSONL",
+    params: {},
+    config: {},
+    invokeNode: vi.fn(async () => ({ ok: true as const })),
+    ...params,
+  };
 }
 
 describe("Canvas plugin entry", () => {
@@ -174,5 +208,73 @@ describe("Canvas plugin entry", () => {
       title: "Status",
       widget_code: "<p>ready</p>",
     });
+  });
+
+  it.each([
+    ["malformed pushJSONL", "canvas.a2ui.pushJSONL", { jsonl: "{not-json}" }],
+    [
+      "versioned A2UI v0.9 pushJSONL",
+      "canvas.a2ui.pushJSONL",
+      {
+        jsonl: JSON.stringify({ version: "v0.9", deleteSurface: { surfaceId: "main" } }),
+      },
+    ],
+    ["malformed legacy push JSONL fallback", "canvas.a2ui.push", { jsonl: "{not-json}" }],
+  ])("rejects %s at the final Canvas node policy", async (_label, command, params) => {
+    const { nodeInvokePolicies } = registerCanvas();
+    const policy = nodeInvokePolicies[0];
+    if (!policy) {
+      throw new Error("Canvas node invoke policy was not registered");
+    }
+    const invokeNode = vi.fn(async () => ({ ok: true as const }));
+
+    const result = await policy.handle(createNodeInvokeContext({ command, params, invokeNode }));
+
+    expect(result).toMatchObject({ ok: false, code: "INVALID_A2UI_JSONL" });
+    expect(invokeNode).not.toHaveBeenCalled();
+  });
+
+  it("dispatches A2UI v0.8 JSONL unchanged through the final Canvas node policy", async () => {
+    const { nodeInvokePolicies } = registerCanvas();
+    const policy = nodeInvokePolicies[0];
+    if (!policy) {
+      throw new Error("Canvas node invoke policy was not registered");
+    }
+    const invokeNode = vi.fn(async () => ({ ok: true as const }));
+
+    const result = await policy.handle(
+      createNodeInvokeContext({
+        params: { jsonl: VALID_A2UI_V08_JSONL },
+        invokeNode,
+      }),
+    );
+
+    expect(result).toEqual({ ok: true });
+    expect(invokeNode).toHaveBeenCalledTimes(1);
+    expect(invokeNode).toHaveBeenCalledWith();
+  });
+
+  it("leaves canonical A2UI message arrays to the native node", async () => {
+    const { nodeInvokePolicies } = registerCanvas();
+    const policy = nodeInvokePolicies[0];
+    if (!policy) {
+      throw new Error("Canvas node invoke policy was not registered");
+    }
+    const invokeNode = vi.fn(async () => ({ ok: true as const }));
+
+    const result = await policy.handle(
+      createNodeInvokeContext({
+        command: "canvas.a2ui.push",
+        params: {
+          messages: [{ deleteSurface: { surfaceId: "main" } }],
+          jsonl: "{not-used-by-native-node}",
+        },
+        invokeNode,
+      }),
+    );
+
+    expect(result).toEqual({ ok: true });
+    expect(invokeNode).toHaveBeenCalledTimes(1);
+    expect(invokeNode).toHaveBeenCalledWith();
   });
 });

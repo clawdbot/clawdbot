@@ -17,6 +17,7 @@ import {
   ensureExecApprovalsSnapshot,
   mergeExecApprovalsSocketDefaults,
   normalizeExecApprovals,
+  readExecApprovalsSnapshot,
   updateExecApprovals,
   type ExecApprovalsFile,
   type ExecApprovalsSnapshot,
@@ -39,7 +40,12 @@ function requireApprovalsBaseHash(
 ): boolean {
   // Approval allowlists are admin-editable state. Require the caller's last
   // observed hash before writing so stale UI tabs cannot overwrite changes.
+  const baseHash = resolveBaseHashParam(params);
   if (!snapshot.exists) {
+    if (baseHash && baseHash !== snapshot.hash) {
+      respondApprovalsChanged(respond);
+      return false;
+    }
     return true;
   }
   if (!snapshot.hash) {
@@ -53,7 +59,6 @@ function requireApprovalsBaseHash(
     );
     return false;
   }
-  const baseHash = resolveBaseHashParam(params);
   if (!baseHash) {
     respond(
       false,
@@ -195,7 +200,9 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {
-      const snapshot = await ensureExecApprovalsSnapshot();
+      // Do not ensure/create state before checking freshness: a rejected stale
+      // save must not recreate a file that an operator deleted.
+      const snapshot = readExecApprovalsSnapshot();
       if (!requireApprovalsBaseHash(params, snapshot, respond)) {
         return;
       }

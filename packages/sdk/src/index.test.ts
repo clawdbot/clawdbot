@@ -575,6 +575,7 @@ describe("OpenClaw SDK", () => {
         method: "tools.invoke",
         params: {
           name: "demo",
+          conversationReadOrigin: "direct-operator",
           args: { mode: "test" },
           sessionKey: "agent:main:main",
           confirm: false,

@@ -1,4 +1,5 @@
 import { sha256Hex } from "./crypto-digest.js";
+import { normalizeExecApprovalPolicySnapshot } from "./exec-approval-policy-snapshot.js";
 // Binds system-run approval requests to stable command identities.
 import type {
   SystemRunApprovalBinding,
@@ -51,6 +52,10 @@ export function normalizeSystemRunApprovalPlan(value: unknown): SystemRunApprova
   if (candidate.mutableFileOperand !== undefined && mutableFileOperand === null) {
     return null;
   }
+  const policySnapshot = normalizeExecApprovalPolicySnapshot(candidate.policySnapshot);
+  if (candidate.policySnapshot !== undefined && policySnapshot === null) {
+    return null;
+  }
   const commandText =
     normalizeNonEmptyString(candidate.commandText) ?? normalizeNonEmptyString(candidate.rawCommand);
   if (!commandText) {
@@ -63,6 +68,7 @@ export function normalizeSystemRunApprovalPlan(value: unknown): SystemRunApprova
     commandPreview: normalizeNonEmptyString(candidate.commandPreview),
     agentId: normalizeNonEmptyString(candidate.agentId),
     sessionKey: normalizeNonEmptyString(candidate.sessionKey),
+    ...(policySnapshot ? { policySnapshot } : {}),
     mutableFileOperand: mutableFileOperand ?? undefined,
   };
 }

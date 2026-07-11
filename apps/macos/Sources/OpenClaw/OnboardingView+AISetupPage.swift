@@ -5,7 +5,7 @@ extension OnboardingView {
     /// best option live, fall through automatically, offer an API-key form
     /// when nothing works. Crestodian becomes available only after inference
     /// has completed a live round-trip.
-    func aiSetupPage() -> some View {
+    func aiSetupPage(contentHeight: CGFloat) -> some View {
         VStack(spacing: 12) {
             Text("Connect your AI")
                 .font(.largeTitle.weight(.semibold))
@@ -28,7 +28,7 @@ extension OnboardingView {
         }
         .padding(.horizontal, 28)
         .padding(.top, 48)
-        .frame(width: self.pageWidth, height: self.contentHeight, alignment: .top)
+        .frame(width: self.pageWidth, height: contentHeight, alignment: .top)
     }
 
     private var aiSetupSubtitle: String {

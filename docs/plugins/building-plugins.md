@@ -236,6 +236,10 @@ Tools can be required or optional. Required tools are always available when the
 plugin is enabled. Optional tools need explicit user opt-in before OpenClaw
 loads the owning plugin runtime.
 
+Tool factories receive trusted runtime context, including `deliveryContext`,
+`nativeChannelId` for the active platform conversation when available, and
+`requesterSenderId`.
+
 ```typescript
 register(api) {
   api.registerTool(

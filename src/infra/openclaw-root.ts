@@ -6,6 +6,7 @@ import { openClawRootFs, openClawRootFsSync } from "./openclaw-root.fs.runtime.j
 const CORE_PACKAGE_NAMES = new Set(["openclaw"]);
 const packageNameCache = new Map<string, string | null>();
 const packageRootCache = new Map<string, string | null>();
+const packageRootsCache = new Map<string, string[]>();
 const argv1CandidateCache = new Map<string, string[]>();
 
 function parsePackageName(raw: string): string | null {
@@ -139,26 +140,41 @@ export async function resolveOpenClawPackageRoot(opts: {
   return null;
 }
 
+// Every distinct OpenClaw package root among the runtime hints, in candidate order (symlinked
+// launcher via realpath first, then cwd). Callers that need a specific file under the root must
+// pick the first root that actually contains it: an installed package root can resolve first but
+// omit files the npm allowlist drops (e.g. scripts/), so stopping at root[0] would skip a valid
+// source-checkout cwd that still has them.
+export function resolveOpenClawPackageRootsSync(opts: {
+  cwd?: string;
+  argv1?: string;
+  moduleUrl?: string;
+}): string[] {
+  const candidates = buildCandidates(opts);
+  const cacheKey = createPackageRootCacheKey(candidates);
+  const cached = packageRootsCache.get(cacheKey);
+  if (cached) {
+    return [...cached];
+  }
+  const seen = new Set<string>();
+  const roots: string[] = [];
+  for (const candidate of candidates) {
+    const found = findPackageRootSync(candidate);
+    if (found && !seen.has(found)) {
+      seen.add(found);
+      roots.push(found);
+    }
+  }
+  packageRootsCache.set(cacheKey, roots);
+  return [...roots];
+}
+
 export function resolveOpenClawPackageRootSync(opts: {
   cwd?: string;
   argv1?: string;
   moduleUrl?: string;
 }): string | null {
-  const candidates = buildCandidates(opts);
-  const cacheKey = createPackageRootCacheKey(candidates);
-  if (packageRootCache.has(cacheKey)) {
-    return packageRootCache.get(cacheKey) ?? null;
-  }
-  for (const candidate of candidates) {
-    const found = findPackageRootSync(candidate);
-    if (found) {
-      packageRootCache.set(cacheKey, found);
-      return found;
-    }
-  }
-
-  packageRootCache.set(cacheKey, null);
-  return null;
+  return resolveOpenClawPackageRootsSync(opts)[0] ?? null;
 }
 
 function buildCandidates(opts: { cwd?: string; argv1?: string; moduleUrl?: string }): string[] {
@@ -203,6 +219,7 @@ export const testing = {
   clearOpenClawPackageRootCaches(): void {
     packageNameCache.clear();
     packageRootCache.clear();
+    packageRootsCache.clear();
     argv1CandidateCache.clear();
   },
 };

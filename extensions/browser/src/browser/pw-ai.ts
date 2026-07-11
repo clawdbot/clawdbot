@@ -36,6 +36,7 @@ export {
   closePageViaPlaywright,
   cookiesClearViaPlaywright,
   cookiesGetViaPlaywright,
+  cookiesSetManyViaPlaywright,
   cookiesSetViaPlaywright,
   downloadViaPlaywright,
   dragViaPlaywright,

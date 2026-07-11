@@ -5,6 +5,7 @@ import type { SessionGoal } from "../config/sessions/types.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
 import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
+import { chunkTextByBreakResolver } from "../shared/text-chunking.js";
 import { formatTokenCount } from "../utils/usage-format.js";
 
 const REPLACEMENT_CHAR_RE = /\uFFFD/g;
@@ -55,17 +56,6 @@ function stripControlChars(text: string): string {
     }
   }
   return sanitized;
-}
-
-function chunkToken(token: string, maxChars: number): string[] {
-  if (token.length <= maxChars) {
-    return [token];
-  }
-  const chunks: string[] = [];
-  for (let i = 0; i < token.length; i += maxChars) {
-    chunks.push(token.slice(i, i + maxChars));
-  }
-  return chunks;
 }
 
 function isCopySensitiveToken(token: string): boolean {
@@ -122,7 +112,7 @@ function normalizeLongTokenForDisplay(token: string): string {
   if (!ALPHANUMERIC_RE.test(token)) {
     return token;
   }
-  return chunkToken(token, MAX_TOKEN_CHARS).join(" ");
+  return chunkTextByBreakResolver(token, MAX_TOKEN_CHARS, () => MAX_TOKEN_CHARS).join(" ");
 }
 
 type Segment = { kind: "prose" | "code"; text: string };

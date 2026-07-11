@@ -1,4 +1,5 @@
 // Control UI view renders skill workshop screen content.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { styleMap } from "lit/directives/style-map.js";
@@ -916,7 +917,7 @@ function truncateAtWord(value: string, maxChars: number): string {
   if (value.length <= maxChars) {
     return value;
   }
-  const clipped = value.slice(0, maxChars - 1);
+  const clipped = truncateUtf16Safe(value, maxChars - 1);
   const boundary = clipped.lastIndexOf(" ");
   const base = boundary > 48 ? clipped.slice(0, boundary) : clipped;
   return `${base.trimEnd()}…`;

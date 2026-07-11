@@ -274,23 +274,32 @@ describe("Codex app-server dynamic tool build", () => {
     expect(webSearchAllowed).toBe(true);
   });
 
-  it("forwards the originating client caps into coding tool assembly", async () => {
+  it("forwards client caps alongside channel authority context", async () => {
     // Regression: capability-gated tools (requiredClientCaps) vanished on the
     // Codex app-server path because this harness dropped params.clientCaps.
+    // Keep that fact composed with the operation-local message context.
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.disableTools = false;
     params.runtimePlan = createCodexRuntimePlanFixture();
     params.clientCaps = ["tool-events", "inline-widgets"];
-    let receivedClientCaps: string[] | undefined;
+    params.chatId = "native-chat-123";
+    params.chatType = "direct";
+    params.messageActionTurnCapability = "turn-capability-1";
+    let receivedOptions: unknown;
     setOpenClawCodingToolsFactoryForTests((options) => {
-      receivedClientCaps = (options as { clientCaps?: string[] }).clientCaps;
+      receivedOptions = options;
       return [createRuntimeDynamicTool("message")];
     });
 
     await buildDynamicToolsForTest(params, workspaceDir);
 
-    expect(receivedClientCaps).toEqual(["tool-events", "inline-widgets"]);
+    expect(receivedOptions).toMatchObject({
+      clientCaps: ["tool-events", "inline-widgets"],
+      chatType: "direct",
+      nativeChannelId: "native-chat-123",
+      messageActionTurnCapability: "turn-capability-1",
+    });
   });
 
   it("shares the computer context epoch with dynamic tool assembly", async () => {
@@ -980,6 +989,7 @@ describe("Codex app-server dynamic tool build", () => {
     } satisfies EmbeddedRunAttemptParams["authProfileStore"];
     params.disableTools = false;
     params.authProfileStore = authProfileStore;
+    params.messageActionTurnCapability = "turn-capability-1";
     params.runtimePlan = createCodexRuntimePlanFixture();
     const factoryOptions: unknown[] = [];
     setOpenClawCodingToolsFactoryForTests((options) => {
@@ -993,6 +1003,9 @@ describe("Codex app-server dynamic tool build", () => {
     expect((factoryOptions[0] as { authProfileStore?: unknown }).authProfileStore).toBe(
       authProfileStore,
     );
+    expect(
+      (factoryOptions[0] as { messageActionTurnCapability?: unknown }).messageActionTurnCapability,
+    ).toBe("turn-capability-1");
   });
 
   it("passes owner identity into Codex dynamic tool construction", async () => {
@@ -1018,6 +1031,8 @@ describe("Codex app-server dynamic tool build", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(sessionFile, workspaceDir);
     params.disableTools = false;
+    params.chatId = "native-chat-123";
+    params.chatType = "direct";
     params.currentChannelId = "D123";
     params.currentMessagingTarget = "user:U123";
     params.runtimePlan = createCodexRuntimePlanFixture();
@@ -1030,8 +1045,10 @@ describe("Codex app-server dynamic tool build", () => {
     await buildDynamicToolsForTest(params, workspaceDir, { sandbox: null as never });
 
     expect(factoryOptions[0]).toMatchObject({
+      chatType: "direct",
       currentChannelId: "D123",
       currentMessagingTarget: "user:U123",
+      nativeChannelId: "native-chat-123",
     });
   });
 

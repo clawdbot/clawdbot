@@ -16,7 +16,7 @@ import {
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
 import {
-  resolvePayloadMediaUrls,
+  resolveSendableOutboundReplyParts,
   sendPayloadMediaSequenceOrFallback,
 } from "openclaw/plugin-sdk/reply-payload";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
@@ -26,8 +26,11 @@ import type { TelegramInlineButtons } from "./button-types.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
 import { splitTelegramHtmlChunks } from "./format.js";
 import { resolveTelegramInteractiveTextFallback } from "./interactive-fallback.js";
-import { resolveTelegramPromptContextTimestampMs } from "./outbound-message-context.js";
 import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";
+import {
+  createTelegramPromptContextProjectionCursor,
+  resolveTelegramPromptContextSource,
+} from "./prompt-context-projection.js";
 import { loadTelegramSendModule, type TelegramSendModule } from "./send-runtime.js";
 import { normalizeTelegramOutboundTarget, parseTelegramTarget } from "./targets.js";
 
@@ -156,17 +159,24 @@ export async function sendTelegramPayloadMessages(params: {
       interactive: params.payload.interactive,
       presentation,
     }) ?? "";
-  const mediaUrls = resolvePayloadMediaUrls(params.payload);
+  const mediaUrls = resolveSendableOutboundReplyParts(params.payload).mediaUrls;
   const buttons = resolveTelegramInlineButtons({
     buttons: telegramData?.buttons,
     presentation,
     interactive: params.payload.interactive,
   });
   const replyToMessageId = params.baseOpts.replyToMessageId;
+  const promptContextSource = resolveTelegramPromptContextSource(params.payload);
+  const projectionCursor = promptContextSource
+    ? createTelegramPromptContextProjectionCursor(promptContextSource)
+    : undefined;
+  const projectionOptions = (finalPart: boolean) =>
+    projectionCursor
+      ? { promptContextProjectionPlan: { cursor: projectionCursor, finalPart } }
+      : {};
   const payloadOpts = {
     ...params.baseOpts,
     quoteText,
-    promptContextTimestampMs: resolveTelegramPromptContextTimestampMs(params.payload),
     ...(params.payload.audioAsVoice === true ? { asVoice: true } : {}),
   };
   const shouldConsumeImplicitReplyTarget =
@@ -208,9 +218,10 @@ export async function sendTelegramPayloadMessages(params: {
     sendNoMedia: async () =>
       await params.send(params.to, text, {
         ...payloadOpts,
+        ...projectionOptions(true),
         buttons,
       }),
-    send: async ({ text: textLocal, mediaUrl, isFirst }) => {
+    send: async ({ text: textLocal, mediaUrl, index, isFirst }) => {
       const mediaPayloadOpts =
         shouldConsumeImplicitReplyTarget && !implicitReplyTargetAvailable
           ? consumedImplicitReplyPayloadOpts
@@ -218,6 +229,7 @@ export async function sendTelegramPayloadMessages(params: {
       implicitReplyTargetAvailable = false;
       return await params.send(params.to, textLocal, {
         ...mediaPayloadOpts,
+        ...projectionOptions(index === mediaUrls.length - 1),
         mediaUrl,
         ...(isFirst ? { buttons } : {}),
       });

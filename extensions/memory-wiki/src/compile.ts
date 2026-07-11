@@ -44,6 +44,7 @@ import {
   WIKI_RELATED_END_MARKER,
   WIKI_RELATED_START_MARKER,
 } from "./markdown.js";
+import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
 import { readMemoryWikiSourceSyncState } from "./source-sync-state.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
@@ -1384,7 +1385,7 @@ async function writeAgentDigestArtifacts(params: {
   return updatedFiles;
 }
 
-export async function compileMemoryWikiVault(
+async function compileMemoryWikiVaultUnlocked(
   config: ResolvedMemoryWikiConfig,
 ): Promise<CompileMemoryWikiResult> {
   await initializeMemoryWikiVault(config);
@@ -1469,6 +1470,14 @@ export async function compileMemoryWikiVault(
     claimCount: pages.reduce((total, page) => total + page.claims.length, 0),
     updatedFiles,
   };
+}
+
+export async function compileMemoryWikiVault(
+  config: ResolvedMemoryWikiConfig,
+): Promise<CompileMemoryWikiResult> {
+  return await withMemoryWikiVaultMutation(config.vault.path, () =>
+    compileMemoryWikiVaultUnlocked(config),
+  );
 }
 
 async function hasMissingWikiIndexes(rootDir: string): Promise<boolean> {

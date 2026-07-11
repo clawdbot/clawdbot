@@ -78,6 +78,13 @@ const preparedPlan = vi.hoisted(() => ({
   commandPreview: "bun ./script.ts",
   agentId: "prepared-agent",
   sessionKey: "prepared-session",
+  policySnapshot: {
+    security: "full" as const,
+    ask: "off" as const,
+    askFallback: "deny" as const,
+    autoAllowSkills: false,
+    allowlistRules: [{ pattern: "/usr/local/bin/bun" }],
+  },
   mutableFileOperand: {
     argvIndex: 1,
     path: "/tmp/work/script.ts",
@@ -2632,7 +2639,7 @@ describe("executeNodeHostCommand", () => {
     ).toBe(false);
   });
 
-  it("builds a local systemRunPlan when approval is required and the node omits prepare", async () => {
+  it("rejects approval when the node omits prepare", async () => {
     listNodesMock.mockResolvedValueOnce([
       {
         nodeId: "node-1",
@@ -2647,38 +2654,21 @@ describe("executeNodeHostCommand", () => {
       askFallback: "deny",
     });
 
-    const result = await executeNodeHostCommand({
-      command: "bun ./script.ts",
-      workdir: "/tmp/work",
-      env: {},
-      security: "full",
-      ask: "off",
-      defaultTimeoutSec: 30,
-      approvalRunningNoticeMs: 0,
-      warnings: [],
-      agentId: "requested-agent",
-      sessionKey: "requested-session",
-    });
-
-    expect(result.details?.status).toBe("approval-pending");
-    expect(parsePreparedSystemRunPayloadMock).not.toHaveBeenCalled();
-    const expectedPlan = {
-      argv: ["/bin/sh", "-lc", "bun ./script.ts"],
-      cwd: "/tmp/work",
-      commandText: '/bin/sh -lc "bun ./script.ts"',
-      commandPreview: "bun ./script.ts",
-      agentId: "requested-agent",
-      sessionKey: "requested-session",
-    };
-    expect(requireRegisteredApprovalRequest().systemRunPlan).toEqual(expectedPlan);
-
-    await vi.waitFor(() => {
-      const call = requireGatewayCommand("system.run");
-      expect(call.callOptions).toEqual({ scopes: ["operator.write", "operator.approvals"] });
-      const runParams = requireRunParams(call);
-      expect(runParams.rawCommand).toBe(expectedPlan.commandPreview);
-      expect(runParams.systemRunPlan).toEqual(expectedPlan);
-    });
+    await expect(
+      executeNodeHostCommand({
+        command: "bun ./script.ts",
+        workdir: "/tmp/work",
+        env: {},
+        security: "full",
+        ask: "off",
+        defaultTimeoutSec: 30,
+        approvalRunningNoticeMs: 0,
+        warnings: [],
+        agentId: "requested-agent",
+        sessionKey: "requested-session",
+      }),
+    ).rejects.toThrow("node approval requires system.run.prepare support");
+    expect(registerExecApprovalRequestForHostOrThrowMock).not.toHaveBeenCalled();
   });
 
   it("requires approval when node allowlist matching would depend on gateway PATH", async () => {

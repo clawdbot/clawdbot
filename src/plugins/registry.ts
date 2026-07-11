@@ -188,6 +188,7 @@ import type {
   OpenClawPluginService,
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
+  OpenClawPluginToolOptions,
   PluginHookHandlerMap,
   PluginHookName,
   PluginHookRegistration as TypedPluginHookRegistration,
@@ -602,7 +603,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const registerTool = (
     record: PluginRecord,
     tool: AnyAgentTool | OpenClawPluginToolFactory,
-    opts?: { name?: string; names?: string[]; optional?: boolean },
+    opts?: OpenClawPluginToolOptions,
   ) => {
     if (pluginsWithChannelRegistrationConflict.has(record.id)) {
       return;
@@ -650,6 +651,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       names: normalized,
       declaredNames,
       optional,
+      origin: record.origin,
       source: record.source,
       rootDir: record.rootDir,
     });
@@ -974,12 +976,14 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       if (existingRuntime.pluginId === record.id) {
         existingRuntime.plugin = plugin;
         existingRuntime.pluginName = record.name;
+        existingRuntime.origin = record.origin;
         existingRuntime.source = record.source;
         existingRuntime.rootDir = record.rootDir;
         const existingSetup = registry.channelSetups.find((entry) => entry.plugin.id === id);
         if (existingSetup) {
           existingSetup.plugin = plugin;
           existingSetup.pluginName = record.name;
+          existingSetup.origin = record.origin;
           existingSetup.source = record.source;
           existingSetup.enabled = record.enabled;
           existingSetup.rootDir = record.rootDir;
@@ -1000,6 +1004,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       if (existingSetup.pluginId === record.id) {
         existingSetup.plugin = plugin;
         existingSetup.pluginName = record.name;
+        existingSetup.origin = record.origin;
         existingSetup.source = record.source;
         existingSetup.enabled = record.enabled;
         existingSetup.rootDir = record.rootDir;
@@ -1021,6 +1026,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginId: record.id,
       pluginName: record.name,
       plugin,
+      origin: record.origin,
       source: record.source,
       enabled: record.enabled,
       rootDir: record.rootDir,
@@ -1032,6 +1038,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginId: record.id,
       pluginName: record.name,
       plugin,
+      origin: record.origin,
       source: record.source,
       rootDir: record.rootDir,
     });

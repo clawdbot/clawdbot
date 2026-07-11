@@ -92,6 +92,14 @@ The tmux pane runs the raw watcher:
 node scripts/watch-node.mjs gateway --force
 ```
 
+Stop an installed Gateway service before watching the same port:
+
+```bash
+pnpm openclaw gateway stop
+```
+
+The watcher's `--force` clears the current listener, but it does not disable a supervised service. A launchd, systemd, or Scheduled Task service can otherwise respawn and replace the watched Gateway.
+
 Foreground mode without tmux:
 
 ```bash

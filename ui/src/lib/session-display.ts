@@ -25,6 +25,15 @@ function shortenPeerId(identifier: string): string {
   return trimmed.length <= 10 ? trimmed : `…${trimmed.slice(-6)}`;
 }
 
+// Long hex/uuid runs inside keys and node ids are machine ids, not names;
+// keep a short recognizable tail so rows never fill with opaque hashes.
+const OPAQUE_ID_RUN_RE =
+  /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{10,}/gi;
+
+function shortenOpaqueIdRuns(text: string): string {
+  return text.replace(OPAQUE_ID_RUN_RE, (match) => `…${match.slice(-4)}`);
+}
+
 const WORKTREE_BRANCH_PREFIX = "openclaw/";
 
 const CHANNEL_SESSION_KEY_RE = /^agent:[^:]+:([^:]+)(?::[^:]+)?:(?:direct|group|channel|thread):/;
@@ -58,14 +67,17 @@ type SessionWorktreeDisplayRow = {
 export function resolveSessionWorkSubtitle(row: SessionWorktreeDisplayRow): string | undefined {
   const repoRoot = normalizeOptionalString(row.worktree?.repoRoot);
   const branch = normalizeOptionalString(row.worktree?.branch);
-  const node = normalizeOptionalString(row.execNode);
+  // execNode is often a raw node id (long hex); never render it in full.
+  const rawNode = normalizeOptionalString(row.execNode);
+  const node = rawNode ? shortenOpaqueIdRuns(rawNode) : undefined;
   const repoName = repoRoot ? (repoRoot.split(/[\\/]/).findLast(Boolean) ?? repoRoot) : undefined;
   const shortBranch = branch?.startsWith(WORKTREE_BRANCH_PREFIX)
     ? branch.slice(WORKTREE_BRANCH_PREFIX.length)
     : branch;
   const checkout = repoName ? (shortBranch ? `${repoName} ⎇ ${shortBranch}` : repoName) : undefined;
   if (checkout && node) {
-    return `${node} · ${checkout}`;
+    // Checkout first: it names the work; the node is routing detail.
+    return `${checkout} · ${node}`;
   }
   return checkout ?? node;
 }
@@ -140,6 +152,14 @@ function parseSessionKey(key: string): SessionKeyInfo {
   // must not flash in the sidebar while that title is pending.
   if (/^agent:[^:]+:dashboard:/.test(key)) {
     return { prefix: "", fallbackName: "New session" };
+  }
+
+  // Remaining agent keys are named subsessions (CLI --session-id and friends):
+  // drop the agent:<id>: routing boilerplate and shorten opaque id runs so the
+  // slug reads as a name instead of a raw key.
+  const agentKeyMatch = key.match(/^agent:[^:]+:(?:explicit:)?(.+)$/);
+  if (agentKeyMatch) {
+    return { prefix: "", fallbackName: shortenOpaqueIdRuns(agentKeyMatch[1]) };
   }
 
   // Unknown: return key as-is.

@@ -23,8 +23,6 @@ export class ResizableDivider extends OpenClawLitElement {
     :host {
       width: 4px;
       cursor: col-resize;
-      background: var(--border, #333);
-      transition: background 150ms ease-out;
       flex-shrink: 0;
       position: relative;
       touch-action: none;
@@ -38,16 +36,31 @@ export class ResizableDivider extends OpenClawLitElement {
       right: -4px;
       bottom: 0;
     }
-    :host(:hover) {
-      background: var(--accent, #007bff);
+    /* The visible divider is a centered hairline, not the whole gutter:
+       filling the host paints a fat bar that stacks with neighboring pane
+       borders into a multi-line smear while dragging. */
+    :host::after {
+      content: "";
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 50%;
+      width: 1px;
+      transform: translateX(-50%);
+      background: var(--border, #333);
+      transition:
+        background 150ms ease-out,
+        width 150ms ease-out;
     }
-    :host(.dragging) {
+    :host(:hover)::after,
+    :host(.dragging)::after,
+    :host(:focus-visible)::after {
+      width: 2px;
       background: var(--accent, #007bff);
     }
     :host(:focus-visible) {
       outline: 2px solid var(--accent, #007bff);
       outline-offset: 2px;
-      background: var(--accent, #007bff);
     }
     :host([orientation="horizontal"]) {
       width: auto;
@@ -59,6 +72,24 @@ export class ResizableDivider extends OpenClawLitElement {
       left: 0;
       right: 0;
       bottom: -4px;
+    }
+    :host([orientation="horizontal"])::after {
+      top: 50%;
+      bottom: auto;
+      left: 0;
+      right: 0;
+      width: auto;
+      height: 1px;
+      transform: translateY(-50%);
+      transition:
+        background 150ms ease-out,
+        height 150ms ease-out;
+    }
+    :host([orientation="horizontal"]:hover)::after,
+    :host([orientation="horizontal"].dragging)::after,
+    :host([orientation="horizontal"]:focus-visible)::after {
+      width: auto;
+      height: 2px;
     }
   `;
 

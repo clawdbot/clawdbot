@@ -71,6 +71,7 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
       sessionKey: "agent:main:slack:direct:U123",
       tempPaths,
       attemptOverrides: {
+        chatId: "oc_native_chat",
         currentChannelId: "D123",
         currentMessagingTarget: "user:U123",
         disableTools: false,
@@ -78,11 +79,16 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
     });
 
     const toolsCall = hoisted.createOpenClawCodingToolsMock.mock.calls[0]?.[0] as
-      | { currentChannelId?: string; currentMessagingTarget?: string }
+      | {
+          currentChannelId?: string;
+          currentMessagingTarget?: string;
+          nativeChannelId?: string;
+        }
       | undefined;
     expect(toolsCall).toMatchObject({
       currentChannelId: "D123",
       currentMessagingTarget: "user:U123",
+      nativeChannelId: "oc_native_chat",
     });
   });
 

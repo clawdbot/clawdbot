@@ -445,6 +445,11 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
 });
 
 describe("feishuOutbound.sendPayload native cards", () => {
+  const nativeCardText = JSON.stringify({
+    schema: "2.0",
+    body: { elements: [{ tag: "markdown", content: "hello" }] },
+  });
+
   beforeEach(() => {
     resetOutboundMocks();
   });
@@ -1029,6 +1034,55 @@ describe("feishuOutbound.sendPayload native cards", () => {
     expect(sendCardCall()?.to).toBe("chat_1");
     expect(sendCardCall()?.accountId).toBe("main");
     expectFeishuResult(result, "native_card_msg");
+  });
+
+  it("threads native-card media and cards when replyToId is whitespace-only", async () => {
+    await feishuOutbound.sendPayload?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: nativeCardText,
+      replyToId: "   ",
+      threadId: "om_topic_root",
+      accountId: "main",
+      payload: { text: nativeCardText, mediaUrl: "https://example.com/image.png" },
+    });
+
+    expect(sendMediaCall()?.replyToMessageId).toBe("om_topic_root");
+    expect(sendMediaCall()?.replyInThread).toBe(true);
+    expect(sendCardCall()?.replyToMessageId).toBe("om_topic_root");
+    expect(sendCardCall()?.replyInThread).toBe(true);
+  });
+
+  it("prefers replyToId over threadId for native-card media and cards", async () => {
+    await feishuOutbound.sendPayload?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: nativeCardText,
+      replyToId: " om_inline ",
+      threadId: "om_topic_root",
+      accountId: "main",
+      payload: { text: nativeCardText, mediaUrl: "https://example.com/image.png" },
+    });
+
+    expect(sendMediaCall()?.replyToMessageId).toBe("om_inline");
+    expect(sendMediaCall()?.replyInThread).toBe(false);
+    expect(sendCardCall()?.replyToMessageId).toBe("om_inline");
+    expect(sendCardCall()?.replyInThread).toBe(false);
+  });
+
+  it("treats whitespace-only threadId as no native-card reply target", async () => {
+    await feishuOutbound.sendPayload?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: nativeCardText,
+      replyToId: " ",
+      threadId: "   ",
+      accountId: "main",
+      payload: { text: nativeCardText },
+    });
+
+    expect(sendCardCall()?.replyToMessageId).toBeUndefined();
+    expect(sendCardCall()?.replyInThread).toBe(false);
   });
 
   it("keeps text/media fallback behavior for non-card payloads, including local image text", async () => {

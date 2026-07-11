@@ -22,6 +22,12 @@ import type {
   TelegramInteractiveHandlerContext,
   TelegramInteractiveHandlerRegistration,
 } from "./interactive-dispatch.js";
+import {
+  resolveTelegramMessageCachePersistentScopeKey,
+  resolveTelegramMessageCacheScope,
+  TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES,
+  TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE,
+} from "./message-cache.js";
 import { buildTelegramOpaqueCallbackData } from "./native-command-callback-data.js";
 import { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";
 import type { TelegramRuntime } from "./runtime.types.js";
@@ -180,15 +186,20 @@ function mockMsgContextArg(
   return mockArg(source, callIndex, argIndex, label) as MsgContext;
 }
 
-async function writeDirectTelegramTranscriptContext(params: {
+type DirectTelegramTranscriptTestMessage = {
+  id: string;
+  role: "assistant" | "user";
+  text: string;
+  timestamp: number;
+};
+
+async function writeDirectTelegramTranscriptMessages(params: {
   cfg: OpenClawConfig;
   storePath: string;
   chatId: number;
-  role?: "assistant" | "user";
   senderId: number;
   sessionId: string;
-  text: string;
-  timestamp: number;
+  messages: DirectTelegramTranscriptTestMessage[];
 }) {
   const route = resolveTelegramConversationRoute({
     cfg: params.cfg,
@@ -219,19 +230,105 @@ async function writeDirectTelegramTranscriptContext(params: {
     path.join(path.dirname(params.storePath), `${params.sessionId}.jsonl`),
     [
       JSON.stringify({ type: "session", id: params.sessionId }),
-      JSON.stringify({
-        id: params.role === "assistant" ? "transcript-assistant-1" : "transcript-user-1",
-        type: "message",
-        message: {
-          role: params.role ?? "user",
-          content: params.text,
-          timestamp: params.timestamp,
-        },
-      }),
+      ...params.messages.map((entry) =>
+        JSON.stringify({
+          id: entry.id,
+          type: "message",
+          message: {
+            role: entry.role,
+            content: entry.text,
+            timestamp: entry.timestamp,
+          },
+        }),
+      ),
       "",
     ].join("\n"),
     "utf-8",
   );
+}
+
+async function writeDirectTelegramTranscriptContext(params: {
+  cfg: OpenClawConfig;
+  storePath: string;
+  chatId: number;
+  role?: "assistant" | "user";
+  senderId: number;
+  sessionId: string;
+  text: string;
+  timestamp: number;
+}) {
+  const role = params.role ?? "user";
+  await writeDirectTelegramTranscriptMessages({
+    ...params,
+    messages: [
+      {
+        id: role === "assistant" ? "transcript-assistant-1" : "transcript-user-1",
+        role,
+        text: params.text,
+        timestamp: params.timestamp,
+      },
+    ],
+  });
+}
+
+function latestConversationContextMessages(): Record<string, unknown>[] {
+  const payload = mockMsgContextArg(
+    replySpy as unknown as MockCallSource,
+    replySpy.mock.calls.length - 1,
+    0,
+    "replySpy call",
+  );
+  const [conversationContext] = requireArray(
+    payload.UntrustedStructuredContext,
+    "structured context",
+  );
+  const contextPayload = requireRecord(
+    requireRecord(conversationContext, "conversation context").payload,
+    "conversation context payload",
+  );
+  return requireArray(contextPayload.messages, "conversation context messages").map(
+    (message, index) => requireRecord(message, `conversation context message ${index + 1}`),
+  );
+}
+
+async function seedTelegramPromptContextMessages(params: {
+  storePath: string;
+  chatId: number;
+  messages: Array<{
+    messageId: number;
+    text: string;
+    date: number;
+    legacyPromptContextTimestampMs?: number;
+    projection?: unknown;
+    unversioned?: boolean;
+  }>;
+}) {
+  setTelegramPluginStateRuntimeForTests();
+  const store = createPluginStateKeyedStoreForTests("telegram", {
+    namespace: TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE,
+    maxEntries: TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES,
+  });
+  const scopeKey = resolveTelegramMessageCachePersistentScopeKey(
+    resolveTelegramMessageCacheScope(params.storePath),
+  );
+  for (const message of params.messages) {
+    await store.register(`${scopeKey}:default:${params.chatId}:${message.messageId}`, {
+      ...(message.unversioned ? {} : { version: 1 }),
+      sourceMessage: {
+        chat: { id: params.chatId, type: "private" },
+        date: message.date,
+        from: { id: message.unversioned ? 0 : 999, is_bot: true, first_name: "OpenClaw" },
+        message_id: message.messageId,
+        text: message.text,
+        ...(message.legacyPromptContextTimestampMs !== undefined
+          ? {
+              openclaw_prompt_context_timestamp_ms: message.legacyPromptContextTimestampMs,
+            }
+          : {}),
+      },
+      ...(message.projection !== undefined ? { promptContextProjection: message.projection } : {}),
+    });
+  }
 }
 
 function execApprovalCall(index = 0) {
@@ -2756,7 +2853,140 @@ describe("createTelegramBot", () => {
     }
   });
 
-  it("dedupes direct assistant transcript context against cached Telegram replies after stripping directives", async () => {
+  it("dedupes an unversioned outbound row by its explicit legacy prompt timestamp", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+
+    const storePath = `/tmp/openclaw-telegram-dm-legacy-dedupe-${process.pid}-${Date.now()}.json`;
+    const config = {
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+      session: { store: storePath },
+    } satisfies NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
+    const chatId = 7772;
+    const senderId = 202;
+    const transcriptTimestampMs = 1_778_474_700_000;
+
+    await rm(storePath, { force: true });
+    try {
+      loadConfig.mockReturnValue(config);
+      await writeDirectTelegramTranscriptContext({
+        cfg: config,
+        storePath,
+        chatId,
+        role: "assistant",
+        senderId,
+        sessionId: "telegram-legacy-outbound-dedupe",
+        text: "Legacy answer",
+        timestamp: transcriptTimestampMs,
+      });
+      await seedTelegramPromptContextMessages({
+        storePath,
+        chatId,
+        messages: [
+          {
+            messageId: 735,
+            text: "Legacy answer",
+            date: transcriptTimestampMs / 1000 + 5,
+            legacyPromptContextTimestampMs: transcriptTimestampMs,
+            unversioned: true,
+          },
+        ],
+      });
+      createTelegramBot({ token: "tok", config });
+
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+      await handler({
+        me: { id: 999, username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+        message: {
+          chat: { id: chatId, type: "private" },
+          text: "continue",
+          date: 1_778_474_850,
+          message_id: 740,
+          from: { id: senderId, is_bot: false, first_name: "Kesava" },
+        },
+      });
+
+      const messages = latestConversationContextMessages();
+      expect(messages.filter((message) => message.body === "Legacy answer")).toEqual([
+        expect.objectContaining({ message_id: "735" }),
+      ]);
+      expect(messages.some((message) => String(message.message_id).startsWith("session:"))).toBe(
+        false,
+      );
+    } finally {
+      clearTelegramRuntime();
+      resetPluginStateStoreForTests();
+      await rm(storePath, { force: true });
+    }
+  });
+
+  it("does not infer projection provenance from a current markerless outbound row", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+
+    const storePath = `/tmp/openclaw-telegram-dm-markerless-assistant-${process.pid}-${Date.now()}.json`;
+    const config = {
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+      session: { store: storePath },
+    } satisfies NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
+    const chatId = 7771;
+    const senderId = 202;
+    const transcriptTimestampMs = 1_778_474_700_000;
+
+    await rm(storePath, { force: true });
+    try {
+      loadConfig.mockReturnValue(config);
+      await writeDirectTelegramTranscriptContext({
+        cfg: config,
+        storePath,
+        chatId,
+        role: "assistant",
+        senderId,
+        sessionId: "telegram-markerless-assistant",
+        text: "same visible answer",
+        timestamp: transcriptTimestampMs,
+      });
+      await seedTelegramPromptContextMessages({
+        storePath,
+        chatId,
+        messages: [
+          {
+            messageId: 734,
+            text: "same visible answer",
+            date: transcriptTimestampMs / 1000,
+          },
+        ],
+      });
+      createTelegramBot({ token: "tok", config });
+
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+      await handler({
+        me: { id: 999, username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+        message: {
+          chat: { id: chatId, type: "private" },
+          text: "continue",
+          date: 1_778_474_850,
+          message_id: 739,
+          from: { id: senderId, is_bot: false, first_name: "Kesava" },
+        },
+      });
+
+      const messages = latestConversationContextMessages();
+      expect(
+        messages
+          .filter((message) => message.body === "same visible answer")
+          .map((message) => message.message_id),
+      ).toEqual(["session:transcript-assistant-1", "734"]);
+    } finally {
+      clearTelegramRuntime();
+      resetPluginStateStoreForTests();
+      await rm(storePath, { force: true });
+    }
+  });
+
+  it("dedupes a Markdown assistant transcript against its complete Telegram projection", async () => {
     onSpy.mockClear();
     replySpy.mockClear();
 
@@ -2777,15 +3007,9 @@ describe("createTelegramBot", () => {
     await rm(`${storePath}.telegram-messages.json`, { force: true });
     try {
       loadConfig.mockReturnValue(config);
-      createTelegramBot({ token: "tok", config });
-      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
-      const baseCtx = {
-        me: { id: 999, is_bot: true, first_name: "OpenClaw", username: "openclaw_bot" },
-        getFile: async () => ({ download: async () => new Uint8Array() }),
-      };
       const chatId = 7773;
       const senderId = 202;
-      const visibleReply = "Yep - I'm here now.";
+      const visibleReply = "Important: use const.";
       const replyTimestampMs = 1_778_474_700_000;
       const telegramReplyDate = Math.floor((replyTimestampMs + 5_000) / 1000);
 
@@ -2796,9 +3020,31 @@ describe("createTelegramBot", () => {
         role: "assistant",
         senderId,
         sessionId: "telegram-dm-assistant-visible-dedupe-session",
-        text: `[[reply_to_current]]${visibleReply}`,
+        text: "[[reply_to_current]]**Important**: use `const`.",
         timestamp: replyTimestampMs,
       });
+      await seedTelegramPromptContextMessages({
+        storePath,
+        chatId,
+        messages: [
+          {
+            messageId: 736,
+            text: visibleReply,
+            date: telegramReplyDate,
+            projection: {
+              transcriptMessageId: "transcript-assistant-1",
+              partIndex: 0,
+              finalPart: true,
+            },
+          },
+        ],
+      });
+      createTelegramBot({ token: "tok", config });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+      const baseCtx = {
+        me: { id: 999, is_bot: true, first_name: "OpenClaw", username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      };
       await handler({
         ...baseCtx,
         message: {
@@ -2812,7 +3058,6 @@ describe("createTelegramBot", () => {
             date: telegramReplyDate,
             from: { id: 999, is_bot: true, first_name: "OpenClaw" },
             message_id: 736,
-            openclaw_prompt_context_timestamp_ms: replyTimestampMs,
             text: visibleReply,
           },
         },
@@ -2849,6 +3094,453 @@ describe("createTelegramBot", () => {
         false,
       );
     } finally {
+      clearTelegramRuntime();
+      resetPluginStateStoreForTests();
+      await rm(storePath, { force: true });
+      await rm(`${storePath}.telegram-messages.json`, { force: true });
+    }
+  });
+
+  it.each([
+    {
+      name: "part zero",
+      parts: [{ messageId: 751, text: "gamma", partIndex: 1, finalPart: true }],
+    },
+    {
+      name: "a middle part",
+      parts: [
+        { messageId: 752, text: "Alpha", partIndex: 0, finalPart: false },
+        { messageId: 754, text: "gamma", partIndex: 2, finalPart: true },
+      ],
+    },
+    {
+      name: "the final marker",
+      parts: [
+        { messageId: 755, text: "Alpha", partIndex: 0, finalPart: false },
+        { messageId: 756, text: "beta", partIndex: 1, finalPart: false },
+      ],
+    },
+  ])("keeps the full assistant transcript when $name is missing", async ({ parts }) => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+
+    const storePath = `/tmp/openclaw-telegram-dm-incomplete-projection-${process.pid}-${parts[0]?.messageId}.json`;
+    const config = {
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+      session: { store: storePath },
+    } satisfies NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
+    const caseId = parts[0]?.messageId ?? 0;
+    const chatId = 10_000 + caseId;
+    const senderId = 202;
+    const transcriptTimestampMs = 1_778_474_700_000;
+
+    await rm(storePath, { force: true });
+    await rm(`${storePath}.telegram-messages.json`, { force: true });
+    try {
+      loadConfig.mockReturnValue(config);
+      await writeDirectTelegramTranscriptContext({
+        cfg: config,
+        storePath,
+        chatId,
+        role: "assistant",
+        senderId,
+        sessionId: `telegram-incomplete-${parts[0]?.messageId}`,
+        text: "**Alpha** beta gamma",
+        timestamp: transcriptTimestampMs,
+      });
+      await seedTelegramPromptContextMessages({
+        storePath,
+        chatId,
+        messages: parts.map((part) => ({
+          messageId: part.messageId,
+          text: part.text,
+          date: Math.floor(transcriptTimestampMs / 1000) + part.partIndex + 1,
+          projection: {
+            transcriptMessageId: "transcript-assistant-1",
+            partIndex: part.partIndex,
+            finalPart: part.finalPart,
+          },
+        })),
+      });
+      createTelegramBot({ token: "tok", config });
+
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+      replySpy.mockClear();
+      await handler({
+        me: { id: 999, username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+        message: {
+          chat: { id: chatId, type: "private" },
+          text: "continue",
+          date: 1_778_474_850,
+          message_id: caseId + 100,
+          from: { id: senderId, is_bot: false, first_name: "Kesava" },
+        },
+      });
+
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const messages = latestConversationContextMessages();
+      expect(messages).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            body: "**Alpha** beta gamma",
+            message_id: "session:transcript-assistant-1",
+          }),
+          ...parts.map((part) =>
+            expect.objectContaining({ body: part.text, message_id: String(part.messageId) }),
+          ),
+        ]),
+      );
+    } finally {
+      clearTelegramRuntime();
+      resetPluginStateStoreForTests();
+      await rm(storePath, { force: true });
+      await rm(`${storePath}.telegram-messages.json`, { force: true });
+    }
+  });
+
+  it("preserves cached multipart provenance on a markerless Telegram reply target", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+
+    const storePath = `/tmp/openclaw-telegram-dm-complete-multipart-${process.pid}-${Date.now()}.json`;
+    const config = {
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+      session: { store: storePath },
+    } satisfies NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
+    const chatId = 7783;
+    const senderId = 202;
+    const transcriptTimestampMs = 1_778_474_700_000;
+
+    await rm(storePath, { force: true });
+    await rm(`${storePath}.telegram-messages.json`, { force: true });
+    try {
+      loadConfig.mockReturnValue(config);
+      setTelegramPluginStateRuntimeForTests();
+      createTelegramBot({ token: "tok", config });
+      await writeDirectTelegramTranscriptContext({
+        cfg: config,
+        storePath,
+        chatId,
+        role: "assistant",
+        senderId,
+        sessionId: "telegram-complete-multipart",
+        text: "**Alpha** beta",
+        timestamp: transcriptTimestampMs,
+      });
+      for (const part of [
+        { messageId: 781, text: "Alpha", partIndex: 0, finalPart: false },
+        { messageId: 782, text: "beta", partIndex: 1, finalPart: true },
+      ]) {
+        await recordOutboundMessageForPromptContext({
+          cfg: config,
+          account: { accountId: "default", name: "OpenClaw" },
+          chatId,
+          message: {
+            message_id: part.messageId,
+            date: transcriptTimestampMs / 1000 + part.partIndex + 1,
+            text: part.text,
+          },
+          messageId: part.messageId,
+          text: part.text,
+          promptContextProjection: {
+            transcriptMessageId: "transcript-assistant-1",
+            partIndex: part.partIndex,
+            finalPart: part.finalPart,
+          },
+        });
+      }
+
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+      replySpy.mockClear();
+      await handler({
+        me: { id: 999, username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+        message: {
+          chat: { id: chatId, type: "private" },
+          text: "continue",
+          date: 1_778_474_850,
+          message_id: 783,
+          from: { id: senderId, is_bot: false, first_name: "Kesava" },
+          reply_to_message: {
+            chat: { id: chatId, type: "private" },
+            date: transcriptTimestampMs / 1000 + 1,
+            from: { id: 999, is_bot: true, first_name: "OpenClaw" },
+            message_id: 781,
+            text: "Alpha",
+          },
+        },
+      });
+
+      const messages = latestConversationContextMessages();
+      expect(messages).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ body: "Alpha", is_reply_target: true, message_id: "781" }),
+          expect.objectContaining({ body: "beta", message_id: "782" }),
+        ]),
+      );
+      expect(messages.filter((message) => message.message_id === "781")).toHaveLength(1);
+      expect(messages.filter((message) => message.message_id === "782")).toHaveLength(1);
+      expect(messages.some((message) => String(message.message_id).startsWith("session:"))).toBe(
+        false,
+      );
+    } finally {
+      clearTelegramRuntime();
+      resetPluginStateStoreForTests();
+      await rm(storePath, { force: true });
+      await rm(`${storePath}.telegram-messages.json`, { force: true });
+    }
+  });
+
+  it("keeps an assistant transcript when persisted projection metadata is invalid", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+
+    const storePath = `/tmp/openclaw-telegram-dm-invalid-projection-${process.pid}-${Date.now()}.json`;
+    const config = {
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+      session: { store: storePath },
+    } satisfies NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
+    const chatId = 7784;
+    const senderId = 202;
+    const transcriptTimestampMs = 1_778_474_700_000;
+
+    await rm(storePath, { force: true });
+    await rm(`${storePath}.telegram-messages.json`, { force: true });
+    try {
+      loadConfig.mockReturnValue(config);
+      await writeDirectTelegramTranscriptContext({
+        cfg: config,
+        storePath,
+        chatId,
+        role: "assistant",
+        senderId,
+        sessionId: "telegram-invalid-projection",
+        text: "same visible answer",
+        timestamp: transcriptTimestampMs,
+      });
+      await seedTelegramPromptContextMessages({
+        storePath,
+        chatId,
+        messages: [
+          {
+            messageId: 790,
+            text: "same visible answer",
+            date: transcriptTimestampMs / 1000,
+            projection: {
+              transcriptMessageId: "transcript-assistant-1",
+              partIndex: 0,
+              finalPart: true,
+            },
+          },
+          {
+            messageId: 791,
+            text: "cached trailing part",
+            date: transcriptTimestampMs / 1000 + 1,
+            projection: {
+              transcriptMessageId: "transcript-assistant-1",
+              partIndex: 1,
+              finalPart: "true",
+            },
+          },
+        ],
+      });
+      createTelegramBot({ token: "tok", config });
+
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+      replySpy.mockClear();
+      await handler({
+        me: { id: 999, username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+        message: {
+          chat: { id: chatId, type: "private" },
+          text: "continue",
+          date: 1_778_474_850,
+          message_id: 792,
+          from: { id: senderId, is_bot: false, first_name: "Kesava" },
+        },
+      });
+
+      const messages = latestConversationContextMessages();
+      expect(messages).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            body: "same visible answer",
+            message_id: "session:transcript-assistant-1",
+          }),
+          expect.objectContaining({ body: "same visible answer", message_id: "790" }),
+          expect.objectContaining({ body: "cached trailing part", message_id: "791" }),
+        ]),
+      );
+    } finally {
+      clearTelegramRuntime();
+      resetPluginStateStoreForTests();
+      await rm(storePath, { force: true });
+      await rm(`${storePath}.telegram-messages.json`, { force: true });
+    }
+  });
+
+  it("keeps identical visible replies correlated to distinct transcript identities", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+
+    const storePath = `/tmp/openclaw-telegram-dm-repeat-projection-${process.pid}-${Date.now()}.json`;
+    const config = {
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+      session: { store: storePath },
+    } satisfies NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
+    const chatId = 7781;
+    const senderId = 202;
+    const transcriptTimestampMs = 1_778_474_700_000;
+
+    await rm(storePath, { force: true });
+    try {
+      loadConfig.mockReturnValue(config);
+      await writeDirectTelegramTranscriptMessages({
+        cfg: config,
+        storePath,
+        chatId,
+        senderId,
+        sessionId: "telegram-repeat-projection",
+        messages: [
+          {
+            id: "assistant-repeat-1",
+            role: "assistant",
+            text: "**same answer**",
+            timestamp: transcriptTimestampMs,
+          },
+          {
+            id: "assistant-repeat-2",
+            role: "assistant",
+            text: "_same answer_",
+            timestamp: transcriptTimestampMs,
+          },
+        ],
+      });
+      await seedTelegramPromptContextMessages({
+        storePath,
+        chatId,
+        messages: [
+          {
+            messageId: 761,
+            text: "same answer",
+            date: transcriptTimestampMs / 1000 + 1,
+            projection: {
+              transcriptMessageId: "assistant-repeat-1",
+              partIndex: 0,
+              finalPart: true,
+            },
+          },
+          {
+            messageId: 762,
+            text: "same answer",
+            date: transcriptTimestampMs / 1000 + 2,
+            projection: {
+              transcriptMessageId: "assistant-repeat-2",
+              partIndex: 0,
+              finalPart: true,
+            },
+          },
+        ],
+      });
+      createTelegramBot({ token: "tok", config });
+
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+      replySpy.mockClear();
+      await handler({
+        me: { id: 999, username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+        message: {
+          chat: { id: chatId, type: "private" },
+          text: "continue",
+          date: 1_778_474_850,
+          message_id: 763,
+          from: { id: senderId, is_bot: false, first_name: "Kesava" },
+        },
+      });
+
+      const messages = latestConversationContextMessages();
+      expect(
+        messages
+          .filter((message) => message.body === "same answer")
+          .map((message) => message.message_id),
+      ).toEqual(["761", "762"]);
+      expect(messages.some((message) => String(message.message_id).startsWith("session:"))).toBe(
+        false,
+      );
+    } finally {
+      clearTelegramRuntime();
+      resetPluginStateStoreForTests();
+      await rm(storePath, { force: true });
+      await rm(`${storePath}.telegram-messages.json`, { force: true });
+    }
+  });
+
+  it("does not collapse literal user Markdown into markerless plain cache text", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+
+    const storePath = `/tmp/openclaw-telegram-dm-user-markdown-${process.pid}-${Date.now()}.json`;
+    const config = {
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+      session: { store: storePath },
+    } satisfies NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
+    const chatId = 7782;
+    const senderId = 202;
+    const timestampMs = 1_778_474_700_000;
+
+    await rm(storePath, { force: true });
+    try {
+      loadConfig.mockReturnValue(config);
+      await writeDirectTelegramTranscriptContext({
+        cfg: config,
+        storePath,
+        chatId,
+        senderId,
+        sessionId: "telegram-user-markdown",
+        text: "**literal user text**",
+        timestamp: timestampMs,
+      });
+      await seedTelegramPromptContextMessages({
+        storePath,
+        chatId,
+        messages: [
+          {
+            messageId: 771,
+            text: "literal user text",
+            date: timestampMs / 1000,
+          },
+        ],
+      });
+      createTelegramBot({ token: "tok", config });
+
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+      replySpy.mockClear();
+      await handler({
+        me: { id: 999, username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+        message: {
+          chat: { id: chatId, type: "private" },
+          text: "continue",
+          date: 1_778_474_850,
+          message_id: 772,
+          from: { id: senderId, is_bot: false, first_name: "Kesava" },
+        },
+      });
+
+      const messages = latestConversationContextMessages();
+      expect(messages).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            body: "**literal user text**",
+            message_id: "session:transcript-user-1",
+          }),
+          expect.objectContaining({ body: "literal user text", message_id: "771" }),
+        ]),
+      );
+    } finally {
+      clearTelegramRuntime();
+      resetPluginStateStoreForTests();
       await rm(storePath, { force: true });
       await rm(`${storePath}.telegram-messages.json`, { force: true });
     }

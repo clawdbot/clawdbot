@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   extractChangelogReleaseSections,
@@ -12,6 +13,7 @@ import {
 } from "../../../../scripts/render-github-release-notes.mjs";
 
 const repo = "openclaw/openclaw";
+const githubSnapshotSchemaVersion = 1;
 const commitAssociationQueryBatchSize = 20;
 const excludedHandles = new Set(["openclaw", "clawsweeper", "claude", "codex", "steipete"]);
 const nonEditorialTypes = new Set([
@@ -48,6 +50,7 @@ const genericDirectCommitTerms = new Set([
   "restore",
   "update",
 ]);
+let githubSnapshotState;
 
 function fail(message) {
   throw new Error(message);
@@ -65,6 +68,11 @@ Required:
 
 Options:
   --manifest <path>     Read or write the complete contribution record ledger.
+  --github-snapshot <path>
+                        Override the exact-range GitHub GraphQL snapshot path.
+  --no-github-snapshot  Disable GitHub GraphQL snapshot reuse.
+  --refresh-github-snapshot
+                        Ignore an existing exact-range snapshot and rebuild it.
   --seed-ref <ref>      Use an existing release section as editorial input.
   --shipped-ref <tag>   Exclude PRs already recorded by this shipped tag; repeatable.
   --write-ledger        Write the verified ledger back into CHANGELOG.md.
@@ -81,6 +89,9 @@ function parseArgs(argv) {
     help: false,
     json: false,
     manifestPath: undefined,
+    githubSnapshotPath: undefined,
+    noGithubSnapshot: false,
+    refreshGithubSnapshot: false,
     seedRef: undefined,
     shippedRefs: [],
     writeLedger: false,
@@ -92,9 +103,23 @@ function parseArgs(argv) {
       options.help = true;
       continue;
     }
-    if (arg === "--check-github" || arg === "--json" || arg === "--write-ledger") {
+    if (
+      arg === "--check-github" ||
+      arg === "--json" ||
+      arg === "--no-github-snapshot" ||
+      arg === "--refresh-github-snapshot" ||
+      arg === "--write-ledger"
+    ) {
       options[
-        arg === "--check-github" ? "checkGithub" : arg === "--write-ledger" ? "writeLedger" : "json"
+        arg === "--check-github"
+          ? "checkGithub"
+          : arg === "--write-ledger"
+            ? "writeLedger"
+            : arg === "--no-github-snapshot"
+              ? "noGithubSnapshot"
+              : arg === "--refresh-github-snapshot"
+                ? "refreshGithubSnapshot"
+                : "json"
       ] = true;
       continue;
     }
@@ -104,6 +129,7 @@ function parseArgs(argv) {
       arg === "--version" ||
       arg === "--release-tag" ||
       arg === "--shipped-ref" ||
+      arg === "--github-snapshot" ||
       arg === "--manifest" ||
       arg === "--seed-ref"
     ) {
@@ -117,6 +143,8 @@ function parseArgs(argv) {
         options.shippedRefs.push(value);
       } else if (arg === "--manifest") {
         options.manifestPath = value;
+      } else if (arg === "--github-snapshot") {
+        options.githubSnapshotPath = value;
       } else if (arg === "--seed-ref") {
         options.seedRef = value;
       } else {
@@ -139,6 +167,12 @@ function parseArgs(argv) {
   }
   if (!options.help && options.checkGithub && options.releaseTags.length === 0) {
     fail("--check-github requires at least one --release-tag");
+  }
+  if (options.noGithubSnapshot && options.githubSnapshotPath) {
+    fail("--no-github-snapshot cannot be combined with --github-snapshot");
+  }
+  if (options.noGithubSnapshot && options.refreshGithubSnapshot) {
+    fail("--no-github-snapshot cannot be combined with --refresh-github-snapshot");
   }
   const uniqueShippedRefs = new Set(options.shippedRefs);
   if (uniqueShippedRefs.size !== options.shippedRefs.length) {
@@ -184,7 +218,7 @@ function gitIsAncestor(base, target) {
   );
 }
 
-function githubApi(args) {
+function fetchGithubApi(args) {
   try {
     return JSON.parse(run("ghx", ["api", ...args]).replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, ""));
   } catch (error) {
@@ -193,6 +227,129 @@ function githubApi(args) {
     }
     throw error;
   }
+}
+
+export function createGithubSnapshotState({
+  base,
+  filePath,
+  refresh = false,
+  repository = repo,
+  target,
+}) {
+  let responses = {};
+  if (!refresh && existsSync(filePath)) {
+    let parsed;
+    try {
+      parsed = JSON.parse(readFileSync(filePath, "utf8"));
+    } catch (error) {
+      fail(
+        `could not read GitHub snapshot ${filePath}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    if (
+      parsed.schemaVersion !== githubSnapshotSchemaVersion ||
+      parsed.repository !== repository ||
+      parsed.base !== base ||
+      parsed.target !== target ||
+      !parsed.responses ||
+      typeof parsed.responses !== "object" ||
+      Array.isArray(parsed.responses)
+    ) {
+      fail(
+        `GitHub snapshot ${filePath} does not match ${repository} ${base}..${target}; use --refresh-github-snapshot`,
+      );
+    }
+    responses = parsed.responses;
+  }
+  return {
+    base,
+    dirty: refresh && existsSync(filePath),
+    filePath,
+    hits: 0,
+    misses: 0,
+    repository,
+    responses,
+    target,
+  };
+}
+
+export function githubApiWithSnapshot(args, fetchApi, snapshotState) {
+  if (!snapshotState || args[0] !== "graphql") {
+    return fetchApi(args);
+  }
+  const key = JSON.stringify(args);
+  const cached = snapshotState.responses[key];
+  if (cached !== undefined) {
+    snapshotState.hits += 1;
+    return structuredClone(cached);
+  }
+  snapshotState.misses += 1;
+  const response = fetchApi(args);
+  if (
+    !response ||
+    typeof response !== "object" ||
+    Array.isArray(response) ||
+    response.data === undefined ||
+    (Array.isArray(response.errors) && response.errors.length > 0)
+  ) {
+    return response;
+  }
+  snapshotState.responses[key] = structuredClone(response);
+  snapshotState.dirty = true;
+  return response;
+}
+
+export function persistGithubSnapshot(snapshotState) {
+  if (!snapshotState?.dirty) {
+    return;
+  }
+  const output = `${JSON.stringify(
+    {
+      schemaVersion: githubSnapshotSchemaVersion,
+      repository: snapshotState.repository,
+      base: snapshotState.base,
+      target: snapshotState.target,
+      responses: snapshotState.responses,
+    },
+    null,
+    2,
+  )}\n`;
+  mkdirSync(path.dirname(snapshotState.filePath), { recursive: true });
+  const tempPath = `${snapshotState.filePath}.${process.pid}.tmp`;
+  try {
+    writeFileSync(tempPath, output);
+    renameSync(tempPath, snapshotState.filePath);
+    snapshotState.dirty = false;
+  } finally {
+    rmSync(tempPath, { force: true });
+  }
+}
+
+function githubApi(args) {
+  return githubApiWithSnapshot(args, fetchGithubApi, githubSnapshotState);
+}
+
+function initializeGithubSnapshot(options) {
+  if (options.noGithubSnapshot) {
+    return undefined;
+  }
+  const base = git(["rev-parse", `${options.base}^{commit}`]);
+  const target = git(["rev-parse", `${options.target}^{commit}`]);
+  const defaultName = `verify-release-notes-${base}-${target}.json`;
+  const filePath = path.resolve(
+    options.githubSnapshotPath ??
+      git(["rev-parse", "--git-path", `openclaw-release-cache/${defaultName}`]),
+  );
+  const state = createGithubSnapshotState({
+    base,
+    filePath,
+    refresh: options.refreshGithubSnapshot,
+    target,
+  });
+  process.once("exit", () => persistGithubSnapshot(state));
+  return state;
 }
 
 function escapeRegExp(value) {
@@ -1719,6 +1876,7 @@ function main() {
     printUsage();
     return;
   }
+  githubSnapshotState = initializeGithubSnapshot(options);
   let changelog = readFileSync("CHANGELOG.md", "utf8");
   let section = sectionFor(changelog, options.version);
   const source = sourceCommits(options.base, options.target);
@@ -1930,13 +2088,24 @@ function main() {
       unlinkedCommits: manifest.unlinkedCommits.length,
     },
     github,
+    githubSnapshot: githubSnapshotState
+      ? {
+          path: githubSnapshotState.filePath,
+          hits: githubSnapshotState.hits,
+          misses: githubSnapshotState.misses,
+        }
+      : null,
     errors,
   };
+  persistGithubSnapshot(githubSnapshotState);
   if (options.json) {
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   } else {
+    const snapshotSummary = githubSnapshotState
+      ? `, GitHub snapshot ${githubSnapshotState.hits} hits/${githubSnapshotState.misses} misses`
+      : "";
     process.stdout.write(
-      `${options.version}: ${ledger.pullRequests.length} PRs, ${ledger.issues.length} issues, ${errors.length === 0 ? "verified" : `${errors.length} errors`}\n`,
+      `${options.version}: ${ledger.pullRequests.length} PRs, ${ledger.issues.length} issues, ${errors.length === 0 ? "verified" : `${errors.length} errors`}${snapshotSummary}\n`,
     );
   }
   if (errors.length > 0) {

@@ -27,10 +27,25 @@
 }
 
 .chat-workbench--dock-bottom .chat-workspace-rail {
-  grid-column: 1;
+  grid-column: 1 / -1;
   grid-row: 2;
   border-left: none;
   border-top: 1px solid var(--border);
+}
+
+/* Background-tasks rail: always right-docked, taking the last grid track. It
+   composes with the workspace rail (three columns when both are open) and
+   with a bottom-docked workspace strip (the strip spans under it). These
+   rules sit after the collapse/dock modifiers so the extra column wins at
+   equal specificity. */
+.chat-workbench--tasks-open {
+  grid-template-columns: minmax(0, 1fr) minmax(230px, 280px);
+}
+
+.chat-workbench--tasks-open:not(.chat-workbench--workspace-collapsed):not(
+  .chat-workbench--dock-bottom
+) {
+  grid-template-columns: minmax(0, 1fr) minmax(230px, 280px) minmax(230px, 280px);
 }
 
 /* Floating opener shown in single-pane mode while the rail is collapsed
@@ -47,21 +62,41 @@
   -webkit-backdrop-filter: blur(10px);
 }
 
-/* The rail (and with it every toggle) only exists on wide viewports. */
+/* Floating background-tasks opener stacks under the workspace one so both
+   stay reachable regardless of which rail is open. */
+.chat-tasks-open {
+  position: absolute;
+  top: 48px;
+  right: 10px;
+  z-index: 12;
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+/* The workspace rail adapts to the pane width (side column on wide panes,
+   bottom strip on narrow ones — chat-pane measures and flips the dock), so
+   its toggles stay available at every width. The background-tasks rail is
+   side-dock only, so its toggles still hide on narrow viewports until it
+   grows a narrow presentation. */
 @media (max-width: 1120px) {
-  .chat-workspace-open,
-  .chat-pane__actions .chat-workspace-toggle {
+  .chat-tasks-open,
+  .chat-pane__actions .chat-tasks-toggle {
     display: none;
   }
 }
 
 /* Positioning context for the badge; the floating variant already gets one
    from its own position: absolute, so scope this to the pane-header variant. */
-.chat-pane__actions .chat-workspace-toggle {
+.chat-pane__actions .chat-workspace-toggle,
+.chat-pane__actions .chat-tasks-toggle {
   position: relative;
 }
 
-.chat-workspace-toggle__badge {
+.chat-workspace-toggle__badge,
+.chat-tasks-toggle__badge {
   position: absolute;
   top: 0;
   right: -2px;
@@ -129,8 +164,8 @@
 
 /* The workspace rail docks flush to the window edge like the terminal panel:
    drop the chat content's right gutter and square the card's right corners in
-   both rail states. Guarded to viewports where the rail actually renders
-   (it is display:none <=1120px, where the gutter should stay). */
+   both rail states. Guarded to wide viewports; narrow ones keep the gutter
+   because the rail presents as a bottom strip there. */
 @media (min-width: 1121px) {
   .content--chat:has(.chat-workbench) {
     padding-left: 0;
@@ -161,10 +196,11 @@
   transition: flex 250ms ease-out;
 }
 
+/* No border-left: the resizable divider rendered next to this panel draws
+   the separator line; a border here doubles it. */
 .chat-sidebar {
   flex: 1;
   min-width: 300px;
-  border-left: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -289,6 +325,8 @@
 }
 
 .chat-workspace-rail__path {
+  /* Fixed rows: only the scroll area gives way when the bottom dock is short. */
+  flex-shrink: 0;
   padding: 9px 12px;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 42%, transparent);
   color: var(--muted);
@@ -375,6 +413,7 @@
 
 .chat-workspace-rail__summary {
   display: flex;
+  flex-shrink: 0;
   flex-wrap: wrap;
   gap: 4px;
   padding: 0 12px 8px;
@@ -572,6 +611,295 @@
   padding: 0 12px 6px;
   font-size: var(--control-ui-text-xs);
   line-height: 1.2;
+}
+
+/* Background-tasks rail: independent element classes on purpose — the
+   workspace rail's dock-bottom modifiers re-lay-out its descendants, and the
+   tasks rail must not inherit that when the workspace strip moves. */
+.chat-tasks-rail {
+  grid-column: -2;
+  grid-row: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-left: 1px solid var(--border);
+  background: color-mix(in srgb, var(--panel) 84%, transparent);
+}
+
+.chat-tasks-rail__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 12px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
+}
+
+.chat-tasks-rail__title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.chat-tasks-rail__eyebrow {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.chat-tasks-rail__title strong {
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.2;
+}
+
+.chat-tasks-rail__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.chat-tasks-rail__refresh svg,
+.chat-tasks-rail__collapse-toggle svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7px;
+}
+
+.chat-tasks-rail__state {
+  padding: 14px 12px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.35;
+}
+
+.chat-tasks-rail__state--error {
+  color: var(--danger, #ef4444);
+}
+
+.chat-tasks-rail__scroll {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: auto;
+}
+
+.chat-tasks-rail__section {
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  padding-top: 8px;
+}
+
+.chat-tasks-rail__section-title {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.1;
+  padding: 0 12px 6px;
+  text-transform: uppercase;
+}
+
+.chat-tasks-rail__section-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+  padding: 0 12px 6px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.chat-tasks-rail__section-toggle .chat-tasks-rail__section-title {
+  padding: 0;
+}
+
+.chat-tasks-rail__section-chevron svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8px;
+}
+
+.chat-tasks-rail__list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+  padding: 4px 8px 8px;
+}
+
+.chat-tasks-rail__task {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg-elevated) 62%, transparent);
+}
+
+.chat-tasks-rail__task:hover,
+.chat-tasks-rail__task:focus-within {
+  border-color: color-mix(in srgb, var(--border-strong) 45%, transparent);
+}
+
+.chat-tasks-rail__task-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* openclaw-tooltip is display:contents, so the title span itself is the flex
+   item; growing it pins the stop button to the card's right edge even for
+   short titles. */
+.chat-tasks-rail__task-title {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--control-ui-text-sm);
+  font-weight: 550;
+  line-height: 1.25;
+}
+
+/* Live-run indicator: replaces the old status pill for running rows. */
+.chat-tasks-rail__task-pulse {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-full);
+  background: var(--warn, #f59e0b);
+  animation: chat-tasks-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes chat-tasks-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-tasks-rail__task-pulse {
+    animation: none;
+  }
+}
+
+.chat-tasks-rail__task-stop {
+  display: inline-grid;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+}
+
+.chat-tasks-rail__task-stop:hover,
+.chat-tasks-rail__task-stop:focus-visible {
+  border-color: color-mix(in srgb, var(--border-strong) 72%, transparent);
+  background: color-mix(in srgb, var(--bg-elevated) 82%, transparent);
+  color: var(--danger, #ef4444);
+}
+
+.chat-tasks-rail__task-stop svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8px;
+}
+
+/* One quiet text line replaces the status/runtime pill chips: colored status
+   word, runtime, relative time, trailing transcript link. */
+.chat-tasks-rail__task-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 5px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.3;
+}
+
+.chat-tasks-rail__task-status {
+  font-weight: 560;
+}
+
+.chat-tasks-rail__task-status--ok {
+  color: var(--ok, #22c55e);
+}
+
+.chat-tasks-rail__task-status--warn {
+  color: var(--warn, #f59e0b);
+}
+
+.chat-tasks-rail__task-status--danger {
+  color: var(--danger, #ef4444);
+}
+
+.chat-tasks-rail__task-status--muted {
+  color: var(--muted);
+}
+
+.chat-tasks-rail__task-sep {
+  opacity: 0.6;
+}
+
+.chat-tasks-rail__task-detail {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+/* Quiet by default so a column of rows is not a column of accent links;
+   pushed right to end the meta line like a row action. */
+.chat-tasks-rail__task-transcript {
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.3;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--muted) 45%, transparent);
+  text-underline-offset: 2px;
+}
+
+.chat-tasks-rail__task-transcript:hover,
+.chat-tasks-rail__task-transcript:focus-visible {
+  color: var(--accent);
+  text-decoration-color: currentColor;
 }
 
 @keyframes chat-sidebar-fade-in {
@@ -1342,13 +1670,43 @@
   }
 }
 
+/* Narrow pane: the detail panel stacks under the thread instead of fighting
+   it for horizontal space (chat-pane measures the pane and sets the class;
+   the divider flips to a horizontal handle so the split stays resizable). */
+.chat-split-container--stacked {
+  flex-direction: column;
+}
+
+.chat-split-container--stacked .chat-main {
+  min-width: 0;
+  min-height: 200px;
+}
+
+.chat-split-container--stacked .chat-sidebar {
+  min-width: 0;
+  min-height: 160px;
+}
+
+/* The background-tasks rail has no narrow presentation yet; hide it with its
+   toggles on narrow viewports (the workspace rail adapts instead). The hidden
+   rail must also release its reserved grid track, so the tasks-open templates
+   collapse back to the workspace-only shapes here. */
 @media (max-width: 1120px) {
-  .chat-workbench {
-    display: flex;
+  .chat-tasks-rail {
+    display: none;
   }
 
-  .chat-workspace-rail {
-    display: none;
+  .chat-workbench--tasks-open.chat-workbench--workspace-collapsed,
+  .chat-workbench--tasks-open.chat-workbench--dock-bottom {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* Mirrors the three-column selector's specificity so the two-column shape
+     wins while the tasks rail is hidden. */
+  .chat-workbench--tasks-open:not(.chat-workbench--workspace-collapsed):not(
+    .chat-workbench--dock-bottom
+  ) {
+    grid-template-columns: minmax(0, 1fr) minmax(230px, 280px);
   }
 }
 
@@ -1367,9 +1725,13 @@
     display: none; /* Hide chat on mobile when sidebar open */
   }
 
+  /* No split to resize while the chat column is hidden. */
+  .chat-split-container--open resizable-divider {
+    display: none;
+  }
+
   .chat-split-container--open .chat-sidebar {
     width: 100%;
     min-width: 0;
-    border-left: none;
   }
 }

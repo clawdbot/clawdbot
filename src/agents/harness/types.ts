@@ -52,9 +52,12 @@ export type AgentHarnessSideQuestionParams = {
   workspaceDir?: string;
   messageChannel?: string;
   messageProvider?: string;
+  chatType?: import("../../channels/chat-type.js").ChatType;
   agentAccountId?: string;
   messageTo?: string;
   messageThreadId?: string | number;
+  chatId?: string;
+  messageActionTurnCapability?: string;
   groupId?: string | null;
   groupChannel?: string | null;
   groupSpace?: string | null;

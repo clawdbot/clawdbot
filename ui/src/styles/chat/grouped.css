@@ -42,7 +42,9 @@
   justify-content: flex-end;
 }
 
-/* Footer at bottom of message group (role + time) */
+/* Footer at bottom of message group (role + time). Hidden until the group is
+   hovered/focused so the thread reads as a clean stream; opacity (not
+   display) keeps the height reserved and avoids layout shift on reveal. */
 .chat-group-footer {
   display: flex;
   flex-wrap: wrap;
@@ -50,7 +52,15 @@
   align-items: center;
   width: 100%;
   min-width: 0;
-  margin-top: 6px;
+  margin-top: 4px;
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+}
+
+.chat-group:hover .chat-group-footer,
+.chat-group:focus-within .chat-group-footer,
+.chat-group-footer:has(details.msg-meta[open]) {
+  opacity: 1;
 }
 
 .chat-group-footer__meta {
@@ -266,6 +276,45 @@ img.chat-avatar {
   box-shadow: none;
 }
 
+/* Assistant replies render as a flat text stream: only user messages keep the
+   bubble card. Border collapses to 0 so the streaming border pulse and hover
+   outline become no-ops without extra rules. */
+.chat-group.assistant .chat-group-messages {
+  max-width: var(--chat-message-max-width, min(980px, calc(100% - 46px)));
+}
+
+.chat-group.assistant .chat-bubble {
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+/* Keep the typing dots on the same left edge as the flat text column. */
+.chat-group.assistant .chat-bubble.chat-reading-indicator {
+  padding: 10px 0;
+}
+
+/* Direct (1:1) threads drop avatars entirely: one agent plus one user makes
+   the repeated identity icons pure decoration. Group threads (any labeled
+   foreign sender) keep avatars as the always-visible identity marker. */
+.chat-thread--direct .chat-avatar,
+.chat-thread--direct img.chat-avatar {
+  display: none;
+}
+
+.chat-thread--direct .chat-group {
+  margin-left: 8px;
+}
+
+.chat-thread--direct .chat-group.assistant .chat-group-messages {
+  max-width: var(--chat-message-max-width, min(980px, 100%));
+}
+
+.chat-thread--direct .chat-group.tool .chat-group-messages {
+  max-width: min(980px, 100%);
+}
+
 .chat-duplicate-count {
   display: inline-flex;
   align-items: center;
@@ -290,6 +339,10 @@ img.chat-avatar {
 @media (hover: none),
   (max-width: 768px),
   (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .chat-group-footer {
+    opacity: 1;
+  }
+
   .chat-group-footer-actions button,
   .chat-message-actions-row button {
     opacity: 1;
@@ -397,7 +450,8 @@ img.chat-avatar {
   box-shadow: inset 0 1px 0 var(--card-highlight);
 }
 
-:root[data-theme-mode="light"] .chat-bubble--tool-shell {
+:root[data-theme-mode="light"] .chat-bubble--tool-shell,
+:root[data-theme-mode="light"] .chat-group.assistant .chat-bubble {
   border-color: transparent;
   background: transparent;
   box-shadow: none;
@@ -498,6 +552,7 @@ details.msg-meta:not([open]) .msg-meta__details {
   left: auto;
 }
 
+.msg-meta__time,
 .msg-meta__tokens,
 .msg-meta__cache,
 .msg-meta__cost,
@@ -622,7 +677,8 @@ details.msg-meta:not([open]) .msg-meta__details {
     max-width: 82%;
   }
 
-  .chat-group.tool .chat-group-messages {
+  .chat-group.tool .chat-group-messages,
+  .chat-group.assistant .chat-group-messages {
     max-width: calc(100% - 46px);
   }
 }

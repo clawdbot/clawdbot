@@ -10,6 +10,7 @@ type RunMessageActionParams = {
   params: Record<string, unknown>;
   agentId?: string;
   senderIsOwner?: boolean;
+  conversationReadOrigin?: "delegated" | "direct-operator";
   gateway?: {
     clientName?: string;
     mode?: string;
@@ -206,6 +207,7 @@ describe("messageCommand", () => {
     expect(actionCall.params.message).toBe("hi");
     expect(actionCall.agentId).toBe("main");
     expect(actionCall.senderIsOwner).toBe(true);
+    expect(actionCall.conversationReadOrigin).toBe("direct-operator");
     expect(actionCall.gateway?.clientName).toBe("cli");
     expect(actionCall.gateway?.mode).toBe("cli");
     expect(actionCall.cfg).not.toBe(rawConfig);

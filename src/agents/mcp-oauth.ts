@@ -19,11 +19,15 @@ import type {
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir } from "../config/paths.js";
+import { type FileLockOptions, withFileLock } from "../infra/file-lock.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writer-queue.js";
 import { sanitizeServerName } from "./agent-bundle-mcp-names.js";
 
 type McpOAuthStore = {
   clientInformation?: OAuthClientInformationMixed;
   tokens?: OAuthTokens;
+  tokenExpiresAt?: number;
   codeVerifier?: string;
   discoveryState?: OAuthDiscoveryState;
   lastAuthorizationUrl?: string;
@@ -31,7 +35,7 @@ type McpOAuthStore = {
   state?: string;
 };
 
-type McpOAuthConfig = {
+export type McpOAuthConfig = {
   scope?: unknown;
   redirectUrl?: unknown;
   clientMetadataUrl?: unknown;
@@ -48,6 +52,23 @@ export type McpOAuthCredentialsStatus = {
 
 const LEGACY_DEFAULT_REDIRECT_URL = "http://127.0.0.1:8989/oauth/callback";
 const LOCALHOST_REDIRECT_URL = "http://localhost:8989/oauth/callback";
+const TOKEN_EXPIRY_SKEW_MS = 30_000;
+const MCP_OAUTH_LOCK_OPTIONS: FileLockOptions = {
+  retries: { retries: 20, factor: 1.3, minTimeout: 25, maxTimeout: 500, randomize: true },
+  stale: 60_000,
+  staleRecovery: "fail-closed",
+};
+const MCP_OAUTH_STORE_QUEUES = resolveGlobalSingleton(
+  Symbol.for("openclaw.mcp-oauth.store-writer-queues"),
+  () => new Map<string, StoreWriterQueue>(),
+);
+
+function resolveTokenExpiresAt(tokens: OAuthTokens): number | undefined {
+  const expiresIn = tokens.expires_in;
+  return typeof expiresIn === "number" && Number.isFinite(expiresIn)
+    ? Date.now() + expiresIn * 1000
+    : undefined;
+}
 
 function isMcpOAuthRedirectRegistrationError(error: unknown): boolean {
   return /invalid_client_metadata|redirect_uri/i.test(String(error));
@@ -82,6 +103,18 @@ async function writeStore(filePath: string, store: McpOAuthStore): Promise<void>
     mode: 0o600,
   });
   await fsPromises.chmod(filePath, 0o600).catch(() => {});
+}
+
+async function withMcpOAuthStoreLock<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
+  return await runQueuedStoreWrite({
+    queues: MCP_OAUTH_STORE_QUEUES,
+    storePath: filePath,
+    label: "withMcpOAuthStoreLock",
+    fn: async () => {
+      await fsPromises.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+      return await withFileLock(filePath, MCP_OAUTH_LOCK_OPTIONS, fn);
+    },
+  });
 }
 
 function resolveOAuthRedirectUrl(config: McpOAuthConfig, store: McpOAuthStore = {}): string {
@@ -155,7 +188,14 @@ export function createMcpOAuthClientProvider(params: {
     },
     async saveTokens(tokens) {
       const store = await readStore(filePath);
-      await writeStore(filePath, { ...store, tokens });
+      const tokenExpiresAt = resolveTokenExpiresAt(tokens);
+      const nextStore = { ...store, tokens };
+      if (tokenExpiresAt === undefined) {
+        delete nextStore.tokenExpiresAt;
+      } else {
+        nextStore.tokenExpiresAt = tokenExpiresAt;
+      }
+      await writeStore(filePath, nextStore);
     },
     async redirectToAuthorization(authorizationUrl) {
       assertAuthorizationRedirectAllowed();
@@ -202,6 +242,62 @@ export function createMcpOAuthClientProvider(params: {
   };
 }
 
+/** Returns a current MCP-native OAuth access token for external runtime projection. */
+export async function resolveMcpOAuthAccessToken(params: {
+  serverName: string;
+  serverUrl: string;
+  config?: McpOAuthConfig;
+  fetchFn?: FetchLike;
+}): Promise<string> {
+  const filePath = oauthStorePath(params.serverName, params.serverUrl);
+  return await withMcpOAuthStoreLock(filePath, async () => {
+    return await resolveMcpOAuthAccessTokenLocked(params, filePath);
+  });
+}
+
+async function resolveMcpOAuthAccessTokenLocked(
+  params: {
+    serverName: string;
+    serverUrl: string;
+    config?: McpOAuthConfig;
+    fetchFn?: FetchLike;
+  },
+  filePath: string,
+): Promise<string> {
+  const store = await readStore(filePath);
+  const tokens = store.tokens;
+  if (!tokens?.access_token) {
+    throw new Error(
+      `MCP server "${params.serverName}" requires OAuth authorization. Run openclaw mcp login ${params.serverName}.`,
+    );
+  }
+
+  const tokenIsFresh =
+    store.tokenExpiresAt !== undefined && store.tokenExpiresAt > Date.now() + TOKEN_EXPIRY_SKEW_MS;
+  if (tokenIsFresh || (store.tokenExpiresAt === undefined && !tokens.refresh_token)) {
+    return tokens.access_token;
+  }
+  if (!tokens.refresh_token) {
+    throw new Error(
+      `MCP server "${params.serverName}" has expired OAuth credentials. Run openclaw mcp login ${params.serverName}.`,
+    );
+  }
+
+  const provider = createMcpOAuthClientProvider(params);
+  const result = await auth(provider, {
+    serverUrl: params.serverUrl,
+    scope: normalizeOptionalString(params.config?.scope),
+    fetchFn: params.fetchFn,
+  });
+  const refreshedTokens = await provider.tokens();
+  if (result !== "AUTHORIZED" || !refreshedTokens?.access_token) {
+    throw new Error(
+      `MCP server "${params.serverName}" could not refresh OAuth credentials. Run openclaw mcp login ${params.serverName}.`,
+    );
+  }
+  return refreshedTokens.access_token;
+}
+
 /** Deletes stored OAuth credentials for one MCP server. */
 export async function clearMcpOAuthCredentials(params: {
   serverName: string;
@@ -233,19 +329,22 @@ async function runMcpOAuthLoginAttempt(params: {
   fetchFn?: FetchLike;
   onAuthorizationUrl?: (url: URL) => void | Promise<void>;
 }): Promise<"authorized" | "redirect"> {
-  const result = await auth(
-    createMcpOAuthClientProvider({
-      ...params,
-      allowAuthorizationRedirect: true,
-    }),
-    {
-      serverUrl: params.serverUrl,
-      authorizationCode: normalizeOptionalString(params.authorizationCode),
-      scope: normalizeOptionalString(params.config?.scope),
-      fetchFn: params.fetchFn,
-    },
-  );
-  return result === "AUTHORIZED" ? "authorized" : "redirect";
+  const filePath = oauthStorePath(params.serverName, params.serverUrl);
+  return await withMcpOAuthStoreLock(filePath, async () => {
+    const result = await auth(
+      createMcpOAuthClientProvider({
+        ...params,
+        allowAuthorizationRedirect: true,
+      }),
+      {
+        serverUrl: params.serverUrl,
+        authorizationCode: normalizeOptionalString(params.authorizationCode),
+        scope: normalizeOptionalString(params.config?.scope),
+        fetchFn: params.fetchFn,
+      },
+    );
+    return result === "AUTHORIZED" ? "authorized" : "redirect";
+  });
 }
 
 /** Runs the MCP OAuth login flow, returning whether it authorized or needs redirect. */

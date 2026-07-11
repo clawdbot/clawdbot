@@ -167,10 +167,10 @@ fail closed before QR/setup-code issuance.
 
 For `gateway.bind=lan` setup URLs, OpenClaw detects persistent Tailscale Serve
 HTTPS roots that proxy the active Gateway's loopback port and advertises them
-alongside the LAN route. Specific-interface `custom` and `tailnet` binds do not
-receive that fallback because a loopback Serve proxy cannot reach those
-listeners. The iOS app probes the advertised routes in order and saves the first
-reachable endpoint.
+alongside the LAN route. The setup command adds this fallback only
+for `lan`; `custom` and `tailnet` keep their explicitly advertised routes. The
+iOS app probes the advertised routes in order and saves the first reachable
+endpoint.
 
 ### Approve a node device
 

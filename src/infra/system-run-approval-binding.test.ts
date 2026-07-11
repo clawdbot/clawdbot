@@ -49,6 +49,89 @@ describe("normalizeSystemRunApprovalPlan", () => {
       },
     },
     {
+      name: "accepts and canonicalizes a prepared policy snapshot",
+      input: {
+        argv: ["echo", "hi"],
+        commandText: "echo hi",
+        policySnapshot: {
+          security: "allowlist",
+          ask: "on-miss",
+          askFallback: "deny",
+          autoAllowSkills: false,
+          allowlistRules: [
+            { pattern: "/usr/bin/zsh", source: "allow-always" },
+            { pattern: "/usr/bin/echo" },
+            { pattern: "/usr/bin/echo" },
+          ],
+        },
+      },
+      expected: {
+        argv: ["echo", "hi"],
+        commandText: "echo hi",
+        commandPreview: null,
+        cwd: null,
+        agentId: null,
+        sessionKey: null,
+        policySnapshot: {
+          security: "allowlist",
+          ask: "on-miss",
+          askFallback: "deny",
+          autoAllowSkills: false,
+          allowlistRules: [
+            { pattern: "/usr/bin/echo" },
+            { pattern: "/usr/bin/zsh", source: "allow-always" },
+          ],
+        },
+        mutableFileOperand: undefined,
+      },
+    },
+    {
+      name: "uses locale-independent UTF-8 ordering for portable policy rules",
+      input: {
+        argv: ["echo", "hi"],
+        commandText: "echo hi",
+        policySnapshot: {
+          security: "allowlist",
+          ask: "always",
+          askFallback: "deny",
+          autoAllowSkills: false,
+          allowlistRules: [
+            { pattern: "/😀" },
+            { pattern: "/A", argPattern: "z" },
+            { pattern: "/é" },
+            { pattern: "/A", source: "allow-always" },
+            { pattern: "/a" },
+            { pattern: "/A" },
+            { pattern: "/A", argPattern: "A" },
+          ],
+        },
+      },
+      expected: {
+        argv: ["echo", "hi"],
+        commandText: "echo hi",
+        commandPreview: null,
+        cwd: null,
+        agentId: null,
+        sessionKey: null,
+        policySnapshot: {
+          security: "allowlist",
+          ask: "always",
+          askFallback: "deny",
+          autoAllowSkills: false,
+          allowlistRules: [
+            { pattern: "/A" },
+            { pattern: "/A", source: "allow-always" },
+            { pattern: "/A", argPattern: "A" },
+            { pattern: "/A", argPattern: "z" },
+            { pattern: "/a" },
+            { pattern: "/é" },
+            { pattern: "/😀" },
+          ],
+        },
+        mutableFileOperand: undefined,
+      },
+    },
+    {
       name: "falls back to rawCommand",
       input: {
         argv: ["bash", "-lc", "echo hi"],
@@ -77,6 +160,22 @@ describe("normalizeSystemRunApprovalPlan", () => {
           argvIndex: -1,
           path: "/tmp/payload.txt",
           sha256: "abc123",
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects malformed prepared policy snapshots", () => {
+    expect(
+      normalizeSystemRunApprovalPlan({
+        argv: ["echo", "hi"],
+        commandText: "echo hi",
+        policySnapshot: {
+          security: "full",
+          ask: "off",
+          askFallback: "deny",
+          autoAllowSkills: false,
+          allowlistRules: [{ pattern: "valid" }, { pattern: 42 }],
         },
       }),
     ).toBeNull();

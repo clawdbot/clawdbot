@@ -24,6 +24,7 @@ import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
 import { describeIMessageMessageTool } from "./message-tool-api.js";
 import {
   findLatestIMessageEntryForChat,
+  isIMessageCurrentMessageInChat,
   rememberIMessageReplyCache,
   type IMessageChatContext,
 } from "./monitor-reply-cache.js";
@@ -69,6 +70,40 @@ function resolveIMessageDeliveryTarget(args: Record<string, unknown>): string | 
     throw new Error("iMessage action received conflicting delivery target aliases.");
   }
   return targets[0];
+}
+
+const IMESSAGE_DELIVERY_TARGET_ALIASES = ["chatGuid", "chatIdentifier", "chatId"];
+
+function matchesIMessageCurrentConversation(params: {
+  args: Record<string, unknown>;
+  accountId: string;
+  toolContext: {
+    currentMessageId?: string | number;
+  };
+}): boolean {
+  const currentMessageId = params.toolContext.currentMessageId;
+  if (currentMessageId === undefined) {
+    return false;
+  }
+  return isIMessageCurrentMessageInChat({
+    accountId: params.accountId,
+    currentMessageId,
+    chatContext: {
+      chatGuid: readStringParam(params.args, "chatGuid"),
+      chatIdentifier: readStringParam(params.args, "chatIdentifier"),
+      chatId: readPositiveIntegerParam(params.args, "chatId"),
+    },
+  });
+}
+
+function createIMessageTargetAliases(resourceAliases: string[] = []) {
+  return {
+    aliases: [...IMESSAGE_DELIVERY_TARGET_ALIASES, ...resourceAliases],
+    deliveryTargetAliases: [...IMESSAGE_DELIVERY_TARGET_ALIASES],
+    resolveDeliveryTarget: ({ args }: { args: Record<string, unknown> }) =>
+      resolveIMessageDeliveryTarget(args),
+    matchesCurrentConversation: matchesIMessageCurrentConversation,
+  };
 }
 
 function rememberOutboundBridgeMessage(params: {
@@ -418,44 +453,20 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
     normalizeOptionalLowercaseString(toolContext?.currentChannelProvider) === "imessage" &&
     GROUP_MANAGEMENT_ACTIONS.has(action),
   messageActionTargetAliases: {
-    react: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
-    edit: { aliases: ["chatGuid", "chatIdentifier", "chatId", "messageId"] },
-    unsend: { aliases: ["chatGuid", "chatIdentifier", "chatId", "messageId"] },
-    reply: {
-      aliases: ["chatGuid", "chatIdentifier", "chatId", "messageId"],
-      deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
-      resolveDeliveryTarget: ({ args }) => resolveIMessageDeliveryTarget(args),
-    },
-    sendWithEffect: {
-      aliases: ["chatGuid", "chatIdentifier", "chatId"],
-      deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
-      resolveDeliveryTarget: ({ args }) => resolveIMessageDeliveryTarget(args),
-    },
-    sendAttachment: {
-      aliases: ["chatGuid", "chatIdentifier", "chatId"],
-      deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
-      resolveDeliveryTarget: ({ args }) => resolveIMessageDeliveryTarget(args),
-    },
-    poll: {
-      aliases: ["chatGuid", "chatIdentifier", "chatId"],
-      deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
-      resolveDeliveryTarget: ({ args }) => resolveIMessageDeliveryTarget(args),
-    },
-    "poll-vote": {
-      aliases: ["chatGuid", "chatIdentifier", "chatId", "pollId", "messageId"],
-      deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
-      resolveDeliveryTarget: ({ args }) => resolveIMessageDeliveryTarget(args),
-    },
-    "upload-file": {
-      aliases: ["chatGuid", "chatIdentifier", "chatId"],
-      deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
-      resolveDeliveryTarget: ({ args }) => resolveIMessageDeliveryTarget(args),
-    },
-    renameGroup: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
-    setGroupIcon: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
-    addParticipant: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
-    removeParticipant: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
-    leaveGroup: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
+    react: createIMessageTargetAliases(["messageId"]),
+    edit: createIMessageTargetAliases(["messageId"]),
+    unsend: createIMessageTargetAliases(["messageId"]),
+    reply: createIMessageTargetAliases(["messageId"]),
+    sendWithEffect: createIMessageTargetAliases(),
+    sendAttachment: createIMessageTargetAliases(),
+    poll: createIMessageTargetAliases(),
+    "poll-vote": createIMessageTargetAliases(["pollId", "messageId"]),
+    "upload-file": createIMessageTargetAliases(),
+    renameGroup: createIMessageTargetAliases(),
+    setGroupIcon: createIMessageTargetAliases(),
+    addParticipant: createIMessageTargetAliases(),
+    removeParticipant: createIMessageTargetAliases(),
+    leaveGroup: createIMessageTargetAliases(),
   },
   extractToolSend: ({ args }) => extractToolSend(args, "sendMessage"),
   handleAction: async ({

@@ -996,7 +996,7 @@ describe("processGatewayAllowlist", () => {
     expect(runExecProcessMock).not.toHaveBeenCalled();
   });
 
-  it("rejects auto-review when the locked policy commit sees always-ask tightening", async () => {
+  it("binds auto-review to the evaluated snapshot before the locked policy commit", async () => {
     const command = "echo reviewed";
     await configurePlanBackedCommand({ command });
     commitExecAuthorizationMock.mockRejectedValueOnce(new Error("approval changed"));
@@ -1010,7 +1010,17 @@ describe("processGatewayAllowlist", () => {
     ).rejects.toThrow("approval changed");
     expect(commitExecAuthorizationMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        authorization: expect.objectContaining({ source: "auto-review", ask: "on-miss" }),
+        authorization: expect.objectContaining({
+          source: "auto-review",
+          ask: "on-miss",
+          policySnapshot: {
+            security: "full",
+            ask: "off",
+            askFallback: "deny",
+            autoAllowSkills: false,
+            allowlistRules: [],
+          },
+        }),
       }),
     );
     expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
@@ -2100,9 +2110,39 @@ EOF`,
 
     expect(commitExecAuthorizationMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        authorization: expect.objectContaining({ source: "explicit-approval" }),
+        authorization: expect.objectContaining({
+          source: "explicit-approval",
+          policySnapshot: expect.any(Object),
+        }),
       }),
     );
+  });
+
+  it("rejects explicit foreground allow-once when the locked policy snapshot changed", async () => {
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: true,
+      deniedReason: null,
+    });
+    commitExecAuthorizationMock.mockRejectedValueOnce(new Error("approval changed"));
+
+    await expect(
+      runGatewayAllowlist({
+        command: "pwd",
+        turnSourceChannel: "webchat",
+      }),
+    ).rejects.toThrow("approval changed");
+
+    expect(commitExecAuthorizationMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authorization: expect.objectContaining({
+          source: "explicit-approval",
+          policySnapshot: expect.any(Object),
+        }),
+      }),
+    );
+    expect(runExecProcessMock).not.toHaveBeenCalled();
   });
 
   it("binds explicit allow-always persistence to its evaluated policy snapshot", async () => {
@@ -2162,7 +2202,7 @@ EOF`,
             ask: "off",
             askFallback: "deny",
             autoAllowSkills: false,
-            allowlistRuleKeys: [],
+            allowlistRules: [],
           },
           requireAutoAllowSkills: false,
           requireExactCommandApproval: false,

@@ -50,33 +50,45 @@ function workflowStep(job: WorkflowJob, name: string) {
 }
 
 function runIdentityVerification(params: {
-  callerWorkflowSha?: string;
   expectedTrustedWorkflowSha: string;
-  jobWorkflowSha: string;
+  invocation?: "dispatch" | "reusable";
+  oidcJobWorkflowSha?: string;
   oidcWorkflowSha?: string;
+  workflowSha?: string;
 }) {
   const repository = "openclaw/openclaw";
-  const workflowRef = `${repository}/.github/workflows/openclaw-release-checks.yml@refs/heads/release-ci/test`;
-  const jobWorkflowRef = `${repository}/.github/workflows/openclaw-release-telegram-qa.yml@refs/heads/main`;
+  const trustedWorkflowRef = `${repository}/.github/workflows/openclaw-release-telegram-qa.yml@refs/heads/main`;
+  const invocation = params.invocation ?? "dispatch";
+  const workflowRef =
+    invocation === "dispatch"
+      ? trustedWorkflowRef
+      : `${repository}/.github/workflows/openclaw-release-checks.yml@refs/heads/release-ci/test`;
+  const workflowRefName =
+    invocation === "dispatch" ? "refs/heads/main" : "refs/heads/release-ci/test";
   const targetSha = "a".repeat(40);
   const workdir = tempDirs.make("openclaw-telegram-identity-");
   const fakeBin = join(workdir, "bin");
   const curlPath = join(fakeBin, "curl");
   const githubOutput = join(workdir, "github-output");
   mkdirSync(fakeBin);
-  const callerWorkflowSha = params.callerWorkflowSha ?? params.expectedTrustedWorkflowSha;
-  const oidcWorkflowSha = params.oidcWorkflowSha ?? params.jobWorkflowSha;
+  const workflowSha = params.workflowSha ?? params.expectedTrustedWorkflowSha;
+  const oidcWorkflowSha = params.oidcWorkflowSha ?? workflowSha;
   const payload = {
     aud: "openclaw-release-telegram-qa",
+    event_name: "workflow_dispatch",
     iss: "https://token.actions.githubusercontent.com",
-    job_workflow_ref: jobWorkflowRef,
-    job_workflow_sha: oidcWorkflowSha,
-    ref: "refs/heads/release-ci/test",
+    ...(invocation === "reusable"
+      ? {
+          job_workflow_ref: trustedWorkflowRef,
+          job_workflow_sha: params.oidcJobWorkflowSha ?? params.expectedTrustedWorkflowSha,
+        }
+      : {}),
+    ref: workflowRefName,
     repository,
     runner_environment: "github-hosted",
-    sha: callerWorkflowSha,
+    sha: workflowSha,
     workflow_ref: workflowRef,
-    workflow_sha: callerWorkflowSha,
+    workflow_sha: oidcWorkflowSha,
   };
   const token = [
     Buffer.from("{}").toString("base64url"),
@@ -86,7 +98,10 @@ function runIdentityVerification(params: {
   writeFileSync(curlPath, "#!/usr/bin/env bash\nprintf '%s\\n' \"$FAKE_OIDC_JSON\"\n", {
     mode: 0o755,
   });
-  const script = workflowStep(workflowJob("trusted_identity"), "Verify called-main identity").run;
+  const script = workflowStep(
+    workflowJob("trusted_identity"),
+    "Verify dispatched-main identity",
+  ).run;
   if (!script) {
     throw new Error("Expected trusted identity script");
   }
@@ -97,21 +112,24 @@ function runIdentityVerification(params: {
       ACTIONS_ID_TOKEN_REQUEST_TOKEN: "test-token",
       ACTIONS_ID_TOKEN_REQUEST_URL: "https://example.invalid/oidc?",
       CALLER_WORKFLOW_REF: workflowRef,
-      CALLER_WORKFLOW_SHA: callerWorkflowSha,
+      CALLER_WORKFLOW_SHA: workflowSha,
       EXPECTED_TRUSTED_WORKFLOW_SHA: params.expectedTrustedWorkflowSha,
       FAKE_OIDC_JSON: JSON.stringify({ value: token }),
+      GITHUB_EVENT_NAME: "workflow_dispatch",
       GITHUB_OUTPUT: githubOutput,
-      GITHUB_REF: "refs/heads/release-ci/test",
+      GITHUB_REF: workflowRefName,
       GITHUB_REPOSITORY: repository,
-      GITHUB_SHA: callerWorkflowSha,
+      GITHUB_SHA: workflowSha,
       JOB_CONTEXT: JSON.stringify({
-        workflow_ref: jobWorkflowRef,
+        workflow_ref: trustedWorkflowRef,
         workflow_repository: repository,
-        workflow_sha: params.jobWorkflowSha,
+        workflow_sha: params.expectedTrustedWorkflowSha,
       }),
       PATH: `${fakeBin}:${process.env.PATH}`,
       TARGET_REF: "refs/heads/release/2026.7.1",
       TARGET_SHA: targetSha,
+      WORKFLOW_REF: workflowRef,
+      WORKFLOW_SHA: workflowSha,
     },
   });
 }
@@ -189,7 +207,7 @@ function runAdvisoryStatus(overrides: Record<string, string> = {}) {
 }
 
 describe("release Telegram QA workflow", () => {
-  it("has exactly one trusted-main caller from release checks", () => {
+  it("dispatches one accepted trusted-main child from release checks", () => {
     const releaseSource = readFileSync(RELEASE_CHECKS_PATH, "utf8");
     const reusableSource = readFileSync(WORKFLOW_PATH, "utf8");
     const releaseWorkflow = parse(releaseSource) as {
@@ -197,44 +215,55 @@ describe("release Telegram QA workflow", () => {
     };
     const caller = releaseWorkflow.jobs?.qa_live_telegram_release_checks;
 
-    expect(caller?.uses).toBe(
-      "openclaw/openclaw/.github/workflows/openclaw-release-telegram-qa.yml@main",
-    );
     expect(caller?.needs).toEqual(["resolve_target"]);
     expect(caller?.if).toContain("needs.resolve_target.outputs.qa_live_telegram_enabled == 'true'");
-    expect(caller?.with).toEqual({
-      expected_trusted_workflow_sha: "${{ needs.resolve_target.outputs.trusted_workflow_sha }}",
-      target_ref: "${{ needs.resolve_target.outputs.ref }}",
-      target_sha: "${{ needs.resolve_target.outputs.revision }}",
-    });
     expect(caller?.permissions).toEqual({
-      actions: "read",
-      attestations: "write",
+      actions: "write",
       contents: "read",
-      "id-token": "write",
-      "pull-requests": "read",
     });
+    expect(caller?.["timeout-minutes"]).toBe(210);
     expect(caller?.["continue-on-error"]).toBeUndefined();
-    expect(caller?.["runs-on"]).toBeUndefined();
+    expect(caller?.["runs-on"]).toBe("ubuntu-24.04");
     expect(caller?.environment).toBeUndefined();
-    expect(caller?.steps).toBeUndefined();
+    const dispatch = caller?.steps?.find(
+      (step) => step.name === "Dispatch and await trusted Telegram QA",
+    );
+    expect(dispatch?.run).toContain('gh workflow run "$workflow"');
+    expect(dispatch?.run).toContain('--repo "$GITHUB_REPOSITORY"');
+    expect(dispatch?.run).toContain("-F event=workflow_dispatch");
+    expect(dispatch?.run).toContain(".display_title == env.RUN_NAME");
+    expect(dispatch?.run).toContain("$(openssl rand -hex 16)");
+    expect(dispatch?.run).toContain("trap cancel_child_on_failure EXIT");
+    expect(dispatch?.run).toContain("for _ in $(seq 1 6)");
+    expect(dispatch?.run).toContain("/actions/runs/${run_id}/cancel");
+    expect(dispatch?.run).toContain("for dispatch_attempt in 1 2 3 4 5");
+    expect(dispatch?.run).toContain('gh api "repos/${GITHUB_REPOSITORY}/commits/main"');
+    expect(dispatch?.run).toContain(
+      'if [[ "$child_head_sha" == "$expected_trusted_workflow_sha" ]]; then',
+    );
+    expect(dispatch?.run).toContain("Trusted main moved from");
+    expect(dispatch?.run).toContain("Trusted main kept moving");
+    expect(dispatch?.run).toContain("for _ in $(seq 1 1080)");
+    expect(dispatch?.run).toContain("Trusted Telegram QA concluded ${conclusion}");
+    expect(
+      releaseSource.match(
+        /"qa_live_telegram_release_checks=\$\{QA_LIVE_TELEGRAM_RELEASE_CHECKS_RESULT\}"/gu,
+      ),
+    ).toHaveLength(1);
+    expect(releaseSource).not.toContain(
+      "qa_live_matrix_release_checks|qa_live_telegram_release_checks|qa_live_discord_release_checks",
+    );
     expect(releaseSource).not.toContain("persist-credentials: true");
 
-    const callerPattern =
-      /uses:\s*openclaw\/openclaw\/\.github\/workflows\/openclaw-release-telegram-qa\.yml@main/gu;
-    const callers = readdirSync(".github/workflows")
+    const dispatchers = readdirSync(".github/workflows")
       .filter((name) => name.endsWith(".yml"))
       .flatMap((name) => {
         const path = `.github/workflows/${name}`;
-        return Array.from(readFileSync(path, "utf8").matchAll(callerPattern), () => path);
+        return readFileSync(path, "utf8").includes('workflow="openclaw-release-telegram-qa.yml"')
+          ? [path]
+          : [];
       });
-    expect(callers).toEqual([RELEASE_CHECKS_PATH]);
-    expect(
-      readdirSync(".github/workflows")
-        .filter((name) => name.endsWith(".yml"))
-        .map((name) => readFileSync(`.github/workflows/${name}`, "utf8"))
-        .join("\n"),
-    ).not.toContain("uses: ./.github/workflows/openclaw-release-telegram-qa.yml");
+    expect(dispatchers).toEqual([RELEASE_CHECKS_PATH]);
     expect(reusableSource).toContain(
       "openclaw/openclaw/.github/workflows/openclaw-release-telegram-qa.yml@refs/heads/main",
     );
@@ -243,63 +272,79 @@ describe("release Telegram QA workflow", () => {
     );
     expect(reusableSource).toContain('--signer-digest "$CALLED_WORKFLOW_SHA"');
     const resolveJob = releaseWorkflow.jobs?.resolve_target;
-    expect(resolveJob?.outputs?.trusted_workflow_sha).toBe(
-      "${{ steps.trusted_workflow.outputs.sha }}",
-    );
-    const resolveTrustedWorkflow = resolveJob?.steps?.find(
-      (step) => step.name === "Resolve trusted main Telegram workflow SHA",
-    );
-    expect(resolveTrustedWorkflow?.run).toContain("--ref refs/heads/main");
-    expect(resolveTrustedWorkflow?.run).not.toContain("--fallback-ok");
-    const reusableWorkflow = parse(reusableSource) as {
+    expect(resolveJob?.outputs?.trusted_workflow_sha).toBeUndefined();
+    expect(
+      resolveJob?.steps?.find((step) => step.name === "Resolve trusted main Telegram workflow SHA"),
+    ).toBeUndefined();
+    const dispatchedWorkflow = parse(reusableSource) as {
       on?: {
         workflow_call?: {
+          inputs?: Record<string, { required?: boolean; type?: string }>;
+          secrets?: Record<string, { required?: boolean }>;
+        };
+        workflow_dispatch?: {
           inputs?: Record<string, { required?: boolean; type?: string }>;
         };
       };
     };
-    expect(reusableWorkflow.on?.workflow_call?.inputs?.expected_trusted_workflow_sha).toEqual({
-      description: "Resolved main SHA authorized for this trusted reusable workflow",
+    expect(dispatchedWorkflow.on?.workflow_dispatch?.inputs?.expected_trusted_workflow_sha).toEqual(
+      {
+        description: "Resolved main SHA authorized for this trusted workflow",
+        required: true,
+        type: "string",
+      },
+    );
+    expect(dispatchedWorkflow.on?.workflow_dispatch?.inputs?.dispatch_id).toEqual({
+      description: "Unique parent release-check dispatch identifier",
       required: true,
       type: "string",
     });
+    expect(dispatchedWorkflow.on?.workflow_call?.inputs?.expected_trusted_workflow_sha).toEqual({
+      description: "Resolved main SHA authorized for this trusted workflow",
+      required: true,
+      type: "string",
+    });
+    expect(dispatchedWorkflow.on?.workflow_call?.secrets).toHaveProperty(
+      "OPENCLAW_QA_CONVEX_SECRET_CI",
+    );
   });
 
-  it("binds called-main OIDC and job identity to the resolved main SHA", () => {
+  it("binds dispatched and legacy reusable OIDC identity to the resolved main SHA", () => {
     const trustedSha = "b".repeat(40);
     const success = runIdentityVerification({
-      callerWorkflowSha: "d".repeat(40),
       expectedTrustedWorkflowSha: trustedSha,
-      jobWorkflowSha: trustedSha,
     });
     expect(success.status).toBe(0);
 
     const oidcDrifted = runIdentityVerification({
       expectedTrustedWorkflowSha: trustedSha,
-      jobWorkflowSha: trustedSha,
       oidcWorkflowSha: "c".repeat(40),
     });
     expect(oidcDrifted.status).toBe(1);
-    expect(oidcDrifted.stderr).toContain(
-      "OIDC job_workflow_sha does not match the frozen trusted workflow SHA",
-    );
-
-    const jobDrifted = runIdentityVerification({
-      expectedTrustedWorkflowSha: trustedSha,
-      jobWorkflowSha: "c".repeat(40),
-      oidcWorkflowSha: trustedSha,
-    });
-    expect(jobDrifted.status).toBe(1);
-    expect(jobDrifted.stderr).toContain("job context workflow_sha mismatch");
+    expect(oidcDrifted.stderr).toContain("OIDC workflow_sha mismatch");
 
     const mainMoved = runIdentityVerification({
-      callerWorkflowSha: "d".repeat(40),
       expectedTrustedWorkflowSha: trustedSha,
-      jobWorkflowSha: "c".repeat(40),
-      oidcWorkflowSha: "c".repeat(40),
+      workflowSha: "c".repeat(40),
     });
     expect(mainMoved.status).toBe(1);
-    expect(mainMoved.stderr).toContain("job context workflow_sha mismatch");
+    expect(mainMoved.stderr).toBe("");
+
+    const reusableSuccess = runIdentityVerification({
+      expectedTrustedWorkflowSha: trustedSha,
+      invocation: "reusable",
+      workflowSha: "d".repeat(40),
+    });
+    expect(reusableSuccess.status).toBe(0);
+
+    const reusableDrifted = runIdentityVerification({
+      expectedTrustedWorkflowSha: trustedSha,
+      invocation: "reusable",
+      oidcJobWorkflowSha: "c".repeat(40),
+      workflowSha: "d".repeat(40),
+    });
+    expect(reusableDrifted.status).toBe(1);
+    expect(reusableDrifted.stderr).toContain("OIDC job_workflow_sha mismatch");
   });
 
   it("keeps candidate construction secretless and credentials inside the isolated runner", () => {
@@ -318,6 +363,7 @@ describe("release Telegram QA workflow", () => {
     expect(secretSteps).toEqual(["Validate required QA credential env", "Run Telegram live lane"]);
     expect(source).not.toContain("secrets: inherit");
     expect(source).not.toContain("persist-credentials: true");
+    expect(source).toContain("trusted_scenario_source=verified_trusted_workflow_sha");
 
     for (const [jobName, job] of Object.entries(workflow.jobs ?? {})) {
       for (const step of job.steps ?? []) {
@@ -326,6 +372,15 @@ describe("release Telegram QA workflow", () => {
         }
       }
     }
+  });
+
+  it("allows the tracked-file index to exceed Node's default child-process buffer", () => {
+    const compareStep = workflowStep(
+      workflowJob("attest_candidate"),
+      "Compare candidate tracked source and tree",
+    );
+
+    expect(compareStep.run).toContain("maxBuffer: 16 * 1024 * 1024");
   });
 
   it("emits the release-check terminal status contract and fails closed", () => {
@@ -450,7 +505,21 @@ describe("release Telegram QA workflow", () => {
 
   it("derives SUT-writable paths from the verified runtime root after sudo", () => {
     const source = readFileSync(WORKFLOW_PATH, "utf8");
+    expect(source).toContain("Telegram SUT launcher failed: stage=%s line=%s status=%s");
+    expect(source).toContain("launcher_stage=root-run-setup");
+    expect(source).toContain("launcher_stage=enter-mount-namespace");
+    expect(source).toContain("launcher_stage=mask-host-paths");
+    expect(source).toContain("launcher_stage=mount-proc");
+    expect(source).toContain("launcher_stage=write-identity");
+    expect(source).toMatch(/launcher_stage=enter-mount-namespace\n\s+\/usr\/bin\/unshare/u);
+    expect(source).not.toContain("exec /usr/bin/unshare");
+    expect(source).not.toContain("set -x");
     expect(source).toContain('temp_root="$(realpath -e "${OPENCLAW_QA_TEMP_ROOT:?}")"');
+    expect(source).toContain("sudo install -d -o root -g root -m 0700 /tmp/openclaw");
+    expect(source).toContain(
+      '-m 0711 \\\n            "${runtime_root}/tmp/openclaw-${runner_uid}"',
+    );
+    expect(source).toContain('"$RUNTIME_ROOT"/tmp/openclaw-"$RUNNER_UID"/openclaw-qa-suite-*');
     expect(source).toContain('proc_stat="$(cat "/proc/${pid}/stat")"');
     expect(source).not.toContain('proc_stat="$(cat /proc/self/stat)"');
     expect(source).toContain('if [[ "${1:-}" == "--root-verify" ]]');
@@ -460,5 +529,25 @@ describe("release Telegram QA workflow", () => {
     expect(source).toContain('export HOME="${temp_root}/home"');
     expect(source).toContain('export XDG_CONFIG_HOME="${temp_root}/xdg-config"');
     expect(source).toContain('if [[ "${1:-}" == "--root-terminate-uid" ]]');
+  });
+
+  it("reports the namespace-entry stage when its supervised child fails", () => {
+    const source = readFileSync(WORKFLOW_PATH, "utf8");
+    const trapLine = source.match(/^\s+(trap 'exit_status=.*' ERR)$/mu)?.[1];
+    expect(trapLine).toBeTruthy();
+
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        `set -Eeuo pipefail\nlauncher_stage=enter-mount-namespace\n${trapLine}\nbash -c 'exit 23'`,
+      ],
+      { encoding: "utf8" },
+    );
+
+    expect(result.status).toBe(23);
+    expect(result.stderr).toMatch(
+      /Telegram SUT launcher failed: stage=enter-mount-namespace line=[0-9]+ status=23/u,
+    );
   });
 });

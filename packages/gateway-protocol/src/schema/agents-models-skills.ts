@@ -916,6 +916,11 @@ export const ToolsInvokeParamsSchema = Type.Object(
     agentId: Type.Optional(NonEmptyString),
     confirm: Type.Optional(Type.Boolean()),
     idempotencyKey: Type.Optional(NonEmptyString),
+    /**
+     * Explicit operation-local marker for an authenticated direct operator.
+     * Missing values remain delegated, and agent runtime identity wins server-side.
+     */
+    conversationReadOrigin: Type.Optional(Type.Literal("direct-operator")),
   },
   { additionalProperties: false },
 );

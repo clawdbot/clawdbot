@@ -305,6 +305,10 @@ struct MacNodeRuntimeTests {
         let home = root.appendingPathComponent("home", isDirectory: true)
         let stateDir = root.appendingPathComponent("state", isDirectory: true)
         defer { try? FileManager().removeItem(at: root) }
+        try FileManager().createDirectory(at: stateDir, withIntermediateDirectories: true)
+        let initial = ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
+        try JSONEncoder().encode(initial)
+            .write(to: stateDir.appendingPathComponent("exec-approvals.json"))
 
         try await TestIsolation.withEnvValues([
             "OPENCLAW_HOME": home.path,

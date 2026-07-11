@@ -752,13 +752,15 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           };
         };
         return {
-          bubble: styleFor(".chat-group.assistant .chat-bubble:first-child"),
+          assistantBubble: styleFor(".chat-group.assistant .chat-bubble:first-child"),
+          bubble: styleFor(".chat-group.user .chat-bubble:first-child"),
           composer: styleFor(".agent-chat__input"),
           footer: styleFor(".agent-chat__composer-footer"),
           textarea: styleFor(".agent-chat__composer-combobox > textarea"),
         };
       });
 
+      expect(geometry.assistantBubble).not.toBeNull();
       expect(geometry.bubble).not.toBeNull();
       expect(geometry.composer).not.toBeNull();
       expect(geometry.footer).not.toBeNull();
@@ -773,6 +775,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           geometry.bubble?.paddingLeft,
         ]),
       ).toEqual(new Set([16]));
+      // Assistant replies render flat (no bubble card): zero horizontal inset
+      // keeps the text on the tool-row left edge.
+      expect(geometry.assistantBubble?.paddingLeft).toBe(0);
+      expect(geometry.assistantBubble?.paddingRight).toBe(0);
       expect(geometry.composer?.borderRadius).toBe(10);
 
       const composerInset = width <= 768 ? 4 : 8;
@@ -1362,6 +1368,137 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       }
     },
   );
+
+  it("stacks the detail sidebar below the thread in a narrow pane", async () => {
+    const page = await openBrowserPage(900, 700);
+    try {
+      // A 620px pane inside a wide viewport: chat-pane sets the stacked class
+      // when the pane cannot fit chat + detail panel side by side.
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+          <div style="width: 620px; height: 600px; display: flex;">
+            <div class="chat-split-container chat-split-container--open chat-split-container--stacked">
+              <div class="chat-main" style="flex: 0 1 60%">
+                <div class="chat-thread" role="log">
+                  <div class="chat-thread-inner">
+                    <div class="chat-group assistant">
+                      <div class="chat-avatar assistant">A</div>
+                      <div class="chat-group-messages">
+                        <div class="chat-bubble"><div class="chat-text">Stacked layout keeps the thread readable.</div></div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <section class="chat-sidebar"><div class="sidebar-panel">Detail panel</div></section>
+            </div>
+          </div>
+        </body></html>`,
+      );
+
+      await expectNoHorizontalOverflow(page);
+      const main = await getRect(page, ".chat-main");
+      const sidebar = await getRect(page, ".chat-sidebar");
+      expect(sidebar.top).toBeGreaterThanOrEqual(main.bottom - 1);
+      expect(Math.abs(sidebar.width - main.width)).toBeLessThanOrEqual(1);
+      expect(sidebar.width).toBeGreaterThanOrEqual(618);
+      expect(sidebar.height).toBeGreaterThanOrEqual(160);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it("releases the hidden tasks-rail grid track on narrow viewports", async () => {
+    const page = await openBrowserPage(1000, 700);
+    try {
+      // Below 1120px the background-tasks rail is display:none; its tasks-open
+      // grid templates must collapse so no empty column strip stays reserved.
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+          <div style="width: 980px; height: 600px; display: flex;">
+            <div class="chat-workbench chat-workbench--tasks-open">
+              <aside class="chat-workspace-rail">workspace</aside>
+              <aside class="chat-tasks-rail">tasks</aside>
+              <div class="chat-workbench__main">thread</div>
+            </div>
+          </div>
+        </body></html>`,
+      );
+
+      const layout = await page.evaluate(() => {
+        const rectFor = (selector: string) => {
+          const node = document.querySelector<HTMLElement>(selector);
+          const rect = node?.getBoundingClientRect();
+          return rect ? { left: rect.left, right: rect.right, width: rect.width } : null;
+        };
+        return {
+          workbench: rectFor(".chat-workbench"),
+          rail: rectFor(".chat-workspace-rail"),
+          tasksVisible:
+            getComputedStyle(document.querySelector<HTMLElement>(".chat-tasks-rail")!).display !==
+            "none",
+        };
+      });
+
+      expect(layout.tasksVisible).toBe(false);
+      expect(layout.workbench).not.toBeNull();
+      expect(layout.rail).not.toBeNull();
+      // The workspace rail sits flush at the workbench edge — no empty strip
+      // reserved for the hidden tasks rail.
+      expect(
+        Math.abs((layout.rail?.right ?? 0) - (layout.workbench?.right ?? 0)),
+      ).toBeLessThanOrEqual(1);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it("keeps the bottom-docked rail path and summary rows unclipped", async () => {
+    const page = await openBrowserPage(760, 700);
+    try {
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+          <div class="chat-workbench chat-workbench--dock-bottom" style="height: 620px;">
+            <div class="chat-workbench__main"></div>
+            <aside class="chat-workspace-rail">
+              <div class="chat-workspace-rail__header">
+                <div class="chat-workspace-rail__title">
+                  <span class="chat-workspace-rail__eyebrow">Session</span>
+                  <strong>Workspace</strong>
+                </div>
+              </div>
+              <div class="chat-workspace-rail__path">/Users/steipete/.openclaw/workspace</div>
+              <div class="chat-workspace-rail__summary">
+                <span>0 changed</span><span>0 read</span><span>0 artifacts</span><span>15 shown</span>
+              </div>
+              <div class="chat-workspace-rail__scroll">
+                <section class="chat-workspace-rail__section">
+                  <div class="chat-workspace-rail__section-title">Project files</div>
+                  ${Array.from(
+                    { length: 12 },
+                    (_value, index) =>
+                      `<div class="chat-workspace-rail__file">notes-file-${index}.md</div>`,
+                  ).join("")}
+                </section>
+              </div>
+            </aside>
+          </div>
+        </body></html>`,
+      );
+
+      const rail = await getRect(page, ".chat-workspace-rail");
+      const railPath = await getRect(page, ".chat-workspace-rail__path");
+      const summary = await getRect(page, ".chat-workspace-rail__summary");
+      // The strip is height-bounded; fixed rows must not shrink below their
+      // content, only the scroll section gives way.
+      expect(rail.height).toBeLessThanOrEqual(237);
+      expect(railPath.height).toBeGreaterThanOrEqual(30);
+      expect(summary.height).toBeGreaterThanOrEqual(20);
+      expect(summary.top).toBeGreaterThanOrEqual(railPath.bottom - 1);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
 
   it("keeps short-landscape composer adjunct rows scroll-reachable", async () => {
     const page = await openFixture(568, 320, { composerAttachment: true });

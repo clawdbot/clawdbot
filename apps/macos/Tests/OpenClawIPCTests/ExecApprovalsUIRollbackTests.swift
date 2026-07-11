@@ -222,6 +222,25 @@ struct ExecApprovalsUIRollbackTests {
         }
     }
 
+    @Test
+    func `inherited allowlist removal remains visible and reports its owning scope`() async throws {
+        try await self.withTempStateDir { _ in
+            let inherited = ExecAllowlistEntry(id: "wildcard-entry", pattern: "/usr/bin/printf")
+            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "*") { entry in
+                entry.allowlist = [inherited]
+            }.get()
+            let model = ExecApprovalsSettingsModel()
+            await model.loadSettings(for: "main")
+            #expect(model.entries.map(\.id) == [inherited.id])
+
+            model.removeEntry(id: inherited.id)
+
+            #expect(model.entries.map(\.id) == [inherited.id])
+            #expect(model.mutationErrorMessage == ExecApprovalsMutationError.entryNotOwned.message)
+            #expect(ExecApprovalsStore.loadFile().agents?["*"]?.allowlist?.map(\.id) == [inherited.id])
+        }
+    }
+
     private func withTempStateDir<T>(
         _ body: (URL) async throws -> T) async throws -> T
     {

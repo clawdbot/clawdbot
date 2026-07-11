@@ -5,8 +5,10 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { definePluginEntry, type AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
+import { validateSupportedA2UIJsonl } from "./src/a2ui-jsonl.js";
 import { canvasConfigSchema, isCanvasHostEnabled } from "./src/config.js";
 import { A2UI_PATH, CANVAS_HOST_PATH, CANVAS_WS_PATH } from "./src/host/a2ui-shared.js";
 import {
@@ -143,7 +145,32 @@ export default definePluginEntry({
       commands: CANVAS_NODE_COMMANDS,
       defaultPlatforms: ["ios", "android", "macos", "windows", "unknown"],
       foregroundRestrictedOnIos: true,
-      handle: (ctx) => ctx.invokeNode(),
+      handle: async (ctx) => {
+        const params =
+          ctx.params && typeof ctx.params === "object" && !Array.isArray(ctx.params)
+            ? (ctx.params as Record<string, unknown>)
+            : {};
+        // Native nodes also accept JSONL under `push` when messages[] is absent.
+        // Validate that fallback here so callers cannot bypass the JSONL policy.
+        const usesJsonl =
+          ctx.command === "canvas.a2ui.pushJSONL" ||
+          (ctx.command === "canvas.a2ui.push" &&
+            !Array.isArray(params.messages) &&
+            Object.hasOwn(params, "jsonl"));
+        if (usesJsonl) {
+          const jsonl = typeof params.jsonl === "string" ? params.jsonl : "";
+          try {
+            validateSupportedA2UIJsonl(jsonl);
+          } catch (error) {
+            return {
+              ok: false,
+              code: "INVALID_A2UI_JSONL",
+              message: formatErrorMessage(error),
+            };
+          }
+        }
+        return await ctx.invokeNode();
+      },
     });
     api.registerTool((ctx) =>
       createLazyCanvasTool({

@@ -10,14 +10,23 @@ import type { SkillBinsProvider } from "./invoke-types.js";
 import { handleInvoke } from "./invoke.js";
 
 const approvalResolutionFailure = vi.hoisted(() => ({ error: null as Error | null }));
+type ExecApprovalsUpdate = Parameters<
+  typeof import("../infra/exec-approvals.js").updateExecApprovals
+>[0];
 const execApprovalsStoreMock = vi.hoisted(() => ({
   ensureError: undefined as Error | undefined,
   ensureResult: undefined as unknown,
   hasEnsureResult: false,
+  ensureCalls: 0,
+  readError: undefined as Error | undefined,
+  readResult: undefined as unknown,
+  hasReadResult: false,
+  readCalls: 0,
   updateError: undefined as Error | undefined,
   updateResult: undefined as unknown,
   hasUpdateResult: false,
   updateCalls: 0,
+  updateParams: undefined as ExecApprovalsUpdate | undefined,
 }));
 
 vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
@@ -25,6 +34,7 @@ vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
   return {
     ...original,
     ensureExecApprovalsSnapshot: async () => {
+      execApprovalsStoreMock.ensureCalls += 1;
       if (execApprovalsStoreMock.ensureError !== undefined) {
         throw execApprovalsStoreMock.ensureError;
       }
@@ -35,8 +45,21 @@ vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
       }
       return await original.ensureExecApprovalsSnapshot();
     },
+    readExecApprovalsSnapshot: () => {
+      execApprovalsStoreMock.readCalls += 1;
+      if (execApprovalsStoreMock.readError !== undefined) {
+        throw execApprovalsStoreMock.readError;
+      }
+      if (execApprovalsStoreMock.hasReadResult) {
+        return execApprovalsStoreMock.readResult as ReturnType<
+          typeof original.readExecApprovalsSnapshot
+        >;
+      }
+      return original.readExecApprovalsSnapshot();
+    },
     updateExecApprovals: async (...args: Parameters<typeof original.updateExecApprovals>) => {
       execApprovalsStoreMock.updateCalls += 1;
+      execApprovalsStoreMock.updateParams = args[0];
       if (execApprovalsStoreMock.updateError !== undefined) {
         throw execApprovalsStoreMock.updateError;
       }
@@ -114,10 +137,16 @@ describe("node host invoke", () => {
     execApprovalsStoreMock.ensureError = undefined;
     execApprovalsStoreMock.ensureResult = undefined;
     execApprovalsStoreMock.hasEnsureResult = false;
+    execApprovalsStoreMock.ensureCalls = 0;
+    execApprovalsStoreMock.readError = undefined;
+    execApprovalsStoreMock.readResult = undefined;
+    execApprovalsStoreMock.hasReadResult = false;
+    execApprovalsStoreMock.readCalls = 0;
     execApprovalsStoreMock.updateError = undefined;
     execApprovalsStoreMock.updateResult = undefined;
     execApprovalsStoreMock.hasUpdateResult = false;
     execApprovalsStoreMock.updateCalls = 0;
+    execApprovalsStoreMock.updateParams = undefined;
   });
 
   it("returns a redacted exec approvals snapshot", async () => {
@@ -137,8 +166,8 @@ describe("node host invoke", () => {
   });
 
   it("updates exec approvals and redacts the resulting snapshot", async () => {
-    execApprovalsStoreMock.hasEnsureResult = true;
-    execApprovalsStoreMock.ensureResult = createExecApprovalsSnapshot();
+    execApprovalsStoreMock.hasReadResult = true;
+    execApprovalsStoreMock.readResult = createExecApprovalsSnapshot();
     execApprovalsStoreMock.hasUpdateResult = true;
     execApprovalsStoreMock.updateResult = createExecApprovalsSnapshot({
       hash: "hash-after",
@@ -154,6 +183,8 @@ describe("node host invoke", () => {
     });
 
     expect(execApprovalsStoreMock.updateCalls).toBe(1);
+    expect(execApprovalsStoreMock.ensureCalls).toBe(0);
+    expect(execApprovalsStoreMock.readCalls).toBe(1);
     expect(JSON.parse(result.payloadJSON ?? "{}")).toEqual({
       path: "/tmp/exec-approvals.json",
       exists: true,
@@ -167,8 +198,8 @@ describe("node host invoke", () => {
   });
 
   it("rejects an exec approvals update with a stale base hash", async () => {
-    execApprovalsStoreMock.hasEnsureResult = true;
-    execApprovalsStoreMock.ensureResult = createExecApprovalsSnapshot();
+    execApprovalsStoreMock.hasReadResult = true;
+    execApprovalsStoreMock.readResult = createExecApprovalsSnapshot();
     const result = await invokeExecApprovals("system.execApprovals.set", {
       baseHash: "stale-hash",
       file: { version: 1 },
@@ -184,9 +215,66 @@ describe("node host invoke", () => {
     });
   });
 
+  it("rejects a stale save without recreating deleted node approval state", async () => {
+    const missingSnapshot = createExecApprovalsSnapshot({
+      exists: false,
+      raw: null,
+      hash: "sha256:missing",
+      file: { version: 1, agents: {} },
+    });
+    execApprovalsStoreMock.hasReadResult = true;
+    execApprovalsStoreMock.readResult = missingSnapshot;
+
+    const result = await invokeExecApprovals("system.execApprovals.set", {
+      baseHash: "hash-before",
+      file: { version: 1, agents: {} },
+    });
+
+    expect(execApprovalsStoreMock.ensureCalls).toBe(0);
+    expect(execApprovalsStoreMock.readCalls).toBe(1);
+    expect(execApprovalsStoreMock.updateCalls).toBe(0);
+    expect(missingSnapshot.file.socket).toBeUndefined();
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("exec approvals changed"),
+      },
+    });
+  });
+
+  it("initializes socket credentials in the first accepted node approval write", async () => {
+    const missingSnapshot = createExecApprovalsSnapshot({
+      exists: false,
+      raw: null,
+      hash: "sha256:missing",
+      file: { version: 1, agents: {} },
+    });
+    execApprovalsStoreMock.hasReadResult = true;
+    execApprovalsStoreMock.readResult = missingSnapshot;
+    execApprovalsStoreMock.hasUpdateResult = true;
+    execApprovalsStoreMock.updateResult = createExecApprovalsSnapshot({ hash: "sha256:created" });
+
+    const result = await invokeExecApprovals("system.execApprovals.set", {
+      file: { version: 1, agents: { main: {} } },
+    });
+    const prepared = execApprovalsStoreMock.updateParams?.update(missingSnapshot.file);
+
+    expect(execApprovalsStoreMock.ensureCalls).toBe(0);
+    expect(execApprovalsStoreMock.readCalls).toBe(1);
+    expect(execApprovalsStoreMock.updateCalls).toBe(1);
+    expect(execApprovalsStoreMock.updateParams?.baseHash).toBe(missingSnapshot.hash);
+    expect(prepared?.socket?.path).toBeTruthy();
+    expect(prepared?.socket?.token).toMatch(/^[A-Za-z0-9_-]{32}$/);
+    expect(JSON.parse(result.payloadJSON ?? "{}")).toMatchObject({
+      hash: "sha256:created",
+      file: { socket: { path: "/tmp/exec-approvals.sock" } },
+    });
+  });
+
   it("rejects an exec approvals update when the locked CAS loses its race", async () => {
-    execApprovalsStoreMock.hasEnsureResult = true;
-    execApprovalsStoreMock.ensureResult = createExecApprovalsSnapshot();
+    execApprovalsStoreMock.hasReadResult = true;
+    execApprovalsStoreMock.readResult = createExecApprovalsSnapshot();
     execApprovalsStoreMock.hasUpdateResult = true;
     execApprovalsStoreMock.updateResult = null;
     const result = await invokeExecApprovals("system.execApprovals.set", {
@@ -235,7 +323,7 @@ describe("node host invoke", () => {
   });
 
   it("classifies exec approvals filesystem failures as UNAVAILABLE", async () => {
-    execApprovalsStoreMock.ensureError = Object.assign(new Error("permission denied"), {
+    execApprovalsStoreMock.readError = Object.assign(new Error("permission denied"), {
       code: "EACCES",
     });
     const result = await invokeExecApprovals("system.execApprovals.set", {
@@ -252,8 +340,8 @@ describe("node host invoke", () => {
   });
 
   it("classifies exec approvals update failures as UNAVAILABLE", async () => {
-    execApprovalsStoreMock.hasEnsureResult = true;
-    execApprovalsStoreMock.ensureResult = createExecApprovalsSnapshot();
+    execApprovalsStoreMock.hasReadResult = true;
+    execApprovalsStoreMock.readResult = createExecApprovalsSnapshot();
     execApprovalsStoreMock.updateError = new Error("approval store write failed");
     const result = await invokeExecApprovals("system.execApprovals.set", {
       baseHash: "hash-before",
@@ -464,14 +552,43 @@ describe("node host invoke", () => {
           version: 1,
           defaults: { security: "allowlist", ask: "on-miss", askFallback: "deny" },
         });
+        const scriptPath = path.join(tempHome, "noop.cjs");
+        fs.writeFileSync(scriptPath, "");
         const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
+        await handleInvoke(
+          {
+            id: "invoke-suppress-notify-prepare",
+            nodeId: "node-1",
+            command: "system.run.prepare",
+            paramsJSON: JSON.stringify({
+              command: [process.execPath, scriptPath],
+              cwd: tempHome,
+              sessionKey: "agent:main:main",
+            }),
+          },
+          { request } as unknown as GatewayClient,
+          { current: async () => [] },
+        );
+        const prepareResult = request.mock.calls.find(
+          ([method, params]) =>
+            method === "node.invoke.result" &&
+            (params as { id?: string } | undefined)?.id === "invoke-suppress-notify-prepare",
+        )?.[1] as { payloadJSON?: string | null } | undefined;
+        const prepared = JSON.parse(prepareResult?.payloadJSON ?? "{}") as {
+          plan?: Record<string, unknown>;
+        };
+        expect(prepared.plan).toBeDefined();
         await handleInvoke(
           {
             id: "invoke-suppress-notify",
             nodeId: "node-1",
             command: "system.run",
             paramsJSON: JSON.stringify({
-              command: [process.execPath, "-e", ""],
+              command: prepared.plan?.argv,
+              rawCommand: prepared.plan?.commandText,
+              cwd: prepared.plan?.cwd,
+              sessionKey: "agent:main:main",
+              systemRunPlan: prepared.plan,
               approved: true,
               approvalDecision: "allow-once",
               suppressNotifyOnExit: true,
@@ -548,7 +665,17 @@ describe("node host invoke", () => {
     };
     const payload = JSON.parse(result.payloadJSON ?? "{}") as {
       execPolicy?: { security?: string; ask?: string };
+      plan?: { policySnapshot?: unknown };
     };
     expect(payload.execPolicy).toEqual({ security: "allowlist", ask: "on-miss" });
+    // The plan snapshot binds persisted approval state. Effective config-layer
+    // policy is returned separately above and re-evaluated at execution.
+    expect(payload.plan?.policySnapshot).toEqual({
+      security: "full",
+      ask: "off",
+      askFallback: "deny",
+      autoAllowSkills: false,
+      allowlistRules: [],
+    });
   });
 });

@@ -209,6 +209,45 @@ describe("createNodesTool screen_record duration guardrails", () => {
     expect(schema.properties?.invokeTimeoutMs).toMatchObject({ type: "integer", minimum: 1 });
   });
 
+  it("guides node discovery before describe", () => {
+    const tool = createNodesTool();
+    const schema = tool.parameters as {
+      properties?: { node?: { description?: string } };
+    };
+
+    expect(tool.description).toContain("List paired nodes with status");
+    expect(tool.description).toContain("specific node by passing node");
+    expect(schema.properties?.node?.description).toBe(
+      "Node ID, name, or IP. Required for describe and node-targeted actions; use status to discover nodes.",
+    );
+  });
+
+  it("requires an explicit node for describe and points to status", async () => {
+    const tool = createNodesTool();
+
+    await expect(tool.execute("call-describe", { action: "describe" })).rejects.toThrow(
+      'node required for describe; call nodes with action="status" to list nodes, then retry with node',
+    );
+    expect(nodeUtilsMocks.resolveNodeId).not.toHaveBeenCalled();
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("resolves and describes the explicit node", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({ nodeId: "node-1" });
+    const tool = createNodesTool();
+
+    await tool.execute("call-describe", { action: "describe", node: "Office Mac" });
+
+    expect(nodeUtilsMocks.resolveNodeId).toHaveBeenCalledWith({}, "Office Mac");
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.describe",
+      {},
+      {
+        nodeId: "node-1",
+      },
+    );
+  });
+
   it.each(["screen_record", "camera_clip"])(
     "clamps %s to the tool duration limit and budgets both timeout layers",
     async (action) => {

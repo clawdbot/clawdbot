@@ -47,15 +47,51 @@ struct PairingApprovalPanelView: View {
                 }
             }
             .scrollBounceBehavior(.basedOnSize)
-            HStack {
-                Spacer()
-                Button("Not Now") { self.center.snooze() }
-                    .keyboardShortcut(.cancelAction)
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-            }
+            self.footer(cards: cards)
         }
         .padding(18)
+    }
+
+    /// Single request keeps the minimal "Not Now" footer; multiple requests
+    /// add one-click bulk actions so a queue never needs card-by-card clicks.
+    @ViewBuilder
+    private func footer(cards: [PairingApprovalCenter.Card]) -> some View {
+        let notNow = Button("Not Now") { self.center.snooze() }
+            .keyboardShortcut(.cancelAction)
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+        if cards.count > 1 {
+            let allBusy = cards.allSatisfy { self.center.decisionsInFlight.contains($0.id) }
+            HStack(spacing: 8) {
+                notNow
+                Spacer()
+                // No keyboard shortcuts here: bulk approval is a security
+                // decision and must never be a stray Return press. Both
+                // actions resolve the rendered `cards` snapshot, never the
+                // live queue, so a request that arrives mid-click cannot be
+                // approved before it was ever displayed.
+                Button(role: .destructive) {
+                    self.center.decideAll(cards, .reject)
+                } label: {
+                    Text("Reject All")
+                        .padding(.horizontal, 6)
+                }
+                .pairingActionStyle(prominent: false)
+                Button {
+                    self.center.decideAll(cards, .approve)
+                } label: {
+                    Text("Approve All")
+                        .padding(.horizontal, 6)
+                }
+                .pairingActionStyle(prominent: true)
+            }
+            .disabled(allBusy)
+        } else {
+            HStack {
+                Spacer()
+                notNow
+            }
+        }
     }
 
     private func header(cards: [PairingApprovalCenter.Card]) -> some View {
@@ -184,44 +220,45 @@ struct PairingRequestCardView: View {
         .onHover { self.isHoveringDetail = $0 }
     }
 
-    @ViewBuilder
     private var approveButton: some View {
-        let button = Button {
+        Button {
             self.onDecision(.approve)
         } label: {
             Text(self.card.kind == .node ? "Approve Node" : "Approve Device")
                 .padding(.horizontal, 6)
         }
-        let shortcut: KeyboardShortcut? = self.isOnlyRequest ? .defaultAction : nil
-        if #available(macOS 26.0, *) {
-            button
-                .buttonStyle(.glassProminent)
-                .buttonBorderShape(.capsule)
-                .keyboardShortcut(shortcut)
-        } else {
-            button
-                .buttonStyle(.borderedProminent)
-                .buttonBorderShape(.capsule)
-                .keyboardShortcut(shortcut)
-        }
+        .pairingActionStyle(prominent: true)
+        .keyboardShortcut(self.isOnlyRequest ? .defaultAction : nil)
     }
 
-    @ViewBuilder
     private var rejectButton: some View {
-        let button = Button(role: .destructive) {
+        Button(role: .destructive) {
             self.onDecision(.reject)
         } label: {
             Text("Reject")
                 .padding(.horizontal, 6)
         }
+        .pairingActionStyle(prominent: false)
+    }
+}
+
+extension View {
+    /// Shared capsule styling for pairing decision buttons: Liquid Glass on
+    /// macOS 26+, bordered fallback on macOS 15.
+    @ViewBuilder
+    func pairingActionStyle(prominent: Bool) -> some View {
         if #available(macOS 26.0, *) {
-            button
-                .buttonStyle(.glass)
-                .buttonBorderShape(.capsule)
+            if prominent {
+                self.buttonStyle(.glassProminent).buttonBorderShape(.capsule)
+            } else {
+                self.buttonStyle(.glass).buttonBorderShape(.capsule)
+            }
         } else {
-            button
-                .buttonStyle(.bordered)
-                .buttonBorderShape(.capsule)
+            if prominent {
+                self.buttonStyle(.borderedProminent).buttonBorderShape(.capsule)
+            } else {
+                self.buttonStyle(.bordered).buttonBorderShape(.capsule)
+            }
         }
     }
 }

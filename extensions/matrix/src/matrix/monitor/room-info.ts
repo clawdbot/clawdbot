@@ -121,6 +121,7 @@ export function createMatrixRoomInfoResolver(client: MatrixClient) {
   };
 
   return {
+    getRoomAliases,
     getRoomInfo,
     getMemberDisplayName,
   };

@@ -612,6 +612,39 @@ describe("buildExecApprovalPendingToolResult", () => {
     expect(text).not.toContain("Pending command:");
   });
 
+  it("preserves node metadata in unavailable recovery guidance", () => {
+    const result = buildExecApprovalPendingToolResult({
+      host: "node",
+      nodeId: "node-mac-1",
+      command: "uname -a",
+      cwd: "/tmp",
+      warningText: "",
+      approvalId: "approval-id",
+      approvalSlug: "approval-slug",
+      expiresAtMs: Date.now() + 60_000,
+      initiatingSurface: {
+        kind: "enabled",
+        channel: undefined,
+        channelLabel: "Web UI",
+      },
+      sentApproverDms: false,
+      unavailableReason: "no-approval-route",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "approval-unavailable",
+      host: "node",
+      nodeId: "node-mac-1",
+    });
+    const text = result.content.find((part) => part.type === "text")?.text ?? "";
+    expect(text).toContain(
+      "Print the Control UI URL with `openclaw dashboard --no-open`, open it in a browser, then use the approval inbox.",
+    );
+    expect(text).toContain(
+      "Inspect the node's effective exec policy with `openclaw approvals get --node node-mac-1`.",
+    );
+  });
+
   it("keeps the Telegram unavailable reply when Discord DM approvals are not fully configured", () => {
     const result = buildDisabledSurfaceApprovalResult({
       channel: "telegram",

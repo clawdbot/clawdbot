@@ -7,8 +7,14 @@ import {
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../agents/glob-pattern.js";
 import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, normalizeToolName } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import { normalizeConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
+import {
+  isBundledConversationReadToolRegistration,
+  isHostRestrictedConversationReadTool,
+  registrationIncludesHostRestrictedConversationReadTool,
+} from "./compat/conversation-read-tools.js";
 import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
 import type { PluginLoadOptions } from "./loader.js";
 import {
@@ -205,6 +211,63 @@ function resolvePluginToolFactory(entry: PluginToolRegistration, ctx: OpenClawPl
   return runWithPluginToolScope(entry, () =>
     wrapPluginToolFactoryResult(entry, entry.factory(ctx)),
   );
+}
+
+function blocksHostRestrictedConversationReadTool(params: {
+  pluginId: string;
+  toolNames: readonly string[];
+  bundledOwner: boolean;
+  ctx: OpenClawPluginToolContext;
+}): boolean {
+  if (
+    normalizeConversationReadInvocationOrigin(params.ctx.conversationReadOrigin) ===
+      "direct-operator" ||
+    params.bundledOwner
+  ) {
+    return false;
+  }
+  return params.toolNames.some((toolName) =>
+    isHostRestrictedConversationReadTool({ pluginId: params.pluginId, toolName }),
+  );
+}
+
+function blocksHostRestrictedConversationReadRegistration(params: {
+  entry: PluginToolRegistration;
+  manifestPlugin: PluginManifestRecord | undefined;
+  ctx: OpenClawPluginToolContext;
+}): boolean {
+  return (
+    registrationIncludesHostRestrictedConversationReadTool(params.entry) &&
+    blocksHostRestrictedConversationReadTool({
+      pluginId: params.entry.pluginId,
+      toolNames: [...params.entry.names, ...(params.entry.declaredNames ?? [])],
+      bundledOwner: isBundledConversationReadToolRegistration({
+        entry: params.entry,
+        manifestPlugin: params.manifestPlugin,
+      }),
+      ctx: params.ctx,
+    })
+  );
+}
+
+function resolveCurrentManifestPlugin(params: {
+  pluginId: string;
+  ctx: OpenClawPluginToolContext;
+  loadContext: ReturnType<typeof resolvePluginRuntimeLoadContext>;
+}): PluginManifestRecord | undefined {
+  let config = params.ctx.runtimeConfig ?? params.ctx.config ?? params.loadContext.config;
+  if (params.ctx.getRuntimeConfig) {
+    try {
+      config = params.ctx.getRuntimeConfig() ?? config;
+    } catch {
+      return undefined;
+    }
+  }
+  return loadManifestContractSnapshot({
+    config,
+    workspaceDir: params.loadContext.workspaceDir,
+    env: params.loadContext.env,
+  }).plugins.find((plugin) => plugin.id === params.pluginId);
 }
 
 /**
@@ -724,6 +787,20 @@ function createCachedDescriptorPluginTool(params: {
       const resolveCandidateTool = (
         candidate: PluginToolRegistration,
       ): AnyAgentTool | undefined => {
+        const manifestPlugin = resolveCurrentManifestPlugin({
+          pluginId,
+          ctx: params.ctx,
+          loadContext: params.loadContext,
+        });
+        if (
+          blocksHostRestrictedConversationReadRegistration({
+            entry: candidate,
+            manifestPlugin,
+            ctx: params.ctx,
+          })
+        ) {
+          return undefined;
+        }
         const resolved = resolvePluginToolFactory(candidate, params.ctx);
         const listRaw: unknown[] = Array.isArray(resolved) ? resolved : resolved ? [resolved] : [];
         for (const toolRaw of listRaw) {
@@ -855,6 +932,16 @@ function resolveCachedPluginTools(params: {
     let hasNameConflict = false;
     const localNormalizedNames = new Set<string>();
     for (const cachedDescriptor of cached) {
+      if (
+        blocksHostRestrictedConversationReadTool({
+          pluginId: plugin.id,
+          toolNames: [cachedDescriptor.descriptor.name],
+          bundledOwner: plugin.origin === "bundled",
+          ctx: params.ctx,
+        })
+      ) {
+        continue;
+      }
       if (
         !cachedDescriptor.optional &&
         !availableToolNames.some(
@@ -1259,6 +1346,15 @@ export function resolvePluginTools(params: {
         pluginId: entry.pluginId,
         optional: entry.optional,
         allowlist,
+      })
+    ) {
+      continue;
+    }
+    if (
+      blocksHostRestrictedConversationReadRegistration({
+        entry,
+        manifestPlugin,
+        ctx: params.context,
       })
     ) {
       continue;

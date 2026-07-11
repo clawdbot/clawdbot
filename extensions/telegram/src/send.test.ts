@@ -8,13 +8,14 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { markdownToTelegramHtml } from "./format.js";
+import { markdownToTelegramHtml, telegramHtmlToPlainTextFallback } from "./format.js";
 import {
   buildTelegramConversationContext,
   createTelegramMessageCache,
   resolveTelegramMessageCacheScope,
   resetTelegramMessageCacheBucketsForTest,
 } from "./message-cache.js";
+import { createTelegramPromptContextProjectionCursor } from "./prompt-context-projection.js";
 import { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";
 import type { TelegramRuntime } from "./runtime.types.js";
 import type { TelegramApiOverride } from "./send.js";
@@ -53,6 +54,7 @@ const {
   createForumTopicTelegram,
   deleteMessageTelegram,
   editForumTopicTelegram,
+  editMessageReplyMarkupTelegram,
   editMessageTelegram,
   pinMessageTelegram,
   reactMessageTelegram,
@@ -181,6 +183,69 @@ function installTelegramStateRuntimeForTest(): void {
     channel: {},
   } as TelegramRuntime);
 }
+
+describe("Telegram send Promise contract", () => {
+  const contextFailureCalls: ReadonlyArray<readonly [string, () => Promise<unknown>]> = [
+    [
+      "sendMessageTelegram",
+      () => sendMessageTelegramImported("123", "hello", { cfg: TELEGRAM_TEST_CFG }),
+    ],
+    ["sendTypingTelegram", () => sendTypingTelegram("123", { cfg: TELEGRAM_TEST_CFG })],
+    [
+      "reactMessageTelegram",
+      () => reactMessageTelegram("123", 1, "👍", { cfg: TELEGRAM_TEST_CFG }),
+    ],
+    ["deleteMessageTelegram", () => deleteMessageTelegram("123", 1, { cfg: TELEGRAM_TEST_CFG })],
+    ["pinMessageTelegram", () => pinMessageTelegram("123", 1, { cfg: TELEGRAM_TEST_CFG })],
+    [
+      "unpinMessageTelegram",
+      () => unpinMessageTelegram("123", undefined, { cfg: TELEGRAM_TEST_CFG }),
+    ],
+    [
+      "editForumTopicTelegram",
+      () => editForumTopicTelegram("123", 1, { cfg: TELEGRAM_TEST_CFG, name: "topic" }),
+    ],
+    [
+      "editMessageReplyMarkupTelegram",
+      () => editMessageReplyMarkupTelegram("123", 1, [], { cfg: TELEGRAM_TEST_CFG }),
+    ],
+    [
+      "editMessageTelegram",
+      () => editMessageTelegram("123", 1, "hello", { cfg: TELEGRAM_TEST_CFG }),
+    ],
+    [
+      "sendStickerTelegram",
+      () => sendStickerTelegram("123", "file-id", { cfg: TELEGRAM_TEST_CFG }),
+    ],
+    [
+      "sendPollTelegram",
+      () =>
+        sendPollTelegram(
+          "123",
+          { question: "Question?", options: ["A", "B"] },
+          { cfg: TELEGRAM_TEST_CFG },
+        ),
+    ],
+    [
+      "createForumTopicTelegram",
+      () => createForumTopicTelegram("123", "topic", { cfg: TELEGRAM_TEST_CFG }),
+    ],
+  ];
+
+  it.each(contextFailureCalls)(
+    "%s reports context failures as Promise rejections",
+    async (_name, invoke) => {
+      let operation: Promise<unknown> | undefined;
+      expect(() => {
+        operation = invoke();
+      }).not.toThrow();
+      if (!operation) {
+        throw new Error("expected Telegram operation promise");
+      }
+      await expect(operation).rejects.toThrow(/Telegram bot token missing/i);
+    },
+  );
+});
 
 async function expectChatNotFoundWithChatId(
   action: Promise<unknown>,
@@ -783,20 +848,25 @@ describe("sendMessageTelegram", () => {
     });
   });
 
-  it("rejects empty topic edits", async () => {
+  it("rejects empty topic edits before creating a Telegram client", async () => {
+    botCtorSpy.mockClear();
+
     await expect(
       editForumTopicTelegram("-1001234567890", 271, {
         cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
         accountId: "default",
       }),
     ).rejects.toThrow("Telegram forum topic update requires a name or iconCustomEmojiId");
     await expect(
       editForumTopicTelegram("-1001234567890", 271, {
         cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
         accountId: "default",
         iconCustomEmojiId: "   ",
       }),
     ).rejects.toThrow("Telegram forum topic icon custom emoji ID is required");
+    expect(botCtorSpy).not.toHaveBeenCalled();
   });
 
   it("applies timeoutSeconds config precedence", async () => {
@@ -928,10 +998,12 @@ describe("sendMessageTelegram", () => {
     );
   });
 
-  it("records prompt-context text messages with a transcript timestamp override", async () => {
+  it("records transcript projection metadata without replacing Telegram time", async () => {
     const storePath = `/tmp/openclaw-telegram-send-context-override-${process.pid}-${Date.now()}.json`;
     const cfg = { session: { store: storePath } };
-    const transcriptTimestamp = 1_779_394_740_123;
+    const cursor = createTelegramPromptContextProjectionCursor({
+      transcriptMessageId: "assistant-final",
+    });
     botApi.sendMessage.mockResolvedValueOnce({
       message_id: 1497,
       date: 1_779_394_745,
@@ -943,7 +1015,7 @@ describe("sendMessageTelegram", () => {
     await sendMessageTelegram("123", "Final answer", {
       cfg,
       token: "tok",
-      promptContextTimestampMs: transcriptTimestamp,
+      promptContextProjectionPlan: { cursor, finalPart: true },
     });
 
     const cache = createTelegramMessageCache({
@@ -955,7 +1027,12 @@ describe("sendMessageTelegram", () => {
       messageId: "1497",
     });
 
-    expect(node?.timestamp).toBe(transcriptTimestamp);
+    expect(node?.timestamp).toBe(1_779_394_745_000);
+    expect(node?.promptContextProjectionMarker).toEqual({
+      kind: "valid",
+      projection: { ...cursor.source, partIndex: 0, finalPart: true },
+    });
+    expect(cursor.nextPartIndex).toBe(1);
   });
 
   it("normalizes raw code language HTML before sending", async () => {
@@ -1160,17 +1237,25 @@ describe("sendMessageTelegram", () => {
 
   it("chunks long plain text when durable rich sends reject an invalid entity", async () => {
     const text = `Status includes openai:owner@example.com ${"A".repeat(5000)}`;
+    const storePath = `/tmp/openclaw-telegram-projection-rich-fallback-${process.pid}-${Date.now()}.json`;
+    const cursor = createTelegramPromptContextProjectionCursor({
+      transcriptMessageId: "assistant-rich",
+    });
     botRawApi.sendRichMessage.mockRejectedValueOnce(createRichEntityInvalidError("EMAIL"));
     botApi.sendMessage
       .mockResolvedValueOnce({ message_id: 47, chat: { id: "123" } })
       .mockResolvedValueOnce({ message_id: 48, chat: { id: "123" } });
 
     const result = await sendMessageTelegram("123", text, {
-      cfg: { channels: { telegram: { richMessages: true } } },
+      cfg: {
+        channels: { telegram: { richMessages: true } },
+        session: { store: storePath },
+      },
       token: "tok",
       replyToMessageId: 100,
       replyToIdSource: "implicit",
       replyToMode: "first",
+      promptContextProjectionPlan: { cursor, finalPart: true },
     });
 
     expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
@@ -1180,6 +1265,19 @@ describe("sendMessageTelegram", () => {
       expect(call[2]).toBeUndefined();
     }
     expect(result.messageId).toBe("48");
+    const cache = createTelegramMessageCache({
+      scope: resolveTelegramMessageCacheScope(storePath),
+    });
+    const first = await cache.get({ accountId: "default", chatId: "123", messageId: "47" });
+    const second = await cache.get({ accountId: "default", chatId: "123", messageId: "48" });
+    expect([first?.promptContextProjectionMarker, second?.promptContextProjectionMarker]).toEqual([
+      {
+        kind: "valid",
+        projection: { ...cursor.source, partIndex: 0, finalPart: false },
+      },
+      { kind: "valid", projection: { ...cursor.source, partIndex: 1, finalPart: true } },
+    ]);
+    expect(cursor.nextPartIndex).toBe(2);
     expect(result.receipt?.platformMessageIds).toEqual(["47", "48"]);
   });
 
@@ -1522,7 +1620,112 @@ describe("sendMessageTelegram", () => {
     expect(chunks.every((chunk) => chunk.length <= 4000)).toBe(true);
   });
 
+  it("indexes every successful text chunk and marks only the last one final", async () => {
+    const storePath = `/tmp/openclaw-telegram-projection-chunks-${process.pid}-${Date.now()}.json`;
+    const cfg = { session: { store: storePath } };
+    const cursor = createTelegramPromptContextProjectionCursor({
+      transcriptMessageId: "assistant-chunks",
+    });
+    botApi.sendMessage
+      .mockResolvedValueOnce({ message_id: 154, date: 2, chat: { id: "123" } })
+      .mockResolvedValueOnce({ message_id: 155, date: 3, chat: { id: "123" } });
+
+    await sendMessageTelegram("123", "A".repeat(5_000), {
+      cfg,
+      token: "tok",
+      promptContextProjectionPlan: { cursor, finalPart: true },
+    });
+
+    const cache = createTelegramMessageCache({
+      scope: resolveTelegramMessageCacheScope(storePath),
+    });
+    const first = await cache.get({ accountId: "default", chatId: "123", messageId: "154" });
+    const second = await cache.get({ accountId: "default", chatId: "123", messageId: "155" });
+    expect([first?.promptContextProjectionMarker, second?.promptContextProjectionMarker]).toEqual([
+      {
+        kind: "valid",
+        projection: { ...cursor.source, partIndex: 0, finalPart: false },
+      },
+      { kind: "valid", projection: { ...cursor.source, partIndex: 1, finalPart: true } },
+    ]);
+    expect(cursor.nextPartIndex).toBe(2);
+  });
+
+  it("records each HTML chunk using that message's visible text", async () => {
+    const storePath = `/tmp/openclaw-telegram-projection-html-chunks-${process.pid}-${Date.now()}.json`;
+    const cfg = { session: { store: storePath } };
+    const cursor = createTelegramPromptContextProjectionCursor({
+      transcriptMessageId: "assistant-html-chunks",
+    });
+    botApi.sendMessage
+      .mockResolvedValueOnce({ message_id: 254, date: 2, chat: { id: "123" } })
+      .mockResolvedValueOnce({ message_id: 255, date: 3, chat: { id: "123" } });
+
+    await sendMessageTelegram("123", "<".repeat(1_000) + "y".repeat(3_000), {
+      cfg,
+      token: "tok",
+      textMode: "html",
+      promptContextProjectionPlan: { cursor, finalPart: true },
+    });
+
+    const visibleChunks = sendMessageTexts(botApi.sendMessage).map((html) =>
+      telegramHtmlToPlainTextFallback(html),
+    );
+    expect(visibleChunks).toHaveLength(2);
+    const cache = createTelegramMessageCache({
+      scope: resolveTelegramMessageCacheScope(storePath),
+    });
+    const cached = await Promise.all(
+      [254, 255].map((messageId) =>
+        cache.get({ accountId: "default", chatId: "123", messageId: String(messageId) }),
+      ),
+    );
+    expect(cached.map((node) => node?.body)).toEqual(visibleChunks);
+    expect(cached.map((node) => node?.promptContextProjectionMarker)).toEqual([
+      {
+        kind: "valid",
+        projection: { ...cursor.source, partIndex: 0, finalPart: false },
+      },
+      {
+        kind: "valid",
+        projection: { ...cursor.source, partIndex: 1, finalPart: true },
+      },
+    ]);
+  });
+
+  it("does not consume a projection part for a rejected HTML attempt", async () => {
+    const storePath = `/tmp/openclaw-telegram-projection-html-fallback-${process.pid}-${Date.now()}.json`;
+    const cfg = { session: { store: storePath } };
+    const cursor = createTelegramPromptContextProjectionCursor({
+      transcriptMessageId: "assistant-html",
+    });
+    botApi.sendMessage
+      .mockRejectedValueOnce(createHtmlParseError())
+      .mockResolvedValueOnce({ message_id: 156, date: 2, chat: { id: "123" } });
+
+    await sendMessageTelegram("123", "**hello**", {
+      cfg,
+      token: "tok",
+      promptContextProjectionPlan: { cursor, finalPart: true },
+    });
+
+    const cache = createTelegramMessageCache({
+      scope: resolveTelegramMessageCacheScope(storePath),
+    });
+    const node = await cache.get({ accountId: "default", chatId: "123", messageId: "156" });
+    expect(botApi.sendMessage).toHaveBeenCalledTimes(2);
+    expect(node?.promptContextProjectionMarker).toEqual({
+      kind: "valid",
+      projection: { ...cursor.source, partIndex: 0, finalPart: true },
+    });
+    expect(cursor.nextPartIndex).toBe(1);
+  });
+
   it("reports the first Telegram chunk before a later chunk fails", async () => {
+    const storePath = `/tmp/openclaw-telegram-projection-partial-${process.pid}-${Date.now()}.json`;
+    const cursor = createTelegramPromptContextProjectionCursor({
+      transcriptMessageId: "assistant-partial",
+    });
     botApi.sendMessage
       .mockResolvedValueOnce({ message_id: 54, chat: { id: "123" } })
       .mockRejectedValueOnce(new Error("second chunk failed"));
@@ -1531,13 +1734,27 @@ describe("sendMessageTelegram", () => {
 
     await expect(
       sendMessageTelegram("123", markdown, {
-        cfg: TELEGRAM_TEST_CFG,
+        cfg: { session: { store: storePath } },
         token: "tok",
         onDeliveryResult,
+        promptContextProjectionPlan: { cursor, finalPart: true },
       }),
     ).rejects.toThrow("second chunk failed");
 
     expect(onDeliveryResult.mock.calls.map((call) => call[0]?.messageId)).toEqual(["54"]);
+    const cached = await createTelegramMessageCache({
+      scope: resolveTelegramMessageCacheScope(storePath),
+    }).get({ accountId: "default", chatId: "123", messageId: "54" });
+    expect(cached?.promptContextProjectionMarker).toEqual({
+      kind: "valid",
+      projection: {
+        transcriptMessageId: "assistant-partial",
+        partIndex: 0,
+        finalPart: false,
+      },
+    });
+    expect(cursor.nextPartIndex).toBe(1);
+    expect(cursor.complete).toBe(false);
   });
 
   it("chunks long inline markdown through the HTML text path", async () => {
@@ -1954,6 +2171,11 @@ describe("sendMessageTelegram", () => {
   it("chunks long default markdown media follow-up text", async () => {
     const chatId = "123";
     const longText = `**${"A".repeat(5000)}**`;
+    const storePath = `/tmp/openclaw-telegram-projection-media-${process.pid}-${Date.now()}.json`;
+    const cfg = { session: { store: storePath } };
+    const cursor = createTelegramPromptContextProjectionCursor({
+      transcriptMessageId: "assistant-media",
+    });
 
     const sendPhoto = vi.fn().mockResolvedValue({
       message_id: 72,
@@ -1975,10 +2197,11 @@ describe("sendMessageTelegram", () => {
     });
 
     const res = await sendMessageTelegram(chatId, longText, {
-      cfg: TELEGRAM_TEST_CFG,
+      cfg,
       token: "tok",
       api,
       mediaUrl: "https://example.com/photo.jpg",
+      promptContextProjectionPlan: { cursor, finalPart: true },
     });
 
     expectMediaSendCall(firstMockCall(sendPhoto, "send photo call"), "send photo call", chatId, {
@@ -1991,6 +2214,28 @@ describe("sendMessageTelegram", () => {
     expect(res.receipt?.primaryPlatformMessageId).toBe("73");
     expect(res.receipt?.platformMessageIds).toEqual(["73", "74"]);
     expect(res.receipt?.parts.map((part) => part.kind)).toEqual(["text", "text"]);
+    const cache = createTelegramMessageCache({
+      scope: resolveTelegramMessageCacheScope(storePath),
+    });
+    const projections = await Promise.all(
+      ["72", "73", "74"].map(
+        async (messageId) =>
+          (await cache.get({ accountId: "default", chatId, messageId }))
+            ?.promptContextProjectionMarker,
+      ),
+    );
+    expect(projections).toEqual([
+      {
+        kind: "valid",
+        projection: { ...cursor.source, partIndex: 0, finalPart: false },
+      },
+      {
+        kind: "valid",
+        projection: { ...cursor.source, partIndex: 1, finalPart: false },
+      },
+      { kind: "valid", projection: { ...cursor.source, partIndex: 2, finalPart: true } },
+    ]);
+    expect(cursor.nextPartIndex).toBe(3);
   });
 
   it("uses caption when text is within 1024 char limit", async () => {
@@ -3548,12 +3793,15 @@ describe("sendStickerTelegram", () => {
     });
   }
 
-  it("throws error when fileId is blank", async () => {
+  it("rejects a blank fileId before creating a Telegram client", async () => {
+    botCtorSpy.mockClear();
+
     for (const fileId of ["", "   "]) {
       await expect(
         sendStickerTelegram("123", fileId, { cfg: TELEGRAM_TEST_CFG, token: "tok" }),
       ).rejects.toThrow(/file_id is required/i);
     }
+    expect(botCtorSpy).not.toHaveBeenCalled();
   });
 
   it("fails sticker sends instead of retrying without message_thread_id", async () => {
@@ -3771,6 +4019,67 @@ describe("shared send behaviors", () => {
       parse_mode: "HTML",
       reply_to_message_id: 100,
       allow_sending_without_reply: true,
+    });
+  });
+
+  it("retries media native quotes with a legacy reply before recording projection", async () => {
+    const chatId = "123";
+    const storePath = `/tmp/openclaw-telegram-media-quote-${process.pid}-${Date.now()}.json`;
+    const cursor = createTelegramPromptContextProjectionCursor({
+      transcriptMessageId: "assistant-media-quote",
+    });
+    const sendPhoto = vi
+      .fn()
+      .mockRejectedValueOnce(createQuoteNotFoundError())
+      .mockResolvedValueOnce({
+        message_id: 58,
+        date: 1_779_425_460,
+        chat: { id: chatId, type: "private" },
+        photo: [{ file_id: "photo-file", file_unique_id: "photo-unique", width: 10, height: 10 }],
+      });
+    const api = { sendPhoto } as unknown as { sendPhoto: typeof sendPhoto };
+    mockLoadedMedia({
+      buffer: Buffer.from("fake-image"),
+      contentType: "image/jpeg",
+      fileName: "photo.jpg",
+    });
+
+    await sendMessageTelegram(chatId, "caption", {
+      cfg: { session: { store: storePath } },
+      token: "tok",
+      api,
+      mediaUrl: "https://example.com/photo.jpg",
+      replyToMessageId: 100,
+      quoteText: "model paraphrase",
+      promptContextProjectionPlan: { cursor, finalPart: true },
+    });
+
+    expect(sendPhoto).toHaveBeenCalledTimes(2);
+    expectMediaSendCall(sendPhoto.mock.calls[0]!, "native quote photo", chatId, {
+      caption: "caption",
+      parse_mode: "HTML",
+      reply_parameters: {
+        message_id: 100,
+        quote: "model paraphrase",
+        allow_sending_without_reply: true,
+      },
+    });
+    expectMediaSendCall(sendPhoto.mock.calls[1]!, "legacy quote photo", chatId, {
+      caption: "caption",
+      parse_mode: "HTML",
+      reply_to_message_id: 100,
+      allow_sending_without_reply: true,
+    });
+    const cached = await createTelegramMessageCache({
+      scope: resolveTelegramMessageCacheScope(storePath),
+    }).get({ accountId: "default", chatId, messageId: "58" });
+    expect(cached?.promptContextProjectionMarker).toEqual({
+      kind: "valid",
+      projection: {
+        transcriptMessageId: "assistant-media-quote",
+        partIndex: 0,
+        finalPart: true,
+      },
     });
   });
 
@@ -4270,4 +4579,16 @@ describe("createForumTopicTelegram", () => {
       expect(result).toEqual(testCase.expectedResult);
     });
   }
+
+  it("rejects an invalid topic name before creating a Telegram client", async () => {
+    botCtorSpy.mockClear();
+
+    await expect(
+      createForumTopicTelegram("-1001234567890", "   ", {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+      }),
+    ).rejects.toThrow("Forum topic name is required");
+    expect(botCtorSpy).not.toHaveBeenCalled();
+  });
 });

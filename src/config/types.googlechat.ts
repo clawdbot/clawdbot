@@ -33,6 +33,7 @@ export type GoogleChatGroupConfig = {
 };
 
 export type GoogleChatActionConfig = {
+  /** @deprecated Accepted for config compatibility; service-account auth cannot use reaction APIs. */
   reactions?: boolean;
 };
 

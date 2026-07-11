@@ -91,6 +91,10 @@ Profiles are named browser routing configs:
 
 ```bash
 openclaw browser profiles
+openclaw browser system-profiles
+openclaw browser system-profiles --browser brave
+openclaw browser import-profile --browser chrome --system Default --into imported
+openclaw browser import-profile --system "Profile 1" --into work --domains google.com,youtube.com
 openclaw browser create-profile --name work --color "#FF5A36"
 openclaw browser create-profile --name chrome-live --driver existing-session
 openclaw browser create-profile --name remote --cdp-url https://browser-host.example.com
@@ -98,6 +102,10 @@ openclaw browser delete-profile --name work
 ```
 
 Use a specific profile with `--browser-profile <name>` on any subcommand, for example `openclaw browser --browser-profile work tabs`.
+
+On macOS, `system-profiles` lists real Chrome, Brave, Edge, or Chromium profiles available on the host. `import-profile` decrypts their cookies after one macOS Keychain/Touch ID consent prompt and injects them into a fresh OpenClaw-managed profile. It imports cookies only; local storage and IndexedDB are unchanged. Some Google sessions use device-bound session credentials (DBSC) and can still require re-authentication after import.
+
+System-profile import is enabled by default. Set `browser.allowSystemProfileImport=false` to disable both CLI and agent-triggered imports. Import is host-local and cannot run through the browser node proxy.
 
 ## Tabs
 

@@ -1,11 +1,12 @@
 // Covers MCP OAuth token persistence, isolation, and noninteractive behavior.
 import fs from "node:fs/promises";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { vi } from "vitest";
 import {
   clearMcpOAuthCredentials,
   createMcpOAuthClientProvider,
+  resolveMcpOAuthAccessToken,
   runMcpOAuthLogin,
 } from "./mcp-oauth.js";
 
@@ -16,6 +17,225 @@ vi.mock("@modelcontextprotocol/sdk/client/auth.js", () => ({
 }));
 
 describe("MCP OAuth provider", () => {
+  beforeEach(() => {
+    authMock.mockReset();
+  });
+
+  it("returns a fresh stored access token without refreshing it", async () => {
+    await withTempHome(
+      async () => {
+        const provider = createMcpOAuthClientProvider({
+          serverName: "Remote Docs",
+          serverUrl: "https://mcp.example.com/mcp",
+        });
+        await provider.saveTokens({
+          access_token: "fresh-access",
+          refresh_token: "refresh-token-must-not-project",
+          token_type: "Bearer",
+          expires_in: 3600,
+        });
+
+        await expect(
+          resolveMcpOAuthAccessToken({
+            serverName: "Remote Docs",
+            serverUrl: "https://mcp.example.com/mcp",
+          }),
+        ).resolves.toBe("fresh-access");
+        expect(authMock).not.toHaveBeenCalled();
+      },
+      {
+        prefix: "openclaw-mcp-oauth-fresh-token-",
+        skipSessionCleanup: true,
+        env: {
+          OPENCLAW_CONFIG_PATH: undefined,
+          OPENCLAW_STATE_DIR: undefined,
+        },
+      },
+    );
+  });
+
+  it("refreshes an expired stored access token before projecting it", async () => {
+    await withTempHome(
+      async () => {
+        const provider = createMcpOAuthClientProvider({
+          serverName: "Remote Docs",
+          serverUrl: "https://mcp.example.com/mcp",
+        });
+        await provider.saveTokens({
+          access_token: "expired-access",
+          refresh_token: "refresh-token-must-not-project",
+          token_type: "Bearer",
+          expires_in: -1,
+        });
+        authMock.mockImplementationOnce(async (refreshProvider) => {
+          await refreshProvider.saveTokens({
+            access_token: "refreshed-access",
+            refresh_token: "rotated-refresh-token-must-not-project",
+            token_type: "Bearer",
+            expires_in: 3600,
+          });
+          return "AUTHORIZED";
+        });
+
+        await expect(
+          resolveMcpOAuthAccessToken({
+            serverName: "Remote Docs",
+            serverUrl: "https://mcp.example.com/mcp",
+            config: { scope: "docs.read" },
+          }),
+        ).resolves.toBe("refreshed-access");
+        expect(authMock).toHaveBeenCalledOnce();
+        expect(authMock.mock.calls[0]?.[1]).toMatchObject({
+          serverUrl: "https://mcp.example.com/mcp",
+          scope: "docs.read",
+        });
+      },
+      {
+        prefix: "openclaw-mcp-oauth-expired-token-",
+        skipSessionCleanup: true,
+        env: {
+          OPENCLAW_CONFIG_PATH: undefined,
+          OPENCLAW_STATE_DIR: undefined,
+        },
+      },
+    );
+  });
+
+  it("serializes concurrent refreshes for the same OAuth credential store", async () => {
+    await withTempHome(
+      async () => {
+        const provider = createMcpOAuthClientProvider({
+          serverName: "Remote Docs",
+          serverUrl: "https://mcp.example.com/mcp",
+        });
+        await provider.saveTokens({
+          access_token: "expired-access",
+          refresh_token: "single-use-refresh-token",
+          token_type: "Bearer",
+          expires_in: -1,
+        });
+
+        let signalRefreshStarted: (() => void) | undefined;
+        const refreshStarted = new Promise<void>((resolve) => {
+          signalRefreshStarted = resolve;
+        });
+        let releaseRefresh: (() => void) | undefined;
+        const refreshGate = new Promise<void>((resolve) => {
+          releaseRefresh = resolve;
+        });
+        authMock.mockImplementationOnce(async (refreshProvider) => {
+          signalRefreshStarted?.();
+          await refreshGate;
+          await refreshProvider.saveTokens({
+            access_token: "shared-refreshed-access",
+            refresh_token: "rotated-refresh-token",
+            token_type: "Bearer",
+            expires_in: 3600,
+          });
+          return "AUTHORIZED";
+        });
+
+        const first = resolveMcpOAuthAccessToken({
+          serverName: "Remote Docs",
+          serverUrl: "https://mcp.example.com/mcp",
+        });
+        await refreshStarted;
+        const second = resolveMcpOAuthAccessToken({
+          serverName: "Remote Docs",
+          serverUrl: "https://mcp.example.com/mcp",
+        });
+        releaseRefresh?.();
+
+        await expect(Promise.all([first, second])).resolves.toEqual([
+          "shared-refreshed-access",
+          "shared-refreshed-access",
+        ]);
+        expect(authMock).toHaveBeenCalledOnce();
+      },
+      {
+        prefix: "openclaw-mcp-oauth-concurrent-refresh-",
+        skipSessionCleanup: true,
+        env: {
+          OPENCLAW_CONFIG_PATH: undefined,
+          OPENCLAW_STATE_DIR: undefined,
+        },
+      },
+    );
+  });
+
+  it("refreshes pre-upgrade token stores that have no expiry timestamp", async () => {
+    await withTempHome(
+      async (home) => {
+        const provider = createMcpOAuthClientProvider({
+          serverName: "Remote Docs",
+          serverUrl: "https://mcp.example.com/mcp",
+        });
+        await provider.saveTokens({
+          access_token: "legacy-access",
+          refresh_token: "legacy-refresh-token-must-not-project",
+          token_type: "Bearer",
+          expires_in: 3600,
+        });
+        const tokenDir = `${home}/.openclaw/mcp-oauth`;
+        const [entry] = await fs.readdir(tokenDir);
+        const tokenPath = `${tokenDir}/${entry}`;
+        const legacyStore = JSON.parse(await fs.readFile(tokenPath, "utf-8")) as Record<
+          string,
+          unknown
+        >;
+        delete legacyStore.tokenExpiresAt;
+        await fs.writeFile(tokenPath, JSON.stringify(legacyStore, null, 2), "utf-8");
+        authMock.mockImplementationOnce(async (refreshProvider) => {
+          await refreshProvider.saveTokens({
+            access_token: "refreshed-legacy-access",
+            refresh_token: "rotated-refresh-token-must-not-project",
+            token_type: "Bearer",
+            expires_in: 3600,
+          });
+          return "AUTHORIZED";
+        });
+
+        await expect(
+          resolveMcpOAuthAccessToken({
+            serverName: "Remote Docs",
+            serverUrl: "https://mcp.example.com/mcp",
+          }),
+        ).resolves.toBe("refreshed-legacy-access");
+        expect(authMock).toHaveBeenCalledOnce();
+      },
+      {
+        prefix: "openclaw-mcp-oauth-legacy-token-",
+        skipSessionCleanup: true,
+        env: {
+          OPENCLAW_CONFIG_PATH: undefined,
+          OPENCLAW_STATE_DIR: undefined,
+        },
+      },
+    );
+  });
+
+  it("requires explicit login when no native OAuth credentials exist", async () => {
+    await withTempHome(
+      async () => {
+        await expect(
+          resolveMcpOAuthAccessToken({
+            serverName: "Remote Docs",
+            serverUrl: "https://mcp.example.com/mcp",
+          }),
+        ).rejects.toThrow("Run openclaw mcp login Remote Docs.");
+        expect(authMock).not.toHaveBeenCalled();
+      },
+      {
+        prefix: "openclaw-mcp-oauth-missing-token-",
+        skipSessionCleanup: true,
+        env: {
+          OPENCLAW_CONFIG_PATH: undefined,
+          OPENCLAW_STATE_DIR: undefined,
+        },
+      },
+    );
+  });
+
   it("stores token state under the OpenClaw state directory with restricted permissions", async () => {
     await withTempHome(
       async (home) => {
@@ -136,7 +356,7 @@ describe("MCP OAuth provider", () => {
           }),
         ).rejects.toThrow("localhost redirect also rejected");
 
-        await expect(fs.readdir(`${home}/.openclaw/mcp-oauth`)).rejects.toThrow();
+        await expect(fs.readdir(`${home}/.openclaw/mcp-oauth`)).resolves.toEqual([]);
       },
       {
         prefix: "openclaw-mcp-oauth-localhost-failure-",

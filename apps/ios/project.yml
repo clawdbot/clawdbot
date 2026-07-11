@@ -412,6 +412,8 @@ targets:
       Release: Signing.xcconfig
     sources:
       - path: Tests/Logic
+      - path: ShareExtension/ShareDraftComposer.swift
+        group: ShareExtension
       - path: WatchApp/Sources/WatchVoiceTurnTracker.swift
         group: WatchApp/Sources
     dependencies:

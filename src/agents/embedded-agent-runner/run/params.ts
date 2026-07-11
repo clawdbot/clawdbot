@@ -100,6 +100,8 @@ export type RunEmbeddedAgentParams = {
   groupSpace?: string | null;
   /** Trusted provider role ids for the requester in this group turn. */
   memberRoleIds?: string[];
+  /** Opaque host-issued capability for current-turn channel message actions. */
+  messageActionTurnCapability?: string;
   /** Parent session key for subagent policy inheritance. */
   spawnedBy?: string | null;
   /** Whether workspaceDir points at the canonical agent workspace for bootstrap purposes. */

@@ -102,18 +102,19 @@ class RoomChatCommandOutboxTest {
     }
 
   @Test
-  fun requeueSendingAfterRestartRecoversInterruptedRows() =
+  fun failSendingAfterRestartKeepsInterruptedRowsVisibleForExplicitRetry() =
     runTest {
       val interrupted = store.enqueueQueued("interrupted", nowMs = 10)
       store.updateStatus(interrupted.id, ChatOutboxStatus.Sending, retryCount = 1, lastError = "socket closed")
       val failed = store.enqueueQueued("dead", nowMs = 20)
       store.updateStatus(failed.id, ChatOutboxStatus.Failed, retryCount = 3, lastError = "boom")
 
-      store.requeueSendingAfterRestart()
+      store.failSendingAfterRestart()
 
       val byId = store.load("gateway-a").associateBy { it.id }
-      assertEquals(ChatOutboxStatus.Queued, byId.getValue(interrupted.id).status)
-      // Retry bookkeeping survives the restart; only the stuck status is repaired.
+      assertEquals(ChatOutboxStatus.Failed, byId.getValue(interrupted.id).status)
+      assertEquals(OUTBOX_DELIVERY_UNCONFIRMED_ERROR, byId.getValue(interrupted.id).lastError)
+      // Retry bookkeeping survives the restart so an explicit retry retains the original context.
       assertEquals(1, byId.getValue(interrupted.id).retryCount)
       assertEquals(ChatOutboxStatus.Failed, byId.getValue(failed.id).status)
     }
@@ -126,7 +127,7 @@ class RoomChatCommandOutboxTest {
       store.expireStale("gateway-a", nowMs = now)
       assertEquals(ChatOutboxStatus.Failed, store.load("gateway-a").single().status)
 
-      store.requeueForRetry(gatewayId = "gateway-a", id = stale.id, nowMs = now)
+      assertEquals(1, store.requeueForRetry(gatewayId = "gateway-a", id = stale.id, nowMs = now))
       store.expireStale("gateway-a", nowMs = now)
 
       val retried = store.load("gateway-a").single()
@@ -134,6 +135,38 @@ class RoomChatCommandOutboxTest {
       assertEquals(0, retried.retryCount)
       assertNull(retried.lastError)
       assertTrue(retried.createdAtMs >= now)
+    }
+
+  @Test
+  fun requeueForRetryCannotCrossGatewayOwnership() =
+    runTest {
+      val failed = store.enqueueQueued("gateway a failed", nowMs = 10, gatewayId = "gateway-a")
+      store.updateStatus(failed.id, ChatOutboxStatus.Failed, retryCount = 1, lastError = "boom")
+
+      val changed = store.requeueForRetry(gatewayId = "gateway-b", id = failed.id, nowMs = 20)
+
+      assertEquals(0, changed)
+      val untouched = store.load("gateway-a").single()
+      assertEquals(ChatOutboxStatus.Failed, untouched.status)
+      assertEquals(10L, untouched.createdAtMs)
+      assertEquals("boom", untouched.lastError)
+    }
+
+  @Test
+  fun secondRetryCannotRequeueARowAlreadySending() =
+    runTest {
+      val failed = store.enqueueQueued("retry once", nowMs = 10)
+      store.updateStatus(failed.id, ChatOutboxStatus.Failed, retryCount = 1, lastError = "boom")
+      assertEquals(1, store.requeueForRetry(gatewayId = "gateway-a", id = failed.id, nowMs = 20))
+      store.updateStatus(failed.id, ChatOutboxStatus.Sending, retryCount = 0, lastError = null)
+      val sendingCreatedAt = store.load("gateway-a").single().createdAtMs
+
+      val changed = store.requeueForRetry(gatewayId = "gateway-a", id = failed.id, nowMs = 30)
+
+      assertEquals(0, changed)
+      val untouched = store.load("gateway-a").single()
+      assertEquals(ChatOutboxStatus.Sending, untouched.status)
+      assertEquals(sendingCreatedAt, untouched.createdAtMs)
     }
 
   @Test

@@ -15,7 +15,6 @@ import {
   resolveToolsBySender,
   resolveChannelEntryMatchWithFallback,
   resolveNestedAllowlistDecision,
-  isDangerousNameMatchingEnabled,
 } from "../runtime-api.js";
 
 type MSTeamsResolvedRouteConfig = {
@@ -100,17 +99,12 @@ export function resolveMSTeamsGroupToolPolicy(
     return undefined;
   }
   const groupId = params.groupId?.trim();
-  const groupChannel = params.groupChannel?.trim();
   const groupSpace = params.groupSpace?.trim();
-  const allowNameMatching = isDangerousNameMatchingEnabled(cfg);
 
   const resolved = resolveMSTeamsRouteConfig({
     cfg,
     teamId: groupSpace,
-    teamName: groupSpace,
     conversationId: groupId,
-    channelName: groupChannel,
-    allowNameMatching,
   });
 
   if (resolved.channelConfig) {
@@ -159,11 +153,7 @@ export function resolveMSTeamsGroupToolPolicy(
     return undefined;
   }
 
-  const channelCandidates = buildChannelKeyCandidates(
-    groupId,
-    allowNameMatching ? groupChannel : undefined,
-    allowNameMatching && groupChannel ? normalizeChannelSlug(groupChannel) : undefined,
-  );
+  const channelCandidates = buildChannelKeyCandidates(groupId, undefined, undefined);
   for (const teamConfig of Object.values(cfg.teams ?? {})) {
     const match = resolveChannelEntryMatchWithFallback({
       entries: teamConfig?.channels ?? {},

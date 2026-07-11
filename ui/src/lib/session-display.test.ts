@@ -39,6 +39,19 @@ describe("resolveSessionDisplayName", () => {
       }),
     ).toBe("clawdbot ⎇ wt-3f2a");
   });
+
+  it("names named subsessions after their slug, never the raw agent key", () => {
+    expect(resolveSessionDisplayName("agent:main:node-proof-claude")).toBe("node-proof-claude");
+    expect(resolveSessionDisplayName("agent:main:explicit:node-mcp-debug")).toBe("node-mcp-debug");
+    expect(
+      resolveSessionDisplayName(
+        "agent:main:explicit:model-run-0f9d5c1e-6d0f-4c9a-9d84-1c2f3a4b5c6d",
+      ),
+    ).toBe("model-run-…5c6d");
+    expect(resolveSessionDisplayName("agent:main:node-fleet-4de003fbff138fcb9239c9378b2e")).toBe(
+      "node-fleet-…8b2e",
+    );
+  });
 });
 
 describe("resolveSessionWorkSubtitle", () => {
@@ -53,9 +66,21 @@ describe("resolveSessionWorkSubtitle", () => {
         worktree: { branch: "feature/x", repoRoot: "/repo/clawdbot" },
         execNode: "macbook",
       }),
-    ).toBe("macbook · clawdbot ⎇ feature/x");
+    ).toBe("clawdbot ⎇ feature/x · macbook");
     expect(resolveSessionWorkSubtitle({ execNode: "macbook" })).toBe("macbook");
     expect(resolveSessionWorkSubtitle({})).toBeUndefined();
+  });
+
+  it("shortens opaque node ids instead of rendering raw hashes", () => {
+    expect(
+      resolveSessionWorkSubtitle({ execNode: "11c38726acc6fac280357576c87acc6fac280357" }),
+    ).toBe("…0357");
+    expect(
+      resolveSessionWorkSubtitle({
+        worktree: { branch: "openclaw/wt-1", repoRoot: "/repo/clawdbot" },
+        execNode: "11c38726acc6fac280357576c87acc6fac280357",
+      }),
+    ).toBe("clawdbot ⎇ wt-1 · …0357");
   });
 });
 

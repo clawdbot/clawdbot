@@ -1327,6 +1327,7 @@ const shouldSkipWatchRuntimeSync = (deps, requirement) =>
   !hasMissingRequiredRuntimePostBuildOutput(deps);
 
 const isGatewayClientCommand = (args) =>
+  args[0] === "dashboard" ||
   (args[0] === "gateway" && (args[1] === "call" || args[1] === "status")) ||
   (args[0] === "agent" && !args.includes("--local"));
 
@@ -1507,6 +1508,9 @@ export async function runNodeMain(params = {}) {
     }
 
     const buildExitCode = await withRunNodeBuildLock(deps, async () => {
+      if (shouldFastPathExistingDistForGatewayClient(deps)) {
+        return 0;
+      }
       const lockedBuildRequirement = resolveBuildRequirement(deps);
       if (!lockedBuildRequirement.shouldBuild) {
         const runtimePostBuildRequirement = resolveRuntimePostBuildRequirement(deps);

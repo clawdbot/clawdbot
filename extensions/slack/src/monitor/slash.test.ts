@@ -1357,6 +1357,44 @@ describe("slack slash commands access groups", () => {
     expect(dispatchArg?.ctx?.From).toBe("slack:group:G_MPIM");
   });
 
+  it("blocks MPIM slash commands from senders outside the configured allowFrom", async () => {
+    const harness = createPolicyHarness({
+      allowFrom: ["U_OWNER"],
+      channelId: "G_MPIM",
+      channelName: "group-dm",
+      resolveChannelName: async () => ({ name: "group-dm", type: "mpim" }),
+      useAccessGroups: false,
+    });
+    const { respond } = await registerAndRunPolicySlash({
+      harness,
+      command: { user_id: "U_ATTACKER" },
+    });
+
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith({
+      text: "You are not authorized to use this command here.",
+      response_type: "ephemeral",
+    });
+  });
+
+  it("allows MPIM slash commands from senders in the configured allowFrom", async () => {
+    const harness = createPolicyHarness({
+      allowFrom: ["U_OWNER"],
+      channelId: "G_MPIM",
+      channelName: "group-dm",
+      resolveChannelName: async () => ({ name: "group-dm", type: "mpim" }),
+    });
+    const { respond } = await registerAndRunPolicySlash({
+      harness,
+      command: { user_id: "U_OWNER" },
+    });
+
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    expect(responseTexts(respond)).not.toContain(
+      "You are not authorized to use this command here.",
+    );
+  });
+
   it("enforces access-group gating when lookup fails for private channels", async () => {
     const harness = createPolicyHarness({
       allowFrom: [],

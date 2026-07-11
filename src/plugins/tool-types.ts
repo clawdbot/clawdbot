@@ -1,6 +1,7 @@
 // Defines plugin tool metadata and filesystem policy types.
 import type { ToolFsPolicy } from "../agents/tool-fs-policy.types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookEntry } from "../hooks/types.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
@@ -44,10 +45,17 @@ export type OpenClawPluginToolContext = {
   resolveApiKeyForProvider?: (providerId: string) => Promise<string | undefined>;
   /** Trusted ambient delivery route for the active agent/session. */
   deliveryContext?: DeliveryContext;
+  /** Trusted platform-native conversation id for the active inbound turn. */
+  nativeChannelId?: string;
   /** Trusted sender id from inbound context (runtime-provided, not tool args). */
   requesterSenderId?: string;
   /** Trusted owner bit from inbound context (runtime-provided, not tool args). */
   senderIsOwner?: boolean;
+  /**
+   * Server-owned origin for this operation. Missing values are delegated.
+   * Plugins must use it only for conversation-read visibility policy.
+   */
+  conversationReadOrigin?: ConversationReadInvocationOrigin;
   sandboxed?: boolean;
   /**
    * True for explicit one-shot local CLI runs that must release plugin-owned

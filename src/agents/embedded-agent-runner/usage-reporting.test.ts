@@ -130,6 +130,27 @@ describe("runEmbeddedAgent usage reporting", () => {
     expect(attemptInput.senderE164).toBe("+15551234567");
   });
 
+  it("forwards the current-turn message action capability into embedded attempts", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Response 1"],
+      }),
+    );
+
+    await runEmbeddedAgent({
+      sessionId: "test-session",
+      sessionKey: "test-key",
+      sessionFile: "/tmp/session.json",
+      workspaceDir: "/tmp/workspace",
+      prompt: "hello",
+      timeoutMs: 30000,
+      runId: "run-message-action-capability",
+      messageActionTurnCapability: "turn-capability",
+    });
+
+    expect(firstAttemptInput().messageActionTurnCapability).toBe("turn-capability");
+  });
+
   it("forwards memory flush write paths into memory-triggered attempts", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({

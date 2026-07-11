@@ -757,6 +757,67 @@ describe("install-cli.sh", () => {
     }
   });
 
+  it("removes the Node staging directory when download fails", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-node-cleanup-"));
+    const prefix = join(tmp, "prefix");
+    const stagingDir = join(tmp, "node-staging");
+
+    try {
+      const result = runInstallCliShell(
+        [
+          "set -euo pipefail",
+          `cd ${JSON.stringify(process.cwd())}`,
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          "os_detect() { printf 'linux\\n'; }",
+          "arch_detect() { printf 'x64\\n'; }",
+          "is_musl_linux() { return 1; }",
+          "linked_node_is_usable() { return 1; }",
+          "detect_downloader() { :; }",
+          "require_bin() { :; }",
+          `mktemp() { mkdir -p ${JSON.stringify(stagingDir)}; printf '%s\\n' ${JSON.stringify(stagingDir)}; }`,
+          "download_file() { return 42; }",
+          `PREFIX=${JSON.stringify(prefix)}`,
+          "NODE_VERSION=22.22.0",
+          "install_node",
+        ].join("\n"),
+      );
+
+      expect(result.status).toBe(42);
+      expect(() => lstatSync(stagingDir)).toThrow();
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+  });
+
+  it("removes the workspace rewrite temp file when rewriting fails", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-workspace-cleanup-"));
+    const repo = join(tmp, "repo");
+    const workspaceFile = join(repo, "pnpm-workspace.yaml");
+    const rewriteTemp = join(tmp, "workspace-rewrite");
+    const workspace = 'packages:\n  - "packages/*"\n\nallowBuilds:\n';
+    mkdirSync(repo, { recursive: true });
+    writeFileSync(workspaceFile, workspace);
+
+    try {
+      const result = runInstallCliShell(
+        [
+          "set -euo pipefail",
+          `cd ${JSON.stringify(process.cwd())}`,
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          `mktemp() { : > ${JSON.stringify(rewriteTemp)}; printf '%s\\n' ${JSON.stringify(rewriteTemp)}; }`,
+          "awk() { return 43; }",
+          `ensure_pnpm_git_prepare_allowlist ${JSON.stringify(repo)}`,
+        ].join("\n"),
+      );
+
+      expect(result.status).toBe(43);
+      expect(() => lstatSync(rewriteTemp)).toThrow();
+      expect(readFileSync(workspaceFile, "utf8")).toBe(workspace);
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+  });
+
   it("clears npm freshness filters for package installs", () => {
     expect(script).toContain('freshness_flag="--min-release-age=0"');
     expect(script).toContain('npm_config_has_raw_key "$(npm_bin)" "min-release-age"');
@@ -999,7 +1060,7 @@ describe("install-cli.sh", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-freshness-"));
     const prefix = join(tmp, "prefix");
     const home = join(tmp, "home");
-    const nodeBin = join(prefix, "tools/node-v22.22.0/bin");
+    const nodeBin = join(prefix, "tools/node-v22.22.2/bin");
     const argsLog = join(tmp, "npm-args.log");
     mkdirSync(nodeBin, { recursive: true });
     mkdirSync(home, { recursive: true });
@@ -1035,7 +1096,7 @@ describe("install-cli.sh", () => {
     const prefix = join(tmp, "prefix");
     const home = join(tmp, "home");
     const project = join(tmp, "project");
-    const nodeBin = join(prefix, "tools/node-v22.22.0/bin");
+    const nodeBin = join(prefix, "tools/node-v22.22.2/bin");
     const argsLog = join(tmp, "npm-args.log");
     mkdirSync(nodeBin, { recursive: true });
     mkdirSync(home, { recursive: true });

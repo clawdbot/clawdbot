@@ -1311,14 +1311,27 @@ export async function dispatchReplyFromConfig(
   const boundAcpDispatchSessionKey = resolveBoundAcpDispatchSessionKey({ ctx, cfg });
   const acpDispatchSessionKey =
     boundAcpDispatchSessionKey ?? initialSessionStoreEntry.sessionKey ?? sessionKey;
-  // initialSessionStoreEntry is command-target-aware, so native command turns
-  // stay target-keyed here. Bound ACP dispatch remains source-key owned while
-  // ACP routing uses acpDispatchSessionKey.
+  // initialSessionStoreEntry stays command-target-aware for handler/store
+  // lookups (status/stop/model act on the target via CommandTargetSessionKey).
+  // Reply-run ownership must stay SOURCE-keyed: a native command turn must not
+  // wait on or contend with the target's active run. Bound ACP routing uses
+  // acpDispatchSessionKey separately and must not move source admission.
+  const sourceSessionKey = normalizeOptionalString(ctx.SessionKey);
   const dispatchOperationSessionKey =
-    initialSessionStoreEntry.sessionKey ?? sessionKey ?? acpDispatchSessionKey;
-  // Reply-run ownership stays on the inbound/source session. Bound ACP routing
-  // may use another agent's store, but must not move source lifecycle admission.
-  const operationSessionStoreEntry = initialSessionStoreEntry;
+    sourceSessionKey ?? initialSessionStoreEntry.sessionKey ?? sessionKey ?? acpDispatchSessionKey;
+  const operationSessionStoreEntry =
+    sourceSessionKey &&
+    initialSessionStoreEntry.sessionKey &&
+    sourceSessionKey !== initialSessionStoreEntry.sessionKey
+      ? resolveSessionStoreLookup(
+          {
+            ...ctx,
+            // Strip target so store resolution follows the source SessionKey.
+            CommandTargetSessionKey: undefined,
+          },
+          cfg,
+        )
+      : initialSessionStoreEntry;
   const initialDispatchReplyOperation = dispatchOperationSessionKey
     ? replyRunRegistry.get(dispatchOperationSessionKey)
     : undefined;
@@ -1528,8 +1541,7 @@ export async function dispatchReplyFromConfig(
     }
     const operationSessionId =
       dispatchAbortOperation?.sessionId ??
-      initialSessionStoreEntry.entry?.sessionId ??
-      sessionStoreEntry.entry?.sessionId ??
+      operationSessionStoreEntry.entry?.sessionId ??
       crypto.randomUUID();
     const replyTurnKind = resolveReplyTurnKind(params.replyOptions);
     const allowActivePreDispatch = phase === "pre_dispatch" && replyTurnKind === "visible";

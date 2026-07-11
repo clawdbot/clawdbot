@@ -45,6 +45,115 @@ class ChatControllerModelSelectionTest {
     }
 
   @Test
+  fun successfulSelectionAppliesGatewayThinkingLevelsAndEffectiveLevel() =
+    runTest {
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { _, _ ->
+            """
+            {
+              "resolved": {
+                "modelProvider": "anthropic",
+                "model": "claude-sonnet-5",
+                "thinkingLevel": "max",
+                "thinkingLevels": [
+                  {"id": "off", "label": "off"},
+                  {"id": "minimal", "label": "minimal"},
+                  {"id": "low", "label": "low"},
+                  {"id": "medium", "label": "medium"},
+                  {"id": "high", "label": "high"},
+                  {"id": "xhigh", "label": "xhigh"},
+                  {"id": "adaptive", "label": "adaptive"},
+                  {"id": "max", "label": "max"}
+                ]
+              }
+            }
+            """.trimIndent()
+          },
+        )
+
+      assertTrue(controller.setSessionModelAwait("main", "anthropic/claude-sonnet-5"))
+
+      assertTrue(controller.thinkingLevelSelection.value.isGatewayProvided)
+      assertEquals(
+        listOf("off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"),
+        controller.thinkingLevelSelection.value.options
+          .map { it.id },
+      )
+      assertEquals("max", controller.thinkingLevel.value)
+
+      controller.setThinkingLevel("ultra")
+      assertEquals("max", controller.thinkingLevel.value)
+      controller.setThinkingLevel("adaptive")
+      assertEquals("adaptive", controller.thinkingLevel.value)
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun existingSessionPreservesEffectiveLevelOmittedFromAdvertisedOptions() =
+    runTest {
+      val sentThinkingLevels = mutableListOf<String>()
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, paramsJson ->
+            when (method) {
+              "sessions.list" ->
+                """
+                {
+                  "sessions": [
+                    {
+                      "key": "main",
+                      "modelProvider": "openai",
+                      "model": "gpt-5.6-luna",
+                      "thinkingLevel": "ultra",
+                      "thinkingLevels": [
+                        {"id": "off", "label": "off"},
+                        {"id": "high", "label": "high"},
+                        {"id": "xhigh", "label": "xhigh"},
+                        {"id": "max", "label": "max"}
+                      ]
+                    }
+                  ]
+                }
+                """.trimIndent()
+              "chat.send" -> {
+                val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
+                sentThinkingLevels += (params["thinking"] as JsonPrimitive).content
+                """{"runId":"run-ok","status":"ok"}"""
+              }
+              else -> "{}"
+            }
+          },
+        )
+
+      controller.refreshSessions()
+      advanceUntilIdle()
+
+      assertEquals(
+        listOf("off", "high", "xhigh", "max"),
+        controller
+          .thinkingLevelSelection
+          .value
+          .options
+          .map { it.id },
+      )
+      assertEquals("ultra", controller.thinkingLevel.value)
+      controller.handleGatewayEvent("health", null)
+      assertTrue(
+        controller.sendMessageAwaitAcceptance(
+          message = "preserve effective reasoning",
+          thinkingLevel = controller.thinkingLevel.value,
+          attachments = emptyList(),
+        ),
+      )
+      assertEquals(listOf("ultra"), sentThinkingLevels)
+    }
+
+  @Test
   fun failedSelectionDoesNotRecordRecentOrUpdateSelectedModel() =
     runTest {
       val recents = mutableListOf<String>()
@@ -395,5 +504,73 @@ class ChatControllerModelSelectionTest {
       )
       assertEquals(listOf("off", "high"), sentThinkingLevels)
       assertEquals("high", controller.thinkingLevel.value)
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun advertisedThinkingLevelsOverrideCatalogReasoningFlagForSend() =
+    runTest {
+      val sentThinkingLevels = mutableListOf<String>()
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, paramsJson ->
+            when (method) {
+              "chat.metadata" ->
+                """
+                {
+                  "commands": [],
+                  "models": [
+                    {
+                      "id": "reasoner",
+                      "name": "Reasoner",
+                      "provider": "synthetic",
+                      "available": true,
+                      "input": ["text"],
+                      "reasoning": false
+                    }
+                  ]
+                }
+                """.trimIndent()
+              "chat.history" -> """{"messages":[],"sessionInfo":{"key":"main"}}"""
+              "sessions.list" -> """{"sessions":[]}"""
+              "sessions.patch" ->
+                """
+                {
+                  "resolved": {
+                    "modelProvider": "synthetic",
+                    "model": "reasoner",
+                    "thinkingLevel": "max",
+                    "thinkingLevels": [
+                      {"id": "off", "label": "off"},
+                      {"id": "max", "label": "max"}
+                    ]
+                  }
+                }
+                """.trimIndent()
+              "chat.send" -> {
+                val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
+                sentThinkingLevels += (params["thinking"] as JsonPrimitive).content
+                """{"runId":"run-ok","status":"ok"}"""
+              }
+              else -> "{}"
+            }
+          },
+        )
+      controller.handleGatewayEvent("health", null)
+      controller.load("main")
+      advanceUntilIdle()
+
+      assertTrue(controller.setSessionModelAwait("main", "synthetic/reasoner"))
+      assertTrue(
+        controller.sendMessageAwaitAcceptance(
+          message = "use the advertised level",
+          thinkingLevel = controller.thinkingLevel.value,
+          attachments = emptyList(),
+        ),
+      )
+
+      assertEquals(listOf("max"), sentThinkingLevels)
     }
 }

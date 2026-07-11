@@ -190,6 +190,7 @@ type MatrixJsClientStub = {
   getJoinedRoomMembers: ReturnType<typeof vi.fn>;
   getStateEvent: ReturnType<typeof vi.fn>;
   getAccountData: ReturnType<typeof vi.fn>;
+  getAccountDataFromServer: ReturnType<typeof vi.fn>;
   setAccountData: ReturnType<typeof vi.fn>;
   getRoomIdForAlias: ReturnType<typeof vi.fn>;
   sendMessage: ReturnType<typeof vi.fn>;
@@ -226,6 +227,7 @@ function createMatrixJsClientStub(): MatrixJsClientStub {
   client.getJoinedRoomMembers = vi.fn(async () => ({ joined: {} }));
   client.getStateEvent = vi.fn(async () => ({}));
   client.getAccountData = vi.fn(() => undefined);
+  client.getAccountDataFromServer = vi.fn(async () => null);
   client.setAccountData = vi.fn(async () => {});
   client.getRoomIdForAlias = vi.fn(async () => ({ room_id: "!resolved:example.org" }));
   client.sendMessage = vi.fn(async () => ({ event_id: "$sent" }));
@@ -322,6 +324,19 @@ describe("MatrixClient request hardening", () => {
     vi.unstubAllGlobals();
     clearTestUndiciRuntimeDepsOverride();
     resetPluginStateStoreForTests();
+  });
+
+  it("reads account data through the server-aware SDK path before initial sync", async () => {
+    matrixJsClient.getAccountDataFromServer.mockResolvedValue({
+      "@alice:example.org": ["!dm:example.org"],
+    });
+    const client = new MatrixClient("https://matrix.example.org", "token");
+
+    await expect(client.getAccountData("m.direct")).resolves.toEqual({
+      "@alice:example.org": ["!dm:example.org"],
+    });
+    expect(matrixJsClient.getAccountDataFromServer).toHaveBeenCalledWith("m.direct");
+    expect(matrixJsClient.getAccountData).not.toHaveBeenCalled();
   });
 
   it("blocks absolute endpoints unless explicitly allowed", async () => {

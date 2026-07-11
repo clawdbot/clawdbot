@@ -101,7 +101,8 @@ vi.mock("../commands/models/shared.js", () => ({
   }),
 }));
 
-vi.mock("../config/model-input.js", () => ({
+vi.mock("../config/model-input.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/model-input.js")>()),
   resolveAgentModelPrimaryValue: (model?: string | { primary?: string }) =>
     typeof model === "string" ? model : model?.primary,
 }));

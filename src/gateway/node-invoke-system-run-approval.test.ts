@@ -51,6 +51,7 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     turnSourceThreadId?: string | null;
     approvalSource?: string;
     runId?: string;
+    systemRunPlan?: Record<string, unknown>;
   };
 
   function approvedRunParams(overrides: ApprovedRunParamOverrides): Record<string, unknown> {
@@ -650,6 +651,13 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
       commandText: "/usr/bin/echo SAFE",
       agentId: "main",
       sessionKey: "agent:main:main",
+      policySnapshot: {
+        security: "allowlist",
+        ask: "on-miss",
+        askFallback: "deny",
+        autoAllowSkills: false,
+        allowlistRules: [{ pattern: "/usr/bin/echo" }],
+      },
     };
     record.request.systemRunBinding = buildSystemRunApprovalBinding({
       argv: ["/usr/bin/echo", "SAFE"],
@@ -664,6 +672,20 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
         cwd: "/tmp/attacker-link/sub",
         agentId: "attacker",
         sessionKey: "agent:attacker:main",
+        systemRunPlan: {
+          argv: ["echo", "PWNED"],
+          cwd: "/tmp/attacker-link/sub",
+          commandText: "echo PWNED",
+          agentId: "attacker",
+          sessionKey: "agent:attacker:main",
+          policySnapshot: {
+            security: "full",
+            ask: "off",
+            askFallback: "full",
+            autoAllowSkills: true,
+            allowlistRules: [],
+          },
+        },
       },
       record,
     });
@@ -677,6 +699,7 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
           commandText?: string;
           agentId?: string;
           sessionKey?: string;
+          policySnapshot?: unknown;
         }
       | undefined;
     expect(systemRunPlan?.argv).toEqual(["/usr/bin/echo", "SAFE"]);
@@ -684,6 +707,13 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     expect(systemRunPlan?.commandText).toBe("/usr/bin/echo SAFE");
     expect(systemRunPlan?.agentId).toBe("main");
     expect(systemRunPlan?.sessionKey).toBe("agent:main:main");
+    expect(systemRunPlan?.policySnapshot).toEqual({
+      security: "allowlist",
+      ask: "on-miss",
+      askFallback: "deny",
+      autoAllowSkills: false,
+      allowlistRules: [{ pattern: "/usr/bin/echo" }],
+    });
     expect(forwarded.cwd).toBe("/real/cwd");
     expect(forwarded.agentId).toBe("main");
     expect(forwarded.sessionKey).toBe("agent:main:main");

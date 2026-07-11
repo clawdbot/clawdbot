@@ -248,6 +248,8 @@ import {
   ChatMessageGetResultSchema,
   ChatInjectParamsSchema,
   ChatSendParamsSchema,
+  ChatToolTitlesParamsSchema,
+  ChatToolTitlesResultSchema,
   LogsTailParamsSchema,
   LogsTailResultSchema,
 } from "./logs-chat.js";
@@ -798,6 +800,8 @@ export const ProtocolSchemas = {
   ChatMetadataParams: ChatMetadataParamsSchema,
   ChatMessageGetParams: ChatMessageGetParamsSchema,
   ChatMessageGetResult: ChatMessageGetResultSchema,
+  ChatToolTitlesParams: ChatToolTitlesParamsSchema,
+  ChatToolTitlesResult: ChatToolTitlesResultSchema,
   ChatSendParams: ChatSendParamsSchema,
   ChatAbortParams: ChatAbortParamsSchema,
   ChatInjectParams: ChatInjectParamsSchema,

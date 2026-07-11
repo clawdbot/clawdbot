@@ -100,6 +100,22 @@ describe("Twilio SMS helpers", () => {
     });
   });
 
+  it.each([
+    ["+1 (555) 123-4567", "+15551234567"],
+    ["RcS:+1 (555) 123-4567", "+15551234567"],
+    ["whatsapp:+15551234567", null],
+    ["signal:+15551234567", null],
+  ] as const)("accepts only supported Twilio inbound From address %s", (from, expected) => {
+    const msg = buildTwilioInboundMessage({
+      From: from,
+      To: "+15557654321",
+      Body: "hello",
+      MessageSid: "SM123",
+    });
+
+    expect(msg?.from ?? null).toBe(expected);
+  });
+
   it("verifies Twilio signatures over sorted form fields", () => {
     const form = {
       Body: "hello",

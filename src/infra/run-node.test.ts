@@ -180,10 +180,6 @@ function statusCommandSpawn() {
   return [process.execPath, "openclaw.mjs", "status"];
 }
 
-function gatewayCallStatusCommandSpawn() {
-  return [process.execPath, "openclaw.mjs", "gateway", "call", "status", "--json"];
-}
-
 function resolvePath(tmp: string, relativePath: string) {
   return path.join(tmp, relativePath);
 }
@@ -321,8 +317,9 @@ async function runStatusCommand(params: {
   });
 }
 
-async function runGatewayCallStatusCommand(params: {
+async function runGatewayClientCommand(params: {
   tmp: string;
+  args: string[];
   spawn: (cmd: string, args: string[]) => ReturnType<typeof createExitedProcess>;
   spawnSync?: (cmd: string, args: string[]) => { status: number; stdout: string };
   env?: Record<string, string>;
@@ -333,7 +330,7 @@ async function runGatewayCallStatusCommand(params: {
 }) {
   return await runNodeMain({
     cwd: params.tmp,
-    args: ["gateway", "call", "status", "--json"],
+    args: params.args,
     env: {
       ...process.env,
       OPENCLAW_RUNNER_LOG: "0",
@@ -1913,7 +1910,12 @@ describe("run-node script", () => {
     });
   });
 
-  it("does not rebuild for gateway client calls against an existing dirty dist", async () => {
+  it.each([
+    { label: "gateway RPC", args: ["gateway", "call", "status", "--json"] },
+    { label: "gateway status", args: ["gateway", "status", "--json"] },
+    { label: "remote agent", args: ["agent", "--message", "hello"] },
+    { label: "dashboard", args: ["dashboard", "--no-open", "--yes"] },
+  ])("does not rebuild for $label calls against an existing dirty dist", async ({ args }) => {
     await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
       await setupTrackedProject(tmp, {
         files: {
@@ -1935,15 +1937,93 @@ describe("run-node script", () => {
         gitHead: "abc123\n",
         gitStatus: ` M ${ROOT_SRC}\n`,
       });
-      const exitCode = await runGatewayCallStatusCommand({
+      const exitCode = await runGatewayClientCommand({
         tmp,
+        args,
         spawn,
         spawnSync,
         runRuntimePostBuild,
       });
 
       expect(exitCode).toBe(0);
-      expect(spawnCalls).toEqual([gatewayCallStatusCommandSpawn()]);
+      expect(spawnCalls).toEqual([[process.execPath, "openclaw.mjs", ...args]]);
+      expect(runRuntimePostBuild).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rechecks a dirty dashboard client after waiting for an active build", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+          [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        },
+        buildPaths: [
+          ROOT_SRC,
+          ROOT_TSCONFIG,
+          ROOT_PACKAGE,
+          DIST_ENTRY,
+          BUILD_STAMP,
+          RUNTIME_POSTBUILD_STAMP,
+        ],
+      });
+      await fs.rm(resolvePath(tmp, BUILD_STAMP));
+      await fs.rm(resolvePath(tmp, RUNTIME_POSTBUILD_STAMP));
+
+      const lockProcess = Object.assign(createFakeProcess(), {
+        kill: vi.fn(() => true),
+      }) as unknown as NodeJS.Process;
+      const releaseLock = await acquireRunNodeBuildLock({
+        cwd: tmp,
+        args: ["gateway"],
+        env: { OPENCLAW_RUNNER_LOG: "0" },
+        fs: fsSync,
+        process: lockProcess,
+        stderr: { write: () => true } as unknown as NodeJS.WriteStream,
+      });
+      let markWaiting!: () => void;
+      const waitingForLock = new Promise<void>((resolve) => {
+        markWaiting = resolve;
+      });
+      const stderr = {
+        write: (chunk: string | Buffer) => {
+          if (String(chunk).includes("Waiting for TypeScript/runtime artifact lock")) {
+            markWaiting();
+          }
+          return true;
+        },
+      } as unknown as NodeJS.WriteStream;
+      const runRuntimePostBuild = vi.fn();
+      const { spawnCalls, spawn, spawnSync } = createSpawnRecorder({
+        gitHead: "abc123\n",
+        gitStatus: ` M ${ROOT_SRC}\n`,
+      });
+      const clientRun = runNodeMain({
+        cwd: tmp,
+        args: ["dashboard", "--no-open", "--yes"],
+        env: {
+          ...process.env,
+          OPENCLAW_RUNNER_LOG: "1",
+          OPENCLAW_RUN_NODE_BUILD_LOCK_POLL_MS: "1",
+        },
+        spawn,
+        spawnSync,
+        process: lockProcess,
+        stderr,
+        runRuntimePostBuild,
+        execPath: process.execPath,
+        platform: process.platform,
+      });
+
+      await waitingForLock;
+      await fs.writeFile(resolvePath(tmp, BUILD_STAMP), '{"head":"abc123"}\n', "utf-8");
+      await fs.writeFile(resolvePath(tmp, RUNTIME_POSTBUILD_STAMP), '{"head":"abc123"}\n', "utf-8");
+      releaseLock();
+
+      await expect(clientRun).resolves.toBe(0);
+      expect(spawnCalls).toEqual([
+        [process.execPath, "openclaw.mjs", "dashboard", "--no-open", "--yes"],
+      ]);
       expect(runRuntimePostBuild).not.toHaveBeenCalled();
     });
   });

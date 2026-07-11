@@ -1,3 +1,7 @@
+import {
+  normalizeConversationReadInvocationOrigin,
+  type ConversationReadInvocationOrigin,
+} from "../channels/plugins/conversation-read-origin.js";
 /**
  * Runtime context resolver for OpenClaw plugin tools.
  *
@@ -18,6 +22,7 @@ export type OpenClawPluginToolOptions = {
   agentAccountId?: string;
   agentTo?: string;
   agentThreadId?: string | number;
+  nativeChannelId?: string;
   agentDir?: string;
   workspaceDir?: string;
   config?: OpenClawConfig;
@@ -26,6 +31,7 @@ export type OpenClawPluginToolOptions = {
   modelId?: string;
   requesterSenderId?: string | null;
   senderIsOwner?: boolean;
+  conversationReadOrigin?: ConversationReadInvocationOrigin;
   requesterAgentIdOverride?: string;
   sessionId?: string;
   /**
@@ -95,8 +101,12 @@ export function resolveOpenClawPluginToolInputs(params: {
       messageChannel: options?.agentChannel,
       agentAccountId: options?.agentAccountId,
       deliveryContext,
+      nativeChannelId: options?.nativeChannelId,
       requesterSenderId: options?.requesterSenderId ?? undefined,
       senderIsOwner: options?.senderIsOwner,
+      conversationReadOrigin: normalizeConversationReadInvocationOrigin(
+        options?.conversationReadOrigin,
+      ),
       sandboxed: options?.sandboxed,
       oneShotCliRun: options?.oneShotCliRun,
     },

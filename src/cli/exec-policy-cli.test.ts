@@ -289,7 +289,16 @@ describe("exec-policy CLI", () => {
       file: mocks.getApprovals(),
     }));
     mocks.restoreExecApprovalsSnapshot.mockReset();
-    mocks.restoreExecApprovalsSnapshot.mockImplementation(async () => true);
+    mocks.restoreExecApprovalsSnapshot.mockImplementation(
+      async (snapshot: ExecApprovalsSnapshot, baseHash: string) => {
+        if (baseHash !== "written-approvals-hash") {
+          return false;
+        }
+        mocks.setApprovals(structuredClone(snapshot.file));
+        mocks.setApprovalsHash(snapshot.hash);
+        return true;
+      },
+    );
     mocks.updateExecApprovals.mockClear();
   });
 
@@ -525,6 +534,7 @@ describe("exec-policy CLI", () => {
       originalSnapshot,
       "written-approvals-hash",
     );
+    expect(mocks.getApprovals()).toEqual(originalApprovals);
     expect(mocks.runtimeErrors).toEqual(["config write failed"]);
   });
 
@@ -551,7 +561,7 @@ describe("exec-policy CLI", () => {
     );
   });
 
-  it("does not clobber a newer approvals write during rollback", async () => {
+  it("rebases rollback over a newer approvals write", async () => {
     const originalApprovals = structuredClone(mocks.getApprovals());
     const originalRaw = JSON.stringify(originalApprovals, null, 2);
     const originalSnapshot = {
@@ -562,7 +572,151 @@ describe("exec-policy CLI", () => {
       file: originalApprovals,
     };
     mockRollbackApprovalSnapshots(originalSnapshot);
-    mocks.restoreExecApprovalsSnapshot.mockResolvedValueOnce(false);
+    mocks.restoreExecApprovalsSnapshot.mockImplementationOnce(async () => {
+      const concurrentFile = structuredClone(mocks.getApprovals());
+      concurrentFile.defaults = {
+        ...concurrentFile.defaults,
+        security: "deny",
+      };
+      concurrentFile.agents = {
+        ...concurrentFile.agents,
+        worker: { security: "deny" },
+      };
+      mocks.setApprovals(concurrentFile);
+      mocks.setApprovalsHash("concurrent-write-hash");
+      return false;
+    });
+    mocks.replaceConfigFile.mockImplementationOnce(async () => {
+      throw new Error("config write failed");
+    });
+
+    await expect(runExecPolicyCommand(["exec-policy", "preset", "yolo"])).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    expect(mocks.restoreExecApprovalsSnapshot).toHaveBeenCalledWith(
+      originalSnapshot,
+      "written-approvals-hash",
+    );
+    expect(mocks.updateExecApprovals).toHaveBeenCalledTimes(2);
+    expect(mocks.getApprovals()).toEqual({
+      ...originalApprovals,
+      defaults: {
+        ...originalApprovals.defaults,
+        security: "deny",
+      },
+      agents: {
+        ...originalApprovals.agents,
+        worker: { security: "deny" },
+      },
+    });
+    expect(mocks.runtimeErrors).toEqual(["config write failed"]);
+  });
+
+  it("does not loosen a same-valued concurrent policy after rollback loses provenance", async () => {
+    const originalApprovals: ExecApprovalsFile = {
+      version: 1,
+      defaults: {
+        security: "full",
+        ask: "off",
+        askFallback: "full",
+      },
+      agents: {},
+    };
+    mocks.setApprovals(originalApprovals);
+    const originalSnapshot = {
+      path: "/tmp/exec-approvals.json",
+      exists: true,
+      raw: JSON.stringify(originalApprovals, null, 2),
+      hash: "original-hash",
+      file: originalApprovals,
+    };
+    mockRollbackApprovalSnapshots(originalSnapshot);
+    mocks.restoreExecApprovalsSnapshot.mockImplementationOnce(async () => {
+      const concurrentFile = structuredClone(mocks.getApprovals());
+      concurrentFile.agents = { worker: { security: "deny" } };
+      mocks.setApprovals(concurrentFile);
+      mocks.setApprovalsHash("concurrent-write-hash");
+      return false;
+    });
+    mocks.replaceConfigFile.mockRejectedValueOnce(new Error("config write failed"));
+
+    await expect(runExecPolicyCommand(["exec-policy", "preset", "cautious"])).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    expect(mocks.updateExecApprovals).toHaveBeenCalledTimes(2);
+    expect(mocks.getApprovals()).toEqual({
+      version: 1,
+      defaults: {
+        security: "allowlist",
+        ask: "on-miss",
+        askFallback: "deny",
+      },
+      agents: { worker: { security: "deny" } },
+    });
+    expect(mocks.runtimeErrors).toEqual(["config write failed"]);
+  });
+
+  it("clears an applied default that was originally unset during rebased rollback", async () => {
+    const originalApprovals: ExecApprovalsFile = {
+      version: 1,
+      defaults: {
+        ask: "on-miss",
+        askFallback: "deny",
+        autoAllowSkills: false,
+      },
+      agents: {},
+    };
+    mocks.setApprovals(originalApprovals);
+    const originalSnapshot = {
+      path: "/tmp/exec-approvals.json",
+      exists: true,
+      raw: JSON.stringify(originalApprovals, null, 2),
+      hash: "original-hash",
+      file: originalApprovals,
+    };
+    mockRollbackApprovalSnapshots(originalSnapshot);
+    mocks.restoreExecApprovalsSnapshot.mockImplementationOnce(async () => {
+      const concurrentFile = structuredClone(mocks.getApprovals());
+      concurrentFile.defaults = {
+        ...concurrentFile.defaults,
+        autoAllowSkills: true,
+      };
+      mocks.setApprovals(concurrentFile);
+      mocks.setApprovalsHash("concurrent-write-hash");
+      return false;
+    });
+    mocks.replaceConfigFile.mockRejectedValueOnce(new Error("config write failed"));
+
+    await expect(
+      runExecPolicyCommand(["exec-policy", "set", "--security", "full"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(mocks.getApprovals().defaults).toEqual({
+      ask: "on-miss",
+      askFallback: "deny",
+      autoAllowSkills: true,
+      security: undefined,
+    });
+    expect(mocks.runtimeErrors).toEqual(["config write failed"]);
+  });
+
+  it("reports when field-level rollback cannot be persisted", async () => {
+    const originalApprovals = structuredClone(mocks.getApprovals());
+    const originalSnapshot = {
+      path: "/tmp/exec-approvals.json",
+      exists: true,
+      raw: JSON.stringify(originalApprovals, null, 2),
+      hash: "original-hash",
+      file: originalApprovals,
+    };
+    mockRollbackApprovalSnapshots(originalSnapshot);
+    mocks.restoreExecApprovalsSnapshot.mockImplementationOnce(async () => {
+      mocks.setApprovalsHash("concurrent-write-hash");
+      mocks.updateExecApprovals.mockRejectedValueOnce(new Error("approval rollback failed"));
+      return false;
+    });
     mocks.replaceConfigFile.mockImplementationOnce(async () => {
       throw new Error("config write failed");
     });
@@ -571,11 +725,8 @@ describe("exec-policy CLI", () => {
       runExecPolicyCommand(["exec-policy", "set", "--security", "full"]),
     ).rejects.toThrow("__exit__:1");
 
-    expect(mocks.restoreExecApprovalsSnapshot).toHaveBeenCalledWith(
-      originalSnapshot,
-      "written-approvals-hash",
-    );
-    expect(mocks.updateExecApprovals).toHaveBeenCalledTimes(1);
-    expect(mocks.runtimeErrors).toEqual(["config write failed"]);
+    expect(mocks.runtimeErrors).toEqual([
+      "Config update failed: config write failed; exec approvals rollback failed: approval rollback failed",
+    ]);
   });
 });

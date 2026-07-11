@@ -21,7 +21,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { shortenHomePath } from "openclaw/plugin-sdk/text-utility-runtime";
-import { buildA2UITextJsonl, validateA2UIJsonl } from "./a2ui-jsonl.js";
+import { buildA2UITextJsonl, validateSupportedA2UIJsonl } from "./a2ui-jsonl.js";
 import { canvasSnapshotTempPath, parseCanvasSnapshotPayload } from "./cli-helpers.js";
 
 /** Runtime output surface used by Canvas CLI commands. */
@@ -444,12 +444,7 @@ export function registerNodesCanvasCommands(nodes: Command, deps: CanvasCliDepen
           const jsonl = hasText
             ? buildA2UITextJsonl(opts.text ?? "")
             : await fs.readFile(String(opts.jsonl), "utf8");
-          const { version, messageCount } = validateA2UIJsonl(jsonl);
-          if (version === "v0.9") {
-            throw new Error(
-              "Detected A2UI v0.9 JSONL (createSurface). OpenClaw currently supports v0.8 only.",
-            );
-          }
+          const { messageCount } = validateSupportedA2UIJsonl(jsonl);
           await invokeCanvas(deps, opts, "canvas.a2ui.pushJSONL", { jsonl });
           if (!opts.json) {
             const { ok } = deps.getNodesTheme();

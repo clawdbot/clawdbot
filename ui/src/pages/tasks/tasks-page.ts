@@ -11,15 +11,15 @@ import {
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { searchForSession } from "../../lib/sessions/index.ts";
-import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
-import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import {
   applyTaskEvent,
   mergeTaskLists,
   normalizeTasksCancelResult,
   normalizeTasksListResult,
   type TaskSummary,
-} from "./data.ts";
+} from "../../lib/tasks/data.ts";
+import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { renderTasks } from "./view.ts";
 
 function formatTaskError(error: unknown, fallback: string): string {

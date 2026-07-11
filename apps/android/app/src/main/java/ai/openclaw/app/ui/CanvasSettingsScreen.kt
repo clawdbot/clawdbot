@@ -26,7 +26,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
@@ -84,17 +83,10 @@ internal fun CanvasSettingsScreen(
         Text(text = it, style = ClawTheme.type.body, color = ClawTheme.colors.warning)
       }
     }
-    ClawPanel(contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)) {
-      Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    ClawPanel(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp)) {
+      Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(text = canvasLabel, style = ClawTheme.type.section, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Surface(
-          modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(ClawTheme.radii.panel)),
-          shape = RoundedCornerShape(ClawTheme.radii.panel),
-          color = ClawTheme.colors.canvas,
-          border = BorderStroke(1.dp, ClawTheme.colors.border),
-        ) {
-          CanvasStandbyPanel(isConnected = isConnected)
-        }
+        CanvasStandbyPanel(isConnected = isConnected)
       }
     }
   }
@@ -103,7 +95,7 @@ internal fun CanvasSettingsScreen(
 @Composable
 private fun CanvasStandbyPanel(isConnected: Boolean) {
   Column(
-    modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 48.dp),
+    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 28.dp),
     horizontalAlignment = Alignment.CenterHorizontally,
     verticalArrangement = Arrangement.Center,
   ) {

@@ -83,6 +83,50 @@ describe("skill_workshop tool", () => {
     expect(tools.some((tool) => tool.name === "skill_workshop")).toBe(false);
   });
 
+  it.each([0, 1.5, "1.5", "25items", "many"])(
+    "rejects invalid list limit %s before touching proposal state",
+    async (limit) => {
+      const workspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-");
+      const tool = createSkillWorkshopTool({
+        workspaceDir,
+        config: {},
+        agentId: "main",
+      });
+
+      await expect(tool.execute("call-list-limit", { action: "list", limit })).rejects.toThrow(
+        "limit must be a positive integer",
+      );
+      await expect(fs.access(path.join(stateDir, "skill-workshop"))).rejects.toThrow();
+    },
+  );
+
+  it("preserves list limits through 50 and clamps larger requests", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-");
+    const tool = createSkillWorkshopTool({
+      workspaceDir,
+      config: { skills: { workshop: { maxPending: 200 } } },
+      agentId: "main",
+    });
+
+    for (let index = 0; index < 51; index += 1) {
+      await tool.execute(`call-create-${index}`, {
+        action: "create",
+        name: `Limit Proposal ${index}`,
+        description: `Proposal ${index}`,
+        proposal_content: `# Limit Proposal ${index}\n`,
+      });
+    }
+
+    for (const [limit, expectedCount] of [
+      [49, 49],
+      [50, 50],
+      [51, 50],
+    ] as const) {
+      const result = await tool.execute(`call-list-${limit}`, { action: "list", limit });
+      expect((result.details as { proposals: unknown[] }).proposals).toHaveLength(expectedCount);
+    }
+  });
+
   it("creates pending skill proposals without applying them", async () => {
     // Creation writes reviewable proposal artifacts under state, not live skill
     // files in the workspace.

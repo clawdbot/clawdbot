@@ -564,6 +564,18 @@ describe("TwitchClientManager", () => {
       expect(mockSay).toHaveBeenCalledWith("testchannel", "Hello, world!");
     });
 
+    it("should keep surrogate pairs intact when pre-chunking long messages", async () => {
+      const prefix = "a".repeat(499);
+
+      const result = await manager.sendMessage(testAccount, "testchannel", `${prefix}😀b`);
+
+      expect(result.ok).toBe(true);
+      expect(mockSay.mock.calls).toEqual([
+        ["testchannel", prefix],
+        ["testchannel", "😀b"],
+      ]);
+    });
+
     it("should generate unique message ID for each message", async () => {
       const result1 = await manager.sendMessage(testAccount, "testchannel", "First message");
       const result2 = await manager.sendMessage(testAccount, "testchannel", "Second message");

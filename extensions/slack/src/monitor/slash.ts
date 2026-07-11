@@ -536,7 +536,7 @@ export async function registerSlackMonitorSlashCommands(params: {
         modeWhenAccessGroupsOff: "configured",
       });
       const senderGate = slashIngress.senderAccess.gate;
-      if (isRoom && senderGate?.allowed === false) {
+      if (isRoomish && senderGate?.allowed === false) {
         await respond({
           text: "You are not authorized to use this command here.",
           response_type: "ephemeral",

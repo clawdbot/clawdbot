@@ -161,6 +161,7 @@ import {
   buildTelegramConversationContext,
   buildTelegramReplyChain,
   createTelegramMessageCache,
+  isTelegramMessageFromCurrentBot,
   isTelegramSessionBoundaryCommandText,
   resolveTelegramMessageCacheScope,
   type TelegramCachedMessageNode,
@@ -186,18 +187,36 @@ import {
   isTelegramEditTargetMissingError,
   isTelegramMessageHasNoTextError,
 } from "./network-errors.js";
+import { resolveCompleteTelegramPromptContextProjectionIds } from "./prompt-context-projection.js";
 import { resolveTelegramPromptMediaPath } from "./prompt-media-path.js";
 import { buildInlineKeyboard } from "./send.js";
-import { buildTelegramSessionTranscriptPromptMessages } from "./session-transcript-context.js";
+import { buildTelegramSessionTranscriptPromptEntries } from "./session-transcript-context.js";
 
-type TelegramPromptContextMessageForDedupe = {
+function hasLegacyPromptContextTimestamp(
+  node: TelegramCachedMessageNode,
+  botUserId?: number,
+): boolean {
+  if (node.promptContextProjectionMarker) {
+    return false;
+  }
+  const timestamp = (
+    node.sourceMessage as Message & { openclaw_prompt_context_timestamp_ms?: unknown }
+  ).openclaw_prompt_context_timestamp_ms;
+  if (typeof timestamp !== "number" || !Number.isFinite(timestamp)) {
+    return false;
+  }
+  // Shipped previews created before bot identity was available used id 0. The
+  // private timestamp marker is their durable outbound provenance.
+  return (
+    isTelegramMessageFromCurrentBot(node.sourceMessage, botUserId) ||
+    (node.sourceMessage.from?.id === 0 && node.sourceMessage.from.is_bot)
+  );
+}
+
+function resolvePromptContextTextDedupeKey(message: {
   body?: unknown;
   timestamp_ms?: unknown;
-};
-
-function resolvePromptContextTextDedupeKey(
-  message: TelegramPromptContextMessageForDedupe,
-): string | undefined {
+}): string | undefined {
   if (typeof message.body !== "string") {
     return undefined;
   }
@@ -1271,11 +1290,12 @@ export const registerTelegramHandlers = ({
     }, TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS);
   };
 
-  const recordMessageForReplyChain = (msg: Message, threadId?: number) =>
+  const recordMessageForReplyChain = (msg: Message, threadId?: number, botUserId?: number) =>
     messageCache.record({
       accountId,
       chatId: msg.chat.id,
       msg,
+      ...(botUserId !== undefined ? { botUserId } : {}),
       ...(threadId != null ? { threadId } : {}),
     });
 
@@ -1292,7 +1312,11 @@ export const registerTelegramHandlers = ({
     ctx: TelegramContext,
     media?: TelegramMediaRef,
   ): TelegramReplyChainEntry => {
-    const { sourceMessage: _sourceMessage, ...entry } = node;
+    const {
+      sourceMessage: _sourceMessage,
+      promptContextProjectionMarker: _promptContextProjectionMarker,
+      ...entry
+    } = node;
     const projectedEntry = { ...entry, sender: resolvePromptSender(node, ctx) };
     if (!media?.path) {
       return projectedEntry;
@@ -1335,6 +1359,7 @@ export const registerTelegramHandlers = ({
     mediaByMessageId?: ReadonlyMap<string, TelegramMediaRef>,
     selectedMessageIds?: PromptContextMessageSelection,
   ): Promise<TelegramPromptContextEntry[]> => {
+    const currentBotUserId = ctx.me?.id ?? opts.botInfo?.id;
     const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
     const groupHistoryLimit = Math.max(
       0,
@@ -1354,10 +1379,10 @@ export const registerTelegramHandlers = ({
     const isSessionBoundaryMessage = isTelegramSessionBoundaryCommandText(
       getTelegramTextParts(msg).text,
     );
-    const sessionPromptMessages =
+    const sessionPromptEntries =
       isGroup || isSessionBoundaryMessage
         ? []
-        : await buildTelegramSessionTranscriptPromptMessages({
+        : await buildTelegramSessionTranscriptPromptEntries({
             ...resolveTelegramSessionState({
               chatId: msg.chat.id,
               isGroup: false,
@@ -1428,22 +1453,45 @@ export const registerTelegramHandlers = ({
         conversationContextById.set(node.messageId, { node });
       }
     }
-    const cachePromptMessages = Array.from(conversationContextById.values()).map((entry) =>
-      toPromptContextMessage(
+    const cachePromptMessageEntries = Array.from(conversationContextById.values()).map((entry) => ({
+      node: entry.node,
+      message: toPromptContextMessage(
         entry.node,
         ctx,
         { replyTarget: entry.isReplyTarget },
         entry.node.messageId ? mediaByMessageId?.get(entry.node.messageId) : undefined,
       ),
+    }));
+    const cachePromptMessages = cachePromptMessageEntries.map((entry) => entry.message);
+    const inboundCacheTextKeys = new Set<string>();
+    const legacyOutboundCacheTextKeys = new Set<string>();
+    for (const entry of cachePromptMessageEntries) {
+      const key = resolvePromptContextTextDedupeKey(entry.message);
+      if (key === undefined) {
+        continue;
+      }
+      if (hasLegacyPromptContextTimestamp(entry.node, currentBotUserId)) {
+        legacyOutboundCacheTextKeys.add(key);
+      } else if (!isTelegramMessageFromCurrentBot(entry.node.sourceMessage, currentBotUserId)) {
+        inboundCacheTextKeys.add(key);
+      }
+    }
+    const completeProjectionIds = resolveCompleteTelegramPromptContextProjectionIds(
+      cachePromptMessageEntries.map((entry) => entry.node.promptContextProjectionMarker),
     );
-    const cacheTextKeys = new Set(
-      cachePromptMessages
-        .map((message) => resolvePromptContextTextDedupeKey(message))
-        .filter((key) => key !== undefined),
-    );
-    const sessionOnlyPromptMessages = sessionPromptMessages.filter((message) => {
-      const key = resolvePromptContextTextDedupeKey(message);
-      return key === undefined || !cacheTextKeys.has(key);
+    const sessionOnlyPromptMessages = sessionPromptEntries.flatMap((entry) => {
+      if (entry.role === "assistant") {
+        if (entry.transcriptMessageId && completeProjectionIds.has(entry.transcriptMessageId)) {
+          return [];
+        }
+        // Shipped pre-projection outbound rows carried an explicit transcript
+        // timestamp. Preserve that exact legacy dedupe without treating other
+        // markerless or invalid rows as projection provenance.
+        const key = resolvePromptContextTextDedupeKey(entry.message);
+        return key !== undefined && legacyOutboundCacheTextKeys.has(key) ? [] : [entry.message];
+      }
+      const key = resolvePromptContextTextDedupeKey(entry.message);
+      return key !== undefined && inboundCacheTextKeys.has(key) ? [] : [entry.message];
     });
     const promptMessages = [...sessionOnlyPromptMessages, ...cachePromptMessages].toSorted(
       (left, right) => (left.timestamp_ms ?? 0) - (right.timestamp_ms ?? 0),
@@ -3698,6 +3746,7 @@ export const registerTelegramHandlers = ({
     ctxForDedupe: TelegramUpdateKeyContext;
     msg: Message;
     requireConfiguredGroup: boolean;
+    botUserId?: number;
   }) => {
     if (shouldSkipUpdate(params.ctxForDedupe)) {
       return;
@@ -3728,7 +3777,11 @@ export const registerTelegramHandlers = ({
       return;
     }
     const { resolvedThreadId, dmThreadId } = gate.context;
-    await recordMessageForReplyChain(normalizedMsg, resolvedThreadId ?? dmThreadId);
+    await recordMessageForReplyChain(
+      normalizedMsg,
+      resolvedThreadId ?? dmThreadId,
+      params.botUserId,
+    );
   };
 
   const handleInboundMessageLike = async (event: InboundTelegramEvent) => {
@@ -3788,7 +3841,11 @@ export const registerTelegramHandlers = ({
         return;
       }
       dispatchDedupeKeys = dispatchDedupe.keys;
-      await recordMessageForReplyChain(event.msg, resolvedThreadId ?? dmThreadId);
+      await recordMessageForReplyChain(
+        event.msg,
+        resolvedThreadId ?? dmThreadId,
+        event.ctx.me?.id ?? opts.botInfo?.id,
+      );
       await processInboundMessage({
         authorizationCfg: gate.context.cfg,
         ctx: event.ctx,
@@ -3886,6 +3943,7 @@ export const registerTelegramHandlers = ({
       ctxForDedupe: ctx,
       msg,
       requireConfiguredGroup: false,
+      botUserId: ctx.me?.id ?? opts.botInfo?.id,
     });
   });
 
@@ -3931,6 +3989,7 @@ export const registerTelegramHandlers = ({
       ctxForDedupe: ctx,
       msg: normalizeChannelPostMessage(post),
       requireConfiguredGroup: true,
+      botUserId: ctx.me?.id ?? opts.botInfo?.id,
     });
   });
 };

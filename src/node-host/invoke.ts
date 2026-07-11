@@ -8,9 +8,11 @@ import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { GatewayClient } from "../gateway/client.js";
 import {
   analyzeArgvCommand,
+  createExecApprovalPolicySnapshot,
   ensureExecApprovalsSnapshot,
   mergeExecApprovalsSocketDefaults,
   normalizeExecApprovals,
+  readExecApprovalsSnapshot,
   resolveAllowAlwaysPatternCoverage,
   updateExecApprovals,
   type ExecAsk,
@@ -255,13 +257,16 @@ function requireExecApprovalsBaseHash(
   params: SystemExecApprovalsSetParams,
   snapshot: ExecApprovalsSnapshot,
 ) {
+  const baseHash = typeof params.baseHash === "string" ? params.baseHash.trim() : "";
   if (!snapshot.exists) {
+    if (baseHash && baseHash !== snapshot.hash) {
+      throw new Error("INVALID_REQUEST: exec approvals changed; reload and retry");
+    }
     return;
   }
   if (!snapshot.hash) {
     throw new Error("INVALID_REQUEST: exec approvals base hash unavailable; reload and retry");
   }
-  const baseHash = typeof params.baseHash === "string" ? params.baseHash.trim() : "";
   if (!baseHash) {
     throw new Error("INVALID_REQUEST: exec approvals base hash required; reload and retry");
   }
@@ -661,7 +666,8 @@ async function dispatchInvoke(
 
     let snapshot: ExecApprovalsSnapshot;
     try {
-      snapshot = await ensureExecApprovalsSnapshot();
+      // A stale save must not initialize state before its base hash is checked.
+      snapshot = readExecApprovalsSnapshot();
     } catch (err) {
       await sendExecApprovalsStorageErrorResult(client, frame, err);
       return;
@@ -755,8 +761,15 @@ async function dispatchInvoke(
         defaultAsk: resolveExecAsk(undefined),
         requireSocket: preferMacAppExecHost,
       });
+      const plan = {
+        ...prepared.plan,
+        policySnapshot: createExecApprovalPolicySnapshot({
+          file: execPolicy.approvals.file,
+          agentId: prepared.plan.agentId ?? undefined,
+        }),
+      };
       await sendJsonPayloadResult(client, frame, {
-        plan: prepared.plan,
+        plan,
         execPolicy: {
           security: execPolicy.security,
           ask: execPolicy.ask,

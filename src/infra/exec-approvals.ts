@@ -14,6 +14,10 @@ import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import type { CommandExplanationSummary } from "./command-analysis/explain.js";
 import { sha256Hex, sha256HexPrefix } from "./crypto-digest.js";
 import {
+  canonicalizeExecApprovalPolicyRules,
+  type ExecApprovalPolicySnapshot,
+} from "./exec-approval-policy-snapshot.js";
+import {
   type AllowAlwaysPattern,
   resolveAllowAlwaysPatternEntries,
 } from "./exec-approvals-allowlist.js";
@@ -37,6 +41,7 @@ import {
 import { isLockOwnerDefinitelyStale } from "./stale-lock-file.js";
 export * from "./exec-approvals-analysis.js";
 export * from "./exec-approvals-allowlist.js";
+export type { ExecApprovalPolicySnapshot } from "./exec-approval-policy-snapshot.js";
 export type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 
 export type ExecHost = "sandbox" | "gateway" | "node";
@@ -202,6 +207,7 @@ export type SystemRunApprovalPlan = {
   commandPreview?: string | null;
   agentId: string | null;
   sessionKey: string | null;
+  policySnapshot?: ExecApprovalPolicySnapshot;
   mutableFileOperand?: SystemRunApprovalFileOperand | null;
 };
 
@@ -1043,7 +1049,7 @@ export function mergeExecApprovalsSocketDefaults(params: {
   const currentToken = params.current?.socket?.token?.trim();
   const socketPath =
     params.normalized.socket?.path?.trim() ?? currentSocketPath ?? resolveExecApprovalsSocketPath();
-  const token = params.normalized.socket?.token?.trim() ?? currentToken ?? "";
+  const token = params.normalized.socket?.token?.trim() ?? currentToken ?? generateToken();
   return {
     ...params.normalized,
     socket: {
@@ -2012,36 +2018,20 @@ function buildAllowlistEntryMatchKey(
   return JSON.stringify([entry.pattern, entry.argPattern ?? null]);
 }
 
-export type ExecApprovalPolicySnapshot = {
-  security: ExecSecurity;
-  ask: ExecAsk;
-  askFallback: ExecSecurity;
-  autoAllowSkills: boolean;
-  allowlistRuleKeys: readonly string[];
-};
-
-function buildExecApprovalPolicyRuleKey(entry: ExecAllowlistEntry): string {
+function buildExecApprovalPolicyRuleKey(
+  entry: Pick<ExecAllowlistEntry, "pattern" | "argPattern" | "source">,
+): string {
   // A JSON tuple preserves exact regex bytes without delimiter collisions.
   return JSON.stringify([entry.pattern, entry.argPattern ?? null, entry.source ?? null]);
 }
 
-function buildAllowAlwaysUpgradeRuleKey(key: string): string | null {
-  let rule: unknown;
-  try {
-    rule = JSON.parse(key) as unknown;
-  } catch {
+function buildAllowAlwaysUpgradeRuleKey(
+  rule: Pick<ExecAllowlistEntry, "pattern" | "argPattern" | "source">,
+): string | null {
+  if (rule.source !== undefined) {
     return null;
   }
-  if (
-    !Array.isArray(rule) ||
-    rule.length !== 3 ||
-    typeof rule[0] !== "string" ||
-    (rule[1] !== null && typeof rule[1] !== "string") ||
-    rule[2] !== null
-  ) {
-    return null;
-  }
-  return JSON.stringify([rule[0], rule[1], "allow-always"]);
+  return buildExecApprovalPolicyRuleKey({ ...rule, source: "allow-always" });
 }
 
 /** Captures effective file policy while excluding ids and mutable usage metadata. */
@@ -2055,22 +2045,30 @@ export function createExecApprovalPolicySnapshot(params: {
     file: params.file,
     agentId: params.agentId,
   });
+  const allowlistRulesByKey = new Map(
+    resolved.allowlist.map((entry) => {
+      const rule = {
+        pattern: entry.pattern,
+        ...(entry.argPattern !== undefined ? { argPattern: entry.argPattern } : {}),
+        ...(entry.source === "allow-always" ? { source: entry.source } : {}),
+      };
+      return [buildExecApprovalPolicyRuleKey(rule), rule] as const;
+    }),
+  );
   return {
     security: resolved.agent.security,
     ask: resolved.agent.ask,
     askFallback: resolved.agent.askFallback,
     autoAllowSkills: resolved.agent.autoAllowSkills,
-    allowlistRuleKeys: [
-      ...new Set(resolved.allowlist.map(buildExecApprovalPolicyRuleKey)),
-    ].toSorted(),
+    allowlistRules: canonicalizeExecApprovalPolicyRules([...allowlistRulesByKey.values()]),
   };
 }
 
-function execApprovalPolicySnapshotIsCurrent(
+export function isExecApprovalPolicySnapshotCurrent(
   expected: ExecApprovalPolicySnapshot,
   current: ExecApprovalPolicySnapshot,
 ): boolean {
-  const currentRuleKeys = new Set(current.allowlistRuleKeys);
+  const currentRuleKeys = new Set(current.allowlistRules.map(buildExecApprovalPolicyRuleKey));
   return (
     expected.security === current.security &&
     expected.ask === current.ask &&
@@ -2079,11 +2077,12 @@ function execApprovalPolicySnapshotIsCurrent(
     // Concurrent operator-approved grants are additive. Preserve them while
     // accepting an in-place allow-always upgrade of the same rule. Revocations
     // and reverse source downgrades still remove an expected authority.
-    expected.allowlistRuleKeys.every((key) => {
+    expected.allowlistRules.every((rule) => {
+      const key = buildExecApprovalPolicyRuleKey(rule);
       if (currentRuleKeys.has(key)) {
         return true;
       }
-      const upgradedKey = buildAllowAlwaysUpgradeRuleKey(key);
+      const upgradedKey = buildAllowAlwaysUpgradeRuleKey(rule);
       return upgradedKey !== null && currentRuleKeys.has(upgradedKey);
     })
   );
@@ -2120,17 +2119,24 @@ function assertCurrentUsageAuthorization(params: {
   if (security === "deny") {
     throw new Error("Exec approval changed before execution");
   }
-  if (params.authorization.source === "explicit-approval") {
+  // Human and model decisions are delayed authority. Bind both one-shot and
+  // persistent decisions to the persisted policy they were evaluated against.
+  const delayedAuthorization =
+    params.authorization.source === "explicit-approval" ||
+    params.authorization.source === "auto-review";
+  if (delayedAuthorization) {
     const expectedPolicy = params.authorization.policySnapshot;
     if (
-      expectedPolicy &&
-      !execApprovalPolicySnapshotIsCurrent(
+      !expectedPolicy ||
+      !isExecApprovalPolicySnapshotCurrent(
         expectedPolicy,
         createExecApprovalPolicySnapshot({ file: params.file, agentId: params.agentId }),
       )
     ) {
       throw new Error("Exec approval changed before execution");
     }
+  }
+  if (params.authorization.source === "explicit-approval") {
     return;
   }
   if (params.authorization.source === "auto-review") {
@@ -2343,12 +2349,16 @@ export async function commitExecAuthorizationLocked(params: {
   authorization: ExecApprovalUsageAuthorization;
   allowAlwaysDecision?: AllowAlwaysPersistenceDecision;
 }): Promise<void> {
+  if (
+    (params.authorization.source === "explicit-approval" ||
+      params.authorization.source === "auto-review") &&
+    !params.authorization.policySnapshot
+  ) {
+    throw new Error("Delayed exec authorization requires a policy snapshot");
+  }
   if (params.allowAlwaysDecision && params.allowAlwaysDecision.kind !== "one-shot") {
     if (params.authorization.source !== "explicit-approval") {
       throw new Error("Allow-always persistence requires explicit approval");
-    }
-    if (!params.authorization.policySnapshot) {
-      throw new Error("Allow-always persistence requires a policy snapshot");
     }
   }
   await updateExecApprovals({

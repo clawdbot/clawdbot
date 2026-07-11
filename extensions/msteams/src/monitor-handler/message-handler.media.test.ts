@@ -202,7 +202,7 @@ describe("msteams message handler Graph media recovery", () => {
     });
   });
 
-  it("uses the canonical AAD group ID for ordinary channel action context", async () => {
+  it("uses canonical Graph team and channel IDs for ordinary channel action context", async () => {
     inboundMediaMockState.resolve.mockResolvedValue([]);
     const { deps, getTeamDetails } = createMessageHandlerDeps(cfg);
     const handler = createMSTeamsMessageHandler(deps);
@@ -222,7 +222,7 @@ describe("msteams message handler Graph media recovery", () => {
 
     expect(getTeamDetails).toHaveBeenCalledWith("19:raw-team@thread.skype");
     expect(firstDispatchedContext()).toMatchObject({
-      NativeChannelId: "team-aad-group/19:general@thread.tacv2",
+      NativeChannelId: "team-aad-group/19:channel@thread.tacv2",
     });
     expect(JSON.stringify(firstDispatchedContext())).not.toContain("19:raw-team@thread.skype/");
   });

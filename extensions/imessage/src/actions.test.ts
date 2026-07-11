@@ -116,6 +116,35 @@ describe("imessage message actions", () => {
     loggerMock.warn.mockReset();
   });
 
+  it.each([
+    "react",
+    "edit",
+    "unsend",
+    "renameGroup",
+    "setGroupIcon",
+    "addParticipant",
+    "removeParticipant",
+    "leaveGroup",
+  ] as const)("resolves %s chat aliases to the canonical delivery target", (action) => {
+    const aliasSpec = imessageMessageActions.messageActionTargetAliases?.[action];
+
+    expect(aliasSpec?.deliveryTargetAliases).toStrictEqual([
+      "chatGuid",
+      "chatIdentifier",
+      "chatId",
+    ]);
+    if (action === "react") {
+      expect(aliasSpec?.aliases).toContain("messageId");
+    }
+    expect(aliasSpec?.resolveDeliveryTarget?.({ args: { chatGuid: "iMessage;+;chat0000" } })).toBe(
+      "chat_guid:iMessage;+;chat0000",
+    );
+    expect(aliasSpec?.resolveDeliveryTarget?.({ args: { chatIdentifier: "team-thread" } })).toBe(
+      "chat_identifier:team-thread",
+    );
+    expect(aliasSpec?.resolveDeliveryTarget?.({ args: { chatId: 42 } })).toBe("chat_id:42");
+  });
+
   it("does not advertise private API actions when the bridge is known unavailable", () => {
     probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
       available: false,

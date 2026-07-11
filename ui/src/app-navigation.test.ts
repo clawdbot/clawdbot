@@ -43,6 +43,11 @@ const SETTINGS_ROUTE_PATHS = [
   },
   { routeId: "worktrees", path: "/settings/worktrees", alias: "/worktrees" },
   { routeId: "ai-agents", path: "/settings/ai-agents", alias: "/ai-agents" },
+  {
+    routeId: "model-providers",
+    path: "/settings/model-providers",
+    alias: "/model-providers",
+  },
 ] as const satisfies readonly { routeId: RouteId; path: string; alias: string }[];
 
 const leadingSlashNormalizerCases = [
@@ -81,6 +86,7 @@ describe("navigationIconForRoute", () => {
       infrastructure: "globe",
       about: "fileText",
       "ai-agents": "brain",
+      "model-providers": "plug",
       debug: "bug",
       logs: "scrollText",
     });
@@ -124,6 +130,7 @@ describe("titleForRoute", () => {
       infrastructure: "Infrastructure",
       about: "About",
       "ai-agents": "AI & Agents",
+      "model-providers": "Model Providers",
       debug: "Debug",
       logs: "Logs",
     });
@@ -161,6 +168,7 @@ describe("subtitleForRoute", () => {
       infrastructure: "Gateway, web, browser, and media settings.",
       about: "Control UI and connected Gateway build identity.",
       "ai-agents": "Agents, models, skills, tools, memory, session.",
+      "model-providers": "Configured providers with plan, quota, and cost.",
       debug: "Snapshots, events, RPC.",
       logs: "Live gateway logs.",
     });
@@ -364,6 +372,7 @@ describe("SIDEBAR_NAV_ROUTES", () => {
       "channels",
       "communications",
       "ai-agents",
+      "model-providers",
       "automation",
       "mcp",
       "infrastructure",

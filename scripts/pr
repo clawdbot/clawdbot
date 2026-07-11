@@ -72,6 +72,7 @@ Usage:
   scripts/pr prepare-run <PR>
   scripts/pr merge-verify <PR>
   scripts/pr merge-run <PR>
+    OPENCLAW_PR_MERGE_METHOD=merge|rebase preserves the PR commit series.
 USAGE
 }
 

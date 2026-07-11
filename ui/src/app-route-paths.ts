@@ -16,6 +16,7 @@ const APP_ROUTE_DEFINITIONS = {
   infrastructure: { path: "/settings/infrastructure", aliases: ["/infrastructure"] },
   about: { path: "/settings/about" },
   "ai-agents": { path: "/settings/ai-agents", aliases: ["/ai-agents"] },
+  "model-providers": { path: "/settings/model-providers", aliases: ["/model-providers"] },
   workboard: { path: "/workboard" },
   worktrees: { path: "/settings/worktrees", aliases: ["/worktrees"] },
   instances: { path: "/instances" },

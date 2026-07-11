@@ -541,6 +541,47 @@ describe("Matrix auth/config live surfaces", () => {
     ).toThrow(/Matrix account "typo" is not configured/i);
   });
 
+  it("rejects invalid explicit account ids instead of borrowing the default account", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          homeserver: "https://legacy.example.org",
+          accessToken: "legacy-token",
+        },
+      },
+    } as CoreConfig;
+
+    expect(() =>
+      resolveMatrixAuthContext({ cfg, env: {} as NodeJS.ProcessEnv, accountId: "!!!" }),
+    ).toThrow(/Matrix account id "!!!" is invalid/i);
+  });
+
+  it("rejects explicitly selected disabled accounts instead of borrowing another account", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          homeserver: "https://legacy.example.org",
+          accessToken: "legacy-token",
+          accounts: {
+            disabled: {
+              enabled: false,
+              homeserver: "https://disabled.example.org",
+              accessToken: "disabled-token",
+            },
+          },
+        },
+      },
+    } as CoreConfig;
+
+    expect(() =>
+      resolveMatrixAuthContext({
+        cfg,
+        env: {} as NodeJS.ProcessEnv,
+        accountId: "disabled",
+      }),
+    ).toThrow(/Matrix account "disabled" is disabled/i);
+  });
+
   it("allows explicit non-default account ids backed only by scoped env vars", () => {
     const cfg = {
       channels: {

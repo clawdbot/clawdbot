@@ -138,6 +138,78 @@ describe("normalizeMessageActionInput", () => {
     },
     {
       input: {
+        action: "react",
+        args: {
+          channel: "imessage",
+          messageId: "msg_123",
+        },
+        toolContext: {
+          currentChannelId: "chat_guid:iMessage;+;chat0000",
+          currentChannelProvider: "imessage",
+        },
+      },
+      expectedFields: {
+        target: "chat_guid:iMessage;+;chat0000",
+        to: "chat_guid:iMessage;+;chat0000",
+        messageId: "msg_123",
+      },
+    },
+    {
+      input: {
+        action: "edit",
+        args: {
+          channel: "imessage",
+          messageId: "msg_123",
+        },
+        toolContext: {
+          currentChannelId: "chat_guid:iMessage;+;chat0000",
+          currentChannelProvider: "imessage",
+        },
+      },
+      expectedFields: {
+        target: "chat_guid:iMessage;+;chat0000",
+        to: "chat_guid:iMessage;+;chat0000",
+        messageId: "msg_123",
+      },
+    },
+    {
+      input: {
+        action: "unsend",
+        args: {
+          channel: "imessage",
+          messageId: "msg_123",
+        },
+        toolContext: {
+          currentChannelId: "chat_guid:iMessage;+;chat0000",
+          currentChannelProvider: "imessage",
+        },
+      },
+      expectedFields: {
+        target: "chat_guid:iMessage;+;chat0000",
+        to: "chat_guid:iMessage;+;chat0000",
+        messageId: "msg_123",
+      },
+    },
+    {
+      input: {
+        action: "poll-vote",
+        args: {
+          channel: "imessage",
+          pollId: "poll_123",
+        },
+        toolContext: {
+          currentChannelId: "chat_guid:iMessage;+;chat0000",
+          currentChannelProvider: "imessage",
+        },
+      },
+      expectedFields: {
+        target: "chat_guid:iMessage;+;chat0000",
+        to: "chat_guid:iMessage;+;chat0000",
+        pollId: "poll_123",
+      },
+    },
+    {
+      input: {
         action: "pin",
         args: {
           channel: "pinboard",
@@ -229,6 +301,21 @@ describe("normalizeMessageActionInput", () => {
       }),
     ).toThrow(/requires a target/);
   });
+
+  it.each([
+    { action: "react" as const, args: { channel: "imessage", messageId: "msg_123" } },
+    { action: "poll-vote" as const, args: { channel: "imessage", pollId: "poll_123" } },
+  ])(
+    "throws when $action has only a resource reference and no current target",
+    ({ action, args }) => {
+      expect(() =>
+        normalizeMessageActionInput({
+          action,
+          args,
+        }),
+      ).toThrow(/requires a target/);
+    },
+  );
 
   it("rejects conflicting canonical and plugin delivery targets", () => {
     expect(() =>

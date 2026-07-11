@@ -4,6 +4,7 @@
  * Twitch chat doesn't support markdown formatting, so we strip it before sending.
  * Based on OpenClaw's markdownToText in src/agents/tools/web-fetch-utils.ts.
  */
+import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 
 /**
  * Strip markdown formatting from text for Twitch compatibility.
@@ -64,35 +65,5 @@ export function chunkTextForTwitch(text: string, limit: number): string[] {
   if (!cleaned) {
     return [];
   }
-  if (limit <= 0) {
-    return [cleaned];
-  }
-  if (cleaned.length <= limit) {
-    return [cleaned];
-  }
-
-  const chunks: string[] = [];
-  let remaining = cleaned;
-
-  while (remaining.length > limit) {
-    // Find the last space before the limit
-    const window = remaining.slice(0, limit);
-    const lastSpaceIndex = window.lastIndexOf(" ");
-
-    if (lastSpaceIndex === -1) {
-      // No space found, hard split at limit
-      chunks.push(window);
-      remaining = remaining.slice(limit);
-    } else {
-      // Split at the last space
-      chunks.push(window.slice(0, lastSpaceIndex));
-      remaining = remaining.slice(lastSpaceIndex + 1);
-    }
-  }
-
-  if (remaining) {
-    chunks.push(remaining);
-  }
-
-  return chunks;
+  return chunkTextForOutbound(cleaned, limit);
 }

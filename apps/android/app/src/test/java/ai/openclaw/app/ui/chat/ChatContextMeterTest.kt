@@ -1,8 +1,12 @@
 package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.chat.ChatThinkingLevelOption
+import ai.openclaw.app.chat.ChatThinkingLevelSelection
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ChatContextMeterTest {
@@ -87,5 +91,54 @@ class ChatContextMeterTest {
     val usage = ChatContextUsage(totalTokens = 2_500L, totalTokensFresh = true, contextTokens = 10_000L)
 
     assertEquals("Context 25%", contextMeterLabel(usage, "high", thinkingSupported = false))
+  }
+
+  @Test
+  fun contextMeterPreservesGatewayThinkingLevelIds() {
+    val usage = ChatContextUsage(totalTokens = null, totalTokensFresh = null, contextTokens = null)
+
+    assertEquals("Context -- · xhigh", contextMeterLabel(usage, "xhigh"))
+    assertEquals("Context -- · adaptive", contextMeterLabel(usage, "adaptive"))
+    assertEquals("Context -- · ultra", contextMeterLabel(usage, "ultra"))
+  }
+
+  @Test
+  fun gatewayThinkingOptionsAreAuthoritativeForSupport() {
+    val offOnly =
+      ChatThinkingLevelSelection(
+        options = listOf(ChatThinkingLevelOption(id = "off", label = "off")),
+        isGatewayProvided = true,
+      )
+    val max =
+      ChatThinkingLevelSelection(
+        options =
+          listOf(
+            ChatThinkingLevelOption(id = "off", label = "off"),
+            ChatThinkingLevelOption(id = "max", label = "max"),
+          ),
+        isGatewayProvided = true,
+      )
+    val fallback =
+      ChatThinkingLevelSelection(
+        options = emptyList(),
+        isGatewayProvided = false,
+      )
+
+    assertFalse(chatThinkingSupported(offOnly, fallbackSupported = true))
+    assertTrue(chatThinkingSupported(max, fallbackSupported = false))
+    assertTrue(chatThinkingSupported(fallback, fallbackSupported = true))
+  }
+
+  @Test
+  fun largeThinkingProfilesSplitIntoBalancedInlineRows() {
+    val options =
+      listOf("off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max")
+        .map { ChatThinkingLevelOption(id = it, label = it) }
+
+    val rows = chatThinkingOptionRows(options)
+
+    assertEquals(listOf(4, 4), rows.map { it.size })
+    assertEquals("Xhigh", chatThinkingOptionLabel(options[5]))
+    assertEquals("Max", chatThinkingOptionLabel(options.last()))
   }
 }

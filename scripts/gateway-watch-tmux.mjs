@@ -26,6 +26,7 @@ const TMUX_CHILD_ENV_KEYS = [
   "OPENCLAW_GATEWAY_PORT",
   "OPENCLAW_GATEWAY_RESTART_TRACE",
   "OPENCLAW_GATEWAY_STARTUP_TRACE",
+  "OPENCLAW_GATEWAY_WATCH_AUTO_DOCTOR",
   "OPENCLAW_HOME",
   "OPENCLAW_PROFILE",
   RUN_NODE_CPU_PROF_DIR_ENV,
@@ -185,9 +186,12 @@ export const buildGatewayWatchTmuxCommand = ({
 } = {}) => {
   const shell = resolveShell(env);
   const colorEnv = resolveColorEnv(env);
+  // tmux sessions retain their own environment across respawns. Clear supported
+  // selectors before applying the invoking process's current values.
   const childEnv = [
     "env",
     ...colorEnv.options,
+    ...TMUX_CHILD_ENV_KEYS.flatMap((key) => ["-u", key]),
     `OPENCLAW_GATEWAY_WATCH_TMUX_CHILD=1`,
     `OPENCLAW_GATEWAY_WATCH_SESSION=${sessionName}`,
     ...colorEnv.assignments,
@@ -242,7 +246,16 @@ const shouldAttachTmux = ({ env, stdinIsTTY, stdoutIsTTY }) => {
   if (TMUX_ATTACH_DISABLE_VALUES.has(raw)) {
     return false;
   }
-  return !env.CI && stdinIsTTY === true && stdoutIsTTY === true;
+  // TERM=dumb pseudo-TTYs cannot satisfy tmux's clear/cursor requirements.
+  const term = String(env.TERM ?? "")
+    .trim()
+    .toLowerCase();
+  return (
+    !env.CI &&
+    stdinIsTTY === true &&
+    stdoutIsTTY === true &&
+    (Boolean(env.TMUX) || (term !== "" && term !== "dumb"))
+  );
 };
 
 const attachTmux = ({ env, sessionName, spawnSyncImpl }) => {

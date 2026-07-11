@@ -1099,7 +1099,11 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     expect(getActiveReplyRunCount()).toBe(0);
   });
 
-  it("keys native command pre-dispatch ownership to the command target session", async () => {
+  it("keys native command pre-dispatch ownership to the source session", async () => {
+    // Contract: reply-run admission is source-keyed for native command turns.
+    // Command handlers still resolve the target via CommandTargetSessionKey /
+    // initialSessionStoreEntry; only the reply-operation key is source-owned
+    // so mid-run status/stop/etc. do not wait on the target's active run.
     hookMocks.runner.hasHooks.mockImplementation(
       (hookName?: string) => hookName === "before_dispatch",
     );
@@ -1128,7 +1132,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       },
       SessionKey: sourceSessionKey,
       CommandTargetSessionKey: targetSessionKey,
-      BodyForAgent: "hang before command target dispatch",
+      BodyForAgent: "hang before command source dispatch",
     });
     const dispatchPromise = dispatchReplyFromConfig({
       ctx,
@@ -1149,13 +1153,155 @@ describe("dispatchReplyFromConfig ACP abort", () => {
         "pending" as const,
       ),
     ).resolves.toBe("started");
-    expect(replyRunRegistry.abort(sourceSessionKey)).toBe(false);
-    expect(replyRunRegistry.abort(targetSessionKey)).toBe(true);
+    expect(replyRunRegistry.abort(targetSessionKey)).toBe(false);
+    expect(replyRunRegistry.abort(sourceSessionKey)).toBe(true);
 
     await expect(dispatchPromise).resolves.toMatchObject({
       queuedFinal: false,
       counts: { tool: 0, block: 0, final: 0 },
     });
+    expect(getActiveReplyRunCount()).toBe(0);
+  });
+
+  it("admits unauthorized native /stop on the source while the target has an active run", async () => {
+    const sourceSessionKey = "agent:main:telegram:slash:user-unauth";
+    const targetSessionKey = "agent:main:telegram:group:target-run";
+    const targetOperation = createReplyOperation({
+      sessionKey: targetSessionKey,
+      sessionId: "target-active-session",
+      resetTriggered: false,
+    });
+    targetOperation.setPhase("running");
+
+    const replyResolver = vi.fn(async () => ({
+      text: "You are not authorized to use this command.",
+    }));
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      CommandSource: "native",
+      CommandAuthorized: false,
+      CommandTurn: {
+        kind: "native",
+        source: "native",
+        authorized: false,
+        commandName: "stop",
+        body: "/stop",
+      },
+      SessionKey: sourceSessionKey,
+      CommandTargetSessionKey: targetSessionKey,
+      Body: "/stop",
+      RawBody: "/stop",
+      CommandBody: "/stop",
+      BodyForAgent: "/stop",
+    });
+
+    const dispatchPromise = dispatchReplyFromConfig({
+      ctx,
+      cfg: {
+        diagnostics: { enabled: true },
+        session: {
+          sendPolicy: { default: "allow" },
+        },
+      } as OpenClawConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    type DispatchOutcome =
+      | { status: "settled"; result: Awaited<typeof dispatchPromise> }
+      | { status: "pending" };
+    const outcome = await raceWithTimeoutResult<DispatchOutcome>(
+      dispatchPromise.then((result) => ({ status: "settled" as const, result })),
+      200,
+      { status: "pending" as const },
+    );
+    expect(outcome).toMatchObject({
+      status: "settled",
+      result: {
+        queuedFinal: true,
+      },
+    });
+    expect(replyResolver).toHaveBeenCalledOnce();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
+      text: "You are not authorized to use this command.",
+    });
+    // Target run must remain active — command admission is source-keyed.
+    expect(targetOperation.result).toBeNull();
+    expect(replyRunRegistry.get(targetSessionKey)).toBe(targetOperation);
+    expect(replyRunRegistry.get(sourceSessionKey)).toBeUndefined();
+    targetOperation.complete();
+    expect(getActiveReplyRunCount()).toBe(0);
+  });
+
+  it("admits authorized native /status on the source while the target has an active run", async () => {
+    const sourceSessionKey = "agent:main:telegram:slash:user-auth";
+    const targetSessionKey = "agent:main:telegram:group:status-target";
+    const targetOperation = createReplyOperation({
+      sessionKey: targetSessionKey,
+      sessionId: "status-target-active-session",
+      resetTriggered: false,
+    });
+    targetOperation.setPhase("running");
+
+    const replyResolver = vi.fn(async () => ({
+      text: "🧠 Model: mock | ⚙️ Status: ok",
+    }));
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      CommandSource: "native",
+      CommandAuthorized: true,
+      CommandTurn: {
+        kind: "native",
+        source: "native",
+        authorized: true,
+        commandName: "status",
+        body: "/status",
+      },
+      SessionKey: sourceSessionKey,
+      CommandTargetSessionKey: targetSessionKey,
+      Body: "/status",
+      RawBody: "/status",
+      CommandBody: "/status",
+      BodyForAgent: "/status",
+    });
+
+    const dispatchPromise = dispatchReplyFromConfig({
+      ctx,
+      cfg: {
+        diagnostics: { enabled: true },
+        session: {
+          sendPolicy: { default: "allow" },
+        },
+      } as OpenClawConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    type DispatchOutcome =
+      | { status: "settled"; result: Awaited<typeof dispatchPromise> }
+      | { status: "pending" };
+    const outcome = await raceWithTimeoutResult<DispatchOutcome>(
+      dispatchPromise.then((result) => ({ status: "settled" as const, result })),
+      200,
+      { status: "pending" as const },
+    );
+    expect(outcome).toMatchObject({
+      status: "settled",
+      result: {
+        queuedFinal: true,
+      },
+    });
+    expect(replyResolver).toHaveBeenCalledOnce();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
+      text: "🧠 Model: mock | ⚙️ Status: ok",
+    });
+    expect(targetOperation.result).toBeNull();
+    expect(replyRunRegistry.get(targetSessionKey)).toBe(targetOperation);
+    targetOperation.complete();
     expect(getActiveReplyRunCount()).toBe(0);
   });
 

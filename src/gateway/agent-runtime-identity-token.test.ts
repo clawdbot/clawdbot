@@ -93,4 +93,42 @@ describe("agent runtime identity token", () => {
     expect(secondToken).not.toBe(token);
     expect(secondProcess.verifyAgentRuntimeIdentityToken(token)).toBeUndefined();
   });
+
+  it("round-trips signed message action context and rejects it after expiry", async () => {
+    useTempHome();
+    const runtimeToken = await importRuntimeTokenModule();
+    const token = await runtimeToken.mintAgentRuntimeIdentityToken({
+      agentId: "main",
+      sessionKey: "session-1",
+      messageActionContext: {
+        expiresAtMs: 5000,
+        sessionId: "session-id-1",
+        requesterAccountId: "ops",
+        requesterSenderId: "sender-1",
+        toolContext: {
+          currentChannelProvider: "matrix",
+          currentChannelId: "!room:example.org",
+          currentChatType: "direct",
+        },
+      },
+    });
+
+    expect(runtimeToken.verifyAgentRuntimeIdentityToken(token, 4000)).toMatchObject({
+      kind: "agentRuntime",
+      agentId: "main",
+      sessionKey: "session-1",
+      messageActionContext: {
+        expiresAtMs: 5000,
+        sessionId: "session-id-1",
+        requesterAccountId: "ops",
+        requesterSenderId: "sender-1",
+        toolContext: {
+          currentChannelProvider: "matrix",
+          currentChannelId: "!room:example.org",
+          currentChatType: "direct",
+        },
+      },
+    });
+    expect(runtimeToken.verifyAgentRuntimeIdentityToken(token, 5000)).toBeUndefined();
+  });
 });

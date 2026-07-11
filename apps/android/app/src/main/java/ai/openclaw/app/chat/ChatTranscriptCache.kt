@@ -9,7 +9,9 @@ import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
 import androidx.room.withTransaction
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
@@ -157,7 +159,7 @@ internal interface ChatCacheDao {
 
 @Database(
   entities = [CachedSessionEntity::class, CachedMessageEntity::class, OutboxCommandEntity::class],
-  version = 2,
+  version = 3,
   exportSchema = false,
 )
 internal abstract class ChatCacheDatabase : RoomDatabase() {
@@ -166,13 +168,34 @@ internal abstract class ChatCacheDatabase : RoomDatabase() {
   abstract fun outboxDao(): ChatOutboxDao
 
   companion object {
-    fun open(context: Context): ChatCacheDatabase =
+    internal val MIGRATION_2_3 =
+      object : Migration(2, 3) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+          // v2 persisted every post-dispatch exception as queued+lastError. Those rows may
+          // already have run, so upgrading must park them alongside crash-interrupted sends.
+          db.execSQL(
+            "UPDATE outbox_commands SET status = ?, lastError = ? " +
+              "WHERE status = ? OR (status = ? AND lastError IS NOT NULL)",
+            arrayOf<Any?>(
+              ChatOutboxStatus.Failed.dbValue,
+              OUTBOX_DELIVERY_UNCONFIRMED_ERROR,
+              ChatOutboxStatus.Sending.dbValue,
+              ChatOutboxStatus.Queued.dbValue,
+            ),
+          )
+        }
+      }
+
+    fun open(
+      context: Context,
+      name: String = CHAT_TRANSCRIPT_CACHE_DB_NAME,
+    ): ChatCacheDatabase =
       Room
-        .databaseBuilder(context, ChatCacheDatabase::class.java, CHAT_TRANSCRIPT_CACHE_DB_NAME)
-        // Established contract: any schema bump drops and rebuilds instead of migrating. Cached
-        // transcripts are disposable; the outbox loses at most a handful of unsent commands at a
-        // release boundary, which is acceptable versus carrying migrations for this store.
-        .fallbackToDestructiveMigration(dropAllTables = true)
+        .databaseBuilder(context, ChatCacheDatabase::class.java, name)
+        .addMigrations(MIGRATION_2_3)
+        // v1 has only disposable transcripts. Starting with v2, the outbox is user data, so every
+        // supported bump needs an explicit migration; destructive fallback remains for v1 only.
+        .fallbackToDestructiveMigrationFrom(true, 1)
         .build()
   }
 }

@@ -1,13 +1,25 @@
 // Browser tests cover browser request.profile from body plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { loadConfigMock, isNodeCommandAllowedMock, resolveNodeCommandAllowlistMock } = vi.hoisted(
-  () => ({
-    loadConfigMock: vi.fn(),
-    isNodeCommandAllowedMock: vi.fn(),
-    resolveNodeCommandAllowlistMock: vi.fn(),
-  }),
-);
+const {
+  loadConfigMock,
+  isNodeCommandAllowedMock,
+  resolveNodeCommandAllowlistMock,
+  startBrowserControlServiceFromConfigMock,
+} = vi.hoisted(() => ({
+  loadConfigMock: vi.fn(),
+  isNodeCommandAllowedMock: vi.fn(),
+  resolveNodeCommandAllowlistMock: vi.fn(),
+  startBrowserControlServiceFromConfigMock: vi.fn(async () => false),
+}));
+
+vi.mock("../core-api.js", async () => {
+  const actual = await vi.importActual<typeof import("../core-api.js")>("../core-api.js");
+  return {
+    ...actual,
+    startBrowserControlServiceFromConfig: startBrowserControlServiceFromConfigMock,
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
   const actual = await vi.importActual<
@@ -104,6 +116,24 @@ describe("browser.request profile selection", () => {
     });
     resolveNodeCommandAllowlistMock.mockReturnValue([]);
     isNodeCommandAllowedMock.mockReturnValue({ ok: true });
+    startBrowserControlServiceFromConfigMock.mockClear();
+  });
+
+  it("forces system-profile import host-local even when a browser node is connected", async () => {
+    const { respond, nodeRegistry } = await runBrowserRequest({
+      method: "POST",
+      path: "/profiles/import",
+      body: { browser: "chrome", systemProfile: "Default", into: "imported" },
+    });
+
+    // Never routed to the browser node...
+    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+    // ...and reached host-local dispatch instead of the node-proxy block.
+    expect(startBrowserControlServiceFromConfigMock).toHaveBeenCalled();
+    const [ok, payload, error] = firstRespondCall(respond);
+    expect(ok).toBe(false);
+    expect(payload).toBeUndefined();
+    expect(error?.message).toBe("browser control is disabled");
   });
 
   it("uses profile from request body when query profile is missing", async () => {
@@ -208,8 +238,31 @@ describe("browser.request profile selection", () => {
     const [ok, payload, error] = firstRespondCall(respond);
     expect(ok).toBe(false);
     expect(payload).toBeUndefined();
-    expect(error?.message).toBe("browser.request cannot mutate persistent browser profiles");
+    expect(error?.message).toBe(
+      "browser.request cannot mutate persistent browser profiles over a node proxy",
+    );
   });
+
+  it.each([
+    { method: "POST", path: "/profiles/create", body: { name: "poc" } },
+    { method: "DELETE", path: "/profiles/poc", body: undefined },
+    { method: "POST", path: "/reset-profile", body: { profile: "poc", name: "poc" } },
+  ])(
+    "blocks host-local persistent mutations for $method $path when no node handles the request",
+    async ({ method, path, body }) => {
+      const { respond, nodeRegistry } = await runBrowserRequest(
+        { method, path, body },
+        undefined,
+        [],
+      );
+
+      expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+      const [ok, payload, error] = firstRespondCall(respond);
+      expect(ok).toBe(false);
+      expect(payload).toBeUndefined();
+      expect(error?.message).toBe("browser.request cannot mutate persistent browser profiles");
+    },
+  );
 
   it("allows non-mutating profile reads", async () => {
     const { respond, nodeRegistry } = await runBrowserRequest({

@@ -614,21 +614,28 @@ enum ExecApprovalsStore {
     {
         do {
             return try self.withWriteLock {
-                let current = try self.ensureFileUnlocked()
+                // A conditional write must not create or normalize policy state
+                // before it proves the caller still owns the observed snapshot.
+                guard self.legacyFileURLIfPending() == nil else {
+                    return .baseHashUnavailable
+                }
                 let snapshot = try self.readSnapshotUnlocked()
+                let expected = baseHash?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 if snapshot.exists {
                     if snapshot.hash.isEmpty {
                         return .baseHashUnavailable
                     }
-                    let expected = baseHash?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                     if expected.isEmpty {
                         return .baseHashRequired
                     }
                     if expected != snapshot.hash {
                         return .conflict
                     }
+                } else if !expected.isEmpty, expected != snapshot.hash {
+                    return .conflict
                 }
 
+                let current = try self.ensureFileUnlocked()
                 var normalized = self.normalizeIncoming(incoming)
                 let socketPath = normalized.socket?.path?.trimmingCharacters(in: .whitespacesAndNewlines)
                 let token = normalized.socket?.token?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -940,33 +947,29 @@ extension ExecApprovalsStore {
         authorization: ExecApprovalAuthorization) throws
     {
         let current = self.resolveFromFile(file, agentId: agentId)
-        let currentKeys = Set(current.allowlist.map(self.allowlistEntryMatchKey))
         let evaluatedSecurity: ExecSecurity
         let evaluatedAsk: ExecAsk?
         let basis: ExecApprovalAuthorization.Basis?
         let appliesFallback: Bool
         switch authorization {
-        case let .autoReview(security):
+        case let .autoReview(security, policySnapshot):
             guard ExecSecurity.narrower(security, current.agent.security) != .deny,
-                  current.agent.ask != .always
+                  current.agent.ask != .always,
+                  policySnapshot.isCurrent(ExecApprovalPolicySnapshot(resolved: current))
             else {
                 throw self.executionAuthorizationChangedError()
             }
             return
-        case let .explicitOnce(security):
-            guard ExecSecurity.narrower(security, current.agent.security) != .deny else {
+        case let .explicitOnce(security, policySnapshot):
+            guard ExecSecurity.narrower(security, current.agent.security) != .deny,
+                  policySnapshot.isCurrent(ExecApprovalPolicySnapshot(resolved: current))
+            else {
                 throw self.executionAuthorizationChangedError()
             }
             return
         case let .explicitAlways(security, policySnapshot, _):
-            let currentSnapshot = ExecApprovalPolicySnapshot(
-                security: current.agent.security,
-                ask: current.agent.ask,
-                askFallback: current.agent.askFallback,
-                autoAllowSkills: current.agent.autoAllowSkills,
-                allowlist: current.allowlist)
             guard ExecSecurity.narrower(security, current.agent.security) != .deny,
-                  policySnapshot.isCurrent(currentSnapshot)
+                  policySnapshot.isCurrent(ExecApprovalPolicySnapshot(resolved: current))
             else {
                 throw self.executionAuthorizationChangedError()
             }
@@ -983,6 +986,7 @@ extension ExecApprovalsStore {
             appliesFallback = true
         }
 
+        let currentKeys = Set(current.allowlist.map(self.allowlistEntryMatchKey))
         let currentSecurity = ExecSecurity.narrower(evaluatedSecurity, current.agent.security)
         let authorizationSecurity = appliesFallback
             ? ExecSecurity.narrower(currentSecurity, current.agent.askFallback)
@@ -1109,7 +1113,12 @@ extension ExecApprovalsStore {
             var agents = file.agents ?? [:]
             var agent = agents[key] ?? ExecApprovalsAgent()
             var allowlist = agent.allowlist ?? []
-            guard let index = allowlist.firstIndex(where: { $0.id == id }) else { return }
+            guard let index = allowlist.firstIndex(where: { $0.id == id }) else {
+                if key != "*", agents["*"]?.allowlist?.contains(where: { $0.id == id }) == true {
+                    throw ExecApprovalsMutationError.entryNotOwned
+                }
+                return
+            }
             allowlist[index].pattern = normalizedPattern
             agent.allowlist = allowlist
             agents[key] = agent
@@ -1126,7 +1135,14 @@ extension ExecApprovalsStore {
             let key = self.agentKey(agentId)
             var agents = file.agents ?? [:]
             var agent = agents[key] ?? ExecApprovalsAgent()
-            let allowlist = (agent.allowlist ?? []).filter { $0.id != id }
+            var allowlist = agent.allowlist ?? []
+            guard let index = allowlist.firstIndex(where: { $0.id == id }) else {
+                if key != "*", agents["*"]?.allowlist?.contains(where: { $0.id == id }) == true {
+                    throw ExecApprovalsMutationError.entryNotOwned
+                }
+                return
+            }
+            allowlist.remove(at: index)
             agent.allowlist = allowlist
             agents[key] = agent
             file.agents = agents
@@ -1153,15 +1169,17 @@ extension ExecApprovalsStore {
     }
 
     private static func updateFile(
-        _ mutate: (inout ExecApprovalsFile) -> Void) -> Result<Void, ExecApprovalsMutationError>
+        _ mutate: (inout ExecApprovalsFile) throws -> Void) -> Result<Void, ExecApprovalsMutationError>
     {
         do {
             try self.withWriteLock {
                 var file = try self.ensureFileUnlocked()
-                mutate(&file)
+                try mutate(&file)
                 try self.saveFileUnlocked(file)
             }
             return .success(())
+        } catch let error as ExecApprovalsMutationError {
+            return .failure(error)
         } catch {
             self.logger.error("exec approvals update failed: \(error.localizedDescription, privacy: .public)")
             return .failure(.unavailable)
@@ -1181,7 +1199,14 @@ extension ExecApprovalsStore {
 
     private static func ensureSecureStateDirectory() throws {
         let url = self.stateDirURL()
-        try FileManager().createDirectory(at: url, withIntermediateDirectories: true)
+        // Create with the final 0700 mode directly: a default-mode (0755)
+        // create followed by the chmod below leaves a transient window where
+        // the directory is world-listable and concurrent observers see the
+        // wrong permissions.
+        try FileManager().createDirectory(
+            at: url,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: self.secureStateDirPermissions])
         try ExecApprovalsFileIO.assertSafeDirectory(at: url)
         try FileManager().setAttributes(
             [.posixPermissions: self.secureStateDirPermissions],

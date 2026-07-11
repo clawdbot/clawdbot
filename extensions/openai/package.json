@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/openai-provider",
-  "version": "2026.6.11",
+  "version": "2026.7.2",
   "private": true,
   "description": "OpenClaw OpenAI provider plugins",
   "type": "module",

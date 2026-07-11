@@ -1,3 +1,5 @@
+import { t } from "../../i18n/index.ts";
+
 export type TaskStatus = "queued" | "running" | "completed" | "failed" | "cancelled" | "timed_out";
 
 export type TaskRuntime = "subagent" | "cron" | "acp" | "cli";
@@ -13,6 +15,7 @@ export type TaskSummary = {
   agentId?: string;
   sessionKey?: string;
   childSessionKey?: string;
+  ownerKey?: string;
   createdAt?: TaskTimestamp;
   updatedAt?: TaskTimestamp;
   startedAt?: TaskTimestamp;
@@ -22,7 +25,7 @@ export type TaskSummary = {
   error?: string;
 };
 
-type TaskEventPayload =
+export type TaskEventPayload =
   | { action: "upserted"; task: TaskSummary }
   | { action: "deleted"; taskId: string }
   | { action: "restored" };
@@ -87,6 +90,7 @@ export function normalizeTaskSummary(value: unknown): TaskSummary | null {
   const agentId = optionalString(value.agentId);
   const sessionKey = optionalString(value.sessionKey);
   const childSessionKey = optionalString(value.childSessionKey);
+  const ownerKey = optionalString(value.ownerKey);
   const createdAt = normalizeTimestamp(value.createdAt);
   const updatedAt = normalizeTimestamp(value.updatedAt);
   const startedAt = normalizeTimestamp(value.startedAt);
@@ -104,6 +108,7 @@ export function normalizeTaskSummary(value: unknown): TaskSummary | null {
     ...(agentId ? { agentId } : {}),
     ...(sessionKey ? { sessionKey } : {}),
     ...(childSessionKey ? { childSessionKey } : {}),
+    ...(ownerKey ? { ownerKey } : {}),
     ...(createdAt !== undefined ? { createdAt } : {}),
     ...(updatedAt !== undefined ? { updatedAt } : {}),
     ...(startedAt !== undefined ? { startedAt } : {}),
@@ -112,6 +117,67 @@ export function normalizeTaskSummary(value: unknown): TaskSummary | null {
     ...(terminalSummary ? { terminalSummary } : {}),
     ...(error ? { error } : {}),
   };
+}
+
+const STATUS_LABEL_KEYS = {
+  queued: "tasksPage.status.queued",
+  running: "tasksPage.status.running",
+  completed: "tasksPage.status.completed",
+  failed: "tasksPage.status.failed",
+  cancelled: "tasksPage.status.cancelled",
+  timed_out: "tasksPage.status.timedOut",
+} as const satisfies Record<TaskStatus, string>;
+
+const STATUS_CHIP_CLASSES = {
+  queued: "chip-warn",
+  running: "chip-warn",
+  completed: "chip-ok",
+  failed: "chip-danger",
+  cancelled: "",
+  timed_out: "chip-danger",
+} as const satisfies Record<TaskStatus, string>;
+
+export function taskStatusLabel(status: TaskStatus): string {
+  return t(STATUS_LABEL_KEYS[status]);
+}
+
+export function taskStatusChipClass(status: TaskStatus): string {
+  return STATUS_CHIP_CLASSES[status];
+}
+
+export function taskRuntimeLabel(task: TaskSummary): string {
+  switch (task.runtime) {
+    case "subagent":
+      return t("tasksPage.runtime.subagent");
+    case "cron":
+      return t("tasksPage.runtime.cron");
+    case "acp":
+      return t("tasksPage.runtime.acp");
+    case "cli":
+      return t("tasksPage.runtime.cli");
+    default:
+      return t("tasksPage.runtime.unknown");
+  }
+}
+
+export function taskTitle(task: TaskSummary): string {
+  return (
+    task.title ?? task.kind ?? (task.runtime ? taskRuntimeLabel(task) : t("tasksPage.untitled"))
+  );
+}
+
+export function taskDetail(task: TaskSummary): string | null {
+  if (task.status === "queued" || task.status === "running") {
+    return task.progressSummary ?? null;
+  }
+  if (task.status === "failed" || task.status === "timed_out") {
+    return task.error ?? task.terminalSummary ?? task.progressSummary ?? null;
+  }
+  return task.terminalSummary ?? task.error ?? task.progressSummary ?? null;
+}
+
+export function isActiveTask(task: TaskSummary): boolean {
+  return task.status === "queued" || task.status === "running";
 }
 
 export function taskTimestampMs(value: TaskTimestamp | undefined): number {
@@ -192,7 +258,7 @@ export function normalizeTasksCancelResult(value: unknown): TasksCancelResult | 
   };
 }
 
-function normalizeTaskEventPayload(value: unknown): TaskEventPayload | null {
+export function normalizeTaskEventPayload(value: unknown): TaskEventPayload | null {
   if (!isRecord(value)) {
     return null;
   }

@@ -5,7 +5,17 @@ import { icon, type IconName } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { formatMs, formatRelativeTimestamp } from "../../lib/format.ts";
 import { searchForSession } from "../../lib/sessions/index.ts";
-import { partitionTasks, taskTimestampMs, type TaskStatus, type TaskSummary } from "./data.ts";
+import {
+  partitionTasks,
+  taskDetail,
+  taskRuntimeLabel,
+  taskStatusChipClass,
+  taskStatusLabel,
+  taskTimestampMs,
+  taskTitle,
+  type TaskStatus,
+  type TaskSummary,
+} from "../../lib/tasks/data.ts";
 
 type TasksProps = {
   basePath: string;
@@ -18,61 +28,6 @@ type TasksProps = {
   onCancel: (taskId: string) => void;
   onNavigateToChat: (sessionKey: string) => void;
 };
-
-const STATUS_LABEL_KEYS = {
-  queued: "tasksPage.status.queued",
-  running: "tasksPage.status.running",
-  completed: "tasksPage.status.completed",
-  failed: "tasksPage.status.failed",
-  cancelled: "tasksPage.status.cancelled",
-  timed_out: "tasksPage.status.timedOut",
-} as const satisfies Record<TaskStatus, string>;
-
-const STATUS_CHIP_CLASSES = {
-  queued: "chip-warn",
-  running: "chip-warn",
-  completed: "chip-ok",
-  failed: "chip-danger",
-  cancelled: "",
-  timed_out: "chip-danger",
-} as const satisfies Record<TaskStatus, string>;
-
-function statusLabel(status: TaskStatus): string {
-  return t(STATUS_LABEL_KEYS[status]);
-}
-
-function statusClass(status: TaskStatus): string {
-  return STATUS_CHIP_CLASSES[status];
-}
-
-function runtimeLabel(task: TaskSummary): string {
-  switch (task.runtime) {
-    case "subagent":
-      return t("tasksPage.runtime.subagent");
-    case "cron":
-      return t("tasksPage.runtime.cron");
-    case "acp":
-      return t("tasksPage.runtime.acp");
-    case "cli":
-      return t("tasksPage.runtime.cli");
-    default:
-      return t("tasksPage.runtime.unknown");
-  }
-}
-
-function taskTitle(task: TaskSummary): string {
-  return task.title ?? task.kind ?? (task.runtime ? runtimeLabel(task) : t("tasksPage.untitled"));
-}
-
-function taskDetail(task: TaskSummary): string | null {
-  if (task.status === "queued" || task.status === "running") {
-    return task.progressSummary ?? null;
-  }
-  if (task.status === "failed" || task.status === "timed_out") {
-    return task.error ?? task.terminalSummary ?? task.progressSummary ?? null;
-  }
-  return task.terminalSummary ?? task.error ?? task.progressSummary ?? null;
-}
 
 function renderSessionLink(task: TaskSummary, props: TasksProps) {
   const sessionKey = task.childSessionKey ?? task.sessionKey;
@@ -112,8 +67,10 @@ function renderTask(task: TaskSummary, props: TasksProps) {
       <div class="list-main">
         <div class="list-title">${title}</div>
         <div class="chip-row">
-          <span class="chip ${statusClass(task.status)}">${statusLabel(task.status)}</span>
-          <span class="chip">${runtimeLabel(task)}</span>
+          <span class="chip ${taskStatusChipClass(task.status)}"
+            >${taskStatusLabel(task.status)}</span
+          >
+          <span class="chip">${taskRuntimeLabel(task)}</span>
           ${task.agentId
             ? html`<span class="chip">${t("tasksPage.agent", { agent: task.agentId })}</span>`
             : nothing}

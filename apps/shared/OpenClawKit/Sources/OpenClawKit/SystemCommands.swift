@@ -20,6 +20,49 @@ public enum OpenClawNotificationDelivery: String, Codable, Sendable {
     case auto
 }
 
+public struct OpenClawSystemRunApprovalFileOperand: Codable, Sendable, Equatable {
+    public var argvIndex: Int
+    public var path: String
+    public var sha256: String
+
+    public init(argvIndex: Int, path: String, sha256: String) {
+        self.argvIndex = argvIndex
+        self.path = path
+        self.sha256 = sha256
+    }
+}
+
+public struct OpenClawSystemRunApprovalPlan: Codable, Sendable, Equatable {
+    public var argv: [String]
+    public var cwd: String?
+    public var commandText: String
+    public var commandPreview: String?
+    public var agentId: String?
+    public var sessionKey: String?
+    public var policySnapshot: OpenClawSystemRunApprovalPolicySnapshot?
+    public var mutableFileOperand: OpenClawSystemRunApprovalFileOperand?
+
+    public init(
+        argv: [String],
+        cwd: String?,
+        commandText: String,
+        commandPreview: String? = nil,
+        agentId: String?,
+        sessionKey: String?,
+        policySnapshot: OpenClawSystemRunApprovalPolicySnapshot? = nil,
+        mutableFileOperand: OpenClawSystemRunApprovalFileOperand? = nil)
+    {
+        self.argv = argv
+        self.cwd = cwd
+        self.commandText = commandText
+        self.commandPreview = commandPreview
+        self.agentId = agentId
+        self.sessionKey = sessionKey
+        self.policySnapshot = policySnapshot
+        self.mutableFileOperand = mutableFileOperand
+    }
+}
+
 public struct OpenClawSystemRunParams: Codable, Sendable, Equatable {
     public var command: [String]
     public var rawCommand: String?
@@ -30,6 +73,7 @@ public struct OpenClawSystemRunParams: Codable, Sendable, Equatable {
     public var agentId: String?
     public var sessionKey: String?
     public var runId: String?
+    public var systemRunPlan: OpenClawSystemRunApprovalPlan?
     public var approved: Bool?
     public var approvalDecision: String?
     public var approvalSource: String?
@@ -44,6 +88,7 @@ public struct OpenClawSystemRunParams: Codable, Sendable, Equatable {
         agentId: String? = nil,
         sessionKey: String? = nil,
         runId: String? = nil,
+        systemRunPlan: OpenClawSystemRunApprovalPlan? = nil,
         approved: Bool? = nil,
         approvalDecision: String? = nil,
         approvalSource: String? = nil)
@@ -57,6 +102,7 @@ public struct OpenClawSystemRunParams: Codable, Sendable, Equatable {
         self.agentId = agentId
         self.sessionKey = sessionKey
         self.runId = runId
+        self.systemRunPlan = systemRunPlan
         self.approved = approved
         self.approvalDecision = approvalDecision
         self.approvalSource = approvalSource

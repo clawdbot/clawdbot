@@ -17,6 +17,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveGlobalSingleton,
   resolveStateDir,
+  truncateUtf16Safe,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
@@ -1719,7 +1720,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       if (!doc) {
         continue;
       }
-      const snippet = entry.snippet?.slice(0, this.qmd.limits.maxSnippetChars) ?? "";
+      const snippet = truncateUtf16Safe(entry.snippet ?? "", this.qmd.limits.maxSnippetChars);
       const lines = this.resolveSnippetLines(entry, snippet);
       const score = typeof entry.score === "number" ? entry.score : 0;
       const minScore = opts?.minScore ?? 0;
@@ -3526,7 +3527,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         clamped.push(entry);
         remaining -= snippet.length;
       } else {
-        const trimmed = snippet.slice(0, Math.max(0, remaining));
+        const trimmed = truncateUtf16Safe(snippet, remaining);
         clamped.push(copyQmdSessionArtifactHit(entry, { ...entry, snippet: trimmed }));
         break;
       }

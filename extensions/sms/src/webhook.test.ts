@@ -68,8 +68,17 @@ function createResponse(): TestResponse {
   } as unknown as TestResponse;
 }
 
-function createSignedSmsPayload(messageSid: string): { body: string; signature: string } {
-  const body = `AccountSid=AC123&From=%2B15551234567&To=%2B15557654321&Body=hello&MessageSid=${messageSid}`;
+function createSignedSmsPayload(
+  messageSid: string,
+  overrides: { from?: string; to?: string } = {},
+): { body: string; signature: string } {
+  const body = new URLSearchParams({
+    AccountSid: "AC123",
+    From: overrides.from ?? "+15551234567",
+    To: overrides.to ?? "+15557654321",
+    Body: "hello",
+    MessageSid: messageSid,
+  }).toString();
   return {
     body,
     signature: computeTwilioSignature({
@@ -115,6 +124,37 @@ describe("createSmsWebhookHandler", () => {
     expect(firstRes.statusCode).toBe(200);
     expect(replayRes.statusCode).toBe(200);
     expect(dispatchSmsInboundEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("validates the raw RCS form before canonicalizing its sender", async () => {
+    const messageSid = createMessageSid(9);
+    const { body, signature } = createSignedSmsPayload(messageSid, {
+      from: "RcS:+1 (555) 123-4567",
+      to: "rcs:example-agent",
+    });
+    const handler = createSmsWebhookHandler({
+      cfg: {},
+      account: createAccount(),
+      channelRuntime: {} as SmsChannelRuntime,
+    });
+
+    expect(parseTwilioFormBody(body).From).toBe("RcS:+1 (555) 123-4567");
+
+    const res = createResponse();
+    await handler(createRequest(body, signature), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(dispatchSmsInboundEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        msg: {
+          accountSid: "AC123",
+          from: "+15551234567",
+          to: "rcs:example-agent",
+          body: "hello",
+          messageSid,
+        },
+      }),
+    );
   });
 
   it("prunes only the expired insertion prefix without refreshing replays", () => {

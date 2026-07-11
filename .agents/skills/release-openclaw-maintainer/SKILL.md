@@ -237,6 +237,19 @@ Stable publication is not complete until `main` carries the actual shipped relea
 
 ## Handle versions and release files consistently
 
+Use the release preparation controller before manual version edits:
+
+```bash
+pnpm release:prepare -- --version YYYY.M.PATCH-beta.N --shadow
+pnpm release:prepare -- --version YYYY.M.PATCH-beta.N --write
+pnpm release:prepare -- --version YYYY.M.PATCH-beta.N --check
+```
+
+Shadow mode is the default and never runs mutating commands. Write mode aligns
+the root and macOS versions, optionally Android with `--android`, then runs only
+the version-owned generated metadata DAG. Every mode writes an exact
+HEAD/worktree-bound manifest under git metadata for cutover review.
+
 - Version locations include:
   - `package.json`
   - `apps/android/app/build.gradle.kts`

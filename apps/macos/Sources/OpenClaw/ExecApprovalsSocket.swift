@@ -126,6 +126,7 @@ struct ExecHostRequest: Codable {
     var sessionKey: String?
     var approvalDecision: ExecApprovalDecision?
     var approvalSource: String?
+    var policySnapshot: OpenClawSystemRunApprovalPolicySnapshot?
 }
 
 private struct ExecHostRunResult: Codable {
@@ -862,7 +863,8 @@ private enum ExecHostExecutor {
             effectiveSecurity: security,
             approvalSource: approvalSource,
             explicitlyApproved: explicitlyApproved,
-            persistAllowlist: persistAllowlist)
+            persistAllowlist: persistAllowlist,
+            delayedPolicySnapshot: validatedRequest.delayedPolicySnapshot)
         let timeoutSec = request.timeoutMs.flatMap { Double($0) / 1000.0 }
         let cwd = request.cwd
         let env = context.env

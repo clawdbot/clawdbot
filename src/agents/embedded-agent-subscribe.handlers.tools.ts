@@ -758,6 +758,8 @@ function readExecApprovalUnavailableDetails(result: unknown): {
   channelLabel?: string;
   accountId?: string;
   sentApproverDms?: boolean;
+  host?: "gateway" | "node";
+  nodeId?: string;
 } | null {
   if (!result || typeof result !== "object") {
     return null;
@@ -786,6 +788,8 @@ function readExecApprovalUnavailableDetails(result: unknown): {
     channelLabel: readStringValue(details.channelLabel),
     accountId: readStringValue(details.accountId),
     sentApproverDms: details.sentApproverDms === true,
+    host: details.host === "gateway" || details.host === "node" ? details.host : undefined,
+    nodeId: readStringValue(details.nodeId),
   };
 }
 
@@ -855,6 +859,8 @@ async function emitToolResultOutput(params: {
           channelLabel: approvalUnavailable.channelLabel,
           accountId: approvalUnavailable.accountId,
           sentApproverDms: approvalUnavailable.sentApproverDms,
+          host: approvalUnavailable.host,
+          nodeId: approvalUnavailable.nodeId,
         }),
       );
       ctx.state.deterministicApprovalPromptSent = true;

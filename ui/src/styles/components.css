@@ -6550,3 +6550,42 @@ details[open] > .ov-expandable-toggle::after {
   border-radius: 10px;
   background: var(--card);
 }
+
+/* ── Provider brand icons (shared: chat picker, model providers page) ── */
+
+.provider-brand-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+}
+
+.provider-brand-icon:not(.provider-brand-icon--fallback) {
+  background: currentColor;
+  mask: var(--provider-icon-url) center / contain no-repeat;
+  -webkit-mask: var(--provider-icon-url) center / contain no-repeat;
+}
+
+.provider-brand-icon--fallback {
+  border: 1px solid color-mix(in srgb, currentColor 48%, transparent);
+  border-radius: var(--radius-sm);
+  font-weight: 700;
+  line-height: 1;
+}
+
+.provider-brand-icon[data-provider-icon="codex"] {
+  color: #10a37f;
+}
+
+.provider-brand-icon[data-provider-icon="claude"] {
+  color: #d97757;
+}
+
+.provider-brand-icon[data-provider-icon="gemini"] {
+  color: #4285f4;
+}
+
+.provider-brand-icon[data-provider-icon="opencode"],
+.provider-brand-icon[data-provider-icon="opencodego"] {
+  color: var(--text-strong);
+}

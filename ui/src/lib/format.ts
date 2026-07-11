@@ -2,10 +2,13 @@
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatDurationHuman } from "../../../src/infra/format-time/format-duration.ts";
-import { formatRelativeTimestamp } from "../../../src/infra/format-time/format-relative.ts";
+import {
+  formatRelativeTimestamp,
+  formatTimeAgo,
+} from "../../../src/infra/format-time/format-relative.ts";
 import { t } from "../i18n/index.ts";
 
-export { formatRelativeTimestamp, formatDurationHuman };
+export { formatRelativeTimestamp, formatTimeAgo, formatDurationHuman };
 
 export function formatUnknownText(
   value: unknown,

@@ -8,14 +8,12 @@ const mocks = vi.hoisted(() => ({
   deleteGoogleChatMessage: vi.fn(),
   sendGoogleChatMessage: vi.fn(),
   updateGoogleChatMessage: vi.fn(),
-  uploadGoogleChatAttachment: vi.fn(),
 }));
 
 vi.mock("./api.js", () => ({
   deleteGoogleChatMessage: mocks.deleteGoogleChatMessage,
   sendGoogleChatMessage: mocks.sendGoogleChatMessage,
   updateGoogleChatMessage: mocks.updateGoogleChatMessage,
-  uploadGoogleChatAttachment: mocks.uploadGoogleChatAttachment,
 }));
 
 const account = {
@@ -106,14 +104,11 @@ describe("Google Chat reply delivery", () => {
     );
   });
 
-  it("does not update a deleted typing message before sending media with a caption", async () => {
+  it("uses text fallback without loading outbound media", async () => {
     const core = createCore({
       media: { buffer: Buffer.from("image"), contentType: "image/png", fileName: "reply.png" },
     });
     const runtime = createRuntime();
-    mocks.deleteGoogleChatMessage.mockResolvedValue(undefined);
-    mocks.uploadGoogleChatAttachment.mockResolvedValue({ attachmentUploadToken: "upload-token" });
-    mocks.sendGoogleChatMessage.mockResolvedValue({ messageName: "spaces/AAA/messages/media" });
 
     await deliverGoogleChatReply({
       payload: {
@@ -129,17 +124,46 @@ describe("Google Chat reply delivery", () => {
       typingMessageName: "spaces/AAA/messages/typing",
     });
 
+    expect(mocks.updateGoogleChatMessage).toHaveBeenCalledWith({
+      account,
+      messageName: "spaces/AAA/messages/typing",
+      text: "caption",
+    });
+    expect(core.channel.media.readRemoteMediaBuffer).not.toHaveBeenCalled();
+    expect(mocks.deleteGoogleChatMessage).not.toHaveBeenCalled();
+    expect(mocks.sendGoogleChatMessage).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Google Chat outbound attachments require user OAuth and are not supported by this service-account channel; sending text fallback only.",
+    );
+  });
+
+  it("cleans up typing and rejects media-only replies without provider upload access", async () => {
+    const core = createCore();
+    const runtime = createRuntime();
+
+    await expect(
+      deliverGoogleChatReply({
+        payload: {
+          mediaUrl: "https://example.invalid/reply.png",
+          replyToId: "spaces/AAA/threads/root",
+        },
+        account,
+        spaceId: "spaces/AAA",
+        runtime,
+        core,
+        config,
+        typingMessageName: "spaces/AAA/messages/typing",
+      }),
+    ).rejects.toThrow(
+      "Google Chat outbound attachments require user OAuth and no text fallback is available.",
+    );
+
     expect(mocks.deleteGoogleChatMessage).toHaveBeenCalledWith({
       account,
       messageName: "spaces/AAA/messages/typing",
     });
+    expect(core.channel.media.readRemoteMediaBuffer).not.toHaveBeenCalled();
     expect(mocks.updateGoogleChatMessage).not.toHaveBeenCalled();
-    expect(mocks.sendGoogleChatMessage).toHaveBeenCalledWith({
-      account,
-      space: "spaces/AAA",
-      text: "caption",
-      thread: "spaces/AAA/threads/root",
-      attachments: [{ attachmentUploadToken: "upload-token", contentName: "reply.png" }],
-    });
+    expect(mocks.sendGoogleChatMessage).not.toHaveBeenCalled();
   });
 });

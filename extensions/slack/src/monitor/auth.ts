@@ -377,8 +377,16 @@ export async function resolveSlackCommandIngress(params: {
   >["modeWhenAccessGroupsOff"];
 }) {
   const isDirectMessage = params.channelType === "im";
+  const isGroupDm = params.channelType === "mpim";
   const channelUsers = normalizeAllowListLower(params.channelUsers);
-  const channelUsersConfigured = !isDirectMessage && channelUsers.length > 0;
+  const channelUsersConfigured = !isDirectMessage && !isGroupDm && channelUsers.length > 0;
+  // MPIM ingress is group-shaped, but its sender policy is DM-owned. Callers
+  // pass configured allowFrom without pairing-store approvals for this path.
+  const groupAllowFrom = isGroupDm
+    ? params.ownerAllowFromLower
+    : channelUsersConfigured
+      ? channelUsers
+      : [];
   const result = await createSlackIngressResolver(params.ctx).message({
     subject: createSlackIngressSubject({
       senderId: params.senderId,
@@ -394,7 +402,7 @@ export async function resolveSlackCommandIngress(params: {
       mayPair: false,
     },
     dmPolicy: isDirectMessage ? "open" : "disabled",
-    groupPolicy: channelUsersConfigured ? "allowlist" : "open",
+    groupPolicy: isGroupDm || channelUsersConfigured ? "allowlist" : "open",
     policy: {
       groupAllowFromFallbackToAllowFrom: false,
       mutableIdentifierMatching: params.ctx.allowNameMatching ? "enabled" : "disabled",
@@ -402,7 +410,7 @@ export async function resolveSlackCommandIngress(params: {
     },
     mentionFacts: params.mentionFacts,
     allowFrom: isDirectMessage ? ["*"] : params.ownerAllowFromLower,
-    groupAllowFrom: channelUsersConfigured ? channelUsers : [],
+    groupAllowFrom,
     command: {
       allowTextCommands: params.allowTextCommands,
       hasControlCommand: params.hasControlCommand,
@@ -424,8 +432,9 @@ async function decideSlackSystemIngress(params: {
   interactiveEvent: boolean;
 }): Promise<ChannelIngressDecision> {
   const isDirectMessage = params.channelType === "im";
+  const isGroupDm = params.channelType === "mpim";
   const channelUsers = normalizeAllowListLower(params.channelUsers);
-  const channelUsersConfigured = !isDirectMessage && channelUsers.length > 0;
+  const channelUsersConfigured = !isDirectMessage && !isGroupDm && channelUsers.length > 0;
   const ownerAllowFrom =
     params.interactiveEvent && channelUsersConfigured
       ? params.ownerAllowFromLower.filter((entry) => entry !== "*")
@@ -434,6 +443,9 @@ async function decideSlackSystemIngress(params: {
   const groupAllowFrom = (() => {
     if (isDirectMessage) {
       return [];
+    }
+    if (isGroupDm) {
+      return ownerAllowFrom;
     }
     if (params.interactiveEvent && hasAnyCommandAllowlist) {
       return channelUsersConfigured ? channelUsers : [];
@@ -458,8 +470,9 @@ async function decideSlackSystemIngress(params: {
       mayPair: false,
     },
     dmPolicy: isDirectMessage ? "open" : "disabled",
-    groupPolicy:
-      params.interactiveEvent && hasAnyCommandAllowlist
+    groupPolicy: isGroupDm
+      ? "allowlist"
+      : params.interactiveEvent && hasAnyCommandAllowlist
         ? "open"
         : channelUsersConfigured || (!params.channelId && params.ownerAllowFromLower.length > 0)
           ? "allowlist"

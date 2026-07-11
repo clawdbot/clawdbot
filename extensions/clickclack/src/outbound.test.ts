@@ -1,5 +1,4 @@
-// Covers outbound delivery routing: a reply to a top-level message must post to
-// the main channel as a quote-reply, not open a per-reply thread.
+// Covers ClickClack outbound routing and sender-boundary assistant text sanitization.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { sendClickClackText } from "./outbound.js";
 import type { CoreConfig } from "./types.js";
@@ -46,18 +45,18 @@ describe("sendClickClackText routing", () => {
     createClientOptions.mockClear();
   });
 
-  it("delivers a reply to a top-level channel message as an in-channel quote-reply", async () => {
+  it("sanitizes a top-level channel quote-reply", async () => {
     await sendClickClackText({
       cfg,
       to: "channel:general",
-      text: "hi",
+      text: "Done.\n⚠️ 🛠️ `search repos (agent)` failed",
       replyToId: "msg_root",
     });
 
     expect(createChannelMessage).toHaveBeenCalledTimes(1);
     expect(createChannelMessage).toHaveBeenCalledWith(
       "general",
-      "hi",
+      "Done.",
       expect.objectContaining({ quotedMessageId: "msg_root" }),
     );
     expect(createThreadReply).not.toHaveBeenCalled();
@@ -89,16 +88,16 @@ describe("sendClickClackText routing", () => {
     });
   });
 
-  it("keeps replies inside a genuine thread (explicit threadId)", async () => {
+  it("sanitizes replies inside a genuine thread", async () => {
     await sendClickClackText({
       cfg,
       to: "channel:general",
-      text: "hi",
+      text: "Done.\n⚠️ 🛠️ `search repos (agent)` failed",
       threadId: "msg_thread_root",
       replyToId: "msg_root",
     });
 
-    expect(createThreadReply).toHaveBeenCalledWith("msg_thread_root", "hi", expect.anything());
+    expect(createThreadReply).toHaveBeenCalledWith("msg_thread_root", "Done.", expect.anything());
     expect(createChannelMessage).not.toHaveBeenCalled();
   });
 
@@ -109,19 +108,35 @@ describe("sendClickClackText routing", () => {
     expect(createChannelMessage).not.toHaveBeenCalled();
   });
 
-  it("delivers a DM reply as a quote-reply in the same conversation", async () => {
+  it("sanitizes leaked tool XML in a DM quote-reply", async () => {
     await sendClickClackText({
       cfg,
       to: "dm:usr_1",
-      text: "hi",
+      text: '<tool_call>{"name":"exec"}</tool_call>Deploy finished.',
       replyToId: "msg_root",
     });
 
     expect(createDirectMessage).toHaveBeenCalledWith(
       "dm_1",
-      "hi",
+      "Deploy finished.",
       expect.objectContaining({ quotedMessageId: "msg_root" }),
     );
     expect(createThreadReply).not.toHaveBeenCalled();
+  });
+
+  it("suppresses replies containing only internal scaffolding", async () => {
+    await expect(
+      sendClickClackText({
+        cfg,
+        to: "channel:general",
+        text: "⚠️ 🛠️ `search repos (agent)` failed",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(createClientOptions).not.toHaveBeenCalled();
+    expect(createChannelMessage).not.toHaveBeenCalled();
+    expect(createThreadReply).not.toHaveBeenCalled();
+    expect(createDirectConversation).not.toHaveBeenCalled();
+    expect(createDirectMessage).not.toHaveBeenCalled();
   });
 });

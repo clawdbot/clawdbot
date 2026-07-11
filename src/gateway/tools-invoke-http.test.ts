@@ -3,6 +3,10 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
 import type { runBeforeToolCallHook as runBeforeToolCallHookType } from "../agents/agent-tools.before-tool-call.js";
 
 type RunBeforeToolCallHook = typeof runBeforeToolCallHookType;
@@ -409,13 +413,25 @@ const firstHookCallArg = () => {
   return call[0];
 };
 
-const invokeToolsRpc = async (params: Record<string, unknown>, scopes = ["operator.write"]) => {
+const invokeToolsRpc = async (
+  params: Record<string, unknown>,
+  scopes = ["operator.write"],
+  clientInfo?: { id: string; mode: string },
+  caps?: string[],
+) => {
   const respond = vi.fn();
   await toolsInvokeHandlers["tools.invoke"]({
     params,
     respond,
     context: { getRuntimeConfig: () => cfg } as never,
-    client: { connect: { role: "operator", scopes } } as never,
+    client: {
+      connect: {
+        role: "operator",
+        scopes,
+        ...(clientInfo ? { client: clientInfo } : {}),
+        ...(caps ? { caps } : {}),
+      },
+    } as never,
     req: { type: "req", id: "req-rpc-1", method: "tools.invoke" },
     isWebchatConnect: () => false,
   });
@@ -458,6 +474,7 @@ describe("POST /tools/invoke", () => {
     expect(body).toHaveProperty("result");
     expect(lastCreateOpenClawToolsContext?.allowMediaInvokeCommands).toBe(true);
     expect(lastCreateOpenClawToolsContext?.disablePluginTools).toBe(true);
+    expect(lastCreateOpenClawToolsContext?.conversationReadOrigin).toBe("direct-operator");
     const hookArg = firstHookCallArg();
     expect(hookArg.toolName).toBe("agents_list");
     const hookCtx = hookArg.ctx;
@@ -1061,7 +1078,7 @@ describe("tools.invoke Gateway RPC", () => {
     const hookArg = firstHookCallArg();
     expect(hookArg.approvalMode).toBe("report");
     expect(hookArg.toolName).toBe("agents_list");
-    expect(hookArg.toolCallId).toBe("rpc-rpc-tool-test");
+    expect(hookArg.toolCallId).toBe("rpc-delegated-rpc-tool-test");
     const hookCtx = hookArg.ctx;
     if (!hookCtx) {
       throw new Error("Expected before-tool-call hook context");
@@ -1069,6 +1086,42 @@ describe("tools.invoke Gateway RPC", () => {
     expect(hookCtx.agentId).toBe("main");
     expect(hookCtx.config).toBe(cfg);
     expect(hookCtx.sessionKey).toBe("agent:main:main");
+    expect(lastCreateOpenClawToolsContext?.conversationReadOrigin).toBe("delegated");
+  });
+
+  it("requires an operation-local marker for direct conversation reads", async () => {
+    allowAgentsListForMain();
+
+    await invokeToolsRpc(
+      {
+        name: "agents_list",
+        args: {},
+        sessionKey: "main",
+        conversationReadOrigin: "direct-operator",
+      },
+      ["operator.write"],
+      {
+        id: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+        mode: GATEWAY_CLIENT_MODES.BACKEND,
+      },
+      ["tool-events", "inline-widgets"],
+    );
+    expect(lastCreateOpenClawToolsContext?.conversationReadOrigin).toBe("direct-operator");
+    expect(lastCreateOpenClawToolsContext?.clientCaps).toEqual(["tool-events", "inline-widgets"]);
+
+    await invokeToolsRpc(
+      {
+        name: "agents_list",
+        args: {},
+        sessionKey: "main",
+      },
+      ["operator.write"],
+      {
+        id: GATEWAY_CLIENT_NAMES.CLI,
+        mode: GATEWAY_CLIENT_MODES.CLI,
+      },
+    );
+    expect(lastCreateOpenClawToolsContext?.conversationReadOrigin).toBe("delegated");
   });
 
   it("keeps owner-only tools unavailable to non-owner RPC callers despite gateway.tools.allow", async () => {

@@ -27,6 +27,9 @@ openclaw-chat-page {
 }
 
 .chat-workbench__main {
+  /* Positioning context for the floating rail openers so they pin to the
+     thread column instead of overlapping an open right-docked rail. */
+  position: relative;
   grid-column: 1;
   grid-row: 1;
   display: flex;
@@ -3492,45 +3495,15 @@ openclaw-chat-page {
   text-align: left;
 }
 
+/* Mask/brand-color rules live on .provider-brand-icon (components.css). */
 .chat-controls__provider-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   width: 18px;
   height: 18px;
   flex: 0 0 18px;
-  color: var(--muted);
 }
 
-.chat-controls__provider-icon:not(.chat-controls__provider-icon--fallback) {
-  background: currentColor;
-  mask: var(--provider-icon-url) center / contain no-repeat;
-  -webkit-mask: var(--provider-icon-url) center / contain no-repeat;
-}
-
-.chat-controls__provider-icon--fallback {
-  border: 1px solid color-mix(in srgb, currentColor 48%, transparent);
-  border-radius: var(--radius-sm);
+.chat-controls__provider-icon.provider-brand-icon--fallback {
   font-size: 9px;
-  font-weight: 700;
-  line-height: 1;
-}
-
-.chat-controls__provider-icon[data-provider-icon="codex"] {
-  color: #10a37f;
-}
-
-.chat-controls__provider-icon[data-provider-icon="claude"] {
-  color: #d97757;
-}
-
-.chat-controls__provider-icon[data-provider-icon="gemini"] {
-  color: #4285f4;
-}
-
-.chat-controls__provider-icon[data-provider-icon="opencode"],
-.chat-controls__provider-icon[data-provider-icon="opencodego"] {
-  color: var(--text-strong);
 }
 
 .chat-controls__inline-select-trigger > .chat-controls__provider-icon {

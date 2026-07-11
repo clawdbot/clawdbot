@@ -107,6 +107,16 @@ final class PairingApprovalCenter {
         }
     }
 
+    /// Resolve a batch of cards with one decision. Takes the caller's
+    /// rendered snapshot instead of reading the live queue: a request that
+    /// arrives between render and click must never be resolved unseen.
+    /// `decide`'s in-flight guard keeps repeated clicks idempotent.
+    func decideAll(_ cards: [Card], _ decision: Decision) {
+        for card in cards {
+            self.decide(card, decision)
+        }
+    }
+
     /// "Not Now": hide the panel without resolving anything. Requests stay
     /// pending on the gateway (TTL applies) and in the menu-bar count.
     func snooze() {
@@ -161,6 +171,12 @@ final class PairingApprovalCenter {
     }
 
     #if DEBUG
+    /// Test seam: seed the live queue without presenting the panel (tests
+    /// run without an NSApplication, so `updatePanel` must not fire).
+    func _testSetCards(_ cards: [Card]) {
+        self.cards = cards
+    }
+
     /// Demo/screenshot hook: decisions on injected cards resolve locally
     /// instead of routing to a prompter.
     private var demoRequestIds: Set<String> = []

@@ -4226,6 +4226,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /
 - Headings:
   - H1: OpenClaw 🦞
+  - H2: Browse docs
   - H2: What is OpenClaw?
   - H2: How it works
   - H2: Key capabilities
@@ -10053,6 +10054,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: MCP page
   - H2: Activity tab
   - H2: Operator terminal
+  - H2: Browser panel
   - H2: Chat behavior
   - H2: Connection loss and reconnect
   - H2: PWA install and web push

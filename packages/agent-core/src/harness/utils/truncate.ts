@@ -201,8 +201,8 @@ export function truncateHead(content: string, options: TruncationOptions = {}): 
     });
   }
 
-  const firstLineBytes = utf8ByteLength(input.lines[0]);
-  if (firstLineBytes > input.maxBytes) {
+  const firstLine = input.lines[0];
+  if (firstLine !== undefined && utf8ByteLength(firstLine) > input.maxBytes) {
     return buildTruncationResult(input, {
       content: "",
       truncated: true,

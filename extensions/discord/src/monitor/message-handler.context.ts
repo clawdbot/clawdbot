@@ -343,6 +343,7 @@ export async function buildDiscordMessageProcessContext(params: {
     conversation: {
       kind: isDirectMessage ? "direct" : "channel",
       id: messageChannelId,
+      nativeChannelId: messageChannelId,
       label: fromLabel,
       spaceId: isGuildMessage ? (guildInfo?.id ?? guildSlug) || undefined : undefined,
       parentId: threadChannel ? threadParentId : undefined,

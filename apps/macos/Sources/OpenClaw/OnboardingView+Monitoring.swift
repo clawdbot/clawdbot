@@ -51,11 +51,16 @@ extension OnboardingView {
     }
 
     func maybeInstallCLI(for pageIndex: Int) {
+        if pageIndex == cliPageIndex, cliExecutableReady {
+            self.startExistingCLIActivationIfNeeded()
+            return
+        }
         guard Self.shouldAutoInstallCLI(
             onCLIPage: pageIndex == cliPageIndex,
             isLocal: state.connectionMode == .local,
             visible: onboardingVisible,
             statusKnown: cliStatusKnown,
+            executableReady: cliExecutableReady,
             installed: cliInstalled,
             installing: installingCLI)
         else { return }
@@ -67,10 +72,62 @@ extension OnboardingView {
         isLocal: Bool,
         visible: Bool,
         statusKnown: Bool,
+        executableReady: Bool,
         installed: Bool,
         installing: Bool) -> Bool
     {
-        onCLIPage && isLocal && visible && statusKnown && !installed && !installing
+        onCLIPage && isLocal && visible && statusKnown && !executableReady && !installed && !installing
+    }
+
+    func startExistingCLIActivationIfNeeded() {
+        guard Self.shouldStartExistingCLIActivation(
+            isLocal: state.connectionMode == .local,
+            executableReady: cliExecutableReady,
+            installing: installingCLI)
+        else { return }
+        // Keep the CLI setup gate in the page order until its Gateway is reachable.
+        cliInstalled = false
+        installingCLI = true
+        cliInstallPhase = .startingService
+        OnboardingController.shared.setWindowCloseEnabled(false)
+        OnboardingController.shared.busyReason = "OpenClaw is starting the Gateway service."
+        cliStatus = "Starting OpenClaw Gateway…"
+        Task { @MainActor in await self.finishExistingCLIActivation() }
+    }
+
+    static func shouldStartExistingCLIActivation(
+        isLocal: Bool,
+        executableReady: Bool,
+        installing: Bool) -> Bool
+    {
+        isLocal && executableReady && !installing
+    }
+
+    func finishExistingCLIActivation() async {
+        defer {
+            installingCLI = false
+            cliInstallPhase = .idle
+            OnboardingController.shared.setWindowCloseEnabled(true)
+            OnboardingController.shared.busyReason = nil
+        }
+
+        let result = await CLIInstaller.activateLocalGateway()
+        guard state.connectionMode == .local else {
+            cliInstalled = true
+            return
+        }
+
+        switch result {
+        case .ready:
+            cliInstalled = true
+            cliStatus = "OpenClaw Gateway is ready."
+        case .deferred:
+            cliInstalled = false
+            cliStatus = "OpenClaw is paused. Resume it, then retry setup to start the Gateway."
+        case .failed:
+            cliInstalled = false
+            cliStatus = "OpenClaw is installed, but the Gateway did not start. Retry setup."
+        }
     }
 
     func startCLIInstall() {
@@ -104,6 +161,7 @@ extension OnboardingView {
             self.cliStatus = message
         }
         guard installed else { return }
+        cliExecutableReady = true
         cliInstallLocation = CLIInstaller.managedExecutableLocation()
         cliStatus = "Starting OpenClaw Gateway…"
         // The step checklist shows one spinner at a time: install first,
@@ -127,9 +185,11 @@ extension OnboardingView {
         // Never let that stale result replace live installation progress.
         guard self.onboardingVisible, !Task.isCancelled, !installingCLI else { return }
         cliInstallLocation = status.location
+        cliExecutableReady = status.isReady
         cliInstalled = status.isReady
         cliStatusKnown = true
         cliStatus = status.message
+        self.startExistingCLIActivationIfNeeded()
         self.maybeInstallCLI(for: self.activePageIndex)
     }
 

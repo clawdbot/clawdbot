@@ -66,6 +66,51 @@ function resolveCodexDefaultToolsApprovalMode(
   );
 }
 
+function normalizeToolFilterList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .filter((entry): entry is string => typeof entry === "string")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function assertCodexExactToolFilters(
+  serverName: string,
+  fieldName: "include" | "exclude",
+  patterns: string[],
+): void {
+  const wildcard = patterns.find((pattern) => pattern.includes("*"));
+  if (!wildcard) {
+    return;
+  }
+  const codexFieldName = fieldName === "include" ? "enabled_tools" : "disabled_tools";
+  throw new Error(
+    `Cannot project mcp.servers.${serverName}.toolFilter.${fieldName} pattern "${wildcard}" into Codex ${codexFieldName}: Codex MCP projection only supports exact tool names.`,
+  );
+}
+
+function applyCodexToolFilter(
+  next: Record<string, unknown>,
+  name: string,
+  server: BundleMcpServerConfig,
+): void {
+  if (!isRecord(server.toolFilter)) {
+    return;
+  }
+  const include = normalizeToolFilterList(server.toolFilter.include);
+  const exclude = normalizeToolFilterList(server.toolFilter.exclude);
+  assertCodexExactToolFilters(name, "include", include);
+  assertCodexExactToolFilters(name, "exclude", exclude);
+  if (include.length > 0) {
+    next.enabled_tools = include;
+  }
+  if (exclude.length > 0) {
+    next.disabled_tools = exclude;
+  }
+}
+
 /** Normalizes one bundle MCP server into Codex's mcp_servers shape. */
 export function normalizeCodexMcpServerConfig(
   name: string,
@@ -73,6 +118,7 @@ export function normalizeCodexMcpServerConfig(
 ): Record<string, unknown> {
   const next: Record<string, unknown> = {};
   applyCommonServerConfig(next, server);
+  applyCodexToolFilter(next, name, server);
   const defaultToolsApprovalMode = resolveCodexDefaultToolsApprovalMode(server);
   if (defaultToolsApprovalMode) {
     next.default_tools_approval_mode = defaultToolsApprovalMode;

@@ -154,8 +154,17 @@ describe("dispatchSmsInboundEvent", () => {
     });
     const turn = await runParams.adapter.resolveTurn(ingested);
 
+    expect(resolveAgentRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        peer: { kind: "direct", id: "+15551234567" },
+      }),
+    );
     expect(buildContext).toHaveBeenCalledWith(
       expect.objectContaining({
+        from: "sms:+15551234567",
+        sender: expect.objectContaining({ id: "+15551234567" }),
+        conversation: expect.objectContaining({ id: "+15551234567" }),
+        reply: { to: "sms:+15551234567" },
         route: expect.objectContaining({
           routeSessionKey: "agent:main:sms:direct:+15551234567",
           dispatchSessionKey: "agent:main:sms:direct:+15551234567",

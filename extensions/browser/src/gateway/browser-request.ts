@@ -19,6 +19,8 @@ import {
   createBrowserRouteDispatcher,
   errorShape,
   getRuntimeConfig,
+  isBrowserHostLocalRoute,
+  isBrowserSystemProfileImport,
   isNodeCommandAllowed,
   isPersistentBrowserProfileMutation,
   persistBrowserProxyFiles,
@@ -127,31 +129,36 @@ export async function handleBrowserGatewayRequest({
     );
     return;
   }
-  if (isPersistentBrowserProfileMutation(methodRaw, path)) {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "browser.request cannot mutate persistent browser profiles",
-      ),
-    );
-    return;
-  }
-
   const cfg = getRuntimeConfig();
-  let nodeTarget: NodeSession | null;
-  try {
-    nodeTarget = resolveBrowserNodeTarget({
-      cfg,
-      nodes: context.nodeRegistry.listConnected(),
-    });
-  } catch (err) {
-    respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
-    return;
+  // System-profile listing and import can only run where the local Keychain and
+  // Chrome profiles live, so they must never route to a browser node. Force
+  // host-local dispatch even when gateway.nodes.browser auto-selects a node.
+  const forceHostLocal = isBrowserHostLocalRoute(methodRaw, path);
+  let nodeTarget: NodeSession | null = null;
+  if (!forceHostLocal) {
+    try {
+      nodeTarget = resolveBrowserNodeTarget({
+        cfg,
+        nodes: context.nodeRegistry.listConnected(),
+      });
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
+      return;
+    }
   }
 
   if (nodeTarget) {
+    if (isPersistentBrowserProfileMutation(methodRaw, path)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "browser.request cannot mutate persistent browser profiles over a node proxy",
+        ),
+      );
+      return;
+    }
     const allowlist = resolveNodeCommandAllowlist(cfg, nodeTarget);
     const allowed = isNodeCommandAllowed({
       command: "browser.proxy",
@@ -207,6 +214,24 @@ export async function handleBrowserGatewayRequest({
     const mapping = await persistProxyFiles(success.files);
     applyProxyPaths(success.result, mapping);
     respond(true, success.result);
+    return;
+  }
+
+  // Host-local dispatch: persistent profile mutations stay blocked here as on a
+  // node proxy, except system-profile import, which must run where the user's
+  // Keychain lives and cannot be proxied to a node.
+  if (
+    isPersistentBrowserProfileMutation(methodRaw, path) &&
+    !isBrowserSystemProfileImport(methodRaw, path)
+  ) {
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "browser.request cannot mutate persistent browser profiles",
+      ),
+    );
     return;
   }
 

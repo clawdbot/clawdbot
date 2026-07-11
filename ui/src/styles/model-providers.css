@@ -1,0 +1,80 @@
+/* Model Providers settings page; provider cards reuse provider-usage-* styles
+   from usage.css and .provider-brand-icon from components.css. */
+
+.model-providers__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.model-providers__identity {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.model-providers__icon {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+}
+
+.model-providers__icon.provider-brand-icon--fallback {
+  font-size: 12px;
+}
+
+.model-providers__badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.model-providers__status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 9px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border);
+  background: var(--bg-muted);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.model-providers__status--ok {
+  border-color: color-mix(in srgb, var(--ok) 32%, var(--border));
+  background: color-mix(in srgb, var(--ok) 10%, var(--bg-muted));
+  color: var(--ok);
+}
+
+.model-providers__status--expiring {
+  border-color: color-mix(in srgb, var(--warn) 32%, var(--border));
+  background: color-mix(in srgb, var(--warn) 10%, var(--bg-muted));
+  color: var(--warn);
+}
+
+.model-providers__status--expired,
+.model-providers__status--missing {
+  border-color: color-mix(in srgb, var(--danger) 32%, var(--border));
+  background: color-mix(in srgb, var(--danger) 10%, var(--bg-muted));
+  color: var(--danger);
+}
+
+.model-providers__models,
+.model-providers__no-stats,
+.model-providers__local-cost-detail {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.model-providers__local-cost {
+  display: grid;
+  gap: 4px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  padding-top: 10px;
+}

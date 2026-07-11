@@ -2,6 +2,7 @@
 import type { Bot } from "grammy";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createTelegramPromptContextProjectionSequence } from "../prompt-context-projection.js";
 const { loadWebMedia } = vi.hoisted(() => ({
   loadWebMedia: vi.fn(),
 }));
@@ -135,6 +136,19 @@ function mockMediaLoad(fileName: string, contentType: string, data: string) {
     buffer: Buffer.from(data),
     contentType,
     fileName,
+  });
+}
+
+function createObservedPromptContextSequence(
+  record: (value: unknown) => void,
+  source?: { transcriptMessageId: string },
+) {
+  return createTelegramPromptContextProjectionSequence({
+    ...(source ? { source } : {}),
+    record: async (value) => {
+      record(value);
+      return true;
+    },
   });
 }
 
@@ -295,6 +309,28 @@ describe("deliverReplies", () => {
     expect(runtime.error).toHaveBeenCalledTimes(1);
     expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(firstMockCallArg(sendMessage, 1)).toBe("hello");
+  });
+
+  it("delivers prepared HTML without reparsing visible syntax as Markdown", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 1, chat: { id: "123" } });
+    const records: unknown[] = [];
+    const promptContextSequence = createObservedPromptContextSequence((record) =>
+      records.push(record),
+    );
+
+    await deliverWith({
+      replies: [{ text: "<code>&lt;b&gt;x&lt;/b&gt;</code>" }],
+      runtime,
+      bot: createBot({ sendMessage }),
+      textMode: "html",
+      promptContextSequence,
+    });
+    await promptContextSequence.finish();
+
+    expect(firstMockCallArg(sendMessage, 1)).toBe("<code>&lt;b&gt;x&lt;/b&gt;</code>");
+    expectRecordFields(firstMockCallArg(sendMessage, 2), { parse_mode: "HTML" });
+    expect(records).toEqual([{ messageId: 1, text: "<b>x</b>" }]);
   });
 
   it("applies reaction-only replies without logging missing text/media", async () => {
@@ -1955,5 +1991,101 @@ describe("deliverReplies", () => {
 
     expect(sendVoice).toHaveBeenCalledTimes(1);
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("detaches prompt-context provenance when message_sending rewrites content", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sending");
+    messageHookRunner.runMessageSending.mockResolvedValue({ content: "rewritten" });
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 304, chat: { id: "123" } });
+    const observer = vi.fn();
+    const promptContextSequence = createObservedPromptContextSequence(observer, {
+      transcriptMessageId: "assistant-1",
+    });
+
+    await deliverWith({
+      replies: [{ text: "original" }],
+      runtime,
+      bot: createBot({ sendMessage }),
+      promptContextSequence,
+    });
+    await promptContextSequence.finish();
+
+    expect(firstSendText(sendMessage)).toBe("rewritten");
+    expect(observer).toHaveBeenCalledWith({ messageId: 304, text: "rewritten" });
+  });
+
+  it("records only concrete text chunks that Telegram accepted", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi
+      .fn()
+      .mockResolvedValueOnce({ message_id: 301, chat: { id: "123" } })
+      .mockRejectedValueOnce(new Error("second chunk failed"));
+    const observer = vi.fn();
+    const promptContextSequence = createObservedPromptContextSequence(observer);
+
+    await expect(
+      deliverWith({
+        replies: [{ text: "chunk-one\n\nchunk-two" }],
+        runtime,
+        bot: createBot({ sendMessage }),
+        textLimit: 12,
+        promptContextSequence,
+      }),
+    ).rejects.toThrow("second chunk failed");
+    await promptContextSequence.fail();
+
+    expect(observer).toHaveBeenCalledTimes(1);
+    expect(observer).toHaveBeenCalledWith({ messageId: 301, text: "chunk-one\n" });
+  });
+
+  it("records the concrete Telegram media message", async () => {
+    const runtime = createRuntime();
+    const message = {
+      message_id: 302,
+      date: 1_779_425_460,
+      chat: { id: "123", type: "private" },
+      photo: [{ file_id: "photo-file", file_unique_id: "photo-unique", width: 10, height: 10 }],
+    };
+    const sendPhoto = vi.fn().mockResolvedValue(message);
+    const observer = vi.fn();
+    const promptContextSequence = createObservedPromptContextSequence(observer);
+    mockMediaLoad("photo.jpg", "image/jpeg", "photo");
+
+    await deliverWith({
+      replies: [{ text: "caption", mediaUrl: "https://example.com/photo.jpg" }],
+      runtime,
+      bot: createBot({ sendPhoto }),
+      promptContextSequence,
+    });
+    await promptContextSequence.finish();
+
+    expect(observer).toHaveBeenCalledWith({ messageId: 302, message, text: "caption" });
+  });
+
+  it("records voice fallback text after the fallback send succeeds", async () => {
+    const { runtime, bot } = createVoiceFailureHarness({
+      voiceError: createVoiceMessagesForbiddenError(),
+      sendMessageResult: { message_id: 303, chat: { id: "123" } },
+    });
+    const observer = vi.fn();
+    const promptContextSequence = createObservedPromptContextSequence(observer);
+    mockMediaLoad("note.ogg", "audio/ogg", "voice");
+
+    await deliverWith({
+      replies: [
+        {
+          mediaUrl: "https://example.com/note.ogg",
+          audioAsVoice: true,
+          spokenText: "Voice fallback",
+        },
+      ],
+      runtime,
+      bot,
+      promptContextSequence,
+    });
+    await promptContextSequence.finish();
+
+    expect(observer).toHaveBeenCalledWith({ messageId: 303, text: "Voice fallback" });
   });
 });

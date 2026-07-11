@@ -165,6 +165,29 @@ describe("plugin tool descriptor cache keys", () => {
     expect(ownerKey).not.toBe(nonOwnerKey);
   });
 
+  it("varies descriptor keys by native channel identity", () => {
+    const base = {
+      pluginId: "demo",
+      source: "/tmp/demo.js",
+      contractToolNames: ["demo"],
+      ctx: {
+        messageChannel: "feishu",
+        nativeChannelId: "oc_first",
+      },
+    };
+
+    const firstKey = buildPluginToolDescriptorCacheKey(base);
+    const secondKey = buildPluginToolDescriptorCacheKey({
+      ...base,
+      ctx: {
+        ...base.ctx,
+        nativeChannelId: "oc_second",
+      },
+    });
+
+    expect(firstKey).not.toBe(secondKey);
+  });
+
   it("keeps descriptor keys stable across config bookkeeping writes", () => {
     const firstConfig = {
       id: "runtime",

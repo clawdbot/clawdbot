@@ -459,6 +459,13 @@ function monitorQaGatewayChildFailure(child: ChildProcess, output: { push(chunk:
   return () => childFailure;
 }
 
+const QA_GATEWAY_PROCESS_BOUNDARY_LOG_TAIL_CHARS = 8_192;
+
+function formatQaGatewayProcessBoundaryStartupFailure(error: unknown, logs: string) {
+  const logTail = redactQaGatewayDebugText(logs).slice(-QA_GATEWAY_PROCESS_BOUNDARY_LOG_TAIL_CHARS);
+  return `${formatErrorMessage(error)}${formatQaGatewayLogsForError(logTail)}`;
+}
+
 async function fetchLocalGatewayHealth(params: {
   baseUrl: string;
   healthPath: "/readyz" | "/healthz";
@@ -549,6 +556,7 @@ export const testing = {
   createQaGatewayChildLogCollector,
   monitorQaGatewayChildFailure,
   throwQaGatewayChildFailure,
+  formatQaGatewayProcessBoundaryStartupFailure,
   createQaBundledPluginsDir,
   signalQaGatewayChildProcessTree,
   stopQaGatewayChildProcessTree,
@@ -1098,13 +1106,21 @@ export async function startQaGatewayChild(params: {
             cleanupErrors.push(cleanupError);
           }
         }
+        const boundaryFailure = preparedBoundary
+          ? formatQaGatewayProcessBoundaryStartupFailure(error, logs())
+          : null;
         if (cleanupErrors.length > 0) {
           const cleanupFailure = new AggregateError(
             [error, ...cleanupErrors],
-            "qa gateway failed before verified process cleanup completed",
+            boundaryFailure
+              ? `qa gateway failed before verified process cleanup completed: ${boundaryFailure}`
+              : "qa gateway failed before verified process cleanup completed",
             { cause: error },
           );
           throw cleanupFailure;
+        }
+        if (boundaryFailure) {
+          throw new Error(boundaryFailure, { cause: error });
         }
         throw error;
       }

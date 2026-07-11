@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 import Testing
 @testable import OpenClaw
 
@@ -90,7 +91,8 @@ struct ExecApprovalsSocketAuthTests {
             needsScreenRecording: nil,
             agentId: nil,
             sessionKey: nil,
-            approvalDecision: .allowOnce)
+            approvalDecision: .allowOnce,
+            policySnapshot: Self.policySnapshot)
         let requestJSON = try JSONEncoder().encode(request)
         let socketDecodedRequest = try JSONDecoder().decode(ExecHostRequest.self, from: requestJSON)
 
@@ -136,25 +138,52 @@ struct ExecApprovalsSocketAuthTests {
     }
 
     @Test
-    func `socket serialization preserves marker only auto review provenance`() throws {
-        let request = ExecHostRequest(
-            command: ["/usr/bin/printf", "ok"],
-            rawCommand: nil,
-            cwd: nil,
-            env: nil,
-            timeoutMs: nil,
-            needsScreenRecording: nil,
-            agentId: "main",
-            sessionKey: "agent:main:main",
-            approvalDecision: nil,
-            approvalSource: "auto-review")
+    func `socket decodes TypeScript auto review policy snapshot`() throws {
+        let requestJSON = Data(#"""
+        {
+          "command": ["/usr/bin/printf", "ok"],
+          "agentId": "main",
+          "sessionKey": "agent:main:main",
+          "approvalSource": "auto-review",
+          "policySnapshot": {
+            "security": "allowlist",
+            "ask": "on-miss",
+            "askFallback": "deny",
+            "autoAllowSkills": true,
+            "allowlistRules": [
+              {"pattern": "/ä"},
+              {"pattern": "/A", "source": "allow-always"},
+              {"pattern": "/"},
+              {"pattern": "/"},
+              {"pattern": "/A"}
+            ]
+          }
+        }
+        """#.utf8)
 
-        let decoded = try JSONDecoder().decode(
-            ExecHostRequest.self,
-            from: JSONEncoder().encode(request))
+        let decoded = try JSONDecoder().decode(ExecHostRequest.self, from: requestJSON)
         #expect(decoded.approvalSource == "auto-review")
         #expect(decoded.approvalDecision == nil)
+        #expect(decoded.policySnapshot?.allowlistRules == [
+            OpenClawSystemRunApprovalPolicySnapshot.Rule(pattern: "/"),
+            OpenClawSystemRunApprovalPolicySnapshot.Rule(pattern: "/A"),
+            OpenClawSystemRunApprovalPolicySnapshot.Rule(pattern: "/A", source: .allowAlways),
+            OpenClawSystemRunApprovalPolicySnapshot.Rule(pattern: "/ä"),
+        ])
+        switch ExecHostRequestEvaluator.validateRequest(decoded) {
+        case let .success(validated):
+            #expect(validated.delayedPolicySnapshot?.portable == decoded.policySnapshot)
+        case let .failure(error):
+            Issue.record("unexpected invalid request: \(error.message)")
+        }
     }
+
+    private static let policySnapshot = OpenClawSystemRunApprovalPolicySnapshot(
+        security: .full,
+        ask: .off,
+        askFallback: .deny,
+        autoAllowSkills: false,
+        allowlistRules: [])
 
     private struct EncodedExecHostResponse: Codable {
         var type: String

@@ -39,7 +39,7 @@ import {
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
 import { resolveUiHourCycleOptions } from "../../../lib/format.ts";
-import { formatCompactTokenCount } from "../../../lib/format.ts";
+import { formatCompactTokenCount, formatTimeAgo } from "../../../lib/format.ts";
 import "../../../components/tooltip.ts";
 import { getMediaFileExtension } from "../../../lib/media-file-extension.ts";
 import { openExternalUrlSafe } from "../../../lib/open-external-url.ts";
@@ -109,6 +109,7 @@ export function formatChatTimestampForDisplay(timestamp: number): ChatTimestampD
       year: "numeric",
       hour: "numeric",
       minute: "2-digit",
+      timeZoneName: "short",
     }),
     title: date.toLocaleString([], {
       ...hourCycle,
@@ -125,17 +126,46 @@ export function formatChatTimestampForDisplay(timestamp: number): ChatTimestampD
   };
 }
 
+const CHAT_RELATIVE_TIMESTAMP_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const CHAT_RELATIVE_TIMESTAMP_FUTURE_SKEW_MS = 2 * 60 * 1000;
+
+/** Footer label: relative for recent messages, compact date beyond a week. */
+export function formatChatRelativeTimestampLabel(timestamp: number, nowMs = Date.now()): string {
+  const date = new Date(timestamp);
+  if (!Number.isFinite(date.getTime())) {
+    return "Unknown date";
+  }
+  const ageMs = nowMs - date.getTime();
+  // Derive from ageMs so the injected clock stays the single time source.
+  // Slightly-future (clock-skewed) messages clamp to "just now"; anything
+  // further out falls through to the compact date instead of lying forever.
+  if (
+    ageMs >= -CHAT_RELATIVE_TIMESTAMP_FUTURE_SKEW_MS &&
+    ageMs < CHAT_RELATIVE_TIMESTAMP_MAX_AGE_MS
+  ) {
+    return formatTimeAgo(Math.max(0, ageMs));
+  }
+  return date.toLocaleDateString([], {
+    month: "short",
+    day: "numeric",
+    ...(date.getFullYear() === new Date(nowMs).getFullYear() ? {} : { year: "numeric" }),
+  });
+}
+
+// Footer times read relative ("5m ago"); the absolute timestamp lives in the
+// tooltip, or in the msg-meta popover when usage metadata makes the
+// timestamp interactive (a nested tooltip would fight the popover).
 function renderChatTimestamp(timestamp: number, interactive = false) {
   const display = formatChatTimestampForDisplay(timestamp);
-  return html`
-    <time
-      class="chat-group-timestamp"
-      datetime=${display.dateTime}
-      title=${interactive ? nothing : display.title}
-    >
-      ${display.label}
+  const timeEl = html`
+    <time class="chat-group-timestamp" datetime=${display.dateTime} aria-live="off">
+      ${formatChatRelativeTimestampLabel(timestamp)}
     </time>
   `;
+  if (interactive) {
+    return timeEl;
+  }
+  return html`<openclaw-tooltip content=${display.label}>${timeEl}</openclaw-tooltip>`;
 }
 
 function resolveMessageMetaDetails(target: EventTarget | null): HTMLDetailsElement | null {
@@ -975,6 +1005,8 @@ function renderMessageMeta(timestamp: number, meta: GroupMeta | null) {
   }
 
   const display = formatChatTimestampForDisplay(timestamp);
+  // Absolute time leads the popover; the summary label itself stays relative.
+  parts.unshift(html`<span class="msg-meta__time">${display.label}</span>`);
 
   return html`
     <details

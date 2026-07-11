@@ -1,12 +1,12 @@
 {
   "name": "@openclaw/ai",
-  "version": "2026.6.11",
+  "version": "2026.7.2",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/ai",
-      "version": "2026.6.11",
+      "version": "2026.7.2",
       "license": "MIT",
       "dependencies": {
         "@anthropic-ai/sdk": "0.109.1",

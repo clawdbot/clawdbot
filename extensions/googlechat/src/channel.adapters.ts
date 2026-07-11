@@ -20,7 +20,6 @@ import {
   listResolvedDirectoryUserEntriesFromAllowFrom,
 } from "openclaw/plugin-sdk/directory-runtime";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
-import type { OutboundMediaLoadOptions } from "openclaw/plugin-sdk/outbound-media";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
@@ -29,13 +28,10 @@ import { formatGoogleChatAllowFromEntry } from "./channel-base.js";
 import {
   type ResolvedGoogleChatAccount,
   chunkTextForOutbound,
-  readRemoteMediaBuffer,
   isGoogleChatUserTarget,
-  loadOutboundMediaFromUrl,
   missingTargetError,
   normalizeGoogleChatTarget,
   PAIRING_APPROVED_MESSAGE,
-  resolveChannelMediaMaxBytes,
   resolveGoogleChatAccount,
   resolveGoogleChatOutboundSpace,
   type OpenClawConfig,
@@ -260,92 +256,6 @@ export const googlechatOutboundAdapter = {
         receipt: createGoogleChatSendReceipt({ messageId, chatId: space, kind: "text" }),
       };
     },
-    sendMedia: async ({
-      cfg,
-      to,
-      text,
-      mediaUrl,
-      mediaAccess,
-      mediaLocalRoots,
-      mediaReadFile,
-      accountId,
-      replyToId,
-      threadId,
-    }: {
-      cfg: OpenClawConfig;
-      to: string;
-      text?: string;
-      mediaUrl?: string;
-      mediaAccess?: OutboundMediaLoadOptions["mediaAccess"];
-      mediaLocalRoots?: OutboundMediaLoadOptions["mediaLocalRoots"];
-      mediaReadFile?: OutboundMediaLoadOptions["mediaReadFile"];
-      accountId?: string | null;
-      replyToId?: string | null;
-      threadId?: string | number | null;
-    }) => {
-      if (!mediaUrl) {
-        throw new Error("Google Chat mediaUrl is required.");
-      }
-      const account = resolveGoogleChatAccount({
-        cfg,
-        accountId,
-      });
-      const space = await resolveGoogleChatOutboundSpace({ account, target: to });
-      const thread =
-        typeof threadId === "number" ? String(threadId) : (threadId ?? replyToId ?? undefined);
-      const maxBytes = resolveChannelMediaMaxBytes({
-        cfg,
-        resolveChannelLimitMb: ({ cfg: cfgLocal, accountId: accountIdLocal }) =>
-          (
-            cfgLocal.channels?.googlechat as
-              | { accounts?: Record<string, { mediaMaxMb?: number }>; mediaMaxMb?: number }
-              | undefined
-          )?.accounts?.[accountIdLocal]?.mediaMaxMb ??
-          (cfgLocal.channels?.googlechat as { mediaMaxMb?: number } | undefined)?.mediaMaxMb,
-        accountId,
-      });
-      const effectiveMaxBytes = maxBytes ?? (account.config.mediaMaxMb ?? 20) * 1024 * 1024;
-      const loaded = /^https?:\/\//i.test(mediaUrl)
-        ? await readRemoteMediaBuffer({
-            url: mediaUrl,
-            maxBytes: effectiveMaxBytes,
-          })
-        : await loadOutboundMediaFromUrl(mediaUrl, {
-            maxBytes: effectiveMaxBytes,
-            mediaAccess,
-            mediaLocalRoots,
-            mediaReadFile,
-          });
-      const { sendGoogleChatMessage, uploadGoogleChatAttachment } =
-        await loadGoogleChatChannelRuntime();
-      const upload = await uploadGoogleChatAttachment({
-        account,
-        space,
-        filename: loaded.fileName ?? "attachment",
-        buffer: loaded.buffer,
-        contentType: loaded.contentType,
-      });
-      const result = await sendGoogleChatMessage({
-        account,
-        space,
-        text,
-        thread,
-        attachments: upload.attachmentUploadToken
-          ? [
-              {
-                attachmentUploadToken: upload.attachmentUploadToken,
-                contentName: loaded.fileName,
-              },
-            ]
-          : undefined,
-      });
-      const messageId = result?.messageName ?? "";
-      return {
-        messageId,
-        chatId: space,
-        receipt: createGoogleChatSendReceipt({ messageId, chatId: space, kind: "media" }),
-      };
-    },
   },
 };
 
@@ -354,13 +264,11 @@ export const googlechatMessageAdapter = defineChannelMessageAdapter({
   durableFinal: {
     capabilities: {
       text: true,
-      media: true,
       thread: true,
       messageSendingHooks: true,
     },
   },
   send: {
     text: googlechatOutboundAdapter.attachedResults.sendText,
-    media: googlechatOutboundAdapter.attachedResults.sendMedia,
   },
 });

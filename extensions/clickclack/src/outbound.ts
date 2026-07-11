@@ -2,6 +2,7 @@
  * Outbound ClickClack delivery helpers for channel messages, thread replies,
  * and direct messages.
  */
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { resolveClickClackAccount } from "./accounts.js";
 import { createClickClackClient } from "./http-client.js";
 import { resolveChannelId, resolveWorkspaceId } from "./resolve.js";
@@ -9,8 +10,8 @@ import { parseClickClackTarget } from "./target.js";
 import type { ClickClackMessageProvenance, CoreConfig } from "./types.js";
 
 /**
- * Sends text to a normalized ClickClack target and returns the created message
- * id for receipt/session tracking.
+ * Sends visible text to a normalized ClickClack target and returns the created
+ * message id, or undefined when sanitization removes all content.
  */
 export async function sendClickClackText(params: {
   cfg: CoreConfig;
@@ -23,7 +24,13 @@ export async function sendClickClackText(params: {
   correlationId?: string;
   /** Optional model/thinking attribution stamped onto the created message. */
   provenance?: ClickClackMessageProvenance;
-}) {
+}): Promise<string | undefined> {
+  // Custom inbound replies bypass shared outbound normalization, so this private
+  // sender owns ClickClack assistant-text sanitization for every delivery path.
+  const text = sanitizeAssistantVisibleText(params.text);
+  if (!text) {
+    return undefined;
+  }
   const account = resolveClickClackAccount({ cfg: params.cfg, accountId: params.accountId });
   const client = createClickClackClient({
     baseUrl: account.baseUrl,
@@ -41,25 +48,25 @@ export async function sendClickClackText(params: {
     // below — otherwise every channel reply spawns its own thread and the main
     // timeline goes silent.
     const rootId = explicitThreadId || parsed.id;
-    const message = await client.createThreadReply(rootId, params.text, {
+    const message = await client.createThreadReply(rootId, text, {
       provenance: params.provenance,
     });
-    return { to: params.to, messageId: message.id };
+    return message.id;
   }
   if (parsed.kind === "dm") {
     const dm = await client.createDirectConversation(workspaceId, [parsed.id]);
-    const message = await client.createDirectMessage(dm.id, params.text, {
+    const message = await client.createDirectMessage(dm.id, text, {
       quotedMessageId: replyToId || undefined,
     });
-    return { to: params.to, messageId: message.id };
+    return message.id;
   }
   const channelId = await resolveChannelId(client, workspaceId, parsed.id);
   // A reply to a top-level channel message is delivered to the main channel as a
   // quote-reply (quoted_message_id), matching the reply-to affordance of the
   // Discord/Slack/Telegram channels, instead of opening a per-reply thread.
-  const message = await client.createChannelMessage(channelId, params.text, {
+  const message = await client.createChannelMessage(channelId, text, {
     provenance: params.provenance,
     quotedMessageId: replyToId || undefined,
   });
-  return { to: params.to, messageId: message.id };
+  return message.id;
 }

@@ -245,7 +245,7 @@ export {
  * - lan: always 0.0.0.0 (no fallback)
  * - tailnet: Tailnet IPv4 if available, else loopback
  * - auto: 0.0.0.0 inside containers (Docker/Podman/K8s); loopback otherwise
- * - custom: User-specified IP, fallback to 0.0.0.0 if unavailable
+ * - custom: User-specified IPv4; unavailable values resolve to 0.0.0.0 for caller validation
  *
  * @returns The bind address to use (never null)
  */
@@ -287,7 +287,7 @@ export async function resolveGatewayBindHost(
     if (isValidIPv4(host) && (await canBindToHost(host))) {
       return host;
     }
-    // Custom IP failed → fall back to LAN
+    // Runtime startup rejects this fallback; status/display callers remain best-effort.
     return "0.0.0.0";
   }
 
@@ -354,7 +354,13 @@ export async function resolveGatewayListenHosts(
   opts?: { canBindToHost?: (host: string) => Promise<boolean> },
 ): Promise<string[]> {
   if (bindHost !== "127.0.0.1") {
-    return [bindHost];
+    if (!isValidIPv4(bindHost) || bindHost === "0.0.0.0") {
+      return [bindHost];
+    }
+    // Same-host clients use the canonical loopback URL even when external access is
+    // pinned to one interface. Startup requires both listeners so a foreign loopback
+    // process cannot receive credentials intended for the local Gateway.
+    return [bindHost, "127.0.0.1"];
   }
   // Windows: uv_tcp_bind6 creates a dual-stack socket (no UV_TCP_IPV6ONLY), which
   // also accepts ::ffff:127.0.0.1 connections. Binding both ::1 and 127.0.0.1 on

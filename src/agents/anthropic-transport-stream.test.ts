@@ -25,11 +25,53 @@ type AnthropicStreamOptions = Parameters<AnthropicStreamFn>[2];
 type RequestTransportConfig = Parameters<typeof attachModelProviderRequestTransport>[1];
 
 function createSseResponse(events: Record<string, unknown>[] = []): Response {
-  const body = events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("");
+  const body = serializeSseEvents(events);
   return new Response(body, {
     status: 200,
     headers: { "content-type": "text/event-stream" },
   });
+}
+
+function serializeSseEvents(events: Record<string, unknown>[]): string {
+  return events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("");
+}
+
+function createFailingSseResponse(events: Record<string, unknown>[], error: Error): Response {
+  const encoder = new TextEncoder();
+  let sentEvents = false;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (!sentEvents) {
+        sentEvents = true;
+        controller.enqueue(encoder.encode(serializeSseEvents(events)));
+        return;
+      }
+      controller.error(error);
+    },
+  });
+  return new Response(body, {
+    status: 200,
+    headers: { "content-type": "text/event-stream" },
+  });
+}
+
+function createInterruptedThinkingEvents(): Record<string, unknown>[] {
+  return [
+    {
+      type: "message_start",
+      message: { id: "msg_1", usage: { input_tokens: 6, output_tokens: 0 } },
+    },
+    {
+      type: "content_block_start",
+      index: 0,
+      content_block: { type: "thinking", thinking: "step by step", signature: "" },
+    },
+    {
+      type: "content_block_delta",
+      index: 0,
+      delta: { type: "signature_delta", signature: "partial-signature" },
+    },
+  ];
 }
 
 function createStalledSseResponse(params: { onCancel: (reason: unknown) => void }): Response {
@@ -1939,6 +1981,124 @@ describe("anthropic transport stream", () => {
       thinking: "step by step",
       thinkingSignature: "chunk1chunk2chunk3",
     });
+  });
+
+  it.each([
+    {
+      label: "the stream ends before content_block_stop",
+      response: () => createSseResponse(createInterruptedThinkingEvents()),
+      stopReason: "stop",
+    },
+    {
+      label: "the provider errors before content_block_stop",
+      response: () =>
+        createSseResponse([
+          ...createInterruptedThinkingEvents(),
+          { type: "error", error: { message: "provider failed" } },
+        ]),
+      stopReason: "error",
+    },
+    {
+      label: "the response body fails",
+      response: () =>
+        createFailingSseResponse(
+          createInterruptedThinkingEvents(),
+          new Error("response body failed"),
+        ),
+      stopReason: "error",
+    },
+  ])("does not persist signature deltas when $label", async ({ response, stopReason }) => {
+    guardedFetchMock.mockResolvedValueOnce(response());
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(),
+      { messages: [{ role: "user", content: "think" }] } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    expect(result.stopReason).toBe(stopReason);
+    expect(result.content[0]).toMatchObject({
+      type: "thinking",
+      thinking: "step by step",
+      thinkingSignature: "",
+    });
+  });
+
+  it("does not persist signature deltas when the request aborts", async () => {
+    const controller = new AbortController();
+    guardedFetchMock.mockResolvedValueOnce(
+      createOpenRawSseResponse({
+        body: serializeSseEvents(createInterruptedThinkingEvents()),
+        onCancel: () => undefined,
+      }),
+    );
+    setTimeout(() => controller.abort(new Error("request aborted")), 20);
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(),
+      { messages: [{ role: "user", content: "think" }] } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+        signal: controller.signal,
+      } as AnthropicStreamOptions,
+    );
+
+    expect(result.stopReason).toBe("aborted");
+    expect(result.content[0]).toMatchObject({
+      type: "thinking",
+      thinkingSignature: "",
+    });
+  });
+
+  it("commits only stopped signatures across interleaved thinking blocks", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: { id: "msg_1", usage: { input_tokens: 6, output_tokens: 0 } },
+        },
+        {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "thinking", thinking: "first", signature: "" },
+        },
+        {
+          type: "content_block_start",
+          index: 1,
+          content_block: { type: "thinking", thinking: "second", signature: "" },
+        },
+        {
+          type: "content_block_delta",
+          index: 1,
+          delta: { type: "signature_delta", signature: "complete-second" },
+        },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "signature_delta", signature: "partial-first" },
+        },
+        { type: "content_block_stop", index: 1 },
+      ]),
+    );
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(),
+      { messages: [{ role: "user", content: "think" }] } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    expect(result.content).toEqual([
+      expect.objectContaining({
+        type: "thinking",
+        thinking: "first",
+        thinkingSignature: "",
+      }),
+      expect.objectContaining({
+        type: "thinking",
+        thinking: "second",
+        thinkingSignature: "complete-second",
+      }),
+    ]);
   });
 
   it("captures OpenAI-style reasoning_content deltas from Anthropic-compatible streams", async () => {

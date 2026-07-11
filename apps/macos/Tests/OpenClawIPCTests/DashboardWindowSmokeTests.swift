@@ -86,6 +86,13 @@ struct DashboardWindowSmokeTests {
         ]) == nil)
     }
 
+    @Test func `dashboard accepts only typed window drag requests`() {
+        #expect(DashboardWindowController.isWindowDragRequest(["type": "window-drag"]))
+        #expect(!DashboardWindowController.isWindowDragRequest(["type": "open-link"]))
+        #expect(!DashboardWindowController.isWindowDragRequest(["type": 1]))
+        #expect(!DashboardWindowController.isWindowDragRequest("window-drag"))
+    }
+
     @Test func `dashboard trusts only its main control path for link messages`() throws {
         let dashboard = try #require(URL(string: "http://127.0.0.1:18789/control/"))
         let trusted = try #require(URL(string: "http://127.0.0.1:18789/control/chat"))

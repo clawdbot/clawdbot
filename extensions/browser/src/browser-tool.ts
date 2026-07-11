@@ -31,10 +31,12 @@ import {
   browserCloseTab,
   browserDoctor,
   browserFocusTab,
+  browserImportProfile,
   browserNavigate,
   browserOpenTab,
   browserPdfSave,
   browserProfiles,
+  browserSystemProfiles,
   browserScreenshotAction,
   browserStart,
   browserStatus,
@@ -67,6 +69,7 @@ import { BrowserServiceError } from "./browser/client-fetch.js";
 import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "./browser/constants.js";
 import { parseBrowserNavigationUrl } from "./browser/navigation-guard.js";
 import { normalizeBrowserScreenshot } from "./browser/screenshot.js";
+import { parseSystemProfileDomains } from "./browser/system-profile-domains.js";
 import { describeBrowserScreenshot, neutralizeMediaDirectives } from "./browser/vision.js";
 import { wrapExternalContent } from "./sdk-security-runtime.js";
 
@@ -77,10 +80,12 @@ const browserToolDeps = {
   browserCloseTab,
   browserDoctor,
   browserFocusTab,
+  browserImportProfile,
   browserNavigate,
   browserOpenTab,
   browserPdfSave,
   browserProfiles,
+  browserSystemProfiles,
   browserScreenshotAction,
   browserStart,
   browserStatus,
@@ -107,10 +112,12 @@ export const testing = {
       browserCloseTab: typeof browserCloseTab;
       browserDoctor: typeof browserDoctor;
       browserFocusTab: typeof browserFocusTab;
+      browserImportProfile: typeof browserImportProfile;
       browserNavigate: typeof browserNavigate;
       browserOpenTab: typeof browserOpenTab;
       browserPdfSave: typeof browserPdfSave;
       browserProfiles: typeof browserProfiles;
+      browserSystemProfiles: typeof browserSystemProfiles;
       browserScreenshotAction: typeof browserScreenshotAction;
       browserStart: typeof browserStart;
       browserStatus: typeof browserStatus;
@@ -135,10 +142,13 @@ export const testing = {
     browserToolDeps.browserCloseTab = overrides?.browserCloseTab ?? browserCloseTab;
     browserToolDeps.browserDoctor = overrides?.browserDoctor ?? browserDoctor;
     browserToolDeps.browserFocusTab = overrides?.browserFocusTab ?? browserFocusTab;
+    browserToolDeps.browserImportProfile = overrides?.browserImportProfile ?? browserImportProfile;
     browserToolDeps.browserNavigate = overrides?.browserNavigate ?? browserNavigate;
     browserToolDeps.browserOpenTab = overrides?.browserOpenTab ?? browserOpenTab;
     browserToolDeps.browserPdfSave = overrides?.browserPdfSave ?? browserPdfSave;
     browserToolDeps.browserProfiles = overrides?.browserProfiles ?? browserProfiles;
+    browserToolDeps.browserSystemProfiles =
+      overrides?.browserSystemProfiles ?? browserSystemProfiles;
     browserToolDeps.browserScreenshotAction =
       overrides?.browserScreenshotAction ?? browserScreenshotAction;
     browserToolDeps.browserStart = overrides?.browserStart ?? browserStart;
@@ -450,6 +460,34 @@ function resolveBrowserBaseUrl(params: {
   return undefined;
 }
 
+/**
+ * Read importable system profiles from the host control server. Discovery must
+ * match where import runs (host-local), so it never uses a node proxy or the
+ * sandbox base URL. Returns [] when host control is unavailable.
+ */
+async function readHostSystemProfiles(params: {
+  allowHostControl?: boolean;
+  sandboxBridgeUrl?: string;
+  timeoutMs?: number;
+}) {
+  if (params.allowHostControl === false) {
+    return [];
+  }
+  let hostBaseUrl: string | undefined;
+  try {
+    hostBaseUrl = resolveBrowserBaseUrl({
+      target: "host",
+      sandboxBridgeUrl: params.sandboxBridgeUrl,
+      allowHostControl: params.allowHostControl,
+    });
+  } catch {
+    return [];
+  }
+  return await browserToolDeps
+    .browserSystemProfiles(hostBaseUrl, { timeoutMs: params.timeoutMs })
+    .catch(() => []);
+}
+
 function shouldPreferHostForProfile(profileName: string | undefined) {
   if (!profileName) {
     return false;
@@ -539,6 +577,18 @@ export function createBrowserTool(opts?: {
 
       if (requestedNode && target && target !== "node") {
         throw new Error('node is only supported with target="node".');
+      }
+
+      // System-profile import reads the local macOS Keychain and Chrome profile,
+      // so it can only run on the host. Pin it before target/node resolution so a
+      // sandbox default or auto-selected browser node never receives the request.
+      if (action === "importprofile") {
+        if (target === "sandbox" || target === "node" || requestedNode) {
+          throw new Error(
+            'system profile import must run on the host; omit target or use target="host".',
+          );
+        }
+        target = "host";
       }
       // existing-session profiles can attach through the selected host or browser node,
       // but they must never fall back into the sandbox browser.
@@ -687,18 +737,45 @@ export function createBrowserTool(opts?: {
           return jsonResult(
             await browserToolDeps.browserStatus(baseUrl, { profile, timeoutMs: toolTimeoutMs }),
           );
-        case "profiles":
+        case "profiles": {
+          // Importable system profiles are host-local (import runs on the host),
+          // so read them from the host regardless of the profiles action target;
+          // never let a node proxy or sandbox describe the wrong Chrome profiles.
+          const systemProfiles = await readHostSystemProfiles({
+            allowHostControl: opts?.allowHostControl,
+            sandboxBridgeUrl: opts?.sandboxBridgeUrl,
+            timeoutMs: toolTimeoutMs,
+          });
           if (proxyRequest) {
             const result = await proxyRequest({
               method: "GET",
               path: "/profiles",
               timeoutMs: toolTimeoutMs,
             });
-            return jsonResult(result);
+            return jsonResult({
+              ...(result && typeof result === "object" ? result : { profiles: result }),
+              systemProfiles,
+            });
           }
           return jsonResult({
             profiles: await browserToolDeps.browserProfiles(baseUrl, { timeoutMs: toolTimeoutMs }),
+            systemProfiles,
           });
+        }
+        case "importprofile": {
+          if (proxyRequest) {
+            throw new Error("system profile import must run on the browser host");
+          }
+          const domains = parseSystemProfileDomains(params.domains);
+          return jsonResult(
+            await browserToolDeps.browserImportProfile(baseUrl, {
+              browser: normalizeOptionalString(params.browser) ?? "chrome",
+              systemProfile: normalizeOptionalString(params.systemProfile) ?? "Default",
+              into: normalizeOptionalString(params.into) ?? "imported",
+              domains,
+            }),
+          );
+        }
         case "tabs":
           return await executeTabsAction({
             baseUrl,

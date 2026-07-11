@@ -8,10 +8,12 @@ import path from "node:path";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { tryReadJson } from "../../infra/json-files.js";
 import { extractMcpServerMap, type BundleMcpConfig } from "../../plugins/bundle-mcp.js";
 import type { CliBundleMcpMode } from "../../plugins/types.js";
 import { loadMergedBundleMcpConfig, toCliBundleMcpServerConfig } from "../bundle-mcp-config.js";
+import { resolveMcpBearerBundleConfig } from "../mcp-auth-profile.js";
 import { isRecord } from "./bundle-mcp-adapter-shared.js";
 import {
   findClaudeMcpConfigPath,
@@ -181,6 +183,7 @@ export async function prepareCliBundleMcpConfig(params: {
   backend: CliBackendConfig;
   workspaceDir: string;
   config?: OpenClawConfig;
+  agentDir?: string;
   additionalConfig?: BundleMcpConfig;
   /**
    * Serve exactly these servers, skipping user/plugin/additional merges.
@@ -238,12 +241,23 @@ export async function prepareCliBundleMcpConfig(params: {
   if (params.additionalConfig) {
     mergedConfig = applyMergePatch(mergedConfig, params.additionalConfig) as BundleMcpConfig;
   }
+  const resolvedBearerConfig = await resolveMcpBearerBundleConfig({
+    config: mergedConfig,
+    cfg: params.config,
+    agentDir: params.agentDir,
+    env: params.env,
+    omitUnavailableOAuthServers: true,
+    onServerUnavailable: (serverName, error) =>
+      params.warn?.(
+        `bundle MCP skipped unavailable OAuth server ${serverName}: ${formatErrorMessage(error)}`,
+      ),
+  });
 
   return await prepareModeSpecificBundleMcpConfig({
     mode,
     backend: params.backend,
-    mergedConfig,
-    env: params.env,
+    mergedConfig: resolvedBearerConfig.config,
+    env: resolvedBearerConfig.env,
   });
 }
 

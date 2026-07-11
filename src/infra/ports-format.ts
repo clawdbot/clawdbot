@@ -1,4 +1,5 @@
 // Formats port probe results for diagnostics and CLI output.
+import net from "node:net";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { PortListener, PortListenerKind, PortUsage } from "./ports-types.js";
@@ -90,28 +91,44 @@ function isExpectedGatewayBindAddress(host: string): boolean {
   return classifyLoopbackAddressFamily(host) !== null || isWildcardAddress(host);
 }
 
+type ParsedGatewayListener = { pid: number; host: string };
+
+function parsePortListeners(
+  listeners: PortListener[],
+  port: number,
+): ParsedGatewayListener[] | null {
+  const parsedListeners: ParsedGatewayListener[] = [];
+  for (const listener of listeners) {
+    const pid = listener.pid;
+    if (typeof pid !== "number" || !Number.isFinite(pid) || typeof listener.address !== "string") {
+      return null;
+    }
+    const address = parseListenerAddress(listener.address);
+    if (!address || address.port !== port) {
+      return null;
+    }
+    parsedListeners.push({ pid, host: address.host });
+  }
+  return parsedListeners;
+}
+
+function parseGatewayListeners(
+  listeners: PortListener[],
+  port: number,
+): ParsedGatewayListener[] | null {
+  if (listeners.some((listener) => classifyPortListener(listener, port) !== "gateway")) {
+    return null;
+  }
+  return parsePortListeners(listeners, port);
+}
+
 /** Returns true for one Gateway listener bound to an expected loopback or wildcard address. */
 export function isSingleExpectedGatewayListener(listeners: PortListener[], port: number): boolean {
   if (listeners.length !== 1) {
     return false;
   }
-  const [listener] = listeners;
-  if (!listener || classifyPortListener(listener, port) !== "gateway") {
-    return false;
-  }
-  const pid = listener.pid;
-  if (typeof pid !== "number" || !Number.isFinite(pid)) {
-    return false;
-  }
-  if (typeof listener.address !== "string") {
-    return false;
-  }
-  const parsedAddress = parseListenerAddress(listener.address);
-  return Boolean(
-    parsedAddress &&
-    parsedAddress.port === port &&
-    isExpectedGatewayBindAddress(parsedAddress.host),
-  );
+  const parsed = parseGatewayListeners(listeners, port);
+  return Boolean(parsed?.[0] && isExpectedGatewayBindAddress(parsed[0].host));
 }
 
 /** Returns true for one Gateway process represented by separate IPv4 and IPv6 loopback rows. */
@@ -122,38 +139,61 @@ export function isDualStackLoopbackGatewayListeners(
   if (listeners.length < 2) {
     return false;
   }
-  const pids = new Set<number>();
-  const families = new Set<"ipv4" | "ipv6">();
-  for (const listener of listeners) {
-    if (classifyPortListener(listener, port) !== "gateway") {
-      return false;
-    }
-    const pid = listener.pid;
-    if (typeof pid !== "number" || !Number.isFinite(pid)) {
-      return false;
-    }
-    pids.add(pid);
-    if (typeof listener.address !== "string") {
-      return false;
-    }
-    const parsedAddress = parseListenerAddress(listener.address);
-    if (!parsedAddress || parsedAddress.port !== port) {
-      return false;
-    }
-    const family = classifyLoopbackAddressFamily(parsedAddress.host);
-    if (!family) {
-      return false;
-    }
-    families.add(family);
+  const parsed = parseGatewayListeners(listeners, port);
+  if (!parsed) {
+    return false;
   }
-  return pids.size === 1 && families.has("ipv4") && families.has("ipv6");
+  const pids = new Set(parsed.map(({ pid }) => pid));
+  const families = new Set(parsed.map(({ host }) => classifyLoopbackAddressFamily(host)));
+  return pids.size === 1 && !families.has(null) && families.has("ipv4") && families.has("ipv6");
+}
+
+function parsedListenersOwnSpecificIpv4WithLoopback(parsed: ParsedGatewayListener[]): boolean {
+  if (new Set(parsed.map(({ pid }) => pid)).size !== 1) {
+    return false;
+  }
+  const hosts = new Set(parsed.map(({ host }) => host));
+  const specificHosts = [...hosts].filter(
+    (host) => host !== "127.0.0.1" && net.isIP(host) === 4 && !isWildcardAddress(host),
+  );
+  return hosts.has("127.0.0.1") && specificHosts.length > 0;
+}
+
+/** Checks one Gateway PID owns both an exact IPv4 interface and canonical loopback. */
+function isSpecificIpv4WithLoopbackGatewayListeners(
+  listeners: PortListener[],
+  port: number,
+): boolean {
+  if (listeners.length !== 2) {
+    return false;
+  }
+  const parsed = parseGatewayListeners(listeners, port);
+  return Boolean(parsed && parsedListenersOwnSpecificIpv4WithLoopback(parsed));
+}
+
+/** Checks one PID owns an expected IPv4 interface and canonical loopback. */
+export function isSameProcessSpecificIpv4WithLoopbackListeners(
+  listeners: PortListener[],
+  port: number,
+  expectedSpecificHost: string,
+): boolean {
+  if (listeners.length !== 2) {
+    return false;
+  }
+  const parsed = parsePortListeners(listeners, port);
+  return Boolean(
+    parsed &&
+    parsedListenersOwnSpecificIpv4WithLoopback(parsed) &&
+    parsed.some(({ host }) => host === expectedSpecificHost),
+  );
 }
 
 /** Returns true when listener rows describe a benign Gateway bind pattern. */
 export function isExpectedGatewayListeners(listeners: PortListener[], port: number): boolean {
   return (
     isSingleExpectedGatewayListener(listeners, port) ||
-    isDualStackLoopbackGatewayListeners(listeners, port)
+    isDualStackLoopbackGatewayListeners(listeners, port) ||
+    isSpecificIpv4WithLoopbackGatewayListeners(listeners, port)
   );
 }
 

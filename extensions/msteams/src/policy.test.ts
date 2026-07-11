@@ -1,7 +1,11 @@
 // Msteams tests cover policy plugin behavior.
 import { describe, expect, it } from "vitest";
 import type { MSTeamsConfig } from "../runtime-api.js";
-import { resolveMSTeamsReplyPolicy, resolveMSTeamsRouteConfig } from "./policy.js";
+import {
+  resolveMSTeamsGroupToolPolicy,
+  resolveMSTeamsReplyPolicy,
+  resolveMSTeamsRouteConfig,
+} from "./policy.js";
 
 function resolveNamedTeamRouteConfig(allowNameMatching = false) {
   const cfg: MSTeamsConfig = {
@@ -152,6 +156,46 @@ describe("msteams policy", () => {
         globalConfig: { requireMention: false, replyStyle: "thread" },
       });
       expect(policy).toEqual({ requireMention: false, replyStyle: "thread" });
+    });
+  });
+
+  describe("resolveMSTeamsGroupToolPolicy", () => {
+    it("uses stable projected keys and never raw mutable names", () => {
+      const cfg = {
+        channels: {
+          msteams: {
+            dangerouslyAllowNameMatching: true,
+            teams: {
+              "Mutable Team": {
+                channels: {
+                  "Mutable Channel": { tools: { allow: ["exec"] } },
+                },
+              },
+              "19:stable-team@thread.tacv2": {
+                channels: {
+                  "19:stable-channel@thread.tacv2": { tools: { allow: ["read"] } },
+                },
+              },
+            },
+          },
+        },
+      };
+
+      expect(
+        resolveMSTeamsGroupToolPolicy({
+          cfg,
+          groupId: "19:unknown@thread.tacv2",
+          groupChannel: "Mutable Channel",
+          groupSpace: "Mutable Team",
+        }),
+      ).toBeUndefined();
+      expect(
+        resolveMSTeamsGroupToolPolicy({
+          cfg,
+          groupId: "19:stable-channel@thread.tacv2",
+          groupSpace: "19:stable-team@thread.tacv2",
+        }),
+      ).toEqual({ allow: ["read"] });
     });
   });
 });

@@ -88,6 +88,7 @@ describe("nextcloud talk core", () => {
 
     expect(looksLikeNextcloudTalkTargetId("nextcloud-talk:room:abc12345")).toBe(true);
     expect(looksLikeNextcloudTalkTargetId("nc:opsroom1")).toBe(true);
+    expect(looksLikeNextcloudTalkTargetId("room:opsroom1")).toBe(true);
     expect(looksLikeNextcloudTalkTargetId("abc12345")).toBe(true);
     expect(looksLikeNextcloudTalkTargetId("")).toBe(false);
   });

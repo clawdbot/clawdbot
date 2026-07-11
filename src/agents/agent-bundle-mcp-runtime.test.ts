@@ -1628,6 +1628,56 @@ process.on("SIGINT", shutdown);`,
     expect(manager.listSessionIds()).not.toContain("session-a");
   });
 
+  it("preserves agentDir scope when creating and reusing session MCP runtimes", async () => {
+    const created: Array<{ sessionId: string; agentDir?: string }> = [];
+    const disposed: Array<{ sessionId: string; agentDir?: string }> = [];
+    const createRuntime: RuntimeFactory = (params) => {
+      created.push({ sessionId: params.sessionId, agentDir: params.agentDir });
+      const runtime = makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]);
+      return {
+        ...runtime,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        workspaceDir: params.workspaceDir,
+        agentDir: params.agentDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+        dispose: async () => {
+          disposed.push({ sessionId: params.sessionId, agentDir: params.agentDir });
+        },
+      };
+    };
+    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
+
+    const runtimeA = await manager.getOrCreate({
+      sessionId: "session-agent-dir",
+      sessionKey: "agent:test:session-agent-dir",
+      workspaceDir: "/workspace",
+      agentDir: "/agents/one",
+    });
+    const runtimeB = await manager.getOrCreate({
+      sessionId: "session-agent-dir",
+      sessionKey: "agent:test:session-agent-dir",
+      workspaceDir: "/workspace",
+      agentDir: "/agents/one",
+    });
+    const runtimeC = await manager.getOrCreate({
+      sessionId: "session-agent-dir",
+      sessionKey: "agent:test:session-agent-dir",
+      workspaceDir: "/workspace",
+      agentDir: "/agents/two",
+    });
+
+    expect(runtimeA).toBe(runtimeB);
+    expect(runtimeC).not.toBe(runtimeA);
+    expect(created).toEqual([
+      { sessionId: "session-agent-dir", agentDir: "/agents/one" },
+      { sessionId: "session-agent-dir", agentDir: "/agents/two" },
+    ]);
+    expect(disposed).toEqual([{ sessionId: "session-agent-dir", agentDir: "/agents/one" }]);
+
+    await manager.disposeAll();
+  });
+
   it("peeks existing runtimes and populated catalogs without creating new runtimes", async () => {
     let catalogReady = false;
     const createRuntime: RuntimeFactory = (params) => {

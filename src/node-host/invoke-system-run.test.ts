@@ -22,6 +22,7 @@ import {
 import type { SystemRunApprovalPlan } from "../infra/exec-approvals.js";
 import {
   commitExecAuthorizationLocked,
+  createExecApprovalPolicySnapshot,
   loadExecApprovals,
   resolveExecApprovalsPath,
   saveExecApprovals,
@@ -125,6 +126,17 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     return prepared.plan;
   }
 
+  function bindCurrentPolicyToPlan(plan: SystemRunApprovalPlan): SystemRunApprovalPlan {
+    return {
+      ...plan,
+      sessionKey: plan.sessionKey ?? "agent:main:main",
+      policySnapshot: createExecApprovalPolicySnapshot({
+        file: loadExecApprovals(),
+        agentId: plan.agentId ?? undefined,
+      }),
+    };
+  }
+
   function expectInvokeOk(
     sendInvokeResult: MockedSendInvokeResult,
     params?: { payloadContains?: string },
@@ -175,6 +187,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       cwd?: string;
       approvalDecision?: string | null;
       approvalSource?: string | null;
+      policySnapshot?: unknown;
     };
   } {
     const call = firstMockCallArg(runViaMacAppExecHost, "runViaMacAppExecHost", 0);
@@ -186,6 +199,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         cwd?: string;
         approvalDecision?: string | null;
         approvalSource?: string | null;
+        policySnapshot?: unknown;
       };
     };
   }
@@ -476,6 +490,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     rawCommand?: string | null;
     systemRunPlan?: SystemRunApprovalPlan | null;
     cwd?: string;
+    agentId?: string;
     security?: "full" | "allowlist";
     ask?: "off" | "on-miss" | "always";
     approvalDecision?: "allow" | "allow-once" | "allow-always" | "deny" | null;
@@ -495,6 +510,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     resolveExecAsk?: HandleSystemRunInvokeOptions["resolveExecAsk"];
     autoReviewer?: ExecAutoReviewer;
     commitExecAuthorization?: HandleSystemRunInvokeOptions["commitExecAuthorization"];
+    prepareDelayedApprovalPlan?: boolean;
   }): Promise<{
     runCommand: MockedRunCommand;
     runViaMacAppExecHost: MockedRunViaMacAppExecHost;
@@ -534,14 +550,48 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       sendExecFinishedEvent.mockImplementation(params.sendExecFinishedEvent);
     }
 
+    const command = params.command ?? ["echo", "ok"];
+    let dispatchCommand = command;
+    let dispatchRawCommand = params.rawCommand;
+    let dispatchCwd = params.cwd;
+    let dispatchAgentId = params.agentId;
+    const forwardsDelayedApproval =
+      params.approvalSource === "auto-review" ||
+      params.approved === true ||
+      params.approvalDecision === "allow" ||
+      params.approvalDecision === "allow-once" ||
+      params.approvalDecision === "allow-always";
+    let systemRunPlan = params.systemRunPlan;
+    if (forwardsDelayedApproval && params.prepareDelayedApprovalPlan !== false) {
+      if (!systemRunPlan) {
+        const prepared = buildSystemRunApprovalPlan({
+          command,
+          rawCommand: params.rawCommand,
+          cwd: params.cwd,
+          agentId: params.agentId,
+          sessionKey: "agent:main:main",
+        });
+        if (!prepared.ok) {
+          throw new Error(prepared.message);
+        }
+        systemRunPlan = prepared.plan;
+        dispatchCommand = prepared.plan.argv;
+        dispatchRawCommand = prepared.plan.commandText;
+        dispatchCwd = prepared.plan.cwd ?? undefined;
+        dispatchAgentId = prepared.plan.agentId ?? undefined;
+      }
+      systemRunPlan = bindCurrentPolicyToPlan(systemRunPlan);
+    }
+
     await handleSystemRunInvoke({
       client: {} as never,
       params: {
-        command: params.command ?? ["echo", "ok"],
+        command: dispatchCommand,
         env: params.env,
-        rawCommand: params.rawCommand,
-        systemRunPlan: params.systemRunPlan,
-        cwd: params.cwd,
+        rawCommand: dispatchRawCommand,
+        systemRunPlan,
+        cwd: dispatchCwd,
+        agentId: dispatchAgentId,
         approvalDecision: params.approvalDecision,
         approvalSource: params.approvalSource,
         approved: params.approved,
@@ -696,6 +746,9 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       const macCall = requireMacExecHostCall(macInvoke.runViaMacAppExecHost);
       expect(macCall.request?.approvalSource).toBe("auto-review");
       expect(macCall.request?.approvalDecision).toBeNull();
+      expect(macCall.request?.policySnapshot).toEqual(
+        createExecApprovalPolicySnapshot({ file: loadExecApprovals(), agentId: undefined }),
+      );
       expect(macInvoke.runCommand).not.toHaveBeenCalled();
       expectInvokeOk(macInvoke.sendInvokeResult, { payloadContains: "app-ok" });
     } finally {
@@ -893,6 +946,11 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
           expect(macHostCall.request?.command).toEqual(["env", "sh", "-c", "echo SAFE"]);
           expect(macHostCall.request?.rawCommand).toBe('env sh -c "echo SAFE"');
           expect(macHostCall.request?.cwd).toBe(canonicalCwd);
+          expect(macHostCall.request?.approvalDecision).toBe("allow-once");
+          expect(macHostCall.request?.approvalSource).toBeUndefined();
+          expect(macHostCall.request?.policySnapshot).toEqual(
+            createExecApprovalPolicySnapshot({ file: loadExecApprovals(), agentId: undefined }),
+          );
           expectInvokeOk(invoke.sendInvokeResult, { payloadContains: "app-ok" });
           continue;
         }
@@ -1241,7 +1299,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   );
 
   it.runIf(process.platform !== "win32")(
-    "denies approval-based execution for symlinked cwd paths",
+    "rejects symlinked cwd paths during approval preparation",
     async () => {
       for (const testCase of [
         {
@@ -1278,16 +1336,14 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         },
       ]) {
         const { cwd, message } = testCase.setup();
-        const { runCommand, sendInvokeResult } = await runSystemInvoke({
-          preferMacAppExecHost: false,
+        const prepared = buildSystemRunApprovalPlan({
           command: ["./run.sh"],
           cwd,
-          approved: true,
-          security: "full",
-          ask: "off",
         });
-        expect(runCommand, testCase.label).not.toHaveBeenCalled();
-        expectInvokeErrorMessage(sendInvokeResult, { message });
+        expect(prepared.ok, testCase.label).toBe(false);
+        if (!prepared.ok) {
+          expect(prepared.message, testCase.label).toContain(message);
+        }
       }
     },
   );
@@ -1329,14 +1385,25 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     fs.writeFileSync(script, "#!/bin/sh\necho SAFE\n");
     fs.chmodSync(script, 0o755);
     const canonicalCwd = fs.realpathSync(tmp);
+    const prepared = buildSystemRunApprovalPlan({
+      command: ["./run.sh"],
+      cwd: tmp,
+      sessionKey: "agent:main:main",
+    });
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) {
+      throw new Error("unreachable");
+    }
     await withMockedCwdIdentityDrift({
       canonicalCwd,
       driftDir: fallback,
       run: async () => {
         const { runCommand, sendInvokeResult } = await runSystemInvoke({
           preferMacAppExecHost: false,
-          command: ["./run.sh"],
-          cwd: tmp,
+          command: prepared.plan.argv,
+          rawCommand: prepared.plan.commandText,
+          systemRunPlan: prepared.plan,
+          cwd: prepared.plan.cwd ?? tmp,
           approved: true,
           security: "full",
           ask: "off",
@@ -1851,7 +1918,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       ask: "always" as const,
       askFallback: "deny" as const,
       autoAllowSkills: false,
-      allowlistRuleKeys: [JSON.stringify([matchedEntry.pattern, null, null])],
+      allowlistRules: [matchedEntry],
     };
 
     await withTempApprovalsHome({
@@ -2048,6 +2115,44 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     });
   });
 
+  it("rejects explicit allow-once when persisted security tightens to allowlist", async () => {
+    await withTempApprovalsHome({
+      approvals: {
+        version: 1,
+        defaults: { security: "full", ask: "always", askFallback: "deny" },
+      },
+      run: async () => {
+        const commitAuthorization = vi.fn(
+          async (params: Parameters<typeof commitExecAuthorizationLocked>[0]) => {
+            const current = loadExecApprovals();
+            current.defaults = { ...current.defaults, security: "allowlist" };
+            saveExecApprovals(current);
+            await commitExecAuthorizationLocked(params);
+          },
+        );
+        const invoke = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          security: "full",
+          ask: "always",
+          approvalDecision: "allow-once",
+          approved: true,
+          commitExecAuthorization: commitAuthorization,
+        });
+
+        expect(commitAuthorization).toHaveBeenCalledWith(
+          expect.objectContaining({
+            authorization: expect.objectContaining({
+              source: "explicit-approval",
+              policySnapshot: expect.any(Object),
+            }),
+          }),
+        );
+        expect(invoke.runCommand).not.toHaveBeenCalled();
+        expectApprovalStateWriteDenied(invoke);
+      },
+    });
+  });
+
   it("treats authenticated auto-review provenance as marker-only one-shot authority", async () => {
     const prepared = buildSystemRunApprovalPlan({
       command: ["echo", "ok"],
@@ -2130,6 +2235,102 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         expect(commitAuthorization).toHaveBeenCalledWith(
           expect.objectContaining({
             authorization: expect.objectContaining({ source: "auto-review" }),
+          }),
+        );
+        expect(invoke.runCommand).not.toHaveBeenCalled();
+        expectApprovalStateWriteDenied(invoke);
+      },
+    });
+  });
+
+  it("rejects forwarded auto-review when persisted security tightens to allowlist", async () => {
+    const prepared = buildSystemRunApprovalPlan({
+      command: ["echo", "ok"],
+      sessionKey: "agent:main:main",
+    });
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) {
+      throw new Error("unreachable");
+    }
+    await withTempApprovalsHome({
+      approvals: {
+        version: 1,
+        defaults: { security: "full", ask: "on-miss", askFallback: "deny" },
+      },
+      run: async () => {
+        const commitAuthorization = vi.fn(
+          async (params: Parameters<typeof commitExecAuthorizationLocked>[0]) => {
+            const current = loadExecApprovals();
+            current.defaults = { ...current.defaults, security: "allowlist" };
+            saveExecApprovals(current);
+            await commitExecAuthorizationLocked(params);
+          },
+        );
+        const invoke = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          command: prepared.plan.argv,
+          rawCommand: prepared.plan.commandText,
+          systemRunPlan: prepared.plan,
+          security: "full",
+          ask: "on-miss",
+          approvalSource: "auto-review",
+          commitExecAuthorization: commitAuthorization,
+        });
+
+        expect(commitAuthorization).toHaveBeenCalledWith(
+          expect.objectContaining({
+            authorization: expect.objectContaining({
+              source: "auto-review",
+              policySnapshot: expect.any(Object),
+            }),
+          }),
+        );
+        expect(invoke.runCommand).not.toHaveBeenCalled();
+        expectApprovalStateWriteDenied(invoke);
+      },
+    });
+  });
+
+  it("rejects forwarded auto-review when persisted ask tightens from off to on-miss", async () => {
+    const prepared = buildSystemRunApprovalPlan({
+      command: ["echo", "ok"],
+      sessionKey: "agent:main:main",
+    });
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) {
+      throw new Error("unreachable");
+    }
+    await withTempApprovalsHome({
+      approvals: {
+        version: 1,
+        defaults: { security: "full", ask: "off", askFallback: "deny" },
+      },
+      run: async () => {
+        const commitAuthorization = vi.fn(
+          async (params: Parameters<typeof commitExecAuthorizationLocked>[0]) => {
+            const current = loadExecApprovals();
+            current.defaults = { ...current.defaults, ask: "on-miss" };
+            saveExecApprovals(current);
+            await commitExecAuthorizationLocked(params);
+          },
+        );
+        const invoke = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          command: prepared.plan.argv,
+          rawCommand: prepared.plan.commandText,
+          systemRunPlan: prepared.plan,
+          security: "full",
+          ask: "off",
+          approvalSource: "auto-review",
+          commitExecAuthorization: commitAuthorization,
+        });
+
+        expect(commitAuthorization).toHaveBeenCalledWith(
+          expect.objectContaining({
+            authorization: expect.objectContaining({
+              source: "auto-review",
+              policySnapshot: expect.any(Object),
+            }),
           }),
         );
         expect(invoke.runCommand).not.toHaveBeenCalled();
@@ -2347,12 +2548,192 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       security: "full",
       ask: "on-miss",
       approvalSource: "auto-review",
+      prepareDelayedApprovalPlan: false,
     });
 
     expect(invoke.runCommand).not.toHaveBeenCalled();
     expectInvokeErrorMessage(invoke.sendInvokeResult, {
       message: "approvalSource requires matching systemRunPlan",
       exact: true,
+    });
+  });
+
+  it("requires a canonical plan for explicit approval provenance", async () => {
+    const invoke = await runSystemInvoke({
+      preferMacAppExecHost: false,
+      security: "full",
+      ask: "always",
+      approvalDecision: "allow-once",
+      approved: true,
+      prepareDelayedApprovalPlan: false,
+    });
+
+    expect(invoke.runCommand).not.toHaveBeenCalled();
+    expectInvokeErrorMessage(invoke.sendInvokeResult, {
+      message: "explicit approval requires matching systemRunPlan",
+      exact: true,
+    });
+  });
+
+  it("requires a prepared policy snapshot for forwarded delayed approval", async () => {
+    const prepared = buildSystemRunApprovalPlan({
+      command: ["echo", "ok"],
+      sessionKey: "agent:main:main",
+    });
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) {
+      throw new Error("unreachable");
+    }
+    const invoke = await runSystemInvoke({
+      preferMacAppExecHost: false,
+      command: prepared.plan.argv,
+      rawCommand: prepared.plan.commandText,
+      systemRunPlan: prepared.plan,
+      security: "full",
+      ask: "on-miss",
+      approvalSource: "auto-review",
+      prepareDelayedApprovalPlan: false,
+    });
+
+    expect(invoke.runCommand).not.toHaveBeenCalled();
+    expectInvokeErrorMessage(invoke.sendInvokeResult, {
+      message: "delayed approval requires a prepared policy snapshot",
+      exact: true,
+    });
+  });
+
+  it("rejects explicit approval when policy tightens after prepare", async () => {
+    await withTempApprovalsHome({
+      approvals: {
+        version: 1,
+        defaults: { security: "full", ask: "always", askFallback: "deny" },
+      },
+      run: async () => {
+        const prepared = buildSystemRunApprovalPlan({
+          command: ["echo", "ok"],
+          sessionKey: "agent:main:main",
+        });
+        expect(prepared.ok).toBe(true);
+        if (!prepared.ok) {
+          throw new Error("unreachable");
+        }
+        const policyBoundPlan = bindCurrentPolicyToPlan(prepared.plan);
+        const current = loadExecApprovals();
+        current.defaults = { ...current.defaults, security: "allowlist" };
+        saveExecApprovals(current);
+        const commitAuthorization = vi.fn(commitExecAuthorizationLocked);
+
+        const invoke = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          command: policyBoundPlan.argv,
+          rawCommand: policyBoundPlan.commandText,
+          systemRunPlan: policyBoundPlan,
+          security: "full",
+          ask: "always",
+          approvalDecision: "allow-once",
+          approved: true,
+          prepareDelayedApprovalPlan: false,
+          commitExecAuthorization: commitAuthorization,
+        });
+
+        expect(commitAuthorization).not.toHaveBeenCalled();
+        expect(invoke.runCommand).not.toHaveBeenCalled();
+        expectInvokeErrorMessage(invoke.sendInvokeResult, {
+          message: "exec approval policy changed; request approval again",
+        });
+      },
+    });
+  });
+
+  it("rejects forwarded auto-review when ask tightens after prepare", async () => {
+    await withTempApprovalsHome({
+      approvals: {
+        version: 1,
+        defaults: { security: "full", ask: "off", askFallback: "deny" },
+      },
+      run: async () => {
+        const prepared = buildSystemRunApprovalPlan({
+          command: ["echo", "ok"],
+          sessionKey: "agent:main:main",
+        });
+        expect(prepared.ok).toBe(true);
+        if (!prepared.ok) {
+          throw new Error("unreachable");
+        }
+        const policyBoundPlan = bindCurrentPolicyToPlan(prepared.plan);
+        const current = loadExecApprovals();
+        current.defaults = { ...current.defaults, ask: "on-miss" };
+        saveExecApprovals(current);
+        const commitAuthorization = vi.fn(commitExecAuthorizationLocked);
+
+        const invoke = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          command: policyBoundPlan.argv,
+          rawCommand: policyBoundPlan.commandText,
+          systemRunPlan: policyBoundPlan,
+          security: "full",
+          ask: "off",
+          approvalSource: "auto-review",
+          prepareDelayedApprovalPlan: false,
+          commitExecAuthorization: commitAuthorization,
+        });
+
+        expect(commitAuthorization).not.toHaveBeenCalled();
+        expect(invoke.runCommand).not.toHaveBeenCalled();
+        expectInvokeErrorMessage(invoke.sendInvokeResult, {
+          message: "exec approval policy changed; request approval again",
+        });
+      },
+    });
+  });
+
+  it("rejects explicit approval when an allowlist rule is revoked after prepare", async () => {
+    await withTempApprovalsHome({
+      approvals: {
+        version: 1,
+        defaults: { security: "allowlist", ask: "always", askFallback: "deny" },
+        agents: {
+          main: {
+            allowlist: [{ id: "rule-1", pattern: "/usr/bin/echo" }],
+          },
+        },
+      },
+      run: async () => {
+        const prepared = buildSystemRunApprovalPlan({
+          command: ["echo", "ok"],
+          agentId: "main",
+          sessionKey: "agent:main:main",
+        });
+        expect(prepared.ok).toBe(true);
+        if (!prepared.ok) {
+          throw new Error("unreachable");
+        }
+        const policyBoundPlan = bindCurrentPolicyToPlan(prepared.plan);
+        const current = loadExecApprovals();
+        current.agents = { ...current.agents, main: { allowlist: [] } };
+        saveExecApprovals(current);
+        const commitAuthorization = vi.fn(commitExecAuthorizationLocked);
+
+        const invoke = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          command: policyBoundPlan.argv,
+          rawCommand: policyBoundPlan.commandText,
+          systemRunPlan: policyBoundPlan,
+          security: "allowlist",
+          ask: "always",
+          agentId: "main",
+          approvalDecision: "allow-once",
+          approved: true,
+          prepareDelayedApprovalPlan: false,
+          commitExecAuthorization: commitAuthorization,
+        });
+
+        expect(commitAuthorization).not.toHaveBeenCalled();
+        expect(invoke.runCommand).not.toHaveBeenCalled();
+        expectInvokeErrorMessage(invoke.sendInvokeResult, {
+          message: "exec approval policy changed; request approval again",
+        });
+      },
     });
   });
 
@@ -2611,6 +2992,9 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         const call = requireMacExecHostCall(invoke.runViaMacAppExecHost);
         expect(call.request?.approvalSource).toBe("auto-review");
         expect(call.request?.approvalDecision).toBeNull();
+        expect(call.request?.policySnapshot).toEqual(
+          createExecApprovalPolicySnapshot({ file: loadExecApprovals(), agentId: undefined }),
+        );
         expect(invoke.runCommand).not.toHaveBeenCalled();
         expectInvokeOk(invoke.sendInvokeResult, { payloadContains: "app-ok" });
       },
@@ -2742,9 +3126,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     });
   });
 
-  it("does not persist allow-always approvals for strict inline-eval carriers", async () => {
-    // Persistence behavior is covered generically in exec-approvals tests; keep
-    // one handler-level smoke for strictInlineEval allow-always suppression.
+  it("rejects unbindable strict inline-eval carriers before delayed approval", async () => {
     setRuntimeConfigSnapshot({
       tools: {
         exec: {
@@ -2761,18 +3143,15 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
             dir: tempDir,
             name: "python3.13",
           });
-          const { runCommand, sendInvokeResult } = await runSystemInvoke({
-            preferMacAppExecHost: false,
+          const prepared = buildSystemRunApprovalPlan({
             command: [executablePath, "-c", "print('hi')"],
-            security: "allowlist",
-            ask: "on-miss",
-            approvalDecision: "allow-always",
-            approved: true,
-            runCommand: vi.fn(async () => createLocalRunResult("inline-eval-ok")),
           });
 
-          expect(runCommand).toHaveBeenCalledTimes(1);
-          expectInvokeOk(sendInvokeResult, { payloadContains: "inline-eval-ok" });
+          expect(prepared).toEqual({
+            ok: false,
+            message:
+              "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
+          });
           expect(loadExecApprovals().agents?.main?.allowlist ?? []).toStrictEqual([]);
         },
       });
@@ -2796,11 +3175,12 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
           const tempDir = createFixtureDir("openclaw-inline-eval-awk-");
           const executablePath = createTempExecutable({
             dir: tempDir,
-            name: "awk",
+            name: "gawk",
           });
+          fs.writeFileSync(path.join(tempDir, "script.awk"), "{ print }\n");
           const benign = await runSystemInvoke({
             preferMacAppExecHost: false,
-            command: [executablePath, "-F", ",", "-f", "script.awk", "data.csv"],
+            command: [executablePath, "-F", ",", "-f", "script.awk"],
             cwd: tempDir,
             security: "allowlist",
             ask: "on-miss",

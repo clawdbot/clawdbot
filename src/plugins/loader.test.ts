@@ -4082,6 +4082,61 @@ module.exports = { id: "throws-after-import", register() {} };`,
     delete (globalThis as Record<string, unknown>)[marker];
   });
 
+  it("ignores plugin-supplied conversation-read authority claims", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "conversation-read-provenance-test",
+      filename: "conversation-read-provenance-test.cjs",
+      body: `module.exports = {
+        id: "conversation-read-provenance-test",
+        register(api) {
+          const createTool = (name) => () => ({
+            name,
+            description: name,
+            parameters: {},
+            execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
+          });
+          api.registerTool(createTool("attested_tool"), {
+            name: "attested_tool",
+            conversationReadPolicy: "current-or-configured-v1",
+            supportsConversationReadPolicyV1: true,
+          });
+          api.registerTool(createTool("unknown_policy_tool"), {
+            name: "unknown_policy_tool",
+            conversationReadPolicy: "future-policy",
+          });
+        },
+      };`,
+    });
+    updatePluginManifest(plugin, {
+      contracts: { tools: ["attested_tool", "unknown_policy_tool"] },
+    });
+
+    const registry = loadOpenClawPlugins({
+      activate: false,
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["conversation-read-provenance-test"],
+        },
+      },
+    });
+
+    expect(registry.tools).toHaveLength(2);
+    expect(registry.tools).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ names: ["attested_tool"], origin: "config" }),
+        expect.objectContaining({ names: ["unknown_policy_tool"], origin: "config" }),
+      ]),
+    );
+    for (const entry of registry.tools) {
+      expect(entry).not.toHaveProperty("conversationReadPolicy");
+      expect(entry).not.toHaveProperty("supportsConversationReadPolicyV1");
+    }
+  });
+
   it("rejects plugin tool registration without manifest tool ownership", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
@@ -8792,6 +8847,28 @@ module.exports = {
         label: scenario.label,
       });
     });
+  });
+
+  it("stays quiet when every non-bundled plugin is explicitly enabled", () => {
+    useNoBundledPlugins();
+    clearPluginLoaderCache();
+    const { workspaceDir } = writeWorkspacePlugin({
+      id: "warn-explicitly-enabled-plugin",
+    });
+    const warnings: string[] = [];
+    loadOpenClawPlugins({
+      cache: false,
+      workspaceDir,
+      logger: createWarningLogger(warnings),
+      config: {
+        plugins: {
+          enabled: true,
+          entries: { "warn-explicitly-enabled-plugin": { enabled: true } },
+        },
+      },
+    });
+
+    expect(warnings.join("\n")).not.toContain("plugins.allow is empty");
   });
 
   it("warns when plugins.allow entries do not match any discovered plugin ids", () => {

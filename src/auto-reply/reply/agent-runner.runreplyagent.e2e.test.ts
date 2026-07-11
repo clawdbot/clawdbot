@@ -141,8 +141,12 @@ vi.mock("../../agents/embedded-agent-runner/runs.js", () => ({
     sessionId: string,
     prompt: string,
     options: unknown,
-  ) =>
-    state.queueEmbeddedAgentMessageMock(sessionId, prompt, options)
+  ) => {
+    const result = state.queueEmbeddedAgentMessageMock(sessionId, prompt, options);
+    if (typeof result === "object") {
+      return result;
+    }
+    return result
       ? {
           queued: true,
           sessionId,
@@ -156,7 +160,8 @@ vi.mock("../../agents/embedded-agent-runner/runs.js", () => ({
           reason: "no_active_run",
           target: "none",
           gatewayHealth: "live",
-        },
+        };
+  },
 }));
 
 vi.mock("./queue.js", () => ({
@@ -351,6 +356,30 @@ describe("runReplyAgent active steering", () => {
     expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
+  });
+
+  it("queues a follow-up when transcript-backed steering is unsupported", async () => {
+    state.queueEmbeddedAgentMessageMock.mockReturnValueOnce({
+      queued: false,
+      sessionId: "session",
+      reason: "transcript_commit_wait_unsupported",
+      target: "none",
+      gatewayHealth: "live",
+    });
+    const onTurnAdopted = vi.fn();
+    const { run } = createMinimalRun({
+      opts: { onTurnAdopted },
+      isActive: true,
+      isStreaming: true,
+      shouldSteer: true,
+      resolvedQueueMode: "steer",
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(onTurnAdopted).not.toHaveBeenCalled();
   });
 });
 

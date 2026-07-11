@@ -1386,9 +1386,16 @@ describe("main-session-restart-recovery", () => {
     expect(result).toEqual({ recovered: 0, failed: 1, skipped: 0 });
     expect(callGateway).toHaveBeenCalledOnce();
     const gatewayCall = vi.mocked(callGateway).mock.calls[0]?.[0] as
-      | { method?: string; params?: Record<string, unknown> }
+      | {
+          method?: string;
+          params?: Record<string, unknown>;
+          clientName?: string;
+          mode?: string;
+        }
       | undefined;
     expect(gatewayCall?.method).toBe("message.action");
+    expect(gatewayCall?.clientName).toBe("gateway-client");
+    expect(gatewayCall?.mode).toBe("backend");
     expect(gatewayCall?.params).toMatchObject({
       channel: "discord",
       action: "send",
