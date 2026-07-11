@@ -291,7 +291,10 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         result = {
           messageId: "processed",
           chatId: to,
-          receipt: createLineSendReceipt({ messageId: "processed", chatId: to, kind: "card" }),
+          receipt: createLineSendReceipt({
+            parts: [{ messageId: "processed", kind: "card" }],
+            chatId: to,
+          }),
         };
       }
       for (const flexMsg of processed.flexMessages) {
@@ -325,9 +328,8 @@ function toLineMessageSendResult(
     result.receipt ??
     (result.messageId
       ? createLineSendReceipt({
-          messageId: result.messageId,
+          parts: [{ messageId: result.messageId, kind }],
           chatId: source.chatId ?? "",
-          kind,
         })
       : undefined);
   if (!receipt) {

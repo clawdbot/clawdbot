@@ -12,7 +12,25 @@ import type {
 
 type MessageReceiptInputResult = MessageReceiptSourceResult & {
   receipt?: MessageReceipt;
+  // Optional receipt kind for this single physical platform message. Adapters
+  // that deliver several kinds in one logical send (e.g. LINE media + caption)
+  // set it per result so each part keeps its own kind; the kind travels with its
+  // id so the two cannot drift, unlike a separate parallel array. Ignored for
+  // nested-receipt results, which carry their own part kinds.
+  kind?: MessageReceiptPartKind;
 };
+
+// The per-result `kind` is receipt-layer metadata, not a platform field, so keep
+// it out of `raw`, which mirrors the raw platform send result.
+function stripResultKind(result: MessageReceiptInputResult): MessageReceiptInputResult {
+  // Own-key check, not `=== undefined`: an explicit `{ kind: undefined }` still
+  // carries the key and must be stripped so `kind` never appears in `raw`.
+  if (!Object.hasOwn(result, "kind")) {
+    return result;
+  }
+  const { kind: _kind, ...rest } = result;
+  return rest;
+}
 
 function resolveReceiptMessageId(result: MessageReceiptInputResult): string | undefined {
   return (
@@ -45,6 +63,7 @@ function appendUnique(values: string[], value: string | undefined): void {
 /** Builds one normalized receipt from platform send results or nested adapter receipts. */
 export function createMessageReceiptFromOutboundResults(params: {
   results: readonly MessageReceiptInputResult[];
+  // Fallback kind for flat results that do not carry their own `kind`.
   kind?: MessageReceiptPartKind;
   threadId?: string;
   replyToId?: string;
@@ -80,11 +99,11 @@ export function createMessageReceiptFromOutboundResults(params: {
     return [
       {
         platformMessageId,
-        kind: params.kind ?? "unknown",
+        kind: result.kind ?? params.kind ?? "unknown",
         index: resultIndex,
         ...(params.threadId ? { threadId: params.threadId } : {}),
         ...(params.replyToId ? { replyToId: params.replyToId } : {}),
-        raw: result,
+        raw: stripResultKind(result),
       },
     ];
   });
@@ -116,7 +135,7 @@ export function createMessageReceiptFromOutboundResults(params: {
       ? { replyToId: params.replyToId ?? firstNestedReceipt?.replyToId }
       : {}),
     sentAt: params.sentAt ?? firstNestedReceipt?.sentAt ?? Date.now(),
-    raw: params.results,
+    raw: params.results.map(stripResultKind),
   };
 }
 

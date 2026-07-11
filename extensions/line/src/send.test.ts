@@ -149,8 +149,8 @@ describe("LINE send helpers", () => {
       hostname: "example.com",
       addresses: ["93.184.216.34"],
     });
-    pushMessageMock.mockResolvedValue({});
-    replyMessageMock.mockResolvedValue({});
+    pushMessageMock.mockResolvedValue({ sentMessages: [{ id: "push-msg-id" }] });
+    replyMessageMock.mockResolvedValue({ sentMessages: [{ id: "reply-msg-id" }] });
     showLoadingAnimationMock.mockResolvedValue({});
   });
 
@@ -411,31 +411,31 @@ describe("LINE send helpers", () => {
     expect(logVerboseMock).toHaveBeenCalledWith("line: pushed image to U123");
     expect(result).toEqual({
       chatId: "U123",
-      messageId: "push",
+      messageId: "push-msg-id",
       receipt: {
         parts: [
           {
             index: 0,
             kind: "media",
-            platformMessageId: "push",
+            platformMessageId: "push-msg-id",
             raw: {
               channel: "line",
               chatId: "U123",
               conversationId: "U123",
-              messageId: "push",
+              messageId: "push-msg-id",
               meta: { messageCount: 1 },
             },
             threadId: "U123",
           },
         ],
-        platformMessageIds: ["push"],
-        primaryPlatformMessageId: "push",
+        platformMessageIds: ["push-msg-id"],
+        primaryPlatformMessageId: "push-msg-id",
         raw: [
           {
             channel: "line",
             chatId: "U123",
             conversationId: "U123",
-            messageId: "push",
+            messageId: "push-msg-id",
             meta: { messageCount: 1 },
           },
         ],
@@ -445,7 +445,52 @@ describe("LINE send helpers", () => {
     });
   });
 
-  it("replies when reply token is provided", async () => {
+  it("adopts the real LINE platform message id from the push response", async () => {
+    pushMessageMock.mockResolvedValueOnce({
+      sentMessages: [{ id: "line-real-id-123" }],
+    });
+
+    const result = await sendModule.sendMessageLine("line:user:U123", "Hello", {
+      cfg: LINE_TEST_CFG,
+    });
+
+    expect(result.messageId).toBe("line-real-id-123");
+    expect(result.receipt?.primaryPlatformMessageId).toBe("line-real-id-123");
+    expect(result.receipt?.platformMessageIds).toEqual(["line-real-id-123"]);
+  });
+
+  it("records every returned id when a push delivers multiple messages", async () => {
+    // media + caption is delivered as two LINE messages, so the response carries
+    // two sent-message ids; both must reach the receipt.
+    pushMessageMock.mockResolvedValueOnce({
+      sentMessages: [{ id: "line-media-id" }, { id: "line-caption-id" }],
+    });
+
+    const result = await sendModule.sendMessageLine("line:user:U123", "Caption", {
+      cfg: LINE_TEST_CFG,
+      mediaUrl: "https://example.com/photo.jpg",
+    });
+
+    // First id stays primary for LineSendResult.messageId parity with siblings.
+    expect(result.messageId).toBe("line-media-id");
+    expect(result.receipt?.primaryPlatformMessageId).toBe("line-media-id");
+    expect(result.receipt?.platformMessageIds).toEqual(["line-media-id", "line-caption-id"]);
+    expect(result.receipt?.parts.map((part) => part.platformMessageId)).toEqual([
+      "line-media-id",
+      "line-caption-id",
+    ]);
+    // Each id keeps its own kind: the image is media, the caption is text.
+    expect(result.receipt?.parts.map((part) => part.kind)).toEqual(["media", "text"]);
+  });
+
+  it("records every returned id and per-message kinds on a media + caption reply", async () => {
+    // A media + caption reply is delivered as two LINE messages, so the response
+    // carries two ordered sent-message ids. Both real ids and their [media, text]
+    // kinds must reach the receipt instead of a single "reply" literal/kind.
+    replyMessageMock.mockResolvedValueOnce({
+      sentMessages: [{ id: "line-reply-media-id" }, { id: "line-reply-caption-id" }],
+    });
+
     const result = await sendModule.sendMessageLine("line:group:C1", "Hello", {
       cfg: LINE_TEST_CFG,
       replyToken: "reply-token",
@@ -472,31 +517,51 @@ describe("LINE send helpers", () => {
     expect(logVerboseMock).toHaveBeenCalledWith("line: replied to C1");
     expect(result).toEqual({
       chatId: "C1",
-      messageId: "reply",
+      messageId: "line-reply-media-id",
       receipt: {
         parts: [
           {
             index: 0,
             kind: "media",
-            platformMessageId: "reply",
+            platformMessageId: "line-reply-media-id",
             raw: {
               channel: "line",
               chatId: "C1",
               conversationId: "C1",
-              messageId: "reply",
+              messageId: "line-reply-media-id",
+              meta: { messageCount: 2 },
+            },
+            threadId: "C1",
+          },
+          {
+            index: 1,
+            kind: "text",
+            platformMessageId: "line-reply-caption-id",
+            raw: {
+              channel: "line",
+              chatId: "C1",
+              conversationId: "C1",
+              messageId: "line-reply-caption-id",
               meta: { messageCount: 2 },
             },
             threadId: "C1",
           },
         ],
-        platformMessageIds: ["reply"],
-        primaryPlatformMessageId: "reply",
+        platformMessageIds: ["line-reply-media-id", "line-reply-caption-id"],
+        primaryPlatformMessageId: "line-reply-media-id",
         raw: [
           {
             channel: "line",
             chatId: "C1",
             conversationId: "C1",
-            messageId: "reply",
+            messageId: "line-reply-media-id",
+            meta: { messageCount: 2 },
+          },
+          {
+            channel: "line",
+            chatId: "C1",
+            conversationId: "C1",
+            messageId: "line-reply-caption-id",
             meta: { messageCount: 2 },
           },
         ],

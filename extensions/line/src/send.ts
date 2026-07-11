@@ -1,6 +1,7 @@
 // Line plugin module implements send behavior.
 import { messagingApi } from "@line/bot-sdk";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
+import type { MessageReceiptPartKind } from "openclaw/plugin-sdk/channel-outbound";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
@@ -14,6 +15,7 @@ import { createLineSendReceipt } from "./send-receipt.js";
 import type { LineOutboundMediaKind, LineSendResult } from "./types.js";
 
 type Message = messagingApi.Message;
+type SentMessage = messagingApi.SentMessage;
 type TextMessage = messagingApi.TextMessage;
 type ImageMessage = messagingApi.ImageMessage;
 type VideoMessage = messagingApi.VideoMessage & { trackingId?: string };
@@ -213,7 +215,7 @@ function recordLineOutboundActivity(accountId: string): void {
   });
 }
 
-function resolveLineReceiptKind(messages: readonly Message[]) {
+function resolveLineReceiptKind(messages: readonly Message[]): MessageReceiptPartKind {
   const types = new Set(messages.map((message) => message.type));
   if (types.has("audio")) {
     return "voice";
@@ -228,6 +230,29 @@ function resolveLineReceiptKind(messages: readonly Message[]) {
     return "text";
   }
   return "unknown";
+}
+
+// LINE returns one SentMessage per delivered message (media + caption sends
+// several), in request order. Record every id with its own kind so receipt
+// parts read [media, text] rather than one aggregate kind, and keep the first
+// id primary (previously a "push"/"reply" literal) so tracking/dedup/audit
+// consumers see every physical message.
+function buildLineSendResult(
+  chatId: string,
+  messages: Message[],
+  sentMessages: readonly SentMessage[],
+): LineSendResult {
+  // LINE returns sentMessages in submitted-message order (documented), so pair
+  // each returned id with its own message's kind; the first stays primary.
+  const parts = sentMessages.map((sent, index) => ({
+    messageId: sent.id,
+    kind: resolveLineReceiptKind([messages[index]]),
+  }));
+  return {
+    messageId: parts[0].messageId,
+    chatId,
+    receipt: createLineSendReceipt({ parts, chatId, messageCount: messages.length }),
+  };
 }
 
 async function pushLineMessages(
@@ -247,14 +272,12 @@ async function pushLineMessages(
     messages: normalizedMessages,
   });
 
-  if (behavior.errorContext) {
-    await pushRequest.catch((err: unknown) => {
-      logLineHttpError(err, behavior.errorContext!);
-      throw err;
-    });
-  } else {
-    await pushRequest;
-  }
+  const response = behavior.errorContext
+    ? await pushRequest.catch((err: unknown) => {
+        logLineHttpError(err, behavior.errorContext!);
+        throw err;
+      })
+    : await pushRequest;
 
   recordLineOutboundActivity(account.accountId);
 
@@ -265,16 +288,7 @@ async function pushLineMessages(
     logVerbose(logMessage);
   }
 
-  return {
-    messageId: "push",
-    chatId,
-    receipt: createLineSendReceipt({
-      messageId: "push",
-      chatId,
-      kind: resolveLineReceiptKind(messages),
-      messageCount: messages.length,
-    }),
-  };
+  return buildLineSendResult(chatId, messages, response.sentMessages);
 }
 
 async function replyLineMessages(
@@ -282,11 +296,13 @@ async function replyLineMessages(
   messages: Message[],
   opts: LinePushOpts,
   behavior: LineReplyBehavior = {},
-): Promise<void> {
+): Promise<readonly SentMessage[]> {
   const { account, client } = createLineMessagingClient(opts);
   const normalizedMessages = messages.map(normalizeLineMessageActions);
 
-  await client.replyMessage({
+  // Reply returns the same ordered sentMessages contract as push; capture it so
+  // the receipt records real ids/kinds instead of a "reply" literal.
+  const response = await client.replyMessage({
     replyToken,
     messages: normalizedMessages,
   });
@@ -299,6 +315,8 @@ async function replyLineMessages(
         `line: replied with ${messages.length} messages`,
     );
   }
+
+  return response.sentMessages;
 }
 
 export async function sendMessageLine(
@@ -346,20 +364,11 @@ export async function sendMessageLine(
   }
 
   if (opts.replyToken) {
-    await replyLineMessages(opts.replyToken, messages, opts, {
+    const sentMessages = await replyLineMessages(opts.replyToken, messages, opts, {
       verboseMessage: () => `line: replied to ${chatId}`,
     });
 
-    return {
-      messageId: "reply",
-      chatId,
-      receipt: createLineSendReceipt({
-        messageId: "reply",
-        chatId,
-        kind: resolveLineReceiptKind(messages),
-        messageCount: messages.length,
-      }),
-    };
+    return buildLineSendResult(chatId, messages, sentMessages);
   }
 
   return pushLineMessages(chatId, messages, opts, {

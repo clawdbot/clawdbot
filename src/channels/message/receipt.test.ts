@@ -36,6 +36,24 @@ describe("createMessageReceiptFromOutboundResults", () => {
     ]);
   });
 
+  it("uses each flat result's own kind, falling back to the aggregate kind, and keeps kind out of raw", () => {
+    const receipt = createMessageReceiptFromOutboundResults({
+      results: [
+        { channel: "line", messageId: "media-id", kind: "media" },
+        { channel: "line", messageId: "caption-id", kind: "text" },
+        // Explicit `kind: undefined` must fall back and still not leak the key.
+        { channel: "line", messageId: "extra-id", kind: undefined },
+      ],
+      kind: "unknown",
+      sentAt: 123,
+    });
+
+    expect(receipt.parts.map((part) => part.kind)).toEqual(["media", "text", "unknown"]);
+    // `kind` is receipt-layer metadata and must not leak into the raw platform result.
+    expect(receipt.parts.every((part) => !("kind" in (part.raw ?? {})))).toBe(true);
+    expect(receipt.raw?.every((result) => !("kind" in result))).toBe(true);
+  });
+
   it("uses alternate platform ids when messageId is unavailable", () => {
     const receipt = createMessageReceiptFromOutboundResults({
       results: [{ channel: "whatsapp", messageId: "", toJid: "jid-1" }],
