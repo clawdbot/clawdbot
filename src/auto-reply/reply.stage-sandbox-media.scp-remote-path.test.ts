@@ -98,6 +98,15 @@ describe("stageSandboxMedia scp remote paths", () => {
     expect(stderr).not.toContain("start-");
   });
 
+  it("keeps scp stderr tail UTF-16 safe when the boundary bisects an emoji", () => {
+    const stderr = appendScpStderrTail("prefix", "🤖tail", 5);
+
+    expect(stderr).toBe("tail");
+    expect(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(stderr),
+    ).toBe(false);
+  });
+
   it("rejects remote attachment filenames with shell metacharacters before spawning scp", async () => {
     await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
       const { cfg, workspaceDir, sessionKey, remoteCacheDir } = createRemoteStageParams(home);

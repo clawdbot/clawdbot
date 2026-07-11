@@ -10,6 +10,13 @@ describe("resolveNodePairApprovalScopes", () => {
     ]);
   });
 
+  it("requires operator.admin for browser.proxy commands", () => {
+    expect(resolveNodePairApprovalScopes(["browser.proxy"])).toEqual([
+      "operator.pairing",
+      "operator.admin",
+    ]);
+  });
+
   it("requires operator.write for non-exec commands", () => {
     expect(resolveNodePairApprovalScopes(["canvas.present"])).toEqual([
       "operator.pairing",

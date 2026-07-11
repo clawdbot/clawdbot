@@ -1,5 +1,6 @@
 // Voice Call plugin module implements tunnel behavior.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   appendBoundedChildOutput,
   emptyBoundedChildOutput,
@@ -170,7 +171,9 @@ export async function startNgrokTunnel(config: {
       const lines = (outputBuffer + data.toString()).split("\n");
       outputBuffer = lines.pop() || "";
       if (outputBuffer.length > NGROK_LOG_BUFFER_MAX_CHARS) {
-        outputBuffer = outputBuffer.slice(-NGROK_LOG_BUFFER_MAX_CHARS);
+        // Same UTF-16 contract as appendBoundedChildOutput: do not leave a lone
+        // surrogate when an incomplete ngrok log line is trimmed to the ring cap.
+        outputBuffer = sliceUtf16Safe(outputBuffer, -NGROK_LOG_BUFFER_MAX_CHARS);
       }
 
       for (const line of lines) {

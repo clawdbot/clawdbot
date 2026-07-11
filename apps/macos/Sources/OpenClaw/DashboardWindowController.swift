@@ -496,9 +496,11 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 
         let stack = NSStackView(views: [sidebar, back, forward])
         stack.orientation = .horizontal
-        stack.spacing = 6
+        stack.spacing = 12
         stack.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 0)
-        stack.setFrameSize(NSSize(width: 104, height: 28))
+        // Fixed accessory frame: 12 leading inset + three ~27pt buttons + two
+        // 12pt gaps. Keep in sync with `spacing`/`edgeInsets` above.
+        stack.setFrameSize(NSSize(width: 116, height: 28))
 
         let accessory = NSTitlebarAccessoryViewController()
         accessory.view = stack

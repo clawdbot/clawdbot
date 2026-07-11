@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isInboundPathAllowed } from "@openclaw/media-core/inbound-path-policy";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { assertSandboxPath } from "../../agents/sandbox-paths.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
 import { slugifySessionKey } from "../../agents/sandbox/shared.js";
@@ -427,7 +428,7 @@ export function appendScpStderrTail(
   if (combined.length <= maxChars) {
     return combined;
   }
-  return combined.slice(-maxChars);
+  return sliceUtf16Safe(combined, Math.max(0, combined.length - maxChars));
 }
 
 export const testing = { scpFile } as const;

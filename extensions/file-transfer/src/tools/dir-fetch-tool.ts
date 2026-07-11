@@ -5,6 +5,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
+import {
+  appendBoundedTextTail,
+  projectBoundedTextTail,
+} from "../shared/append-bounded-text-tail.js";
 import { appendFileTransferAudit } from "../shared/audit.js";
 import { consumeChildOutput } from "../shared/child-output.js";
 import { IMAGE_MIME_INLINE_SET, mimeFromExtension } from "../shared/mime.js";
@@ -32,6 +36,8 @@ const TAR_UNPACK_TIMEOUT_MS = 60_000;
 const TAR_UNPACK_MAX_ENTRIES = 5000;
 const TAR_LIST_OUTPUT_MAX_CHARS = 32 * 1024 * 1024;
 const TAR_STDERR_TAIL_CHARS = 4096;
+const TAR_ERROR_REASON_STDERR_CHARS = 200;
+const TAR_UNPACK_ERROR_STDERR_CHARS = 300;
 
 // Hard caps on uncompressed extraction. Defends against decompression-bomb
 // archives that compress to <16MB but expand to gigabytes. Both caps are
@@ -39,11 +45,6 @@ const TAR_STDERR_TAIL_CHARS = 4096;
 // and per-file size to bound any single fs.stat / hash operation.
 const DIR_FETCH_MAX_UNCOMPRESSED_BYTES = 64 * 1024 * 1024;
 const DIR_FETCH_MAX_SINGLE_FILE_BYTES = 16 * 1024 * 1024;
-
-function appendBoundedTextTail(current: string, chunk: Buffer, maxChars: number): string {
-  const next = current + chunk.toString();
-  return next.length > maxChars ? next.slice(-maxChars) : next;
-}
 
 async function listTarOutputLines<T>(input: {
   args: string[];
@@ -137,7 +138,10 @@ async function listTarOutputLines<T>(input: {
         return;
       }
       if (code !== 0) {
-        finish({ ok: false, reason: `${input.label} exited ${code}: ${stderr.slice(-200)}` });
+        finish({
+          ok: false,
+          reason: `${input.label} exited ${code}: ${projectBoundedTextTail(stderr, TAR_ERROR_REASON_STDERR_CHARS)}`,
+        });
         return;
       }
       if (pending) {
@@ -350,7 +354,7 @@ export async function validateTarUncompressedBudget(
       if (code !== 0) {
         finish({
           ok: false,
-          reason: `tar uncompressed budget validation exited ${code}: ${stderr.slice(-200)}`,
+          reason: `tar uncompressed budget validation exited ${code}: ${projectBoundedTextTail(stderr, TAR_ERROR_REASON_STDERR_CHARS)}`,
         });
         return;
       }
@@ -455,7 +459,11 @@ async function unpackTar(tarBuffer: Buffer, destDir: string): Promise<void> {
     });
     child.on("close", (code) => {
       if (code !== 0) {
-        fail(new Error(`tar unpack exited ${code}: ${stderrOut.slice(-300)}`));
+        fail(
+          new Error(
+            `tar unpack exited ${code}: ${projectBoundedTextTail(stderrOut, TAR_UNPACK_ERROR_STDERR_CHARS)}`,
+          ),
+        );
         return;
       }
       succeed();

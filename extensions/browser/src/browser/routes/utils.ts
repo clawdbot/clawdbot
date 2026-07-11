@@ -70,19 +70,6 @@ export function toStringOrEmpty(value: unknown) {
   return "";
 }
 
-/** Coerce route numeric values from numbers or decimal strings. */
-export function toNumber(value: unknown) {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  const normalized = typeof value === "string" ? normalizeOptionalString(value) : undefined;
-  if (normalized) {
-    const parsed = Number(normalized);
-    return Number.isFinite(parsed) ? parsed : undefined;
-  }
-  return undefined;
-}
-
 /** Coerce route boolean values from booleans or common string forms. */
 export function toBoolean(value: unknown) {
   if (typeof value === "boolean") {

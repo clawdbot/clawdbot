@@ -70,4 +70,32 @@ describe("dir.fetch archive policy output lifecycle", () => {
       }),
     ).resolves.toEqual({ ok: true, entries: ["ok.txt"] });
   });
+
+  it("surfaces UTF-16 safe tar stderr tail when archive listing fails with emoji at projection boundary", async () => {
+    const oldNoise = "n".repeat(250);
+    // Length 201: raw slice(-200) would start on the low surrogate of 🤖.
+    const recent = "🤖" + "f".repeat(199);
+    const spawnMock = mockTarSpawn((child) => {
+      child.stderr.emit("data", Buffer.from(oldNoise));
+      child.stderr.emit("data", Buffer.from(recent));
+      child.emit("close", 2);
+    });
+    const { testing } = await importWithSpawn(spawnMock);
+    const { projectBoundedTextTail } = await import("./append-bounded-text-tail.js");
+
+    const result = await testing.listDirFetchArchiveEntries({
+      tarBase64: Buffer.from("archive").toString("base64"),
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toContain(projectBoundedTextTail(recent, 200));
+      expect(result.reason).toContain("f".repeat(199));
+      expect(result.reason).not.toContain("🤖");
+      expect(
+        /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(
+          result.reason,
+        ),
+      ).toBe(false);
+    }
+  });
 });

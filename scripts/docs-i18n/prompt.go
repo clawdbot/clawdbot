@@ -62,11 +62,11 @@ func translationPrompt(srcLang, tgtLang string, glossary []GlossaryEntry) string
 	switch {
 	case strings.EqualFold(tgtLang, "zh-CN"):
 		// Keep this prompt as stable as possible; it has lots of tuning baked into the wording.
-		return strings.TrimSpace(fmt.Sprintf(zhCNPromptTemplate, srcLabel, tgtLabel, glossaryBlock))
+		return strings.TrimSpace(fmt.Sprintf(zhCNPromptTemplate, srcLabel, tgtLabel, thirdPartyUILabelRule, glossaryBlock))
 	case strings.EqualFold(tgtLang, "ja-JP"):
-		return strings.TrimSpace(fmt.Sprintf(jaJPPromptTemplate, srcLabel, tgtLabel, glossaryBlock))
+		return strings.TrimSpace(fmt.Sprintf(jaJPPromptTemplate, srcLabel, tgtLabel, thirdPartyUILabelRule, glossaryBlock))
 	default:
-		return strings.TrimSpace(fmt.Sprintf(genericPromptTemplate, srcLabel, tgtLabel, localePromptRules(tgtLang), glossaryBlock))
+		return strings.TrimSpace(fmt.Sprintf(genericPromptTemplate, srcLabel, tgtLabel, localePromptRules(tgtLang), thirdPartyUILabelRule, glossaryBlock))
 	}
 }
 
@@ -78,6 +78,8 @@ func localePromptRules(tgtLang string) string {
 		return ""
 	}
 }
+
+const thirdPartyUILabelRule = `- Preserve exact third-party UI text, including button names, menu items, setting names, form field labels, and navigation paths such as “Review + create” -> “Create”. Translate the surrounding explanation, but do not translate, apply glossary substitutions to, or invent localized third-party UI labels. This exception overrides the general instruction to translate headings and labels and the mandatory glossary rule below.`
 
 const zhCNPromptTemplate = `You are a translation function, not a chat assistant.
 Translate from %s to %s.
@@ -99,6 +101,7 @@ Rules:
 - Do not remove, reorder, or summarize content.
 - Use fluent, idiomatic technical Chinese; avoid slang or jokes.
 - Use neutral documentation tone; prefer “你/你的”, avoid “您/您的”.
+%s
 - Glossary terms are mandatory. When a source term matches a glossary entry, use
   the glossary target exactly, including headings, link labels, and short
   UI-style labels.
@@ -136,6 +139,7 @@ Rules:
 - Do not remove, reorder, or summarize content.
 - Use fluent, idiomatic technical Japanese; avoid slang or jokes.
 - Use neutral documentation tone; avoid overly formal honorifics (e.g., avoid “〜でございます”).
+%s
 - Glossary terms are mandatory. When a source term matches a glossary entry, use
   the glossary target exactly, including headings, link labels, and short
   UI-style labels.
@@ -172,6 +176,7 @@ Rules:
 - Do not remove, reorder, or summarize content.
 - Use fluent, idiomatic technical language in the target language; avoid slang or jokes.
 - Use neutral documentation tone.
+%s
 %s
 - Glossary terms are mandatory. When a source term matches a glossary entry, use
   the glossary target exactly, including headings, link labels, and short

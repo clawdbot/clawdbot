@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { projectBoundedTextTail } from "../shared/append-bounded-text-tail.js";
 import { validateTarUncompressedBudget } from "./dir-fetch-tool.js";
 
 let tmpRoot: string;
@@ -276,8 +277,45 @@ describe("dir.fetch tar validation", () => {
       const result = await testing.preValidateTarball(Buffer.from("x"));
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.reason).toContain(recent.slice(-200));
+        expect(result.reason).toContain(projectBoundedTextTail(recent, 200));
         expect(result.reason).not.toContain(oldNoise.slice(0, 40));
+      }
+    } finally {
+      vi.doUnmock("node:child_process");
+      vi.resetModules();
+    }
+  });
+
+  it("surfaces UTF-16 safe tar stderr tail when listing fails with emoji at projection boundary", async () => {
+    vi.resetModules();
+    const oldNoise = "n".repeat(250);
+    // Length 201: raw slice(-200) would start on the low surrogate of 🤖.
+    const recent = "🤖" + "f".repeat(199);
+    vi.doMock("node:child_process", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("node:child_process")>();
+      return {
+        ...actual,
+        spawn: mockTarSpawn((child) => {
+          child.stderr.emit("data", Buffer.from(oldNoise));
+          child.stderr.emit("data", Buffer.from(recent));
+          child.emit("close", 2);
+        }),
+      };
+    });
+
+    try {
+      const { testing } = await import("./dir-fetch-tool.js");
+      const result = await testing.preValidateTarball(Buffer.from("x"));
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.reason).toContain(projectBoundedTextTail(recent, 200));
+        expect(result.reason).toContain("f".repeat(199));
+        expect(result.reason).not.toContain("🤖");
+        expect(
+          /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(
+            result.reason,
+          ),
+        ).toBe(false);
       }
     } finally {
       vi.doUnmock("node:child_process");

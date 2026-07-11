@@ -6,6 +6,7 @@ import type {
   OpenClawPluginNodeInvokePolicyContext,
   OpenClawPluginNodeInvokePolicyResult,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { appendBoundedTextTail, projectBoundedTextTail } from "./append-bounded-text-tail.js";
 import { appendFileTransferAudit, type FileTransferAuditOp } from "./audit.js";
 import { consumeChildOutput } from "./child-output.js";
 import {
@@ -22,6 +23,7 @@ const DIR_FETCH_MAX_ENTRIES = 5000;
 const DIR_FETCH_ARCHIVE_LIST_TIMEOUT_MS = 30_000;
 const DIR_FETCH_ARCHIVE_LIST_MAX_OUTPUT_BYTES = 32 * 1024 * 1024;
 const DIR_FETCH_ARCHIVE_LIST_STDERR_TAIL_CHARS = 4096;
+const DIR_FETCH_ARCHIVE_LIST_ERROR_STDERR_CHARS = 200;
 
 type FileTransferCommand = FileTransferNodeInvokeCommand;
 
@@ -29,11 +31,6 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
-}
-
-function appendBoundedTextTail(current: string, chunk: Buffer, maxChars: number): string {
-  const next = current + chunk.toString();
-  return next.length > maxChars ? next.slice(-maxChars) : next;
 }
 
 function readPath(params: Record<string, unknown>): string {
@@ -424,7 +421,7 @@ async function listDirFetchArchiveEntries(
         finish({
           ok: false,
           code: "ARCHIVE_ENTRIES_UNREADABLE",
-          reason: `tar -tzf exited ${code}: ${stderr.slice(-200)}`,
+          reason: `tar -tzf exited ${code}: ${projectBoundedTextTail(stderr, DIR_FETCH_ARCHIVE_LIST_ERROR_STDERR_CHARS)}`,
         });
         return;
       }
