@@ -1,6 +1,8 @@
 /**
  * Splits streamed embedded-agent replies into Markdown-safe message chunks.
  */
+
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { FenceSpan } from "../../packages/markdown-core/src/fences.js";
 import {
   findFenceSpanAt,
@@ -379,13 +381,19 @@ export class EmbeddedBlockChunker {
     }
 
     if (buffer.length >= maxChars) {
-      if (isSafeFenceBreak(fenceSpans, offset + maxChars)) {
-        return { index: maxChars };
+      const firstCodePointWidth = (buffer.codePointAt(0) ?? 0) > 0xffff ? 2 : 1;
+      const forcedBreakIndex = sliceUtf16Safe(
+        buffer,
+        0,
+        Math.max(maxChars, firstCodePointWidth),
+      ).length;
+      if (isSafeFenceBreak(fenceSpans, offset + forcedBreakIndex)) {
+        return { index: forcedBreakIndex };
       }
-      const fence = findFenceSpanAt(fenceSpans, offset + maxChars);
+      const fence = findFenceSpanAt(fenceSpans, offset + forcedBreakIndex);
       if (fence) {
         const closeFenceStart = findFenceCloseLineStart(buffer, fence, offset);
-        if (closeFenceStart >= minChars && closeFenceStart < maxChars) {
+        if (closeFenceStart >= minChars && closeFenceStart < forcedBreakIndex) {
           return {
             index: closeFenceStart,
             fenceSplit: {
@@ -396,7 +404,7 @@ export class EmbeddedBlockChunker {
           };
         }
         return {
-          index: maxChars,
+          index: forcedBreakIndex,
           fenceSplit: {
             closeFenceLine: `${fence.indent}${fence.marker}`,
             reopenFenceLine: fence.openLine,
@@ -404,7 +412,7 @@ export class EmbeddedBlockChunker {
           },
         };
       }
-      return { index: maxChars };
+      return { index: forcedBreakIndex };
     }
 
     return { index: -1 };

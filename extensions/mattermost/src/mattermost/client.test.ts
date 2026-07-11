@@ -13,6 +13,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
 
 import {
   createMattermostClient,
+  createMattermostDirectChannelWithRetry,
   createMattermostPost,
   normalizeMattermostBaseUrl,
   readMattermostError,
@@ -562,5 +563,42 @@ describe("updateMattermostPost", () => {
     expect(body.id).toBe("post1");
     expect(body.message).toBeUndefined();
     expect(body.props).toEqual({ attachments: [] });
+  });
+});
+
+describe("createMattermostDirectChannelWithRetry delay cap", () => {
+  it("keeps maxDelayMs authoritative when initialDelayMs exceeds it", async () => {
+    vi.useFakeTimers();
+    try {
+      const mockFetch = vi
+        .fn<typeof fetch>()
+        .mockRejectedValueOnce(new Error("Mattermost API 503 Service Unavailable"))
+        .mockRejectedValueOnce(new Error("Mattermost API 503 Service Unavailable"))
+        .mockResolvedValueOnce(Response.json({ id: "dm-channel-cap" }, { status: 201 }));
+      const client = createMattermostClient({
+        baseUrl: "https://mattermost.example.com",
+        botToken: "test-token",
+        fetchImpl: mockFetch,
+      });
+      const delays: number[] = [];
+      // The config schema allows initialDelayMs above the defaulted 10s
+      // maxDelayMs cap; the cap must still bound every retry delay instead of
+      // the base delay overriding it (regression guard for the core-retry
+      // migration, which raises maxDelayMs to the minDelayMs floor).
+      const promise = createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
+        maxRetries: 3,
+        initialDelayMs: 60_000,
+        onRetry: (_attempt, delayMs) => {
+          delays.push(delayMs);
+        },
+      });
+      await vi.runAllTimersAsync();
+      const result = await promise;
+      expect(result.id).toBe("dm-channel-cap");
+      expect(delays).toEqual([10_000, 10_000]);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
   });
 });
