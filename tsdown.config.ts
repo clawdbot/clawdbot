@@ -40,7 +40,7 @@ const env = {
 };
 const OUTPUT_SOURCE_MAPS = process.env.OUTPUT_SOURCE_MAPS === "1";
 const RUN_NODE_SKIP_DTS_BUILD = process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD === "1";
-const TSDOWN_DECLARATIONS = RUN_NODE_SKIP_DTS_BUILD ? false : true;
+const TSDOWN_DECLARATIONS = !RUN_NODE_SKIP_DTS_BUILD;
 
 const SUPPRESSED_EVAL_WARNING_PATHS = [
   "@protobufjs/inquire/index.js",
@@ -277,6 +277,7 @@ function buildCoreDistEntries(): Record<string, string> {
     "cli/gateway-lifecycle.runtime": "src/cli/gateway-cli/lifecycle.runtime.ts",
     "provider-dispatcher.runtime": "src/auto-reply/reply/provider-dispatcher.runtime.ts",
     "server-close.runtime": "src/gateway/server-close.runtime.ts",
+    "gateway/worker-environments/runtime": "src/gateway/worker-environments/runtime.ts",
     "plugins/hook-runner-global": "src/plugins/hook-runner-global.ts",
     "plugins/memory-state": "src/plugins/memory-state.ts",
     "plugins/synthetic-auth.runtime": "src/plugins/synthetic-auth.runtime.ts",

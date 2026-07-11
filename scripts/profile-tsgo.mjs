@@ -21,6 +21,10 @@ const GRAPH_DEFINITIONS = {
     config: "tsconfig.core.json",
     description: "core production graph",
   },
+  ui: {
+    config: "tsconfig.ui.json",
+    description: "UI production graph",
+  },
   "core-test": {
     config: "test/tsconfig/tsconfig.core.test.json",
     description: "core colocated test graph",

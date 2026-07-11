@@ -1,4 +1,5 @@
 // Test Extension tests cover test extension script behavior.
+/* oxlint-disable typescript/no-unnecessary-type-parameters -- explicit call-site result types keep mock tuple extraction precise. */
 import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -45,7 +46,7 @@ function runScriptResult(args: string[], cwd = process.cwd()) {
   });
 }
 
-function requireFirstMockArg<T>(mock: { mock: { calls: Array<[T, ...unknown[]]> } }): T {
+function requireFirstMockArg<T>(mock: { mock: { calls: readonly (readonly unknown[])[] } }): T {
   const [call] = mock.mock.calls;
   if (!call) {
     throw new Error("expected first mock call argument");
@@ -54,7 +55,7 @@ function requireFirstMockArg<T>(mock: { mock: { calls: Array<[T, ...unknown[]]> 
   if (arg === undefined) {
     throw new Error("expected first mock call argument");
   }
-  return arg;
+  return arg as T;
 }
 
 function findExtensionWithoutTests() {
@@ -522,7 +523,7 @@ describe("scripts/test-extension.mjs", () => {
 
     expect(shards).toHaveLength(DEFAULT_EXTENSION_TEST_SHARD_COUNT);
     expect(shards.map((shard) => shard.checkName)).toEqual(
-      shards.map((shard, index) => `checks-node-extensions-shard-${index + 1}`),
+      shards.map((_shard, index) => `checks-node-extensions-shard-${index + 1}`),
     );
 
     const assigned = shards.flatMap((shard) => shard.extensionIds);
@@ -593,7 +594,9 @@ describe("scripts/test-extension.mjs", () => {
       },
       {
         env: { OPENCLAW_EXTENSION_BATCH_PARALLEL: "2" },
-        runGroup,
+        runGroup: runGroup as NonNullable<
+          NonNullable<Parameters<typeof runExtensionBatchPlan>[1]>["runGroup"]
+        >,
         vitestArgs: ["--reporter=dot"],
       },
     );

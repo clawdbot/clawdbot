@@ -2918,62 +2918,6 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   }
 }
 
-.chat-queue__item--steered {
-  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
-}
-
-.chat-queue__main {
-  min-width: 0;
-}
-
-.chat-queue__actions {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-}
-
-.chat-queue__steer,
-.chat-queue__retry {
-  align-self: start;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 8px;
-  color: var(--accent);
-  font-size: 12px;
-  line-height: 1;
-}
-
-.chat-queue__steer svg,
-.chat-queue__retry svg {
-  width: 13px;
-  height: 13px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.chat-queue__steer:hover:not(:disabled),
-.chat-queue__retry:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-}
-
-.chat-queue__badge {
-  display: inline-flex;
-  width: fit-content;
-  margin-bottom: 6px;
-  flex-shrink: 0;
-  padding: 2px 6px;
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  color: var(--accent);
-  font-size: 0.68rem;
-  font-weight: 600;
-  line-height: 1.2;
-}
-
 .slash-menu {
   position: absolute;
   bottom: 100%;

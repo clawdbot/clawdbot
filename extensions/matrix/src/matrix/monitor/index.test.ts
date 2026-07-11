@@ -50,13 +50,11 @@ const hoisted = vi.hoisted(() => {
     dm: {},
   };
   const inboundDeduper = {
-    claimEvent: vi.fn(() => true),
+    claimEvent: vi.fn(async () => true),
     commitEvent: vi.fn(async () => undefined),
     releaseEvent: vi.fn(),
-    flush: vi.fn(async () => undefined),
-    stop: vi.fn(async () => undefined),
   };
-  const createMatrixInboundEventDeduper = vi.fn(async () => inboundDeduper);
+  const createMatrixInboundEventDeduper = vi.fn(() => inboundDeduper);
   const client = Object.assign(createEmitter(), {
     id: "matrix-client",
     hasPersistedSyncState: vi.fn(() => false),
@@ -503,12 +501,10 @@ describe("monitorMatrixProvider", () => {
     hoisted.client.hasPersistedSyncState.mockReset().mockReturnValue(false);
     hoisted.client.stopSyncWithoutPersist.mockReset();
     hoisted.client.drainPendingDecryptions.mockReset().mockResolvedValue(undefined);
-    hoisted.inboundDeduper.claimEvent.mockReset().mockReturnValue(true);
+    hoisted.inboundDeduper.claimEvent.mockReset().mockResolvedValue(true);
     hoisted.inboundDeduper.commitEvent.mockReset().mockResolvedValue(undefined);
     hoisted.inboundDeduper.releaseEvent.mockReset();
-    hoisted.inboundDeduper.flush.mockReset().mockResolvedValue(undefined);
-    hoisted.inboundDeduper.stop.mockReset().mockResolvedValue(undefined);
-    hoisted.createMatrixInboundEventDeduper.mockReset().mockResolvedValue(hoisted.inboundDeduper);
+    hoisted.createMatrixInboundEventDeduper.mockReset().mockReturnValue(hoisted.inboundDeduper);
     hoisted.backfillMatrixAuthDeviceIdAfterStartup.mockReset().mockResolvedValue(undefined);
     hoisted.runMatrixStartupMaintenance.mockReset().mockResolvedValue(undefined);
     hoisted.createMatrixRoomMessageHandler.mockReset().mockReturnValue(vi.fn());
@@ -728,7 +724,9 @@ describe("monitorMatrixProvider", () => {
   });
 
   it("releases the prepared client when startup fails before later resources exist", async () => {
-    hoisted.createMatrixInboundEventDeduper.mockRejectedValue(new Error("deduper failed"));
+    hoisted.createMatrixInboundEventDeduper.mockImplementation(() => {
+      throw new Error("deduper failed");
+    });
 
     await expect(
       monitorMatrixProvider({
@@ -737,7 +735,6 @@ describe("monitorMatrixProvider", () => {
     ).rejects.toThrow("deduper failed");
 
     expect(hoisted.releaseSharedClientInstance).toHaveBeenCalledWith(hoisted.client, "persist");
-    expect(hoisted.inboundDeduper.stop).not.toHaveBeenCalled();
     expectLastStatusFields({
       accountId: "default",
       connected: false,
@@ -909,9 +906,6 @@ describe("monitorMatrixProvider", () => {
       hoisted.callOrder.push("release-client");
       return true;
     });
-    hoisted.inboundDeduper.stop.mockImplementation(async () => {
-      hoisted.callOrder.push("stop-deduper");
-    });
 
     const monitorPromise = monitorMatrixProvider({ abortSignal: abortController.signal });
     await waitForCallOrderEntry("start-client");
@@ -923,7 +917,7 @@ describe("monitorMatrixProvider", () => {
     const roomMessagePromise = onRoomMessage("!room:example.org", { event_id: "$event" });
     abortController.abort();
     await waitForCallOrderEntry("pause-client");
-    expect(hoisted.callOrder).not.toContain("stop-deduper");
+    expect(hoisted.callOrder).not.toContain("stop-manager");
 
     if (resolveHandler === null) {
       throw new Error("expected in-flight handler to be pending");
@@ -942,9 +936,6 @@ describe("monitorMatrixProvider", () => {
       hoisted.callOrder.indexOf("stop-manager"),
     );
     expect(hoisted.callOrder.indexOf("stop-manager")).toBeLessThan(
-      hoisted.callOrder.indexOf("stop-deduper"),
-    );
-    expect(hoisted.callOrder.indexOf("stop-deduper")).toBeLessThan(
       hoisted.callOrder.indexOf("release-client"),
     );
   });

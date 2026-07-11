@@ -161,6 +161,14 @@ describe("tsdown config", () => {
     );
   });
 
+  it("keeps worker environment bootstrap behind one stable dist entry", () => {
+    const distGraph = requireUnifiedDistGraph();
+
+    expect(entrySources(distGraph)["gateway/worker-environments/runtime"]).toBe(
+      "src/gateway/worker-environments/runtime.ts",
+    );
+  });
+
   it("keeps PI model discovery synthetic auth refs behind one stable runtime dist entry", () => {
     const distGraph = requireUnifiedDistGraph();
     const importSpecifiers = [

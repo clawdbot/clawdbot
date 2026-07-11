@@ -443,7 +443,12 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadDoctorHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["environments.list", "environments.status"],
+    methods: [
+      "environments.list",
+      "environments.status",
+      "environments.create",
+      "environments.destroy",
+    ],
     loadHandlers: loadEnvironmentsHandlers,
   }),
   ...createLazyCoreHandlers({

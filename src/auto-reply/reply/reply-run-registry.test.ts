@@ -4,6 +4,7 @@ import { createAgentRunRestartAbortError } from "../../agents/run-termination.js
 import {
   getDiagnosticSessionActivitySnapshot,
   resetDiagnosticRunActivityForTest,
+  RUN_STALE_TAKEOVER_MS,
 } from "../../logging/diagnostic-run-activity.js";
 import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../../shared/number-coercion.js";
@@ -18,7 +19,6 @@ import {
   isReplyRunAbortableForSignal,
   queueReplyRunMessage,
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
-  REPLY_RUN_STALE_TAKEOVER_MS,
   REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS,
   replyRunRegistry,
   runAfterReplyOperationClear,
@@ -901,7 +901,7 @@ describe("reply run registry", () => {
       });
       operation.setPhase("running");
 
-      vi.advanceTimersByTime(REPLY_RUN_STALE_TAKEOVER_MS + 1);
+      vi.advanceTimersByTime(RUN_STALE_TAKEOVER_MS + 1);
 
       expect(queueReplyRunMessage("session-running", "stale")).toBe(false);
       expect(queueMessage).not.toHaveBeenCalled();

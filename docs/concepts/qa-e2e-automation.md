@@ -307,7 +307,7 @@ For an agent/CV style desktop task, run:
 pnpm openclaw qa mantis visual-task \
   --browser-url https://example.net \
   --expect-text "Example Domain" \
-  --vision-model openai/gpt-5.5
+  --vision-model openai/gpt-5.6-luna
 ```
 
 `visual-task` leases or reuses a Crabbox desktop/browser machine, starts
@@ -560,8 +560,8 @@ Run the Mantis status-reaction scenario explicitly:
 pnpm openclaw qa discord \
   --scenario discord-status-reactions-tool-only \
   --provider-mode live-frontier \
-  --model openai/gpt-5.5 \
-  --alt-model openai/gpt-5.5 \
+  --model openai/gpt-5.6-luna \
+  --alt-model openai/gpt-5.6-luna \
   --fast
 ```
 
@@ -617,6 +617,18 @@ Imperative Slack scenarios (`extensions/qa-lab/src/live-transports/slack/slack-l
 - `slack-reaction-glyph-native` - opt-in live message-tool reaction scenario.
   Instructs the agent to pass the exact `✅` glyph and confirms Slack stored
   `white_check_mark` for the SUT bot on the target message.
+- `slack-chart-presentation-native` - opt-in portable chart scenario that
+  verifies the native `data_visualization` block and exact accessible text.
+- `slack-table-presentation-native` - opt-in portable table scenario that
+  verifies the native `data_table` block, exact rows, and accessible text.
+- `slack-table-invalid-blocks-fallback` - opt-in direct-transport scenario
+  that sends a structurally readable over-limit raw table with 101 data rows
+  plus its header through the
+  production Slack send path, proves Slack itself returns `invalid_blocks`,
+  and verifies the stored formatting-disabled fallback is complete and has no
+  native data block. The report keeps only safe error-code, count, and boolean
+  evidence; raw synthetic table text follows
+  `OPENCLAW_QA_SLACK_CAPTURE_CONTENT`.
 - `slack-approval-exec-native` - opt-in native Slack exec approval scenario.
   Requests an exec approval through the gateway, verifies the Slack message
   has native approval buttons, resolves it, and verifies the resolved Slack
@@ -1219,7 +1231,7 @@ model refs and write a judged Markdown report:
 
 ```bash
 pnpm openclaw qa character-eval \
-  --model openai/gpt-5.5,thinking=medium,fast \
+  --model openai/gpt-5.6-luna,thinking=medium,fast \
   --model openai/gpt-5.2,thinking=xhigh \
   --model openai/gpt-5,thinking=xhigh \
   --model anthropic/claude-opus-4-8,thinking=high \
@@ -1227,7 +1239,7 @@ pnpm openclaw qa character-eval \
   --model zai/glm-5.1,thinking=high \
   --model moonshot/kimi-k2.5,thinking=high \
   --model google/gemini-3.1-pro-preview,thinking=high \
-  --judge-model openai/gpt-5.5,thinking=xhigh,fast \
+  --judge-model openai/gpt-5.6-sol,thinking=xhigh,fast \
   --judge-model anthropic/claude-opus-4-8,thinking=high \
   --blind-judge-models \
   --concurrency 16 \
@@ -1245,7 +1257,7 @@ providers: the judge prompt still gets every transcript and run status, but
 candidate refs are replaced with neutral labels such as `candidate-01`; the
 report maps rankings back to real refs after parsing.
 
-Candidate runs default to `high` thinking, with `medium` for GPT-5.5 and
+Candidate runs default to `high` thinking, with `medium` for GPT-5.6 Luna and
 `xhigh` for older OpenAI eval refs that support it. Override a specific
 candidate inline with `--model provider/model,thinking=<level>`; inline
 options also support `fast`, `no-fast`, and `fast=<bool>`. `--thinking
@@ -1260,11 +1272,11 @@ Lower `--concurrency` or `--judge-concurrency` when provider limits or local
 gateway pressure make a run too noisy.
 
 When no candidate `--model` is passed, the character eval defaults to
-`openai/gpt-5.5`, `openai/gpt-5.2`, `openai/gpt-5`,
+`openai/gpt-5.6-luna`, `openai/gpt-5.2`, `openai/gpt-5`,
 `anthropic/claude-opus-4-8`, `anthropic/claude-sonnet-4-6`, `zai/glm-5.1`,
 `moonshot/kimi-k2.5`, and `google/gemini-3.1-pro-preview`. When no
 `--judge-model` is passed, the judges default to
-`openai/gpt-5.5,thinking=xhigh,fast` and
+`openai/gpt-5.6-sol,thinking=xhigh,fast` and
 `anthropic/claude-opus-4-8,thinking=high`.
 
 ## Related docs

@@ -31,6 +31,9 @@ export {
   createChannelReplyPipeline as createChannelMessageReplyPipeline,
   resolveChannelSourceReplyDeliveryMode as resolveChannelMessageSourceReplyDeliveryMode,
 } from "../channels/message/index.js";
+// Bare interval/stop orchestration for channels that own their typing renewal
+// policy (e.g. per-message reply budgets) instead of the createTypingCallbacks lifecycle.
+export { createTypingKeepaliveLoop } from "../channels/typing-lifecycle.js";
 
 export {
   createFinalizableDraftLifecycle,

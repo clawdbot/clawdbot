@@ -58,6 +58,29 @@ export type CodexSessionsUiState = {
   archivedSessionKeys: Set<string>;
   actionError: string | null;
   actionGeneration: number;
+  transcriptKey: string;
+  transcriptItems: CodexTranscriptItem[];
+  transcriptNextCursor: string | null;
+  transcriptRequestedCursors: Set<string>;
+  transcriptLoading: boolean;
+  transcriptError: string | null;
+  transcriptGeneration: number;
+};
+
+export type CodexTranscriptItem = {
+  id?: string;
+  type?: string;
+  text?: string;
+  [key: string]: unknown;
+};
+
+export type CodexTranscriptPage = {
+  hostId: string;
+  label: string;
+  threadId: string;
+  items: CodexTranscriptItem[];
+  nextCursor?: string;
+  backwardsCursor?: string;
 };
 
 export type CodexSessionPendingAction = "continue" | "archive";
@@ -70,6 +93,7 @@ export type CodexContinueResult = {
 const LIST_METHOD = "codex.sessions.list";
 const CONTINUE_METHOD = "codex.sessions.continue";
 const ARCHIVE_METHOD = "codex.sessions.archive";
+const READ_METHOD = "codex.sessions.read";
 const PAGE_SIZE = 40;
 const POLL_INTERVAL_MS = 30_000;
 const SEARCH_DEBOUNCE_MS = 250;
@@ -101,6 +125,13 @@ export function getCodexSessionsState(host: object): CodexSessionsUiState {
       archivedSessionKeys: new Set(),
       actionError: null,
       actionGeneration: 0,
+      transcriptKey: "",
+      transcriptItems: [],
+      transcriptNextCursor: null,
+      transcriptRequestedCursors: new Set(),
+      transcriptLoading: false,
+      transcriptError: null,
+      transcriptGeneration: 0,
     };
     codexSessionStates.set(host, state);
   }
@@ -205,6 +236,111 @@ function clearCatalogContext(state: CodexSessionsUiState): void {
   state.pendingSessionActions = new Map();
   state.archivedSessionKeys = new Set();
   state.actionError = null;
+  state.transcriptKey = "";
+  state.transcriptItems = [];
+  state.transcriptNextCursor = null;
+  state.transcriptRequestedCursors = new Set();
+  state.transcriptLoading = false;
+  state.transcriptError = null;
+  state.transcriptGeneration += 1;
+}
+
+export async function loadCodexTranscript(
+  state: CodexSessionsUiState,
+  client: GatewayBrowserClient | null,
+  hostId: string,
+  threadId: string,
+  options: { append?: boolean } = {},
+): Promise<void> {
+  if (!client) {
+    return;
+  }
+  const key = sessionActionKey(hostId, threadId);
+  if (state.transcriptLoading && state.transcriptKey === key) {
+    return;
+  }
+  const append = options.append === true && state.transcriptKey === key;
+  const cursor = append ? state.transcriptNextCursor : null;
+  if (append && !cursor) {
+    return;
+  }
+  if (!append) {
+    state.transcriptKey = key;
+    state.transcriptItems = [];
+    state.transcriptNextCursor = null;
+    state.transcriptRequestedCursors = new Set();
+  } else if (cursor) {
+    if (state.transcriptRequestedCursors.has(cursor)) {
+      state.transcriptError = "Codex transcript returned a repeated page cursor";
+      notify(state);
+      return;
+    }
+  }
+  state.transcriptLoading = true;
+  state.transcriptError = null;
+  const generation = ++state.transcriptGeneration;
+  notify(state);
+  try {
+    const page = await client.request<CodexTranscriptPage>(READ_METHOD, {
+      hostId,
+      threadId,
+      limit: 20,
+      ...(cursor ? { cursor } : {}),
+    });
+    if (generation !== state.transcriptGeneration || state.transcriptKey !== key) {
+      return;
+    }
+    const requestedCursors = new Set(state.transcriptRequestedCursors);
+    if (cursor) {
+      requestedCursors.add(cursor);
+    }
+    const nextCursor = page.nextCursor?.trim() || null;
+    if (nextCursor && requestedCursors.has(nextCursor)) {
+      state.transcriptNextCursor = null;
+      throw new Error("Codex transcript returned a repeated page cursor");
+    }
+    state.transcriptRequestedCursors = requestedCursors;
+    const chronologicalItems = page.items.toReversed();
+    state.transcriptItems = append
+      ? [...chronologicalItems, ...state.transcriptItems]
+      : chronologicalItems;
+    state.transcriptNextCursor = nextCursor;
+  } catch (error) {
+    if (generation === state.transcriptGeneration && state.transcriptKey === key) {
+      state.transcriptError = messageForError(error);
+    }
+  } finally {
+    if (generation === state.transcriptGeneration) {
+      state.transcriptLoading = false;
+      notify(state);
+    }
+  }
+}
+
+export function bindCodexTranscript(
+  state: CodexSessionsUiState,
+  client: GatewayBrowserClient | null,
+  hostId: string,
+  threadId: string,
+): void {
+  const key = sessionActionKey(hostId, threadId);
+  if (state.transcriptKey !== key) {
+    void loadCodexTranscript(state, client, hostId, threadId);
+  }
+}
+
+/** Retires the selected transcript when the detail route is left. */
+export function unbindCodexTranscript(state: CodexSessionsUiState): void {
+  if (!state.transcriptKey) {
+    return;
+  }
+  state.transcriptKey = "";
+  state.transcriptItems = [];
+  state.transcriptNextCursor = null;
+  state.transcriptRequestedCursors = new Set();
+  state.transcriptLoading = false;
+  state.transcriptError = null;
+  state.transcriptGeneration += 1;
 }
 
 /** Loads a fresh first page for every visible Codex host. */

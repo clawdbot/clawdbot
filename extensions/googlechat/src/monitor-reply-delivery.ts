@@ -5,6 +5,11 @@ import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { deleteGoogleChatMessage, sendGoogleChatMessage, updateGoogleChatMessage } from "./api.js";
 import type { GoogleChatCoreRuntime, GoogleChatRuntimeEnv } from "./monitor-types.js";
 
+export type GoogleChatTypingMessage = {
+  name: string;
+  thread?: string;
+};
+
 export async function deliverGoogleChatReply(params: {
   payload: {
     text?: string;
@@ -18,15 +23,28 @@ export async function deliverGoogleChatReply(params: {
   core: GoogleChatCoreRuntime;
   config: OpenClawConfig;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
-  typingMessageName?: string;
+  typingMessage?: GoogleChatTypingMessage;
 }): Promise<void> {
   const { payload, account, spaceId, runtime, core, config, statusSink } = params;
   // Clear this whenever the typing message is deleted or unavailable; otherwise
   // text delivery can keep retrying a dead message and drop content.
-  let typingMessageName = params.typingMessageName;
+  let typingMessage = params.typingMessage;
+  const replyThreadName = payload.replyToId?.trim() || undefined;
+  const typingMessageThreadName = typingMessage?.thread?.trim() || undefined;
   const reply = resolveSendableOutboundReplyParts(payload);
   const text = reply.text;
   let firstTextChunk = true;
+
+  if (typingMessage && typingMessageThreadName !== replyThreadName) {
+    // Typing starts before reply directives are resolved. Never edit a placeholder
+    // from one thread into a final reply targeted at another conversation surface.
+    try {
+      await deleteGoogleChatMessage({ account, messageName: typingMessage.name });
+    } catch (err) {
+      runtime.error?.(`Google Chat typing cleanup failed: ${String(err)}`);
+    }
+    typingMessage = undefined;
+  }
 
   if (reply.hasMedia) {
     runtime.error?.(
@@ -36,8 +54,8 @@ export async function deliverGoogleChatReply(params: {
 
   if (reply.hasMedia && !reply.hasText) {
     try {
-      if (typingMessageName) {
-        await deleteGoogleChatMessage({ account, messageName: typingMessageName });
+      if (typingMessage) {
+        await deleteGoogleChatMessage({ account, messageName: typingMessage.name });
       }
     } catch (err) {
       runtime.error?.(`Google Chat typing cleanup failed: ${String(err)}`);
@@ -54,7 +72,7 @@ export async function deliverGoogleChatReply(params: {
       account,
       space: spaceId,
       text: chunk,
-      thread: payload.replyToId,
+      thread: replyThreadName,
     });
   };
   const chunks = core.channel.text.chunkMarkdownTextWithMode(text, chunkLimit, chunkMode);
@@ -63,10 +81,10 @@ export async function deliverGoogleChatReply(params: {
       continue;
     }
     try {
-      if (firstTextChunk && typingMessageName) {
+      if (firstTextChunk && typingMessage) {
         await updateGoogleChatMessage({
           account,
-          messageName: typingMessageName,
+          messageName: typingMessage.name,
           text: chunk,
         });
       } else {
@@ -76,8 +94,8 @@ export async function deliverGoogleChatReply(params: {
       statusSink?.({ lastOutboundAt: Date.now() });
     } catch (err) {
       runtime.error?.(`Google Chat message send failed: ${String(err)}`);
-      if (firstTextChunk && typingMessageName) {
-        typingMessageName = undefined;
+      if (firstTextChunk && typingMessage) {
+        typingMessage = undefined;
         try {
           await sendTextMessage(chunk);
           statusSink?.({ lastOutboundAt: Date.now() });

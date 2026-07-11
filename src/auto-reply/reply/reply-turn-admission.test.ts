@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import {
   markDiagnosticToolStartedForTest,
   resetDiagnosticRunActivityForTest,
+  RUN_STALE_TAKEOVER_MS,
 } from "../../logging/diagnostic-run-activity.js";
 import {
   interruptSessionWorkAdmissions,
@@ -14,7 +15,6 @@ import {
 import {
   createReplyOperation,
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
-  REPLY_RUN_STALE_TAKEOVER_MS,
   REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS,
   replyRunRegistry,
   runAfterReplyOperationClear,
@@ -947,7 +947,7 @@ describe("reply turn admission", () => {
         isStreaming: () => true,
       });
       active.setPhase("running");
-      vi.setSystemTime(startedAt + REPLY_RUN_STALE_TAKEOVER_MS + 1);
+      vi.setSystemTime(startedAt + RUN_STALE_TAKEOVER_MS + 1);
 
       const result = await admitReplyTurn({
         sessionKey: "agent:main:telegram:topic:stale-visible",
@@ -1084,7 +1084,7 @@ describe("reply turn admission", () => {
           isStreaming: () => true,
         });
         active.setPhase("running");
-        vi.setSystemTime(startedAt + REPLY_RUN_STALE_TAKEOVER_MS + 1);
+        vi.setSystemTime(startedAt + RUN_STALE_TAKEOVER_MS + 1);
 
         const admission = admitReplyTurn({
           sessionKey: `agent:main:telegram:topic:stale-${kind}`,

@@ -20,16 +20,16 @@ const MODELS = {
     maxTokens: 8192,
   },
   openai: {
-    id: "gpt-5.5",
-    name: "GPT-5.5",
+    id: "gpt-5.6-sol",
+    name: "GPT-5.6 Sol",
     api: "openai-responses",
     provider: "openai",
     baseUrl: "https://api.openai.com/v1",
     reasoning: true,
     input: ["text"],
-    cost: { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0 },
-    contextWindow: 400_000,
-    maxTokens: 16_384,
+    cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
+    contextWindow: 1_050_000,
+    maxTokens: 128_000,
   },
   // Local Ollama server; no API key required.
   ollama: {

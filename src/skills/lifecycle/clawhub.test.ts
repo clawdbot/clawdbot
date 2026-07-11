@@ -1363,6 +1363,7 @@ describe("skills-clawhub", () => {
 
   it("installs GitHub-backed ClawHub skills from the pinned resolver source path", async () => {
     const commit = "b".repeat(40);
+    const paddedCommit = `  ${commit.toUpperCase()}\n`;
     fetchClawHubSkillInstallResolutionMock.mockResolvedValueOnce({
       ok: true,
       slug: "aiq-deploy",
@@ -1370,7 +1371,7 @@ describe("skills-clawhub", () => {
       github: {
         repo: "NVIDIA/skills",
         path: "skills/aiq-deploy",
-        commit,
+        commit: paddedCommit,
         contentHash: "hash-aiq-deploy",
         sourceUrl: `https://github.com/NVIDIA/skills/tree/${commit}/skills/aiq-deploy`,
       },
@@ -1415,6 +1416,32 @@ describe("skills-clawhub", () => {
       version: commit,
       targetDir: "/tmp/workspace/skills/aiq-deploy",
     });
+  });
+
+  it("rejects a mutable GitHub ref before downloading a ClawHub skill", async () => {
+    fetchClawHubSkillInstallResolutionMock.mockResolvedValueOnce({
+      ok: true,
+      slug: "aiq-deploy",
+      installKind: "github",
+      github: {
+        repo: "NVIDIA/skills",
+        path: "skills/aiq-deploy",
+        commit: "main",
+        contentHash: "hash-aiq-deploy",
+        sourceUrl: "https://github.com/NVIDIA/skills/tree/main/skills/aiq-deploy",
+      },
+    });
+
+    const result = await installSkillFromClawHub({
+      workspaceDir: "/tmp/workspace",
+      slug: "aiq-deploy",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok ? "" : result.error).toContain("expected a full 40-character commit SHA");
+    expect(downloadClawHubGitHubSkillArchiveMock).not.toHaveBeenCalled();
+    expect(withExtractedArchiveRootMock).not.toHaveBeenCalled();
+    expect(installPackageDirMock).not.toHaveBeenCalled();
   });
 
   it("passes forceInstall to the ClawHub install resolver", async () => {

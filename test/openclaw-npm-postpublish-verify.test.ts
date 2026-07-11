@@ -132,7 +132,7 @@ describe("npm registry provenance verification", () => {
 
     await expect(
       fetchRegistryJson("https://registry.example/openclaw", {
-        fetchImpl,
+        fetchImpl: fetchImpl as typeof fetch,
         timeoutMs: 1234,
       }),
     ).resolves.toEqual({ ok: true });

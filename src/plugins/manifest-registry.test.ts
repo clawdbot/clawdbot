@@ -2317,6 +2317,7 @@ describe("loadPluginManifestRegistry", () => {
       contracts: {
         externalAuthProviders: ["acme-ai"],
         usageProviders: ["acme-ai"],
+        workerProviders: [" static-ssh ", ""],
       },
       configSchema: { type: "object" },
     });
@@ -2330,6 +2331,7 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.contracts).toEqual({
       externalAuthProviders: ["acme-ai"],
       usageProviders: ["acme-ai"],
+      workerProviders: ["static-ssh"],
     });
   });
 

@@ -155,6 +155,17 @@ export const BUILD_ALL_PROFILES = {
     "build-stamp",
     "runtime-postbuild-stamp",
   ],
+  sourcePerformance: [
+    "plugins:assets:build",
+    "tsdown",
+    "check-cli-bootstrap-imports",
+    "plugins:assets:copy",
+    "runtime-postbuild",
+    "build-stamp",
+    "runtime-postbuild-stamp",
+    "write-cli-startup-metadata",
+    "write-cli-compat",
+  ],
   cliStartup: [
     "tsdown",
     "check-cli-bootstrap-imports",
@@ -189,6 +200,12 @@ export const BUILD_ALL_PROFILE_STEP_ENV = {
   qaRuntime: {
     tsdown: {
       OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+    },
+  },
+  sourcePerformance: {
+    tsdown: {
+      OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+      OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
     },
   },
   cliStartup: {

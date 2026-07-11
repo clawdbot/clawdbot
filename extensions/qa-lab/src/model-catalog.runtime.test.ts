@@ -51,7 +51,7 @@ async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
 }
 
 describe("qa runner model catalog", () => {
-  it("filters to available rows and prefers gpt-5.5 first", () => {
+  it("filters to available rows and prefers gpt-5.6-luna first", () => {
     expect(
       selectQaRunnerModelOptions([
         {
@@ -62,8 +62,8 @@ describe("qa runner model catalog", () => {
           missing: false,
         },
         {
-          key: "openai/gpt-5.5",
-          name: "gpt-5.5",
+          key: "openai/gpt-5.6-luna",
+          name: "gpt-5.6-luna",
           input: "text,image",
           available: true,
           missing: false,
@@ -76,7 +76,7 @@ describe("qa runner model catalog", () => {
           missing: false,
         },
       ]).map((entry) => entry.key),
-    ).toEqual(["openai/gpt-5.5", "anthropic/claude-sonnet-4-6"]);
+    ).toEqual(["openai/gpt-5.6-luna", "anthropic/claude-sonnet-4-6"]);
   });
 
   it("reports malformed catalog JSON with an owned error", () => {
@@ -92,8 +92,8 @@ describe("qa runner model catalog", () => {
           models: [
             null,
             {
-              key: "openai/gpt-5.5",
-              name: "gpt-5.5",
+              key: "openai/gpt-5.6-luna",
+              name: "gpt-5.6-luna",
               input: "text,image",
               available: true,
               missing: false,
@@ -101,7 +101,7 @@ describe("qa runner model catalog", () => {
           ],
         }),
       ).map((entry) => entry.key),
-    ).toEqual(["openai/gpt-5.5"]);
+    ).toEqual(["openai/gpt-5.6-luna"]);
   });
 
   it.runIf(process.platform !== "win32")(

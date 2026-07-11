@@ -263,7 +263,9 @@ const createDefaultRegistry = () =>
       plugin: createStubPlugin({
         id: "discord",
         label: "Discord",
-        resolveReplyToMode: createTopLevelChannelReplyToModeResolverForTest("discord"),
+        resolveReplyToMode: createTopLevelChannelReplyToModeResolverForTest(
+          "discord",
+        ) as Parameters<typeof createStubPlugin>[0]["resolveReplyToMode"],
       }),
       source: "test",
     },
@@ -282,7 +284,9 @@ const createDefaultRegistry = () =>
         ...createStubPlugin({
           id: "telegram",
           label: "Telegram",
-          resolveReplyToMode: createTopLevelChannelReplyToModeResolverForTest("telegram"),
+          resolveReplyToMode: createTopLevelChannelReplyToModeResolverForTest(
+            "telegram",
+          ) as Parameters<typeof createStubPlugin>[0]["resolveReplyToMode"],
         }),
         status: {
           buildChannelSummary: async () => ({

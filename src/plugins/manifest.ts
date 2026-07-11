@@ -436,6 +436,7 @@ export type PluginManifestContracts = {
   webContentExtractors?: string[];
   webFetchProviders?: string[];
   webSearchProviders?: string[];
+  workerProviders?: string[];
   /** Provider ids whose plugin owns usage auth and snapshot hooks. */
   usageProviders?: string[];
   migrationProviders?: string[];
@@ -895,6 +896,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   const webContentExtractors = normalizeTrimmedStringList(value.webContentExtractors);
   const webFetchProviders = normalizeTrimmedStringList(value.webFetchProviders);
   const webSearchProviders = normalizeTrimmedStringList(value.webSearchProviders);
+  const workerProviders = normalizeTrimmedStringList(value.workerProviders);
   const usageProviders = normalizeTrimmedStringList(value.usageProviders);
   const migrationProviders = normalizeTrimmedStringList(value.migrationProviders);
   const gatewayMethodDispatch = normalizeTrimmedStringList(value.gatewayMethodDispatch);
@@ -918,6 +920,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
     ...(webContentExtractors.length > 0 ? { webContentExtractors } : {}),
     ...(webFetchProviders.length > 0 ? { webFetchProviders } : {}),
     ...(webSearchProviders.length > 0 ? { webSearchProviders } : {}),
+    ...(workerProviders.length > 0 ? { workerProviders } : {}),
     ...(usageProviders.length > 0 ? { usageProviders } : {}),
     ...(migrationProviders.length > 0 ? { migrationProviders } : {}),
     ...(gatewayMethodDispatch.length > 0 ? { gatewayMethodDispatch } : {}),

@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import type { QaProviderMode } from "../../extensions/qa-lab/src/run-config.ts";
 
 function parseBoolean(value: string | undefined) {
   const normalized = value?.trim().toLowerCase();
@@ -132,7 +133,7 @@ async function main() {
     repoRoot,
     outputDir,
     sutOpenClawCommand,
-    providerMode: process.env.OPENCLAW_NPM_TELEGRAM_PROVIDER_MODE,
+    providerMode: process.env.OPENCLAW_NPM_TELEGRAM_PROVIDER_MODE as QaProviderMode | undefined,
     primaryModel: process.env.OPENCLAW_NPM_TELEGRAM_MODEL,
     alternateModel: process.env.OPENCLAW_NPM_TELEGRAM_ALT_MODEL,
     fastMode: parseBoolean(process.env.OPENCLAW_NPM_TELEGRAM_FAST),
@@ -152,7 +153,13 @@ async function main() {
 
 async function formatRunnerErrorMessage(error: unknown) {
   try {
-    const { formatErrorMessage } = await import("../../dist/infra/errors.js");
+    // Widen the specifier so the source-only test-root program does not try to
+    // resolve dist (TS2307); the docker-e2e boundary guard requires importing
+    // built dist here, so the cast stays structural instead of a src reference.
+    const distErrorsPath = "../../dist/infra/errors.js" as string;
+    const { formatErrorMessage } = (await import(distErrorsPath)) as {
+      formatErrorMessage: (err: unknown) => string;
+    };
     return formatErrorMessage(error);
   } catch {
     return error instanceof Error ? error.message : String(error);

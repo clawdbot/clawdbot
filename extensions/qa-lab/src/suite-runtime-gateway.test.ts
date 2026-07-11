@@ -42,8 +42,8 @@ function createConfigMutationEnv(
       waitReady,
     },
     providerMode: "mock-openai",
-    primaryModel: "openai/gpt-5.5",
-    alternateModel: "openai/gpt-5.5-mini",
+    primaryModel: "openai/gpt-5.6-luna",
+    alternateModel: "openai/gpt-5.6-luna-mini",
   } as unknown as QaSuiteRuntimeEnv;
   return { env, waitReady };
 }
@@ -105,7 +105,7 @@ describe("qa suite gateway helpers", () => {
         profile: "coding",
       },
       agents: {
-        list: [{ id: "qa", model: { primary: "openai/gpt-5.5" } }],
+        list: [{ id: "qa", model: { primary: "openai/gpt-5.6-luna" } }],
       },
     };
 

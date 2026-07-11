@@ -244,7 +244,7 @@ Paste (bracketed by default):
 {
   tools: {
     exec: {
-      applyPatch: { workspaceOnly: true, allowModels: ["gpt-5.5"] },
+      applyPatch: { workspaceOnly: true, allowModels: ["gpt-5.6-sol"] },
     },
   },
 }

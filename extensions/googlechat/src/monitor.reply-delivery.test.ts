@@ -77,7 +77,10 @@ describe("Google Chat reply delivery", () => {
       core,
       config,
       statusSink,
-      typingMessageName: "spaces/AAA/messages/typing",
+      typingMessage: {
+        name: "spaces/AAA/messages/typing",
+        thread: "spaces/AAA/threads/root",
+      },
     });
 
     expect(mocks.updateGoogleChatMessage).toHaveBeenCalledWith({
@@ -104,6 +107,37 @@ describe("Google Chat reply delivery", () => {
     );
   });
 
+  it("replaces a typing message when the final reply target changed", async () => {
+    const core = createCore();
+    const runtime = createRuntime();
+    mocks.sendGoogleChatMessage.mockResolvedValue({ messageName: "spaces/AAA/messages/reply" });
+
+    await deliverGoogleChatReply({
+      payload: { text: "top-level reply" },
+      account,
+      spaceId: "spaces/AAA",
+      runtime,
+      core,
+      config,
+      typingMessage: {
+        name: "spaces/AAA/messages/typing",
+        thread: "spaces/AAA/threads/root",
+      },
+    });
+
+    expect(mocks.deleteGoogleChatMessage).toHaveBeenCalledWith({
+      account,
+      messageName: "spaces/AAA/messages/typing",
+    });
+    expect(mocks.updateGoogleChatMessage).not.toHaveBeenCalled();
+    expect(mocks.sendGoogleChatMessage).toHaveBeenCalledWith({
+      account,
+      space: "spaces/AAA",
+      text: "top-level reply",
+      thread: undefined,
+    });
+  });
+
   it("uses text fallback without loading outbound media", async () => {
     const core = createCore({
       media: { buffer: Buffer.from("image"), contentType: "image/png", fileName: "reply.png" },
@@ -121,7 +155,10 @@ describe("Google Chat reply delivery", () => {
       runtime,
       core,
       config,
-      typingMessageName: "spaces/AAA/messages/typing",
+      typingMessage: {
+        name: "spaces/AAA/messages/typing",
+        thread: "spaces/AAA/threads/root",
+      },
     });
 
     expect(mocks.updateGoogleChatMessage).toHaveBeenCalledWith({
@@ -152,7 +189,10 @@ describe("Google Chat reply delivery", () => {
         runtime,
         core,
         config,
-        typingMessageName: "spaces/AAA/messages/typing",
+        typingMessage: {
+          name: "spaces/AAA/messages/typing",
+          thread: "spaces/AAA/threads/root",
+        },
       }),
     ).rejects.toThrow(
       "Google Chat outbound attachments require user OAuth and no text fallback is available.",

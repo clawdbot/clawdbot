@@ -1,4 +1,6 @@
-/* Full-page new-session draft: target chips above a large composer. */
+/* Full-page new-session draft: target chips above the shared chat composer
+   shell (.agent-chat__input). Corner radii stay on the composer's radius
+   tokens so the draft picker matches the chat picker. */
 .new-session-page {
   display: flex;
   justify-content: center;
@@ -38,7 +40,7 @@
   gap: 6px;
   padding: 4px 10px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--bg-elevated) 70%, transparent);
   font-size: 12px;
   color: var(--text);
@@ -85,7 +87,7 @@
   width: 22px;
   height: 22px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
   cursor: pointer;
@@ -111,7 +113,7 @@
 .new-session-page__browser {
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   background: var(--panel);
 }
 
@@ -147,7 +149,7 @@
   gap: 8px;
   padding: 6px 8px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text);
   font-size: 13px;
@@ -181,30 +183,17 @@
   color: var(--danger);
 }
 
-.new-session-page__message {
-  width: 100%;
-  min-height: 140px;
-  padding: 12px 14px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--bg);
-  color: var(--text);
-  font: inherit;
-  font-size: 13px;
-  resize: vertical;
+/* Larger draft box than the chat composer default; wins over the shared
+   .agent-chat__composer-combobox > textarea sizing by specificity. */
+.new-session-page__composer textarea.new-session-page__message {
+  min-height: 112px;
+  max-height: 40vh;
 }
 
-.new-session-page__actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.new-session-page__start,
 .new-session-page__browser-use {
   padding: 6px 14px;
   border: 1px solid transparent;
-  border-radius: 999px;
+  border-radius: var(--radius-md);
   background: var(--accent);
   color: var(--accent-contrast, #fff);
   font-size: 13px;
@@ -212,7 +201,6 @@
   cursor: pointer;
 }
 
-.new-session-page__start:disabled,
 .new-session-page__browser-use:disabled {
   opacity: 0.5;
   cursor: default;

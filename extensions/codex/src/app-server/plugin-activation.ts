@@ -1,11 +1,15 @@
 /**
- * Activates configured Codex marketplace plugins and refreshes runtime state so
- * plugin-owned apps/tools are visible to native Codex turns.
+ * Activates curated Codex marketplace plugins and keeps require-active
+ * marketplaces outside OpenClaw's install authority.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { CodexAppInventoryCache, CodexAppInventoryRequest } from "./app-inventory-cache.js";
-import { CODEX_PLUGINS_MARKETPLACE_NAME, type ResolvedCodexPluginPolicy } from "./config.js";
+import {
+  CODEX_PLUGINS_MARKETPLACE_NAME,
+  CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
+  type ResolvedCodexPluginPolicy,
+} from "./config.js";
 import {
   findOpenAiCuratedPluginSummary,
   pluginReadParams,
@@ -55,13 +59,14 @@ export type CodexPluginRuntimeRefreshResult = {
   diagnostics: CodexPluginActivationDiagnostic[];
 };
 
-/** Installs/enables a configured Codex plugin and refreshes plugin/app state. */
+/** Activates a curated plugin or rejects a workspace plugin that is not already active. */
 export async function ensureCodexPluginActivation(
   params: EnsureCodexPluginActivationParams,
 ): Promise<CodexPluginActivationResult> {
-  if (params.identity.marketplaceName !== CODEX_PLUGINS_MARKETPLACE_NAME) {
-    return activationFailure(params.identity, "marketplace_missing", {
-      message: "Only openai-curated plugins can be activated.",
+  if (params.identity.marketplaceName === CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME) {
+    return activationFailure(params.identity, "disabled", {
+      message:
+        "workspace-directory plugins must be installed and enabled outside OpenClaw before use.",
     });
   }
 

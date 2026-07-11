@@ -340,8 +340,8 @@ function makeFakeGit(
       '  rm -rf "$4"',
       "  exit 0",
       "fi",
-      ...Object.entries(responses).flatMap(([key, response]) => {
-        const args = key.split("\u0000");
+      ...Object.entries(responses).flatMap(([responseKey, response]) => {
+        const args = responseKey.split("\u0000");
         return [
           `if ${shellArgListCondition(args)}; then`,
           response.stdout ? `  printf "%s" ${shellSingleQuote(response.stdout)}` : "",
@@ -864,7 +864,7 @@ describe("scripts/crabbox-wrapper", () => {
     ]);
 
     const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = normalizeShellLineEndings(output.scriptContent);
+    const remoteCommand = normalizeShellLineEndings(output.scriptContent!);
     expect(result.status).toBe(0);
     expect(output.args.slice(0, 7)).toEqual([
       "run",

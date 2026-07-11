@@ -16,6 +16,7 @@ import type {
 import type { BrowserConfig } from "./types.browser.js";
 import type { ChannelsConfig } from "./types.channels.js";
 import type { CliConfig } from "./types.cli.js";
+import type { CloudWorkersConfig } from "./types.cloud-workers.js";
 import type { CommitmentsConfig } from "./types.commitments.js";
 import type { CrestodianConfig } from "./types.crestodian.js";
 import type { CronConfig } from "./types.cron.js";
@@ -241,6 +242,8 @@ export type OpenClawConfig = {
   talk?: TalkConfig;
   /** Gateway server, auth, UI, node-pairing, and dispatch settings. */
   gateway?: GatewayConfig;
+  /** Opt-in cloud-worker provider profiles and stored lifetime policy. */
+  cloudWorkers?: CloudWorkersConfig;
   /** Memory indexing/search configuration. */
   memory?: MemoryConfig;
   /** MCP client/server and Codex MCP approval configuration. */

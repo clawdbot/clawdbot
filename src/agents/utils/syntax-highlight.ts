@@ -4,8 +4,39 @@
  * Highlight.js emits HTML spans; this module walks that small HTML subset and
  * maps active scopes to caller-provided text formatters.
  */
-import hljs from "highlight.js";
+import { createRequire } from "node:module";
 import { decodeHtmlEntityAt } from "./html.js";
+
+type HighlightJs = {
+  getLanguage(name: string): unknown;
+  highlight(
+    code: string,
+    options: { language: string; ignoreIllegals?: boolean },
+  ): { value: string };
+  highlightAuto(code: string, languageSubset?: string[]): { value: string };
+};
+
+function isHighlightJs(value: unknown): value is HighlightJs {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "getLanguage" in value &&
+    typeof value.getLanguage === "function" &&
+    "highlight" in value &&
+    typeof value.highlight === "function" &&
+    "highlightAuto" in value &&
+    typeof value.highlightAuto === "function"
+  );
+}
+
+// highlight.js ships `/// <reference lib="dom" />` in its d.ts, which would
+// silently re-inject DOM globals into the DOM-free core program. Load it
+// untyped and validate the narrow API we use instead of importing its types.
+const highlightJsModule: unknown = createRequire(import.meta.url)("highlight.js");
+if (!isHighlightJs(highlightJsModule)) {
+  throw new TypeError("highlight.js did not expose the expected Node API");
+}
+const hljs = highlightJsModule;
 
 /** Formatter applied to highlighted text segments. */
 export type HighlightFormatter = (text: string) => string;

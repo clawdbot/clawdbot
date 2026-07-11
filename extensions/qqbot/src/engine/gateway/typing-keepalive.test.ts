@@ -54,4 +54,65 @@ describe("TypingKeepAlive", () => {
     await vi.advanceTimersByTimeAsync(10_000);
     expect(sendInputNotify).toHaveBeenCalledTimes(TYPING_RENEWAL_LIMIT);
   });
+
+  it("counts token-refresh retry attempts against the renewal budget", async () => {
+    vi.useFakeTimers();
+    const clearCache = vi.fn();
+    const sendInputNotify = vi
+      .fn(async () => undefined)
+      .mockRejectedValueOnce(new Error("11244 token expired"));
+    const keepAlive = new TypingKeepAlive(
+      async () => "token-1",
+      clearCache,
+      sendInputNotify,
+      "openid-1",
+      "msg-1",
+    );
+
+    keepAlive.start();
+
+    // First tick: the failed attempt and its token-refresh retry both spend budget.
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(clearCache).toHaveBeenCalledTimes(1);
+    expect(sendInputNotify).toHaveBeenCalledTimes(2);
+
+    // Only one renewal remains before the reserved final-reply slot.
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(sendInputNotify).toHaveBeenCalledTimes(TYPING_RENEWAL_LIMIT);
+  });
+
+  it("suppresses overlapping renewals while a send is still in flight", async () => {
+    vi.useFakeTimers();
+    let release: (() => void) | undefined;
+    const sendInputNotify = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const keepAlive = new TypingKeepAlive(
+      async () => "token-1",
+      vi.fn(),
+      sendInputNotify,
+      "openid-1",
+      "msg-1",
+    );
+
+    keepAlive.start();
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(sendInputNotify).toHaveBeenCalledTimes(1);
+
+    // A stalled RPC must not double-send or burn extra reply budget.
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(sendInputNotify).toHaveBeenCalledTimes(1);
+
+    release?.();
+    // Let the stalled tick settle so the next interval tick is not suppressed.
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(sendInputNotify).toHaveBeenCalledTimes(2);
+
+    keepAlive.stop();
+  });
 });

@@ -357,6 +357,7 @@ class NodeRuntime private constructor(
   private val tlsFingerprintProbe: suspend (String, Int) -> GatewayTlsProbeResult,
   chatStores: AndroidChatStores,
   internal val mode: NodeRuntimeMode,
+  initialForeground: Boolean,
 ) {
   private val chatTranscriptCache = chatStores.transcriptCache
   private val chatCommandOutbox = chatStores.commandOutbox
@@ -394,6 +395,20 @@ class NodeRuntime private constructor(
     tlsFingerprintProbe = tlsFingerprintProbe,
     chatStores = openAndroidChatStores(context),
     mode = NodeRuntimeMode.Live,
+    initialForeground = true,
+  )
+
+  internal constructor(
+    context: Context,
+    prefs: SecurePrefs,
+    initialForeground: Boolean,
+  ) : this(
+    context = context,
+    prefs = prefs,
+    tlsFingerprintProbe = ::probeGatewayTlsFingerprint,
+    chatStores = openAndroidChatStores(context),
+    mode = NodeRuntimeMode.Live,
+    initialForeground = initialForeground,
   )
 
   internal constructor(
@@ -406,6 +421,7 @@ class NodeRuntime private constructor(
     tlsFingerprintProbe = ::probeGatewayTlsFingerprint,
     chatStores = openAndroidChatStores(context),
     mode = mode,
+    initialForeground = true,
   )
 
   internal constructor(
@@ -422,6 +438,7 @@ class NodeRuntime private constructor(
         commandOutbox = RoomChatCommandOutbox(ChatCacheDatabase.open(context.applicationContext)),
       ),
     mode = NodeRuntimeMode.Live,
+    initialForeground = true,
   )
 
   /**
@@ -805,7 +822,7 @@ class NodeRuntime private constructor(
   private val _healthLogsErrorText = MutableStateFlow<String?>(null)
   val healthLogsErrorText: StateFlow<String?> = _healthLogsErrorText.asStateFlow()
 
-  private val _isForeground = MutableStateFlow(true)
+  private val _isForeground = MutableStateFlow(initialForeground)
   val isForeground: StateFlow<Boolean> = _isForeground.asStateFlow()
 
   private data class TalkPttOwnership(
@@ -1978,8 +1995,11 @@ class NodeRuntime private constructor(
         prefs.setVoiceWakeMode(VoiceWakeMode.Off)
       }
 
-      if (prefs.voiceMicEnabled.value) {
+      if (initialForeground && prefs.voiceMicEnabled.value) {
         setVoiceCaptureMode(VoiceCaptureMode.ManualMic, persistManualMic = false)
+      } else if (!initialForeground && prefs.voiceMicEnabled.value) {
+        // Process recovery without an Activity must not revive microphone capture.
+        prefs.setVoiceMicEnabled(false)
       }
 
       scope.launch(Dispatchers.Default) {

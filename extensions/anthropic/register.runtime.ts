@@ -54,6 +54,11 @@ import {
   normalizeAnthropicProviderConfigForProvider,
 } from "./config-defaults.js";
 import { anthropicMediaUnderstandingProvider } from "./media-understanding-provider.js";
+import {
+  createClaudeSessionNodeHostCommands,
+  createClaudeSessionNodeInvokePolicies,
+  registerClaudeSessionCatalog,
+} from "./session-catalog.js";
 import { wrapAnthropicProviderStream } from "./stream-wrappers.js";
 import { fetchAnthropicUsage, resolveAnthropicUsageAuth } from "./usage.js";
 
@@ -923,4 +928,11 @@ export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
   api.registerCliBackend(buildAnthropicCliBackend());
   api.registerProvider(buildAnthropicProvider());
   api.registerMediaUnderstandingProvider(anthropicMediaUnderstandingProvider);
+  registerClaudeSessionCatalog(api);
+  for (const command of createClaudeSessionNodeHostCommands()) {
+    api.registerNodeHostCommand(command);
+  }
+  for (const policy of createClaudeSessionNodeInvokePolicies()) {
+    api.registerNodeInvokePolicy(policy);
+  }
 }

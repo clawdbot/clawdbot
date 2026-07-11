@@ -1776,9 +1776,20 @@ jobs:
                     OPENCLAW_QA_PROC_CONTROL=visible sleep 30 &
                     control_pid="$!"
                     trap "kill ${control_pid} >/dev/null 2>&1 || true" EXIT
-                    tr "\0" "\n" <"/proc/${control_pid}/environ" |
-                      grep -Fxq "OPENCLAW_QA_PROC_CONTROL=visible"
-                    kill "$control_pid"
+                    proc_marker_visible=false
+                    # The background child can still expose the shell pre-exec environment.
+                    for _ in {1..100}; do
+                      if tr "\0" "\n" <"/proc/${control_pid}/environ" 2>/dev/null |
+                        grep -Fxq "OPENCLAW_QA_PROC_CONTROL=visible"; then
+                        proc_marker_visible=true
+                        break
+                      fi
+                      kill -0 "$control_pid" >/dev/null 2>&1 || break
+                      sleep 0.05
+                    done
+                    [[ "$proc_marker_visible" == "true" ]]
+                    # Reading the marker is the proof; the probe may exit before cleanup.
+                    kill "$control_pid" >/dev/null 2>&1 || true
                     wait "$control_pid" || true
                     trap - EXIT
                     runtime_stage=verify-secret-env-hidden
@@ -1981,8 +1992,8 @@ jobs:
                 --repo-root "$CANDIDATE_ROOT" \
                 --output-dir "${EVIDENCE_RELATIVE}/${output_name}" \
                 --provider-mode mock-openai \
-                --model mock-openai/gpt-5.5 \
-                --alt-model mock-openai/gpt-5.5-alt \
+                --model mock-openai/gpt-5.6-luna \
+                --alt-model mock-openai/gpt-5.6-luna-alt \
                 --fast \
                 --credential-source convex \
                 --credential-role ci \

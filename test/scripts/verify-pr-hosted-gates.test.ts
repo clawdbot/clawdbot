@@ -42,7 +42,9 @@ function successfulRun(name: string, id: number, updatedAt: string) {
   };
 }
 
-function collectHostedGateEvidence(options: Parameters<typeof collectHostedGateEvidenceRaw>[0]) {
+function collectHostedGateEvidence(
+  options: Omit<Parameters<typeof collectHostedGateEvidenceRaw>[0], "nowMs" | "pr">,
+) {
   return collectHostedGateEvidenceRaw({ nowMs, pr, ...options });
 }
 

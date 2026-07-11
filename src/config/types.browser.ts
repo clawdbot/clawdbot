@@ -39,7 +39,7 @@ export type BrowserTabCleanupConfig = {
   sweepMinutes?: number;
 };
 export type BrowserSsrFPolicyConfig = {
-  /** If true, permit browser navigation to private/internal networks. Default: true */
+  /** If true, permit browser navigation to private/internal networks. Default: false */
   dangerouslyAllowPrivateNetwork?: boolean;
   /**
    * Explicitly allowed hostnames (exact-match), including blocked names like localhost.

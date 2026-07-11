@@ -209,7 +209,7 @@ Controls elevated exec access outside the sandbox:
       commandHighlighting: false,
       applyPatch: {
         enabled: true,
-        allowModels: ["gpt-5.5"],
+        allowModels: ["gpt-5.6-sol"],
       },
     },
   },

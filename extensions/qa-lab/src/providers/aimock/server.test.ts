@@ -25,7 +25,7 @@ describe("qa aimock server", () => {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          model: "aimock/gpt-5.5",
+          model: "aimock/gpt-5.6-luna",
           stream: false,
           input: [makeResponsesInput("hello aimock")],
         }),
@@ -33,12 +33,12 @@ describe("qa aimock server", () => {
       expect(response.status).toBe(200);
       const responseBody = (await response.json()) as { model?: unknown; status?: unknown };
       expect(responseBody.status).toBe("completed");
-      expect(responseBody.model).toBe("aimock/gpt-5.5");
+      expect(responseBody.model).toBe("aimock/gpt-5.6-luna");
 
       const debug = await fetch(`${server.baseUrl}/debug/last-request`);
       expect(debug.status).toBe(200);
       const expectedBody = {
-        model: "aimock/gpt-5.5",
+        model: "aimock/gpt-5.6-luna",
         messages: [{ role: "user", content: "hello aimock" }],
         stream: false,
         _endpointType: "chat",
@@ -49,7 +49,7 @@ describe("qa aimock server", () => {
         prompt: "hello aimock",
         allInputText: "hello aimock",
         toolOutput: "",
-        model: "aimock/gpt-5.5",
+        model: "aimock/gpt-5.6-luna",
         providerVariant: "openai",
         imageInputCount: 0,
       });
@@ -68,7 +68,7 @@ describe("qa aimock server", () => {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          model: "aimock/gpt-5.5",
+          model: "aimock/gpt-5.6-luna",
           stream: false,
           input: [makeResponsesInput("@openclaw explain the QA lab")],
         }),
@@ -80,7 +80,7 @@ describe("qa aimock server", () => {
       const debug = await fetch(`${server.baseUrl}/debug/requests`);
       expect(debug.status).toBe(200);
       const expectedBody = {
-        model: "aimock/gpt-5.5",
+        model: "aimock/gpt-5.6-luna",
         messages: [{ role: "user", content: "@openclaw explain the QA lab" }],
         stream: false,
         _endpointType: "chat",
@@ -92,7 +92,7 @@ describe("qa aimock server", () => {
           prompt: "@openclaw explain the QA lab",
           allInputText: "@openclaw explain the QA lab",
           toolOutput: "",
-          model: "aimock/gpt-5.5",
+          model: "aimock/gpt-5.6-luna",
           providerVariant: "openai",
           imageInputCount: 0,
         },
@@ -112,7 +112,7 @@ describe("qa aimock server", () => {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          model: "openai/gpt-5.5",
+          model: "openai/gpt-5.6-luna",
           stream: false,
           input: [makeResponsesInput("hello codex-compatible aimock")],
         }),
@@ -122,7 +122,7 @@ describe("qa aimock server", () => {
       const debug = await fetch(`${server.baseUrl}/debug/last-request`);
       expect(debug.status).toBe(200);
       const expectedBody = {
-        model: "openai/gpt-5.5",
+        model: "openai/gpt-5.6-luna",
         messages: [{ role: "user", content: "hello codex-compatible aimock" }],
         stream: false,
         _endpointType: "chat",
@@ -133,7 +133,7 @@ describe("qa aimock server", () => {
         prompt: "hello codex-compatible aimock",
         allInputText: "hello codex-compatible aimock",
         toolOutput: "",
-        model: "openai/gpt-5.5",
+        model: "openai/gpt-5.6-luna",
         providerVariant: "openai",
         imageInputCount: 0,
       });

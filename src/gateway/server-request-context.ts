@@ -19,6 +19,7 @@ export type GatewayRequestContextParams = {
   resolveTerminalLaunchPolicy: GatewayRequestContext["resolveTerminalLaunchPolicy"];
   isTerminalEnabled: GatewayRequestContext["isTerminalEnabled"];
   execApprovalManager: GatewayRequestContext["execApprovalManager"];
+  forwardPluginApprovalRequest?: GatewayRequestContext["forwardPluginApprovalRequest"];
   pluginApprovalManager: GatewayRequestContext["pluginApprovalManager"];
   loadGatewayModelCatalog: GatewayRequestContext["loadGatewayModelCatalog"];
   getHealthCache: GatewayRequestContext["getHealthCache"];
@@ -43,6 +44,7 @@ export type GatewayRequestContextParams = {
   disconnectDeviceTransports?: (deviceId: string, opts?: { role?: string }) => void;
   enforceSharedGatewayAuthGenerationForConfigWrite: (nextConfig: OpenClawConfig) => void;
   nodeRegistry: GatewayRequestContext["nodeRegistry"];
+  workerEnvironmentService?: GatewayRequestContext["workerEnvironmentService"];
   terminalSessions?: GatewayRequestContext["terminalSessions"];
   agentRunSeq: GatewayRequestContext["agentRunSeq"];
   chatAbortControllers: GatewayRequestContext["chatAbortControllers"];
@@ -102,6 +104,7 @@ export function createGatewayRequestContext(
     resolveTerminalLaunchPolicy: params.resolveTerminalLaunchPolicy,
     isTerminalEnabled: params.isTerminalEnabled,
     execApprovalManager: params.execApprovalManager,
+    forwardPluginApprovalRequest: params.forwardPluginApprovalRequest,
     pluginApprovalManager: params.pluginApprovalManager,
     loadGatewayModelCatalog: params.loadGatewayModelCatalog,
     getHealthCache: params.getHealthCache,
@@ -199,6 +202,9 @@ export function createGatewayRequestContext(
     enforceSharedGatewayAuthGenerationForConfigWrite:
       params.enforceSharedGatewayAuthGenerationForConfigWrite,
     nodeRegistry: params.nodeRegistry,
+    ...(params.workerEnvironmentService
+      ? { workerEnvironmentService: params.workerEnvironmentService }
+      : {}),
     terminalSessions: params.terminalSessions,
     agentRunSeq: params.agentRunSeq,
     chatAbortControllers: params.chatAbortControllers,

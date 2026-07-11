@@ -11,7 +11,7 @@ describe("Docker E2E seed scripts", () => {
     const source = readScript("scripts/e2e/docker-openai-seed.ts");
 
     expect(source).toContain("../../dist/plugin-sdk/provider-onboard.js");
-    expect(source).toContain('const DOCKER_OPENAI_MODEL_REF = "openai/gpt-5.5"');
+    expect(source).toContain('const DOCKER_OPENAI_MODEL_REF = "openai/gpt-5.6-luna"');
     expect(source).toContain('api: "openai-responses"');
     expect(source).toContain('aliases: [{ modelRef: DOCKER_OPENAI_MODEL_REF, alias: "GPT" }]');
     expect(source).toContain("primaryModelRef: DOCKER_OPENAI_MODEL_REF");

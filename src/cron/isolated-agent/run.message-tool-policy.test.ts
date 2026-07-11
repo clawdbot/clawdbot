@@ -755,6 +755,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     expectRecordFields(
       getMockCallArg(runCliAgentMock, 0, 0, "CLI run"),
       {
+        allowEmptyAssistantReplyAsSilent: true,
         messageChannel: "messagechat",
         requireExplicitMessageTarget: true,
       },

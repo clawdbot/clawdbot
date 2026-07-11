@@ -22,7 +22,7 @@ async function makeWriter(params: { maxDetailsBytes?: number; maxLogBytes?: numb
       logFileName: "producer.log",
       maxDetailsBytes: params.maxDetailsBytes,
       maxLogBytes: params.maxLogBytes ?? 64,
-      primaryModel: "mock-openai/gpt-5.5",
+      primaryModel: "mock-openai/gpt-5.6-luna",
       providerMode: "mock-openai",
       repoRoot,
       target: {

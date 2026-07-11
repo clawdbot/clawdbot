@@ -7,7 +7,11 @@ import { createClientHarness } from "./test-support.js";
 const mocks = vi.hoisted(() => ({
   bridgeCodexAppServerStartOptions: vi.fn(async ({ startOptions }) => startOptions),
   applyCodexAppServerAuthProfile: vi.fn(
-    async (_params?: { agentDir?: string; authProfileId?: string; config?: unknown }) => undefined,
+    async (_params?: {
+      agentDir?: string;
+      authProfileId?: string;
+      config?: unknown;
+    }): Promise<void> => undefined,
   ),
   resolveCodexAppServerAuthProfileIdForAgent: vi.fn(
     (params?: { authProfileId?: string }) => params?.authProfileId,
@@ -126,6 +130,15 @@ function clientStartCall(startSpy: unknown) {
   };
 }
 
+function deferNextAuthProfileApplication(): () => void {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = () => resolve();
+  });
+  mocks.applyCodexAppServerAuthProfile.mockReturnValueOnce(gate);
+  return release;
+}
+
 describe("shared Codex app-server client", () => {
   beforeAll(async () => {
     ({ listCodexAppServerModels } = await import("./models.js"));
@@ -240,6 +253,54 @@ describe("shared Codex app-server client", () => {
 
     await expect(secondList).resolves.toEqual({ models: [] });
     expect(startSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps shared startup alive for a caller with a longer initialize timeout", async () => {
+    const harness = createClientHarness();
+    const startSpy = vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
+
+    const shortAcquire = getSharedCodexAppServerClient({ timeoutMs: 5 });
+    const longAcquire = getSharedCodexAppServerClient({ timeoutMs: 1000 });
+
+    await expect(shortAcquire).rejects.toThrow("codex app-server initialize timed out");
+    expect(harness.process.stdin.destroyed).toBe(false);
+
+    await sendInitializeResult(harness, "openclaw/0.143.0 (macOS; test)");
+
+    await expect(longAcquire).resolves.toBe(harness.client);
+    expect(startSpy).toHaveBeenCalledTimes(1);
+    expect(harness.process.stdin.destroyed).toBe(false);
+  });
+
+  it("reports a stalled shared auth phase separately from initialize", async () => {
+    const harness = createClientHarness();
+    vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
+    const releaseAuth = deferNextAuthProfileApplication();
+
+    const acquire = getSharedCodexAppServerClient({ timeoutMs: 100 });
+    await sendInitializeResult(harness, "openclaw/0.143.0 (macOS; test)");
+
+    await expect(acquire).rejects.toThrow("codex app-server authentication timed out");
+    expect(harness.process.stdin.destroyed).toBe(true);
+    releaseAuth();
+  });
+
+  it("keeps shared auth alive for a caller with a longer timeout", async () => {
+    const harness = createClientHarness();
+    const startSpy = vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
+    const releaseAuth = deferNextAuthProfileApplication();
+
+    const shortAcquire = getSharedCodexAppServerClient({ timeoutMs: 100 });
+    const longAcquire = getSharedCodexAppServerClient({ timeoutMs: 1000 });
+    await sendInitializeResult(harness, "openclaw/0.143.0 (macOS; test)");
+
+    await expect(shortAcquire).rejects.toThrow("codex app-server authentication timed out");
+    expect(harness.process.stdin.destroyed).toBe(false);
+
+    releaseAuth();
+    await expect(longAcquire).resolves.toBe(harness.client);
+    expect(startSpy).toHaveBeenCalledTimes(1);
+    expect(harness.process.stdin.destroyed).toBe(false);
   });
 
   it("keeps a pending shared app-server alive when another acquire still owns startup", async () => {

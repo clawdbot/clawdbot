@@ -554,7 +554,7 @@ describe("kitchen-sink plugin assertions", () => {
   it("rejects kitchen-sink log scans without an isolated scratch root", () => {
     const parent = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-scan-"));
     try {
-      const spawnEnv = { ...process.env, HOME: parent };
+      const spawnEnv: NodeJS.ProcessEnv = { ...process.env, HOME: parent };
       delete spawnEnv.KITCHEN_SINK_TMP_DIR;
       const result = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "scan-logs"], {
         encoding: "utf8",

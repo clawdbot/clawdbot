@@ -351,6 +351,17 @@ describe("plugin tabs route", () => {
     expect(pluginTabKey({ pluginId: "other", id: "logbook" })).not.toBe(pluginTabKey(ref));
   });
 
+  it("round-trips a selected Codex host and thread without changing the tab key", () => {
+    const ref = {
+      pluginId: "codex",
+      id: "sessions",
+      hostId: "node:macbook",
+      threadId: "thread-1",
+    };
+    expect(pluginTabRefFromSearch(pluginTabSearch(ref))).toEqual(ref);
+    expect(pluginTabKey(ref)).toBe("codex/sessions");
+  });
+
   it("stays out of the customizable static sidebar routes", () => {
     expect(SIDEBAR_NAV_ROUTES).not.toContain("plugin");
     expect(SIDEBAR_NAV_ROUTES).toContain("plugins");

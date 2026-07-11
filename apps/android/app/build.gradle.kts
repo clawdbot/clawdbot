@@ -164,9 +164,11 @@ android {
   productFlavors {
     create("play") {
       dimension = "store"
+      manifestPlaceholders["nodeForegroundServiceType"] = "connectedDevice|microphone"
     }
     create("thirdParty") {
       dimension = "store"
+      manifestPlaceholders["nodeForegroundServiceType"] = "connectedDevice|microphone|location"
     }
   }
 

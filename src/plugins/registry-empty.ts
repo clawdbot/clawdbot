@@ -24,6 +24,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     musicGenerationProviders: [],
     webFetchProviders: [],
     webSearchProviders: [],
+    workerProviders: new Map(),
     migrationProviders: [],
     codexAppServerExtensionFactories: [],
     agentToolResultMiddlewares: [],

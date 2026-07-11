@@ -198,21 +198,72 @@ describeControlUiE2e("Codex Sessions mocked Gateway E2E", () => {
           sessionKey: continuedSessionKey,
           disposition: "forked",
         },
+        "codex.sessions.read": {
+          cases: [
+            {
+              match: { cursor: "transcript-page-2" },
+              response: {
+                hostId: "node:devbox",
+                label: "Development Box",
+                threadId: "00000000-0000-4000-8000-000000000001",
+                items: [
+                  {
+                    id: "item-3",
+                    type: "commandExecution",
+                    command: "pnpm test",
+                    aggregatedOutput: "Tests passed",
+                  },
+                ],
+              },
+            },
+            {
+              match: {},
+              response: {
+                hostId: "node:devbox",
+                label: "Development Box",
+                threadId: "00000000-0000-4000-8000-000000000001",
+                items: [
+                  {
+                    id: "item-2",
+                    type: "agentMessage",
+                    text: "The remote implementation is complete.",
+                  },
+                  {
+                    id: "item-1",
+                    type: "userMessage",
+                    text: "Please finish the remote implementation.",
+                  },
+                ],
+                nextCursor: "transcript-page-2",
+              },
+            },
+          ],
+        },
         "codex.sessions.archive": { archived: true },
       },
     });
 
     try {
       await page.goto(`${server.baseUrl}plugin?plugin=codex&id=sessions`);
-      const initialRequest = await gateway.waitForRequest("codex.sessions.list");
-      expect(initialRequest.params).toEqual({ limitPerHost: 40 });
+      const catalogPage = page.locator(".codex-sessions");
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("codex.sessions.list")).some(
+            (request) => JSON.stringify(request.params) === JSON.stringify({ limitPerHost: 40 }),
+          ),
+        )
+        .toBe(true);
 
       await expect
         .poll(() =>
           page.getByRole("heading", { name: "Sessions across your computers" }).isVisible(),
         )
         .toBe(true);
-      await expect.poll(() => page.getByText("Current Codex UI session").isVisible()).toBe(true);
+      await expect
+        .poll(() =>
+          catalogPage.getByRole("heading", { name: "Current Codex UI session" }).isVisible(),
+        )
+        .toBe(true);
       await expect
         .poll(() => page.getByText("00000000-0000-4000-8000-000000000001").isVisible())
         .toBe(true);
@@ -225,7 +276,9 @@ describeControlUiE2e("Codex Sessions mocked Gateway E2E", () => {
           page
             .locator('[data-thread-id="00000000-0000-4000-8000-000000000001"]')
             .locator(".codex-session__view-only")
-            .getByText("Paired-computer sessions are view-only for now.", { exact: true })
+            .getByText("Transcript available; continue and archive stay on the owning computer.", {
+              exact: true,
+            })
             .isVisible(),
         )
         .toBe(true);
@@ -234,7 +287,9 @@ describeControlUiE2e("Codex Sessions mocked Gateway E2E", () => {
           page
             .locator('[data-thread-id="demo-offline-thread"]')
             .locator(".codex-session__view-only")
-            .getByText("Paired-computer sessions are view-only for now.", { exact: true })
+            .getByText("Transcript available; continue and archive stay on the owning computer.", {
+              exact: true,
+            })
             .isVisible(),
         )
         .toBe(true);
@@ -257,17 +312,52 @@ describeControlUiE2e("Codex Sessions mocked Gateway E2E", () => {
       await holdUiProof(page);
       await captureUiProof(page, "01-hosts-and-partial-error.png");
 
+      await expect
+        .poll(() =>
+          page
+            .locator('[data-codex-host-id="node:devbox"]')
+            .locator('[data-codex-thread-id="00000000-0000-4000-8000-000000000001"]')
+            .isVisible(),
+        )
+        .toBe(true);
+      await page
+        .locator('[data-codex-host-id="node:devbox"]')
+        .locator('[data-codex-thread-id="00000000-0000-4000-8000-000000000001"]')
+        .click();
+      const transcriptRequest = await gateway.waitForRequest("codex.sessions.read");
+      expect(transcriptRequest.params).toEqual({
+        hostId: "node:devbox",
+        threadId: "00000000-0000-4000-8000-000000000001",
+        limit: 20,
+      });
+      await page.getByText("Please finish the remote implementation.", { exact: true }).waitFor();
+      await page.getByText("The remote implementation is complete.", { exact: true }).waitFor();
+      await page.getByRole("button", { name: "Load older transcript items" }).click();
+      await page.getByText("Tests passed", { exact: true }).waitFor();
+      const commandItem = page.locator('[data-item-type="commandExecution"]');
+      await commandItem.locator("summary").click();
+      await commandItem.getByText('"command": "pnpm test"').waitFor();
+      await captureUiProof(page, "02-remote-transcript.png");
+      await page.getByRole("button", { name: "All Codex sessions", exact: true }).click();
+      await page.getByRole("heading", { name: "Sessions across your computers" }).waitFor();
+
       await page.getByRole("button", { name: "Load more — Development Box", exact: true }).click();
       await expect
         .poll(async () => (await gateway.getRequests("codex.sessions.list")).length)
         .toBeGreaterThanOrEqual(2);
-      await expect.poll(() => page.getByText("Follow-up on the dev box").isVisible()).toBe(true);
+      await expect
+        .poll(() =>
+          catalogPage.getByRole("heading", { name: "Follow-up on the dev box" }).isVisible(),
+        )
+        .toBe(true);
       await expect
         .poll(() =>
           page
             .locator('[data-thread-id="demo-next-thread"]')
             .locator(".codex-session__view-only")
-            .getByText("Paired-computer sessions are view-only for now.", { exact: true })
+            .getByText("Transcript available; continue and archive stay on the owning computer.", {
+              exact: true,
+            })
             .isVisible(),
         )
         .toBe(true);
@@ -286,9 +376,9 @@ describeControlUiE2e("Codex Sessions mocked Gateway E2E", () => {
             .getByRole("button", { name: "Continue Follow-up on the dev box as a branch" })
             .getAttribute("title"),
         )
-        .toBe("Paired-computer sessions are view-only for now.");
+        .toBe("Transcript available; continue and archive stay on the owning computer.");
       await holdUiProof(page);
-      await captureUiProof(page, "02-paginated.png");
+      await captureUiProof(page, "03-paginated.png");
 
       const searchInput = page.getByRole("searchbox", { name: "Search Codex sessions" });
       await searchInput.fill("Current");
@@ -299,10 +389,10 @@ describeControlUiE2e("Codex Sessions mocked Gateway E2E", () => {
           ),
         )
         .toBe(true);
-      await expect.poll(() => page.getByText("Local release checklist").count()).toBe(0);
-      await expect.poll(() => page.getByText("Travel Mac").count()).toBe(0);
+      await expect.poll(() => catalogPage.getByText("Local release checklist").count()).toBe(0);
+      await expect.poll(() => catalogPage.getByText("Travel Mac").count()).toBe(0);
       await holdUiProof(page);
-      await captureUiProof(page, "03-search-filtered.png");
+      await captureUiProof(page, "04-search-filtered.png");
 
       await searchInput.fill("");
       await expect
@@ -312,7 +402,11 @@ describeControlUiE2e("Codex Sessions mocked Gateway E2E", () => {
             .length;
         })
         .toBeGreaterThanOrEqual(2);
-      await expect.poll(() => page.getByText("Local release checklist").isVisible()).toBe(true);
+      await expect
+        .poll(() =>
+          catalogPage.getByRole("heading", { name: "Local release checklist" }).isVisible(),
+        )
+        .toBe(true);
       await expect
         .poll(() => page.getByRole("heading", { name: "Travel Mac", exact: true }).isVisible())
         .toBe(true);
@@ -355,9 +449,11 @@ describeControlUiE2e("Codex Sessions mocked Gateway E2E", () => {
         threadId: "demo-archive-thread",
         confirmNoOtherRunner: true,
       });
-      await expect.poll(() => page.getByText("Archive after testing").count()).toBe(0);
+      await expect
+        .poll(() => catalogPage.locator('[data-thread-id="demo-archive-thread"]').count())
+        .toBe(0);
       await holdUiProof(page);
-      await captureUiProof(page, "04-archived-active-row.png");
+      await captureUiProof(page, "05-archived-active-row.png");
 
       await gateway.setHistoryMessages([
         {

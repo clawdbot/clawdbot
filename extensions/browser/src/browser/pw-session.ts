@@ -1227,61 +1227,42 @@ export async function getPageForTargetId(opts: {
   }
 }
 
-function isTopLevelNavigationRequest(page: Page, request: Request): boolean {
-  let sameMainFrame;
+export type BrowserDocumentNavigationRequestKind = "top-level" | "subframe";
+
+/** Classify requests that can navigate the selected page or one of its frames. */
+export function classifyBrowserDocumentNavigationRequest(
+  page: Page,
+  request: Request,
+): BrowserDocumentNavigationRequestKind | null {
+  let kind: BrowserDocumentNavigationRequestKind;
+  let frameResolutionFailed = false;
   try {
-    sameMainFrame = request.frame() === page.mainFrame();
+    kind = request.frame() === page.mainFrame() ? "top-level" : "subframe";
   } catch {
-    // Frame resolution can fail during redirect/renderer churn; fail closed.
-    sameMainFrame = true;
-  }
-  if (!sameMainFrame) {
-    return false;
+    // Preserve the navigate-owner fail-closed contract during renderer churn:
+    // an unresolved document request may be the selected main frame.
+    kind = "top-level";
+    frameResolutionFailed = true;
   }
 
   try {
     if (request.isNavigationRequest()) {
-      return true;
-    }
-  } catch {
-    // Ignore and fall back to resource-type check below.
-  }
-
-  try {
-    return request.resourceType() === "document";
-  } catch {
-    return false;
-  }
-}
-
-function isSubframeDocumentNavigationRequest(page: Page, request: Request): boolean {
-  let sameMainFrame;
-  try {
-    sameMainFrame = request.frame() === page.mainFrame();
-  } catch {
-    // Fail closed: if frame resolution throws after the top-level check already
-    // determined this is NOT the main frame, treat it as a subframe document
-    // navigation so the SSRF guard still fires. Returning false here would let
-    // transient renderer churn skip the policy check entirely.
-    return true;
-  }
-  if (sameMainFrame) {
-    return false;
-  }
-
-  try {
-    if (request.isNavigationRequest()) {
-      return true;
+      return kind;
     }
   } catch {
     // Fall through to the resource-type check.
   }
 
   try {
-    return request.resourceType() === "document";
+    if (request.resourceType() === "document") {
+      return kind;
+    }
   } catch {
-    return false;
+    // Fall through to the unresolved-frame result below.
   }
+  // Match the previous two-step classifier: known non-doc requests fall
+  // through, while an unresolved frame remains guarded as a subframe.
+  return frameResolutionFailed ? "subframe" : null;
 }
 
 /** Return true when an error is a browser navigation policy denial. */
@@ -1370,6 +1351,276 @@ async function continueRouteSafely(route: Route): Promise<void> {
   }
 }
 
+async function fallbackRouteSafely(route: Route): Promise<void> {
+  try {
+    await route.fallback();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "";
+    if (message.includes("Route is already handled")) {
+      return;
+    }
+    throw err;
+  }
+}
+
+const sourcePreservedPolicyDenials = new WeakSet<object>();
+
+async function removePageNavigationRequestGuard(
+  page: Page,
+  handler: (route: Route, request: Request) => Promise<void>,
+): Promise<unknown> {
+  try {
+    await page.unroute("**", handler);
+  } catch (err) {
+    // A closed page owns no remaining route. Preserve close-triggering actions,
+    // but surface cleanup failures while the page is still usable.
+    try {
+      if (page.isClosed()) {
+        return undefined;
+      }
+    } catch {
+      // Keep the original cleanup failure when page state is unavailable.
+    }
+    return err;
+  }
+  return undefined;
+}
+
+/** Return true when policy denial left the selected page on its source document. */
+export function wasBrowserNavigationSourcePreservedAfterPolicyDenial(err: unknown): boolean {
+  return typeof err === "object" && err !== null && sourcePreservedPolicyDenials.has(err);
+}
+
+/** Run one selected-page action while guarding document requests. */
+export async function withPageNavigationRequestGuard<T>(
+  opts: {
+    action: (baselineUrl: string) => Promise<T>;
+    onPolicyCheckStarted?: (check: Promise<void>) => void;
+    onPolicyDenied?: (
+      event:
+        | { state: "detected"; error: unknown }
+        | { state: "handled"; error: unknown; sourcePreserved: boolean },
+    ) => void;
+    page: Page;
+  } & BrowserNavigationPolicyOptions,
+): Promise<T> {
+  const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
+    browserProxyMode: opts.browserProxyMode,
+  });
+  if (!navigationPolicy.ssrfPolicy && !navigationPolicy.browserProxyMode) {
+    return await opts.action(opts.page.url());
+  }
+
+  const inFlight = new Set<Promise<void>>();
+  let hasGuardError = false;
+  let firstGuardError: unknown;
+  let deniedDocumentCount = 0;
+  let fulfilledDeniedDocumentCount = 0;
+  let pendingDeniedDocumentCount = 0;
+  let unpreservedDocumentCount = 0;
+  let policyDeniedDetected = false;
+  let lastNotifiedSourcePreserved: boolean | undefined;
+
+  const recordGuardError = (err: unknown) => {
+    if (hasGuardError) {
+      if (!isPolicyDenyNavigationError(firstGuardError) && isPolicyDenyNavigationError(err)) {
+        firstGuardError = err;
+      }
+      return;
+    }
+    hasGuardError = true;
+    firstGuardError = err;
+  };
+  const emitPolicyDenied = (
+    event:
+      | { state: "detected"; error: unknown }
+      | { state: "handled"; error: unknown; sourcePreserved: boolean },
+  ) => {
+    try {
+      opts.onPolicyDenied?.(event);
+    } catch {
+      // Notification only exposes state already owned by this guard.
+    }
+  };
+  const updateImmediateSourcePreservation = () => {
+    if (typeof firstGuardError !== "object" || firstGuardError === null) {
+      return;
+    }
+    let sourcePreserved: boolean | undefined;
+    if (unpreservedDocumentCount > 0) {
+      sourcePreserved = false;
+    } else if (
+      isPolicyDenyNavigationError(firstGuardError) &&
+      deniedDocumentCount > 0 &&
+      pendingDeniedDocumentCount === 0 &&
+      fulfilledDeniedDocumentCount === deniedDocumentCount
+    ) {
+      sourcePreserved = true;
+    }
+    if (sourcePreserved === undefined) {
+      sourcePreservedPolicyDenials.delete(firstGuardError);
+      return;
+    }
+    if (sourcePreserved) {
+      sourcePreservedPolicyDenials.add(firstGuardError);
+    } else {
+      sourcePreservedPolicyDenials.delete(firstGuardError);
+    }
+    if (policyDeniedDetected && sourcePreserved !== lastNotifiedSourcePreserved) {
+      lastNotifiedSourcePreserved = sourcePreserved;
+      emitPolicyDenied({ state: "handled", error: firstGuardError, sourcePreserved });
+    }
+  };
+  const notifyPolicyDeniedDetected = () => {
+    if (policyDeniedDetected || !isPolicyDenyNavigationError(firstGuardError)) {
+      return;
+    }
+    policyDeniedDetected = true;
+    emitPolicyDenied({ state: "detected", error: firstGuardError });
+  };
+  const stopGuardedRoute = async (
+    route: Route,
+    preserveDocument: boolean,
+    requestError: unknown,
+  ) => {
+    if (preserveDocument && isPolicyDenyNavigationError(requestError)) {
+      deniedDocumentCount += 1;
+      pendingDeniedDocumentCount += 1;
+      try {
+        // A synthetic 204 stops the document load while Chromium keeps the
+        // selected page's current document. route.abort() commits an error page.
+        await route.fulfill({ status: 204, body: "" });
+        fulfilledDeniedDocumentCount += 1;
+        pendingDeniedDocumentCount -= 1;
+        updateImmediateSourcePreservation();
+        return;
+      } catch {
+        pendingDeniedDocumentCount -= 1;
+        // Abort still stops the document load, but the source may no longer be usable.
+      }
+    }
+    if (preserveDocument) {
+      unpreservedDocumentCount += 1;
+      updateImmediateSourcePreservation();
+    }
+    await route.abort().catch(() => {});
+  };
+  const handleRoute = async (route: Route, request: Request) => {
+    if (!classifyBrowserDocumentNavigationRequest(opts.page, request)) {
+      try {
+        await fallbackRouteSafely(route);
+      } catch (err) {
+        recordGuardError(err);
+        await stopGuardedRoute(route, false, err);
+      }
+      return;
+    }
+    const policyCheck = assertBrowserNavigationAllowed({
+      url: request.url(),
+      ...navigationPolicy,
+    });
+    try {
+      opts.onPolicyCheckStarted?.(policyCheck);
+    } catch {
+      // Observation cannot change the policy decision owned by this guard.
+    }
+    try {
+      await policyCheck;
+    } catch (err) {
+      recordGuardError(err);
+      notifyPolicyDeniedDetected();
+      await stopGuardedRoute(route, true, err);
+      return;
+    }
+    try {
+      await fallbackRouteSafely(route);
+    } catch (err) {
+      recordGuardError(err);
+      await stopGuardedRoute(route, true, err);
+    }
+  };
+  const handler = (route: Route, request: Request) => {
+    const operation = handleRoute(route, request).catch(async (err: unknown) => {
+      recordGuardError(err);
+      await stopGuardedRoute(route, true, err);
+    });
+    inFlight.add(operation);
+    void operation.finally(() => inFlight.delete(operation));
+    return operation;
+  };
+
+  try {
+    await opts.page.route("**", handler);
+  } catch (err) {
+    // Playwright can register the client handler before browser-side setup
+    // rejects, so roll back that exact handler even on setup failure.
+    await removePageNavigationRequestGuard(opts.page, handler);
+    throw err;
+  }
+
+  let result: T | undefined;
+  let actionFailed = false;
+  let actionError: unknown;
+  try {
+    let baselineUrl = opts.page.url();
+    await assertBrowserNavigationResultAllowed({ url: baselineUrl, ...navigationPolicy });
+    const latestUrl = opts.page.url();
+    if (latestUrl !== baselineUrl) {
+      // The route is already installed, so any later document request remains
+      // intercepted. Revalidate the one URL that could commit during preflight.
+      await assertBrowserNavigationResultAllowed({ url: latestUrl, ...navigationPolicy });
+      baselineUrl = latestUrl;
+    }
+    result = await opts.action(baselineUrl);
+  } catch (err) {
+    actionFailed = true;
+    actionError = err;
+    if (isPolicyDenyNavigationError(err)) {
+      // Preflight/postflight policy errors describe committed or otherwise
+      // unpreserved state. Notify before cleanup can stall on active routes.
+      recordGuardError(err);
+      notifyPolicyDeniedDetected();
+      unpreservedDocumentCount += 1;
+      updateImmediateSourcePreservation();
+    }
+  }
+
+  // Remove admission first so a busy page cannot add work indefinitely. Active
+  // RouteHandler callbacks retain their exact invocation and are drained below.
+  const cleanupError = await removePageNavigationRequestGuard(opts.page, handler);
+  while (inFlight.size > 0) {
+    await Promise.allSettled(inFlight);
+  }
+
+  // Request-policy denial wins over locator/action/cleanup errors. Only 204
+  // responses prove that every denied document was intercepted and source-preserved.
+  if (hasGuardError) {
+    const sourcePreserved =
+      isPolicyDenyNavigationError(firstGuardError) &&
+      deniedDocumentCount > 0 &&
+      fulfilledDeniedDocumentCount === deniedDocumentCount &&
+      unpreservedDocumentCount === 0 &&
+      !(actionFailed && isPolicyDenyNavigationError(actionError)) &&
+      typeof firstGuardError === "object" &&
+      firstGuardError !== null;
+    if (typeof firstGuardError === "object" && firstGuardError !== null) {
+      if (sourcePreserved) {
+        sourcePreservedPolicyDenials.add(firstGuardError);
+      } else {
+        sourcePreservedPolicyDenials.delete(firstGuardError);
+      }
+    }
+    throw toLintErrorObject(firstGuardError, "Non-Error thrown");
+  }
+  if (actionFailed) {
+    throw toLintErrorObject(actionError, "Non-Error thrown");
+  }
+  if (cleanupError !== undefined) {
+    throw toLintErrorObject(cleanupError, "Non-Error thrown");
+  }
+  return result as T;
+}
+
 /** Navigate a page while guarding requested URL and redirect chain. */
 export async function gotoPageWithNavigationGuard(
   opts: {
@@ -1390,10 +1641,8 @@ export async function gotoPageWithNavigationGuard(
       await route.abort().catch(() => {});
       return;
     }
-    const isTopLevel = isTopLevelNavigationRequest(opts.page, request);
-    const isSubframeDocument =
-      !isTopLevel && isSubframeDocumentNavigationRequest(opts.page, request);
-    if (!isTopLevel && !isSubframeDocument) {
+    const requestKind = classifyBrowserDocumentNavigationRequest(opts.page, request);
+    if (!requestKind) {
       await continueRouteSafely(route);
       return;
     }
@@ -1404,7 +1653,7 @@ export async function gotoPageWithNavigationGuard(
       });
     } catch (err) {
       if (isPolicyDenyNavigationError(err)) {
-        if (isTopLevel) {
+        if (requestKind === "top-level") {
           blockedError = err;
         }
         await route.abort().catch(() => {});

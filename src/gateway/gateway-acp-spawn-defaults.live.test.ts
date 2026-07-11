@@ -50,7 +50,7 @@ function resolvePositiveInteger(raw: string | undefined, fallback: number): numb
 }
 
 function resolveSubagentModel(): string {
-  return process.env.OPENCLAW_LIVE_ACP_SPAWN_DEFAULTS_MODEL?.trim() || "openai/gpt-5.5";
+  return process.env.OPENCLAW_LIVE_ACP_SPAWN_DEFAULTS_MODEL?.trim() || "openai/gpt-5.6-luna";
 }
 
 function resolveThinking(): string {
@@ -58,7 +58,7 @@ function resolveThinking(): string {
 }
 
 function resolveHarnessModel(): string {
-  return process.env.OPENCLAW_LIVE_ACP_BIND_CODEX_MODEL?.trim() || "gpt-5.5";
+  return process.env.OPENCLAW_LIVE_ACP_BIND_CODEX_MODEL?.trim() || "gpt-5.6-luna";
 }
 
 function resolveAcpAgentId(): string {

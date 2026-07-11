@@ -108,12 +108,12 @@ describe("qa-otel-smoke receiver bounds", () => {
         { name: "openclaw.context.assembled", parent: true, attributes: {} },
         { name: "openclaw.message.delivery", parent: true, attributes: {} },
         {
-          name: "chat gpt-5.5",
+          name: "chat gpt-5.6-luna",
           parent: true,
           attributes: {
             "gen_ai.operation.name": "chat",
-            "gen_ai.request.model": "gpt-5.5",
-            "openclaw.model": "gpt-5.5",
+            "gen_ai.request.model": "gpt-5.6-luna",
+            "openclaw.model": "gpt-5.6-luna",
             "openclaw.provider": "openai",
           },
         },

@@ -212,6 +212,7 @@ export function createScopedVitestConfig(
 ) {
   const base = sharedVitestConfig as Record<string, unknown>;
   const baseTest = sharedVitestConfig.test ?? {};
+  const baseSequence = (baseTest as { sequence?: { groupOrder?: number } }).sequence;
   const scopedDir = options?.dir;
   const resolvedScopedDir = scopedDir ? path.join(repoRoot, scopedDir) : undefined;
   const env = options?.env;
@@ -263,7 +264,7 @@ export function createScopedVitestConfig(
         ? {}
         : {
             sequence: {
-              ...baseTest.sequence,
+              ...baseSequence,
               groupOrder: scopedGroupOrder,
             },
           }),

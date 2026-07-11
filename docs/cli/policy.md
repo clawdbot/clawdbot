@@ -614,9 +614,9 @@ Example JSON output:
     ],
     "modelRefs": [
       {
-        "ref": "openai/gpt-5.5",
+        "ref": "openai/gpt-5.6-sol",
         "provider": "openai",
-        "model": "gpt-5.5",
+        "model": "gpt-5.6-sol",
         "source": "oc://openclaw.config/agents/defaults/model"
       }
     ],

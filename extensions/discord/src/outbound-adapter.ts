@@ -22,7 +22,6 @@ import { normalizeDiscordApprovalPayload } from "./outbound-approval.js";
 import {
   buildDiscordPresentationPayload,
   DISCORD_PRESENTATION_CAPABILITIES,
-  DISCORD_PRESENTATION_TEXT_LIMIT,
 } from "./outbound-components.js";
 import { sendDiscordOutboundPayload } from "./outbound-payload.js";
 import {
@@ -34,7 +33,7 @@ import {
 } from "./outbound-send-context.js";
 import { resolveDiscordReplyReference } from "./reply-reference.js";
 
-export const DISCORD_TEXT_CHUNK_LIMIT = DISCORD_PRESENTATION_TEXT_LIMIT;
+export const DISCORD_TEXT_CHUNK_LIMIT = 2000;
 const DISCORD_INTERNAL_RUNTIME_SCAFFOLDING_BLOCK_RE =
   /<\s*(system-reminder|previous_response)\b[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi;
 const DISCORD_INTERNAL_RUNTIME_SCAFFOLDING_SELF_CLOSING_RE =

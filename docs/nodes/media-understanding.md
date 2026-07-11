@@ -88,7 +88,7 @@ Each `models[]` entry is a **provider** entry (default) or a **CLI** entry:
     {
       type: "provider", // default if omitted
       provider: "openai",
-      model: "gpt-5.5",
+      model: "gpt-5.6-sol",
       prompt: "Describe the image in <= 500 chars.",
       maxChars: 500,
       maxBytes: 10485760,
@@ -282,7 +282,7 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
       tools: {
         media: {
           models: [
-            { provider: "openai", model: "gpt-5.5", capabilities: ["image"] },
+            { provider: "openai", model: "gpt-5.6-sol", capabilities: ["image"] },
             {
               provider: "google",
               model: "gemini-3-flash-preview",
@@ -361,7 +361,7 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
             maxBytes: 10485760,
             maxChars: 500,
             models: [
-              { provider: "openai", model: "gpt-5.5" },
+              { provider: "openai", model: "gpt-5.6-sol" },
               { provider: "anthropic", model: "claude-opus-4-8" },
               {
                 type: "cli",
@@ -425,7 +425,7 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
 When media understanding runs, `/status` includes a per-capability summary line:
 
 ```
-📎 Media: image ok (openai/gpt-5.5) · audio ok (whisper-cli observed=metal)
+📎 Media: image ok (openai/gpt-5.6-sol) · audio ok (whisper-cli observed=metal)
 ```
 
 For preflight inventory, run `openclaw capability audio providers`. Local rows show the local fallback winner separately from global provider selection, readiness, and separate capable/requested/observed backend fields. The same local selection is available as an informational doctor finding:

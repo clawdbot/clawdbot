@@ -2551,6 +2551,32 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       }));
       expect(layout.scrollWidth, JSON.stringify(layout)).toBeGreaterThan(layout.clientWidth);
 
+      await recentRow.dispatchEvent("mouseenter");
+      await page.waitForTimeout(250);
+      expect(await recentLabel.evaluate((label) => label.classList.value)).not.toContain(
+        "hover-marquee--scrolling",
+      );
+      await recentRow.dispatchEvent("mouseleave");
+      await page.waitForTimeout(300);
+      expect(await recentLabel.evaluate((label) => label.classList.value)).not.toContain(
+        "hover-marquee--scrolling",
+      );
+      await recentRow.dispatchEvent("mouseenter");
+      await expect
+        .poll(() => recentLabel.evaluate((label) => label.classList.value), { timeout: 1_500 })
+        .toContain("hover-marquee--scrolling");
+      await recentRow.dispatchEvent("mouseleave");
+      await expect
+        .poll(
+          () =>
+            recentLabel.evaluate((label) => ({
+              textIndent: getComputedStyle(label).textIndent,
+              textOverflow: getComputedStyle(label).textOverflow,
+            })),
+          { timeout: 1_500 },
+        )
+        .toEqual({ textIndent: "0px", textOverflow: "ellipsis" });
+
       await recentRow.locator("a.sidebar-recent-session__link").dispatchEvent("click", {
         button: 0,
       });

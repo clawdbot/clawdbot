@@ -1,17 +1,19 @@
 // Host Server script supports OpenClaw repository automation.
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import type { Readable } from "node:stream";
 import { sleep as delay } from "../../lib/sleep.mjs";
 import { die, run, say, sh, warn } from "./host-command.ts";
 import type { HostServer, NpmRegistryPackage, NpmRegistryServer } from "./types.ts";
 
 const HOST_SERVER_STDERR_LIMIT_BYTES = 64 * 1024;
 const HOST_SERVER_STDERR_DRAIN_MS = 5_000;
+type HostServerChild = ChildProcess & { stderr: Readable };
 
 export function resolveHostIp(explicit = ""): string {
   if (explicit) {
@@ -132,7 +134,7 @@ export async function startNpmRegistryServer(input: {
 }
 
 async function stopHostServerChild(
-  child: ChildProcessWithoutNullStreams,
+  child: HostServerChild,
   terminateTimeoutMs = 2_000,
   killTimeoutMs = 1_500,
 ): Promise<boolean> {
@@ -147,10 +149,7 @@ async function stopHostServerChild(
   return await waitForChildExit(child, killTimeoutMs);
 }
 
-async function waitForChildExit(
-  child: ChildProcessWithoutNullStreams,
-  timeoutMs: number,
-): Promise<boolean> {
+async function waitForChildExit(child: HostServerChild, timeoutMs: number): Promise<boolean> {
   if (hasHostServerChildExited(child)) {
     return true;
   }
@@ -172,14 +171,11 @@ async function waitForChildExit(
   });
 }
 
-function hasHostServerChildExited(child: ChildProcessWithoutNullStreams): boolean {
+function hasHostServerChildExited(child: HostServerChild): boolean {
   return child.exitCode != null || child.signalCode != null;
 }
 
-async function waitForHostServer(
-  child: ChildProcessWithoutNullStreams,
-  port: number,
-): Promise<void> {
+async function waitForHostServer(child: HostServerChild, port: number): Promise<void> {
   let stderr = "";
   child.stderr.on("data", (chunk: Buffer) => {
     stderr = appendBoundedOutput(stderr, chunk, HOST_SERVER_STDERR_LIMIT_BYTES);
@@ -218,7 +214,7 @@ function appendBoundedOutput(previous: string, chunk: Buffer, limitBytes: number
   return combined.subarray(combined.byteLength - limitBytes).toString("utf8");
 }
 
-function formatHostServerExit(child: ChildProcessWithoutNullStreams): string {
+function formatHostServerExit(child: HostServerChild): string {
   return child.signalCode ? `signal ${child.signalCode}` : `exit ${child.exitCode ?? "unknown"}`;
 }
 

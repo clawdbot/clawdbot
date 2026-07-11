@@ -1,6 +1,6 @@
 // Slack tests cover blocks plugin behavior.
 import { describe, expect, it } from "vitest";
-import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
+import { buildSlackBlocksFallbackText, renderSlackBlockFallbackText } from "./blocks-fallback.js";
 import { parseSlackBlocksInput } from "./blocks-input.js";
 import {
   encodeSlackModalPrivateMetadata,
@@ -63,6 +63,127 @@ describe("buildSlackBlocksFallbackText", () => {
     ).toBe("Pipeline report (table)\n- Account: Acme; ARR: 125000");
   });
 
+  it("uses only visible action labels and select placeholders", () => {
+    const fallback = buildSlackBlocksFallbackText([
+      {
+        type: "actions",
+        block_id: "private-block-id",
+        elements: [
+          {
+            type: "button",
+            action_id: "private-action-id",
+            text: { type: "plain_text", text: "Approve" },
+            value: "private-button-value",
+          },
+          {
+            type: "static_select",
+            action_id: "private-select-id",
+            placeholder: { type: "plain_text", text: "Choose owner" },
+            options: [
+              { text: { type: "plain_text", text: "Secret option" }, value: "private-option" },
+            ],
+          },
+        ],
+      },
+    ] as never);
+
+    expect(fallback).toBe("Approve\nChoose owner");
+    expect(fallback).not.toMatch(/private|Secret option/u);
+  });
+
+  it("renders section text and fields together", () => {
+    expect(
+      renderSlackBlockFallbackText({
+        type: "section",
+        text: { type: "mrkdwn", text: "Deploy status" },
+        fields: [
+          { type: "mrkdwn", text: "*Region*\nus-east-1" },
+          { type: "plain_text", text: "Healthy" },
+        ],
+      }),
+    ).toBe("Deploy status\n*Region*\nus-east-1\nHealthy");
+  });
+
+  it("includes section accessory labels without hidden values", () => {
+    expect(
+      renderSlackBlockFallbackText({
+        type: "section",
+        text: { type: "mrkdwn", text: "Deploy status" },
+        accessory: {
+          type: "button",
+          text: { type: "plain_text", text: "Approve" },
+          value: "secret-approval-token",
+        },
+      }),
+    ).toBe("Deploy status\nApprove");
+  });
+
+  it("renders rich text and context without hidden metadata", () => {
+    const richText = renderSlackBlockFallbackText({
+      type: "rich_text",
+      block_id: "private-block-id",
+      elements: [
+        {
+          type: "rich_text_section",
+          elements: [
+            { type: "text", text: "Ask " },
+            { type: "user", user_id: "U123" },
+            { type: "text", text: " <!channel> in " },
+            { type: "channel", channel_id: "C123" },
+            { type: "text", text: " " },
+            { type: "emoji", name: "wave" },
+          ],
+        },
+        {
+          type: "rich_text_list",
+          elements: [
+            { type: "rich_text_section", elements: [{ type: "text", text: "First" }] },
+            {
+              type: "rich_text_section",
+              elements: [
+                {
+                  type: "link",
+                  url: "https://example.com/private-target",
+                  text: "Second",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    const context = renderSlackBlockFallbackText({
+      type: "context",
+      elements: [
+        { type: "mrkdwn", text: "Updated now" },
+        { type: "image", alt_text: "Green status", image_url: "https://example.com/secret" },
+      ],
+    });
+
+    expect(richText).toBe(
+      "Ask &lt;@U123&gt; &lt;!channel&gt; in &lt;#C123&gt; :wave:\nFirst\nSecond",
+    );
+    expect(richText).not.toContain("private-block-id");
+    expect(richText).not.toContain("private-target");
+    expect(context).toBe("Updated now Green status");
+    expect(context).not.toContain("secret");
+  });
+
+  it("selects plain or mrkdwn-safe native data text explicitly", () => {
+    const table = {
+      type: "data_table",
+      caption: "<!channel> pipeline",
+      rows: [[{ type: "raw_text", text: "Owner" }], [{ type: "raw_text", text: "<@U123>" }]],
+    };
+
+    expect(renderSlackBlockFallbackText(table, { nativeDataFormat: "plain" })).toBe(
+      "<!channel> pipeline (table)\n- Owner: <@U123>",
+    );
+    expect(renderSlackBlockFallbackText(table, { nativeDataFormat: "mrkdwn-safe" })).toBe(
+      "&lt;!channel&gt; pipeline (table)\n- Owner: &lt;@U123&gt;",
+    );
+  });
+
   it("uses generic defaults for file and unknown blocks", () => {
     expect(
       buildSlackBlocksFallbackText([
@@ -72,6 +193,7 @@ describe("buildSlackBlocksFallbackText", () => {
     expect(buildSlackBlocksFallbackText([{ type: "divider" }] as never)).toBe(
       "Shared a Block Kit message",
     );
+    expect(renderSlackBlockFallbackText({ type: "video" })).toBe("Shared a video");
   });
 });
 

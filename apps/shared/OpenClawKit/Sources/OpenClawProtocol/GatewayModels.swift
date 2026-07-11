@@ -37,6 +37,27 @@ public enum EnvironmentStatus: String, Codable, Sendable {
     case error = "error"
 }
 
+public enum WorkerEnvironmentState: String, Codable, Sendable {
+    case requested = "requested"
+    case provisioning = "provisioning"
+    case bootstrapping = "bootstrapping"
+    case ready = "ready"
+    case attached = "attached"
+    case idle = "idle"
+    case draining = "draining"
+    case destroying = "destroying"
+    case destroyed = "destroyed"
+    case failed = "failed"
+    case orphaned = "orphaned"
+}
+
+public enum WorkerTunnelStatus: String, Codable, Sendable {
+    case stopped = "stopped"
+    case connecting = "connecting"
+    case connected = "connected"
+    case reconnecting = "reconnecting"
+}
+
 public enum NodePresenceAliveReason: String, Codable, Sendable {
     case background = "background"
     case silentPush = "silent_push"
@@ -129,6 +150,28 @@ public struct ConnectParams: Codable, Sendable {
         case auth
         case locale
         case useragent = "userAgent"
+    }
+}
+
+public struct WorkerAdmissionHandshake: Codable, Sendable {
+    public let bundlehash: String
+    public let openclawversion: String
+    public let protocolfeatures: [String]
+
+    public init(
+        bundlehash: String,
+        openclawversion: String,
+        protocolfeatures: [String])
+    {
+        self.bundlehash = bundlehash
+        self.openclawversion = openclawversion
+        self.protocolfeatures = protocolfeatures
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case bundlehash = "bundleHash"
+        case openclawversion = "openclawVersion"
+        case protocolfeatures = "protocolFeatures"
     }
 }
 
@@ -648,25 +691,66 @@ public struct GatewaySuspendResumeResult: Codable, Sendable {
     }
 }
 
+public struct WorkerEnvironmentMetadata: Codable, Sendable {
+    public let providerid: String
+    public let leaseid: String?
+    public let state: WorkerEnvironmentState
+    public let agems: Int
+    public let idlems: Int?
+    public let attachedsessionids: [String]
+    public let tunnelstatus: WorkerTunnelStatus
+
+    public init(
+        providerid: String,
+        leaseid: String? = nil,
+        state: WorkerEnvironmentState,
+        agems: Int,
+        idlems: Int? = nil,
+        attachedsessionids: [String],
+        tunnelstatus: WorkerTunnelStatus)
+    {
+        self.providerid = providerid
+        self.leaseid = leaseid
+        self.state = state
+        self.agems = agems
+        self.idlems = idlems
+        self.attachedsessionids = attachedsessionids
+        self.tunnelstatus = tunnelstatus
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case providerid = "providerId"
+        case leaseid = "leaseId"
+        case state
+        case agems = "ageMs"
+        case idlems = "idleMs"
+        case attachedsessionids = "attachedSessionIds"
+        case tunnelstatus = "tunnelStatus"
+    }
+}
+
 public struct EnvironmentSummary: Codable, Sendable {
     public let id: String
     public let type: String
     public let label: String?
     public let status: EnvironmentStatus
     public let capabilities: [String]?
+    public let worker: WorkerEnvironmentMetadata?
 
     public init(
         id: String,
         type: String,
         label: String? = nil,
         status: EnvironmentStatus,
-        capabilities: [String]? = nil)
+        capabilities: [String]? = nil,
+        worker: WorkerEnvironmentMetadata? = nil)
     {
         self.id = id
         self.type = type
         self.label = label
         self.status = status
         self.capabilities = capabilities
+        self.worker = worker
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -675,6 +759,107 @@ public struct EnvironmentSummary: Codable, Sendable {
         case label
         case status
         case capabilities
+        case worker
+    }
+}
+
+public struct EnvironmentsCreateParams: Codable, Sendable {
+    public let profileid: String
+    public let idempotencykey: String
+
+    public init(
+        profileid: String,
+        idempotencykey: String)
+    {
+        self.profileid = profileid
+        self.idempotencykey = idempotencykey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case profileid = "profileId"
+        case idempotencykey = "idempotencyKey"
+    }
+}
+
+public struct EnvironmentsCreateResult: Codable, Sendable {
+    public let id: String
+    public let type: String
+    public let label: String?
+    public let status: EnvironmentStatus
+    public let capabilities: [String]?
+    public let worker: WorkerEnvironmentMetadata?
+
+    public init(
+        id: String,
+        type: String,
+        label: String? = nil,
+        status: EnvironmentStatus,
+        capabilities: [String]? = nil,
+        worker: WorkerEnvironmentMetadata? = nil)
+    {
+        self.id = id
+        self.type = type
+        self.label = label
+        self.status = status
+        self.capabilities = capabilities
+        self.worker = worker
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case type
+        case label
+        case status
+        case capabilities
+        case worker
+    }
+}
+
+public struct EnvironmentsDestroyParams: Codable, Sendable {
+    public let environmentid: String
+
+    public init(
+        environmentid: String)
+    {
+        self.environmentid = environmentid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case environmentid = "environmentId"
+    }
+}
+
+public struct EnvironmentsDestroyResult: Codable, Sendable {
+    public let id: String
+    public let type: String
+    public let label: String?
+    public let status: EnvironmentStatus
+    public let capabilities: [String]?
+    public let worker: WorkerEnvironmentMetadata?
+
+    public init(
+        id: String,
+        type: String,
+        label: String? = nil,
+        status: EnvironmentStatus,
+        capabilities: [String]? = nil,
+        worker: WorkerEnvironmentMetadata? = nil)
+    {
+        self.id = id
+        self.type = type
+        self.label = label
+        self.status = status
+        self.capabilities = capabilities
+        self.worker = worker
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case type
+        case label
+        case status
+        case capabilities
+        case worker
     }
 }
 
@@ -714,19 +899,22 @@ public struct EnvironmentsStatusResult: Codable, Sendable {
     public let label: String?
     public let status: EnvironmentStatus
     public let capabilities: [String]?
+    public let worker: WorkerEnvironmentMetadata?
 
     public init(
         id: String,
         type: String,
         label: String? = nil,
         status: EnvironmentStatus,
-        capabilities: [String]? = nil)
+        capabilities: [String]? = nil,
+        worker: WorkerEnvironmentMetadata? = nil)
     {
         self.id = id
         self.type = type
         self.label = label
         self.status = status
         self.capabilities = capabilities
+        self.worker = worker
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -735,6 +923,7 @@ public struct EnvironmentsStatusResult: Codable, Sendable {
         case label
         case status
         case capabilities
+        case worker
     }
 }
 
@@ -1740,19 +1929,31 @@ public struct NodeInvokeParams: Codable, Sendable {
     public let params: AnyCodable?
     public let timeoutms: Int?
     public let idempotencykey: String
+    public let turnsourcechannel: String?
+    public let turnsourceto: String?
+    public let turnsourceaccountid: String?
+    public let turnsourcethreadid: AnyCodable?
 
     public init(
         nodeid: String,
         command: String,
         params: AnyCodable? = nil,
         timeoutms: Int? = nil,
-        idempotencykey: String)
+        idempotencykey: String,
+        turnsourcechannel: String? = nil,
+        turnsourceto: String? = nil,
+        turnsourceaccountid: String? = nil,
+        turnsourcethreadid: AnyCodable? = nil)
     {
         self.nodeid = nodeid
         self.command = command
         self.params = params
         self.timeoutms = timeoutms
         self.idempotencykey = idempotencykey
+        self.turnsourcechannel = turnsourcechannel
+        self.turnsourceto = turnsourceto
+        self.turnsourceaccountid = turnsourceaccountid
+        self.turnsourcethreadid = turnsourcethreadid
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -1761,6 +1962,10 @@ public struct NodeInvokeParams: Codable, Sendable {
         case params
         case timeoutms = "timeoutMs"
         case idempotencykey = "idempotencyKey"
+        case turnsourcechannel = "turnSourceChannel"
+        case turnsourceto = "turnSourceTo"
+        case turnsourceaccountid = "turnSourceAccountId"
+        case turnsourcethreadid = "turnSourceThreadId"
     }
 }
 

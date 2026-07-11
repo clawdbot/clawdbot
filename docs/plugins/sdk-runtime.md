@@ -201,7 +201,7 @@ two-party event loops that do not go through the shared inbound reply runner.
     Default model and provider constants:
 
     ```typescript
-    const model = api.runtime.agent.defaults.model; // e.g. "gpt-5.5"
+    const model = api.runtime.agent.defaults.model; // e.g. "gpt-5.6-sol"
     const provider = api.runtime.agent.defaults.provider; // e.g. "openai"
     ```
 
@@ -294,7 +294,7 @@ two-party event loops that do not go through the shared inbound reply runner.
       sessionKey: "agent:main:subagent:search-helper",
       message: "Expand this query into focused follow-up searches.",
       provider: "openai", // optional override
-      model: "gpt-5.5", // optional override
+      model: "gpt-5.6-sol", // optional override
       deliver: false,
     });
 
@@ -443,7 +443,7 @@ two-party event loops that do not go through the shared inbound reply runner.
     // Include at least one image; text inputs are supplemental context.
     const evidence = await api.runtime.mediaUnderstanding.extractStructuredWithModel({
       provider: "codex",
-      model: "gpt-5.5",
+      model: "gpt-5.6-sol",
       input: [
         {
           type: "image",

@@ -12,6 +12,7 @@ import {
   isOpenAICompatibleAzureResponsesBaseUrl,
   isOpenAIGpt54MiniModel,
   isOpenAIGpt55Model,
+  isOpenAIGpt56Model,
   isResponsesTextContentPartType,
   isResponsesTextDeltaEventType,
   mapOpenAIStopReason,
@@ -4828,6 +4829,11 @@ export function buildOpenAICompletionsParams(
     params.tools.length > 0 &&
     (isOpenAIGpt54MiniModel(model) ||
       (isOpenAIGpt55Model(model) && isKnownOpenAICompletionsEndpoint(model)));
+  const disableChatCompletionsToolReasoning =
+    Array.isArray(params.tools) &&
+    params.tools.length > 0 &&
+    isOpenAIGpt56Model(model) &&
+    isKnownOpenAICompletionsEndpoint(model);
   const handledQwenThinkingFormat = applyQwenOpenAICompletionsThinkingParams({
     compatThinkingFormat: compat.thinkingFormat,
     modelReasoning: model.reasoning,
@@ -4840,7 +4846,11 @@ export function buildOpenAICompletionsParams(
     payload: params,
     requestedEffort: completionsReasoningEffort,
   });
-  if (
+  if (disableChatCompletionsToolReasoning) {
+    // GPT-5.6 Chat Completions defaults reasoning on, but rejects function
+    // tools unless reasoning is explicitly disabled.
+    params.reasoning_effort = "none";
+  } else if (
     compat.thinkingFormat === "openrouter" &&
     model.reasoning &&
     resolvedCompletionsReasoningEffort

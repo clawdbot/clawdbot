@@ -72,6 +72,8 @@ import { createTelegramWebhookStatusPublisher } from "./webhook-status.js";
 
 const TELEGRAM_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const TELEGRAM_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
+const TELEGRAM_WEBHOOK_ACCEPTED_HEADER = "x-openclaw-delivery-accepted";
+const TELEGRAM_WEBHOOK_ACCEPTED_VALUE = "durable";
 const TELEGRAM_WEBHOOK_SPOOLED_DRAIN_INTERVAL_MS = 500;
 const TELEGRAM_WEBHOOK_SPOOLED_CLAIM_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 const TELEGRAM_WEBHOOK_SPOOLED_HANDLER_TIMEOUT_MS = 25 * 60_000;
@@ -948,6 +950,7 @@ export async function startTelegramWebhook(opts: {
       });
       // Enqueue duplicate detection makes Telegram webhook retries idempotent:
       // re-posted update_ids map to the same spool row and still ack fast.
+      res.setHeader(TELEGRAM_WEBHOOK_ACCEPTED_HEADER, TELEGRAM_WEBHOOK_ACCEPTED_VALUE);
       respondText(200);
       status.noteWebhookUpdateReceived();
       requestWebhookSpoolDrain();

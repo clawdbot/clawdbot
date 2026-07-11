@@ -17,7 +17,11 @@ import {
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { z } from "zod";
-import { CODEX_PLUGINS_MARKETPLACE_NAME, normalizeCodexServiceTier } from "./config.js";
+import {
+  CODEX_PLUGINS_MARKETPLACE_NAME,
+  CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
+  normalizeCodexServiceTier,
+} from "./config.js";
 import type { PluginAppPolicyContext } from "./plugin-thread-config.js";
 import type { CodexServiceTier } from "./protocol.js";
 
@@ -140,7 +144,10 @@ const pluginAppPolicyEntrySchema = z
   .object({
     source: z.literal("plugin").optional(),
     configKey: z.string(),
-    marketplaceName: z.literal(CODEX_PLUGINS_MARKETPLACE_NAME),
+    marketplaceName: z.enum([
+      CODEX_PLUGINS_MARKETPLACE_NAME,
+      CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
+    ]),
     pluginName: z.string(),
     allowDestructiveActions: z.boolean(),
     destructiveApprovalMode: destructiveApprovalModeSchema,
@@ -1231,7 +1238,8 @@ function readPluginAppPolicyContext(
       "appId" in entry ||
       (entry.source !== undefined && entry.source !== "plugin") ||
       typeof entry.configKey !== "string" ||
-      entry.marketplaceName !== CODEX_PLUGINS_MARKETPLACE_NAME ||
+      (entry.marketplaceName !== CODEX_PLUGINS_MARKETPLACE_NAME &&
+        entry.marketplaceName !== CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME) ||
       typeof entry.pluginName !== "string" ||
       typeof entry.allowDestructiveActions !== "boolean" ||
       destructiveApprovalMode === "invalid" ||

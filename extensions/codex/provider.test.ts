@@ -1,6 +1,7 @@
 // Codex tests cover provider plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "./prompt-overlay.js";
+import { buildCodexModelDefinition } from "./provider-catalog.js";
 import { codexProviderDiscovery } from "./provider-discovery.js";
 import {
   buildCodexProvider,
@@ -23,7 +24,12 @@ afterEach(() => {
 function expectStaticFallbackCatalog(
   result: Awaited<ReturnType<typeof buildCodexProviderCatalog>>,
 ) {
-  expect(result.provider.models.map((model) => model.id)).toEqual(["gpt-5.5", "gpt-5.4-mini"]);
+  expect(result.provider.models.map((model) => model.id)).toEqual([
+    "gpt-5.6-sol",
+    "gpt-5.6-luna",
+    "gpt-5.5",
+    "gpt-5.4-mini",
+  ]);
 }
 
 function createFakeCodexClient(): CodexAppServerClient {
@@ -85,6 +91,19 @@ function mockCallArg(mockFn: { mock: { calls: unknown[][] } }, callIndex: number
 }
 
 describe("codex provider", () => {
+  it.each(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])(
+    "uses the known context window for discovered %s models",
+    (modelId) => {
+      const model = buildCodexModelDefinition({
+        id: modelId,
+        model: modelId,
+        inputModalities: ["text", "image"],
+      });
+
+      expect(model.contextWindow).toBe(372_000);
+    },
+  );
+
   it.each(["gpt-5.5-pro", "gpt-5.4-pro"] as const)(
     "classifies %s as a modern Codex model",
     (modelId) => {
@@ -378,7 +397,7 @@ describe("codex provider", () => {
     ).toBe(true);
   });
 
-  it("keeps undiscovered GPT-5.6 models on family reasoning rules", () => {
+  it("uses fallback reasoning metadata for GPT-5.6 Luna", () => {
     const provider = buildCodexProvider();
     const model = provider.resolveDynamicModel?.({
       provider: "codex",
@@ -389,7 +408,12 @@ describe("codex provider", () => {
     expectRecordFields(model, {
       id: "gpt-5.6-luna",
       reasoning: true,
-      compat: { supportsUsageInStreaming: true },
+      contextWindow: 372_000,
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+        supportsUsageInStreaming: true,
+      },
     });
     expect(
       provider
@@ -640,7 +664,7 @@ describe("codex provider", () => {
     const authResult = await authChoice?.run({} as never);
     expectRecordFields(authResult, {
       profiles: [],
-      defaultModel: "codex/gpt-5.5",
+      defaultModel: "codex/gpt-5.6-sol",
     });
   });
 
@@ -658,9 +682,15 @@ describe("codex provider", () => {
       agentDir: "/tmp/openclaw-agent",
     } as never);
 
-    expect(
-      result && "provider" in result ? result.provider.models.map((model) => model.id) : [],
-    ).toEqual(["gpt-5.5", "gpt-5.4-mini"]);
+    const models = result && "provider" in result ? result.provider.models : [];
+    expect(models.map((model) => model.id)).toEqual([
+      "gpt-5.6-sol",
+      "gpt-5.6-luna",
+      "gpt-5.5",
+      "gpt-5.4-mini",
+    ]);
+    expect(models.find((model) => model.id === "gpt-5.6-sol")?.contextWindow).toBe(372_000);
+    expect(models.find((model) => model.id === "gpt-5.6-luna")?.contextWindow).toBe(372_000);
   });
 
   it("adds the GPT-5 prompt overlay to Codex provider runs", () => {

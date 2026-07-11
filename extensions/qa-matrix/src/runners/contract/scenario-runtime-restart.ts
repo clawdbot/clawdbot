@@ -236,7 +236,6 @@ export async function runStaleSyncReplayDedupeScenario(context: MatrixQaScenario
     });
 
   await waitForMatrixInboundDedupeEntry({
-    context,
     eventId: replayDriverEventId,
     roomId,
     stateDir,

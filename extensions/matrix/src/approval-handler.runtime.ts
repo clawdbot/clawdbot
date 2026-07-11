@@ -1,5 +1,4 @@
 // Matrix plugin module implements approval handler behavior.
-import { setTimeout as sleep } from "node:timers/promises";
 import type {
   ChannelApprovalCapabilityHandlerContext,
   PendingApprovalView,
@@ -21,6 +20,7 @@ import {
   listMessageReceiptPlatformIds,
   resolveMessageReceiptPrimaryId,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import { normalizeUniqueStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildMatrixApprovalReactionHint,
@@ -184,19 +184,15 @@ async function retryMatrixApprovalDelivery<T>(
   operation: () => Promise<T>,
   params: { shouldRetry?: (error: unknown) => boolean } = {},
 ): Promise<T> {
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= MATRIX_APPROVAL_DELIVERY_ATTEMPTS; attempt += 1) {
-    try {
-      return await operation();
-    } catch (error) {
-      lastError = error;
-      if (attempt === MATRIX_APPROVAL_DELIVERY_ATTEMPTS || params.shouldRetry?.(error) === false) {
-        break;
-      }
-      await sleep(MATRIX_APPROVAL_DELIVERY_RETRY_DELAY_MS * attempt);
-    }
-  }
-  throw lastError;
+  // With a 3-attempt budget the core exponential schedule (250ms, 500ms)
+  // matches the previous linear attempt*250ms backoff exactly; revisit the
+  // delay curve if MATRIX_APPROVAL_DELIVERY_ATTEMPTS grows.
+  return await retryAsync(operation, {
+    attempts: MATRIX_APPROVAL_DELIVERY_ATTEMPTS,
+    minDelayMs: MATRIX_APPROVAL_DELIVERY_RETRY_DELAY_MS,
+    // Deliveries default to retryable; callers opt out per error class.
+    shouldRetry: (error) => params.shouldRetry?.(error) !== false,
+  });
 }
 
 async function prepareTarget(

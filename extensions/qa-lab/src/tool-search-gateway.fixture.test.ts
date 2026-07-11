@@ -174,7 +174,7 @@ describe("tool search gateway e2e lane result", () => {
       );
     vi.stubGlobal("fetch", fetchMock);
     const env: QaSuiteRuntimeEnv = {
-      alternateModel: "openai/gpt-5.5",
+      alternateModel: "openai/gpt-5.6-luna",
       cfg: {},
       gateway: {
         baseUrl: "http://gateway.test",
@@ -192,7 +192,7 @@ describe("tool search gateway e2e lane result", () => {
         workspaceDir: tempRoot,
       },
       mock: { baseUrl: "http://mock-openai.test" },
-      primaryModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.6-luna",
       providerMode: "mock-openai",
       repoRoot: tempRoot,
       transport: {} as QaSuiteRuntimeEnv["transport"],

@@ -222,6 +222,43 @@ describe("openclaw state database", () => {
     expect(columns.map((column) => column.name)).toContain("startup_reason");
   });
 
+  it("adds worker bootstrap lifecycle columns to existing state databases", () => {
+    const stateDir = createTempStateDir();
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const databasePath = database.path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacyDb = new DatabaseSync(databasePath);
+    legacyDb.exec(`
+      ALTER TABLE worker_environments DROP COLUMN bootstrap_bundle_hash;
+      ALTER TABLE worker_environments DROP COLUMN bootstrap_openclaw_version;
+      ALTER TABLE worker_environments DROP COLUMN bootstrap_protocol_features_json;
+      ALTER TABLE worker_environments DROP COLUMN teardown_terminal_state;
+      ALTER TABLE worker_environments DROP COLUMN ssh_host_key;
+    `);
+    legacyDb.close();
+
+    const reopened = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const columns = reopened.db.prepare("PRAGMA table_info(worker_environments)").all() as Array<{
+      name?: string;
+    }>;
+
+    expect(columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining([
+        "bootstrap_bundle_hash",
+        "bootstrap_openclaw_version",
+        "bootstrap_protocol_features_json",
+        "teardown_terminal_state",
+        "ssh_host_key",
+      ]),
+    );
+  });
+
   it("migrates requester and executor attribution for existing cross-agent tasks", () => {
     const stateDir = createTempStateDir();
     const database = openOpenClawStateDatabase({

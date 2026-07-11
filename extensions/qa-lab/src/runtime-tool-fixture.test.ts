@@ -14,8 +14,8 @@ async function makeEnv(overrides: Partial<QaSuiteRuntimeEnv> = {}): Promise<QaSu
   return {
     repoRoot: workspaceDir,
     providerMode: "mock-openai",
-    primaryModel: "openai/gpt-5.5",
-    alternateModel: "openai/gpt-5.5",
+    primaryModel: "openai/gpt-5.6-luna",
+    alternateModel: "openai/gpt-5.6-luna",
     mock: null,
     cfg: {},
     transport: {} as QaSuiteRuntimeEnv["transport"],

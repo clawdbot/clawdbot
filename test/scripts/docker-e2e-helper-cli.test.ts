@@ -161,7 +161,7 @@ describe("Docker E2E helper CLIs", () => {
   it("rejects missing timings limits without a Node stack trace", () => {
     for (const limit of [undefined, "-h"]) {
       const args = ["scripts/docker-e2e-timings.mjs", "summary.json", "--limit"];
-      const result = runHelper(...(limit === undefined ? args : [...args, limit]));
+      const result = runHelper(args[0]!, ...args.slice(1), ...(limit === undefined ? [] : [limit]));
 
       expect(result.status).toBe(1);
       expect(result.stdout).toBe("");

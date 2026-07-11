@@ -13,6 +13,7 @@ import type {
   MessagePresentationSelectBlock,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 import {
   buildSlackDataTableBlock,
   countSlackDataTableBlocksCellCharacters,
@@ -46,7 +47,7 @@ const SLACK_BUTTON_URL_MAX = 3000;
 
 export type SlackBlock = Block | KnownBlock;
 
-type SlackBlockRenderOptions = {
+export type SlackBlockRenderOptions = {
   buttonIndexOffset?: number;
   dataTableCellCharacterCountOffset?: number;
   dataVisualizationCountOffset?: number;
@@ -293,7 +294,13 @@ export function buildSlackPresentationBlocks(
       if (block.type === "context") {
         blocks.push({
           type: "context",
-          elements: [{ type: "mrkdwn", text: truncateSlackText(text, SLACK_SECTION_TEXT_MAX) }],
+          elements: [
+            {
+              type: "mrkdwn",
+              text: truncateSlackText(text, SLACK_SECTION_TEXT_MAX),
+              verbatim: true,
+            },
+          ],
         });
       } else {
         blocks.push({
@@ -324,19 +331,15 @@ export function buildSlackPresentationBlocks(
         dataVisualizationCount += 1;
         blocks.push(rendered);
       } else {
-        blocks.push({
-          type: "context",
-          elements: [
-            {
-              type: "mrkdwn",
-              verbatim: true,
-              text: truncateSlackText(
-                renderSlackMessagePresentationChartFallbackText(block),
-                SLACK_SECTION_TEXT_MAX,
-              ),
-            },
-          ],
-        });
+        const fallback = renderSlackMessagePresentationChartFallbackText(block);
+        blocks.push(
+          ...chunkTextForOutbound(fallback, SLACK_SECTION_TEXT_MAX).map(
+            (text): SlackBlock => ({
+              type: "context",
+              elements: [{ type: "mrkdwn", text, verbatim: true }],
+            }),
+          ),
+        );
       }
       continue;
     }
@@ -453,6 +456,7 @@ export function canRenderSlackPresentation(
   if (!canRenderSlackPresentationTables(presentation, options)) {
     return false;
   }
+  let dataVisualizationCount = options.dataVisualizationCountOffset ?? 0;
   for (const block of presentation.blocks) {
     if (block.type === "text" || block.type === "context") {
       if (!isWithinSlackLimit(block.text.trim(), SLACK_SECTION_TEXT_MAX)) {
@@ -474,9 +478,10 @@ export function canRenderSlackPresentation(
       continue;
     }
     if (block.type === "select") {
+      const placeholder = normalizeOptionalString(block.placeholder) ?? "Choose an option";
       const allOptionsRenderable =
+        isWithinSlackLimit(placeholder, SLACK_ACTION_LABEL_MAX) &&
         block.options.length <= SLACK_STATIC_SELECT_OPTIONS_MAX &&
-        (!block.placeholder || isWithinSlackLimit(block.placeholder, SLACK_ACTION_LABEL_MAX)) &&
         block.options.every(
           (option) =>
             isWithinSlackLimit(option.label, SLACK_ACTION_LABEL_MAX) &&
@@ -491,11 +496,13 @@ export function canRenderSlackPresentation(
       continue;
     }
     if (block.type === "chart") {
-      if (!canRenderSlackDataVisualization(block)) {
+      if (
+        dataVisualizationCount >= SLACK_DATA_VISUALIZATION_BLOCKS_MAX ||
+        !canRenderSlackDataVisualization(block)
+      ) {
         return false;
       }
-      // The renderer preserves valid charts beyond Slack's native two-block
-      // budget as visible context, so count overflow is still lossless here.
+      dataVisualizationCount += 1;
       continue;
     }
     if (block.type === "table") {
@@ -503,6 +510,20 @@ export function canRenderSlackPresentation(
     }
   }
   return true;
+}
+
+/** True when every non-table block survives while tables use text fallback. */
+export function canRenderSlackPresentationWithoutTables(
+  presentation: MessagePresentation,
+  options: SlackBlockRenderOptions = {},
+): boolean {
+  return canRenderSlackPresentation(
+    {
+      ...presentation,
+      blocks: presentation.blocks.filter((block) => block.type !== "table"),
+    },
+    options,
+  );
 }
 
 function buildSlackPresentationSelectBlock(

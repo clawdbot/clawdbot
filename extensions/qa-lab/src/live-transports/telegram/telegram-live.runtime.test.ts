@@ -381,7 +381,7 @@ describe("telegram live qa runtime", () => {
     });
 
     expect(next.agents?.defaults?.skipBootstrap).toBe(true);
-    expect(next.agents?.defaults?.models?.["openai/gpt-5.5"]?.agentRuntime).toEqual({
+    expect(next.agents?.defaults?.models?.["openai/gpt-5.6-luna"]?.agentRuntime).toEqual({
       id: "openclaw",
     });
     expect(next.plugins?.allow).toContain("telegram");

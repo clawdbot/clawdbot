@@ -108,6 +108,7 @@ import {
   replaceWithEffectiveCronCreatorToolAllowlist,
   type CronCreatorToolAllowlistEntry,
 } from "./tools/cron-tool.js";
+import { wrapToolWithGatewayCallerIdentity } from "./tools/gateway-caller-context.js";
 import type { RequestCompactionToolOpts } from "./tools/request-compaction-tool.js";
 
 const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);
@@ -854,13 +855,29 @@ export function createOpenClawCodingTools(options?: {
   );
   // Plugin-only plans bypass createOpenClawTools, so the capability gate must
   // apply here too or narrow allowlists leak gated tools onto capless surfaces.
+  const pluginToolCallerIdentity =
+    agentId && options?.sessionKey?.trim()
+      ? {
+          agentId,
+          sessionKey: options.sessionKey.trim(),
+          turnSourceChannel: resolveGatewayMessageChannel(
+            options.messageChannel ?? options.messageProvider,
+          ),
+          turnSourceTo:
+            options.currentMessagingTarget ?? options.currentChannelId ?? options.messageTo,
+          turnSourceAccountId: options.agentAccountId,
+          turnSourceThreadId: options.currentThreadTs ?? options.messageThreadId,
+        }
+      : undefined;
   const pluginToolsOnly = filterToolsByClientCaps(
     includeOpenClawTools || !includePluginTools
       ? []
       : resolveOpenClawPluginToolsForOptions({
           options: {
             agentSessionKey: options?.sessionKey,
-            agentChannel: resolveGatewayMessageChannel(options?.messageProvider),
+            agentChannel: resolveGatewayMessageChannel(
+              options?.messageChannel ?? options?.messageProvider,
+            ),
             agentAccountId: options?.agentAccountId,
             agentTo: options?.messageTo,
             agentThreadId: options?.messageThreadId,
@@ -894,7 +911,7 @@ export function createOpenClawCodingTools(options?: {
           resolvedConfig: options?.config,
         }),
     options?.clientCaps,
-  );
+  ).map((tool) => wrapToolWithGatewayCallerIdentity(tool, pluginToolCallerIdentity));
   const toolSearchTools = toolSearchControlsEnabled
     ? createToolSearchTools({
         config: options?.config,
@@ -947,7 +964,9 @@ export function createOpenClawCodingTools(options?: {
           agentSessionKey: options?.sessionKey,
           runId: options?.runId,
           runSessionKey: options?.runSessionKey,
-          agentChannel: resolveGatewayMessageChannel(options?.messageProvider),
+          agentChannel: resolveGatewayMessageChannel(
+            options?.messageChannel ?? options?.messageProvider,
+          ),
           agentAccountId: options?.agentAccountId,
           agentTo: options?.messageTo,
           agentThreadId: options?.messageThreadId,

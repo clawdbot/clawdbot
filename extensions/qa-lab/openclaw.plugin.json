@@ -5,7 +5,8 @@
     "onStartup": false
   },
   "contracts": {
-    "webSearchProviders": ["qa-lab-search"]
+    "webSearchProviders": ["qa-lab-search"],
+    "workerProviders": ["static-ssh"]
   },
   "configSchema": {
     "type": "object",

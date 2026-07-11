@@ -30,7 +30,10 @@ import {
   resolveBrowserExecutableForPlatform,
   stopOpenClawChrome,
 } from "./chrome.js";
-import { usesOpenClawMockKeychain } from "./chrome.profile-decoration.js";
+import {
+  ensureProfileNetworkPredictionDisabled,
+  usesOpenClawMockKeychain,
+} from "./chrome.profile-decoration.js";
 import {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
@@ -305,6 +308,22 @@ describe("browser chrome profile decoration", () => {
     const prefs = await readJson(path.join(userDataDir, "Default", "Preferences"));
     expect(prefs.exit_type).toBe("Normal");
     expect(prefs.exited_cleanly).toBe(true);
+  });
+
+  it("disables speculative network prediction without replacing sibling net prefs", async () => {
+    const userDataDir = await createUserDataDir();
+    const preferencesPath = path.join(userDataDir, "Default", "Preferences");
+    await fsp.mkdir(path.dirname(preferencesPath), { recursive: true });
+    await fsp.writeFile(
+      preferencesPath,
+      `${JSON.stringify({ net: { quic_allowed: false } })}\n`,
+      "utf-8",
+    );
+
+    ensureProfileNetworkPredictionDisabled(userDataDir);
+
+    const prefs = await readJson(preferencesPath);
+    expect(prefs.net).toEqual({ quic_allowed: false, network_prediction_options: 2 });
   });
 
   it("is idempotent when rerun on an existing profile", async () => {

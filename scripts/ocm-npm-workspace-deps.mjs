@@ -9,6 +9,9 @@ import { pathToFileURL } from "node:url";
 const WORKSPACE_DIRS_ENV = "OPENCLAW_OCM_WORKSPACE_DEPENDENCY_DIRS";
 const REAL_NPM_ENV = "OPENCLAW_OCM_REAL_NPM_BIN";
 const ALLOW_UNRELEASED_CHANGELOG_ENV = "OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG";
+const RUNTIME_BUILD_PROFILE_ENV = "OPENCLAW_OCM_RUNTIME_BUILD_PROFILE";
+const supportedRuntimeBuildProfiles = new Set(["sourcePerformance"]);
+const fullGitCommitPattern = /^[0-9a-f]{40}$/iu;
 
 export function parseWorkspaceDependencyDirs(
   raw = process.env[WORKSPACE_DIRS_ENV],
@@ -75,6 +78,48 @@ export function resolveNpmEnvironment(args, env = process.env) {
   };
 }
 
+export function resolveRuntimePackPlan(args, env = process.env) {
+  if (args[0] !== "pack") {
+    return null;
+  }
+  const profile = env[RUNTIME_BUILD_PROFILE_ENV]?.trim();
+  if (!profile) {
+    return null;
+  }
+  if (!supportedRuntimeBuildProfiles.has(profile)) {
+    throw new Error(`invalid ${RUNTIME_BUILD_PROFILE_ENV}: ${profile}`);
+  }
+  return {
+    profile,
+    packArgs: args.includes("--ignore-scripts") ? args : [...args, "--ignore-scripts"],
+  };
+}
+
+export function resolveRuntimePackEnvironment(
+  env = process.env,
+  now = () => new Date(),
+  readGitCommit = () => {
+    const result = spawnSync("git", ["rev-parse", "HEAD"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return result.status === 0 ? result.stdout.trim() : null;
+  },
+) {
+  const explicitTimestamp = env.OPENCLAW_BUILD_TIMESTAMP?.trim();
+  const explicitCommit = env.GIT_COMMIT?.trim() || env.GIT_SHA?.trim();
+  const checkedOutCommit = explicitCommit ? null : readGitCommit()?.trim();
+  const commit = explicitCommit || checkedOutCommit || env.GITHUB_SHA?.trim();
+  if (commit && !fullGitCommitPattern.test(commit)) {
+    throw new Error("runtime pack commit must be a full 40-character hexadecimal SHA");
+  }
+  return {
+    ...env,
+    OPENCLAW_BUILD_TIMESTAMP: explicitTimestamp || now().toISOString(),
+    ...(commit ? { GIT_COMMIT: commit.toLowerCase() } : {}),
+  };
+}
+
 function runTar(args) {
   const result = spawnSync("tar", args, {
     env: process.env,
@@ -86,6 +131,59 @@ function runTar(args) {
   if (result.status !== 0) {
     throw new Error(`tar failed with status ${result.status ?? 1}`);
   }
+}
+
+function runChecked(command, args, options = {}) {
+  const result = runNpm(command, args, options);
+  if (result.status !== 0) {
+    throw new Error(`${command} failed with status ${result.status ?? 1}`);
+  }
+}
+
+function supportsPreparedRuntimePack(env) {
+  const script = `
+    const mod = await import("./scripts/openclaw-prepack.ts");
+    process.exit(typeof mod.preparePrepackArtifacts === "function" ? 0 : 1);
+  `;
+  const result = runNpm(
+    process.execPath,
+    ["--import", "tsx", "--input-type=module", "--eval", script],
+    {
+      env,
+      stdio: "ignore",
+    },
+  );
+  return result.status === 0;
+}
+
+function prepareRuntimePack(profile, env) {
+  runChecked(process.execPath, ["scripts/build-all.mjs", profile], {
+    env,
+    stdio: "inherit",
+  });
+  runChecked(process.execPath, ["scripts/ui.js", "build"], {
+    env,
+    stdio: "inherit",
+  });
+  const script = `
+    const mod = await import("./scripts/openclaw-prepack.ts");
+    await mod.preparePrepackArtifacts();
+  `;
+  runChecked(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", script], {
+    env,
+    stdio: "inherit",
+  });
+}
+
+function restoreRuntimePack(env) {
+  const script = `
+    const mod = await import("./scripts/package-changelog.mjs");
+    await mod.restorePackageChangelog();
+  `;
+  runChecked(process.execPath, ["--input-type=module", "--eval", script], {
+    env,
+    stdio: "inherit",
+  });
 }
 
 function packWorkspaceDependencies(npm, workspaceDirs, outputDir) {
@@ -171,10 +269,27 @@ function main() {
   const args = process.argv.slice(2);
   const npm = process.env[REAL_NPM_ENV]?.trim() || "npm";
   const workspaceDirs = parseWorkspaceDependencyDirs();
+  const npmEnv = resolveNpmEnvironment(args);
+  const runtimePackPlan = resolveRuntimePackPlan(args);
+  const runtimePackEnv = runtimePackPlan ? resolveRuntimePackEnvironment(npmEnv) : null;
+  if (runtimePackPlan && runtimePackEnv && supportsPreparedRuntimePack(runtimePackEnv)) {
+    // This adapter-only archive is installed into OCM and never published.
+    // Standard npm pack still runs the full package build.
+    try {
+      prepareRuntimePack(runtimePackPlan.profile, runtimePackEnv);
+      const result = runNpm(npm, runtimePackPlan.packArgs, {
+        env: runtimePackEnv,
+        stdio: "inherit",
+      });
+      return result.status ?? 1;
+    } finally {
+      restoreRuntimePack(runtimePackEnv);
+    }
+  }
   const plan = resolveWorkspaceInstallPlan(args, workspaceDirs);
   if (!plan) {
     const result = runNpm(npm, args, {
-      env: resolveNpmEnvironment(args),
+      env: npmEnv,
       stdio: "inherit",
     });
     return result.status ?? 1;

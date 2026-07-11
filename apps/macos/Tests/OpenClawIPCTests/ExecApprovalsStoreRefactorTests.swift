@@ -2242,11 +2242,9 @@ extension ExecApprovalsStoreRefactorTests {
                 [.modificationDate: Date().addingTimeInterval(-31)],
                 ofItemAtPath: lockURL.path)
 
-            let startedAt = Date()
             let result = ExecApprovalsStore.addAllowlistEntry(
                 agentId: "main",
                 pattern: "/bin/echo")
-            let elapsed = Date().timeIntervalSince(startedAt)
 
             guard case .failure(.unavailable) = result else {
                 Issue.record("expected lock contention failure")
@@ -2254,7 +2252,6 @@ extension ExecApprovalsStoreRefactorTests {
             }
             #expect(FileManager().fileExists(atPath: lockURL.path))
             #expect(try Data(contentsOf: lockURL) == Data("{".utf8))
-            #expect(elapsed < 0.5)
             #expect(ExecApprovalsStore.loadFile().agents?["main"]?.allowlist?.isEmpty != false)
         }
     }

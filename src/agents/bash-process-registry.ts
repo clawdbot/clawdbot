@@ -82,6 +82,8 @@ export interface ProcessSession {
   exitReason?: TerminationReason;
   noOutputTimedOut?: boolean;
   exited: boolean;
+  /** Process exit observed; backend cleanup still owns the terminal transition. */
+  finalizing?: boolean;
   truncated: boolean;
   backgrounded: boolean;
   /** PTY cursor key mode: unknown until a PTY reports smkx/rmkx. */

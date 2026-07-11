@@ -13,6 +13,7 @@ import type {
   ArtifactsDownloadResult,
   ArtifactsGetResult,
   ArtifactsListResult,
+  EnvironmentCreateParams,
   EnvironmentSummary,
   EnvironmentsListResult,
   GatewayEvent,
@@ -956,13 +957,16 @@ export class EnvironmentsNamespace extends RpcNamespace {
     return await this.call("list", params === undefined ? {} : params);
   }
 
-  async create(params?: unknown): Promise<unknown> {
-    void params;
-    return unsupportedGatewayApi("oc.environments.create");
+  async create(params: EnvironmentCreateParams): Promise<EnvironmentSummary> {
+    return await this.call("create", params);
   }
 
   async status(environmentId: string): Promise<EnvironmentSummary> {
     return await this.call("status", { environmentId });
+  }
+
+  async destroy(environmentId: string): Promise<EnvironmentSummary> {
+    return await this.call("destroy", { environmentId });
   }
 
   async delete(environmentId: string): Promise<unknown> {

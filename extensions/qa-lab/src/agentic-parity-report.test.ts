@@ -103,7 +103,7 @@ function makeRuntimeParitySummary(): QaRuntimeParitySuiteSummary {
     },
     run: {
       providerMode: "mock-openai",
-      primaryModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.6-luna",
       runtimePair: ["openclaw", "codex"],
     },
   };
@@ -233,7 +233,7 @@ describe("qa agentic parity report", () => {
 
   it("fails the parity gate when the candidate regresses against baseline", () => {
     const comparison = buildQaAgenticParityComparison({
-      candidateLabel: "openai/gpt-5.5",
+      candidateLabel: "openai/gpt-5.6-luna",
       baselineLabel: "anthropic/claude-opus-4-8",
       candidateSummary: {
         scenarios: [
@@ -262,10 +262,10 @@ describe("qa agentic parity report", () => {
 
     expect(comparison.pass).toBe(false);
     expect(comparison.failures).toContain(
-      "openai/gpt-5.5 completion rate 80.0% is below anthropic/claude-opus-4-8 100.0%.",
+      "openai/gpt-5.6-luna completion rate 80.0% is below anthropic/claude-opus-4-8 100.0%.",
     );
     expect(comparison.failures).toContain(
-      "openai/gpt-5.5 unintended-stop rate 20.0% exceeds anthropic/claude-opus-4-8 0.0%.",
+      "openai/gpt-5.6-luna unintended-stop rate 20.0% exceeds anthropic/claude-opus-4-8 0.0%.",
     );
   });
 
@@ -280,7 +280,7 @@ describe("qa agentic parity report", () => {
       passScenario("Extra non-parity lane"),
     ];
     const comparison = buildQaAgenticParityComparison({
-      candidateLabel: "openai/gpt-5.5",
+      candidateLabel: "openai/gpt-5.6-luna",
       baselineLabel: "anthropic/claude-opus-4-8",
       candidateSummary: {
         scenarios: baselineScenarios.filter(
@@ -293,13 +293,13 @@ describe("qa agentic parity report", () => {
 
     expect(comparison.pass).toBe(false);
     expect(comparison.failures).toContain(
-      "Scenario coverage mismatch for Extra non-parity lane: openai/gpt-5.5=missing, anthropic/claude-opus-4-8=pass.",
+      "Scenario coverage mismatch for Extra non-parity lane: openai/gpt-5.6-luna=missing, anthropic/claude-opus-4-8=pass.",
     );
   });
 
   it("reports each missing required parity scenario exactly once (no double-counting)", () => {
     const comparison = buildQaAgenticParityComparison({
-      candidateLabel: "openai/gpt-5.5",
+      candidateLabel: "openai/gpt-5.6-luna",
       baselineLabel: "anthropic/claude-opus-4-8",
       candidateSummary: {
         scenarios: [{ name: "Approval turn tool followthrough", status: "pass" }],
@@ -341,7 +341,7 @@ describe("qa agentic parity report", () => {
     };
 
     const comparison = buildQaAgenticParityComparison({
-      candidateLabel: "openai/gpt-5.5",
+      candidateLabel: "openai/gpt-5.6-luna",
       baselineLabel: "anthropic/claude-opus-4-8",
       candidateSummary: summaryWithExtras,
       baselineSummary: scopedSummary,
@@ -363,7 +363,7 @@ describe("qa agentic parity report", () => {
 
   it("fails the parity gate when required parity scenarios are missing on both sides", () => {
     const comparison = buildQaAgenticParityComparison({
-      candidateLabel: "openai/gpt-5.5",
+      candidateLabel: "openai/gpt-5.6-luna",
       baselineLabel: "anthropic/claude-opus-4-8",
       candidateSummary: {
         scenarios: [{ name: "Approval turn tool followthrough", status: "pass" }],
@@ -376,13 +376,13 @@ describe("qa agentic parity report", () => {
 
     expect(comparison.pass).toBe(false);
     expect(comparison.failures).toContain(
-      "Missing required parity scenario coverage for Image understanding from attachment: openai/gpt-5.5=missing, anthropic/claude-opus-4-8=missing.",
+      "Missing required parity scenario coverage for Image understanding from attachment: openai/gpt-5.6-luna=missing, anthropic/claude-opus-4-8=missing.",
     );
   });
 
   it("fails the parity gate when required parity scenarios are skipped", () => {
     const comparison = buildQaAgenticParityComparison({
-      candidateLabel: "openai/gpt-5.5",
+      candidateLabel: "openai/gpt-5.6-luna",
       baselineLabel: "anthropic/claude-opus-4-8",
       candidateSummary: {
         scenarios: [
@@ -407,7 +407,7 @@ describe("qa agentic parity report", () => {
 
     expect(comparison.pass).toBe(false);
     expect(comparison.failures).toContain(
-      "Missing required parity scenario coverage for Compaction retry after mutating tool: openai/gpt-5.5=skip, anthropic/claude-opus-4-8=skip.",
+      "Missing required parity scenario coverage for Compaction retry after mutating tool: openai/gpt-5.6-luna=skip, anthropic/claude-opus-4-8=skip.",
     );
   });
 
@@ -423,7 +423,7 @@ describe("qa agentic parity report", () => {
       status: "fail",
     });
     const comparison = buildQaAgenticParityComparison({
-      candidateLabel: "openai/gpt-5.5",
+      candidateLabel: "openai/gpt-5.6-luna",
       baselineLabel: "anthropic/claude-opus-4-8",
       candidateSummary: { scenarios: scenariosWithBothFail },
       baselineSummary: { scenarios: scenariosWithBothFail },
@@ -432,7 +432,7 @@ describe("qa agentic parity report", () => {
 
     expect(comparison.pass).toBe(false);
     expect(comparison.failures).toContain(
-      "Required parity scenario Approval turn tool followthrough failed: openai/gpt-5.5=fail, anthropic/claude-opus-4-8=fail.",
+      "Required parity scenario Approval turn tool followthrough failed: openai/gpt-5.6-luna=fail, anthropic/claude-opus-4-8=fail.",
     );
     // Metric comparisons are relative, so a same-on-both-sides failure
     // must not appear as a relative metric failure. The required-scenario
@@ -451,7 +451,7 @@ describe("qa agentic parity report", () => {
       status: "fail",
     });
     const comparison = buildQaAgenticParityComparison({
-      candidateLabel: "openai/gpt-5.5",
+      candidateLabel: "openai/gpt-5.6-luna",
       baselineLabel: "anthropic/claude-opus-4-8",
       candidateSummary: { scenarios: candidateWithOneFail },
       baselineSummary: { scenarios: FULL_PARITY_PASS_SCENARIOS },
@@ -460,7 +460,7 @@ describe("qa agentic parity report", () => {
 
     expect(comparison.pass).toBe(false);
     expect(comparison.failures).toContain(
-      "Required parity scenario Approval turn tool followthrough failed: openai/gpt-5.5=fail, anthropic/claude-opus-4-8=pass.",
+      "Required parity scenario Approval turn tool followthrough failed: openai/gpt-5.6-luna=fail, anthropic/claude-opus-4-8=pass.",
     );
   });
 
@@ -468,7 +468,7 @@ describe("qa agentic parity report", () => {
     // Cover the full second-wave pack on both sides so the suspicious-pass assertion
     // below is the isolated gate failure under test (no coverage-gap noise).
     const comparison = buildQaAgenticParityComparison({
-      candidateLabel: "openai/gpt-5.5",
+      candidateLabel: "openai/gpt-5.6-luna",
       baselineLabel: "anthropic/claude-opus-4-8",
       candidateSummary: {
         scenarios: FULL_PARITY_PASS_SCENARIOS,
@@ -652,7 +652,7 @@ status=done`,
 
     expect(() =>
       buildQaAgenticParityComparison({
-        candidateLabel: "openai/gpt-5.5",
+        candidateLabel: "openai/gpt-5.6-luna",
         baselineLabel: "anthropic/claude-opus-4-8",
         candidateSummary: {
           scenarios: parityPassScenarios,
@@ -674,7 +674,7 @@ status=done`,
 
     expect(() =>
       buildQaAgenticParityComparison({
-        candidateLabel: "openai/gpt-5.5",
+        candidateLabel: "openai/gpt-5.6-luna",
         baselineLabel: "anthropic/claude-opus-4-8",
         candidateSummary: {
           scenarios: parityPassScenarios,
@@ -682,25 +682,25 @@ status=done`,
         },
         baselineSummary: {
           scenarios: parityPassScenarios,
-          run: { primaryProvider: "openai", primaryModel: "gpt-5.5" },
+          run: { primaryProvider: "openai", primaryModel: "gpt-5.6-luna" },
         },
         comparedAt: "2026-04-11T00:00:00.000Z",
       }),
     ).toThrow(
-      /baseline summary run\.primaryProvider=openai and run\.primaryModel=gpt-5\.5 do not match --baseline-label/,
+      /baseline summary run\.primaryProvider=openai and run\.primaryModel=gpt-5\.6-luna do not match --baseline-label/,
     );
   });
 
   it("accepts matching run.primaryProvider labels without throwing", () => {
     const comparison = buildQaAgenticParityComparison({
-      candidateLabel: "openai/gpt-5.5",
+      candidateLabel: "openai/gpt-5.6-luna",
       baselineLabel: "anthropic/claude-opus-4-8",
       candidateSummary: {
         scenarios: FULL_PARITY_PASS_SCENARIOS,
         run: {
           primaryProvider: "openai",
-          primaryModel: "openai/gpt-5.5",
-          primaryModelName: "gpt-5.5",
+          primaryModel: "openai/gpt-5.6-luna",
+          primaryModelName: "gpt-5.6-luna",
         },
       },
       baselineSummary: {
@@ -720,7 +720,7 @@ status=done`,
     // Pre-PR-L summaries don't carry a `run` block. The gate must still
     // work against those, trusting the caller-supplied label.
     const comparison = buildQaAgenticParityComparison({
-      candidateLabel: "openai/gpt-5.5",
+      candidateLabel: "openai/gpt-5.6-luna",
       baselineLabel: "anthropic/claude-opus-4-8",
       candidateSummary: { scenarios: FULL_PARITY_PASS_SCENARIOS },
       baselineSummary: { scenarios: FULL_PARITY_PASS_SCENARIOS },
@@ -731,14 +731,14 @@ status=done`,
 
   it("skips provider verification for arbitrary display labels when run metadata is present", () => {
     const comparison = buildQaAgenticParityComparison({
-      candidateLabel: "GPT-5.5 candidate",
+      candidateLabel: "GPT-5.6 Luna candidate",
       baselineLabel: "Opus 4.8 baseline",
       candidateSummary: {
         scenarios: FULL_PARITY_PASS_SCENARIOS,
         run: {
           primaryProvider: "openai",
-          primaryModel: "openai/gpt-5.5",
-          primaryModelName: "gpt-5.5",
+          primaryModel: "openai/gpt-5.6-luna",
+          primaryModelName: "gpt-5.6-luna",
         },
       },
       baselineSummary: {
@@ -757,14 +757,14 @@ status=done`,
 
   it("skips provider verification for mixed-case or decorated display labels", () => {
     const comparison = buildQaAgenticParityComparison({
-      candidateLabel: "Candidate: GPT-5.5",
+      candidateLabel: "Candidate: GPT-5.6 Luna",
       baselineLabel: "Opus 4.8 / baseline",
       candidateSummary: {
         scenarios: FULL_PARITY_PASS_SCENARIOS,
         run: {
           primaryProvider: "openai",
-          primaryModel: "openai/gpt-5.5",
-          primaryModelName: "gpt-5.5",
+          primaryModel: "openai/gpt-5.6-luna",
+          primaryModelName: "gpt-5.6-luna",
         },
       },
       baselineSummary: {
@@ -784,14 +784,14 @@ status=done`,
   it("throws when a structured label mismatches the recorded model even if the provider matches", () => {
     expect(() =>
       buildQaAgenticParityComparison({
-        candidateLabel: "openai/gpt-5.5",
+        candidateLabel: "openai/gpt-5.6-luna",
         baselineLabel: "anthropic/claude-opus-4-8",
         candidateSummary: {
           scenarios: FULL_PARITY_PASS_SCENARIOS,
           run: {
             primaryProvider: "openai",
-            primaryModel: "openai/gpt-5.5-alt",
-            primaryModelName: "gpt-5.5-alt",
+            primaryModel: "openai/gpt-5.6-luna-alt",
+            primaryModelName: "gpt-5.6-luna-alt",
           },
         },
         baselineSummary: {
@@ -805,20 +805,20 @@ status=done`,
         comparedAt: "2026-04-11T00:00:00.000Z",
       }),
     ).toThrow(
-      /candidate summary run\.primaryProvider=openai and run\.primaryModel=openai\/gpt-5\.5-alt do not match --candidate-label=openai\/gpt-5\.5/,
+      /candidate summary run\.primaryProvider=openai and run\.primaryModel=openai\/gpt-5\.6-luna-alt do not match --candidate-label=openai\/gpt-5\.6-luna/,
     );
   });
 
   it("accepts colon-delimited structured labels when provider and model both match", () => {
     const comparison = buildQaAgenticParityComparison({
-      candidateLabel: "openai:gpt-5.5",
+      candidateLabel: "openai:gpt-5.6-luna",
       baselineLabel: "anthropic:claude-opus-4-8",
       candidateSummary: {
         scenarios: FULL_PARITY_PASS_SCENARIOS,
         run: {
           primaryProvider: "openai",
-          primaryModel: "openai/gpt-5.5",
-          primaryModelName: "gpt-5.5",
+          primaryModel: "openai/gpt-5.6-luna",
+          primaryModelName: "gpt-5.6-luna",
         },
       },
       baselineSummary: {
@@ -840,7 +840,7 @@ status=done`,
     // verdict is not disrupted by required-scenario coverage failures
     // added by the second-wave expansion.
     const comparison = buildQaAgenticParityComparison({
-      candidateLabel: "openai/gpt-5.5",
+      candidateLabel: "openai/gpt-5.6-luna",
       baselineLabel: "anthropic/claude-opus-4-8",
       candidateSummary: { scenarios: FULL_PARITY_PASS_SCENARIOS },
       baselineSummary: { scenarios: FULL_PARITY_PASS_SCENARIOS },
@@ -850,7 +850,7 @@ status=done`,
     const report = renderQaAgenticParityMarkdownReport(comparison);
 
     expect(report).toContain(
-      "# OpenClaw Agentic Parity Report — openai/gpt-5.5 vs anthropic/claude-opus-4-8",
+      "# OpenClaw Agentic Parity Report — openai/gpt-5.6-luna vs anthropic/claude-opus-4-8",
     );
     expect(report).toContain("| Completion rate | 100.0% | 100.0% |");
     expect(report).toContain("### Approval turn tool followthrough");
@@ -859,20 +859,20 @@ status=done`,
 
   it("parametrizes the markdown header from the comparison labels", () => {
     // Regression for the loop-7 Copilot finding: callers that configure
-    // non-gpt-5.5 / non-opus labels (for example an internal candidate vs
+    // non-gpt-5.6-luna / non-opus labels (for example an internal candidate vs
     // another candidate) must see the labels in the rendered H1 instead of
-    // the hardcoded "GPT-5.5 / Opus 4.8" title that would otherwise confuse
+    // the hardcoded "GPT-5.6 Luna / Opus 4.8" title that would otherwise confuse
     // readers of saved reports.
     const comparison = buildQaAgenticParityComparison({
-      candidateLabel: "openai/gpt-5.5-alt",
-      baselineLabel: "openai/gpt-5.5",
+      candidateLabel: "openai/gpt-5.6-luna-alt",
+      baselineLabel: "openai/gpt-5.6-luna",
       candidateSummary: { scenarios: [] },
       baselineSummary: { scenarios: [] },
       comparedAt: "2026-04-11T00:00:00.000Z",
     });
     const report = renderQaAgenticParityMarkdownReport(comparison);
     expect(report).toContain(
-      "# OpenClaw Agentic Parity Report — openai/gpt-5.5-alt vs openai/gpt-5.5",
+      "# OpenClaw Agentic Parity Report — openai/gpt-5.6-luna-alt vs openai/gpt-5.6-luna",
     );
   });
 

@@ -213,7 +213,7 @@ const getFreePort = async () => {
 };
 
 async function waitForPortOpen(
-  proc: OpenClawTestProcess,
+  proc: Pick<OpenClawTestProcess, "exitCode" | "signalCode">,
   chunksOut: string[],
   chunksErr: string[],
   port: number,

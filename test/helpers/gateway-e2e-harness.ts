@@ -220,7 +220,9 @@ export async function waitForNodeStatus(
     }
     try {
       while (Date.now() < deadline) {
-        const list = await client.request("node.list", {});
+        const list = (await client.request("node.list", {})) as {
+          nodes?: Array<{ nodeId: string; connected?: boolean; paired?: boolean }>;
+        };
         const match = list.nodes?.find((n) => n.nodeId === nodeId);
         if (match?.connected && match?.paired) {
           return;

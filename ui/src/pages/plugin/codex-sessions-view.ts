@@ -6,16 +6,20 @@ import { t } from "../../i18n/index.ts";
 import { formatDateTimeMs, formatRelativeTimestamp } from "../../lib/format.ts";
 import {
   archiveCodexSession,
+  bindCodexTranscript,
   configureCodexSessionsPolling,
   continueCodexSession,
   getCodexSessionPendingAction,
   getCodexSessionsState,
   loadCodexSessions,
+  loadCodexTranscript,
   loadMoreCodexSessions,
   setCodexSessionsSearch,
+  unbindCodexTranscript,
   type CodexSessionHostPayload,
   type CodexSessionPayload,
   type CodexSessionsUiState,
+  type CodexTranscriptItem,
 } from "./codex-sessions-controller.ts";
 
 type CodexSessionsProps = {
@@ -24,6 +28,10 @@ type CodexSessionsProps = {
   connected: boolean;
   onRequestUpdate?: () => void;
   onContinueSession?: (sessionKey: string) => void;
+  selectedHostId?: string;
+  selectedThreadId?: string;
+  onOpenSession?: (hostId: string, threadId: string) => void;
+  onCloseSession?: () => void;
 };
 
 function timestampMs(value: number | null | undefined): number | undefined {
@@ -173,6 +181,7 @@ function renderSession(
   host: CodexSessionHostPayload,
   interactionsEnabled: boolean,
   onContinueSession: ((sessionKey: string) => void) | undefined,
+  onOpenSession: ((hostId: string, threadId: string) => void) | undefined,
   session: CodexSessionPayload,
 ): TemplateResult {
   const title = displayTitle(session);
@@ -231,6 +240,15 @@ function renderSession(
           : nothing}
       </div>
       <div class="codex-session__actions">
+        <button
+          class="btn btn--small codex-session__open"
+          type="button"
+          aria-label=${t("codexSessions.actions.readTranscriptLabel", { title })}
+          ?disabled=${!interactionsEnabled || !host.connected}
+          @click=${() => onOpenSession?.(host.hostId, session.threadId)}
+        >
+          ${icons.eye}<span>${t("codexSessions.actions.readTranscript")}</span>
+        </button>
         <button
           class="btn btn--small codex-session__continue"
           type="button"
@@ -292,6 +310,7 @@ function renderHost(
   host: CodexSessionHostPayload,
   interactionsEnabled: boolean,
   onContinueSession: ((sessionKey: string) => void) | undefined,
+  onOpenSession: ((hostId: string, threadId: string) => void) | undefined,
 ): TemplateResult {
   const loadingMore = state.loadingMoreHostIds.has(host.hostId);
   const visibleSessions = visibleSessionsForHost(state, host);
@@ -341,7 +360,15 @@ function renderHost(
       ${visibleSessions.length > 0
         ? html`<div class="codex-host__sessions">
             ${visibleSessions.map((session) =>
-              renderSession(state, client, host, interactionsEnabled, onContinueSession, session),
+              renderSession(
+                state,
+                client,
+                host,
+                interactionsEnabled,
+                onContinueSession,
+                onOpenSession,
+                session,
+              ),
             )}
           </div>`
         : !host.error
@@ -368,6 +395,118 @@ function renderHost(
   `;
 }
 
+function transcriptItemText(item: CodexTranscriptItem): string {
+  if (typeof item.text === "string" && item.text.trim()) {
+    return item.text;
+  }
+  const fragments: string[] = [];
+  const visit = (value: unknown): void => {
+    if (typeof value === "string") {
+      if (value.trim()) {
+        fragments.push(value);
+      }
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (!value || typeof value !== "object") {
+      return;
+    }
+    const record = value as Record<string, unknown>;
+    for (const key of ["text", "content", "summary", "aggregatedOutput"]) {
+      if (key in record) {
+        visit(record[key]);
+      }
+    }
+  };
+  visit(item);
+  return [...new Set(fragments)].join("\n\n");
+}
+
+function transcriptItemLabel(item: CodexTranscriptItem): string {
+  switch (item.type) {
+    case "userMessage":
+      return t("codexSessions.transcript.you");
+    case "agentMessage":
+      return "Codex";
+    case "reasoning":
+      return t("codexSessions.transcript.reasoning");
+    case "commandExecution":
+      return t("codexSessions.transcript.command");
+    case "fileChange":
+      return t("codexSessions.transcript.fileChange");
+    default:
+      return item.type || t("codexSessions.transcript.item");
+  }
+}
+
+function renderTranscriptItem(item: CodexTranscriptItem, index: number): TemplateResult {
+  const text = transcriptItemText(item);
+  const message = item.type === "userMessage" || item.type === "agentMessage";
+  return html`
+    <article
+      class="codex-transcript__item ${message ? "codex-transcript__item--message" : ""}"
+      data-item-type=${item.type ?? "unknown"}
+    >
+      <div class="codex-transcript__item-label">${transcriptItemLabel(item)}</div>
+      ${text ? html`<div class="codex-transcript__text">${text}</div>` : nothing}
+      <details class="codex-transcript__details" ?open=${!text}>
+        <summary>${t("codexSessions.transcript.details")}</summary>
+        <pre>${JSON.stringify(item, null, 2)}</pre>
+      </details>
+      <span class="codex-transcript__index" aria-hidden="true">${index + 1}</span>
+    </article>
+  `;
+}
+
+function renderTranscript(props: CodexSessionsProps, state: CodexSessionsUiState) {
+  const hostId = props.selectedHostId?.trim() ?? "";
+  const threadId = props.selectedThreadId?.trim() ?? "";
+  bindCodexTranscript(state, props.client, hostId, threadId);
+  const session = state.hosts
+    .find((host) => host.hostId === hostId)
+    ?.sessions.find((candidate) => candidate.threadId === threadId);
+  return html`
+    <section class="codex-transcript">
+      <header class="codex-transcript__header">
+        <button class="btn btn--small" type="button" @click=${() => props.onCloseSession?.()}>
+          ${icons.arrowLeft}<span>${t("codexSessions.transcript.back")}</span>
+        </button>
+        <div>
+          <div class="codex-sessions__eyebrow">${t("codexSessions.transcript.eyebrow")}</div>
+          <h1>${session ? displayTitle(session) : threadId}</h1>
+          <p>${threadId}</p>
+        </div>
+      </header>
+      ${state.transcriptError
+        ? html`<div class="callout danger" role="alert">${state.transcriptError}</div>`
+        : nothing}
+      <div class="codex-transcript__items" aria-live="polite">
+        ${state.transcriptItems.map(renderTranscriptItem)}
+      </div>
+      ${state.transcriptLoading
+        ? html`<div class="codex-sessions__loading">
+            <span class="codex-sessions__spinner" aria-hidden="true"></span>
+            ${t("codexSessions.transcript.loading")}
+          </div>`
+        : nothing}
+      ${state.transcriptNextCursor
+        ? html`<button
+            class="btn codex-transcript__more"
+            type="button"
+            ?disabled=${state.transcriptLoading}
+            @click=${() =>
+              void loadCodexTranscript(state, props.client, hostId, threadId, { append: true })}
+          >
+            ${t("codexSessions.transcript.loadMore")}
+          </button>`
+        : nothing}
+    </section>
+  `;
+}
+
 export function renderCodexSessions(props: CodexSessionsProps) {
   const state = getCodexSessionsState(props.host);
   state.requestUpdate = props.onRequestUpdate ?? null;
@@ -375,6 +514,10 @@ export function renderCodexSessions(props: CodexSessionsProps) {
   if (props.connected && !state.loading && !state.refreshedAtMs && !state.error) {
     void loadCodexSessions(state, props.client);
   }
+  if (props.selectedHostId && props.selectedThreadId) {
+    return renderTranscript(props, state);
+  }
+  unbindCodexTranscript(state);
 
   const hostErrors = state.hosts.filter((host) => host.error).length;
   const onlineHosts = state.hosts.filter((host) => host.connected).length;
@@ -459,7 +602,14 @@ export function renderCodexSessions(props: CodexSessionsProps) {
                 <p>${t("codexSessions.empty.supervisionSubtitle")}</p>
               </div>`
             : state.hosts.map((host) =>
-                renderHost(state, props.client, host, props.connected, props.onContinueSession),
+                renderHost(
+                  state,
+                  props.client,
+                  host,
+                  props.connected,
+                  props.onContinueSession,
+                  props.onOpenSession,
+                ),
               )}
       </div>
     </section>

@@ -137,7 +137,7 @@ function rawManifest({
   workflowRefType,
   workflowSha,
 }: {
-  evidenceReuse?: Record<string, unknown>;
+  evidenceReuse?: unknown;
   rerunGroup?: string;
   runId?: string;
   targetSha?: string;
@@ -145,7 +145,25 @@ function rawManifest({
   workflowFullRef?: string;
   workflowRefType?: "branch" | "tag";
   workflowSha?: string;
-}) {
+}): {
+  childRuns: Record<string, string | { blocking: boolean; conclusion: string; runId: string }>;
+  controls: Record<string, unknown>;
+  evidenceReuse?: unknown;
+  releaseProfile: string;
+  rerunGroup: string;
+  runAttempt: string;
+  runId: string;
+  runReleaseSoak: string;
+  targetRef?: string;
+  targetSha: string;
+  validationInputs: Record<string, string>;
+  version: 2 | 3;
+  workflowFullRef?: string;
+  workflowName: string;
+  workflowRef: string;
+  workflowRefType?: "branch" | "tag";
+  workflowSha?: string;
+} {
   return {
     childRuns: {
       normalCi: "101",
@@ -312,10 +330,10 @@ function trustedMainPackageFixture({
       return [parentJob];
     },
     getRun(requestedRunId: string) {
-      if (String(requestedRunId) === runId) {
+      if (requestedRunId === runId) {
         return parentRun;
       }
-      if (String(requestedRunId) === childRunId) {
+      if (requestedRunId === childRunId) {
         return childRun;
       }
       throw new Error(`unexpected run: ${requestedRunId}`);
@@ -1152,7 +1170,7 @@ describe("release CI summary child correlation", () => {
       id: 999,
     };
     const pages = Array.from({ length: 10 }, (_, pageIndex) =>
-      Array.from({ length: 100 }, (_, runIndex) => ({
+      Array.from({ length: 100 }, (_unused, runIndex) => ({
         display_title: `decoy-${pageIndex}-${runIndex}`,
         event: "workflow_dispatch",
         head_branch: "main",

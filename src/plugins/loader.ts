@@ -476,6 +476,7 @@ type PluginRegistrySnapshot = {
     musicGenerationProviders: PluginRegistry["musicGenerationProviders"];
     webFetchProviders: PluginRegistry["webFetchProviders"];
     webSearchProviders: PluginRegistry["webSearchProviders"];
+    workerProviders: PluginRegistry["workerProviders"];
     migrationProviders: PluginRegistry["migrationProviders"];
     codexAppServerExtensionFactories: PluginRegistry["codexAppServerExtensionFactories"];
     agentToolResultMiddlewares: PluginRegistry["agentToolResultMiddlewares"];
@@ -523,6 +524,7 @@ function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistrySnapsho
       musicGenerationProviders: [...registry.musicGenerationProviders],
       webFetchProviders: [...registry.webFetchProviders],
       webSearchProviders: [...registry.webSearchProviders],
+      workerProviders: new Map(registry.workerProviders),
       migrationProviders: [...registry.migrationProviders],
       codexAppServerExtensionFactories: [...registry.codexAppServerExtensionFactories],
       agentToolResultMiddlewares: [...registry.agentToolResultMiddlewares],
@@ -569,6 +571,7 @@ function restorePluginRegistry(registry: PluginRegistry, snapshot: PluginRegistr
   registry.musicGenerationProviders = snapshot.arrays.musicGenerationProviders;
   registry.webFetchProviders = snapshot.arrays.webFetchProviders;
   registry.webSearchProviders = snapshot.arrays.webSearchProviders;
+  registry.workerProviders = snapshot.arrays.workerProviders;
   registry.migrationProviders = snapshot.arrays.migrationProviders;
   registry.codexAppServerExtensionFactories = snapshot.arrays.codexAppServerExtensionFactories;
   registry.agentToolResultMiddlewares = snapshot.arrays.agentToolResultMiddlewares;

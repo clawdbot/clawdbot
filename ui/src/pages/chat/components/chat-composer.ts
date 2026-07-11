@@ -952,78 +952,80 @@ export function renderChatQueue(props: ChatQueueProps) {
   }
   return html`
     <div class="chat-queue" role="status" aria-live="polite">
-      <div class="chat-queue__title">Queued (${visibleQueue.length})</div>
-      <div class="chat-queue__list">
-        ${visibleQueue.map((item) => {
-          const stateLabel = sendStateLabel(item);
-          return html`
-            <div
-              class="chat-queue__item ${item.kind === "steered" ? "chat-queue__item--steered" : ""}"
-            >
-              <div class="chat-queue__main">
-                ${item.kind === "steered"
-                  ? html`<span class="chat-queue__badge">Steered</span>`
-                  : nothing}
-                ${stateLabel ? html`<span class="chat-queue__badge">${stateLabel}</span>` : nothing}
-                <div class="chat-queue__text">
-                  ${item.text ||
-                  (item.attachments?.length ? `Image (${item.attachments.length})` : "")}
-                </div>
-                ${item.sendError
-                  ? html`<div class="chat-queue__error">${item.sendError}</div>`
-                  : nothing}
-              </div>
-              <div class="chat-queue__actions">
-                ${(item.sendState === "failed" || item.sendState === "unconfirmed") &&
-                props.onQueueRetry
-                  ? html`
-                      <button
-                        class="btn chat-queue__retry"
-                        type="button"
-                        aria-label=${t("chat.queue.retryQueuedMessage")}
-                        @click=${() => props.onQueueRetry?.(item.id)}
-                      >
-                        ${icons.refresh}
-                        <span>${t("chat.queue.retry")}</span>
-                      </button>
-                    `
-                  : nothing}
-                ${props.canAbort &&
-                props.onQueueSteer &&
-                item.kind !== "steered" &&
-                (item.sendState === undefined || item.sendState === "waiting-idle") &&
-                !item.localCommandName
-                  ? html`
-                      <button
-                        class="btn chat-queue__steer"
-                        type="button"
-                        aria-label="Steer queued message"
-                        @click=${() => props.onQueueSteer?.(item.id)}
-                      >
-                        ${icons.cornerDownRight}
-                        <span>Steer</span>
-                      </button>
-                    `
-                  : nothing}
-                ${item.sendState === "executing-command" || item.sendState === "steering"
-                  ? nothing
-                  : html`
-                      <openclaw-tooltip content="Remove queued message">
-                        <button
-                          class="btn chat-queue__remove"
-                          type="button"
-                          aria-label="Remove queued message"
-                          @click=${() => props.onQueueRemove(item.id)}
-                        >
-                          ${icons.x}
-                        </button>
-                      </openclaw-tooltip>
-                    `}
-              </div>
-            </div>
-          `;
-        })}
-      </div>
+      ${visibleQueue.map((item) => renderChatQueueItem(item, props))}
+    </div>
+  `;
+}
+
+function renderChatQueueItem(item: ChatQueueItem, props: ChatQueueProps) {
+  const stateLabel = sendStateLabel(item);
+  const steered = item.kind === "steered";
+  const failed = item.sendState === "failed" || item.sendState === "unconfirmed";
+  const busy = item.sendState === "executing-command" || item.sendState === "steering";
+  const canSteer =
+    Boolean(props.canAbort && props.onQueueSteer) &&
+    !steered &&
+    (item.sendState === undefined || item.sendState === "waiting-idle") &&
+    !item.localCommandName;
+  const text = item.text || (item.attachments?.length ? `Image (${item.attachments.length})` : "");
+  const itemClass = `chat-queue__item${steered ? " chat-queue__item--steered" : ""}${
+    failed ? " chat-queue__item--failed" : ""
+  }`;
+  // Row order keeps the actions on the first flex line; the error wraps below
+  // them via flex-basis so failed rows grow by one line instead of a card.
+  return html`
+    <div class=${itemClass}>
+      <span class="chat-queue__icon" aria-hidden="true">
+        ${failed ? icons.alertTriangle : icons.clock}
+      </span>
+      ${steered
+        ? html`<span class="chat-queue__badge chat-queue__badge--steered">Steered</span>`
+        : nothing}
+      ${stateLabel ? html`<span class="chat-queue__badge">${stateLabel}</span>` : nothing}
+      <span class="chat-queue__text" title=${text}>${text}</span>
+      <span class="chat-queue__actions">
+        ${failed && props.onQueueRetry
+          ? html`
+              <button
+                class="chat-queue__retry"
+                type="button"
+                aria-label=${t("chat.queue.retryQueuedMessage")}
+                @click=${() => props.onQueueRetry?.(item.id)}
+              >
+                ${icons.refresh}
+                <span>${t("chat.queue.retry")}</span>
+              </button>
+            `
+          : nothing}
+        ${canSteer
+          ? html`
+              <button
+                class="chat-queue__steer"
+                type="button"
+                aria-label="Steer queued message"
+                @click=${() => props.onQueueSteer?.(item.id)}
+              >
+                ${icons.cornerDownRight}
+                <span>Steer</span>
+              </button>
+            `
+          : nothing}
+        ${busy
+          ? nothing
+          : html`
+              <openclaw-tooltip content="Remove queued message">
+                <button
+                  class="chat-queue__remove"
+                  type="button"
+                  aria-label="Remove queued message"
+                  @click=${() => props.onQueueRemove(item.id)}
+                >
+                  ${icons.x}
+                </button>
+              </openclaw-tooltip>
+            `}
+      </span>
+      ${item.sendError ? html`<span class="chat-queue__error">${item.sendError}</span>` : nothing}
     </div>
   `;
 }

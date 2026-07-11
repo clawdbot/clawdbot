@@ -118,7 +118,10 @@ import {
 } from "../../infra/voicewake-routing.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { PluginHookSessionEndReason } from "../../plugins/hook-types.js";
-import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
+import {
+  retainGatewayRootWorkAdmissionContinuation,
+  runWithGatewayIndependentRootWorkContinuation,
+} from "../../process/gateway-work-admission.js";
 import {
   classifySessionKeyShape,
   isAcpSessionKey,
@@ -1971,9 +1974,9 @@ export const agentHandlers: GatewayRequestHandlers = {
       }
       cronContinuationReleaseRecoveryScheduled = true;
       const ownerLifecycleGeneration = lifecycleGeneration;
-      // Keep the failed settlement recoverable without retaining the process or
-      // transferring claim ownership beyond this request's gateway generation.
-      void (async () => {
+      // Settlement retries can still persist session and dedupe state. Reserve a
+      // detached root now so suspension cannot snapshot between retry attempts.
+      void runWithGatewayIndependentRootWorkContinuation(async () => {
         for (const delayMs of CRON_CONTINUATION_RELEASE_RECOVERY_DELAYS_MS) {
           await waitForCronContinuationReleaseRecovery(delayMs);
           if (
@@ -1994,7 +1997,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           }
         }
         context.logGateway.warn(`cron continuation release recovery exhausted for ${runId}`);
-      })();
+      });
     };
     const releaseCronContinuationClaimWithRecovery = async (
       outcome?: { terminalOutcome: AgentRunTerminalOutcome },

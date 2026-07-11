@@ -29,8 +29,8 @@ function createMockOpenAiResponsesProvider(baseUrl: string): ModelProviderConfig
     },
     models: [
       {
-        id: "gpt-5.5",
-        name: "gpt-5.5",
+        id: "gpt-5.6-luna",
+        name: "gpt-5.6-luna",
         api: "openai-responses",
         reasoning: true,
         input: ["text", "image"],
@@ -39,8 +39,8 @@ function createMockOpenAiResponsesProvider(baseUrl: string): ModelProviderConfig
         maxTokens: 4096,
       },
       {
-        id: "gpt-5.5-alt",
-        name: "gpt-5.5-alt",
+        id: "gpt-5.6-luna-alt",
+        name: "gpt-5.6-luna-alt",
         api: "openai-responses",
         reasoning: true,
         input: ["text", "image"],

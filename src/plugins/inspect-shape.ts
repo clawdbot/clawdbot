@@ -16,6 +16,7 @@ export type PluginCapabilityKind =
   | "video-generation"
   | "music-generation"
   | "web-search"
+  | "worker-provider"
   | "agent-harness"
   | "context-engine"
   | "channel";
@@ -56,6 +57,7 @@ function buildPluginCapabilityEntries(
     { kind: "video-generation" as const, ids: plugin.videoGenerationProviderIds },
     { kind: "music-generation" as const, ids: plugin.musicGenerationProviderIds },
     { kind: "web-search" as const, ids: plugin.webSearchProviderIds },
+    { kind: "worker-provider" as const, ids: plugin.contracts?.workerProviders ?? [] },
     { kind: "agent-harness" as const, ids: plugin.agentHarnessIds },
     {
       kind: "context-engine" as const,

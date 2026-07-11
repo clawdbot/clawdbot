@@ -764,6 +764,61 @@ struct MacNodeCodexThreadCatalogTests {
         #expect(listParams["useStateDbOnly"] as? Bool == false)
     }
 
+    @Test func `reads one paginated transcript turn page from App Server`() async throws {
+        let fake = try makeFakeCodex(#"""
+        #!/bin/sh
+        capture="${0}.requests"
+        counter="${0}.counter"
+        count=0
+        [ ! -f "$counter" ] || count=$(cat "$counter")
+        count=$((count + 1))
+        printf '%s\n' "$count" > "$counter"
+        IFS= read -r initialize || exit 2
+        printf '%s\n' "$initialize" >> "$capture"
+        printf '%s\n' '{"id":1,"result":{}}'
+        IFS= read -r initialized || exit 3
+        printf '%s\n' "$initialized" >> "$capture"
+        IFS= read -r request || exit 4
+        printf '%s\n' "$request" >> "$capture"
+        case "$count" in
+          1)
+            printf '%s\n' '{"id":2,"result":{"data":[{"id":"thread-1","name":"Task","status":{"type":"notLoaded"}}],"nextCursor":null,"backwardsCursor":null}}'
+            ;;
+          2)
+            printf '%s\n' '{"id":2,"result":{"data":[{"id":"turn-1","items":[{"id":"item-1","type":"agentMessage","text":"full answer"}]}],"nextCursor":"turns-2","backwardsCursor":null}}'
+            ;;
+          *) exit 5 ;;
+        esac
+        sleep 1
+        """#)
+        defer { try? FileManager.default.removeItem(at: fake.directory) }
+
+        let payload = try await MacNodeCodexThreadCatalog.turns(
+            paramsJSON: #"{"threadId":" thread-1 ","cursor":" turns-1 ","limit":25}"#,
+            executable: fake.executable.path)
+        let response = try #require(
+            JSONSerialization.jsonObject(with: Data(payload.utf8)) as? [String: Any])
+        let firstTurn = try #require((response["data"] as? [[String: Any]])?.first)
+        #expect((firstTurn["items"] as? [[String: Any]])?.first?["text"] as? String == "full answer")
+        #expect(response["nextCursor"] as? String == "turns-2")
+
+        let captured = try String(contentsOf: fake.capture, encoding: .utf8)
+            .split(whereSeparator: \.isNewline)
+            .map { try JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }
+        #expect(captured.count == 6)
+        let initializeParams = try #require(captured[0]?["params"] as? [String: Any])
+        let capabilities = try #require(initializeParams["capabilities"] as? [String: Any])
+        #expect(capabilities["experimentalApi"] as? Bool == true)
+        #expect(captured[2]?["method"] as? String == "thread/list")
+        #expect(captured[5]?["method"] as? String == "thread/turns/list")
+        let params = try #require(captured[5]?["params"] as? [String: Any])
+        #expect(params["threadId"] as? String == "thread-1")
+        #expect(params["cursor"] as? String == "turns-1")
+        #expect(params["limit"] as? Int == 25)
+        #expect(params["sortDirection"] as? String == "desc")
+        #expect(params["itemsView"] as? String == "full")
+    }
+
     @Test func `title search fills one result page across bounded native pages`() async throws {
         let first = try listResponseJSON(
             names: ["Target one", "Other one", "Other two"],
@@ -1020,7 +1075,7 @@ struct MacNodeCodexThreadCatalogTests {
             Issue.record("expected fake App Server error")
         } catch let error as MacNodeCodexThreadCatalog.CatalogError {
             #expect(error == .appServerUnavailable)
-            #expect(error.localizedDescription == "UNAVAILABLE: Codex app-server thread list failed")
+            #expect(error.localizedDescription == "UNAVAILABLE: Codex app-server request failed")
             #expect(!error.localizedDescription.contains("/Users/secret"))
         }
     }

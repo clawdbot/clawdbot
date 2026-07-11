@@ -99,7 +99,7 @@ describe("plugin lifecycle resource sampler", () => {
         dir,
         'printf "%s\\n" "$1" >>"$GETCONF_LOG"\ncase "$1" in PAGESIZE) echo 16384 ;; CLK_TCK) echo 250 ;; esac',
       );
-      const env = {
+      const env: NodeJS.ProcessEnv = {
         ...process.env,
         GETCONF_LOG: logPath,
         PATH: `${binDir}:${process.env.PATH ?? ""}`,
@@ -291,7 +291,7 @@ describe("plugin lifecycle resource sampler", () => {
       const dir = makeTempDir();
       const summary = path.join(dir, "summary.tsv");
       const pidFile = path.join(dir, "descendant.pid");
-      let descendantPid;
+      let descendantPid: number | undefined;
 
       try {
         const result = spawnSync(
@@ -330,7 +330,7 @@ describe("plugin lifecycle resource sampler", () => {
         );
         expect(waitForPidExit(descendantPid, 1000)).toBe(true);
       } finally {
-        if (descendantPid > 0 && pidExists(descendantPid)) {
+        if (descendantPid !== undefined && descendantPid > 0 && pidExists(descendantPid)) {
           process.kill(descendantPid, "SIGKILL");
         }
       }
@@ -343,7 +343,7 @@ describe("plugin lifecycle resource sampler", () => {
       const dir = makeTempDir();
       const summary = path.join(dir, "summary.tsv");
       const pidFile = path.join(dir, "descendant.pid");
-      let descendantPid;
+      let descendantPid: number | undefined;
 
       try {
         const result = spawn(
@@ -376,7 +376,7 @@ describe("plugin lifecycle resource sampler", () => {
         expect(close.signal).toBe("SIGTERM");
         expect(waitForPidExit(descendantPid, 1000)).toBe(true);
       } finally {
-        if (descendantPid > 0 && pidExists(descendantPid)) {
+        if (descendantPid !== undefined && descendantPid > 0 && pidExists(descendantPid)) {
           process.kill(descendantPid, "SIGKILL");
         }
       }

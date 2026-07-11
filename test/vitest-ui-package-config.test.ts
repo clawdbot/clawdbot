@@ -3,11 +3,18 @@ import { describe, expect, it } from "vitest";
 import uiConfig from "../ui/vitest.config.ts";
 import uiNodeConfig from "../ui/vitest.node.config.ts";
 
-function requireTestConfig<T extends { test?: unknown }>(config: T): NonNullable<T["test"]> {
-  if (!config.test) {
+type ExpectedTestConfig = {
+  isolate?: boolean;
+  pool?: string;
+  projects?: unknown[];
+  runner?: string;
+};
+
+function requireTestConfig(config: unknown): ExpectedTestConfig {
+  if (!config || typeof config !== "object" || !("test" in config) || !config.test) {
     throw new Error("expected ui package vitest test config");
   }
-  return config.test as NonNullable<T["test"]>;
+  return config.test as ExpectedTestConfig;
 }
 
 describe("ui package vitest config", () => {
@@ -18,7 +25,7 @@ describe("ui package vitest config", () => {
     expect(testConfig.isolate).toBe(false);
     expect(testConfig.projects).toHaveLength(3);
 
-    for (const project of testConfig.projects) {
+    for (const project of testConfig.projects ?? []) {
       const projectTestConfig = requireTestConfig(project);
       expect(projectTestConfig.pool).toBe("threads");
       expect(projectTestConfig.isolate).toBe(false);

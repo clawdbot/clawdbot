@@ -91,6 +91,24 @@ export const FIELD_HELP: Record<string, string> = {
   "update.auto.stableJitterHours":
     "Extra stable-channel rollout spread window in hours (default: 12).",
   "update.auto.betaCheckIntervalHours": "How often beta-channel checks run in hours (default: 1).",
+  cloudWorkers:
+    "Opt-in cloud worker profiles for disposable remote environments. When this section is omitted or has no profiles, cloud worker creation remains unavailable and existing gateway/node status behavior is unchanged.",
+  "cloudWorkers.profiles":
+    "Named cloud worker profiles. Each profile selects a worker provider registered by a plugin and carries provider-owned settings plus optional stored lifetime policy.",
+  "cloudWorkers.profiles.*":
+    "One cloud worker profile selected by name when creating an environment. Keep provider credentials in supported references rather than embedding secret material in this block.",
+  "cloudWorkers.profiles.*.provider":
+    "Worker provider id registered by a plugin. The configured plugin must expose this id before the gateway can provision environments from the profile.",
+  "cloudWorkers.profiles.*.install":
+    'Worker installation method: "bundle" (default) transfers the gateway\'s content-hashed installed build and supports released, development, and unreleased versions; "npm" installs the exact gateway version and is available only when that version is released.',
+  "cloudWorkers.profiles.*.settings":
+    "Provider-owned settings validated by the selected plugin. Use SecretRef objects for secret-bearing values; opaque settings do not gain automatic secret resolution.",
+  "cloudWorkers.profiles.*.lifetime":
+    "Stored environment lifetime policy. This first cloud-worker slice records these values as data; automatic idle and maximum-lifetime enforcement lands in later lifecycle work.",
+  "cloudWorkers.profiles.*.lifetime.idleTimeoutMinutes":
+    "Positive inactivity interval in minutes after which later lifecycle policy may reclaim an idle environment. Omit to leave idle cleanup unspecified.",
+  "cloudWorkers.profiles.*.lifetime.maxLifetimeMinutes":
+    "Positive maximum environment lifetime in minutes for later lifecycle enforcement. Omit to leave the maximum lifetime unspecified.",
   gateway:
     "Gateway runtime surface for bind mode, auth, control UI, remote transport, and operational safety controls. Keep conservative defaults unless you intentionally expose the gateway beyond trusted local interfaces.",
   "gateway.port":

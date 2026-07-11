@@ -51,6 +51,7 @@ type LobsterPetElement = HTMLElement & {
 
 type TestSessionMenu = HTMLElement & {
   forkDisabled: boolean;
+  selectionCount: number;
   readonly updateComplete: Promise<boolean>;
 };
 
@@ -70,6 +71,7 @@ function createGatewayHarness(client: GatewayBrowserClient) {
     get snapshot() {
       return snapshot;
     },
+    setSessionKey: () => undefined,
     subscribe(listener: (next: ApplicationGatewaySnapshot) => void) {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -118,6 +120,10 @@ function createSessionsHarness(agentId: string, keys: string[]) {
   let canonicalListRevision = 1;
   const listeners = new Set<(next: SessionState) => void>();
   const groupsPut = vi.fn(() => Promise.resolve());
+  const patch = vi.fn(() => Promise.resolve(null));
+  const deleteMany = vi.fn(() =>
+    Promise.resolve({ deleted: [] as string[], errors: [], preservedWorktrees: [] }),
+  );
   const sessions = {
     get state() {
       return state;
@@ -132,9 +138,11 @@ function createSessionsHarness(agentId: string, keys: string[]) {
     subscribeCreated: () => () => undefined,
     groupsLoad: () => Promise.resolve(),
     groupsPut,
+    patch,
+    deleteMany,
   } as unknown as SessionCapability;
-  const publish = (patch: Partial<SessionState>) => {
-    state = { ...state, ...patch };
+  const publish = (statePatch: Partial<SessionState>) => {
+    state = { ...state, ...statePatch };
     for (const listener of listeners) {
       listener(state);
     }
@@ -142,10 +150,12 @@ function createSessionsHarness(agentId: string, keys: string[]) {
   return {
     sessions,
     groupsPut,
+    patch,
+    deleteMany,
     publish,
-    publishList(patch: Partial<SessionState>) {
+    publishList(statePatch: Partial<SessionState>) {
       canonicalListRevision += 1;
-      publish(patch);
+      publish(statePatch);
     },
   };
 }
@@ -432,6 +442,154 @@ function dispatchDragEvent(
   Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
   target.dispatchEvent(event);
 }
+
+describe("AppSidebar multi-select", () => {
+  const KEYS = ["agent:main:main", "agent:main:a", "agent:main:b", "agent:main:c"];
+
+  function rowLink(sidebar: SidebarLifecycleState, key: string): HTMLAnchorElement {
+    const link = sidebar.querySelector<HTMLAnchorElement>(
+      `[data-session-key="${key}"] .sidebar-recent-session__link`,
+    );
+    if (!link) {
+      throw new Error(`expected row link for ${key}`);
+    }
+    return link;
+  }
+
+  function selectedRowKeys(sidebar: SidebarLifecycleState): string[] {
+    return Array.from(sidebar.querySelectorAll(".sidebar-recent-session--selected")).map(
+      (row) => row.getAttribute("data-session-key") ?? "",
+    );
+  }
+
+  function click(target: Element, init: MouseEventInit = {}) {
+    target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, ...init }));
+  }
+
+  function openContextMenu(sidebar: SidebarLifecycleState, key: string) {
+    const row = sidebar.querySelector(`[data-session-key="${key}"]`);
+    if (!row) {
+      throw new Error(`expected row for ${key}`);
+    }
+    row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+  }
+
+  async function sessionMenu(sidebar: SidebarLifecycleState): Promise<TestSessionMenu> {
+    const menu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
+    if (!menu) {
+      throw new Error("expected session menu");
+    }
+    await menu.updateComplete;
+    return menu;
+  }
+
+  async function mountMultiSelect() {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const harness = createSessionsHarness("main", KEYS);
+    const { sidebar } = await mountSidebar(gateway, harness.sessions);
+    sidebar.connected = true;
+    await sidebar.updateComplete;
+    return { sidebar, harness };
+  }
+
+  it("cmd-click toggles rows into the selection and plain click clears it", async () => {
+    const { sidebar } = await mountMultiSelect();
+
+    click(rowLink(sidebar, "agent:main:a"), { metaKey: true });
+    click(rowLink(sidebar, "agent:main:b"), { metaKey: true });
+    await sidebar.updateComplete;
+    expect(selectedRowKeys(sidebar)).toEqual(["agent:main:a", "agent:main:b"]);
+
+    click(rowLink(sidebar, "agent:main:b"), { metaKey: true });
+    await sidebar.updateComplete;
+    expect(selectedRowKeys(sidebar)).toEqual(["agent:main:a"]);
+
+    click(rowLink(sidebar, "agent:main:c"));
+    await sidebar.updateComplete;
+    expect(selectedRowKeys(sidebar)).toEqual([]);
+  });
+
+  it("shift-click extends the selection from the anchor across the visible order", async () => {
+    const { sidebar } = await mountMultiSelect();
+
+    click(rowLink(sidebar, "agent:main:a"), { metaKey: true });
+    click(rowLink(sidebar, "agent:main:c"), { shiftKey: true });
+    await sidebar.updateComplete;
+
+    expect(selectedRowKeys(sidebar)).toEqual(["agent:main:a", "agent:main:b", "agent:main:c"]);
+  });
+
+  it("archives every selected session from the batch menu", async () => {
+    const { sidebar, harness } = await mountMultiSelect();
+
+    click(rowLink(sidebar, "agent:main:a"), { metaKey: true });
+    click(rowLink(sidebar, "agent:main:b"), { metaKey: true });
+    await sidebar.updateComplete;
+    openContextMenu(sidebar, "agent:main:a");
+    await sidebar.updateComplete;
+
+    const menu = await sessionMenu(sidebar);
+    expect(menu.selectionCount).toBe(2);
+    // Batch menus drop single-session actions like Rename.
+    expect(menu.querySelector('[data-shortcut="r"]')).toBeNull();
+    menu.querySelector<HTMLButtonElement>('[data-shortcut="a"]')?.click();
+
+    await vi.waitFor(() => expect(harness.patch).toHaveBeenCalledTimes(2));
+    expect(harness.patch).toHaveBeenNthCalledWith(
+      1,
+      "agent:main:a",
+      { archived: true },
+      { agentId: "main" },
+    );
+    expect(harness.patch).toHaveBeenNthCalledWith(
+      2,
+      "agent:main:b",
+      { archived: true },
+      { agentId: "main" },
+    );
+  });
+
+  it("deletes the selection in one batch after a single confirm", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    try {
+      const { sidebar, harness } = await mountMultiSelect();
+
+      click(rowLink(sidebar, "agent:main:a"), { metaKey: true });
+      click(rowLink(sidebar, "agent:main:b"), { metaKey: true });
+      await sidebar.updateComplete;
+      openContextMenu(sidebar, "agent:main:b");
+      await sidebar.updateComplete;
+
+      const menu = await sessionMenu(sidebar);
+      menu.querySelector<HTMLButtonElement>('[data-shortcut="d"]')?.click();
+
+      await vi.waitFor(() => expect(harness.deleteMany).toHaveBeenCalledOnce());
+      expect(confirmSpy).toHaveBeenCalledOnce();
+      expect(confirmSpy.mock.calls[0]?.[0]).toContain("2");
+      expect(harness.deleteMany).toHaveBeenCalledWith([
+        { key: "agent:main:a", agentId: "main", deleteTranscript: true },
+        { key: "agent:main:b", agentId: "main", deleteTranscript: true },
+      ]);
+    } finally {
+      confirmSpy.mockRestore();
+    }
+  });
+
+  it("retargets the menu to an unselected row and drops the selection", async () => {
+    const { sidebar } = await mountMultiSelect();
+
+    click(rowLink(sidebar, "agent:main:a"), { metaKey: true });
+    click(rowLink(sidebar, "agent:main:b"), { metaKey: true });
+    await sidebar.updateComplete;
+    openContextMenu(sidebar, "agent:main:c");
+    await sidebar.updateComplete;
+
+    expect(selectedRowKeys(sidebar)).toEqual([]);
+    const menu = await sessionMenu(sidebar);
+    expect(menu.selectionCount).toBe(1);
+    expect(menu.querySelector('[data-shortcut="r"]')).not.toBeNull();
+  });
+});
 
 describe("AppSidebar custom group reordering", () => {
   async function mountWithGroups(groups: string[]) {

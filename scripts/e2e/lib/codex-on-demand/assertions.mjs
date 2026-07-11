@@ -24,12 +24,12 @@ if (!codexRecord) {
 if (codexRecord.source !== "npm") {
   throw new Error(`expected npm codex install record, got ${codexRecord.source}`);
 }
-if (!String(codexRecord.spec || "").includes("@openclaw/codex")) {
+if (!codexRecord.spec?.includes("@openclaw/codex")) {
   throw new Error(`expected @openclaw/codex install spec, got ${codexRecord.spec}`);
 }
 
 const npmRoot = managedNpmRoot();
-const installPath = String(codexRecord.installPath || "").replace(/^~(?=$|\/)/u, process.env.HOME);
+const installPath = (codexRecord.installPath || "").replace(/^~(?=$|\/)/u, process.env.HOME);
 if (!installPath) {
   throw new Error(`missing codex installPath: ${JSON.stringify(codexRecord)}`);
 }

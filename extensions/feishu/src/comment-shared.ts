@@ -1,4 +1,5 @@
 // Feishu plugin module implements comment shared behavior.
+import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import {
   isRecord as sharedIsRecord,
   normalizeOptionalString,
@@ -142,56 +143,39 @@ export async function requestFeishuApi<T>(
   options: {
     includeConfigParams?: boolean;
     includeNestedErrorLogId?: boolean;
-    /** Base delay per retry attempt in ms; multiplied by attempt index. @internal */
+    /** Base retry delay in ms; doubles on the second retry. @internal */
     retryDelayMs?: number;
   } = {},
 ): Promise<T> {
-  const retryDelayMs = options.retryDelayMs ?? FEISHU_SEND_RETRY_BASE_MS;
-  let lastFulfilledRateLimit: { response: unknown; code: number } | undefined;
-  for (let attempt = 0; attempt <= FEISHU_SEND_MAX_RETRIES; attempt++) {
-    if (attempt > 0) {
-      // Linear backoff: delay grows with each attempt to give the rate-limit window time to reset.
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, attempt * retryDelayMs);
-      });
-    }
-    try {
-      const result = await request();
-      // Feishu SDK may fulfill with a rate-limit body (e.g. { code: 11232, ... })
-      // instead of throwing. Classify before returning so retry covers both shapes.
-      const fulfilledRateLimit = getFeishuSendRateLimitCodeFromResponse(result);
-      if (fulfilledRateLimit !== undefined) {
-        // Capture for the synthetic-error path below; on a non-final attempt
-        // continue retrying, on the final attempt fall through so the loop
-        // exits and the wrapped exhaustion error is thrown.
-        lastFulfilledRateLimit = { response: result, code: fulfilledRateLimit };
-        if (attempt < FEISHU_SEND_MAX_RETRIES) {
-          continue;
+  try {
+    return await retryAsync(
+      async () => {
+        const result = await request();
+        // Feishu SDK may fulfill with a rate-limit body (e.g. { code: 11232, ... })
+        // instead of throwing. Rethrow it in the AxiosError response shape so
+        // getFeishuSendRateLimitCode classifies it retryable and exhaustion
+        // wraps it exactly like an SDK throw.
+        const fulfilledRateLimit = getFeishuSendRateLimitCodeFromResponse(result);
+        if (fulfilledRateLimit !== undefined) {
+          throw Object.assign(
+            new Error(`Request fulfilled with rate-limit code ${fulfilledRateLimit}`),
+            { response: { status: 200, data: result } },
+          );
         }
-        break;
-      }
-      return result;
-    } catch (error) {
-      const isRetryable =
-        attempt < FEISHU_SEND_MAX_RETRIES && getFeishuSendRateLimitCode(error) !== undefined;
-      if (!isRetryable) {
-        throw createFeishuApiError(error, errorPrefix, options);
-      }
-      // Rate-limit on a non-final attempt — loop continues to next retry.
-    }
-  }
-  // Exhausted retries while the SDK kept fulfilling rate-limit bodies. Surface
-  // the last response as an error so callers see the same wrapped shape they
-  // would have seen if the SDK had thrown.
-  if (lastFulfilledRateLimit) {
-    const synthetic = Object.assign(
-      new Error(`Request fulfilled with rate-limit code ${lastFulfilledRateLimit.code}`),
-      { response: { status: 200, data: lastFulfilledRateLimit.response } },
+        return result;
+      },
+      {
+        attempts: FEISHU_SEND_MAX_RETRIES + 1,
+        // With a 2-retry budget the core exponential schedule (1x, 2x base)
+        // matches the previous linear attempt*base backoff exactly; revisit
+        // the delay curve if FEISHU_SEND_MAX_RETRIES grows.
+        minDelayMs: options.retryDelayMs ?? FEISHU_SEND_RETRY_BASE_MS,
+        shouldRetry: (error) => getFeishuSendRateLimitCode(error) !== undefined,
+      },
     );
-    throw createFeishuApiError(synthetic, errorPrefix, options);
+  } catch (error) {
+    throw createFeishuApiError(error, errorPrefix, options);
   }
-  // Unreachable: every iteration either returns or throws. Required for TypeScript exhaustiveness.
-  throw createFeishuApiError(new Error("unreachable"), errorPrefix, options);
 }
 
 type ParsedCommentDocumentRef = {

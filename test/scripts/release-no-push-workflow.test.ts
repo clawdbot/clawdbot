@@ -20,7 +20,6 @@ const PACKAGE_ACCEPTANCE = ".github/workflows/package-acceptance.yml";
 const PLUGIN_PRERELEASE = ".github/workflows/plugin-prerelease.yml";
 const LIVE_E2E = ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml";
 const INSTALL_SMOKE = ".github/workflows/install-smoke.yml";
-const INSTALL_SMOKE_REUSABLE = ".github/workflows/install-smoke-reusable.yml";
 const SHARED_IMAGE_PUBLISHER = ".github/workflows/openclaw-shared-image-publish-reusable.yml";
 const SCHEDULED_LIVE = ".github/workflows/openclaw-scheduled-live-checks.yml";
 const DOCKER_RELEASE = ".github/workflows/docker-release.yml";
@@ -99,7 +98,7 @@ function permissionScopes(...permissions: Array<PermissionMap | undefined>): str
       }
     }
   }
-  return [...scopes].sort();
+  return [...scopes].toSorted();
 }
 
 function reusablePermissionViolations(

@@ -145,6 +145,9 @@ const config = {
         "@mistralai/mistralai",
         "cross-spawn",
         "file-type",
+        // Loaded via createRequire in src/agents/utils/syntax-highlight.ts because its
+        // d.ts force-includes lib.dom; knip cannot see the dynamic require.
+        "highlight.js",
         "playwright-core",
         "partial-json",
         "sqlite-vec",

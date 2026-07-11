@@ -81,7 +81,7 @@ MiniMax M3 uses `minimax/MiniMax-M3` as its default provider/model reference.
   - `OPENCLAW_LIVE_MODELS=modern` runs the curated high-signal priority list (see [Live: model matrix](#live-model-matrix-what-we-cover))
   - `OPENCLAW_LIVE_MODELS=small` runs the curated small-model priority list
   - `OPENCLAW_LIVE_MODELS=all` is an alias for `modern`
-  - or `OPENCLAW_LIVE_MODELS="openai/gpt-5.5,anthropic/claude-opus-4-6,..."` (comma allowlist)
+  - or `OPENCLAW_LIVE_MODELS="openai/gpt-5.6-luna,anthropic/claude-opus-4-6,..."` (comma allowlist)
   - Local Ollama small-model runs default to `http://127.0.0.1:11434`; set `OPENCLAW_LIVE_OLLAMA_BASE_URL` only for LAN, custom, or Ollama Cloud endpoints.
   - Modern/all and small sweeps default to their curated-list length as a cap; set `OPENCLAW_LIVE_MAX_MODELS=0` for an exhaustive selected-profile sweep or a positive number for a smaller cap.
   - Exhaustive sweeps use `OPENCLAW_LIVE_TEST_TIMEOUT_MS` for the whole direct-model test timeout. Default: 60 minutes.
@@ -239,11 +239,11 @@ Notes:
   - `OPENCLAW_LIVE_ACP_BIND_AGENT=opencode`
   - `OPENCLAW_LIVE_ACP_BIND_AGENTS=claude,codex,gemini`
   - `OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND='npx -y @agentclientprotocol/claude-agent-acp@<version>'`
-  - `OPENCLAW_LIVE_ACP_BIND_CODEX_MODEL=gpt-5.5`
+  - `OPENCLAW_LIVE_ACP_BIND_CODEX_MODEL=gpt-5.6-luna`
   - `OPENCLAW_LIVE_ACP_BIND_OPENCODE_MODEL=opencode/kimi-k2.6`
   - `OPENCLAW_LIVE_ACP_BIND_IMAGE_PROBE=1` (or `on`/`true`/`yes`) to force the image probe on; any other value forces it off. Runs by default for every agent except `opencode`.
   - `OPENCLAW_LIVE_ACP_BIND_REQUIRE_CRON=1`
-  - `OPENCLAW_LIVE_ACP_BIND_PARENT_MODEL=openai/gpt-5.5`
+  - `OPENCLAW_LIVE_ACP_BIND_PARENT_MODEL=openai/gpt-5.6-luna`
 - Notes:
   - This lane uses the gateway `chat.send` surface with admin-only synthetic originating-route fields so tests can attach message-channel context without pretending to deliver externally.
   - When `OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND` is unset, the test uses the embedded `acpx` plugin's built-in agent registry for the selected ACP harness agent.
@@ -299,7 +299,7 @@ Docker notes:
     denied so the agent asks back
 - Test: `src/gateway/gateway-codex-harness.live.test.ts`
 - Enable: `OPENCLAW_LIVE_CODEX_HARNESS=1`
-- Harness baseline model: `codex/gpt-5.5`
+- Harness baseline model: `openai/gpt-5.6-luna`
 - Fresh OpenAI API-key selection default: `openai/gpt-5.6`
 - Default thinking: `low`
 - Model override: `OPENCLAW_LIVE_CODEX_HARNESS_MODEL=openai/<model>`
@@ -323,7 +323,7 @@ OPENCLAW_LIVE_CODEX_HARNESS=1 \
   OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE=1 \
   OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=1 \
   OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE=1 \
-  OPENCLAW_LIVE_CODEX_HARNESS_MODEL=openai/gpt-5.5 \
+  OPENCLAW_LIVE_CODEX_HARNESS_MODEL=openai/gpt-5.6-luna \
   pnpm test:live -- src/gateway/gateway-codex-harness.live.test.ts
 ```
 
@@ -385,7 +385,7 @@ Docker notes:
 Narrow, explicit allowlists are fastest and least flaky:
 
 - Single model, direct (no gateway):
-  - `OPENCLAW_LIVE_MODELS="openai/gpt-5.5" pnpm test:live src/agents/models.profiles.live.test.ts`
+  - `OPENCLAW_LIVE_MODELS="openai/gpt-5.6-luna" pnpm test:live src/agents/models.profiles.live.test.ts`
 
 - Small-model direct profile:
   - `OPENCLAW_LIVE_MODELS=small pnpm test:live src/agents/models.profiles.live.test.ts`
@@ -397,10 +397,10 @@ Narrow, explicit allowlists are fastest and least flaky:
   - `OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_OLLAMA=1 OPENCLAW_LIVE_OLLAMA_BASE_URL=https://ollama.com OPENCLAW_LIVE_OLLAMA_MODEL=glm-5.1:cloud OPENCLAW_LIVE_OLLAMA_WEB_SEARCH=0 pnpm test:live -- extensions/ollama/ollama.live.test.ts`
 
 - Single model, gateway smoke:
-  - `OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.5" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
+  - `OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.6-luna" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
 - Tool calling across several providers:
-  - `OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.5,anthropic/claude-opus-4-6,google/gemini-3.5-flash,deepseek/deepseek-v4-flash,zai/glm-5.1,minimax/MiniMax-M3" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
+  - `OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.6-luna,anthropic/claude-opus-4-6,google/gemini-3.5-flash,deepseek/deepseek-v4-flash,zai/glm-5.1,minimax/MiniMax-M3" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
 - Z.AI Coding Plan GLM-5.2 direct smoke:
   - `ZAI_CODING_LIVE_TEST=1 pnpm test:live src/agents/zai.live.test.ts`
@@ -473,7 +473,7 @@ Notes on the modern list:
 Run gateway smoke with tools + image across a hand-picked cross-provider set:
 
 ```bash
-OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.5,anthropic/claude-opus-4-6,google/gemini-3.1-pro-preview,google/gemini-3.5-flash,google-antigravity/claude-opus-4-6-thinking,deepseek/deepseek-v4-flash,zai/glm-5.1,minimax/MiniMax-M3" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts
+OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.6-luna,anthropic/claude-opus-4-6,google/gemini-3.1-pro-preview,google/gemini-3.5-flash,google-antigravity/claude-opus-4-6-thinking,deepseek/deepseek-v4-flash,zai/glm-5.1,minimax/MiniMax-M3" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts
 ```
 
 Optional additional coverage outside the curated lists (nice to have, pick a "tools"-capable model you have enabled):

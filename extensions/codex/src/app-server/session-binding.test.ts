@@ -1140,6 +1140,39 @@ describe("Codex app-server binding store", () => {
     expect(invalid?.binding.pluginAppPolicyContext).toBeUndefined();
   });
 
+  it("round-trips workspace-directory plugin policy context", () => {
+    const stored = createStoredCodexAppServerBinding({
+      schemaVersion: 2,
+      threadId: "thread-workspace-plugin",
+      cwd: "/repo",
+      pluginAppPolicyContext: {
+        fingerprint: "policy-workspace",
+        apps: {
+          workspaceData: {
+            configKey: "workspaceData",
+            marketplaceName: "workspace-directory",
+            pluginName: "workspace-data@workspace-directory",
+            allowDestructiveActions: true,
+            destructiveApprovalMode: "ask",
+            mcpServerNames: [],
+          },
+        },
+        pluginAppIds: { workspaceData: ["workspace-data"] },
+      },
+    });
+
+    expect(stored?.binding.pluginAppPolicyContext).toMatchObject({
+      apps: {
+        workspaceData: {
+          marketplaceName: "workspace-directory",
+          pluginName: "workspace-data@workspace-directory",
+          destructiveApprovalMode: "ask",
+        },
+      },
+      pluginAppIds: { workspaceData: ["workspace-data"] },
+    });
+  });
+
   it("serializes writes from another facade behind a native-compaction lease", async () => {
     vi.useFakeTimers();
     const { state } = createStateStore();

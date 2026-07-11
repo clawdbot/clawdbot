@@ -87,6 +87,7 @@ describe("bundled capability metadata", () => {
       cliBackendIds: [],
       providerIds: [],
       providerEnvVars: {},
+      workerProviderIds: [],
       embeddingProviderIds: [],
       speechProviderIds: [],
       realtimeTranscriptionProviderIds: [],

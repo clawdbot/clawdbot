@@ -326,7 +326,7 @@ describe("Parallels smoke model selection", () => {
 
     expect(providerAuth).toContain("OPENCLAW_PARALLELS_OPENAI_MODEL");
     expect(providerAuth).toContain("OPENCLAW_PARALLELS_WINDOWS_OPENAI_MODEL");
-    expect(providerAuth).toContain("openai/gpt-5.5");
+    expect(providerAuth).toContain("openai/gpt-5.6-luna");
     expect(providerAuth).toContain('authChoice: "openai-api-key"');
     expect(providerAuth).toContain('authChoice: "apiKey"');
     expect(providerAuth).toContain('authChoice: "minimax-global-api"');
@@ -357,7 +357,7 @@ describe("Parallels smoke model selection", () => {
   it("keeps Windows provider-only plugin isolation temp scripts per run", () => {
     const script = windowsProviderOnlyPluginIsolationScript({
       fallbackPluginId: "openai",
-      modelId: "openai/gpt-5.5",
+      modelId: "openai/gpt-5.6-luna",
     });
 
     expect(script).toContain("[guid]::NewGuid().ToString('N')");
@@ -1022,7 +1022,7 @@ if (isPrlctl) {
       apiKeyValue: "sk-openai",
       authChoice: "openai-api-key",
       authKeyFlag: "openai-api-key",
-      modelId: "openai/gpt-5.5",
+      modelId: "openai/gpt-5.6-luna",
     });
 
     expect(
@@ -1042,7 +1042,7 @@ if (isPrlctl) {
     });
   });
 
-  it("uses the shared GPT-5 OpenAI model for Windows smoke unless overridden", () => {
+  it("uses the shared GPT-5.6 Luna model for Windows smoke unless overridden", () => {
     expect(
       withEnv({ OPENAI_API_KEY: "sk-openai" }, () =>
         resolveWindowsProviderAuth({ provider: "openai" }),
@@ -1052,7 +1052,7 @@ if (isPrlctl) {
       apiKeyValue: "sk-openai",
       authChoice: "openai-api-key",
       authKeyFlag: "openai-api-key",
-      modelId: "openai/gpt-5.5",
+      modelId: "openai/gpt-5.6-luna",
     });
 
     expect(
@@ -2005,7 +2005,7 @@ setInterval(() => {}, 1000);
     expect(script).toContain('"$sessionId.jsonl"');
   });
 
-  it("gives GPT-5.5 enough Parallels model time on slower desktop guests", () => {
+  it("gives GPT-5.6 Luna enough Parallels model time on slower desktop guests", () => {
     expect({
       linux: resolveParallelsModelTimeoutSeconds("linux"),
       macos: resolveParallelsModelTimeoutSeconds("macos"),

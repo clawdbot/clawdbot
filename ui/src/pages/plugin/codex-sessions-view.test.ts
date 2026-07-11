@@ -264,11 +264,11 @@ describe("Codex sessions view", () => {
       "Reconnect this computer before managing its Codex sessions.",
     );
     expect(container.querySelector(".codex-session__view-only")?.textContent).toContain(
-      "Paired-computer sessions are view-only for now.",
+      "Transcript available; continue and archive stay on the owning computer.",
     );
   });
 
-  it("explains that connected paired-computer sessions are view-only", () => {
+  it("explains that connected paired-computer sessions allow transcript reads only", () => {
     const host = {};
     hosts.push(host);
     const state = getCodexSessionsState(host);
@@ -296,9 +296,11 @@ describe("Codex sessions view", () => {
 
     const continueButton = container.querySelector(".codex-session__continue") as HTMLButtonElement;
     expect(continueButton.disabled).toBe(true);
-    expect(continueButton.title).toBe("Paired-computer sessions are view-only for now.");
+    expect(continueButton.title).toBe(
+      "Transcript available; continue and archive stay on the owning computer.",
+    );
     expect(container.querySelector(".codex-session__view-only")?.textContent).toContain(
-      "Paired-computer sessions are view-only for now.",
+      "Transcript available; continue and archive stay on the owning computer.",
     );
     expect((container.querySelector(".codex-session__archive") as HTMLButtonElement).disabled).toBe(
       true,
@@ -350,6 +352,58 @@ describe("Codex sessions view", () => {
     expect(archiveButton.disabled).toBe(false);
     expect(archiveButton.title).toBe(
       "Activity is unknown because status is process-local. Archive only after confirming that no other Codex client or runner is using this session.",
+    );
+  });
+
+  it("renders readable transcript text and preserves the full persisted item", () => {
+    const host = {};
+    hosts.push(host);
+    const state = getCodexSessionsState(host);
+    state.hosts = [
+      {
+        hostId: "node:macbook",
+        label: "MacBook",
+        kind: "node",
+        connected: true,
+        sessions: [
+          {
+            threadId: "thread-1",
+            name: "Inspect the screenshot",
+            status: "idle",
+            archived: false,
+          },
+        ],
+      },
+    ];
+    state.transcriptKey = JSON.stringify(["node:macbook", "thread-1"]);
+    state.transcriptItems = [
+      {
+        id: "item-1",
+        type: "userMessage",
+        content: [
+          { type: "text", text: "Read the complete prompt" },
+          { type: "image", url: "attachment://screenshot.png" },
+        ],
+      },
+    ];
+    const container = document.createElement("div");
+
+    render(
+      renderCodexSessions({
+        host,
+        client,
+        connected: true,
+        selectedHostId: "node:macbook",
+        selectedThreadId: "thread-1",
+      }),
+      container,
+    );
+
+    expect(container.querySelector(".codex-transcript__text")?.textContent).toContain(
+      "Read the complete prompt",
+    );
+    expect(container.querySelector(".codex-transcript__details pre")?.textContent).toContain(
+      "attachment://screenshot.png",
     );
   });
 

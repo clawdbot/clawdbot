@@ -102,7 +102,7 @@ type RawCopyBaseline = {
 };
 
 const CONTROL_UI_I18N_WORKFLOW = 1;
-const DEFAULT_OPENAI_MODEL = "gpt-5.5";
+const DEFAULT_OPENAI_MODEL = "gpt-5.6-sol";
 const DEFAULT_ANTHROPIC_MODEL = "claude-opus-4-6";
 const DEFAULT_PROVIDER = "openai";
 const HERE = path.dirname(fileURLToPath(import.meta.url));

@@ -534,6 +534,16 @@ describe("release Telegram QA workflow", () => {
     expect(source).toContain("runtime_stage=verify-runtime-privileges");
     expect(source).toContain("runtime_stage=verify-parent-proc-hidden");
     expect(source).toContain("runtime_stage=verify-proc-visibility");
+    expect(source).toContain("for _ in {1..100}; do");
+    expect(source).toMatch(
+      /if tr "\\0" "\\n" <"\/proc\/\$\{control_pid\}\/environ" 2>\/dev\/null \|\n\s+grep -Fxq "OPENCLAW_QA_PROC_CONTROL=visible"; then/u,
+    );
+    expect(source).toContain("proc_marker_visible=true\n                        break");
+    expect(source).toContain("sleep 0.05");
+    expect(source).toContain('[[ "$proc_marker_visible" == "true" ]]');
+    expect(source).toMatch(
+      /kill "\$control_pid" >\/dev\/null 2>&1 \|\| true\n\s+wait "\$control_pid" \|\| true/u,
+    );
     expect(source).toContain("runtime_stage=verify-secret-env-hidden");
     expect(source).toContain("runtime_stage=verify-runner-fds-hidden");
     expect(source).toContain("runtime_stage=verify-runtime-files");
@@ -573,6 +583,23 @@ describe("release Telegram QA workflow", () => {
     expect(source).toContain('export HOME="${temp_root}/home"');
     expect(source).toContain('export XDG_CONFIG_HOME="${temp_root}/xdg-config"');
     expect(source).toContain('if [[ "${1:-}" == "--root-terminate-uid" ]]');
+  });
+
+  it("keeps the generated SUT launcher valid bash", () => {
+    const createSutStep = workflowStep(
+      workflowJob("run_telegram"),
+      "Create isolated Telegram SUT identity and launcher",
+    );
+    const launcherSource = createSutStep.run?.match(
+      /<<'LAUNCHER'\n([\s\S]*?)\nLAUNCHER(?:\n|$)/u,
+    )?.[1];
+    expect(launcherSource).toBeTruthy();
+
+    const result = spawnSync("bash", ["-n"], {
+      encoding: "utf8",
+      input: launcherSource,
+    });
+    expect(result.status, result.stderr).toBe(0);
   });
 
   it("arms the boundary preload only in the gateway main thread", () => {

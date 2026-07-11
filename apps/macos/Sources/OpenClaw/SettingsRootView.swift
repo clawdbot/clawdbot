@@ -534,7 +534,7 @@ struct SettingsRootView_Previews: PreviewProvider {
                 state: .preview,
                 updater: DisabledUpdaterController(),
                 initialTab: tab,
-                configuredInferenceModel: tab == .crestodian ? "openai/gpt-5.5" : nil)
+                configuredInferenceModel: tab == .crestodian ? "openai/gpt-5.6-sol" : nil)
                 .previewDisplayName(tab.title)
                 .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight)
         }

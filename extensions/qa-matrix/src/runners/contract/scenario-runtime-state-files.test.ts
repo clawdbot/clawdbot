@@ -1,34 +1,11 @@
-import { createHash } from "node:crypto";
+// Qa Matrix tests cover persisted runtime state probes.
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  createPluginStateSyncKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, describe, expect, it } from "vitest";
-import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 import { waitForMatrixInboundDedupeEntry } from "./scenario-runtime-state-files.js";
-
-const dedupeStoreRuntime = {
-  openMatrixInboundDedupeStoreOptions(params: { stateDir?: string }) {
-    return {
-      namespace: "inbound-dedupe",
-      maxEntries: 20_000,
-      env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir },
-    };
-  },
-};
-
-function buildDedupeKey(params: { accountId: string; eventId: string; roomId: string }) {
-  return `${params.accountId}:${createHash("sha256")
-    .update(params.accountId)
-    .update("\0")
-    .update(params.roomId)
-    .update("\0")
-    .update(params.eventId)
-    .digest("hex")}`;
-}
 
 describe("Matrix QA persisted state probes", () => {
   const tempDirs: string[] = [];
@@ -38,27 +15,30 @@ describe("Matrix QA persisted state probes", () => {
     await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { force: true, recursive: true })));
   });
 
-  it("observes inbound dedupe entries through the canonical plugin-state store", async () => {
+  it("observes inbound dedupe entries committed through the core claimable dedupe", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "matrix-qa-dedupe-"));
     tempDirs.push(stateDir);
     const accountRoot = path.join(stateDir, "matrix", "accounts", "sut", "server", "token");
-    const accountId = "sut";
     const eventId = "$event";
     const roomId = "!room:matrix-qa.test";
-    const options = dedupeStoreRuntime.openMatrixInboundDedupeStoreOptions({
-      stateDir: accountRoot,
+    // Mirrors the matrix monitor's guard configuration so the probe is proven
+    // against the exact persisted row shape the runtime writes, including the
+    // account-scoped key the probe must match by suffix.
+    const guard = createClaimableDedupe({
+      pluginId: "matrix",
+      namespacePrefix: "matrix.inbound-dedupe",
+      ttlMs: 30 * 24 * 60 * 60 * 1000,
+      memoryMaxSize: 100,
+      stateMaxEntries: 100,
+      env: { ...process.env, OPENCLAW_STATE_DIR: accountRoot },
     });
-    const runtimeAccountId = "runtime-default";
-    createPluginStateSyncKeyedStoreForTests("matrix", options).register(
-      buildDedupeKey({ accountId: runtimeAccountId, eventId, roomId }),
-      { eventId, roomId, ts: Date.now() },
-    );
+    const key = `runtime-default\0${roomId}\0${eventId}`;
+    await guard.claim(key);
+    await guard.commit(key);
     resetPluginStateStoreForTests();
 
     await expect(
       waitForMatrixInboundDedupeEntry({
-        context: { sutAccountId: accountId } as MatrixQaScenarioContext,
-        dedupeStoreRuntime,
         eventId,
         roomId,
         stateDir,

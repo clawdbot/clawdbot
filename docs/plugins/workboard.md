@@ -96,7 +96,7 @@ Unlinked cards can start work directly:
 
 - **Run Codex** / **Run Claude** starts a task-tracked agent run with an
   explicit engine, sends the card prompt, and marks the card `running`. Codex
-  runs use `openai/gpt-5.5`; Claude runs use `anthropic/claude-sonnet-4-6`.
+  runs use `openai/gpt-5.6-sol`; Claude runs use `anthropic/claude-sonnet-4-6`.
 - **Open Codex** / **Open Claude** creates a linked dashboard session without
   sending the card prompt or moving the card, for manual work that stays
   attached to the board.

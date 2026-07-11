@@ -46,6 +46,7 @@ class MockChildProcess extends EventEmitter {
   readonly stdout = new PassThrough();
   readonly stderr = new PassThrough();
   readonly stdin: Writable;
+  readonly receivedMessages: Record<string, unknown>[] = [];
 
   constructor(
     private readonly initializeResponsePrefix = "",
@@ -70,13 +71,26 @@ class MockChildProcess extends EventEmitter {
 
   private respondToRequest(text: string): void {
     const body = parseWrittenLspBody(text);
-    if (!body || typeof body.id !== "number" || typeof body.method !== "string") {
+    if (!body) {
+      return;
+    }
+    this.receivedMessages.push(body);
+    if (typeof body.id !== "number" || typeof body.method !== "string") {
       return;
     }
     if (this.respondMethods && !this.respondMethods.has(body.method)) {
       return;
     }
-    const result = body.method === "initialize" ? { capabilities: { hoverProvider: true } } : null;
+    const result =
+      body.method === "initialize"
+        ? {
+            capabilities: {
+              hoverProvider: true,
+              definitionProvider: true,
+              referencesProvider: true,
+            },
+          }
+        : null;
     queueMicrotask(() => {
       this.stdout.write(
         `${this.initializeResponsePrefix}${encodeLspMessage({ jsonrpc: "2.0", id: body.id, result })}`,
@@ -237,6 +251,56 @@ describe("bundle LSP runtime", () => {
     child.emit("close", 1, null);
 
     await expect(request).rejects.toThrow('LSP server "typescript" exited (1)');
+    await runtime.dispose();
+  });
+
+  it.each([
+    ["lsp_hover_typescript", "textDocument/hover"],
+    ["lsp_definition_typescript", "textDocument/definition"],
+    ["lsp_references_typescript", "textDocument/references"],
+  ])("cancels pending %s requests when the tool signal aborts", async (toolName, method) => {
+    configureSingleLspServer();
+    const child = new MockChildProcess("", new Set(["initialize"]));
+    spawnMock.mockReturnValue(child);
+    const { createBundleLspToolRuntime } = await import("./agent-bundle-lsp-runtime.js");
+
+    const runtime = await createBundleLspToolRuntime({ workspaceDir: "/tmp/workspace" });
+    const tool = runtime.tools.find((candidate) => candidate.name === toolName);
+    if (!tool) {
+      throw new Error(`expected ${toolName} tool`);
+    }
+    const controller = new AbortController();
+    const request = tool.execute(
+      "call-1",
+      {
+        uri: "file:///tmp/workspace/index.ts",
+        line: 0,
+        character: 0,
+      },
+      controller.signal,
+    );
+    const settled = request.then(
+      () => "resolved",
+      () => "rejected",
+    );
+    const lspRequest = child.receivedMessages.find((message) => message.method === method);
+
+    controller.abort(new Error("agent stopped"));
+
+    await expect(
+      Promise.race([
+        settled,
+        new Promise((resolve) => {
+          setTimeout(() => resolve("still pending"), 100);
+        }),
+      ]),
+    ).resolves.toBe("rejected");
+    expect(child.receivedMessages).toContainEqual({
+      jsonrpc: "2.0",
+      method: "$/cancelRequest",
+      params: { id: lspRequest?.id },
+    });
+
     await runtime.dispose();
   });
 

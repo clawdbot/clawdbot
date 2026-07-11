@@ -159,7 +159,7 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           ANTHROPIC_MODEL: claude-opus-4-8
-          OPENAI_MODEL: ${{ vars.OPENCLAW_CI_OPENAI_MODEL_BARE || 'gpt-5.5' }}
+          OPENAI_MODEL: ${{ vars.OPENCLAW_CI_OPENAI_MODEL_BARE || 'gpt-5.6-sol' }}
           OPENCLAW_CONTROL_UI_I18N_THINKING: low
           OPENCLAW_CONTROL_UI_I18N_AUTH_OPTIONAL: "0"
           LOCALE: ${{ matrix.locale }}

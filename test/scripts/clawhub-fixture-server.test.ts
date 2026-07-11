@@ -1,7 +1,8 @@
 // ClawHub Fixture Server tests cover the local package fixture HTTP contract.
-import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, spawnSync, type ChildProcessByStdio } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
+import type { Readable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
@@ -11,7 +12,8 @@ const PACKAGE_NAME = "@openclaw/kitchen-sink";
 const PACKAGE_PATH = `/api/v1/packages/${encodeURIComponent(PACKAGE_NAME)}`;
 const KITCHEN_SINK_VERSION = "0.2.5";
 const tempDirs: string[] = [];
-const servers: ChildProcessWithoutNullStreams[] = [];
+type FixtureServerChild = ChildProcessByStdio<null, Readable, Readable>;
+const servers: FixtureServerChild[] = [];
 
 afterEach(async () => {
   await Promise.all(servers.splice(0).map(stopServer));
@@ -27,7 +29,7 @@ function collectStream(stream: NodeJS.ReadableStream) {
   return () => text;
 }
 
-async function stopServer(child: ChildProcessWithoutNullStreams) {
+async function stopServer(child: FixtureServerChild) {
   if (child.exitCode !== null || child.signalCode !== null) {
     return;
   }

@@ -728,10 +728,12 @@ function createChatContext(): Pick<
     dedupe: new Map(),
     loadGatewayModelCatalog: async () =>
       mockState.modelCatalog ?? [
+        // Keep the default model image-capable here; otherwise attachment tests
+        // exercise the unsupported-model fallback instead of Pi persistence.
         {
           provider: "openai",
-          id: "gpt-5.5",
-          name: "GPT-5.5",
+          id: "gpt-5.6-sol",
+          name: "GPT-5.6 Sol",
           input: ["text", "image"],
         },
         {

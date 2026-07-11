@@ -119,7 +119,7 @@ function scenarioConfig(scenario, options = {}) {
       agents: {
         defaults: {
           model: {
-            primary: "openai/gpt-5.5",
+            primary: "openai/gpt-5.6-luna",
           },
           contextTokens: 64000,
           skills: ["memory"],
@@ -131,7 +131,7 @@ function scenarioConfig(scenario, options = {}) {
             name: "Main",
             workspace: "~/workspace",
             model: {
-              primary: "openai/gpt-5.5",
+              primary: "openai/gpt-5.6-luna",
             },
             thinkingDefault: "low",
             skills: ["memory"],
@@ -142,7 +142,7 @@ function scenarioConfig(scenario, options = {}) {
             name: "Ops",
             workspace: "~/workspace/ops",
             model: {
-              primary: "openai/gpt-5.5",
+              primary: "openai/gpt-5.6-luna",
             },
             fastModeDefault: true,
           },
@@ -466,7 +466,7 @@ OPENCLAW_TEST_STATE_JSON
   "agents": {
     "defaults": {
       "model": {
-        "primary": "openai/gpt-5.5"
+        "primary": "openai/gpt-5.6-luna"
       },
       "contextTokens": 64000,
       "skills": [
@@ -480,7 +480,7 @@ OPENCLAW_TEST_STATE_JSON
         "name": "Main",
         "workspace": "~/workspace",
         "model": {
-          "primary": "openai/gpt-5.5"
+          "primary": "openai/gpt-5.6-luna"
         },
         "thinkingDefault": "low",
         "skills": [
@@ -493,7 +493,7 @@ OPENCLAW_TEST_STATE_JSON
         "name": "Ops",
         "workspace": "~/workspace/ops",
         "model": {
-          "primary": "openai/gpt-5.5"
+          "primary": "openai/gpt-5.6-luna"
         },
         "fastModeDefault": true
       }

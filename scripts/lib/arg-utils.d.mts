@@ -5,10 +5,10 @@ type FlagSpec<T extends FlagArgs> = {
     index: number,
     args: T,
   ): {
-    flag: string;
+    flag?: string;
     nextIndex: number;
-    repeatable: boolean;
-    apply(target: T): void;
+    repeatable?: boolean;
+    apply(target?: T): void;
   } | null;
 };
 

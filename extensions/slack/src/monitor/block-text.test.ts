@@ -2,6 +2,55 @@ import { describe, expect, it } from "vitest";
 import { chooseSlackPrimaryText, resolveSlackBlocksText } from "./block-text.js";
 
 describe("resolveSlackBlocksText data visualizations", () => {
+  it("uses the shared visible-text parser for rich text, fields, and controls", () => {
+    const resolved = resolveSlackBlocksText([
+      {
+        type: "rich_text",
+        elements: [
+          {
+            type: "rich_text_section",
+            elements: [
+              { type: "text", text: "Ask " },
+              { type: "user", user_id: "U123" },
+            ],
+          },
+        ],
+      },
+      {
+        type: "section",
+        text: { type: "plain_text", text: "Deploy" },
+        fields: [{ type: "plain_text", text: "Healthy" }],
+      },
+      {
+        type: "actions",
+        block_id: "private-block",
+        elements: [
+          {
+            type: "workflow_button",
+            text: { type: "plain_text", text: "Run workflow" },
+            action_id: "private-action",
+            workflow: { trigger: { url: "https://example.com/private" } },
+          },
+          {
+            type: "static_select",
+            placeholder: { type: "plain_text", text: "Choose owner" },
+            action_id: "private-select",
+            options: [
+              { text: { type: "plain_text", text: "Hidden option" }, value: "private-value" },
+            ],
+          },
+        ],
+      },
+    ]);
+
+    expect(resolved).toEqual({
+      text: "Ask &lt;@U123&gt;\nDeploy\nHealthy\nRun workflow\nChoose owner",
+      hasRichText: true,
+      hasNativeData: false,
+    });
+    expect(resolved?.text).not.toMatch(/private|Hidden option/u);
+  });
+
   it("preserves native chart values in inbound conversation context", () => {
     expect(
       resolveSlackBlocksText([

@@ -91,34 +91,58 @@ function buildStartParams(
   return approved(startParams);
 }
 
-function buildForwardParams(params: Record<string, unknown>): Record<string, unknown> | null {
+function denyMissing(action: string, field: string): PolicyDecision {
+  return {
+    approved: false,
+    result: denied(`googlemeet.chrome ${action} requires ${field}`),
+  };
+}
+
+function buildForwardParams(params: Record<string, unknown>): PolicyDecision | null {
   const action = readString(params.action);
   switch (action) {
     case "setup":
-      return { action };
+      return approved({ action });
     case "status": {
       const bridgeId = readString(params.bridgeId);
-      return bridgeId ? { action, bridgeId } : { action };
+      return approved(bridgeId ? { action, bridgeId } : { action });
     }
     case "list": {
       const forwarded: Record<string, unknown> = { action };
       const url = readString(params.url);
       const mode = readString(params.mode);
       if (url) {
-        forwarded.url = url;
+        try {
+          forwarded.url = normalizeMeetUrl(url);
+        } catch (error) {
+          return {
+            approved: false,
+            result: denied(error instanceof Error ? error.message : "googlemeet.chrome list url"),
+          };
+        }
       }
       if (mode) {
         forwarded.mode = mode;
       }
-      return forwarded;
+      return approved(forwarded);
     }
     case "stopByUrl": {
       const forwarded: Record<string, unknown> = { action };
       const url = readString(params.url);
       const mode = readString(params.mode);
       const exceptBridgeId = readString(params.exceptBridgeId);
-      if (url) {
-        forwarded.url = url;
+      if (!url) {
+        return denyMissing(action, "url");
+      }
+      try {
+        forwarded.url = normalizeMeetUrl(url);
+      } catch (error) {
+        return {
+          approved: false,
+          result: denied(
+            error instanceof Error ? error.message : "googlemeet.chrome stopByUrl url",
+          ),
+        };
       }
       if (mode) {
         forwarded.mode = mode;
@@ -126,36 +150,45 @@ function buildForwardParams(params: Record<string, unknown>): Record<string, unk
       if (exceptBridgeId) {
         forwarded.exceptBridgeId = exceptBridgeId;
       }
-      return forwarded;
+      return approved(forwarded);
     }
     case "pullAudio": {
       const forwarded: Record<string, unknown> = { action };
       const bridgeId = readString(params.bridgeId);
       const timeoutMs = readPositiveNumber(params.timeoutMs);
-      if (bridgeId) {
-        forwarded.bridgeId = bridgeId;
+      if (!bridgeId) {
+        return denyMissing(action, "bridgeId");
       }
+      forwarded.bridgeId = bridgeId;
       if (timeoutMs) {
         forwarded.timeoutMs = timeoutMs;
       }
-      return forwarded;
+      return approved(forwarded);
     }
     case "pushAudio": {
       const forwarded: Record<string, unknown> = { action };
       const bridgeId = readString(params.bridgeId);
       const base64 = readString(params.base64);
-      if (bridgeId) {
-        forwarded.bridgeId = bridgeId;
+      if (!bridgeId) {
+        return denyMissing(action, "bridgeId");
       }
-      if (base64) {
-        forwarded.base64 = base64;
+      if (!base64) {
+        return denyMissing(action, "base64");
       }
-      return forwarded;
+      forwarded.bridgeId = bridgeId;
+      forwarded.base64 = base64;
+      return approved(forwarded);
     }
-    case "clearAudio":
+    case "clearAudio": {
+      const bridgeId = readString(params.bridgeId);
+      if (!bridgeId) {
+        return denyMissing(action, "bridgeId");
+      }
+      return approved({ action, bridgeId });
+    }
     case "stop": {
       const bridgeId = readString(params.bridgeId);
-      return bridgeId ? { action, bridgeId } : { action };
+      return approved(bridgeId ? { action, bridgeId } : { action });
     }
     default:
       return null;
@@ -178,10 +211,10 @@ export function createGoogleMeetChromeNodeInvokePolicy(
       if (action === "start") {
         decision = buildStartParams(params, config);
       } else {
-        const forwardParams = buildForwardParams(params);
-        decision = forwardParams
-          ? approved(forwardParams)
-          : { approved: false, result: denied("unsupported googlemeet.chrome action") };
+        decision = buildForwardParams(params) ?? {
+          approved: false,
+          result: denied("unsupported googlemeet.chrome action"),
+        };
       }
       if (!decision.approved) {
         return decision.result;

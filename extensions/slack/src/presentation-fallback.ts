@@ -3,47 +3,28 @@ import {
   renderMessagePresentationChartFallbackText,
   renderMessagePresentationFallbackText,
   renderMessagePresentationTableFallbackText,
+  normalizeMessagePresentation,
   type MessagePresentation,
   type MessagePresentationBlock,
-  type MessagePresentationButton,
   type MessagePresentationChartBlock,
   type MessagePresentationTableBlock,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
-import { SLACK_SECTION_TEXT_MAX } from "./presentation.js";
 
-function escapeSlackFallbackCommand(command: string, escapedLabel: string): string | undefined {
-  // Slack parses mrkdwn before decoding these entities. That keeps mention/link
-  // tokens inert while preserving the displayed, copyable command bytes.
-  if (/[\r\n]/u.test(escapedLabel) || /[\\`\r\n]/u.test(command)) {
-    return undefined;
+const SLACK_UNCOPYABLE_COMMAND_WARNING = "not copyable: contains backtick";
+
+// Slack inline code cannot escape its ASCII backtick delimiter. Make the changed
+// byte explicit so the fallback cannot look like a copyable version of the command.
+function resolveSlackCommandFallback(command: string): {
+  command: string;
+  warning?: string;
+} {
+  if (!command.includes("`")) {
+    return { command };
   }
-  const escaped = command.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
-  const fallbackLine = `- ${escapedLabel}: \`${escaped}\``;
-  return Array.from(fallbackLine).length <= SLACK_SECTION_TEXT_MAX ? escaped : undefined;
-}
-
-function escapeSlackPresentationButton(
-  button: MessagePresentationButton,
-): MessagePresentationButton {
-  const { action, ...rest } = button;
-  const label = escapeSlackMrkdwn(button.label);
-  const command =
-    action?.type === "command" ? escapeSlackFallbackCommand(action.command, label) : undefined;
   return {
-    ...rest,
-    label,
-    ...(button.value ? { value: escapeSlackMrkdwn(button.value) } : {}),
-    ...(button.url ? { url: escapeSlackMrkdwn(button.url) } : {}),
-    ...(button.webApp ? { webApp: { url: escapeSlackMrkdwn(button.webApp.url) } } : {}),
-    ...(button.web_app ? { web_app: { url: escapeSlackMrkdwn(button.web_app.url) } } : {}),
-    ...(action?.type === "command"
-      ? command
-        ? { action: { ...action, command } }
-        : {}
-      : action
-        ? { action }
-        : {}),
+    command: command.replaceAll("`", "[backtick]"),
+    warning: SLACK_UNCOPYABLE_COMMAND_WARNING,
   };
 }
 
@@ -98,7 +79,31 @@ function escapeSlackPresentationFallbackBlock(
   if (block.type === "buttons") {
     return {
       ...block,
-      buttons: block.buttons.map(escapeSlackPresentationButton),
+      buttons: block.buttons.map((button) => {
+        const commandFallback =
+          button.action?.type === "command"
+            ? resolveSlackCommandFallback(button.action.command)
+            : undefined;
+        const label = commandFallback?.warning
+          ? `${button.label} [${commandFallback.warning}]`
+          : button.label;
+        return {
+          ...button,
+          label: escapeSlackMrkdwn(label),
+          ...(button.value ? { value: escapeSlackMrkdwn(button.value) } : {}),
+          ...(button.url ? { url: escapeSlackMrkdwn(button.url) } : {}),
+          ...(button.webApp ? { webApp: { url: escapeSlackMrkdwn(button.webApp.url) } } : {}),
+          ...(button.web_app ? { web_app: { url: escapeSlackMrkdwn(button.web_app.url) } } : {}),
+          ...(button.action?.type === "command" && commandFallback
+            ? {
+                action: {
+                  ...button.action,
+                  command: commandFallback.command,
+                },
+              }
+            : {}),
+        };
+      }),
     };
   }
   if (block.type === "select") {
@@ -124,6 +129,21 @@ export function renderSlackMessagePresentationTableFallbackText(
   block: MessagePresentationTableBlock,
 ): string {
   return renderMessagePresentationTableFallbackText(escapeSlackPresentationTableBlock(block));
+}
+
+/** Render only table data that must move out of native Slack blocks. */
+export function renderSlackMessagePresentationTablesFallbackText(params: {
+  presentation?: unknown;
+  text?: string | null;
+}): string {
+  const presentation = normalizeMessagePresentation(params.presentation);
+  const blocks = presentation?.blocks.filter(
+    (block): block is MessagePresentationTableBlock => block.type === "table",
+  );
+  return renderSlackMessagePresentationFallbackText({
+    text: params.text,
+    ...(blocks?.length ? { presentation: { blocks } } : {}),
+  });
 }
 
 export function renderSlackMessagePresentationFallbackText(params: {

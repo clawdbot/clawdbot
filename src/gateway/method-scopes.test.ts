@@ -57,6 +57,8 @@ describe("method scope resolution", () => {
     ["sessions.messages.subscribe", ["operator.read"]],
     ["sessions.messages.unsubscribe", ["operator.read"]],
     ["environments.list", ["operator.read"]],
+    ["environments.create", ["operator.admin"]],
+    ["environments.destroy", ["operator.admin"]],
     ["worktrees.list", ["operator.read"]],
     ["worktrees.branches", ["operator.write"]],
     ["worktrees.create", ["operator.admin"]],

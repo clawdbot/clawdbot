@@ -40,6 +40,7 @@ import {
 } from "../cli-output.js";
 import { classifyFailoverReason } from "../embedded-agent-helpers.js";
 import { FailoverError, isTimeoutError, resolveFailoverStatus } from "../failover-error.js";
+import { resolveCliToolTerminalReason } from "../run-termination.js";
 import { prepareCliBundleMcpCaptureAttempt } from "./bundle-mcp.js";
 import { buildClaudeOwnerKey } from "./helpers.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./log.js";
@@ -52,6 +53,8 @@ type ManagedRun = Awaited<ReturnType<ProcessSupervisor["spawn"]>>;
 type ClaudeLiveTurn = {
   backend: CliBackendConfig;
   diagnosticRefs: ClaudeLiveDiagnosticRefs;
+  /** Enclosing run abort signal; authoritative for tool terminal reason on turn failure. */
+  abortSignal?: AbortSignal;
   outputLimits: ClaudeLiveOutputLimits;
   startedAtMs: number;
   rawLines: string[];
@@ -670,11 +673,16 @@ function markClaudeLiveToolDenied(turn: ClaudeLiveTurn, tool: CliToolUseStartDel
 }
 
 function failActiveClaudeLiveTools(turn: ClaudeLiveTurn, error: unknown): void {
-  const timedOut =
-    isTimeoutError(error) || (error instanceof FailoverError && error.reason === "timeout");
-  const aborted = error instanceof Error && error.name === "AbortError";
-  const errorCategory = timedOut ? "timeout" : aborted ? "aborted" : "error";
-  const terminalReason = timedOut ? "timed_out" : aborted ? "cancelled" : "failed";
+  const terminalReason = resolveCliToolTerminalReason({
+    error,
+    abortSignal: turn.abortSignal,
+  });
+  const errorCategory =
+    terminalReason === "timed_out"
+      ? "timeout"
+      : terminalReason === "cancelled"
+        ? "aborted"
+        : "error";
   for (const activeTool of turn.activeTools.values()) {
     const event: Omit<DiagnosticToolExecutionErrorEvent, "seq" | "ts" | "type" | "errorCategory"> =
       {
@@ -1188,6 +1196,7 @@ function createTurn(params: {
       ...(params.context.params.sessionKey ? { sessionKey: params.context.params.sessionKey } : {}),
       ...(params.context.params.agentId ? { agentId: params.context.params.agentId } : {}),
     },
+    abortSignal: params.context.params.abortSignal,
     outputLimits: resolveCliStreamJsonOutputLimits(params.context.preparedBackend.backend),
     startedAtMs: Date.now(),
     rawLines: [],

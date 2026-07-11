@@ -207,7 +207,7 @@ Use this reference page for flag semantics and step ordering.
 ```bash
 openclaw agents add work \
   --workspace ~/.openclaw/workspace-work \
-  --model openai/gpt-5.5 \
+  --model openai/gpt-5.6-sol \
   --bind whatsapp:biz \
   --non-interactive \
   --json

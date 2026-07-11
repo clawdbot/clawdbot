@@ -611,6 +611,123 @@
   line-height: 1.5;
 }
 
+.sidebar-codex-sessions {
+  padding: 0 10px 12px;
+}
+
+.sidebar-codex-sessions__truncated {
+  padding: 2px 12px 6px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.sidebar-codex-sessions .sidebar-recent-session {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-decoration: none;
+}
+
+.sidebar-codex-sessions .sidebar-recent-session__body {
+  min-width: 0;
+  flex: 1;
+}
+
+.codex-transcript {
+  width: min(980px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 28px 0 60px;
+}
+
+.codex-transcript__header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+  margin-bottom: 28px;
+}
+
+.codex-transcript__header h1 {
+  margin: 4px 0 6px;
+  font-size: 26px;
+}
+
+.codex-transcript__header p {
+  margin: 0;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.codex-transcript__items {
+  display: grid;
+  gap: 12px;
+}
+
+.codex-transcript__item {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+  padding: 14px 16px;
+}
+
+.codex-transcript__item--message {
+  border-color: color-mix(in srgb, var(--accent) 24%, var(--border));
+}
+
+.codex-transcript__item-label {
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.codex-transcript__text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.55;
+}
+
+.codex-transcript__details {
+  margin-top: 10px;
+}
+
+.codex-transcript__details summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.codex-transcript__details pre,
+.codex-transcript__raw {
+  max-height: 520px;
+  overflow: auto;
+  margin: 10px 0 0;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--bg);
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+.codex-transcript__index {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.codex-transcript__more {
+  display: block;
+  margin: 20px auto 0;
+}
+
 @keyframes codex-sessions-spin {
   to {
     transform: rotate(360deg);

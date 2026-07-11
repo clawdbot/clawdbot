@@ -135,6 +135,127 @@ describe("reconcileSlackUnknownSend", () => {
     }
   });
 
+  it("attaches a complete single-part marker to successful block sends", async () => {
+    const client = createSlackReconcileTestClient();
+    const sent = await sendMessageSlack("channel:C123", "Status", {
+      cfg,
+      client,
+      deliveryQueueId: "queue-1",
+      blocks: [{ type: "section", text: { type: "mrkdwn", text: "Status" } }],
+    });
+    const request = client.chat.postMessage.mock.calls[0]?.[0] as ChatPostMessageArguments;
+    const metadata = request.metadata as MessageMetadata;
+
+    expect(metadata.event_payload).toMatchObject({
+      openclaw_delivery_part_index: 0,
+      openclaw_delivery_part_count: 1,
+    });
+    expect(sent.receipt.platformMessageIds).toEqual(["1782584647.000002"]);
+    client.conversations.history.mockResolvedValueOnce({
+      messages: [{ ts: "1782584647.000002", metadata }],
+    });
+
+    const reconciled = await reconcileSlackUnknownSend(createUnknownSendContext(), { client });
+    expect(reconciled.status).toBe("sent");
+    if (reconciled.status === "sent") {
+      expect(reconciled.receipt.platformMessageIds).toEqual(["1782584647.000002"]);
+    }
+  });
+
+  it("reconciles every ordered native-data fallback batch as one durable part set", async () => {
+    const client = createSlackReconcileTestClient();
+    client.chat.postMessage
+      .mockRejectedValueOnce(
+        Object.assign(new Error("An API error occurred: invalid_blocks"), {
+          data: { error: "invalid_blocks" },
+        }),
+      )
+      .mockResolvedValueOnce({
+        ok: true,
+        channel: "C123",
+        ts: "1782584647.000001",
+        message: {},
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        channel: "C123",
+        ts: "1782584647.000002",
+        message: {},
+      });
+    const metadata = {
+      event_type: "assistant_thread_context",
+      event_payload: { team_id: "T123" },
+    };
+    const sent = await sendMessageSlack("channel:C123", "Pipeline", {
+      cfg,
+      client,
+      deliveryQueueId: "queue-1",
+      metadata,
+      blocks: [
+        ...Array.from({ length: 48 }, () => ({ type: "divider" })),
+        {
+          type: "actions",
+          elements: [
+            {
+              type: "button",
+              action_id: "approve",
+              text: { type: "plain_text", text: "Approve" },
+              value: "yes",
+            },
+          ],
+        },
+        {
+          type: "data_table",
+          caption: "c".repeat(9_000),
+          rows: [[{ type: "raw_text", text: "Account" }], [{ type: "raw_text", text: "Acme" }]],
+        },
+      ] as never,
+    });
+    const requests = client.chat.postMessage.mock.calls.map(
+      ([request]) => request as ChatPostMessageArguments,
+    );
+    const rejectedMetadata = requests[0]?.metadata as MessageMetadata;
+    const firstFallbackMetadata = requests[1]?.metadata as MessageMetadata;
+    const secondFallbackMetadata = requests[2]?.metadata as MessageMetadata;
+
+    expect(rejectedMetadata.event_payload.openclaw_delivery_part_count).toBe(1);
+    expect(
+      [firstFallbackMetadata, secondFallbackMetadata].map(
+        (part) => part.event_payload.openclaw_delivery_part_index,
+      ),
+    ).toEqual([0, 1]);
+    expect(
+      [firstFallbackMetadata, secondFallbackMetadata].map(
+        (part) => part.event_payload.openclaw_delivery_part_count,
+      ),
+    ).toEqual([2, 2]);
+    expect(firstFallbackMetadata.event_payload).toMatchObject({ team_id: "T123" });
+    expect(secondFallbackMetadata.event_payload).not.toHaveProperty("team_id");
+    expect(
+      new Set(
+        [firstFallbackMetadata, secondFallbackMetadata].map(
+          (part) => part.event_payload.openclaw_delivery_id,
+        ),
+      ).size,
+    ).toBe(1);
+    expect(sent.receipt.platformMessageIds).toEqual(["1782584647.000001", "1782584647.000002"]);
+    client.conversations.history.mockResolvedValueOnce({
+      messages: [
+        { ts: "1782584647.000002", metadata: secondFallbackMetadata },
+        { ts: "1782584647.000001", metadata: firstFallbackMetadata },
+      ],
+    });
+
+    const reconciled = await reconcileSlackUnknownSend(createUnknownSendContext(), { client });
+    expect(reconciled.status).toBe("sent");
+    if (reconciled.status === "sent") {
+      expect(reconciled.receipt.platformMessageIds).toEqual([
+        "1782584647.000001",
+        "1782584647.000002",
+      ]);
+    }
+  });
+
   it("refreshes durable timing after dequeue and before Slack API work", async () => {
     const client = createSlackReconcileTestClient();
     const order: string[] = [];

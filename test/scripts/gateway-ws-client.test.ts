@@ -1,5 +1,6 @@
 // Gateway Ws Client tests cover gateway ws client script behavior.
 import { createServer, type Server } from "node:http";
+import type { Duplex } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { createGatewayWsClient } from "../../scripts/dev/gateway-ws-client.js";
@@ -47,7 +48,7 @@ async function listen(handler: (ws: WebSocket) => void): Promise<string> {
 
 async function listenStalledUpgrade(): Promise<{ close: () => Promise<void>; url: string }> {
   const stalledServer = createServer();
-  const sockets = new Set<import("node:net").Socket>();
+  const sockets = new Set<Duplex>();
   let closing = false;
   stalledServer.on("connection", (socket) => {
     sockets.add(socket);

@@ -21,7 +21,12 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime";
 import { hasUsableOAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 import type { CodexAppServerClient } from "./client.js";
-import { resolveCodexAppServerUserHomeDir, type CodexAppServerStartOptions } from "./config.js";
+import { ensureCodexComputerUseSharedPluginCache } from "./computer-use-cache.js";
+import {
+  resolveCodexAppServerUserHomeDir,
+  resolveCodexComputerUseConfig,
+  type CodexAppServerStartOptions,
+} from "./config.js";
 import type {
   CodexChatgptAuthTokensRefreshResponse,
   CodexGetAccountResponse,
@@ -61,11 +66,16 @@ export async function bridgeCodexAppServerStartOptions(params: {
   authProfileId?: string | null;
   authProfileStore?: AuthProfileStore;
   config?: AuthProfileOrderConfig;
+  pluginConfig?: unknown;
 }): Promise<CodexAppServerStartOptions> {
   if (params.startOptions.transport !== "stdio") {
     return params.startOptions;
   }
-  const scopedStartOptions = await withCodexHomeEnvironment(params.startOptions, params.agentDir);
+  const scopedStartOptions = await withCodexHomeEnvironment(
+    params.startOptions,
+    params.agentDir,
+    params.pluginConfig,
+  );
   if (params.authProfileId === null) {
     return scopedStartOptions;
   }
@@ -333,6 +343,7 @@ export function resolveCodexAppServerNativeHomeDir(agentDir: string): string {
 async function withCodexHomeEnvironment(
   startOptions: CodexAppServerStartOptions,
   agentDir: string,
+  pluginConfig?: unknown,
 ): Promise<CodexAppServerStartOptions> {
   const codexHome = startOptions.env?.[CODEX_HOME_ENV_VAR]?.trim()
     ? startOptions.env[CODEX_HOME_ENV_VAR]
@@ -343,6 +354,10 @@ async function withCodexHomeEnvironment(
     ? startOptions.env[HOME_ENV_VAR]
     : undefined;
   await fs.mkdir(codexHome, { recursive: true });
+  await ensureCodexComputerUseSharedPluginCache({
+    codexHome,
+    config: resolveCodexComputerUseConfig({ pluginConfig }),
+  });
   if (nativeHome) {
     await fs.mkdir(nativeHome, { recursive: true });
   }

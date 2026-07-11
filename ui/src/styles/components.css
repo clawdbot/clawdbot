@@ -3484,63 +3484,171 @@ td.data-table-key-col {
   flex: 1;
 }
 
-/* Chat queue */
+/* Chat queue: compact pending rows aligned with the composer shell width. */
 .chat-queue {
-  margin-top: 12px;
-  padding: 12px;
-  border-radius: var(--radius-lg);
-  border: 1px solid var(--border);
-  background: var(--card);
-  display: grid;
-  gap: 8px;
-}
-
-.chat-queue__title {
-  font-family: var(--mono);
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--muted);
-}
-
-.chat-queue__list {
-  display: grid;
-  gap: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: calc(100% - 36px);
+  max-width: 48rem;
+  margin: 8px auto 0;
 }
 
 .chat-queue__item {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 12px;
-  padding: 10px 12px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 8px;
+  min-height: 30px;
+  padding: 3px 5px 3px 10px;
   border-radius: var(--radius-md);
-  border: 1px dashed var(--border-strong);
-  background: var(--secondary);
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+  color: var(--muted);
+}
+
+.chat-queue__item--steered {
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+.chat-queue__item--failed {
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+}
+
+.chat-queue__icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+}
+
+.chat-queue__icon svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chat-queue__item--failed .chat-queue__icon {
+  color: var(--danger);
+}
+
+.chat-queue__badge {
+  flex-shrink: 0;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--fg) 12%, transparent);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.chat-queue__badge--steered {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+}
+
+.chat-queue__item--failed .chat-queue__badge {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--danger);
 }
 
 .chat-queue__text {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--chat-text);
   font-size: 13px;
-  line-height: 1.45;
-  white-space: pre-wrap;
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
+  line-height: 1.4;
 }
 
+/* Wraps onto its own flex line below the row (see renderChatQueueItem). */
 .chat-queue__error {
-  margin-top: 4px;
+  flex-basis: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 0 3px 22px;
   color: var(--danger);
-  font-size: 12px;
+  font-size: 11.5px;
   line-height: 1.35;
 }
 
-.chat-queue__remove {
-  align-self: start;
-  padding: 4px 10px;
-  font-size: 12px;
+.chat-queue__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.chat-queue__steer,
+.chat-queue__retry {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--accent);
+  font-size: 11.5px;
+  font-weight: 600;
   line-height: 1;
+  cursor: pointer;
+}
+
+.chat-queue__steer svg,
+.chat-queue__retry svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chat-queue__steer:hover:not(:disabled),
+.chat-queue__retry:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.chat-queue__remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.chat-queue__remove:hover {
+  color: var(--fg);
+  background: color-mix(in srgb, var(--fg) 10%, transparent);
+}
+
+.chat-queue__remove svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 /* Chat lines */

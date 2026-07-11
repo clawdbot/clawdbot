@@ -73,7 +73,9 @@ async function waitForObservation(
     if (observations.slice(afterCount).some((entry) => entry.outcome === outcome)) {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
   }
   throw new Error(`heartbeat scheduler did not observe ${outcome} within ${timeoutMs}ms`);
 }
@@ -110,7 +112,7 @@ export async function runHeartbeatActiveHoursRuntime(options: HeartbeatRuntimeOp
     cfg: currentConfig,
     readCurrentConfig: () => currentConfig,
     runOnce: async ({ cfg, heartbeat }) => {
-      const active = isWithinActiveHours(cfg, heartbeat);
+      const active = isWithinActiveHours(cfg!, heartbeat);
       const outcome = active ? "active-fire" : "quiet-hours-skip";
       observations.push({ at: new Date().toISOString(), outcome });
       writer.appendLog(`heartbeat-active-hours: ${outcome}\n`);

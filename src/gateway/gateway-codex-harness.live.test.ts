@@ -86,7 +86,7 @@ const CODEX_HARNESS_THINKING = resolveCodexHarnessThinkingLevel(
 const describeLive = LIVE && CODEX_HARNESS_LIVE ? describe : describe.skip;
 const describeDisabled = LIVE && !CODEX_HARNESS_LIVE ? describe : describe.skip;
 const CODEX_HARNESS_TIMEOUT_MS = 900_000;
-const DEFAULT_CODEX_MODEL = "codex/gpt-5.5";
+const DEFAULT_CODEX_MODEL = "openai/gpt-5.6-luna";
 const GATEWAY_CONNECT_TIMEOUT_MS = 60_000;
 
 type CapturedAgentEvent = {

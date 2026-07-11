@@ -66,12 +66,13 @@ async function listen(server: Server): Promise<string> {
 async function allocatePort(): Promise<number> {
   const server = createServer();
   const url = await listen(server);
-  await new Promise<void>((resolve) => server.close(() => resolve()));
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
   return Number(new URL(url).port);
 }
 
 async function waitForOutput(
-  child: ReturnType<typeof spawn>,
   matches: (text: string) => boolean,
   getOutput: () => string,
 ): Promise<void> {
@@ -80,7 +81,9 @@ async function waitForOutput(
     if (matches(getOutput())) {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
   }
   throw new Error(`timed out waiting for fixture output. Output: ${getOutput()}`);
 }
@@ -142,7 +145,6 @@ describe("e2e helper numeric env limits", () => {
     });
     try {
       await waitForOutput(
-        child,
         (text) => text.includes(`clickclack fixture listening on ${port}`),
         () => output.text(),
       );

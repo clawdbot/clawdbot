@@ -179,7 +179,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 116,
+      "line": 163,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeForegroundService.kt",
       "source": "Connected",
       "surface": "android",
@@ -187,7 +187,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 116,
+      "line": 163,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeForegroundService.kt",
       "source": "Talk mode active",
       "surface": "android",
@@ -195,7 +195,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 278,
+      "line": 358,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeForegroundService.kt",
       "source": " · Mic: Listening",
       "surface": "android",
@@ -203,7 +203,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 278,
+      "line": 358,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeForegroundService.kt",
       "source": " · Mic: Pending",
       "surface": "android",
@@ -211,7 +211,7 @@
     },
     {
       "kind": "ui-state-text",
-      "line": 649,
+      "line": 666,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Offline",
       "surface": "android",
@@ -219,7 +219,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1512,
+      "line": 1529,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Cron job started.",
       "surface": "android",
@@ -227,7 +227,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1512,
+      "line": 1529,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Cron run queued.",
       "surface": "android",
@@ -235,7 +235,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1556,
+      "line": 1573,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Cron job disabled.",
       "surface": "android",
@@ -243,7 +243,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1556,
+      "line": 1573,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Cron job enabled.",
       "surface": "android",
@@ -251,7 +251,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3149,
+      "line": 3169,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: no secure gateway endpoint was detected. Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address with Unencrypted selected.",
       "surface": "android",
@@ -259,7 +259,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3151,
+      "line": 3171,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry.",
       "surface": "android",
@@ -267,7 +267,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3153,
+      "line": 3173,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: couldn't reach the secure gateway endpoint for this host.",
       "surface": "android",
@@ -435,7 +435,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1303,
+      "line": 1327,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt",
       "source": "Connecting…",
       "surface": "android",
@@ -443,7 +443,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1303,
+      "line": 1327,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt",
       "source": "Reconnecting…",
       "surface": "android",
@@ -18915,7 +18915,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 935,
+      "line": 985,
       "path": "apps/macos/Sources/OpenClaw/NodeMode/MacNodeRuntime.swift",
       "source": "approvalSource requires matching systemRunPlan",
       "surface": "apple",
@@ -18923,7 +18923,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 935,
+      "line": 985,
       "path": "apps/macos/Sources/OpenClaw/NodeMode/MacNodeRuntime.swift",
       "source": "explicit approval requires matching systemRunPlan",
       "surface": "apple",

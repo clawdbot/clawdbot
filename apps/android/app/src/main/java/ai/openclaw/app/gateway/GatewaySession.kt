@@ -11,6 +11,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.isActive
@@ -1216,16 +1217,39 @@ class GatewaySession(
           ?: payload["params"]?.let { value -> if (value is JsonNull) null else value.toString() }
       val timeoutMs = payload["timeoutMs"].asLongOrNull()
       connectionScope.launch {
-        val result =
-          try {
-            onInvoke?.invoke(InvokeRequest(id, nodeId, command, params, timeoutMs))
-              ?: InvokeResult.error("UNAVAILABLE", "invoke handler missing")
-          } catch (err: CancellationException) {
-            throw err
-          } catch (err: Throwable) {
-            invokeErrorFromThrowable(err)
-          }
+        val request = InvokeRequest(id, nodeId, command, params, timeoutMs)
+        val result = executeInvokeRequest(request)
         sendInvokeResult(id, nodeId, result, timeoutMs)
+      }
+    }
+
+    private suspend fun executeInvokeRequest(request: InvokeRequest): InvokeResult {
+      val handler = onInvoke ?: return InvokeResult.error("UNAVAILABLE", "invoke handler missing")
+      return try {
+        val timeoutMs = resolveInvokeExecutionTimeoutMs(request.timeoutMs)
+        if (timeoutMs == null) {
+          handler(request)
+        } else {
+          // Keep the deadline owner separate so a blocking handler cannot delay the timeout result.
+          // Cancellation still reaches cooperative handlers; late results are never sent.
+          val handlerTask = connectionScope.async { handler(request) }
+          try {
+            withTimeoutOrNull(timeoutMs) { handlerTask.await() }
+              ?: run {
+                handlerTask.cancel(CancellationException("node invoke timed out"))
+                InvokeResult.error("TIMEOUT", "node invoke timed out")
+              }
+          } catch (err: CancellationException) {
+            handlerTask.cancel(err)
+            throw err
+          }
+        }
+      } catch (err: TimeoutCancellationException) {
+        InvokeResult.error("TIMEOUT", err.message ?: "node invoke timed out")
+      } catch (err: CancellationException) {
+        throw err
+      } catch (err: Throwable) {
+        invokeErrorFromThrowable(err)
       }
     }
 
@@ -1687,4 +1711,11 @@ private fun parseJsonOrNull(payload: String): JsonElement? {
 internal fun resolveInvokeResultAckTimeoutMs(invokeTimeoutMs: Long?): Long {
   val normalized = invokeTimeoutMs?.takeIf { it > 0L } ?: 15_000L
   return normalized.coerceIn(15_000L, 120_000L)
+}
+
+/** Zero disables the deadline; an omitted value uses the same 30s default as Gateway/iOS. */
+internal fun resolveInvokeExecutionTimeoutMs(invokeTimeoutMs: Long?): Long? {
+  val normalized = invokeTimeoutMs ?: 30_000L
+  if (normalized <= 0L) return null
+  return normalized.coerceAtMost(Int.MAX_VALUE.toLong())
 }

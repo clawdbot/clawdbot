@@ -339,6 +339,15 @@ export async function ensureGatewayServiceForOnboarding(params: {
     ) {
       const progress = prompter.progress(t("wizard.finalize.gatewayService"));
       let installError: string | null = null;
+      const installWarnings: Array<{ message: string; title?: string }> = [];
+      const flushInstallWarnings = async () => {
+        let warning: (typeof installWarnings)[number] | undefined;
+        // Remove before awaiting so a rejected note is not replayed when the
+        // outer catch drains warnings that remain in the planner's queue.
+        while ((warning = installWarnings.shift()) !== undefined) {
+          await prompter.note(warning.message, warning.title);
+        }
+      };
       try {
         progress.update(t("wizard.finalize.gatewayServicePreparing"));
         const tokenResolution = await resolveGatewayInstallToken({
@@ -361,10 +370,11 @@ export async function ensureGatewayServiceForOnboarding(params: {
               port: settings.port,
               runtime: daemonRuntime,
               warn: (message, title) => {
-                void prompter.note(message, title);
+                installWarnings.push({ message, title });
               },
               config: nextConfig,
             });
+          await flushInstallWarnings();
 
           progress.update(t("wizard.finalize.gatewayServiceInstalling"));
           await service.install({
@@ -377,6 +387,7 @@ export async function ensureGatewayServiceForOnboarding(params: {
           });
         }
       } catch (err) {
+        await flushInstallWarnings();
         installError = formatErrorMessage(err);
       } finally {
         progress.stop(

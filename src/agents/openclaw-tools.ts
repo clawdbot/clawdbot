@@ -756,7 +756,15 @@ export function createOpenClawTools(
   const hookAgentId = options?.requesterAgentIdOverride ?? sessionAgentId;
   const gatewayCallerIdentity =
     hookAgentId && options?.agentSessionKey?.trim()
-      ? { agentId: hookAgentId, sessionKey: options.agentSessionKey.trim() }
+      ? {
+          agentId: hookAgentId,
+          sessionKey: options.agentSessionKey.trim(),
+          turnSourceChannel: options.agentChannel,
+          turnSourceTo:
+            options.currentMessagingTarget ?? options.currentChannelId ?? options.agentTo,
+          turnSourceAccountId: options.agentAccountId,
+          turnSourceThreadId: options.currentThreadTs ?? options.agentThreadId,
+        }
       : undefined;
   const wrapGatewayCallerIdentity = (tool: AnyAgentTool) =>
     wrapToolWithGatewayCallerIdentity(tool, gatewayCallerIdentity);

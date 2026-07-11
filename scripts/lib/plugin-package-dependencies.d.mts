@@ -1,6 +1,7 @@
 export type RuntimeDependencyPackageJson = {
-  dependencies?: Record<string, string>;
-  optionalDependencies?: Record<string, string>;
+  dependencies?: Record<string, unknown>;
+  devDependencies?: Record<string, unknown>;
+  optionalDependencies?: Record<string, unknown>;
 };
 export function collectRuntimeDependencySpecs(
   packageJson?: RuntimeDependencyPackageJson,

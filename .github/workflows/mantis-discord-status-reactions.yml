@@ -346,8 +346,8 @@ jobs:
               --repo-root "$repo_root" \
               --output-dir "$output_dir" \
               --provider-mode live-frontier \
-              --model openai/gpt-5.5 \
-              --alt-model openai/gpt-5.5 \
+              --model openai/gpt-5.6-luna \
+              --alt-model openai/gpt-5.6-luna \
               --fast \
               --credential-source convex \
               --credential-role ci \

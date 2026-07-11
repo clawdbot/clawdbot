@@ -288,6 +288,7 @@ describe("createCronPromptExecutor sourceDelivery guard", () => {
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const args = getEmbeddedRunArg();
     expect(args.sourceReplyDeliveryMode).toBeUndefined();
+    expect(args.allowEmptyAssistantReplyAsSilent).toBe(true);
     expect(args.requireExplicitMessageTarget).toBe(false);
     expect(args.disableMessageTool).toBe(false);
     expect(args.forceMessageTool).toBe(false);
@@ -308,6 +309,7 @@ describe("createCronPromptExecutor sourceDelivery guard", () => {
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const args = getEmbeddedRunArg();
     expect(args.sourceReplyDeliveryMode).toBeUndefined();
+    expect(args.allowEmptyAssistantReplyAsSilent).toBe(true);
     expect(args.disableMessageTool).toBe(false);
     expect(args.forceMessageTool).toBe(false);
     expect(args.messageChannel).toBe("messagechat");

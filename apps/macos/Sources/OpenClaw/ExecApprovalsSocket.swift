@@ -1175,7 +1175,7 @@ private final class ExecApprovalsSocketLifecycleLease: @unchecked Sendable {
     }
 
     private static func releaseProcessReservation(_ path: String) {
-        self.processLock.withLock {
+        _ = self.processLock.withLock {
             self.reservedPaths.remove(path)
         }
     }

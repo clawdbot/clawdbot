@@ -216,16 +216,20 @@ async function writeDistInventory(): Promise<void> {
   await writePackageDistInventory(process.cwd());
 }
 
-async function main(): Promise<void> {
-  const buildEnv = resolvePrepackBuildEnvironment();
-  runPnpm(["build"], buildEnv);
-  runPnpm(["ui:build"], buildEnv);
+export async function preparePrepackArtifacts(env: NodeJS.ProcessEnv = process.env): Promise<void> {
   ensurePreparedArtifacts();
   await writeDistInventory();
   runBuildSmoke();
   await preparePackageChangelog(process.cwd(), {
-    allowUnreleased: resolvePrepackAllowUnreleasedChangelog(),
+    allowUnreleased: resolvePrepackAllowUnreleasedChangelog(env),
   });
+}
+
+async function main(): Promise<void> {
+  const buildEnv = resolvePrepackBuildEnvironment();
+  runPnpm(["build"], buildEnv);
+  runPnpm(["ui:build"], buildEnv);
+  await preparePrepackArtifacts(buildEnv);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

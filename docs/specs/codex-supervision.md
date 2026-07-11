@@ -39,7 +39,8 @@ plan:
   no-other-runner confirmation.
 - Show active local sources without new-branch or archive controls while still
   allowing an existing supervised Chat to open.
-- Show paired-node rows as read-only metadata.
+- Show every row in the main sidebar and provide bounded, cursor-paginated
+  transcript reads for local and paired-node rows.
 - Isolate catalog failures by host.
 
 The catalog is the non-archived collection. A row within it can still have an
@@ -107,6 +108,14 @@ the interactive `cli` and `vscode` source kinds. It combines:
    which defaults to managed user-home stdio.
 2. `codex.appServer.threads.list.v1` results from each connected, opted-in node.
 
+Transcript selection uses `thread/turns/list` with `itemsView: "full"` locally or
+the versioned `codex.appServer.thread.turns.list.v1` command on the selected
+node. Every response contains at most 20 persisted turns plus opaque
+forward/backward cursors. The Control UI requests newest-first pages, renders each page in
+chronological order, and prepends older pages. It never falls back to an
+unbounded `thread/read`. OpenClaw also rejects any serialized item page above
+20 MiB before it can cross the node or Gateway transport.
+
 The native macOS paired-node implementation supports only an unset/default or
 explicit `appServer.transport: "stdio"` with unset/default supervision scope or
 explicit `appServer.homeScope: "user"`. It carries configured `command`, `args`,
@@ -116,10 +125,12 @@ nor command; direct invocation also fails closed. It must never expose the user
 Codex home for an agent-scoped configuration or substitute local stdio for an
 explicit endpoint.
 
-The projection normalizes identifiers, title, cwd, status, active wait flags,
-timestamps, source, model provider, Codex version, and Git branch. Paired nodes
-do not return transcript previews, turns, rollout paths, Codex home paths, Git
-remotes, commit SHAs, raw endpoints, or raw App Server errors.
+The catalog projection normalizes identifiers, title, cwd, status, active wait
+flags, timestamps, source, model provider, Codex version, and Git branch. It
+does not return transcript previews, turns, rollout paths, Codex home paths,
+Git remotes, commit SHAs, raw endpoints, or raw App Server errors. Transcript
+responses contain only the explicitly requested App Server item page and its
+opaque cursors.
 
 Host failures remain local to each host result. An offline node or unavailable
 local App Server does not erase healthy hosts from the page. Connectivity is a
@@ -297,12 +308,12 @@ implied by showing an active row.
 ## Paired-node boundary
 
 Node invoke is currently request/response only. It can safely return bounded
-catalog metadata, but it cannot carry the long-lived event stream, approval
+catalog metadata and transcript turn pages, but it cannot carry the long-lived event stream, approval
 requests, tool calls, cancellation, and assistant deltas required by a Codex
 harness run.
 
-The initial node contract is therefore listing only. Remote rows stay visible
-but **Continue** and **Archive** are unavailable, regardless of idle status. A
+The node contract therefore supports list and transcript-turn pages. Remote
+rows stay readable, but **Continue** and **Archive** are unavailable, regardless of idle status. A
 real remote continuation requires a node-side runner and streaming bridge that
 preserves the same approval and binding invariants as the local harness.
 
@@ -312,9 +323,9 @@ Each computer opts in locally. Enabling the Gateway does not authorize another
 node to read its Codex metadata. The node capability must pass normal pairing
 and command-policy approval.
 
-Fleet listing uses the `operator.write` Gateway scope because it invokes paired
-nodes. Local continuation and archive are authenticated operator actions and
-remain subject to host and status checks.
+Fleet listing and transcript viewing use the `operator.write` Gateway scope
+because they invoke paired nodes. Local continuation and archive are
+authenticated operator actions and remain subject to host and status checks.
 
 Autonomous agent and standalone MCP access is separate. The shipped
 `codex_endpoint_probe`, `codex_sessions_list`, `codex_session_read`,

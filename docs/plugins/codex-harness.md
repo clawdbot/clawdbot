@@ -14,7 +14,7 @@ native compaction, and app-server execution. OpenClaw still owns chat
 channels, session files, model selection, OpenClaw dynamic tools, approvals,
 media delivery, and the visible transcript mirror.
 
-Use canonical OpenAI model refs such as `openai/gpt-5.5`. Do not configure
+Use canonical OpenAI model refs such as `openai/gpt-5.6-sol`. Do not configure
 legacy Codex GPT refs; put OpenAI agent auth order under `auth.order.openai`.
 Legacy Codex auth profile ids and legacy Codex auth order entries are
 repaired by `openclaw doctor --fix`.
@@ -36,7 +36,7 @@ This Codex-native feature is separate from
 [OpenClaw code mode](/reference/code-mode), an opt-in QuickJS-WASI runtime
 for generic OpenClaw runs with a different `exec` input shape. For the
 broader model/provider/runtime split, start with
-[Agent runtimes](/concepts/agent-runtimes): `openai/gpt-5.5` is the model
+[Agent runtimes](/concepts/agent-runtimes): `openai/gpt-5.6-sol` is the model
 ref, `codex` is the runtime, and Telegram, Discord, Slack, or another
 channel is the communication surface.
 
@@ -77,7 +77,7 @@ Enable the `codex` plugin and select an OpenAI agent model:
   },
   agents: {
     defaults: {
-      model: "openai/gpt-5.5",
+      model: "openai/gpt-5.6-sol",
     },
   },
 }
@@ -316,7 +316,7 @@ default:
   },
   agents: {
     defaults: {
-      model: "openai/gpt-5.5",
+      model: "openai/gpt-5.6-sol",
     },
   },
 }
@@ -348,7 +348,7 @@ Keep Claude as the default agent and add a named Codex agent:
       {
         id: "codex",
         name: "Codex",
-        model: "openai/gpt-5.5",
+        model: "openai/gpt-5.6-sol",
       },
     ],
   },
@@ -376,7 +376,7 @@ available. Add explicit runtime policy for a written fail-closed rule:
   },
   agents: {
     defaults: {
-      model: "openai/gpt-5.5",
+      model: "openai/gpt-5.6-sol",
     },
   },
   plugins: {
@@ -932,7 +932,7 @@ OpenClaw host:
   | tail -200
 ```
 
-Useful excerpts usually include `openai/gpt-5.5` or `openai/gpt-5.4`,
+Useful excerpts usually include `openai/gpt-5.6-sol` or `openai/gpt-5.6-luna`,
 `Runtime: OpenAI Codex`, `agentRuntime.id` or `harnessRuntime`,
 `candidateProvider: "openai"`, and a `401`, `Incorrect API key`, or
 `No API key` result. A corrected run should show the OpenAI OAuth path

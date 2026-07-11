@@ -17,6 +17,17 @@ function renderExpectedSlackChartAccessibleText(summaryText: string) {
   ].join("\n");
 }
 
+function renderExpectedSlackTableAccessibleText(summaryText: string) {
+  return [
+    summaryText,
+    "",
+    "QA pipeline report (table)",
+    "Account\tStage\tARR",
+    "Acme\tWon\t125000",
+    "Globex\tReview\t82000",
+  ].join("\n");
+}
+
 describe("Slack live QA runtime helpers", () => {
   beforeEach(() => {
     vi.useRealTimers();
@@ -90,6 +101,8 @@ describe("Slack live QA runtime helpers", () => {
       testing
         .findScenario([
           "slack-chart-presentation-native",
+          "slack-table-presentation-native",
+          "slack-table-invalid-blocks-fallback",
           "slack-reaction-glyph-native",
           "slack-approval-exec-native",
           "slack-approval-plugin-native",
@@ -99,6 +112,8 @@ describe("Slack live QA runtime helpers", () => {
         .map((scenario) => scenario.id),
     ).toEqual([
       "slack-chart-presentation-native",
+      "slack-table-presentation-native",
+      "slack-table-invalid-blocks-fallback",
       "slack-reaction-glyph-native",
       "slack-approval-exec-native",
       "slack-approval-plugin-native",
@@ -107,15 +122,26 @@ describe("Slack live QA runtime helpers", () => {
     ]);
     expect(testing.SLACK_QA_STANDARD_SCENARIO_IDS).not.toContain("slack-approval-exec-native");
     expect(testing.SLACK_QA_STANDARD_SCENARIO_IDS).not.toContain("slack-chart-presentation-native");
+    expect(testing.SLACK_QA_STANDARD_SCENARIO_IDS).not.toContain("slack-table-presentation-native");
+    expect(testing.SLACK_QA_STANDARD_SCENARIO_IDS).not.toContain(
+      "slack-table-invalid-blocks-fallback",
+    );
     expect(testing.SLACK_QA_STANDARD_SCENARIO_IDS).not.toContain("slack-reaction-glyph-native");
     expect(testing.SLACK_QA_STANDARD_SCENARIO_IDS).not.toContain(
       "slack-codex-approval-exec-native",
     );
+    expect(testing.findScenario().map((scenario) => scenario.id)).not.toContain(
+      "slack-table-invalid-blocks-fallback",
+    );
   });
 
   it("accepts only Codex harness providers for Codex approval scenarios", () => {
-    expect(() => testing.assertSlackCodexApprovalModelSupported("openai/gpt-5.5")).not.toThrow();
-    expect(() => testing.assertSlackCodexApprovalModelSupported("codex/gpt-5.5")).not.toThrow();
+    expect(() =>
+      testing.assertSlackCodexApprovalModelSupported("openai/gpt-5.6-luna"),
+    ).not.toThrow();
+    expect(() =>
+      testing.assertSlackCodexApprovalModelSupported("codex/gpt-5.6-luna"),
+    ).not.toThrow();
     expect(() =>
       testing.assertSlackCodexApprovalModelSupported("anthropic/claude-sonnet-4-6"),
     ).toThrow(
@@ -176,7 +202,7 @@ describe("Slack live QA runtime helpers", () => {
           list: [
             {
               id: "qa",
-              model: { primary: "openai/gpt-5.5" },
+              model: { primary: "openai/gpt-5.6-luna" },
             },
           ],
         },
@@ -192,7 +218,7 @@ describe("Slack live QA runtime helpers", () => {
           },
           codexApproval: true,
         },
-        primaryModel: "openai/gpt-5.5",
+        primaryModel: "openai/gpt-5.6-luna",
         sutAccountId: "sut",
         sutAppToken: "xapp-sut",
         sutBotToken: "xoxb-sut",
@@ -209,7 +235,7 @@ describe("Slack live QA runtime helpers", () => {
       },
     });
     expect(cfg.tools?.exec?.mode).toBe("ask");
-    expect(cfg.agents?.defaults?.models?.["openai/gpt-5.5"]?.agentRuntime).toEqual({
+    expect(cfg.agents?.defaults?.models?.["openai/gpt-5.6-luna"]?.agentRuntime).toEqual({
       id: "codex",
     });
     expect(cfg.approvals?.plugin).toEqual({ enabled: true, mode: "session" });
@@ -426,6 +452,297 @@ describe("Slack live QA runtime helpers", () => {
 
     await vi.advanceTimersByTimeAsync(16_000);
     await result;
+  });
+
+  it("drives the live native table scenario through a portable message-tool presentation", () => {
+    const scenario = testing.findScenario(["slack-table-presentation-native"])[0];
+    const run = scenario?.buildRun("U999999999");
+    const input = run && "input" in run ? run.input : "";
+    const summaryText = input.match(/SLACK_QA_TABLE_SUMMARY_[A-Z0-9]+/u)?.[0];
+
+    expect(run).toMatchObject({ expectReply: true });
+    expect(scenario?.configOverrides).toEqual({ messageTool: true });
+    if (!summaryText) {
+      throw new Error("missing Slack table summary token");
+    }
+    expect(input).toContain(
+      JSON.stringify({
+        action: "send",
+        message: summaryText,
+        presentation: {
+          blocks: [
+            {
+              type: "table",
+              caption: "QA pipeline report",
+              headers: ["Account", "Stage", "ARR"],
+              rows: [
+                ["Acme", "Won", 125000],
+                ["Globex", "Review", 82000],
+              ],
+              rowHeaderColumnIndex: 0,
+            },
+          ],
+        },
+      }),
+    );
+    expect(run && "matchText" in run ? run.matchText : "").toMatch(
+      /^SLACK_QA_TABLE_DONE_[A-Z0-9]+$/u,
+    );
+  });
+
+  it("verifies the SUT-owned native table and exact accessible top-level text", async () => {
+    const scenario = testing.findScenario(["slack-table-presentation-native"])[0];
+    const run = scenario?.buildRun("U999999999");
+    const input = run && "input" in run ? run.input : "";
+    const summaryText = input.match(/SLACK_QA_TABLE_SUMMARY_[A-Z0-9]+/u)?.[0];
+    const afterReply = run && "afterReply" in run ? run.afterReply : undefined;
+    if (!summaryText || !afterReply) {
+      throw new Error("missing Slack table scenario verifier");
+    }
+    const accessibleText = renderExpectedSlackTableAccessibleText(summaryText);
+    const history = vi.fn(async () => ({
+      messages: [
+        {
+          blocks: [
+            {
+              type: "data_table",
+              caption: "QA pipeline report",
+              rows: [
+                [
+                  { type: "raw_text", text: "Account" },
+                  { type: "raw_text", text: "Stage" },
+                  { type: "raw_text", text: "ARR" },
+                ],
+                [
+                  { type: "raw_text", text: "Acme" },
+                  { type: "raw_text", text: "Won" },
+                  { type: "raw_number", value: 125000, text: "125000" },
+                ],
+                [
+                  { type: "raw_text", text: "Globex" },
+                  { type: "raw_text", text: "Review" },
+                  { type: "raw_number", value: 82000, text: "82000" },
+                ],
+              ],
+              row_header_column_index: 0,
+            },
+          ],
+          text: accessibleText.replace(/\s+/gu, " "),
+          ts: "2.000000",
+          user: "U999999999",
+        },
+      ],
+    }));
+
+    await expect(
+      afterReply(
+        {} as never,
+        {
+          channelId: "C123456789",
+          sentTs: "1.000000",
+          sutIdentity: { userId: "U999999999" },
+          sutReadClient: { conversations: { history } },
+        } as never,
+      ),
+    ).resolves.toBe("verified native data_table block and deterministic accessible text");
+  });
+
+  it("rejects fallback-only Slack table delivery", async () => {
+    vi.useFakeTimers();
+    const scenario = testing.findScenario(["slack-table-presentation-native"])[0];
+    const run = scenario?.buildRun("U999999999");
+    const input = run && "input" in run ? run.input : "";
+    const summaryText = input.match(/SLACK_QA_TABLE_SUMMARY_[A-Z0-9]+/u)?.[0];
+    const afterReply = run && "afterReply" in run ? run.afterReply : undefined;
+    if (!summaryText || !afterReply) {
+      throw new Error("missing Slack table scenario verifier");
+    }
+    const history = vi.fn(async () => ({
+      messages: [
+        {
+          text: renderExpectedSlackTableAccessibleText(summaryText).replace(/\s+/gu, " "),
+          ts: "2.000000",
+          user: "U999999999",
+        },
+      ],
+    }));
+    const result = expect(
+      afterReply(
+        {} as never,
+        {
+          channelId: "C123456789",
+          sentTs: "1.000000",
+          sutIdentity: { userId: "U999999999" },
+          sutReadClient: { conversations: { history } },
+        } as never,
+      ),
+    ).rejects.toThrow("waiting for Slack message");
+
+    await vi.advanceTimersByTimeAsync(16_000);
+    await result;
+  });
+
+  it("builds the invalid_blocks fallback probe as a direct transport scenario", () => {
+    const scenario = testing.findScenario(["slack-table-invalid-blocks-fallback"])[0];
+    const run = scenario?.buildRun("U999999999");
+    const probe = testing.buildSlackInvalidBlocksTableProbe();
+
+    expect(run).toMatchObject({ kind: "direct-transport" });
+    expect(probe.dataRowCount).toBe(101);
+    expect(probe.block).toMatchObject({
+      type: "data_table",
+      caption: "QA invalid_blocks fallback",
+      row_header_column_index: 0,
+    });
+    expect(probe.block.rows).toHaveLength(102);
+    expect(probe.block.rows[0]).toEqual([
+      { type: "raw_text", text: "Row" },
+      { type: "raw_text", text: "Value" },
+    ]);
+    expect(probe.firstRowText).toBe("row-001\tvalue-001");
+    expect(probe.finalRowText).toBe("row-101\tvalue-101");
+    expect(probe.fallbackText.split("\n")).toContain(probe.firstRowText);
+    expect(probe.fallbackText.split("\n")).toContain(probe.finalRowText);
+  });
+
+  it("proves the public Slack send path stores one complete formatting-disabled fallback", async () => {
+    const invalidBlocksError = Object.assign(new Error("An API error occurred: invalid_blocks"), {
+      code: "slack_webapi_platform_error",
+      data: { error: "invalid_blocks", ok: false },
+    });
+    let apiAttempt = 0;
+    let storedPayload: Record<string, unknown> | undefined;
+    const postMessage = vi.fn(async (payload: Record<string, unknown>) => {
+      apiAttempt += 1;
+      if (apiAttempt === 1) {
+        throw invalidBlocksError;
+      }
+      storedPayload = payload;
+      return { channel: "C123456789", ok: true, ts: "2.000000" };
+    });
+    const history = vi.fn(async () => ({
+      messages: storedPayload
+        ? [
+            {
+              blocks: storedPayload.blocks,
+              text: storedPayload.text,
+              ts: "2.000000",
+              user: "U999999999",
+            },
+          ]
+        : [],
+    }));
+    const sutWriteClient = { chat: { postMessage } };
+    const cfg = testing.buildSlackQaConfig(
+      {},
+      {
+        channelId: "C123456789",
+        driverBotUserId: "U111111111",
+        sutAccountId: "sut",
+        sutAppToken: "xapp-sut",
+        sutBotToken: "xoxb-sut",
+      },
+    );
+
+    const result = await testing.runSlackTableInvalidBlocksFallbackScenario({
+      cfg,
+      channelId: "C123456789",
+      sutAccountId: "sut",
+      sutIdentity: { userId: "U999999999" },
+      sutReadClient: { conversations: { history } } as never,
+      sutWriteClient: sutWriteClient as never,
+      timeoutMs: 0,
+    });
+
+    expect(postMessage).toHaveBeenCalledTimes(2);
+    const [nativeRequest] = postMessage.mock.calls[0] ?? [];
+    const [fallbackRequest] = postMessage.mock.calls[1] ?? [];
+    const nativeBlocks = nativeRequest?.blocks as Array<{ rows?: unknown[]; type?: string }>;
+    expect(nativeRequest).toMatchObject({ mrkdwn: false });
+    expect(nativeBlocks).toHaveLength(1);
+    expect(nativeBlocks[0]).toMatchObject({ type: "data_table" });
+    expect(nativeBlocks[0]?.rows).toHaveLength(102);
+    expect(fallbackRequest).not.toHaveProperty("blocks");
+    expect(fallbackRequest).toMatchObject({ mrkdwn: false });
+    const fallbackText = typeof fallbackRequest?.text === "string" ? fallbackRequest.text : "";
+    expect(fallbackText).toBe(nativeRequest?.text);
+    expect(fallbackText.split("\n")).toContain("row-001\tvalue-001");
+    expect(fallbackText.split("\n")).toContain("row-101\tvalue-101");
+    expect(result.message).toMatchObject({
+      text: fallbackText,
+      ts: "2.000000",
+      user: "U999999999",
+    });
+    expect(result.details).toContain("first API failure=invalid_blocks");
+    expect(result.details).toContain("fallback formatting disabled=true");
+    expect(result.details).toContain("complete delivery=true");
+    expect(sutWriteClient.chat.postMessage).toBe(postMessage);
+  });
+
+  it("fails with sanitized evidence when Slack returns a different first API code", async () => {
+    const postMessage = vi.fn(async () => {
+      throw Object.assign(new Error("do not persist this raw platform detail"), {
+        data: { error: "invalid_arguments", ok: false },
+      });
+    });
+    const sutWriteClient = { chat: { postMessage } };
+    const cfg = testing.buildSlackQaConfig(
+      {},
+      {
+        channelId: "C123456789",
+        driverBotUserId: "U111111111",
+        sutAccountId: "sut",
+        sutAppToken: "xapp-sut",
+        sutBotToken: "xoxb-sut",
+      },
+    );
+
+    await expect(
+      testing.runSlackTableInvalidBlocksFallbackScenario({
+        cfg,
+        channelId: "C123456789",
+        sutAccountId: "sut",
+        sutIdentity: { userId: "U999999999" },
+        sutReadClient: { conversations: { history: vi.fn() } } as never,
+        sutWriteClient: sutWriteClient as never,
+        timeoutMs: 0,
+      }),
+    ).rejects.toThrow(
+      "expected first Slack API failure code invalid_blocks; observed invalid_arguments",
+    );
+    expect(sutWriteClient.chat.postMessage).toBe(postMessage);
+  });
+
+  it("does not expose an untrusted Slack API error value", async () => {
+    const postMessage = vi.fn(async () => {
+      throw Object.assign(new Error("private platform detail"), {
+        data: { error: "unsafe private detail", ok: false },
+      });
+    });
+    const sutWriteClient = { chat: { postMessage } };
+    const cfg = testing.buildSlackQaConfig(
+      {},
+      {
+        channelId: "C123456789",
+        driverBotUserId: "U111111111",
+        sutAccountId: "sut",
+        sutAppToken: "xapp-sut",
+        sutBotToken: "xoxb-sut",
+      },
+    );
+
+    await expect(
+      testing.runSlackTableInvalidBlocksFallbackScenario({
+        cfg,
+        channelId: "C123456789",
+        sutAccountId: "sut",
+        sutIdentity: { userId: "U999999999" },
+        sutReadClient: { conversations: { history: vi.fn() } } as never,
+        sutWriteClient: sutWriteClient as never,
+        timeoutMs: 0,
+      }),
+    ).rejects.toThrow("expected first Slack API failure code invalid_blocks; observed none");
+    expect(sutWriteClient.chat.postMessage).toBe(postMessage);
   });
 
   it("enables the message tool for the live reaction scenario", () => {
@@ -924,7 +1241,7 @@ describe("Slack live QA runtime helpers", () => {
               approvalKind: "plugin",
               appServerMethod: "item/fileChange/requestApproval",
               channelId: "C123456789",
-              codexModelKey: "openai/gpt-5.5",
+              codexModelKey: "openai/gpt-5.6-luna",
               decision: "allow-once",
               finalCodexTurnStatus: "ok",
               operationVerified: true,
@@ -947,7 +1264,7 @@ describe("Slack live QA runtime helpers", () => {
       approvalId: "<redacted>",
       appServerMethod: "item/fileChange/requestApproval",
       channelId: undefined,
-      codexModelKey: "openai/gpt-5.5",
+      codexModelKey: "openai/gpt-5.6-luna",
       finalCodexTurnStatus: "ok",
       operationVerified: true,
       pendingActionValues: undefined,

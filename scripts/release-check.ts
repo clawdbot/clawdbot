@@ -798,7 +798,7 @@ export function writePackedBundledPluginActivationConfig(homeDir: string): void 
       {
         agents: {
           defaults: {
-            model: { primary: "openai/gpt-5.5" },
+            model: { primary: "openai/gpt-5.6-luna" },
           },
         },
         channels: {

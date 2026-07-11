@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi, type MockedFunction } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockedFunction } from "vitest";
 import { NON_ENV_SECRETREF_MARKER } from "./provider-auth-runtime.js";
 import {
   buildLiveModelProviderConfig,
@@ -48,7 +48,12 @@ describe("provider-catalog-live-runtime", () => {
     clearLiveCatalogCacheForTests();
   });
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("fetches and dedupes OpenAI-style live model ids with resolved discovery auth", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_000);
     const { fetchGuard, fetchGuardMock, release } = buildFetchGuard({
       data: [
         { id: "model-a", object: "model" },

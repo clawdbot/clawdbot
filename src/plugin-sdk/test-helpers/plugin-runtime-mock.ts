@@ -18,7 +18,7 @@ import {
 import type { PluginRuntime } from "../testing.js";
 
 const DEFAULT_PROVIDER = "openai";
-const DEFAULT_MODEL = "gpt-5.5";
+const DEFAULT_MODEL = "gpt-5.6-sol";
 
 type DeepPartial<T> = {
   [K in keyof T]?: T[K] extends (...args: never[]) => unknown

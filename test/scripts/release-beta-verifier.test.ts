@@ -1,4 +1,5 @@
 // Release Beta Verifier tests cover release beta verifier script behavior.
+/* oxlint-disable typescript/no-base-to-string -- fetch mock normalizes standard RequestInfo inputs for URL assertions. */
 import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -454,7 +455,7 @@ describe("downloadClawHubBootstrapReadback", () => {
         return Response.json(attemptMetadata);
       }
       if (url.endsWith("/actions/artifacts/45/zip")) {
-        return new Response(archive, {
+        return new Response(archive as unknown as BodyInit, {
           headers: { "content-length": String(archive.length) },
         });
       }

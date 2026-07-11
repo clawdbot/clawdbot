@@ -20,13 +20,11 @@ export const SLACK_PRESENTATION_CAPABILITIES = {
   limits: {
     actions: {
       maxActionsPerRow: SLACK_ACTION_BLOCK_ELEMENTS_MAX,
-      maxLabelLength: SLACK_ACTION_LABEL_MAX,
       maxValueBytes: SLACK_BUTTON_VALUE_MAX,
       supportsStyles: true,
     },
     selects: {
       maxOptions: SLACK_STATIC_SELECT_OPTIONS_MAX,
-      maxLabelLength: SLACK_ACTION_LABEL_MAX,
       maxValueBytes: SLACK_OPTION_VALUE_MAX,
     },
     text: {

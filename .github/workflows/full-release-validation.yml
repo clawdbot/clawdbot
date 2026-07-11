@@ -545,7 +545,11 @@ jobs:
 
           dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-ci"
           dispatch_run_name="CI ${dispatch_id}"
-          dispatch_and_wait ci.yml "$dispatch_run_name" -f target_ref="$TARGET_SHA" -f include_android=true -f dispatch_id="$dispatch_id"
+          args=(-f target_ref="$TARGET_SHA" -f include_android=true -f dispatch_id="$dispatch_id")
+          if [[ "$TARGET_REF" =~ ^v[0-9]{4}\.[0-9]+\.[0-9]+(-(alpha|beta)\.[0-9]+)?$ ]]; then
+            args+=(-f historical_target_tag="$TARGET_REF")
+          fi
+          dispatch_and_wait ci.yml "$dispatch_run_name" "${args[@]}"
 
   plugin_prerelease:
     name: Run plugin prerelease validation

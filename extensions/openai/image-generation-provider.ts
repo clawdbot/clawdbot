@@ -43,7 +43,7 @@ import { resolveConfiguredOpenAIBaseUrl } from "./shared.js";
 
 const DEFAULT_OPENAI_IMAGE_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_OPENAI_CODEX_IMAGE_BASE_URL = OPENAI_CODEX_RESPONSES_BASE_URL;
-const DEFAULT_OPENAI_CODEX_IMAGE_RESPONSES_MODEL = "gpt-5.5";
+const DEFAULT_OPENAI_CODEX_IMAGE_RESPONSES_MODEL = "gpt-5.6-sol";
 const OPENAI_CODEX_IMAGE_INSTRUCTIONS = "You are an image generation assistant.";
 const OPENAI_TRANSPARENT_BACKGROUND_IMAGE_MODEL = "gpt-image-1.5";
 const DEFAULT_OPENAI_IMAGE_TIMEOUT_MS = 180_000;

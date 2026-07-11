@@ -1454,5 +1454,13 @@
   {
     "source": "openclaw nodes approve",
     "target": "openclaw nodes approve"
+  },
+  {
+    "source": "Cloud workers plan",
+    "target": "云端工作节点计划"
+  },
+  {
+    "source": "Crabbox plugin",
+    "target": "Crabbox 插件"
   }
 ]

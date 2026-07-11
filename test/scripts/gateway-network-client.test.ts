@@ -2,6 +2,7 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import {
+  type GatewayFrame,
   assertGatewaySuspendingError,
   assertReadySuspensionResponse,
   assertSuspendedProbes,
@@ -133,7 +134,7 @@ describe("gateway network WebSocket open guard", () => {
         delay: async () => {},
         onceFrame: async (
           _ws: unknown,
-          predicate: (frame: unknown) => boolean,
+          predicate: (frame: GatewayFrame) => boolean,
           _timeoutMs?: number,
         ) => {
           const frame = {
@@ -157,7 +158,7 @@ describe("gateway network WebSocket open guard", () => {
     const harness = createNetworkClientHarness([{ ok: true }, healthResponse()]);
 
     await runGatewayNetworkClient(
-      { token: "secret-token", url: "ws://127.0.0.1:12345", timeoutMs: 1000 },
+      { token: "test-token", url: "ws://127.0.0.1:12345", timeoutMs: 1000 },
       harness.deps,
     );
 
@@ -169,21 +170,23 @@ describe("gateway network WebSocket open guard", () => {
   it("bounds socket and frame waits by the client deadline", async () => {
     const harness = createNetworkClientHarness([{ ok: true }, healthResponse()]);
     const openSocket = vi.fn(harness.deps.openSocket);
-    const onceFrame = vi.fn(harness.deps.onceFrame);
+    const onceFrameMock = vi.fn(harness.deps.onceFrame);
 
     await runGatewayNetworkClient(
-      { token: "secret-token", url: "ws://127.0.0.1:12345", timeoutMs: 250 },
+      { token: "test-token", url: "ws://127.0.0.1:12345", timeoutMs: 250 },
       {
         ...harness.deps,
-        onceFrame,
+        onceFrame: onceFrameMock,
         openSocket,
       },
     );
 
-    expect(openSocket.mock.calls[0]?.[1]).toBeGreaterThan(0);
-    expect(openSocket.mock.calls[0]?.[1]).toBeLessThanOrEqual(250);
-    expect(onceFrame.mock.calls.map((call) => call[2])).toHaveLength(2);
-    for (const frameTimeoutMs of onceFrame.mock.calls.map((call) => call[2])) {
+    const openSocketCalls = openSocket.mock.calls as unknown as Array<[unknown, number]>;
+    const onceFrameCalls = onceFrameMock.mock.calls as unknown as Array<[unknown, unknown, number]>;
+    expect(openSocketCalls[0]?.[1]).toBeGreaterThan(0);
+    expect(openSocketCalls[0]?.[1]).toBeLessThanOrEqual(250);
+    expect(onceFrameCalls.map((call) => call[2])).toHaveLength(2);
+    for (const frameTimeoutMs of onceFrameCalls.map((call) => call[2])) {
       expect(frameTimeoutMs).toBeGreaterThan(0);
       expect(frameTimeoutMs).toBeLessThanOrEqual(250);
     }
@@ -197,7 +200,7 @@ describe("gateway network WebSocket open guard", () => {
     try {
       await expect(
         runGatewayNetworkClient(
-          { token: "secret-token", url: "ws://127.0.0.1:12345", timeoutMs: 250 },
+          { token: "test-token", url: "ws://127.0.0.1:12345", timeoutMs: 250 },
           {
             delay: async (ms: number) => {
               delays.push(ms);
@@ -224,7 +227,7 @@ describe("gateway network WebSocket open guard", () => {
 
     await expect(
       runGatewayNetworkClient(
-        { token: "secret-token", url: "ws://127.0.0.1:12345", timeoutMs: 1000 },
+        { token: "test-token", url: "ws://127.0.0.1:12345", timeoutMs: 1000 },
         harness.deps,
       ),
     ).rejects.toThrow("health failed: missing health summary payload");
@@ -242,7 +245,7 @@ describe("gateway network WebSocket open guard", () => {
 
     await expect(
       runGatewayNetworkClient(
-        { token: "secret-token", url: "ws://127.0.0.1:12345", timeoutMs: 1000 },
+        { token: "test-token", url: "ws://127.0.0.1:12345", timeoutMs: 1000 },
         harness.deps,
       ),
     ).rejects.toThrow("health failed: health unavailable");

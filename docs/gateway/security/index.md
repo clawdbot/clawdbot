@@ -481,7 +481,8 @@ Private/internal destinations stay blocked unless you explicitly opt in.
 - Default: `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork` unset, so private/internal/special-use destinations stay blocked. Legacy alias `allowPrivateNetwork` still accepted.
 - Opt-in: set `dangerouslyAllowPrivateNetwork: true` to allow those destinations.
 - In strict mode, use `hostnameAllowlist` (patterns like `*.example.com`) and `allowedHostnames` (exact host exceptions, including otherwise-blocked names like `localhost`) for explicit exceptions.
-- Navigation is checked before the request and best-effort re-checked on the final `http(s)` URL after navigation, to reduce redirect-based pivots.
+- Direct navigation requests are preflight checked. During the action and bounded post-action grace, guarded Playwright interactions (click, coordinate click, hover, drag, scroll, select, press, type, form fill, and evaluate) intercept policy-denied top-level and subframe document loads before HTTP request bytes, then best-effort re-check the final `http(s)` URL.
+- Before each fresh managed Chrome launch, OpenClaw best-effort disables network prediction, suppressing Chromium's observed speculative preconnect for those denied loads. This is defense in depth, not a policy boundary: a browser reused across a control-service restart and other browser backends may not share the hardening. Page routing remains request-level interception, not a network firewall: redirect hops, a popup's first request, Service Worker traffic, page code that runs after the bounded guard window, and some background/subresource paths can bypass it. Final-URL checks remain detection/quarantine defense; complete prevention requires owner-side egress isolation or a policy-enforcing proxy.
 
 ```json5
 {

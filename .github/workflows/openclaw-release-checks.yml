@@ -103,7 +103,7 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.15.0"
-  OPENCLAW_CI_OPENAI_MODEL: ${{ vars.OPENCLAW_CI_OPENAI_MODEL || 'openai/gpt-5.5' }}
+  OPENCLAW_CI_OPENAI_MODEL: ${{ vars.OPENCLAW_CI_OPENAI_MODEL || 'openai/gpt-5.6-luna' }}
 
 jobs:
   resolve_target:
@@ -677,7 +677,7 @@ jobs:
       candidate_sha256: ${{ needs.prepare_release_package.outputs.package_sha256 }}
       candidate_version: ${{ needs.prepare_release_package.outputs.package_version }}
       candidate_source_sha: ${{ needs.prepare_release_package.outputs.source_sha }}
-      openai_model: openai/gpt-5.5
+      openai_model: openai/gpt-5.6-luna
       ubuntu_runner: ubuntu-24.04
       windows_runner: windows-2025
       macos_runner: macos-26
@@ -947,7 +947,7 @@ jobs:
           case "${QA_PARITY_LANE}" in
             candidate)
               model="${OPENCLAW_CI_OPENAI_MODEL}"
-              alt_model="openai/gpt-5.5-alt"
+              alt_model="openai/gpt-5.6-luna-alt"
               ;;
             baseline)
               model="anthropic/claude-opus-4-8"
@@ -1158,7 +1158,7 @@ jobs:
             --parity-pack agentic \
             --concurrency "${QA_PARITY_CONCURRENCY}" \
             --model "${OPENCLAW_CI_OPENAI_MODEL}" \
-            --alt-model "openai/gpt-5.5-alt" \
+            --alt-model "openai/gpt-5.6-luna-alt" \
             --runtime-pair openclaw,codex \
             --output-dir ".artifacts/qa-e2e/runtime-parity"
 
@@ -1172,7 +1172,7 @@ jobs:
             --runtime-parity-tier standard \
             --concurrency "${QA_PARITY_CONCURRENCY}" \
             --model "${OPENCLAW_CI_OPENAI_MODEL}" \
-            --alt-model "openai/gpt-5.5-alt" \
+            --alt-model "openai/gpt-5.6-luna-alt" \
             --runtime-pair openclaw,codex \
             --output-dir ".artifacts/qa-e2e/runtime-parity-standard"
 
@@ -1186,7 +1186,7 @@ jobs:
             --runtime-parity-tier soak \
             --concurrency "${QA_PARITY_CONCURRENCY}" \
             --model "${OPENCLAW_CI_OPENAI_MODEL}" \
-            --alt-model "openai/gpt-5.5-alt" \
+            --alt-model "openai/gpt-5.6-luna-alt" \
             --runtime-pair openclaw,codex \
             --output-dir ".artifacts/qa-e2e/runtime-parity-soak"
 
@@ -1408,8 +1408,8 @@ jobs:
           matrix_args=(
             --repo-root . \
             --provider-mode mock-openai \
-            --model mock-openai/gpt-5.5 \
-            --alt-model mock-openai/gpt-5.5-alt \
+            --model mock-openai/gpt-5.6-luna \
+            --alt-model mock-openai/gpt-5.6-luna-alt \
             --profile fast \
             --fast
           )
@@ -1658,8 +1658,8 @@ jobs:
               --repo-root . \
               --output-dir "${attempt_output_dir}" \
               --provider-mode mock-openai \
-              --model mock-openai/gpt-5.5 \
-              --alt-model mock-openai/gpt-5.5-alt \
+              --model mock-openai/gpt-5.6-luna \
+              --alt-model mock-openai/gpt-5.6-luna-alt \
               --fast \
               --credential-source convex \
               --credential-role ci; then
@@ -1758,8 +1758,8 @@ jobs:
               --repo-root . \
               --output-dir "${attempt_output_dir}" \
               --provider-mode mock-openai \
-              --model mock-openai/gpt-5.5 \
-              --alt-model mock-openai/gpt-5.5-alt \
+              --model mock-openai/gpt-5.6-luna \
+              --alt-model mock-openai/gpt-5.6-luna-alt \
               --fast \
               --credential-source convex \
               --credential-role ci; then
@@ -1855,8 +1855,8 @@ jobs:
               --repo-root . \
               --output-dir "${attempt_output_dir}" \
               --provider-mode mock-openai \
-              --model mock-openai/gpt-5.5 \
-              --alt-model mock-openai/gpt-5.5-alt \
+              --model mock-openai/gpt-5.6-luna \
+              --alt-model mock-openai/gpt-5.6-luna-alt \
               --fast \
               --credential-source convex \
               --credential-role ci; then

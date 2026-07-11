@@ -84,9 +84,9 @@ When debugging real providers/models (requires real creds):
 - Live suite (models + gateway tool/image probes): `pnpm test:live`
 - Target one live file quietly: `pnpm test:live -- src/agents/models.profiles.live.test.ts`
 - Runtime performance reports: dispatch `OpenClaw Performance` with
-  `live_openai_candidate=true` for a real `openai/gpt-5.5` agent turn or
+  `live_openai_candidate=true` for a real `openai/gpt-5.6-luna` agent turn or
   `deep_profile=true` for Kova CPU/heap/trace artifacts. Daily scheduled runs
-  publish mock-provider, deep-profile, and GPT 5.5 lane reports to
+  publish mock-provider, deep-profile, and GPT-5.6 Luna lane reports to
   `openclaw/clawgrit-reports` from a separate artifact-consuming publisher job;
   missing or invalid publisher authentication fails scheduled and
   `profile=release` runs. Manual non-release dispatches keep the GitHub artifacts
@@ -173,7 +173,7 @@ explicitly, while the Matrix CLI and manual workflow input default remains
 `all`; manual dispatch can shard `all` into `transport`, `media`,
 `e2ee-smoke`, `e2ee-deep`, and `e2ee-cli` jobs. `OpenClaw Release Checks` runs
 parity plus the fast Matrix and Telegram lanes before release approval, using
-`mock-openai/gpt-5.5` for release transport checks so they stay deterministic
+`mock-openai/gpt-5.6-luna` for release transport checks so they stay deterministic
 and avoid normal provider-plugin startup. These live transport gateways
 disable memory search; memory behavior stays covered by the QA parity suites.
 
@@ -369,7 +369,7 @@ gh workflow run package-acceptance.yml --ref main \
   - Use `--platform macos`, `--platform windows`, or `--platform linux`
     while iterating on one guest. Use `--json` for the summary artifact
     path and per-lane status.
-  - The OpenAI lane uses `openai/gpt-5.5` for the live agent-turn proof by
+  - The OpenAI lane uses `openai/gpt-5.6-luna` for the live agent-turn proof by
     default. Pass `--model <provider/model>` or set
     `OPENCLAW_PARALLELS_OPENAI_MODEL` to validate another OpenAI model.
   - Wrap long local runs in a host timeout so Parallels transport stalls

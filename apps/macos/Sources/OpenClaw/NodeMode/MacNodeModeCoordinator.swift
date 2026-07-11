@@ -53,6 +53,7 @@ final class MacNodeModeCoordinator: NSObject {
         let endpointGeneration: UInt64
         let routeAuthorityGeneration: UInt64
         let codexThreadCatalogAdvertised: Bool
+        let claudeSessionCatalogAdvertised: Bool
         let config: GatewayConnection.Config
         let options: GatewayConnectOptions
         let sessionBox: WebSocketSessionBox?
@@ -340,7 +341,14 @@ final class MacNodeModeCoordinator: NSObject {
         command: String,
         catalogAdvertised: Bool) -> Bool
     {
-        command != MacNodeCodexThreadCatalogContract.listCommand || catalogAdvertised
+        !MacNodeCodexThreadCatalogContract.commands.contains(command) || catalogAdvertised
+    }
+
+    nonisolated static func routeSnapshotAllowsClaudeCatalogInvoke(
+        command: String,
+        catalogAdvertised: Bool) -> Bool
+    {
+        !MacNodeClaudeSessionCatalogContract.commands.contains(command) || catalogAdvertised
     }
 
     nonisolated static func stalePostConnectRequiresDisconnect(
@@ -403,6 +411,7 @@ final class MacNodeModeCoordinator: NSObject {
             let cameraEnabled = defaults.object(forKey: cameraEnabledKey) as? Bool ?? false
             let browserControlEnabled = OpenClawConfigFile.browserControlEnabled()
             let codexThreadCatalogEnabled = MacNodeCodexThreadCatalog.shouldAdvertise()
+            let claudeSessionCatalogEnabled = MacNodeClaudeSessionCatalog.shouldAdvertise()
 
             var attemptedURL: URL?
             do {
@@ -426,7 +435,8 @@ final class MacNodeModeCoordinator: NSObject {
                     routeAuthorityGeneration: routeAuthorityGeneration,
                     browserControlEnabled: browserControlEnabled,
                     cameraEnabled: cameraEnabled,
-                    codexThreadCatalogEnabled: codexThreadCatalogEnabled)
+                    codexThreadCatalogEnabled: codexThreadCatalogEnabled,
+                    claudeSessionCatalogEnabled: claudeSessionCatalogEnabled)
                 else { continue }
 
                 try await self.connect(attempt)
@@ -454,12 +464,14 @@ final class MacNodeModeCoordinator: NSObject {
         routeAuthorityGeneration: UInt64,
         browserControlEnabled: Bool,
         cameraEnabled: Bool,
-        codexThreadCatalogEnabled: Bool) async throws -> ConnectionAttempt?
+        codexThreadCatalogEnabled: Bool,
+        claudeSessionCatalogEnabled: Bool) async throws -> ConnectionAttempt?
     {
         let caps = self.currentCaps(
             browserControlEnabled: browserControlEnabled,
             cameraEnabled: cameraEnabled,
-            codexThreadCatalogEnabled: codexThreadCatalogEnabled)
+            codexThreadCatalogEnabled: codexThreadCatalogEnabled,
+            claudeSessionCatalogEnabled: claudeSessionCatalogEnabled)
         // If Computer Control was turned off, release any button the
         // computer.act service is still holding rather than waiting for
         // the idle watchdog. This refresh loop re-runs on the settings
@@ -514,6 +526,8 @@ final class MacNodeModeCoordinator: NSObject {
             routeAuthorityGeneration: routeAuthorityGeneration,
             codexThreadCatalogAdvertised: commands.contains(
                 MacNodeCodexThreadCatalogContract.listCommand),
+            claudeSessionCatalogAdvertised: commands.contains(
+                MacNodeClaudeSessionCatalogContract.listCommand),
             config: config,
             options: options,
             sessionBox: sessionBox)
@@ -582,6 +596,17 @@ final class MacNodeModeCoordinator: NSObject {
                         error: OpenClawNodeError(
                             code: .unavailable,
                             message: "UNAVAILABLE: Codex session catalog was not advertised for this route"))
+                }
+                guard Self.routeSnapshotAllowsClaudeCatalogInvoke(
+                    command: req.command,
+                    catalogAdvertised: attempt.claudeSessionCatalogAdvertised)
+                else {
+                    return BridgeInvokeResponse(
+                        id: req.id,
+                        ok: false,
+                        error: OpenClawNodeError(
+                            code: .unavailable,
+                            message: "UNAVAILABLE: Claude session catalog was not advertised for this route"))
                 }
                 return await self.runtime.handleInvoke(req)
             },
@@ -685,7 +710,8 @@ final class MacNodeModeCoordinator: NSObject {
         computerControlEnabled: Bool,
         locationMode: OpenClawLocationMode,
         connectionMode: AppState.ConnectionMode,
-        codexThreadCatalogEnabled: Bool = false) -> [String]
+        codexThreadCatalogEnabled: Bool = false,
+        claudeSessionCatalogEnabled: Bool = false) -> [String]
     {
         var caps: [String] = [
             OpenClawCapability.canvas.rawValue,
@@ -706,13 +732,17 @@ final class MacNodeModeCoordinator: NSObject {
         if codexThreadCatalogEnabled, connectionMode == .remote {
             caps.append(MacNodeCodexThreadCatalogContract.capability)
         }
+        if claudeSessionCatalogEnabled, connectionMode == .remote {
+            caps.append(MacNodeClaudeSessionCatalogContract.capability)
+        }
         return caps
     }
 
     private func currentCaps(
         browserControlEnabled: Bool,
         cameraEnabled: Bool,
-        codexThreadCatalogEnabled: Bool) -> [String]
+        codexThreadCatalogEnabled: Bool,
+        claudeSessionCatalogEnabled: Bool) -> [String]
     {
         let rawLocationMode = UserDefaults.standard.string(forKey: locationModeKey) ?? "off"
         let computerControlEnabled =
@@ -723,7 +753,8 @@ final class MacNodeModeCoordinator: NSObject {
             computerControlEnabled: computerControlEnabled,
             locationMode: OpenClawLocationMode(rawValue: rawLocationMode) ?? .off,
             connectionMode: AppStateStore.shared.connectionMode,
-            codexThreadCatalogEnabled: codexThreadCatalogEnabled)
+            codexThreadCatalogEnabled: codexThreadCatalogEnabled,
+            claudeSessionCatalogEnabled: claudeSessionCatalogEnabled)
     }
 
     private func currentPermissions() async -> [String: Bool] {
@@ -763,7 +794,10 @@ final class MacNodeModeCoordinator: NSObject {
             commands.append(OpenClawLocationCommand.get.rawValue)
         }
         if capsSet.contains(MacNodeCodexThreadCatalogContract.capability) {
-            commands.append(MacNodeCodexThreadCatalogContract.listCommand)
+            commands.append(contentsOf: MacNodeCodexThreadCatalogContract.commands)
+        }
+        if capsSet.contains(MacNodeClaudeSessionCatalogContract.capability) {
+            commands.append(contentsOf: MacNodeClaudeSessionCatalogContract.commands)
         }
         if capsSet.contains(OpenClawCapability.computer.rawValue) {
             commands.append(OpenClawComputerCommand.act.rawValue)

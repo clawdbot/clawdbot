@@ -116,8 +116,8 @@ describe("qa multipass runtime", () => {
       repoRoot: process.cwd(),
       outputDir: path.join(process.cwd(), ".artifacts", "qa-e2e", "multipass-live-test"),
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.5",
-      alternateModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.6-luna",
+      alternateModel: "openai/gpt-5.6-luna",
       fastMode: true,
       scenarioIds: ["channel-chat-baseline"],
     });
@@ -127,7 +127,7 @@ describe("qa multipass runtime", () => {
     expect(plan.qaCommand).toContain("--provider-mode");
     expect(plan.qaCommand).toContain("live-frontier");
     expect(plan.qaCommand).toContain("--model");
-    expect(plan.qaCommand).toContain("openai/gpt-5.5");
+    expect(plan.qaCommand).toContain("openai/gpt-5.6-luna");
     expect(plan.qaCommand).toContain("--alt-model");
     expect(plan.qaCommand).toContain("--fast");
     expect(plan.forwardedEnv.OPENAI_API_KEY).toBe("test-openai-key");

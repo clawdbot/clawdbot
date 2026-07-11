@@ -229,6 +229,11 @@ export class CodexAppServerClient {
     return this.runtimeIdentity ? { ...this.runtimeIdentity } : undefined;
   }
 
+  /** Returns the local transport PID for scoped child-process cleanup, when available. */
+  getTransportPid(): number | undefined {
+    return this.child.pid;
+  }
+
   request<M extends CodexAppServerRequestMethod>(
     method: M,
     params: CodexAppServerRequestParams<M>,

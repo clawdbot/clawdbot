@@ -101,4 +101,24 @@ describe("ModelsConfigSchema", () => {
 
     expect(result.success).toBe(true);
   });
+
+  it("accepts catalog-declared temperature compatibility", () => {
+    const result = ModelsConfigSchema.safeParse({
+      providers: {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          api: "openai-responses",
+          models: [
+            {
+              id: "gpt-5.6-luna",
+              name: "GPT-5.6 Luna",
+              compat: { supportsTemperature: false },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
 });

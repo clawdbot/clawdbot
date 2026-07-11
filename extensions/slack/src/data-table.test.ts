@@ -5,6 +5,7 @@ import {
   countSlackDataTableBlocksCellCharacters,
   countSlackDataTableCellCharacters,
   hasSlackDataTableBlock,
+  renderSlackDataTableCompactPlainTextFallback,
   renderSlackDataTableFallbackText,
   SLACK_DATA_TABLE_CELL_CHARACTERS_MAX,
 } from "./data-table.js";
@@ -129,6 +130,89 @@ describe("Slack data table blocks", () => {
         row_header_column_index: 0,
       }),
     ).toBe("Pipeline report (table)\n- Account: Acme; ARR: $125k; Owner: <@U123> ready");
+  });
+
+  it("renders a compact formatting-disabled fallback with each cell once", () => {
+    expect(
+      renderSlackDataTableCompactPlainTextFallback({
+        type: "data_table",
+        caption: "Pipeline report",
+        rows: [
+          [
+            { type: "raw_text", text: "Owner <!channel>" },
+            { type: "raw_text", text: "Link" },
+          ],
+          [
+            { type: "raw_text", text: "<@U1> & `literal`" },
+            { type: "raw_text", text: "<https://example.com|open>" },
+          ],
+        ],
+      }),
+    ).toBe(
+      [
+        "Pipeline report (table)",
+        "Owner <!channel>\tLink",
+        "<@U1> & `literal`\t<https://example.com|open>",
+      ].join("\n"),
+    );
+  });
+
+  it("reversibly escapes one-line table delimiters without collapsing authored whitespace", () => {
+    expect(
+      renderSlackDataTableCompactPlainTextFallback({
+        type: "data_table",
+        caption: " Path\\root\t\r\n  ",
+        rows: [
+          [
+            { type: "raw_text", text: "A  B" },
+            { type: "raw_text", text: "Column\tTwo" },
+          ],
+          [
+            { type: "raw_text", text: "line1\nline2\\tail" },
+            { type: "raw_text", text: "keep  spaces" },
+          ],
+        ],
+      }),
+    ).toBe(
+      [
+        " Path\\\\root\\t\\r\\n   (table)",
+        "A  B\tColumn\\tTwo",
+        "line1\\nline2\\\\tail\tkeep  spaces",
+      ].join("\n"),
+    );
+  });
+
+  it("rejects raw native tables outside Slack's documented bounds", () => {
+    const rows = Array.from({ length: 100 }, () => [{ type: "raw_text", text: "x" }]);
+    expect(
+      countSlackDataTableCellCharacters({
+        type: "data_table",
+        caption: "At limit",
+        rows: [[{ type: "raw_text", text: "&".repeat(9_900) }], ...rows],
+      }),
+    ).toBe(10_000);
+    const overCharacterLimit = {
+      type: "data_table",
+      caption: "Over limit",
+      rows: [[{ type: "raw_text", text: "&".repeat(9_901) }], ...rows],
+    };
+    expect(countSlackDataTableCellCharacters(overCharacterLimit)).toBeUndefined();
+    expect(renderSlackDataTableCompactPlainTextFallback(overCharacterLimit)).toContain(
+      "&".repeat(9_901),
+    );
+
+    const overRowLimit = {
+      type: "data_table",
+      caption: "Too many rows",
+      rows: [
+        [{ type: "raw_text", text: "Value" }],
+        ...Array.from({ length: 101 }, (_entry, index) => [
+          { type: "raw_text", text: `row-${String(index)}` },
+        ]),
+      ],
+    };
+    expect(countSlackDataTableCellCharacters(overRowLimit)).toBeUndefined();
+    expect(renderSlackDataTableCompactPlainTextFallback(overRowLimit)).toContain("row-100");
   });
 
   it("detects native tables and keeps a caption fallback for malformed raw blocks", () => {

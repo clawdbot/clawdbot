@@ -183,7 +183,7 @@ Anthropic setup-token auth remains supported, but OpenClaw prefers Claude CLI re
 ```bash
 openclaw agents add work \
   --workspace ~/.openclaw/workspace-work \
-  --model openai/gpt-5.5 \
+  --model openai/gpt-5.6-sol \
   --bind whatsapp:biz \
   --non-interactive \
   --json

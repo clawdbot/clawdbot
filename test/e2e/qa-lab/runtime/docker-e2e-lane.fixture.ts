@@ -143,7 +143,7 @@ export function resolveQaDockerE2eLane(
   }
   const lane = QA_DOCKER_E2E_LANES[laneName];
   return {
-    env: { ...env, ...lane.env?.(env) },
+    env: { ...env, ...("env" in lane ? lane.env?.(env) : undefined) },
     name: laneName,
     script: lane.script,
   };

@@ -15,6 +15,7 @@ const TELEGRAM_PROOF_SKILL = ".agents/skills/telegram-crabbox-e2e-proof/SKILL.md
 const DOCS = ["docs/help/testing.md", "docs/concepts/qa-e2e-automation.md"];
 
 type WorkflowStep = {
+  if?: string;
   env?: Record<string, string>;
   name?: string;
   run?: string;

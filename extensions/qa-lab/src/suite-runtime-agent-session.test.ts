@@ -24,8 +24,8 @@ describe("qa suite runtime agent session helpers", () => {
   const gatewayCall = vi.fn();
   const env = {
     gateway: { call: gatewayCall },
-    primaryModel: "openai/gpt-5.5",
-    alternateModel: "openai/gpt-5.5-mini",
+    primaryModel: "openai/gpt-5.6-luna",
+    alternateModel: "openai/gpt-5.6-luna-mini",
     providerMode: "mock-openai",
   } as never;
 

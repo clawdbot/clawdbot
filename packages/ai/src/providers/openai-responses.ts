@@ -30,7 +30,11 @@ import { buildBaseOptions } from "./simple-options.js";
 
 const OPENAI_TOOL_CALL_PROVIDERS = new Set(["openai", "opencode"]);
 
-function getCompat(model: Model<"openai-responses">): Required<OpenAIResponsesCompat> {
+type ResolvedOpenAIResponsesCompat = Required<
+  Pick<OpenAIResponsesCompat, "sendSessionIdHeader" | "supportsLongCacheRetention">
+>;
+
+function getCompat(model: Model<"openai-responses">): ResolvedOpenAIResponsesCompat {
   return {
     sendSessionIdHeader: model.compat?.sendSessionIdHeader ?? true,
     supportsLongCacheRetention: model.compat?.supportsLongCacheRetention ?? true,
@@ -38,7 +42,7 @@ function getCompat(model: Model<"openai-responses">): Required<OpenAIResponsesCo
 }
 
 function getPromptCacheRetention(
-  compat: Required<OpenAIResponsesCompat>,
+  compat: ResolvedOpenAIResponsesCompat,
   cacheRetention: CacheRetention,
 ): "24h" | undefined {
   return cacheRetention === "long" && compat.supportsLongCacheRetention ? "24h" : undefined;

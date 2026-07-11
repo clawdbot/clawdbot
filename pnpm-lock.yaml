@@ -591,6 +591,12 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/crabbox:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/deepgram:
     devDependencies:
       '@openclaw/plugin-sdk':

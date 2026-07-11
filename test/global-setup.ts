@@ -1,5 +1,5 @@
 // Global test setup installs shared environment before Vitest projects run.
-import { installTestEnv } from "./test-env";
+import { installTestEnv } from "./test-env.js";
 
 export default async () => {
   const { cleanup } = installTestEnv();

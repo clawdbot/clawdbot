@@ -169,4 +169,36 @@ describe("finalizeSlackPreviewEdit", () => {
       }),
     ).resolves.toBeUndefined();
   });
+
+  it("accepts native-data text fallback without blocks after an ambiguous retry response", async () => {
+    editSlackMessageMock.mockRejectedValueOnce(new Error("socket closed"));
+    const blocks = [
+      {
+        type: "data_visualization",
+        title: "Revenue mix",
+        chart: {
+          type: "pie",
+          segments: [
+            { label: "Product", value: 60 },
+            { label: "Services", value: 40 },
+          ],
+        },
+      },
+    ] as const;
+    const text = "Revenue mix (pie chart)\n- Product: 60\n- Services: 40";
+    const client = createClient({
+      historyMessages: [{ ts: "171234.567", text }],
+    });
+
+    await expect(
+      finalizeSlackPreviewEdit({
+        client,
+        token: "xoxb-test",
+        channelId: "C123",
+        messageId: "171234.567",
+        text: "",
+        blocks: blocks as unknown as Parameters<typeof finalizeSlackPreviewEdit>[0]["blocks"],
+      }),
+    ).resolves.toBeUndefined();
+  });
 });

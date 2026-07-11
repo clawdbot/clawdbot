@@ -199,7 +199,7 @@ const providerConfig = {
     extensionId: "openai",
     secretEnv: "OPENAI_API_KEY",
     authChoice: "openai-api-key",
-    model: "openai/gpt-5.5",
+    model: "openai/gpt-5.6-luna",
     baseUrl: "https://api.openai.com/v1",
     timeoutSeconds: CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS,
   },
@@ -236,7 +236,9 @@ const RELEASE_SMOKE_PLUGIN_ALLOWLIST_BASE = [
   "talk-voice",
 ];
 
-export function buildCrossOsReleaseSmokePluginAllowlist(providerMeta: ProviderConfig) {
+export function buildCrossOsReleaseSmokePluginAllowlist(
+  providerMeta: Pick<ProviderConfig, "extensionId">,
+) {
   return [...new Set([providerMeta.extensionId, ...RELEASE_SMOKE_PLUGIN_ALLOWLIST_BASE])];
 }
 
@@ -1826,9 +1828,9 @@ function resolveExpectedDevUpdateRef(ref?: string) {
   return trimmed || "main";
 }
 
-export function resolveDevUpdateVerificationRef(ref: string, sourceSha: string) {
+export function resolveDevUpdateVerificationRef(ref: string, sourceSha?: string) {
   if (resolveExpectedDevUpdateRef(ref) === "main" && looksLikeCommitSha(sourceSha ?? "")) {
-    return sourceSha.trim();
+    return sourceSha!.trim();
   }
   return resolveExpectedDevUpdateRef(ref);
 }

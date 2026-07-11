@@ -670,7 +670,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           return undefined;
         }
         if (eventId && inboundDeduper) {
-          claimedInboundEvent = inboundDeduper.claimEvent({ roomId, eventId });
+          claimedInboundEvent = await inboundDeduper.claimEvent({ roomId, eventId });
           if (!claimedInboundEvent) {
             logVerboseMessage(`matrix: skip duplicate inbound event room=${roomId} id=${eventId}`);
             return undefined;

@@ -62,7 +62,7 @@ function vitestArtifactEvidence(params: {
           provider: {
             id: "mock-openai",
             live: false,
-            model: { name: "mock-openai/gpt-5.5", ref: "mock-openai/gpt-5.5" },
+            model: { name: "mock-openai/gpt-5.6-luna", ref: "mock-openai/gpt-5.6-luna" },
           },
           packageSource: { kind: "source-checkout" },
           artifacts: [{ ...params.artifact, source: "vitest" }],
@@ -90,7 +90,7 @@ describe("evidence gallery", () => {
         OPENCLAW_QA_REF: "gallery-test",
       } as NodeJS.ProcessEnv,
       generatedAt: "2026-06-17T12:00:00.000Z",
-      primaryModel: "mock-openai/gpt-5.5",
+      primaryModel: "mock-openai/gpt-5.6-luna",
       providerMode: "mock-openai",
       targets: [
         {

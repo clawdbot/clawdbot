@@ -39,6 +39,7 @@ describe("plugin contract registry", () => {
             providers: entry.providerIds,
             contracts: {
               embeddingProviders: entry.embeddingProviderIds,
+              workerProviders: entry.workerProviderIds,
               speechProviders: entry.speechProviderIds,
               realtimeTranscriptionProviders: entry.realtimeTranscriptionProviderIds,
               realtimeVoiceProviders: entry.realtimeVoiceProviderIds,
@@ -80,6 +81,10 @@ describe("plugin contract registry", () => {
     {
       name: "does not duplicate bundled provider ids",
       ids: () => pluginRegistrationContractRegistry.flatMap((entry) => entry.providerIds),
+    },
+    {
+      name: "does not duplicate bundled worker provider ids",
+      ids: () => pluginRegistrationContractRegistry.flatMap((entry) => entry.workerProviderIds),
     },
     {
       name: "does not duplicate bundled web fetch provider ids",
@@ -132,6 +137,16 @@ describe("plugin contract registry", () => {
     expectRegistryPluginIds({
       actualPluginIds: providerContractPluginIds,
       predicate: (plugin) => plugin.origin === "bundled" && plugin.providers.length > 0,
+    });
+  });
+
+  it("covers every bundled worker provider plugin discovered from manifests", () => {
+    expectRegistryPluginIds({
+      actualPluginIds: pluginRegistrationContractRegistry
+        .filter((entry) => entry.workerProviderIds.length > 0)
+        .map((entry) => entry.pluginId),
+      predicate: (plugin) =>
+        plugin.origin === "bundled" && (plugin.contracts?.workerProviders?.length ?? 0) > 0,
     });
   });
 

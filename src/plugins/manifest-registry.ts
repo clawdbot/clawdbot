@@ -182,6 +182,7 @@ export type PluginManifestContractListKey =
   | "webContentExtractors"
   | "webFetchProviders"
   | "webSearchProviders"
+  | "workerProviders"
   | "usageProviders"
   | "migrationProviders"
   | "gatewayMethodDispatch";
@@ -383,6 +384,7 @@ function mergeManifestContracts(
     "webContentExtractors",
     "webFetchProviders",
     "webSearchProviders",
+    "workerProviders",
     "usageProviders",
     "migrationProviders",
     "gatewayMethodDispatch",

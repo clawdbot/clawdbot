@@ -98,6 +98,31 @@ describe("buildSlackInteractiveBlocks", () => {
     expect(buttonBlock.elements?.[0]?.value).toBe(long);
   });
 
+  it.each([
+    {
+      name: "button label",
+      block: { type: "buttons" as const, buttons: [{ label: "x".repeat(76), value: "go" }] },
+    },
+    {
+      name: "select placeholder",
+      block: {
+        type: "select" as const,
+        placeholder: "x".repeat(76),
+        options: [{ label: "Go", value: "go" }],
+      },
+    },
+    {
+      name: "select option label",
+      block: {
+        type: "select" as const,
+        placeholder: "Choose",
+        options: [{ label: "x".repeat(76), value: "go" }],
+      },
+    },
+  ])("does not silently truncate an oversized portable $name", ({ block }) => {
+    expect(canRenderSlackPresentation({ blocks: [block] })).toBe(false);
+  });
+
   it("preserves original callback payloads for round-tripping", () => {
     const blocks = buildSlackInteractiveBlocks({
       blocks: [
@@ -458,6 +483,35 @@ describe("buildSlackPresentationBlocks", () => {
     ]);
   });
 
+  it("chunks Slack-incompatible chart fallback without truncating its data", () => {
+    const categories = Array.from(
+      { length: 4 },
+      (_entry, index) => `category-${String(index)}-${"x".repeat(1_000)}`,
+    );
+    const blocks = buildSlackPresentationBlocks({
+      blocks: [
+        {
+          type: "chart",
+          chartType: "line",
+          title: "Long labels",
+          categories,
+          series: [{ name: "Requests", values: [1, 2, 3, 4] }],
+        },
+      ],
+    });
+    const chunks = blocks.flatMap((block) => {
+      const context = block as { type?: string; elements?: Array<{ text?: string }> };
+      return context.type === "context"
+        ? (context.elements ?? []).flatMap((element) => (element.text ? [element.text] : []))
+        : [];
+    });
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= 3_000)).toBe(true);
+    expect(chunks.join("\n")).toContain(categories.at(-1));
+    expect(chunks.join("\n")).toContain(": 4");
+  });
+
   it("renders at most two native charts per message", () => {
     const blocks = buildSlackPresentationBlocks({
       blocks: [
@@ -509,21 +563,18 @@ describe("buildSlackPresentationBlocks", () => {
     } as SlackBlock;
     const offsets = resolveSlackBlockOffsets([nativeChart, nativeChart]);
 
-    expect(
-      buildSlackPresentationBlocks(
+    const presentation = {
+      blocks: [
         {
-          blocks: [
-            {
-              type: "chart",
-              chartType: "pie",
-              title: "Presentation chart",
-              segments: [{ label: "Closed", value: 8 }],
-            },
-          ],
+          type: "chart" as const,
+          chartType: "pie" as const,
+          title: "Presentation chart",
+          segments: [{ label: "Closed", value: 8 }],
         },
-        offsets,
-      ),
-    ).toEqual([
+      ],
+    };
+    expect(canRenderSlackPresentation(presentation, offsets)).toBe(false);
+    expect(buildSlackPresentationBlocks(presentation, offsets)).toEqual([
       {
         type: "context",
         elements: [

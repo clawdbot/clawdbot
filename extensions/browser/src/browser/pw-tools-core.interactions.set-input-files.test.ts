@@ -34,6 +34,16 @@ vi.mock("./pw-session.js", () => {
     markObservedDialogsHandledRemotelyForPage,
     refLocator,
     restoreRoleRefsForTarget,
+    wasBrowserNavigationSourcePreservedAfterPolicyDenial: vi.fn(() => false),
+    withPageNavigationRequestGuard: vi.fn(
+      async ({
+        action,
+        page: guardedPage,
+      }: {
+        action: (url: string) => Promise<unknown>;
+        page: { url: () => string };
+      }) => await action(guardedPage.url()),
+    ),
   };
 });
 

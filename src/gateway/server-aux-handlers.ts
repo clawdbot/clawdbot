@@ -277,6 +277,7 @@ export function createGatewayAuxHandlers(params: {
 
   return {
     execApprovalManager,
+    forwardPluginApprovalRequest: execApprovalForwarder.handlePluginApprovalRequested,
     pluginApprovalManager,
     extraHandlers: {
       "exec.approval.get": createLazyHandler("exec.approval.get", loadExecApprovalHandlers),

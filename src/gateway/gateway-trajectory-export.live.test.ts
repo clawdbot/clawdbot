@@ -28,7 +28,7 @@ const GATEWAY_CONNECT_TIMEOUT_MS = 60_000;
 const AGENT_REQUEST_TIMEOUT_MS = 180_000;
 // Keep this below LIVE_TIMEOUT_MS so timeout diagnostics win over Vitest's generic cap.
 const TRAJECTORY_EXPORT_INSTRUCTION_TIMEOUT_MS = 120_000;
-const DEFAULT_CODEX_MODEL = "openai/gpt-5.5";
+const DEFAULT_CODEX_MODEL = "openai/gpt-5.6-luna";
 
 type TrajectoryExportApprovalEntry = {
   id?: string;

@@ -22,6 +22,10 @@ import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/ma
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { resolveOwningPluginIdsForModelRef } from "../plugins/providers.js";
 import { resolvePluginSetupAutoEnableReasons } from "../plugins/setup-registry.js";
+import {
+  collectConfiguredWorkerProviderIds,
+  listBundledWorkerProviderOwners,
+} from "../plugins/worker-provider-registry.js";
 import { isRecord } from "../utils.js";
 import { isChannelConfigured } from "./channel-configured.js";
 import { shouldSkipPreferredPluginAutoEnable } from "./plugin-auto-enable.prefer-over.js";
@@ -188,7 +192,8 @@ function resolvePluginIdsForConfiguredSpeechProvider(
         (candidate) => normalizeOptionalLowercaseString(candidate) === normalizedProviderId,
       ),
     )
-    .map((plugin) => plugin.id);
+    .map((plugin) => plugin.id)
+    .toSorted((left, right) => left.localeCompare(right));
 }
 
 function resolvePluginsWithOwnedToolConfig(
@@ -546,6 +551,9 @@ function configMayNeedPluginManifestRegistry(cfg: OpenClawConfig, env: NodeJS.Pr
   if (hasConfiguredSpeechProviderSelection(cfg)) {
     return true;
   }
+  if (collectConfiguredWorkerProviderIds(cfg).length > 0) {
+    return true;
+  }
   if (hasConfiguredWebSearchProviderSelection(cfg)) {
     return true;
   }
@@ -593,6 +601,9 @@ export function resolvePluginAutoEnableReadiness(
   if (hasConfiguredSpeechProviderSelection(cfg)) {
     return { mayNeedAutoEnable: true, configuredChannelIds };
   }
+  if (collectConfiguredWorkerProviderIds(cfg).length > 0) {
+    return { mayNeedAutoEnable: true, configuredChannelIds };
+  }
   if (
     hasConfiguredWebSearchProviderSelection(cfg) ||
     hasConfiguredWebSearchPluginEntry(cfg) ||
@@ -626,6 +637,8 @@ export function resolvePluginAutoEnableCandidateReason(
       return `${candidate.modelRef} model configured`;
     case "speech-provider-selected":
       return `${candidate.providerId} speech provider selected`;
+    case "worker-provider-selected":
+      return `${candidate.providerId} worker provider selected`;
     case "agent-harness-runtime-configured":
       return `${candidate.runtime} agent runtime configured`;
     case "web-search-provider-selected":
@@ -697,6 +710,13 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
         providerId,
       });
     }
+  }
+
+  for (const { pluginId, providerId } of listBundledWorkerProviderOwners(
+    params.registry,
+    collectConfiguredWorkerProviderIds(params.config),
+  )) {
+    changes.push({ pluginId, kind: "worker-provider-selected", providerId });
   }
 
   for (const runtime of collectConfiguredAgentHarnessRuntimes(params.config)) {

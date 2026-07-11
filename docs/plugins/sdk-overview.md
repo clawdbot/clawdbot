@@ -91,6 +91,7 @@ methods:
 | Method                                           | What it registers                                                                 |
 | ------------------------------------------------ | --------------------------------------------------------------------------------- |
 | `api.registerProvider(...)`                      | Text inference (LLM)                                                              |
+| `api.registerWorkerProvider(...)`                | Cloud-worker lifecycle leases                                                     |
 | `api.registerModelCatalogProvider(...)`          | Model catalog rows for text and media generation                                  |
 | `api.registerAgentHarness(...)`                  | [Experimental](/plugins/sdk-agent-harness) native agent executor (Codex, Copilot) |
 | `api.registerCliBackend(...)`                    | Local CLI inference backend                                                       |
@@ -107,6 +108,12 @@ methods:
 | `api.registerWebFetchProvider(...)`              | Web fetch / scrape provider                                                       |
 | `api.registerWebSearchProvider(...)`             | Web search                                                                        |
 | `api.registerCompactionProvider(...)`            | Pluggable transcript-compaction backend                                           |
+
+Worker providers must also declare their id in `contracts.workerProviders`.
+Core persists durable intent before `provision(profile, operationId)`. Providers validate settings before external allocation and throw `WorkerProviderError` for permanent profile rejection. `provision` must adopt the same lease when the operation id repeats.
+Core persists the validated profile settings with the lease and supplies that snapshot to `destroy({ leaseId, profile })`, which must be idempotent, and `inspect({ leaseId, profile })`, which returns `active`, `destroyed`, or `unknown`. This lets providers route lifecycle calls after a gateway restart or named-profile removal. SSH endpoints use a `SecretRef` for `keyRef`, never inline key material, and include a `hostKey` from trusted provisioning output as exactly `algorithm base64`, without a hostname or comment. Core pins `hostKey` and never trusts a key from the first connection. A provider that mints a dynamic `keyRef` can implement `resolveSshIdentity({ leaseId, profile, keyRef })`; when present, that resolver is authoritative, while providers without it use the configured generic secret resolver.
+Providers with renewable leases can also implement `renew(leaseId)`.
+`inspect` must throw on transient or indeterminate failures; return `unknown` only for authoritative absence. Core marks an active local record orphaned, or treats the absence as teardown completion after a persisted destroy request.
 
 Embedding providers registered with `api.registerEmbeddingProvider(...)` must
 also be listed in `contracts.embeddingProviders` in the plugin manifest. This

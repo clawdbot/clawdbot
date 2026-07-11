@@ -8,7 +8,7 @@ Install from OpenClaw:
 openclaw plugins install @openclaw/codex
 ```
 
-Use this plugin when you want OpenClaw to run Codex-backed model turns, media understanding, and prompt overlays through the Codex app-server harness, or to list non-archived Codex Desktop and CLI source sessions and branch from eligible local sessions in OpenClaw Chat.
+Use this plugin when you want OpenClaw to run Codex-backed model turns, media understanding, and prompt overlays through the Codex app-server harness, or to browse non-archived Codex Desktop and CLI sessions and paginated transcripts across paired computers.
 
 Guided onboarding attempts to install and enable supervision after it detects a native Codex installation and the selected inference backend passes its live check; Codex does not need to be the primary backend. Supervision activates when that opportunistic plugin setup succeeds. App Server availability is checked when supervision connects. An explicit Codex plugin disable, plugin-policy block, or `supervision.enabled: false` prevents opportunistic enablement. Manual setups enable `plugins.entries.codex.config.supervision.enabled`. Without explicit App Server connection settings, supervision uses a managed user-home stdio connection; explicit `appServer` settings are honored.
 
@@ -20,7 +20,7 @@ openclaw codex continue <thread-id> [--json] [--url <url>] [--token <token>] [--
 openclaw codex archive <thread-id> --confirm-no-other-runner [--json] [--url <url>] [--token <token>] [--timeout <ms>] [--expect-final]
 ```
 
-The catalog never includes archived threads and has no archived or include-archived option. `--limit` defaults to 50 sessions per host, `--cursor` requires `--host`, and the sessions Gateway timeout defaults to 75,000 ms so cold paired-node catalogs can complete. Continue and archive retain the shared 30,000 ms default. All three commands require `operator.write`. Paired-node rows are list-only; continue and archive operate only on the Gateway-local host, and archive requires the no-other-runner confirmation.
+The catalog never includes archived threads and has no archived or include-archived option. Active rows appear in the main Control UI sidebar and open a full transcript viewer. Transcript history requires a recent Codex App Server with `thread/turns/list` and is fetched 20 full-item turns at a time through opaque cursors; OpenClaw does not fall back to an unbounded `thread/read`, and rejects a serialized transcript page above 20 MiB before transport. `--limit` defaults to 50 sessions per host, `--cursor` requires `--host`, and the sessions Gateway timeout defaults to 75,000 ms so cold paired-node catalogs can complete. Continue and archive retain the shared 30,000 ms default. All operator surfaces require `operator.write`. Paired-node rows can be listed and read; continue and archive operate only on the Gateway-local host, and archive requires the no-other-runner confirmation.
 
 A supervised OpenClaw Chat cannot be deleted while its model-selection lock protects the native binding. Before native archive, OpenClaw checks the exact target and every non-archived spawned descendant reported by Codex; any active OpenClaw binding blocks the operation. Descendant pagination errors, cycles, and safety-limit exhaustion also fail closed. Codex still does not expose a conditional archive operation or cross-process runner lease, so the confirmation covers unknown native clients and the race between the status read and archive request.
 

@@ -61,6 +61,7 @@ function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
       cliBackendIds: [...entry.cliBackendIds],
       providerIds: [...entry.providerIds],
       providerEnvVars: normalizeProviderEnvVars(entry.providerEnvVars),
+      workerProviderIds: [...entry.workerProviderIds],
       embeddingProviderIds: [...entry.embeddingProviderIds],
       speechProviderIds: [...entry.speechProviderIds],
       realtimeTranscriptionProviderIds: [...entry.realtimeTranscriptionProviderIds],
@@ -84,6 +85,7 @@ function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
         plugin.origin === "bundled" &&
         (plugin.cliBackends.length > 0 ||
           plugin.providers.length > 0 ||
+          (plugin.contracts?.workerProviders?.length ?? 0) > 0 ||
           (plugin.contracts?.embeddingProviders?.length ?? 0) > 0 ||
           (plugin.contracts?.speechProviders?.length ?? 0) > 0 ||
           (plugin.contracts?.realtimeTranscriptionProviders?.length ?? 0) > 0 ||
@@ -105,6 +107,7 @@ function resolveBundledManifestContracts(): PluginRegistrationContractEntry[] {
       cliBackendIds: uniqueStrings(plugin.cliBackends),
       providerIds: uniqueStrings(plugin.providers),
       providerEnvVars: resolvePluginProviderEnvVars(plugin),
+      workerProviderIds: uniqueStrings(plugin.contracts?.workerProviders ?? []),
       embeddingProviderIds: uniqueStrings(plugin.contracts?.embeddingProviders ?? []),
       speechProviderIds: uniqueStrings(plugin.contracts?.speechProviders ?? []),
       realtimeTranscriptionProviderIds: uniqueStrings(

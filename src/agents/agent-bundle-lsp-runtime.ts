@@ -2,6 +2,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createAbortError } from "../infra/abort-signal.js";
 import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
 import { logDebug, logWarn } from "../logger.js";
 import {
@@ -39,6 +40,7 @@ type PendingLspRequest = {
   resolve: (v: unknown) => void;
   reject: (e: Error) => void;
   timeout: ReturnType<typeof setTimeout>;
+  dispose: () => void;
 };
 
 type LspServerCapabilities = {
@@ -114,13 +116,22 @@ function rememberLspFailure(session: LspSession, error: Error): void {
   session.failure ??= error;
 }
 
+function takePendingLspRequest(session: LspSession, id: number): PendingLspRequest | undefined {
+  const pending = session.pendingRequests.get(id);
+  if (!pending) {
+    return undefined;
+  }
+  session.pendingRequests.delete(id);
+  clearTimeout(pending.timeout);
+  pending.dispose();
+  return pending;
+}
+
 function failLspSession(session: LspSession, error: Error): void {
   rememberLspFailure(session, error);
-  for (const pending of session.pendingRequests.values()) {
-    clearTimeout(pending.timeout);
-    pending.reject(session.failure ?? error);
+  for (const [id] of session.pendingRequests) {
+    takePendingLspRequest(session, id)?.reject(session.failure ?? error);
   }
-  session.pendingRequests.clear();
 }
 
 function lspProcessExitError(
@@ -205,20 +216,49 @@ function parseLspMessages(buffer: Buffer): { messages: unknown[]; remaining: Buf
   return { messages, remaining };
 }
 
-function sendRequest(session: LspSession, method: string, params?: unknown): Promise<unknown> {
+function lspAbortError(signal?: AbortSignal): Error {
+  return signal?.reason instanceof Error
+    ? signal.reason
+    : createAbortError("LSP request aborted", { cause: signal?.reason });
+}
+
+function sendRequest(
+  session: LspSession,
+  method: string,
+  params?: unknown,
+  signal?: AbortSignal,
+): Promise<unknown> {
   if (session.failure) {
     return Promise.reject(session.failure);
+  }
+  if (signal?.aborted) {
+    return Promise.reject(lspAbortError(signal));
   }
   const id = ++session.requestId;
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
-      if (session.pendingRequests.has(id)) {
-        session.pendingRequests.delete(id);
-        reject(new Error(`LSP request ${method} timed out`));
-      }
+      takePendingLspRequest(session, id)?.reject(new Error(`LSP request ${method} timed out`));
     }, 10_000);
     timeout.unref?.();
-    session.pendingRequests.set(id, { resolve, reject, timeout });
+    const onAbort = () => {
+      const pending = takePendingLspRequest(session, id);
+      if (!pending) {
+        return;
+      }
+      // Bundle tools share the server process, so cancel only this request.
+      try {
+        session.process.stdin?.write(
+          encodeLspMessage({ jsonrpc: "2.0", method: "$/cancelRequest", params: { id } }),
+          "utf-8",
+        );
+      } catch {
+        // Best-effort notification; the local tool promise must still settle.
+      }
+      pending.reject(lspAbortError(signal));
+    };
+    const dispose = () => signal?.removeEventListener("abort", onAbort);
+    session.pendingRequests.set(id, { resolve, reject, timeout, dispose });
+    signal?.addEventListener("abort", onAbort, { once: true });
     const message = { jsonrpc: "2.0", id, method, params };
     const encoded = encodeLspMessage(message);
     session.process.stdin?.write(encoded, "utf-8");
@@ -240,10 +280,8 @@ function handleIncomingData(session: LspSession, chunk: Buffer | string) {
     const record = msg as Record<string, unknown>;
 
     if ("id" in record && typeof record.id === "number") {
-      const pending = session.pendingRequests.get(record.id);
+      const pending = takePendingLspRequest(session, record.id);
       if (pending) {
-        session.pendingRequests.delete(record.id);
-        clearTimeout(pending.timeout);
         if ("error" in record) {
           pending.reject(new Error(JSON.stringify(record.error)));
         } else {
@@ -316,11 +354,9 @@ async function disposeSession(session: LspSession) {
       // best-effort
     }
   }
-  for (const [, pending] of session.pendingRequests) {
-    clearTimeout(pending.timeout);
-    pending.reject(new Error("LSP session disposed"));
+  for (const [id] of session.pendingRequests) {
+    takePendingLspRequest(session, id)?.reject(new Error("LSP session disposed"));
   }
-  session.pendingRequests.clear();
   terminateLspProcessTree(session);
 }
 
@@ -349,12 +385,17 @@ function createLspPositionTool(params: {
       },
       required: ["uri", "line", "character"],
     },
-    execute: async (_toolCallId, input) => {
+    execute: async (_toolCallId, input, signal) => {
       const position = input as LspPositionParams;
-      const result = await sendRequest(params.session, params.method, {
-        textDocument: { uri: position.uri },
-        position: { line: position.line, character: position.character },
-      });
+      const result = await sendRequest(
+        params.session,
+        params.method,
+        {
+          textDocument: { uri: position.uri },
+          position: { line: position.line, character: position.character },
+        },
+        signal,
+      );
       return formatLspResult(params.session.serverName, params.resultLabel, result);
     },
   };
@@ -409,18 +450,23 @@ function buildLspTools(session: LspSession): AnyAgentTool[] {
         },
         required: ["uri", "line", "character"],
       },
-      execute: async (_toolCallId, input) => {
+      execute: async (_toolCallId, input, signal) => {
         const params = input as {
           uri: string;
           line: number;
           character: number;
           includeDeclaration?: boolean;
         };
-        const result = await sendRequest(session, "textDocument/references", {
-          textDocument: { uri: params.uri },
-          position: { line: params.line, character: params.character },
-          context: { includeDeclaration: params.includeDeclaration ?? true },
-        });
+        const result = await sendRequest(
+          session,
+          "textDocument/references",
+          {
+            textDocument: { uri: params.uri },
+            position: { line: params.line, character: params.character },
+            context: { includeDeclaration: params.includeDeclaration ?? true },
+          },
+          signal,
+        );
         return formatLspResult(serverLabel, "references", result);
       },
     });

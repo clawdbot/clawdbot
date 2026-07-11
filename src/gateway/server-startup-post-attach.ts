@@ -1147,6 +1147,7 @@ export async function startGatewayPostAttachRuntime(
     onPluginServices?: (pluginServices: PluginServicesHandle | null) => void;
     onPostReadySidecars?: (postReadySidecars: GatewayPostReadySidecarHandle[]) => void;
     onGatewayLifetimeSidecars?: (sidecars: GatewayPostReadySidecarHandle[]) => void;
+    startWorkerEnvironmentRuntime?: () => Awaitable<GatewayPostReadySidecarHandle | null>;
     onSidecarsReady?: () => void;
     isClosing?: () => boolean;
     startupTrace?: GatewayStartupTrace;
@@ -1291,6 +1292,9 @@ export async function startGatewayPostAttachRuntime(
             startupOutcomes,
           }),
         );
+        const workerEnvironmentSidecar = params.isClosing?.()
+          ? null
+          : ((await params.startWorkerEnvironmentRuntime?.()) ?? null);
         const loaderStatsAfter = getPluginModuleLoaderStats();
         params.startupTrace?.detail("sidecars.plugin-loader", [
           ["callsCount", loaderStatsAfter.calls - loaderStatsBefore.calls],
@@ -1322,6 +1326,9 @@ export async function startGatewayPostAttachRuntime(
         }
         const postReadySidecars = [...result.postReadySidecars];
         const gatewayLifetimeSidecars: GatewayPostReadySidecarHandle[] = [];
+        if (workerEnvironmentSidecar) {
+          gatewayLifetimeSidecars.push(workerEnvironmentSidecar);
+        }
         if (params.agentRuntimePluginPrewarm?.enabled !== false) {
           gatewayLifetimeSidecars.push(
             scheduleAgentRuntimePluginPrewarm({

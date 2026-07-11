@@ -17,7 +17,7 @@ configuration. They are different layers:
 | Layer         | Examples                                     | Meaning                                                             |
 | ------------- | -------------------------------------------- | ------------------------------------------------------------------- |
 | Provider      | `anthropic`, `github-copilot`, `openai`      | How OpenClaw authenticates, discovers models, and names model refs. |
-| Model         | `claude-opus-4-6`, `gpt-5.5`                 | The model selected for the agent turn.                              |
+| Model         | `claude-opus-4-6`, `gpt-5.6-sol`             | The model selected for the agent turn.                              |
 | Agent runtime | `claude-cli`, `codex`, `copilot`, `openclaw` | The low-level loop or backend that executes the prepared turn.      |
 | Channel       | Discord, Slack, Telegram, WhatsApp           | Where messages enter and leave OpenClaw.                            |
 
@@ -68,7 +68,7 @@ keeps the model ref as `openai/*` and selects the `codex` runtime:
 {
   agents: {
     defaults: {
-      model: "openai/gpt-5.5",
+      model: "openai/gpt-5.6-sol",
     },
   },
 }
@@ -244,7 +244,7 @@ The Codex runtime support contract is documented in
 Status output can show both `Execution` and `Runtime` labels. Read them as
 diagnostics, not provider names:
 
-- A model ref such as `openai/gpt-5.5` is the selected provider/model.
+- A model ref such as `openai/gpt-5.6-sol` is the selected provider/model.
 - A runtime id such as `codex` is the loop executing the turn.
 - A channel label such as Telegram or Discord is where the conversation is happening.
 

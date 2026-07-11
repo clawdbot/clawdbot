@@ -89,7 +89,7 @@ describe("extended-stable Full Release Validation workflow", () => {
       "refs/heads/extended-stable/2026.12.33",
     ]) {
       const result = runReleaseChecksTrustedRefGuard(valid);
-      expect(result.status, result.stderr).toBe(0);
+      expect(result.status, String(result.stderr)).toBe(0);
     }
 
     for (const invalid of [

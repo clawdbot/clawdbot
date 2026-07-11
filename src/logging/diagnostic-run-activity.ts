@@ -61,6 +61,9 @@ type DiagnosticRunProgressActivityEvent = Pick<
 // steer gates): lowering it reopens #88870, removing it reopens #96168.
 export const BLOCKED_TOOL_CALL_ABORT_FLOOR_MS = 15 * 60_000;
 
+// Default quiet-run reclaim window for steer/takeover. Evidence clocks stay local.
+export const RUN_STALE_TAKEOVER_MS = 10 * 60_000;
+
 export type DiagnosticSessionActivitySnapshot = {
   activeWorkKind?: DiagnosticSessionActiveWorkKind;
   hasActiveEmbeddedRun?: boolean;
@@ -70,6 +73,16 @@ export type DiagnosticSessionActivitySnapshot = {
   lastProgressAgeMs?: number;
   lastProgressReason?: string;
 };
+
+// Quiet-but-alive tool phases get the blocked-tool floor so a human message
+// cannot reclaim a healthy long tool that stuck recovery would not touch yet.
+export function resolveRunStaleThresholdMs(
+  activity: Pick<DiagnosticSessionActivitySnapshot, "activeWorkKind">,
+): number {
+  return activity.activeWorkKind === "tool_call"
+    ? Math.max(RUN_STALE_TAKEOVER_MS, BLOCKED_TOOL_CALL_ABORT_FLOOR_MS)
+    : RUN_STALE_TAKEOVER_MS;
+}
 
 const activityByRef = new Map<string, SessionActivity>();
 const activityByRunId = new Map<string, SessionActivity>();

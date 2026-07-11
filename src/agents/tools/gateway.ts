@@ -12,6 +12,7 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/schema/error-codes.js";
 import { getRuntimeConfig, resolveGatewayPort } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { mintAgentRuntimeIdentityToken } from "../../gateway/agent-runtime-identity-token.js";
@@ -223,6 +224,8 @@ const AGENT_RUNTIME_IDENTITY_METHODS = new Set<string>([
   "cron.runs",
 ]);
 
+const OPTIONAL_LOCAL_AGENT_RUNTIME_IDENTITY_METHODS = new Set<string>(["node.invoke"]);
+
 function resolveApprovalRuntimeTokenForGatewayTool(params: {
   method: string;
   opts: GatewayCallOptions;
@@ -247,6 +250,40 @@ function isApprovalReplayNodeSystemRun(method: string, callParams: unknown): boo
   const run = invoke?.command === "system.run" ? asNullableRecord(invoke.params) : null;
   const decision = normalizeOptionalString(run?.approvalDecision);
   return run?.approved === true || decision === "allow-once" || decision === "allow-always";
+}
+
+function attachNodeInvokeTurnSource(method: string, params: unknown): unknown {
+  if (method !== "node.invoke") {
+    return params;
+  }
+  const invoke = asNullableRecord(params);
+  const caller = getGatewayToolCallerIdentity();
+  if (!invoke || !caller) {
+    return params;
+  }
+  return {
+    ...omitNodeInvokeTurnSource(invoke),
+    ...(caller.turnSourceChannel ? { turnSourceChannel: caller.turnSourceChannel } : {}),
+    ...(caller.turnSourceTo ? { turnSourceTo: caller.turnSourceTo } : {}),
+    ...(caller.turnSourceAccountId ? { turnSourceAccountId: caller.turnSourceAccountId } : {}),
+    ...(caller.turnSourceThreadId !== undefined
+      ? { turnSourceThreadId: caller.turnSourceThreadId }
+      : {}),
+  };
+}
+
+function omitNodeInvokeTurnSource(invoke: Record<string, unknown>): Record<string, unknown> {
+  const legacyParams = { ...invoke };
+  delete legacyParams.turnSourceChannel;
+  delete legacyParams.turnSourceTo;
+  delete legacyParams.turnSourceAccountId;
+  delete legacyParams.turnSourceThreadId;
+  return legacyParams;
+}
+
+function stripNodeInvokeTurnSource(params: unknown): unknown {
+  const invoke = asNullableRecord(params);
+  return invoke ? omitNodeInvokeTurnSource(invoke) : params;
 }
 
 function resolveApprovalRequesterDeviceIdentityForGatewayTool(params: {
@@ -310,7 +347,12 @@ async function resolveAgentRuntimeIdentityTokenForGatewayTool(params: {
   target: GatewayOverrideTarget;
   required?: boolean;
 }): Promise<string | undefined> {
-  if (!params.required && !AGENT_RUNTIME_IDENTITY_METHODS.has(params.method)) {
+  const optionalLocalIdentity = OPTIONAL_LOCAL_AGENT_RUNTIME_IDENTITY_METHODS.has(params.method);
+  if (
+    !params.required &&
+    !AGENT_RUNTIME_IDENTITY_METHODS.has(params.method) &&
+    !optionalLocalIdentity
+  ) {
     return undefined;
   }
   const identity = getGatewayToolCallerIdentity();
@@ -323,9 +365,20 @@ async function resolveAgentRuntimeIdentityTokenForGatewayTool(params: {
   const hasGatewayUrlOverride = trimToUndefined(params.opts.gatewayUrl) !== undefined;
   const hasGatewayTokenOverride = trimToUndefined(params.opts.gatewayToken) !== undefined;
   if (hasGatewayUrlOverride || hasGatewayTokenOverride || params.target !== "local") {
+    // Optional provenance must never turn a supported remote node call into an auth failure.
+    if (optionalLocalIdentity && !params.required) {
+      return undefined;
+    }
     throw new Error("agent gateway calls require the trusted local gateway context");
   }
-  return await mintAgentRuntimeIdentityToken(identity);
+  try {
+    return await mintAgentRuntimeIdentityToken(identity);
+  } catch (error) {
+    if (optionalLocalIdentity && !params.required) {
+      return undefined;
+    }
+    throw error;
+  }
 }
 
 export async function resolveMessageActionAgentRuntimeIdentityToken(params: {
@@ -376,6 +429,29 @@ function isStaleGatewayAgentRuntimeIdentityRejection(error: unknown): boolean {
   );
 }
 
+function isStaleGatewayNodeInvokeTurnSourceRejection(error: unknown): boolean {
+  if (!(error instanceof Error) || error.name !== "GatewayClientRequestError") {
+    return false;
+  }
+  const requestError = error as Error & { gatewayCode?: unknown; details?: unknown };
+  if (requestError.gatewayCode !== ErrorCodes.INVALID_REQUEST) {
+    return false;
+  }
+  const details = asNullableRecord(requestError.details);
+  // A dispatched command may have acted before returning an error. Never turn
+  // version fallback into a duplicate invocation when the Gateway says so.
+  if (details?.nodeCommandDispatched === true) {
+    return false;
+  }
+  const message = formatErrorMessage(error);
+  if (!message.includes("invalid node.invoke params:")) {
+    return false;
+  }
+  return ["turnSourceChannel", "turnSourceTo", "turnSourceAccountId", "turnSourceThreadId"].some(
+    (field) => message.includes(`unexpected property '${field}'`),
+  );
+}
+
 function staleGatewayAgentRuntimeIdentityError(cause: unknown): Error {
   return new Error(
     [
@@ -401,9 +477,10 @@ export async function callGatewayTool<T = Record<string, unknown>>(
   },
 ) {
   const gateway = resolveGatewayOptions(opts);
+  const callParams = attachNodeInvokeTurnSource(method, params);
   const scopes = Array.isArray(extra?.scopes)
     ? extra.scopes
-    : resolveLeastPrivilegeOperatorScopesForMethod(method, params);
+    : resolveLeastPrivilegeOperatorScopesForMethod(method, callParams);
   const approvalRuntimeToken = resolveApprovalRuntimeTokenForGatewayTool({
     method,
     opts,
@@ -417,29 +494,43 @@ export async function callGatewayTool<T = Record<string, unknown>>(
   });
   const deviceIdentity = resolveApprovalRequesterDeviceIdentityForGatewayTool({
     method,
-    callParams: params,
+    callParams,
     opts,
     target: gateway.target,
   });
+  const callOptions = {
+    url: gateway.url,
+    token: gateway.token,
+    method,
+    params: callParams,
+    timeoutMs: gateway.timeoutMs,
+    signal: extra?.signal,
+    expectFinal: extra?.expectFinal,
+    clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+    clientDisplayName: "agent",
+    mode: GATEWAY_CLIENT_MODES.BACKEND,
+    ...(approvalRuntimeToken ? { approvalRuntimeToken } : {}),
+    ...(agentRuntimeIdentityToken ? { agentRuntimeIdentityToken } : {}),
+    ...(deviceIdentity ? { deviceIdentity } : {}),
+    scopes,
+  };
   try {
-    return await callGateway<T>({
-      url: gateway.url,
-      token: gateway.token,
-      method,
-      params,
-      timeoutMs: gateway.timeoutMs,
-      signal: extra?.signal,
-      expectFinal: extra?.expectFinal,
-      clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-      clientDisplayName: "agent",
-      mode: GATEWAY_CLIENT_MODES.BACKEND,
-      ...(approvalRuntimeToken ? { approvalRuntimeToken } : {}),
-      ...(agentRuntimeIdentityToken ? { agentRuntimeIdentityToken } : {}),
-      ...(deviceIdentity ? { deviceIdentity } : {}),
-      scopes,
-    });
+    return await callGateway<T>(callOptions);
   } catch (error) {
+    if (method === "node.invoke" && isStaleGatewayNodeInvokeTurnSourceRejection(error)) {
+      return await callGateway<T>({
+        ...callOptions,
+        params: stripNodeInvokeTurnSource(callOptions.params),
+      });
+    }
     if (agentRuntimeIdentityToken && isStaleGatewayAgentRuntimeIdentityRejection(error)) {
+      if (method === "node.invoke" && extra?.requireAgentRuntimeIdentity !== true) {
+        return await callGateway<T>({
+          ...callOptions,
+          params: stripNodeInvokeTurnSource(callOptions.params),
+          agentRuntimeIdentityToken: undefined,
+        });
+      }
       throw staleGatewayAgentRuntimeIdentityError(error);
     }
     throw error;

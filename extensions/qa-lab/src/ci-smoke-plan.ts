@@ -13,7 +13,7 @@ const QA_SMOKE_CI_SCENARIO_IDS = new Set([
   "crestodian-ring-zero-setup",
   "dreaming-shadow-trial-report",
   "gateway-smoke",
-  "gpt55-thinking-visibility-switch",
+  "luna-thinking-visibility-switch",
   "group-visible-reply-tool",
   "long-running-release-audit",
   "matrix-restart-resume",

@@ -224,6 +224,7 @@ const ModelCompatSchema = z
     supportsPromptCacheKey: z.boolean().optional(),
     supportsDeveloperRole: z.boolean().optional(),
     supportsReasoningEffort: z.boolean().optional(),
+    supportsTemperature: z.boolean().optional(),
     supportsUsageInStreaming: z.boolean().optional(),
     supportsTools: z.boolean().optional(),
     supportsStrictMode: z.boolean().optional(),

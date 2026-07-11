@@ -14,8 +14,13 @@ import type {
 } from "../plugins/types.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "./node-command-policy.js";
 import type { NodeSession } from "./node-registry.js";
-import { resolveApprovalRequestRecipientConnIds } from "./server-methods/approval-shared.js";
-import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
+import {
+  bindApprovalRequesterMetadata,
+  buildRequestedApprovalEvent,
+  handlePendingApprovalRequest,
+  registerPendingApprovalRecord,
+} from "./server-methods/approval-shared.js";
+import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 
 // Plugin node.invoke policies are the last gateway-side guard before a
 // plugin-declared dangerous node command reaches the node transport.
@@ -34,6 +39,34 @@ function parsePayload(payloadJSON: string | null | undefined, payload: unknown):
   } catch {
     return payload;
   }
+}
+
+function normalizeRouteThreadId(value: unknown): string | number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  return normalizeOptionalString(value) ?? null;
+}
+
+function resolveNodeInvokeTurnSourceFields(
+  turnSource:
+    | {
+        channel?: unknown;
+        to?: unknown;
+        accountId?: unknown;
+        threadId?: unknown;
+      }
+    | undefined,
+): Pick<
+  PluginApprovalRequestPayload,
+  "turnSourceChannel" | "turnSourceTo" | "turnSourceAccountId" | "turnSourceThreadId"
+> {
+  return {
+    turnSourceChannel: normalizeOptionalString(turnSource?.channel) ?? null,
+    turnSourceTo: normalizeOptionalString(turnSource?.to) ?? null,
+    turnSourceAccountId: normalizeOptionalString(turnSource?.accountId) ?? null,
+    turnSourceThreadId: normalizeRouteThreadId(turnSource?.threadId),
+  };
 }
 
 // Dangerous commands must have an explicit policy. Without this check, a plugin
@@ -55,6 +88,7 @@ function createApprovalRuntime(params: {
   context: GatewayRequestContext;
   client: GatewayClient | null;
   pluginId: string;
+  turnSource: Parameters<typeof resolveNodeInvokeTurnSourceFields>[0];
 }): OpenClawPluginNodeInvokePolicyContext["approvals"] | undefined {
   const manager = params.context.pluginApprovalManager;
   if (!manager) {
@@ -63,6 +97,8 @@ function createApprovalRuntime(params: {
   return {
     async request(input) {
       const timeoutMs = resolvePluginApprovalTimeoutMs(input.timeoutMs);
+      const turnSource = resolveNodeInvokeTurnSourceFields(params.turnSource);
+      const callerIdentity = params.client?.internal?.agentRuntimeIdentity;
       const request: PluginApprovalRequestPayload = {
         pluginId: params.pluginId,
         title: truncateUtf16Safe(input.title, 80),
@@ -70,52 +106,51 @@ function createApprovalRuntime(params: {
         severity: input.severity ?? "warning",
         toolName: normalizeOptionalString(input.toolName) ?? null,
         toolCallId: normalizeOptionalString(input.toolCallId) ?? null,
-        agentId: normalizeOptionalString(input.agentId) ?? null,
-        sessionKey: normalizeOptionalString(input.sessionKey) ?? null,
+        agentId: callerIdentity?.agentId ?? normalizeOptionalString(input.agentId) ?? null,
+        sessionKey: callerIdentity?.sessionKey ?? normalizeOptionalString(input.sessionKey) ?? null,
+        turnSourceChannel: turnSource.turnSourceChannel,
+        turnSourceTo: turnSource.turnSourceTo,
+        turnSourceAccountId: turnSource.turnSourceAccountId,
+        turnSourceThreadId: turnSource.turnSourceThreadId,
       };
       const record = manager.create(request, timeoutMs, `plugin:${randomUUID()}`);
-      record.requestedByConnId = params.client?.connId ?? null;
-      record.requestedByDeviceId = params.client?.connect?.device?.id ?? null;
-      record.requestedByClientId = params.client?.connect?.client?.id ?? null;
-      record.requestedByDeviceTokenAuth = params.client?.isDeviceTokenAuth === true;
-      const decisionPromise = manager.register(record, timeoutMs);
-      const requestEvent = {
-        id: record.id,
-        request: record.request,
-        createdAtMs: record.createdAtMs,
-        expiresAtMs: record.expiresAtMs,
-      };
-      const approvalClientConnIds = resolveApprovalRequestRecipientConnIds({
-        context: params.context,
+      bindApprovalRequesterMetadata({ record, client: params.client });
+      const respond: RespondFn = () => {};
+      const decisionPromise = registerPendingApprovalRecord({
+        manager,
         record,
-        excludeConnId: params.client?.connId,
+        timeoutMs,
+        respond,
       });
-      // Approval requests are routed to eligible operator clients only. Falling
-      // back to broadcast is safe because the event payload carries no secret.
-      if (approvalClientConnIds) {
-        params.context.broadcastToConnIds(
-          "plugin.approval.requested",
-          requestEvent,
-          approvalClientConnIds,
-          {
-            dropIfSlow: true,
-          },
-        );
-      } else {
-        params.context.broadcast("plugin.approval.requested", requestEvent, {
-          dropIfSlow: true,
-        });
-      }
-      const hasApprovalClients =
-        approvalClientConnIds !== null
-          ? approvalClientConnIds.size > 0
-          : (params.context.hasExecApprovalClients?.(params.client?.connId) ?? false);
-      if (!hasApprovalClients) {
-        manager.expire(record.id, "no-approval-route");
+      if (!decisionPromise) {
         return { id: record.id, decision: null };
       }
-      const decision = await decisionPromise;
-      return { id: record.id, decision };
+      const requestEvent = buildRequestedApprovalEvent(record);
+      await handlePendingApprovalRequest({
+        manager,
+        record,
+        decisionPromise,
+        respond,
+        context: params.context,
+        clientConnId: params.client?.connId,
+        requestEventName: "plugin.approval.requested",
+        requestEvent,
+        twoPhase: false,
+        approvalKind: "plugin",
+        deliverRequest: () => {
+          const forward = params.context.forwardPluginApprovalRequest;
+          if (!forward) {
+            return false;
+          }
+          return forward(requestEvent).catch((err: unknown) => {
+            params.context.logGateway?.error?.(
+              `plugin approvals: forward node policy request failed: ${String(err)}`,
+            );
+            return false;
+          });
+        },
+      });
+      return { id: record.id, decision: await decisionPromise };
     },
   };
 }
@@ -127,10 +162,20 @@ export async function applyPluginNodeInvokePolicy(params: {
   nodeSession: NodeSession;
   command: string;
   params: unknown;
+  turnSource?: {
+    channel?: unknown;
+    to?: unknown;
+    accountId?: unknown;
+    threadId?: unknown;
+  };
   timeoutMs?: number;
   idempotencyKey?: string;
 }): Promise<OpenClawPluginNodeInvokePolicyResult | null> {
   const registry = getActivePluginGatewayNodePolicyRegistry();
+  // Route metadata is authority-bearing: only a signed agent-runtime caller may nominate it.
+  const trustedTurnSource = params.client?.internal?.agentRuntimeIdentity
+    ? params.turnSource
+    : undefined;
   const entry = registry?.nodeInvokePolicies?.find((candidate) =>
     candidate.policy.commands.includes(params.command),
   );
@@ -230,6 +275,7 @@ export async function applyPluginNodeInvokePolicy(params: {
       context: params.context,
       client: params.client,
       pluginId: entry.pluginId,
+      turnSource: trustedTurnSource,
     }),
     invokeNode,
   });

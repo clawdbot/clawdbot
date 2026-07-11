@@ -285,9 +285,9 @@ Example patch:
   },
   agents: {
     defaults: {
-      model: { primary: "openai/gpt-5.5" },
+      model: { primary: "openai/gpt-5.6-sol" },
       models: {
-        "openai/gpt-5.5": { params: { fastMode: true } },
+        "openai/gpt-5.6-sol": { params: { fastMode: true } },
       },
     },
   },

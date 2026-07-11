@@ -101,6 +101,7 @@ type SessionDeleteOptions = {
 type SessionDeleteTarget = {
   key: string;
   agentId?: string;
+  deleteTranscript?: boolean;
 };
 
 /** Dirty/unpushed checkouts survive session deletion; callers surface them. */

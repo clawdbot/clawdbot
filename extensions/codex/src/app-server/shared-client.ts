@@ -3,6 +3,7 @@
  * lease tracking, and teardown.
  */
 import { resolveDefaultAgentDir, type AuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   applyCodexAppServerAuthProfile,
   bridgeCodexAppServerStartOptions,
@@ -22,11 +23,16 @@ import { withTimeout } from "./timeout.js";
 
 type SharedCodexAppServerClientEntry = {
   client?: CodexAppServerClient;
-  promise?: Promise<CodexAppServerClient>;
+  startup?: SharedCodexAppServerClientStartup;
   activeLeases: number;
   pendingAcquires: number;
   closeWhenIdle: boolean;
   closeError?: Error;
+};
+
+type SharedCodexAppServerClientStartup = {
+  initialized: Promise<void>;
+  ready: Promise<CodexAppServerClient>;
 };
 
 type SharedCodexAppServerClientState = {
@@ -56,6 +62,7 @@ function getSharedCodexAppServerClientState(): SharedCodexAppServerClientState {
 
 export type CodexAppServerClientOptions = {
   startOptions?: CodexAppServerStartOptions;
+  pluginConfig?: unknown;
   timeoutMs?: number;
   authProfileId?: string | null;
   agentDir?: string;
@@ -114,6 +121,7 @@ async function resolveCodexAppServerClientStartContext(
     agentDir,
     authProfileId: usesNativeAuth ? null : authProfileId,
     config: options?.config,
+    pluginConfig: options?.pluginConfig,
     ...(authProfileStore ? { authProfileStore } : {}),
   });
   return { agentDir, usesNativeAuth, authProfileId, authProfileStore, startOptions };
@@ -194,28 +202,27 @@ async function acquireSharedCodexAppServerClient(
       abandon();
     }
   }
-  const sharedPromise =
-    entry.promise ??
-    (entry.promise = (async () => {
-      const client = await startInitializedCodexAppServerClient({
-        startOptions,
-        agentDir,
-        authProfileId: usesNativeAuth ? null : authProfileId,
-        config: options?.config,
-        onStartedClient: (startedClient) => {
-          entry.client = startedClient;
-          options?.onStartedClient?.(startedClient);
-        },
-      });
-      entry.client = client;
-      client.addCloseHandler((closedClient) => clearSharedClientEntryIfCurrent(key, closedClient));
-      return client;
-    })());
+  const startup =
+    entry.startup ??
+    (entry.startup = createSharedCodexAppServerClientStartup({
+      entry,
+      key,
+      startOptions,
+      agentDir,
+      authProfileId: usesNativeAuth ? null : authProfileId,
+      config: options?.config,
+      onStartedClient: options?.onStartedClient,
+    }));
   try {
-    const client = await withTimeout(
-      sharedPromise,
+    await withTimeout(
+      startup.initialized,
       options?.timeoutMs ?? 0,
       "codex app-server initialize timed out",
+    );
+    const client = await withTimeout(
+      startup.ready,
+      options?.timeoutMs ?? 0,
+      "codex app-server authentication timed out",
     );
     if (entry.closeError) {
       throw entry.closeError;
@@ -230,15 +237,53 @@ async function acquireSharedCodexAppServerClient(
     const release = leaseOptions?.leased ? retainSharedClientEntry(entry) : undefined;
     return release ? { client, release } : { client };
   } catch (error) {
-    const currentEntry = state.clients.get(key);
-    if (currentEntry?.promise === sharedPromise) {
-      clearSharedClientEntry(key, currentEntry);
-    }
+    // This deadline belongs to one waiter, not the shared physical client.
+    // Release first so only the final claimant can tear down stalled startup.
+    releasePendingAcquire();
+    closeSharedClientEntryIfUnclaimed(key, entry);
     throw error;
   } finally {
     cleanupAbandonSignal?.();
     releasePendingAcquire();
   }
+}
+
+function createSharedCodexAppServerClientStartup(params: {
+  entry: SharedCodexAppServerClientEntry;
+  key: string;
+  startOptions: CodexAppServerStartOptions;
+  agentDir: string;
+  authProfileId: string | null | undefined;
+  config?: CodexAppServerClientOptions["config"];
+  onStartedClient?: (client: CodexAppServerClient) => void;
+}): SharedCodexAppServerClientStartup {
+  const initialized = createDeferred<void>();
+  const ready = startInitializedCodexAppServerClient({
+    startOptions: params.startOptions,
+    agentDir: params.agentDir,
+    authProfileId: params.authProfileId,
+    config: params.config,
+    onStartedClient: (startedClient) => {
+      params.entry.client = startedClient;
+      params.onStartedClient?.(startedClient);
+    },
+    onInitializedClient: () => initialized.resolve(),
+  }).then(
+    (client) => {
+      params.entry.client = client;
+      client.addCloseHandler((closedClient) =>
+        clearSharedClientEntryIfCurrent(params.key, closedClient),
+      );
+      return client;
+    },
+    (error: unknown) => {
+      initialized.reject(error);
+      throw error;
+    },
+  );
+  // Callers observe pre-initialize failures through the phase promise first.
+  void ready.catch(() => undefined);
+  return { initialized: initialized.promise, ready };
 }
 
 /** Starts a non-shared Codex app-server client owned entirely by the caller. */
@@ -266,6 +311,7 @@ async function startInitializedCodexAppServerClient(params: {
   config?: CodexAppServerClientOptions["config"];
   timeoutMs?: number;
   onStartedClient?: (client: CodexAppServerClient) => void;
+  onInitializedClient?: () => void;
 }): Promise<CodexAppServerClient> {
   const startOptionsCandidates = resolveManagedFallbackStartOptions(params.startOptions);
   for (let index = 0; index < startOptionsCandidates.length; index += 1) {
@@ -284,6 +330,7 @@ async function startInitializedCodexAppServerClient(params: {
       throw error;
     }
 
+    params.onInitializedClient?.();
     ensureCodexAppServerClientRuntime(client, {
       agentDir: params.agentDir,
       authProfileId: params.authProfileId ?? undefined,
@@ -507,15 +554,6 @@ function getOrCreateSharedClientEntry(
     state.clients.set(key, entry);
   }
   return entry;
-}
-
-function clearSharedClientEntry(key: string, entry: SharedCodexAppServerClientEntry): void {
-  const state = getSharedCodexAppServerClientState();
-  if (state.clients.get(key) !== entry) {
-    return;
-  }
-  state.clients.delete(key);
-  entry.client?.close();
 }
 
 function clearSharedClientEntryIfCurrent(key: string, client: CodexAppServerClient): void {

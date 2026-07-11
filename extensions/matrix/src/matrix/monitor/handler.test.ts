@@ -2564,7 +2564,7 @@ describe("matrix monitor handler live allowlist reload", () => {
 describe("matrix monitor handler durable inbound dedupe", () => {
   it("skips replayed inbound events before session recording", async () => {
     const inboundDeduper = {
-      claimEvent: vi.fn(() => false),
+      claimEvent: vi.fn(async () => false),
       commitEvent: vi.fn(async () => undefined),
       releaseEvent: vi.fn(),
     };
@@ -2596,7 +2596,7 @@ describe("matrix monitor handler durable inbound dedupe", () => {
   it("commits inbound events only after queued replies finish delivering", async () => {
     const callOrder: string[] = [];
     const inboundDeduper = {
-      claimEvent: vi.fn(() => {
+      claimEvent: vi.fn(async () => {
         callOrder.push("claim");
         return true;
       }),
@@ -2663,7 +2663,7 @@ describe("matrix monitor handler durable inbound dedupe", () => {
 
   it("commits a claimed event when bot loop protection suppresses dispatch", async () => {
     const inboundDeduper = {
-      claimEvent: vi.fn(() => true),
+      claimEvent: vi.fn(async () => true),
       commitEvent: vi.fn(async () => undefined),
       releaseEvent: vi.fn(),
     };
@@ -2705,7 +2705,7 @@ describe("matrix monitor handler durable inbound dedupe", () => {
 
   it("releases a claimed event when reply dispatch fails before completion", async () => {
     const inboundDeduper = {
-      claimEvent: vi.fn(() => true),
+      claimEvent: vi.fn(async () => true),
       commitEvent: vi.fn(async () => undefined),
       releaseEvent: vi.fn(),
     };
@@ -2742,7 +2742,7 @@ describe("matrix monitor handler durable inbound dedupe", () => {
 
   it("keeps replay committed when queued final delivery fails after a generic error", async () => {
     const inboundDeduper = {
-      claimEvent: vi.fn(() => true),
+      claimEvent: vi.fn(async () => true),
       commitEvent: vi.fn(async () => undefined),
       releaseEvent: vi.fn(),
     };
@@ -2789,7 +2789,7 @@ describe("matrix monitor handler durable inbound dedupe", () => {
     "keeps replay committed when queued %s delivery fails after a generic error and no final reply exists",
     async (kind) => {
       const inboundDeduper = {
-        claimEvent: vi.fn(() => true),
+        claimEvent: vi.fn(async () => true),
         commitEvent: vi.fn(async () => undefined),
         releaseEvent: vi.fn(),
       };
@@ -2839,7 +2839,7 @@ describe("matrix monitor handler durable inbound dedupe", () => {
 
   it("releases a claimed event when queued final delivery fails with an explicit retryable error", async () => {
     const inboundDeduper = {
-      claimEvent: vi.fn(() => true),
+      claimEvent: vi.fn(async () => true),
       commitEvent: vi.fn(async () => undefined),
       releaseEvent: vi.fn(),
     };
@@ -2885,7 +2885,7 @@ describe("matrix monitor handler durable inbound dedupe", () => {
     "releases a claimed event when queued %s delivery fails with an explicit retryable error and no final reply exists",
     async (kind) => {
       const inboundDeduper = {
-        claimEvent: vi.fn(() => true),
+        claimEvent: vi.fn(async () => true),
         commitEvent: vi.fn(async () => undefined),
         releaseEvent: vi.fn(),
       };
@@ -2931,7 +2931,7 @@ describe("matrix monitor handler durable inbound dedupe", () => {
   it("commits a claimed event when dispatch completes without a final reply", async () => {
     const callOrder: string[] = [];
     const inboundDeduper = {
-      claimEvent: vi.fn(() => {
+      claimEvent: vi.fn(async () => {
         callOrder.push("claim");
         return true;
       }),

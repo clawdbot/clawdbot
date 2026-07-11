@@ -5,18 +5,22 @@ import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime"
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { z } from "zod";
 import { resolveSlackAccount } from "./accounts.js";
+import type { SlackAuthoredTextPlacement } from "./authored-text.js";
+import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
 import { createSlackWebClient, getSlackWriteClient } from "./client.js";
 import { buildSlackEditTextPayload } from "./edit-text.js";
-import { SLACK_TEXT_LIMIT } from "./limits.js";
+import { SLACK_EDIT_TEXT_LIMIT } from "./limits.js";
 import { resolveSlackMedia } from "./monitor/media.js";
 import type { SlackMediaResult } from "./monitor/media.js";
+import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
 import {
   appendSlackNativeDataFallbackText,
-  buildSlackNativeDataFallbackBlocks,
   hasSlackNativeDataBlock,
   isSlackInvalidBlocksError,
+  stripSlackNativeDataBlocks,
 } from "./native-data-blocks.js";
+import { buildSlackNativeDataDeliveryPlan } from "./native-data-fallback.js";
 import { sendMessageSlack } from "./send.js";
 import { resolveSlackBotToken } from "./token.js";
 import { truncateSlackText } from "./truncate.js";
@@ -315,8 +319,10 @@ export async function sendSlackMessage(
     uploadFileName?: string;
     uploadTitle?: string;
     blocks?: (Block | KnownBlock)[];
+    authoredTextPlacement?: SlackAuthoredTextPlacement;
+    nativeDataFallbackBaseText?: string;
     textIsSlackMrkdwn?: boolean;
-    separateTextAndBlocks?: boolean;
+    textIsSlackPlainText?: boolean;
   },
 ) {
   return await sendMessageSlack(to, content, {
@@ -331,7 +337,11 @@ export async function sendSlackMessage(
     threadTs: opts.threadTs,
     replyBroadcast: opts.replyBroadcast,
     ...(opts.textIsSlackMrkdwn ? { textIsSlackMrkdwn: true } : {}),
-    ...(opts.separateTextAndBlocks ? { separateTextAndBlocks: true } : {}),
+    ...(opts.textIsSlackPlainText ? { textIsSlackPlainText: true } : {}),
+    ...(opts.authoredTextPlacement ? { authoredTextPlacement: opts.authoredTextPlacement } : {}),
+    ...(Object.hasOwn(opts, "nativeDataFallbackBaseText")
+      ? { nativeDataFallbackBaseText: opts.nativeDataFallbackBaseText }
+      : {}),
     ...(opts.uploadFileName ? { uploadFileName: opts.uploadFileName } : {}),
     ...(opts.uploadTitle ? { uploadTitle: opts.uploadTitle } : {}),
     blocks: opts.blocks,
@@ -351,13 +361,13 @@ export async function editSlackMessage(
   const nativeFallbackText = hasNativeData
     ? appendSlackNativeDataFallbackText(editText, blocks)
     : editText;
-  if (blocks && nativeFallbackText.length > SLACK_TEXT_LIMIT) {
+  if (hasNativeData && nativeFallbackText.length > SLACK_EDIT_TEXT_LIMIT) {
     throw new Error(
-      `Slack block accessibility fallback exceeds OpenClaw's ${String(SLACK_TEXT_LIMIT)}-character per-edit limit. Send a new message instead.`,
+      `Slack native chart or table fallback exceeds the ${String(SLACK_EDIT_TEXT_LIMIT)}-character edit limit. Send a new message instead.`,
     );
   }
   const text = hasNativeData
-    ? truncateSlackText(nativeFallbackText, SLACK_TEXT_LIMIT)
+    ? truncateSlackText(nativeFallbackText, SLACK_EDIT_TEXT_LIMIT)
     : nativeFallbackText;
   const update = {
     channel: channelId,
@@ -372,12 +382,45 @@ export async function editSlackMessage(
       throw error;
     }
     logVerbose("slack edit: native data block rejected, retrying with text fallback");
-    const fallbackBlocks = buildSlackNativeDataFallbackBlocks(blocks);
+    const survivorBlocks = stripSlackNativeDataBlocks(blocks);
+    const survivorText = buildSlackBlocksFallbackText(survivorBlocks) ?? "";
+    const authoredEditText = content.trim();
+    const baseText =
+      authoredEditText && !survivorText.includes(authoredEditText) ? authoredEditText : "";
+    const fallbackPlan = buildSlackNativeDataDeliveryPlan({
+      baseText,
+      blocks: blocks ?? [],
+    });
+    if (fallbackPlan.fallbackMessages.length !== 1) {
+      throw new Error(
+        "Slack native chart or table edit fallback requires multiple messages. Send a new message instead.",
+        { cause: error },
+      );
+    }
+    const fallback = fallbackPlan.fallbackMessages[0];
+    if (!fallback || fallback.text.length > SLACK_EDIT_TEXT_LIMIT) {
+      throw new Error(
+        `Slack native chart or table fallback exceeds the ${String(SLACK_EDIT_TEXT_LIMIT)}-character edit limit. Send a new message instead.`,
+        { cause: error },
+      );
+    }
+    const fallbackText = fallback.blocks
+      ? escapeSlackMrkdwn(fallback.text)
+      : truncateSlackText(
+          appendSlackNativeDataFallbackText(editText, blocks),
+          SLACK_EDIT_TEXT_LIMIT,
+        );
+    if (fallbackText.length > SLACK_EDIT_TEXT_LIMIT) {
+      throw new Error(
+        `Slack native chart or table fallback exceeds the ${String(SLACK_EDIT_TEXT_LIMIT)}-character edit limit. Send a new message instead.`,
+        { cause: error },
+      );
+    }
     await client.chat.update({
       channel: channelId,
       ts: messageId,
-      text: truncateSlackText(appendSlackNativeDataFallbackText(text, blocks), SLACK_TEXT_LIMIT),
-      ...(fallbackBlocks?.length ? { blocks: fallbackBlocks } : {}),
+      text: fallbackText,
+      ...(fallback.blocks ? { blocks: fallback.blocks } : {}),
     });
   }
 }

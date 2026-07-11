@@ -253,6 +253,57 @@ describe("googlechat monitor inbound space classification", () => {
     );
     expect(runTurn).toHaveBeenCalledOnce();
   });
+
+  it.each([
+    { name: "the default off mode", replyToMode: undefined, expectedThread: undefined },
+    { name: "explicit off mode", replyToMode: "off" as const, expectedThread: undefined },
+    {
+      name: "all mode",
+      replyToMode: "all" as const,
+      expectedThread: "spaces/CLASSIFY/threads/root",
+    },
+  ])("targets typing messages according to $name", async ({ replyToMode, expectedThread }) => {
+    const { core } = createInboundClassificationHarness();
+    const account = {
+      accountId: "work",
+      config: { replyToMode },
+      credentialSource: "inline",
+    } as ResolvedGoogleChatAccount;
+    const event = {
+      type: "MESSAGE",
+      space: { name: "spaces/CLASSIFY", spaceType: "SPACE" },
+      message: {
+        name: "spaces/CLASSIFY/messages/1",
+        text: "hello",
+        thread: { name: "spaces/CLASSIFY/threads/root" },
+        sender: { name: "users/alice", displayName: "Alice", type: "HUMAN" },
+      },
+    } satisfies GoogleChatEvent;
+
+    accessMocks.applyGoogleChatInboundAccessPolicy.mockResolvedValue({
+      ok: true,
+      commandAuthorized: undefined,
+      effectiveWasMentioned: undefined,
+      groupBotLoopProtection: undefined,
+      groupSystemPrompt: undefined,
+    });
+
+    await testing.processMessageWithPipeline({
+      event,
+      account,
+      config: {},
+      runtime: { error: vi.fn(), log: vi.fn() },
+      core,
+      mediaMaxMb: 10,
+    });
+
+    expect(apiMocks.sendGoogleChatMessage).toHaveBeenCalledWith({
+      account,
+      space: "spaces/CLASSIFY",
+      text: "_OpenClaw is typing..._",
+      thread: expectedThread,
+    });
+  });
 });
 
 describe("googlechat monitor sender bot status", () => {

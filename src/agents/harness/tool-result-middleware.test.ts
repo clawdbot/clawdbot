@@ -67,14 +67,14 @@ describe("createAgentToolResultMiddlewareRunner", () => {
     expect(result.details).toEqual({ status: "error", middlewareError: true });
   });
 
-  it("rejects oversized middleware details", async () => {
+  it("rejects oversized multibyte middleware details", async () => {
     // Details are serialized into harness/tool payloads; cap them before a
     // middleware result can create unbounded transcript growth.
     const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
       () => ({
         result: {
           content: [{ type: "text", text: "compacted" }],
-          details: { payload: "x".repeat(100_001) },
+          details: { payload: "é".repeat(60_000) },
         },
       }),
     ]);
@@ -548,6 +548,28 @@ describe("createAgentToolResultMiddlewareRunner", () => {
     const sanitized = result.details as { truncated?: boolean; originalSizeBytes?: number };
     expect(sanitized.truncated).toBe(true);
     expect(sanitized.originalSizeBytes ?? 0).toBeGreaterThan(100_000);
+  });
+
+  it("measures multibyte incoming details by serialized UTF-8 bytes", async () => {
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
+      () => undefined,
+    ]);
+    const details = { blob: "é".repeat(60_000) };
+
+    const result = await runner.applyToolResultMiddleware({
+      toolCallId: "call-1",
+      toolName: "exec",
+      args: {},
+      result: {
+        content: [{ type: "text", text: "ok" }],
+        details,
+      },
+    });
+
+    expect(result.details).toEqual({
+      truncated: true,
+      originalSizeBytes: Buffer.byteLength(JSON.stringify(details)),
+    });
   });
 
   it("snapshots confirmed delivery before oversized details are collapsed", async () => {

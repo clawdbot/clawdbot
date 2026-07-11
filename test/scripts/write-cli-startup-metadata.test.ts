@@ -158,7 +158,7 @@ describe("write-cli-startup-metadata", () => {
         failureMessage: "render failed",
         killGraceMs: 25,
         maxOutputBytes: 1024,
-        spawnProcess,
+        spawnProcess: spawnProcess as typeof spawn,
         timeoutMs: 5_000,
       });
 
@@ -182,7 +182,7 @@ describe("write-cli-startup-metadata", () => {
       failureMessage: "render failed",
       killGraceMs: 25,
       maxOutputBytes: 5,
-      spawnProcess,
+      spawnProcess: spawnProcess as typeof spawn,
       timeoutMs: 5_000,
     });
 

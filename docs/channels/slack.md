@@ -1546,13 +1546,13 @@ readers, notifications, session mirroring, and clients that cannot render the
 block. Standard presentation sends to other OpenClaw channels receive that same
 deterministic chart data as text unless they advertise native chart support. If
 Slack rejects the chart with `invalid_blocks` during a phased rollout, OpenClaw
-retries once with the native chart replaced by visible mrkdwn fallback sections;
-valid sibling blocks remain intact.
+removes the rejected native data blocks, keeps any sibling controls, and sends
+the complete chart representation as visible text.
 
 Slack currently accepts up to two `data_visualization` blocks per message. When
-a presentation contains more than two valid charts, OpenClaw renders the first
-two natively and preserves each additional chart as deterministic visible text
-in the same message.
+a presentation contains more than two valid charts, OpenClaw keeps their order
+and continues native rendering in follow-up messages, with no more than two
+charts in each message.
 
 Slack's [developer launch](https://docs.slack.dev/changelog/2026/06/16/block-kit-data-visualization-block/)
 documents the block as an app-facing Block Kit feature and publishes no paid
@@ -1590,7 +1590,7 @@ No additional OAuth scope or Slack configuration is required beyond normal
 OpenClaw maps header and string cells to Slack `raw_text` cells. Numeric cells
 map to `raw_number`, with the finite numeric value preserved for native sorting
 and filtering. `rowHeaderColumnIndex`, when present, marks that zero-based
-column as Slack row headers; when omitted, Slack defaults to column `0`.
+column as Slack row headers.
 
 Slack's published `data_table` limits are enforced before native rendering:
 
@@ -1602,25 +1602,21 @@ Slack's published `data_table` limits are enforced before native rendering:
 Multiple valid table blocks can render natively while the message remains
 within the aggregate character limit. A table that cannot render within the
 native envelope becomes complete deterministic text instead of losing rows or
-cells. If that text exceeds one OpenClaw Slack text chunk, sends and slash
-responses use ordered chunks. Table edits fail with an explicit size error
-instead of silently truncating rows from an existing message.
-
-Slack permits at most [five messages from one interaction `response_url`](https://docs.slack.dev/interactivity/handling-user-interaction/#message_responses).
-OpenClaw shares that budget across streamed slash payloads, accounts for a
-possible native-block retry, and returns size guidance before publishing a
-partial table. Send exceptionally large results as a regular channel message
-instead.
+cells. If that text exceeds one Slack message, sends and slash responses use
+ordered text chunks. Table edits fail with an explicit size error instead of
+silently truncating rows from an existing message.
 
 Every native table produced from portable presentation also carries a top-level
 text representation for screen readers, notifications, session mirroring, and
 clients that cannot render the block. Raw chart and table values stay literal
-in that mrkdwn fallback, so cell data such as `<@U123>` does not become a Slack
-mention. If Slack rejects native chart or table blocks with `invalid_blocks`,
-OpenClaw retries once with those native blocks replaced by visible mrkdwn
-fallback sections. A genuinely invalid sibling block still fails closed. Table
-and chart sends preserve the complete representation through ordered preflight
-chunks whenever the top-level accessibility text exceeds one Slack post.
+in the fallback, so cell data such as `<@U123>` does not become a Slack mention.
+If Slack rejects native chart or table blocks with `invalid_blocks`, OpenClaw
+removes every native data block in one bounded recovery step, retains valid
+sibling blocks such as buttons and selects, and sends complete visible chart
+and table text with Slack formatting disabled. Slash-command delivery
+tracks Slack's five-call `response_url` budget across the command. Before each
+reply batch, it selects a complete plan that fits the remaining calls or fails
+before posting that batch.
 
 Only explicit `presentation` table blocks are promoted to native tables.
 Markdown pipe tables remain authored text; OpenClaw does not guess at table

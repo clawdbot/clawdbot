@@ -216,6 +216,68 @@ struct MacNodeRuntimeTests {
         #expect(response.error?.message == "UNAVAILABLE: Codex session catalog is disabled")
     }
 
+    @Test func `handle invoke returns an injected Codex transcript turn page`() async {
+        let payload = #"{"data":[{"id":"item-1","type":"agentMessage","text":"answer"}],"nextCursor":"page-2"}"#
+        let runtime = MacNodeRuntime(
+            codexThreadCatalogEnabled: { true },
+            codexThreadTurnsRequest: { paramsJSON in
+                #expect(paramsJSON == #"{"threadId":"thread-1","limit":50}"#)
+                return payload
+            })
+        let response = await runtime.handleInvoke(BridgeInvokeRequest(
+            id: "req-codex-items",
+            command: MacNodeCodexThreadCatalogContract.turnsCommand,
+            paramsJSON: #"{"threadId":"thread-1","limit":50}"#))
+
+        #expect(response.ok)
+        #expect(response.payloadJSON == payload)
+    }
+
+    @Test func `handle invoke returns injected Claude session pages`() async {
+        let listPayload = #"{"sessions":[]}"#
+        let readPayload = #"{"threadId":"thread-1","items":[]}"#
+        let runtime = MacNodeRuntime(
+            claudeSessionCatalogEnabled: { true },
+            claudeSessionListRequest: { paramsJSON in
+                #expect(paramsJSON == #"{"limit":7}"#)
+                return listPayload
+            },
+            claudeSessionReadRequest: { paramsJSON in
+                #expect(paramsJSON == #"{"threadId":"thread-1","limit":20}"#)
+                return readPayload
+            })
+
+        let list = await runtime.handleInvoke(BridgeInvokeRequest(
+            id: "req-claude-list",
+            command: MacNodeClaudeSessionCatalogContract.listCommand,
+            paramsJSON: #"{"limit":7}"#))
+        let read = await runtime.handleInvoke(BridgeInvokeRequest(
+            id: "req-claude-read",
+            command: MacNodeClaudeSessionCatalogContract.readCommand,
+            paramsJSON: #"{"threadId":"thread-1","limit":20}"#))
+
+        #expect(list.ok)
+        #expect(list.payloadJSON == listPayload)
+        #expect(read.ok)
+        #expect(read.payloadJSON == readPayload)
+    }
+
+    @Test func `handle invoke enforces local Claude catalog policy`() async {
+        let runtime = MacNodeRuntime(
+            claudeSessionCatalogEnabled: { false },
+            claudeSessionListRequest: { _ in
+                Issue.record("disabled Claude catalog request must not execute")
+                return #"{"sessions":[]}"#
+            })
+        let response = await runtime.handleInvoke(BridgeInvokeRequest(
+            id: "req-claude-disabled",
+            command: MacNodeClaudeSessionCatalogContract.listCommand))
+
+        #expect(!response.ok)
+        #expect(response.error?.code == .unavailable)
+        #expect(response.error?.message == "UNAVAILABLE: Claude session catalog is disabled")
+    }
+
     @Test func `A2UI host capability refresh uses injected node session refresher`() async {
         let probe = CanvasRefreshProbe()
         let runtime = MacNodeRuntime(

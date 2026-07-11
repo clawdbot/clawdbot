@@ -57,11 +57,13 @@ import {
   pinActivePluginHttpRouteRegistry,
   pinActivePluginSessionExtensionRegistry,
 } from "../plugins/runtime.js";
+import { resolveWorkerProvider } from "../plugins/worker-provider-registry.js";
 import { getTotalQueueSize, isGatewayDraining } from "../process/command-queue.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   clearSecretsRuntimeSnapshot,
+  getActiveSecretsRuntimeEnv,
   getActiveSecretsRuntimeConfigSnapshot,
 } from "../secrets/runtime-state.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
@@ -85,6 +87,7 @@ import {
 } from "./methods/registry.js";
 import { isLoopbackHost } from "./net.js";
 import { createNodeReapprovalCoordinator } from "./node-reapproval-coordinator.js";
+import { resolveGatewayStartupPluginActivationConfig } from "./plugin-activation-runtime-config.js";
 import {
   listChannelPluginConfigTargetIds,
   pluginConfigTargetsChanged,
@@ -131,11 +134,20 @@ import { createReadinessChecker } from "./server/readiness.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-origins.js";
+import type { WorkerBundleProducer, WorkerNpmArtifact } from "./worker-environments/bundle.js";
+import { createWorkerEnvironmentService } from "./worker-environments/service.js";
+import { createWorkerEnvironmentStore } from "./worker-environments/store.js";
 
 type LoadGatewayModelCatalog = typeof import("./server-model-catalog.js").loadGatewayModelCatalog;
 
 const loadGatewayModelCatalogModule = createLazyRuntimeModule(
   () => import("./server-model-catalog.js"),
+);
+const loadWorkerEnvironmentRuntimeModule = createLazyRuntimeModule(
+  () => import("./worker-environments/runtime.js"),
+);
+const loadWorkerTunnelRuntimeModule = createLazyRuntimeModule(
+  () => import("./worker-environments/tunnel.js"),
 );
 
 export async function resetModelCatalogCacheForTest(): Promise<void> {
@@ -681,6 +693,13 @@ export async function startGatewayServer(
     startupLastGoodSnapshot = startupSnapshot;
   }
   setRuntimeConfigSnapshot(cfgAtStart, startupLastGoodSnapshot.sourceConfig);
+  const workerEnvironmentStore = minimalTestGateway ? undefined : createWorkerEnvironmentStore();
+  const hasWorkerEnvironmentRecords = (workerEnvironmentStore?.list().length ?? 0) > 0;
+  // Durable rows can outlive profiles. Startup planning still enforces plugin trust/disable gates.
+  const listDurableWorkerProviderIds = () =>
+    uniqueStrings(
+      workerEnvironmentStore?.listForReconcile().map((record) => record.providerId) ?? [],
+    );
   const { prepareGatewayPluginBootstrap } = await loadStartupPluginsModule();
   const pluginBootstrap = await startupTrace.measure("plugins.bootstrap", () =>
     prepareGatewayPluginBootstrap({
@@ -688,6 +707,7 @@ export async function startGatewayServer(
       activationSourceConfig: startupActivationSourceConfig,
       startupRuntimeConfig,
       pluginMetadataSnapshot: startupConfigLoad.pluginMetadataSnapshot,
+      workerProviderIds: listDurableWorkerProviderIds(),
       minimalTestGateway,
       log,
       loadRuntimePlugins: false,
@@ -729,6 +749,73 @@ export async function startGatewayServer(
     ]);
   }
   let { pluginRegistry, baseGatewayMethods } = pluginBootstrap;
+  // Unconfigured clean installs get no service; durable rows still need list/status projection.
+  const shouldStartWorkerEnvironmentService =
+    Object.keys(gatewayPluginConfigAtStart.cloudWorkers?.profiles ?? {}).length > 0 ||
+    hasWorkerEnvironmentRecords;
+  let workerBundleProducer: WorkerBundleProducer | undefined;
+  let workerNpmArtifact: Promise<WorkerNpmArtifact> | undefined;
+  const prepareWorkerInstallation = async (install: "bundle" | "npm") => {
+    const workerEnvironmentRuntime = await loadWorkerEnvironmentRuntimeModule();
+    workerBundleProducer ??= workerEnvironmentRuntime.createWorkerBundleProducer();
+    const bundle = await workerBundleProducer.prepare();
+    if (install === "bundle") {
+      return bundle;
+    }
+    workerNpmArtifact ??= workerEnvironmentRuntime
+      .resolveWorkerNpmInstallationArtifact({ bundle })
+      .catch((error: unknown) => {
+        workerNpmArtifact = undefined;
+        throw error;
+      });
+    return await workerNpmArtifact;
+  };
+  const workerTunnelManager =
+    workerEnvironmentStore && shouldStartWorkerEnvironmentService
+      ? (await loadWorkerTunnelRuntimeModule()).createWorkerTunnelManager()
+      : undefined;
+  const workerEnvironmentService =
+    workerEnvironmentStore && shouldStartWorkerEnvironmentService
+      ? createWorkerEnvironmentService({
+          store: workerEnvironmentStore,
+          getConfig: getRuntimeConfig,
+          resolveProvider: (providerId) => resolveWorkerProvider(pluginRegistry, providerId),
+          prepareInstallation: prepareWorkerInstallation,
+          tunnelManager: workerTunnelManager,
+          resolveSshIdentity: async ({ provider, leaseId, profile, keyRef }) => {
+            const workerEnvironmentRuntime = await loadWorkerEnvironmentRuntimeModule();
+            return await workerEnvironmentRuntime.resolveWorkerSshIdentity({
+              provider,
+              leaseId,
+              profile,
+              keyRef,
+              resolveGeneric: async (genericKeyRef) => ({
+                kind: "material",
+                contents: await workerEnvironmentRuntime.resolveSecretRefString(genericKeyRef, {
+                  config:
+                    getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig ?? getRuntimeConfig(),
+                  env: getActiveSecretsRuntimeEnv(),
+                }),
+              }),
+            });
+          },
+          bootstrapWorker: async ({ sshEndpoint, installation, resolveIdentity, signal }) => {
+            const workerEnvironmentRuntime = await loadWorkerEnvironmentRuntimeModule();
+            return await workerEnvironmentRuntime.bootstrapWorker(
+              {
+                ssh: sshEndpoint,
+                artifact: installation,
+                pinnedHostKey: sshEndpoint.hostKey,
+              },
+              {
+                signal,
+                resolveIdentity,
+              },
+            );
+          },
+          logger: log.child("worker-environments"),
+        })
+      : undefined;
   const channelLogs = Object.fromEntries(
     listGatewayStartupChannelPlugins().map((plugin) => [plugin.id, logChannels.child(plugin.id)]),
   ) as Record<ChannelId, ReturnType<typeof createSubsystemLogger>>;
@@ -1281,25 +1368,30 @@ export async function startGatewayServer(
     );
     Object.assign(runtimeState, runtimeServices);
 
-    const { execApprovalManager, pluginApprovalManager, extraHandlers, coreGatewayHandlers } =
-      await startupTrace.measure("gateway.handlers", async () => {
-        const [{ createGatewayAuxHandlers }, { coreGatewayHandlers: coreGatewayHandlersLocal }] =
-          await Promise.all([import("./server-aux-handlers.js"), import("./server-methods.js")]);
-        return {
-          ...createGatewayAuxHandlers({
-            log,
-            activateRuntimeSecrets,
-            sharedGatewaySessionGenerationState,
-            resolveSharedGatewaySessionGenerationForConfig,
-            clients,
-            startChannel,
-            stopChannel,
-            getChannelAutostartSuppression: channelManager.getAutostartSuppression,
-            logChannels,
-          }),
-          coreGatewayHandlers: coreGatewayHandlersLocal,
-        };
-      });
+    const {
+      execApprovalManager,
+      forwardPluginApprovalRequest,
+      pluginApprovalManager,
+      extraHandlers,
+      coreGatewayHandlers,
+    } = await startupTrace.measure("gateway.handlers", async () => {
+      const [{ createGatewayAuxHandlers }, { coreGatewayHandlers: coreGatewayHandlersLocal }] =
+        await Promise.all([import("./server-aux-handlers.js"), import("./server-methods.js")]);
+      return {
+        ...createGatewayAuxHandlers({
+          log,
+          activateRuntimeSecrets,
+          sharedGatewaySessionGenerationState,
+          resolveSharedGatewaySessionGenerationForConfig,
+          clients,
+          startChannel,
+          stopChannel,
+          getChannelAutostartSuppression: channelManager.getAutostartSuppression,
+          logChannels,
+        }),
+        coreGatewayHandlers: coreGatewayHandlersLocal,
+      };
+    });
     const attachedGatewayExtraHandlers: GatewayRequestHandlers = {
       ...pluginRegistry.gatewayHandlers,
       ...extraHandlers,
@@ -1317,8 +1409,13 @@ export async function startGatewayServer(
           auxHandlers[method] = handler;
         }
       }
+      const coreDescriptors = createCoreGatewayMethodDescriptors(coreDescriptorHandlers).filter(
+        (descriptor) =>
+          workerEnvironmentService ||
+          (descriptor.name !== "environments.create" && descriptor.name !== "environments.destroy"),
+      );
       return createGatewayMethodRegistry([
-        ...createCoreGatewayMethodDescriptors(coreDescriptorHandlers),
+        ...coreDescriptors,
         ...createPluginGatewayMethodDescriptors(nextPluginRegistry),
         ...createGatewayMethodDescriptorsFromHandlers({
           handlers: auxHandlers,
@@ -1415,11 +1512,17 @@ export async function startGatewayServer(
           loadGatewayPluginBootstrapModule(),
           import("../plugins/services.js"),
         ]);
+      const nextPluginActivationConfig = resolveGatewayStartupPluginActivationConfig({
+        runtimeConfig: params.nextConfig,
+        activationSourceConfig: params.nextConfig,
+        env: process.env,
+      });
       const nextPluginLookUpTable = loadPluginLookUpTable({
-        config: params.nextConfig,
+        config: nextPluginActivationConfig,
         workspaceDir: defaultWorkspaceDir,
         env: process.env,
         activationSourceConfig: params.nextConfig,
+        workerProviderIds: listDurableWorkerProviderIds(),
       });
       const nextStartupPluginIds = new Set(nextPluginLookUpTable.startup.pluginIds);
       const nextStartupChannelIds = new Set<ChannelId>();
@@ -1523,6 +1626,7 @@ export async function startGatewayServer(
           resolveTerminalLaunchPolicy: terminalLaunchPolicy.resolve,
           isTerminalEnabled: terminalLaunchPolicy.isEnabled,
           execApprovalManager,
+          forwardPluginApprovalRequest,
           pluginApprovalManager,
           loadGatewayModelCatalog,
           getHealthCache,
@@ -1552,6 +1656,7 @@ export async function startGatewayServer(
             });
           },
           nodeRegistry,
+          ...(workerEnvironmentService ? { workerEnvironmentService } : {}),
           terminalSessions,
           agentRunSeq,
           chatAbortControllers,
@@ -1789,6 +1894,20 @@ export async function startGatewayServer(
                 runtimeState.gatewayLifetimeSidecars = [];
               }
             },
+            ...(workerEnvironmentService
+              ? {
+                  startWorkerEnvironmentRuntime: () => {
+                    if (closePreludeStarted) {
+                      return null;
+                    }
+                    const sidecar = { stop: () => workerEnvironmentService.stop() };
+                    // Close must see the drain handle before reconciliation can yield.
+                    runtimeState.gatewayLifetimeSidecars.push(sidecar);
+                    workerEnvironmentService.start();
+                    return sidecar;
+                  },
+                }
+              : {}),
             onSidecarsReady: () => {
               startupSidecarsReady = true;
               activateScheduledServicesWhenReady();

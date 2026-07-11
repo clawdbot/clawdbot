@@ -123,17 +123,18 @@ function allProfileScorecardFixture() {
     (surface.categories ?? []).map((category) => {
       const coverageIds = [
         ...new Set((category.features ?? []).flatMap((feature) => feature.coverageIds ?? [])),
-      ].sort();
+      ].toSorted();
+      const features = category.features ?? [];
       return {
         id: `${surface.id}.${category.id}`,
         surfaceId: surface.id,
         name: category.name,
         status: "missing",
         features: {
-          total: category.features.length,
+          total: features.length,
           fulfilled: 0,
           partial: 0,
-          missing: category.features.length,
+          missing: features.length,
           fulfillmentPercent: 0,
         },
         coverageIds: {

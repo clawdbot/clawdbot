@@ -51,13 +51,13 @@ Each entry lists the package, distribution route, and description.
 
 ## Core npm package
 
-62 plugins
+64 plugins
 
 - **[admin-http-rpc](/plugins/reference/admin-http-rpc)** (`@openclaw/admin-http-rpc`) - included in OpenClaw. OpenClaw admin HTTP RPC endpoint.
 
 - **[alibaba](/plugins/reference/alibaba)** (`@openclaw/alibaba-provider`) - included in OpenClaw. Adds video generation provider support.
 
-- **[anthropic](/plugins/reference/anthropic)** (`@openclaw/anthropic-provider`) - included in OpenClaw. Adds Anthropic model provider support to OpenClaw.
+- **[anthropic](/plugins/reference/anthropic)** (`@openclaw/anthropic-provider`) - included in OpenClaw. Adds Anthropic models, Claude CLI runtime, and read-only Claude CLI/Desktop session browsing across paired computers.
 
 - **[azure-speech](/plugins/reference/azure-speech)** (`@openclaw/azure-speech`) - included in OpenClaw. Azure AI Speech text-to-speech (MP3, native Ogg/Opus voice notes, PCM telephony).
 
@@ -76,6 +76,8 @@ Each entry lists the package, distribution route, and description.
 - **[comfy](/plugins/reference/comfy)** (`@openclaw/comfy-provider`) - included in OpenClaw. Adds ComfyUI model provider support to OpenClaw.
 
 - **[copilot-proxy](/plugins/reference/copilot-proxy)** (`@openclaw/copilot-proxy`) - included in OpenClaw. Adds Copilot Proxy model provider support to OpenClaw.
+
+- **[crabbox](/plugins/reference/crabbox)** (`@openclaw/crabbox-provider`) - included in OpenClaw. Cloud worker provider backed by the Crabbox CLI.
 
 - **[deepgram](/plugins/reference/deepgram)** (`@openclaw/deepgram-provider`) - included in OpenClaw. Adds media understanding provider support. Adds realtime transcription provider support.
 
@@ -172,6 +174,8 @@ Each entry lists the package, distribution route, and description.
 - **[webhooks](/plugins/reference/webhooks)** (`@openclaw/webhooks`) - included in OpenClaw. Authenticated inbound webhooks that bind external automation to OpenClaw TaskFlows.
 
 - **[workboard](/plugins/reference/workboard)** (`@openclaw/workboard`) - included in OpenClaw. Dashboard workboard for agent-owned issues and sessions.
+
+- **[workspaces](/plugins/reference/workspaces)** (`@openclaw/workspaces-plugin`) - included in OpenClaw. Agent-composable Workspaces document and control-plane backend.
 
 - **[xai](/plugins/reference/xai)** (`@openclaw/xai-plugin`) - included in OpenClaw. Adds xAI model provider support to OpenClaw.
 

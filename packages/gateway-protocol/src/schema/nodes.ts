@@ -102,6 +102,11 @@ export const NodeInvokeParamsSchema = Type.Object(
     params: Type.Optional(Type.Unknown()),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
     idempotencyKey: NonEmptyString,
+    // Gateway-only approval routing metadata. Node forwarding strips these fields.
+    turnSourceChannel: Type.Optional(Type.String()),
+    turnSourceTo: Type.Optional(Type.String()),
+    turnSourceAccountId: Type.Optional(Type.String()),
+    turnSourceThreadId: Type.Optional(Type.Union([Type.String(), Type.Number()])),
   },
   { additionalProperties: false },
 );

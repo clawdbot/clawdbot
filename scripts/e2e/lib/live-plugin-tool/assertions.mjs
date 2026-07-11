@@ -416,7 +416,7 @@ function pluginInstallPath() {
   if (record.source !== "npm" || record.artifactKind !== "npm-pack") {
     throw new Error(`expected npm-pack install record: ${JSON.stringify(record)}`);
   }
-  return String(record.installPath || "").replace(/^~(?=$|\/)/u, process.env.HOME);
+  return (record.installPath || "").replace(/^~(?=$|\/)/u, process.env.HOME);
 }
 
 function writeFixture() {

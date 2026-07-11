@@ -57,6 +57,30 @@ describe("gateway startup import boundaries", () => {
     expect(validation).not.toContain("commands/doctor");
   });
 
+  it("loads the worker bootstrap runtime only when an operation needs it", () => {
+    const serverImpl = readSource("src/gateway/server.impl.ts");
+    const runtimeLoad = "await loadWorkerEnvironmentRuntimeModule()";
+    const prepareStart = serverImpl.indexOf("const prepareWorkerInstallation = async");
+    const serviceStart = serverImpl.indexOf("const workerEnvironmentService =", prepareStart);
+    const identityStart = serverImpl.indexOf("resolveSshIdentity: async", serviceStart);
+    const bootstrapStart = serverImpl.indexOf("bootstrapWorker: async", serviceStart);
+    const loggerStart = serverImpl.indexOf("logger: log.child", bootstrapStart);
+
+    expect(prepareStart).toBeGreaterThan(-1);
+    expect(serviceStart).toBeGreaterThan(prepareStart);
+    expect(identityStart).toBeGreaterThan(serviceStart);
+    expect(bootstrapStart).toBeGreaterThan(serviceStart);
+    expect(loggerStart).toBeGreaterThan(bootstrapStart);
+    expect(serverImpl.slice(0, prepareStart)).not.toContain(runtimeLoad);
+    expect(serverImpl.slice(prepareStart, serviceStart)).toContain(runtimeLoad);
+    expect(serverImpl.slice(identityStart, bootstrapStart)).toContain(runtimeLoad);
+    expect(serverImpl.slice(bootstrapStart, loggerStart)).toContain(runtimeLoad);
+    expect(serverImpl.slice(bootstrapStart, loggerStart)).toContain(
+      "pinnedHostKey: sshEndpoint.hostKey",
+    );
+    expect(serverImpl.match(/await loadWorkerEnvironmentRuntimeModule\(\)/gu)).toHaveLength(3);
+  });
+
   it("marks gateway close before awaiting gateway_stop hooks", () => {
     const serverImpl = readSource("src/gateway/server.impl.ts");
     const closeStart = /close:\s*async\s*\([^)]*\)\s*=>/u.exec(serverImpl)?.index ?? -1;

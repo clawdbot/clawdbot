@@ -15,16 +15,19 @@ import {
 } from "./app-server/session-binding.test-helpers.js";
 import {
   archiveLocalCodexSession,
+  CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
   CODEX_APP_SERVER_THREADS_LIST_COMMAND,
   CODEX_LOCAL_SESSION_HOST_ID,
   CODEX_SESSION_ARCHIVE_METHOD,
   CODEX_SESSION_CATALOG_METHOD,
   CODEX_SESSION_CONTINUE_METHOD,
+  CODEX_SESSION_READ_METHOD,
   continueLocalCodexSession,
   createCodexSessionCatalogControl,
   createCodexSessionCatalogNodeHostCommands,
   listCodexSessionCatalog,
   registerCodexSessionCatalogGateway,
+  readCodexSessionTranscript,
   type CodexSessionCatalogControl,
 } from "./session-catalog.js";
 
@@ -88,16 +91,17 @@ function createControl(overrides: Partial<CodexSessionCatalogControl> = {}) {
   const withPinnedConnection = vi.fn(
     async (run: (value: CodexSessionCatalogControl) => Promise<unknown>) => await run(control),
   ) as unknown as CodexSessionCatalogControl["withPinnedConnection"];
-  const control: CodexSessionCatalogControl = {
+  const control = {
     assertEnabled: vi.fn(),
     connectionFingerprint: "catalog-connection",
     withPinnedConnection,
     listPage: vi.fn(async () => ({ sessions: [] })),
     listDescendantPage: vi.fn(async () => ({ data: [] })),
+    listTurnPage: vi.fn(async () => ({ data: [] })),
     readThread: vi.fn(async (threadId: string) => idleThread({ id: threadId })),
     archiveThread: vi.fn(async () => undefined),
     ...overrides,
-  };
+  } as CodexSessionCatalogControl;
   return control;
 }
 
@@ -937,6 +941,75 @@ describe("Codex supervision catalog", () => {
       }),
     ]);
     expect(JSON.stringify(result)).not.toContain("private transcript");
+  });
+
+  it("serves one bounded transcript page from the node host command", async () => {
+    const listTurnPage = vi.fn(async () => ({
+      data: [
+        {
+          id: "turn-1",
+          items: [{ id: "item-1", type: "agentMessage", text: "bounded answer" }],
+        },
+      ] as never,
+      nextCursor: "turns-page-2",
+    }));
+    const control = createEligibleControl({ listTurnPage });
+    const command = createCodexSessionCatalogNodeHostCommands(control).find(
+      (candidate) => candidate.command === CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
+    );
+    if (!command) {
+      throw new Error("Codex transcript node command was not registered");
+    }
+
+    await expect(
+      command.handle(JSON.stringify({ threadId: "thread-1", cursor: "turns-page-1", limit: 25 })),
+    ).resolves.toBe(
+      JSON.stringify({
+        data: [
+          {
+            id: "turn-1",
+            items: [{ id: "item-1", type: "agentMessage", text: "bounded answer" }],
+          },
+        ],
+        nextCursor: "turns-page-2",
+      }),
+    );
+    expect(listTurnPage).toHaveBeenCalledWith({
+      threadId: "thread-1",
+      cursor: "turns-page-1",
+      limit: 25,
+      sortDirection: "desc",
+      itemsView: "full",
+    });
+  });
+
+  it("rejects an oversized transcript page before returning it over node.invoke", async () => {
+    const control = createEligibleControl({
+      listTurnPage: vi.fn(async () => ({
+        data: [
+          {
+            id: "turn-1",
+            items: [
+              {
+                id: "item-1",
+                type: "commandExecution",
+                aggregatedOutput: "x".repeat(20 * 1024 * 1024),
+              },
+            ],
+          },
+        ] as never,
+      })),
+    });
+    const command = createCodexSessionCatalogNodeHostCommands(control).find(
+      (candidate) => candidate.command === CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
+    );
+    if (!command) {
+      throw new Error("Codex transcript node command was not registered");
+    }
+
+    await expect(
+      command.handle(JSON.stringify({ threadId: "thread-1", limit: 50 })),
+    ).rejects.toThrow("Codex app-server transcript is unavailable");
   });
 
   it("caps aggregate host results at the public wire bound", async () => {
@@ -2603,6 +2676,7 @@ describe("Codex supervision actions", () => {
     );
     for (const method of [
       CODEX_SESSION_CATALOG_METHOD,
+      CODEX_SESSION_READ_METHOD,
       CODEX_SESSION_CONTINUE_METHOD,
       CODEX_SESSION_ARCHIVE_METHOD,
     ]) {
@@ -2656,5 +2730,109 @@ describe("Codex supervision actions", () => {
     expect(control.readThread).toHaveBeenCalledOnce();
     expect(control.archiveThread).toHaveBeenCalledOnce();
     expect(createSessionEntry).not.toHaveBeenCalled();
+  });
+
+  it("reads local transcript turns one bounded App Server page at a time", async () => {
+    const listTurnPage = vi.fn(async () => ({
+      data: [
+        {
+          id: "turn-1",
+          items: [
+            { id: "item-1", type: "userMessage", text: "question" },
+            { id: "item-2", type: "agentMessage", text: "full answer" },
+          ],
+        },
+      ] as never,
+      nextCursor: "turns-page-2",
+    }));
+    const control = createEligibleControl({ listTurnPage });
+
+    await expect(
+      readCodexSessionTranscript({
+        runtime: createRuntime().runtime,
+        control,
+        hostId: CODEX_LOCAL_SESSION_HOST_ID,
+        threadId: "thread-1",
+        limit: 50,
+      }),
+    ).resolves.toEqual({
+      hostId: CODEX_LOCAL_SESSION_HOST_ID,
+      label: "Local Codex",
+      threadId: "thread-1",
+      items: [
+        { id: "item-2", type: "agentMessage", text: "full answer" },
+        { id: "item-1", type: "userMessage", text: "question" },
+      ],
+      nextCursor: "turns-page-2",
+    });
+    expect(listTurnPage).toHaveBeenCalledWith({
+      threadId: "thread-1",
+      limit: 50,
+      sortDirection: "desc",
+      itemsView: "full",
+    });
+    expect(control.readThread).not.toHaveBeenCalled();
+  });
+
+  it("delegates paired-node transcript pagination to the eligible node command", async () => {
+    const invoke = vi.fn<PluginRuntime["nodes"]["invoke"]>(async (request) => {
+      if (request.command === CODEX_APP_SERVER_THREADS_LIST_COMMAND) {
+        return {
+          payloadJSON: JSON.stringify({
+            sessions: [
+              { threadId: "thread-remote", status: "idle", source: "cli", archived: false },
+            ],
+          }),
+        };
+      }
+      return {
+        payloadJSON: JSON.stringify({
+          data: [
+            {
+              id: "turn-remote",
+              items: [{ id: "item-remote", type: "userMessage", text: "remote prompt" }],
+            },
+          ],
+          nextCursor: "remote-turns-2",
+        }),
+      };
+    });
+    const { runtime } = createRuntime({
+      nodes: [
+        {
+          nodeId: "devbox",
+          displayName: "Devbox",
+          connected: true,
+          commands: [
+            CODEX_APP_SERVER_THREADS_LIST_COMMAND,
+            CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
+          ],
+        },
+      ],
+      invoke,
+    });
+
+    await expect(
+      readCodexSessionTranscript({
+        runtime,
+        control: createControl(),
+        hostId: "node:devbox",
+        threadId: "thread-remote",
+        cursor: "remote-turns-1",
+        limit: 25,
+      }),
+    ).resolves.toEqual({
+      hostId: "node:devbox",
+      label: "Devbox",
+      threadId: "thread-remote",
+      items: [{ id: "item-remote", type: "userMessage", text: "remote prompt" }],
+      nextCursor: "remote-turns-2",
+    });
+    expect(invoke).toHaveBeenLastCalledWith({
+      nodeId: "devbox",
+      command: CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
+      params: { threadId: "thread-remote", cursor: "remote-turns-1", limit: 25 },
+      timeoutMs: 65_000,
+    });
   });
 });

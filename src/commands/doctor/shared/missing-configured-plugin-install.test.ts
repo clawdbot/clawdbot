@@ -173,6 +173,16 @@ vi.mock("../../../plugins/manifest-contract-eligibility.js", async (importOrigin
   loadManifestMetadataSnapshot: mocks.loadPluginMetadataSnapshot,
 }));
 
+vi.mock("../../../plugins/doctor-contract-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../plugins/doctor-contract-registry.js")>()),
+  // Plugin-owned compatibility is outside this install-repair suite. Avoid scanning
+  // the real plugin registry when the legacy-config fixture reaches that follow-up pass.
+  applyPluginDoctorCompatibilityMigrations: (cfg: OpenClawConfig) => ({
+    config: cfg,
+    changes: [],
+  }),
+}));
+
 vi.mock("../../../plugins/official-external-plugin-catalog.js", () => ({
   getOfficialExternalPluginCatalogManifest: mocks.getOfficialExternalPluginCatalogManifest,
   listOfficialExternalChannelEnvVars: mocks.listOfficialExternalChannelEnvVars,

@@ -232,7 +232,7 @@ export async function applyResetModelOverride(params: {
   let consumed = 0;
 
   if (providers.has(normalizeProviderId(first)) && second) {
-    // Support reset bodies like `openai gpt-5.5 rest of prompt`.
+    // Support reset bodies like `openai gpt-5.6-sol rest of prompt`.
     const composite = `${normalizeProviderId(first)}/${second}`;
     const resolved = resolveSelection(composite);
     if (resolved.selection) {

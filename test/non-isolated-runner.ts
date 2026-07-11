@@ -1,7 +1,7 @@
 // Non-isolated runner helps execute tests without Vitest isolation.
 import fs from "node:fs";
 import path from "node:path";
-import { TestRunner, type RunnerTask, type RunnerTestSuite, vi } from "vitest";
+import { TestRunner, type RunnerTask, type RunnerTestFile, type RunnerTestSuite, vi } from "vitest";
 
 type EvaluatedModuleNode = {
   promise?: unknown;
@@ -12,6 +12,11 @@ type EvaluatedModuleNode = {
 
 type EvaluatedModules = {
   idToModuleMap: Map<string, EvaluatedModuleNode>;
+};
+
+type TestRunnerInternals = {
+  moduleRunner?: { mocker?: { reset?: () => void } };
+  workerState: { evaluatedModules: unknown };
 };
 
 const SHARED_TEST_SETUP = Symbol.for("openclaw.sharedTestSetup");
@@ -181,6 +186,7 @@ function resetOpenClawGlobalRunState(): void {
 
   const cleanupError = runCleanupActions(cleanupActions);
   if (cleanupError) {
+    // oxlint-disable-next-line typescript/only-throw-error -- cleanup hooks may throw their original non-Error value; preserve that test-runner behavior.
     throw cleanupError;
   }
 
@@ -202,7 +208,7 @@ function resetOpenClawGlobalRunState(): void {
 }
 
 export default class OpenClawNonIsolatedRunner extends TestRunner {
-  override onCollectStart(file: { filepath: string }) {
+  override onCollectStart(file: RunnerTestFile) {
     super.onCollectStart(file);
     restoreRealTimers();
     restoreNativeTimerGlobals();
@@ -247,7 +253,8 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     vi.clearAllMocks();
     resetOpenClawGlobalRunState();
     vi.resetModules();
-    this.moduleRunner?.mocker?.reset?.();
-    resetEvaluatedModules(this.workerState.evaluatedModules as EvaluatedModules, true);
+    const internals = this as unknown as TestRunnerInternals;
+    internals.moduleRunner?.mocker?.reset?.();
+    resetEvaluatedModules(internals.workerState.evaluatedModules as EvaluatedModules, true);
   }
 }

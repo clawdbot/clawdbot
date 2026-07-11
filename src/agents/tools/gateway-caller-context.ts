@@ -9,6 +9,11 @@ import type { AnyAgentTool } from "./common.js";
 type GatewayToolCallerIdentity = {
   agentId: string;
   sessionKey: string;
+  // Trusted run context, carried separately from model-authored tool arguments.
+  turnSourceChannel?: string;
+  turnSourceTo?: string;
+  turnSourceAccountId?: string;
+  turnSourceThreadId?: string | number;
 };
 
 const gatewayToolCallerStorage = new AsyncLocalStorage<GatewayToolCallerIdentity>();
@@ -28,6 +33,16 @@ export async function withGatewayToolCallerIdentity<T>(
     {
       agentId: identity.agentId.trim(),
       sessionKey: identity.sessionKey.trim(),
+      ...(identity.turnSourceChannel?.trim()
+        ? { turnSourceChannel: identity.turnSourceChannel.trim() }
+        : {}),
+      ...(identity.turnSourceTo?.trim() ? { turnSourceTo: identity.turnSourceTo.trim() } : {}),
+      ...(identity.turnSourceAccountId?.trim()
+        ? { turnSourceAccountId: identity.turnSourceAccountId.trim() }
+        : {}),
+      ...(identity.turnSourceThreadId !== undefined
+        ? { turnSourceThreadId: identity.turnSourceThreadId }
+        : {}),
     },
     run,
   );

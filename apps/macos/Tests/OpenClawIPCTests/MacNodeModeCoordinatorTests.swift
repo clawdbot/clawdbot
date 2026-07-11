@@ -448,39 +448,61 @@ struct MacNodeModeCoordinatorTests {
         #expect(commands.contains(OpenClawBrowserCommand.proxy.rawValue))
     }
 
-    @Test func `local mode omits native Codex thread catalog`() {
+    @Test func `local mode omits native session catalogs`() {
         let caps = MacNodeModeCoordinator.resolvedCaps(
             browserControlEnabled: false,
             cameraEnabled: false,
             computerControlEnabled: false,
             locationMode: .off,
             connectionMode: .local,
-            codexThreadCatalogEnabled: true)
+            codexThreadCatalogEnabled: true,
+            claudeSessionCatalogEnabled: true)
         let commands = MacNodeModeCoordinator.resolvedCommands(caps: caps)
 
         #expect(!caps.contains(MacNodeCodexThreadCatalogContract.capability))
         #expect(!commands.contains(MacNodeCodexThreadCatalogContract.listCommand))
+        #expect(!commands.contains(MacNodeCodexThreadCatalogContract.turnsCommand))
+        #expect(!caps.contains(MacNodeClaudeSessionCatalogContract.capability))
+        #expect(!commands.contains(MacNodeClaudeSessionCatalogContract.listCommand))
+        #expect(!commands.contains(MacNodeClaudeSessionCatalogContract.readCommand))
     }
 
-    @Test func `remote mode advertises native Codex thread catalog`() {
+    @Test func `remote mode advertises native session catalogs`() {
         let caps = MacNodeModeCoordinator.resolvedCaps(
             browserControlEnabled: false,
             cameraEnabled: false,
             computerControlEnabled: false,
             locationMode: .off,
             connectionMode: .remote,
-            codexThreadCatalogEnabled: true)
+            codexThreadCatalogEnabled: true,
+            claudeSessionCatalogEnabled: true)
         let commands = MacNodeModeCoordinator.resolvedCommands(caps: caps)
 
         #expect(caps.contains(MacNodeCodexThreadCatalogContract.capability))
         #expect(commands.contains(MacNodeCodexThreadCatalogContract.listCommand))
+        #expect(commands.contains(MacNodeCodexThreadCatalogContract.turnsCommand))
         #expect(MacNodeModeCoordinator.routeSnapshotAllowsCodexCatalogInvoke(
             command: MacNodeCodexThreadCatalogContract.listCommand,
             catalogAdvertised: true))
         #expect(!MacNodeModeCoordinator.routeSnapshotAllowsCodexCatalogInvoke(
             command: MacNodeCodexThreadCatalogContract.listCommand,
             catalogAdvertised: false))
+        #expect(!MacNodeModeCoordinator.routeSnapshotAllowsCodexCatalogInvoke(
+            command: MacNodeCodexThreadCatalogContract.turnsCommand,
+            catalogAdvertised: false))
         #expect(MacNodeModeCoordinator.routeSnapshotAllowsCodexCatalogInvoke(
+            command: OpenClawSystemCommand.notify.rawValue,
+            catalogAdvertised: false))
+        #expect(caps.contains(MacNodeClaudeSessionCatalogContract.capability))
+        #expect(commands.contains(MacNodeClaudeSessionCatalogContract.listCommand))
+        #expect(commands.contains(MacNodeClaudeSessionCatalogContract.readCommand))
+        #expect(MacNodeModeCoordinator.routeSnapshotAllowsClaudeCatalogInvoke(
+            command: MacNodeClaudeSessionCatalogContract.listCommand,
+            catalogAdvertised: true))
+        #expect(!MacNodeModeCoordinator.routeSnapshotAllowsClaudeCatalogInvoke(
+            command: MacNodeClaudeSessionCatalogContract.readCommand,
+            catalogAdvertised: false))
+        #expect(MacNodeModeCoordinator.routeSnapshotAllowsClaudeCatalogInvoke(
             command: OpenClawSystemCommand.notify.rawValue,
             catalogAdvertised: false))
     }

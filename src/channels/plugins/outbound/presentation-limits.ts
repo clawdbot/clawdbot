@@ -4,6 +4,7 @@
  * Truncates and reshapes portable presentation blocks to match per-channel limits.
  */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   renderMessagePresentationChartFallbackText,
   renderMessagePresentationTableFallbackText,
@@ -71,7 +72,7 @@ function truncatePresentationText(value: string, limits: TextLimits | undefined)
     return truncateUtf8Bytes(value, limit);
   }
   if (limits?.encoding === "utf16-units") {
-    return value.length > limit ? value.slice(0, limit) : value;
+    return truncateUtf16Safe(value, limit);
   }
   const chars = Array.from(value);
   return chars.length > limit ? chars.slice(0, limit).join("") : value;

@@ -16,7 +16,7 @@ import { maybeHandleGoogleChatApprovalCardClick } from "./approval-card-click.js
 import type { GoogleChatAudienceType } from "./auth.js";
 import { applyGoogleChatInboundAccessPolicy } from "./monitor-access.js";
 import { resolveGoogleChatDurableReplyOptions } from "./monitor-durable.js";
-import { deliverGoogleChatReply } from "./monitor-reply-delivery.js";
+import { deliverGoogleChatReply, type GoogleChatTypingMessage } from "./monitor-reply-delivery.js";
 import {
   registerGoogleChatWebhookTarget,
   setGoogleChatWebhookEventProcessor,
@@ -354,7 +354,11 @@ async function processMessageWithPipeline(params: {
     );
     typingIndicator = "message";
   }
-  let typingMessageName: string | undefined;
+  let typingMessage: GoogleChatTypingMessage | undefined;
+  const typingMessageThreadName =
+    account.config.replyToMode && account.config.replyToMode !== "off"
+      ? replyThreadName
+      : undefined;
 
   // Start typing indicator (message mode only, reaction mode not supported with app auth)
   if (typingIndicator === "message") {
@@ -368,9 +372,11 @@ async function processMessageWithPipeline(params: {
         account,
         space: spaceId,
         text: `_${botName} is typing..._`,
-        thread: replyThreadName,
+        thread: typingMessageThreadName,
       });
-      typingMessageName = result?.messageName;
+      if (result?.messageName) {
+        typingMessage = { name: result.messageName, thread: typingMessageThreadName };
+      }
     } catch (err) {
       runtime.error?.(`Failed sending typing message: ${String(err)}`);
     }
@@ -406,7 +412,7 @@ async function processMessageWithPipeline(params: {
               payload,
               infoKind: info.kind,
               spaceId,
-              typingMessageName,
+              hasTypingMessage: Boolean(typingMessage),
             }),
           deliver: async (payload) => {
             await deliverGoogleChatReply({
@@ -417,10 +423,10 @@ async function processMessageWithPipeline(params: {
               core,
               config,
               statusSink,
-              typingMessageName,
+              typingMessage,
             });
             // Only use typing message for first delivery
-            typingMessageName = undefined;
+            typingMessage = undefined;
           },
           onDelivered: () => {
             statusSink?.({ lastOutboundAt: Date.now() });

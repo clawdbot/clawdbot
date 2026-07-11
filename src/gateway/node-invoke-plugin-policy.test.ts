@@ -23,6 +23,16 @@ const DEMO_PLUGIN_ID = "demo";
 const DEMO_COMMAND = "demo.read";
 const DEMO_PARAMS = { path: "/tmp/x" };
 
+const hasApprovalTurnSourceRouteMock = vi.hoisted(() =>
+  vi.fn(
+    (params: { turnSourceChannel?: string | null; approvalKind?: "exec" | "plugin" }) =>
+      params.approvalKind === "plugin" && params.turnSourceChannel === "tui",
+  ),
+);
+
+vi.mock("../infra/approval-turn-source.js", () => ({
+  hasApprovalTurnSourceRoute: hasApprovalTurnSourceRouteMock,
+}));
 function createNodeSession(): NodeSession {
   return {
     nodeId: "node-1",
@@ -41,6 +51,8 @@ function createContext(opts?: {
   getApprovalClientConnIds?: GatewayRequestContext["getApprovalClientConnIds"];
   getRuntimeConfig?: GatewayRequestContext["getRuntimeConfig"];
   nodeSession?: NodeSession;
+  hasExecApprovalClients?: GatewayRequestContext["hasExecApprovalClients"];
+  forwardPluginApprovalRequest?: GatewayRequestContext["forwardPluginApprovalRequest"];
 }) {
   const nodeSession = opts?.nodeSession ?? createNodeSession();
   const invoke = vi.fn(async () => ({
@@ -59,6 +71,8 @@ function createContext(opts?: {
       broadcastToConnIds: vi.fn(),
       pluginApprovalManager: opts?.pluginApprovalManager,
       getApprovalClientConnIds: opts?.getApprovalClientConnIds,
+      hasExecApprovalClients: opts?.hasExecApprovalClients,
+      forwardPluginApprovalRequest: opts?.forwardPluginApprovalRequest,
     } as unknown as GatewayRequestContext,
     invoke,
   };
@@ -198,6 +212,7 @@ async function expectApprovalResolution(
 describe("applyPluginNodeInvokePolicy", () => {
   beforeEach(() => {
     resetPluginRuntimeStateForTest();
+    hasApprovalTurnSourceRouteMock.mockClear();
   });
 
   afterEach(() => {
@@ -369,6 +384,109 @@ describe("applyPluginNodeInvokePolicy", () => {
     );
 
     await expectApprovalResolution(resultPromise, manager, record);
+  });
+
+  it("forwards plugin policy approvals to the originating turn source", async () => {
+    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();
+    const getApprovalClientConnIds = vi.fn(() => new Set<string>());
+    const handlePluginApprovalRequested = vi.fn(async () => true);
+    setDangerousDemoCommandRegistry([createApprovalRequestPolicy()]);
+    const { context } = createContext({
+      pluginApprovalManager: manager,
+      getApprovalClientConnIds,
+      hasExecApprovalClients: vi.fn(() => false),
+      forwardPluginApprovalRequest: handlePluginApprovalRequested,
+    });
+    const resultPromise = applyPluginNodeInvokePolicy({
+      context,
+      client: {
+        ...createOperatorClient(),
+        internal: {
+          agentRuntimeIdentity: {
+            kind: "agentRuntime",
+            agentId: "main",
+            sessionKey: "agent:main:telegram:direct:alice",
+          },
+        },
+      },
+      nodeSession: createNodeSession(),
+      command: DEMO_COMMAND,
+      params: DEMO_PARAMS,
+      turnSource: {
+        channel: "tui",
+        to: "terminal",
+        accountId: "default",
+        threadId: 7,
+      },
+    });
+
+    const record = await expectSinglePendingApproval(manager);
+    expect(record.request.turnSourceChannel).toBe("tui");
+    expect(record.request.turnSourceTo).toBe("terminal");
+    expect(record.request.turnSourceAccountId).toBe("default");
+    expect(record.request.turnSourceThreadId).toBe(7);
+    expect(context.broadcast).not.toHaveBeenCalled();
+    expect(context.broadcastToConnIds).toHaveBeenCalledWith(
+      "plugin.approval.requested",
+      expect.objectContaining({ id: record.id }),
+      new Set<string>(),
+      { dropIfSlow: true },
+    );
+    expect(handlePluginApprovalRequested).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: record.id,
+        request: expect.objectContaining({
+          turnSourceChannel: "tui",
+          turnSourceTo: "terminal",
+          turnSourceAccountId: "default",
+          turnSourceThreadId: 7,
+          agentId: "main",
+          sessionKey: "agent:main:telegram:direct:alice",
+        }),
+      }),
+    );
+
+    await expectApprovalResolution(resultPromise, manager, record);
+  });
+
+  it("ignores approval routes from unsigned node.invoke clients", async () => {
+    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();
+    const forwardPluginApprovalRequest = vi.fn(async () => false);
+    setDangerousDemoCommandRegistry([createApprovalRequestPolicy()]);
+    const { context } = createContext({
+      pluginApprovalManager: manager,
+      getApprovalClientConnIds: vi.fn(() => new Set<string>()),
+      hasExecApprovalClients: vi.fn(() => false),
+      forwardPluginApprovalRequest,
+    });
+
+    const result = await applyPluginNodeInvokePolicy({
+      context,
+      client: createOperatorClient(),
+      nodeSession: createNodeSession(),
+      command: DEMO_COMMAND,
+      params: DEMO_PARAMS,
+      turnSource: {
+        channel: "telegram",
+        to: "chat:other",
+        accountId: "work",
+        threadId: 9,
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true, payload: { decision: null } });
+    expect(forwardPluginApprovalRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        request: expect.objectContaining({
+          agentId: null,
+          sessionKey: null,
+          turnSourceChannel: null,
+          turnSourceTo: null,
+          turnSourceAccountId: null,
+          turnSourceThreadId: null,
+        }),
+      }),
+    );
   });
 
   it("caps plugin policy approval timeouts through the shared approval policy", async () => {

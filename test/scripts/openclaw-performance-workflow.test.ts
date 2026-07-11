@@ -82,7 +82,7 @@ describe("OpenClaw performance workflow", () => {
 
   it("pins the Kova evaluator with release validation contracts", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
-    const kovaRef = "790f0b28229cb60a60c289ef8c250d76c639f48f";
+    const kovaRef = "5425ee9e6c59cc18c1fd52a65df09fbc758381a7";
     const install = findStep("Install OCM and Kova");
     const installRun = install.run ?? "";
 
@@ -163,6 +163,17 @@ describe("OpenClaw performance workflow", () => {
     expect(run).toContain("checkout --detach FETCH_HEAD");
     expect(run).not.toContain("checkout -B main FETCH_HEAD");
     expect(workflowText).not.toContain("https://x-access-token:");
+  });
+
+  it("builds only the QA and startup artifacts required by source probes", () => {
+    const run = findStep("Run OpenClaw source performance probes", "source_performance").run ?? "";
+    const build = "OPENCLAW_BUILD_PRIVATE_QA=1 node scripts/build-all.mjs sourcePerformance";
+
+    expect(run).toContain("module.BUILD_ALL_PROFILES?.sourcePerformance");
+    expect(run).toContain(build);
+    expect(run).toContain("pnpm build");
+    expect(run.indexOf(build)).toBeLessThan(run.indexOf("pnpm test:gateway:cpu-scenarios"));
+    expect(run.indexOf("pnpm build")).toBeLessThan(run.indexOf("pnpm test:gateway:cpu-scenarios"));
   });
 
   it("isolates required publication in a fresh artifact-consuming job", () => {
@@ -765,8 +776,10 @@ esac
   });
 
   it("installs local workspace packages beside the OCM root tarball", () => {
+    const workflow = readWorkflow();
     const configure = findStep("Configure OCM local workspace dependencies");
 
+    expect(workflow.jobs?.kova?.env).not.toHaveProperty("OPENCLAW_OCM_RUNTIME_BUILD_PROFILE");
     expect(configure.run).toContain(
       'npm_wrapper="$PERFORMANCE_HELPER_DIR/scripts/ocm-npm-workspace-deps.mjs"',
     );

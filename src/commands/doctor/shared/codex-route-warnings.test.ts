@@ -75,6 +75,65 @@ describe("collectCodexRouteWarnings", () => {
     ]);
   });
 
+  it("surfaces enabled Codex Computer Use in doctor warnings", () => {
+    const warnings = collectCodexRouteWarnings({
+      cfg: {
+        plugins: {
+          entries: {
+            codex: {
+              enabled: true,
+              config: {
+                computerUse: {
+                  enabled: true,
+                  healthCheckEnabled: true,
+                  healthCheckIntervalMinutes: 120,
+                  autoRepair: true,
+                },
+              },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+    });
+
+    expect(warnings).toStrictEqual([
+      [
+        "- Codex Computer Use is enabled.",
+        "- Doctor config review found Computer Use enabled; run `/codex computer-use status` to inspect installation, exposure, and the live `list_apps` probe.",
+        "- Periodic Computer Use health checks are enabled with a 120-minute cadence.",
+        "- Stale Computer Use MCP child repair is enabled and limited to SkyComputerUseClient children.",
+      ].join("\n"),
+    ]);
+  });
+
+  it("surfaces opt-in defaults for Codex Computer Use health and repair", () => {
+    const warnings = collectCodexRouteWarnings({
+      cfg: {
+        plugins: {
+          entries: {
+            codex: {
+              enabled: true,
+              config: {
+                computerUse: {
+                  enabled: true,
+                },
+              },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+    });
+
+    expect(warnings).toStrictEqual([
+      [
+        "- Codex Computer Use is enabled.",
+        "- Doctor config review found Computer Use enabled; run `/codex computer-use status` to inspect installation, exposure, and the live `list_apps` probe.",
+        "- Periodic Computer Use health checks are disabled by default; set `computerUse.healthCheckEnabled` to true to enable them.",
+        "- Stale Computer Use MCP child repair is disabled by default; set `computerUse.autoRepair` to true to repair before retrying a failed probe.",
+      ].join("\n"),
+    ]);
+  });
+
   it("still warns when the native Codex runtime is selected with a legacy model ref", () => {
     const warnings = collectCodexRouteWarnings({
       cfg: {

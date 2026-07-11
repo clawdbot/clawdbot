@@ -7,8 +7,10 @@ import {
   getCodexSessionsState,
   loadCodexSessions,
   loadMoreCodexSessions,
+  loadCodexTranscript,
   setCodexSessionsSearch,
   stopCodexSessionsPolling,
+  unbindCodexTranscript,
   type CodexSessionsPayload,
 } from "./codex-sessions-controller.ts";
 
@@ -716,5 +718,126 @@ describe("Codex sessions controller", () => {
 
     await loadCodexSessions(state, client);
     expect(state.hosts[0]?.sessions[0]?.threadId).toBe("fresh");
+  });
+
+  it("appends paginated Codex transcript items without requesting full history", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        hostId: "node:macbook",
+        label: "MacBook",
+        threadId: "thread-1",
+        items: [{ id: "item-2", type: "agentMessage", text: "Answer" }],
+        nextCursor: "items-2",
+      })
+      .mockResolvedValueOnce({
+        hostId: "node:macbook",
+        label: "MacBook",
+        threadId: "thread-1",
+        items: [{ id: "item-1", type: "userMessage", text: "Question" }],
+      });
+    const client = clientWithRequest(request);
+    const state = getCodexSessionsState({});
+
+    await loadCodexTranscript(state, client, "node:macbook", "thread-1");
+    await loadCodexTranscript(state, client, "node:macbook", "thread-1", { append: true });
+
+    expect(request).toHaveBeenNthCalledWith(1, "codex.sessions.read", {
+      hostId: "node:macbook",
+      threadId: "thread-1",
+      limit: 20,
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "codex.sessions.read", {
+      hostId: "node:macbook",
+      threadId: "thread-1",
+      limit: 20,
+      cursor: "items-2",
+    });
+    expect(state.transcriptItems.map((item) => item.text)).toEqual(["Question", "Answer"]);
+    expect(state.transcriptNextCursor).toBeNull();
+  });
+
+  it("loads a newly selected transcript without waiting for the previous read", async () => {
+    const first = deferred<unknown>();
+    const second = deferred<unknown>();
+    const request = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    const client = clientWithRequest(request);
+    const state = getCodexSessionsState({});
+
+    const firstLoad = loadCodexTranscript(state, client, "node:macbook", "thread-1");
+    const secondLoad = loadCodexTranscript(state, client, "node:macbook", "thread-2");
+
+    expect(request).toHaveBeenCalledTimes(2);
+    second.resolve({
+      hostId: "node:macbook",
+      label: "MacBook",
+      threadId: "thread-2",
+      items: [{ id: "item-2", type: "agentMessage", text: "Selected answer" }],
+    });
+    await secondLoad;
+    first.resolve({
+      hostId: "node:macbook",
+      label: "MacBook",
+      threadId: "thread-1",
+      items: [{ id: "item-1", type: "agentMessage", text: "Stale answer" }],
+    });
+    await firstLoad;
+
+    expect(state.transcriptKey).toBe('["node:macbook","thread-2"]');
+    expect(state.transcriptItems.map((item) => item.text)).toEqual(["Selected answer"]);
+    expect(state.transcriptLoading).toBe(false);
+  });
+
+  it("reloads a transcript after leaving and reopening the detail route", async () => {
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("temporary read failure"))
+      .mockResolvedValueOnce({
+        hostId: "node:macbook",
+        label: "MacBook",
+        threadId: "thread-1",
+        items: [{ id: "item-1", type: "agentMessage", text: "Recovered answer" }],
+      });
+    const client = clientWithRequest(request);
+    const state = getCodexSessionsState({});
+
+    await loadCodexTranscript(state, client, "node:macbook", "thread-1");
+    expect(state.transcriptError).toBe("temporary read failure");
+
+    unbindCodexTranscript(state);
+    await loadCodexTranscript(state, client, "node:macbook", "thread-1");
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(state.transcriptError).toBeNull();
+    expect(state.transcriptItems.map((item) => item.text)).toEqual(["Recovered answer"]);
+  });
+
+  it("stops paginated transcript loading when Codex repeats a cursor", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        hostId: "node:macbook",
+        label: "MacBook",
+        threadId: "thread-1",
+        items: [{ id: "item-2", type: "agentMessage", text: "Answer" }],
+        nextCursor: "items-2",
+      })
+      .mockResolvedValueOnce({
+        hostId: "node:macbook",
+        label: "MacBook",
+        threadId: "thread-1",
+        items: [{ id: "item-1", type: "userMessage", text: "Question" }],
+        nextCursor: "items-2",
+      });
+    const client = clientWithRequest(request);
+    const state = getCodexSessionsState({});
+
+    await loadCodexTranscript(state, client, "node:macbook", "thread-1");
+    await loadCodexTranscript(state, client, "node:macbook", "thread-1", { append: true });
+    await loadCodexTranscript(state, client, "node:macbook", "thread-1", { append: true });
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(state.transcriptItems.map((item) => item.text)).toEqual(["Answer"]);
+    expect(state.transcriptError).toBe("Codex transcript returned a repeated page cursor");
   });
 });

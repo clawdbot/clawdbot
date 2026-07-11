@@ -32,6 +32,11 @@ import {
   type DiagnosticEventPayload,
 } from "../../infra/diagnostic-events.js";
 import {
+  resetGatewaySuspendCoordinatorForTest,
+  resumeGatewaySuspend,
+} from "../../infra/gateway-suspend-coordinator.js";
+import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
+import {
   interruptSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
@@ -53,6 +58,7 @@ import { setGatewayDedupeEntry } from "./agent-job.js";
 import { agentHandlers } from "./agent.js";
 import { chatHandlers } from "./chat.js";
 import { expectSubagentFollowupReactivation } from "./subagent-followup.test-helpers.js";
+import { suspendHandlers } from "./suspend.js";
 import type { GatewayRequestContext } from "./types.js";
 
 const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
@@ -227,6 +233,7 @@ vi.mock("../../infra/agent-events.js", () => ({
   clearAgentRunContext: mocks.clearAgentRunContext,
   emitAgentEvent: mocks.emitAgentEvent,
   getAgentEventLifecycleGeneration: () => mocks.lifecycleGeneration,
+  getAgentRunContext: vi.fn(() => undefined),
   registerAgentRunContext: mocks.registerAgentRunContext,
   onAgentEvent: vi.fn(),
 }));
@@ -616,6 +623,26 @@ function setupCronContinuationReleaseFixture() {
     sessionKey,
     store: { [sessionKey]: structuredClone(entry) } as Record<string, SessionEntry>,
   };
+}
+
+async function invokeGatewaySuspendPrepare(context: GatewayRequestContext, requestId: string) {
+  const respond = vi.fn();
+  await suspendHandlers["gateway.suspend.prepare"]({
+    params: { requestId },
+    respond: respond as never,
+    context: {
+      ...context,
+      cron: {
+        pauseScheduling: vi.fn(),
+        resumeScheduling: vi.fn(),
+        getSuspensionBlockerCount: () => 0,
+      },
+    } as unknown as GatewayRequestContext,
+    req: { type: "req", id: requestId, method: "gateway.suspend.prepare" },
+    client: null,
+    isWebchatConnect: () => false,
+  });
+  return respond;
 }
 
 // Operator-write client that is NOT the in-process backend ACP spawn caller:
@@ -3876,6 +3903,7 @@ describe("gateway agent handler", () => {
 
   it("recovers a continuation release after reporting a durable write failure", async () => {
     vi.useFakeTimers();
+    resetGatewayWorkAdmission();
     try {
       mocks.agentCommand.mockClear();
       const { sessionKey, store } = setupCronContinuationReleaseFixture();
@@ -3920,6 +3948,15 @@ describe("gateway agent handler", () => {
         expect.objectContaining({ code: ErrorCodes.UNAVAILABLE }),
         expect.objectContaining({ runId: "cron-media-release-fails" }),
       );
+      const busyPrepare = await invokeGatewaySuspendPrepare(context, "cron-media-release-backoff");
+      expect(busyPrepare).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          status: "busy",
+          reason: "active-work",
+          blockers: expect.arrayContaining([expect.objectContaining({ kind: "root-request" })]),
+        }),
+      );
 
       await vi.advanceTimersByTimeAsync(250);
 
@@ -3928,6 +3965,18 @@ describe("gateway agent handler", () => {
         lifecycleRevision: "revision-1",
         phase: "ready",
         basePersisted: true,
+      });
+      const readyPrepare = await invokeGatewaySuspendPrepare(
+        context,
+        "cron-media-release-recovered",
+      );
+      const readyPayload = readyPrepare.mock.calls.at(-1)?.[1] as
+        | { status?: string; suspensionId?: string }
+        | undefined;
+      expect(readyPayload).toMatchObject({ status: "ready" });
+      expect(resumeGatewaySuspend(readyPayload?.suspensionId ?? "missing")).toMatchObject({
+        ok: true,
+        status: "running",
       });
       const retryRespond = await invokeAgent(request, {
         reqId: "cron-media-release-retry",
@@ -3942,14 +3991,90 @@ describe("gateway agent handler", () => {
       );
       expect(mocks.agentCommand).toHaveBeenCalledOnce();
     } finally {
+      resetGatewaySuspendCoordinatorForTest();
+      resetGatewayWorkAdmission();
+      vi.useRealTimers();
+    }
+  });
+
+  it("releases suspension admission after continuation recovery exhausts", async () => {
+    vi.useFakeTimers();
+    resetGatewayWorkAdmission();
+    try {
+      const { sessionKey, store } = setupCronContinuationReleaseFixture();
+      const context = makeContext();
+      let releaseAttempts = 0;
+      mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+        if (store[sessionKey].cronRunContinuation?.phase === "continuing") {
+          releaseAttempts += 1;
+          throw new Error("disk unavailable");
+        }
+        return await updater(store);
+      });
+      mocks.agentCommand.mockResolvedValue({ payloads: [{ text: "continued" }], meta: {} });
+
+      await invokeAgent(
+        {
+          message: "media completion",
+          sessionKey,
+          internalEvents: [cronMediaCompletionEvent()],
+          idempotencyKey: "cron-media-release-exhausts",
+        },
+        {
+          reqId: "cron-media-release-exhausts",
+          client: cronContinuationGatewayClient(),
+          context,
+          flushDispatch: false,
+        },
+      );
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(releaseAttempts).toBe(3);
+      const busyPrepare = await invokeGatewaySuspendPrepare(
+        context,
+        "cron-media-release-exhaustion-backoff",
+      );
+      expect(busyPrepare).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          status: "busy",
+          blockers: expect.arrayContaining([expect.objectContaining({ kind: "root-request" })]),
+        }),
+      );
+
+      for (const delayMs of [250, 1_000, 4_000, 15_000]) {
+        await vi.advanceTimersByTimeAsync(delayMs);
+      }
+
+      expect(releaseAttempts).toBe(15);
+      expect(context.logGateway.warn).toHaveBeenCalledWith(
+        "cron continuation release recovery exhausted for cron-media-release-exhausts",
+      );
+      const readyPrepare = await invokeGatewaySuspendPrepare(
+        context,
+        "cron-media-release-exhausted",
+      );
+      const readyPayload = readyPrepare.mock.calls.at(-1)?.[1] as
+        | { status?: string; suspensionId?: string }
+        | undefined;
+      expect(readyPayload).toMatchObject({ status: "ready" });
+      expect(resumeGatewaySuspend(readyPayload?.suspensionId ?? "missing")).toMatchObject({
+        ok: true,
+        status: "running",
+      });
+    } finally {
+      resetGatewaySuspendCoordinatorForTest();
+      resetGatewayWorkAdmission();
       vi.useRealTimers();
     }
   });
 
   it("stops continuation release recovery after gateway generation rotation", async () => {
     vi.useFakeTimers();
+    resetGatewayWorkAdmission();
     try {
       const { sessionKey, store } = setupCronContinuationReleaseFixture();
+      const context = makeContext();
       let releaseAttempts = 0;
       mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
         if (store[sessionKey].cronRunContinuation?.phase === "continuing") {
@@ -3970,11 +4095,20 @@ describe("gateway agent handler", () => {
         {
           reqId: "cron-media-release-rotates",
           client: cronContinuationGatewayClient(),
+          context,
           flushDispatch: false,
         },
       );
       await vi.advanceTimersByTimeAsync(10);
       expect(releaseAttempts).toBe(3);
+      const busyPrepare = await invokeGatewaySuspendPrepare(context, "cron-media-release-rotating");
+      expect(busyPrepare).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          status: "busy",
+          blockers: expect.arrayContaining([expect.objectContaining({ kind: "root-request" })]),
+        }),
+      );
 
       mocks.lifecycleGeneration = "post-restart-generation";
       await vi.advanceTimersByTimeAsync(250);
@@ -3984,7 +4118,21 @@ describe("gateway agent handler", () => {
         phase: "continuing",
         ownerRunId: "cron-media-release-rotates",
       });
+      const readyPrepare = await invokeGatewaySuspendPrepare(
+        context,
+        "cron-media-release-rotation-complete",
+      );
+      const readyPayload = readyPrepare.mock.calls.at(-1)?.[1] as
+        | { status?: string; suspensionId?: string }
+        | undefined;
+      expect(readyPayload).toMatchObject({ status: "ready" });
+      expect(resumeGatewaySuspend(readyPayload?.suspensionId ?? "missing")).toMatchObject({
+        ok: true,
+        status: "running",
+      });
     } finally {
+      resetGatewaySuspendCoordinatorForTest();
+      resetGatewayWorkAdmission();
       vi.useRealTimers();
     }
   });

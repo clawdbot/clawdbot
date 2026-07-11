@@ -12,6 +12,7 @@ export const CODEX_CONTROL_METHODS = {
   listMcpServers: "mcpServerStatus/list",
   listSkills: "skills/list",
   listThreads: "thread/list",
+  listThreadTurns: "thread/turns/list",
   readThread: "thread/read",
   rateLimits: "account/rateLimits/read",
   archiveThread: "thread/archive",

@@ -13,7 +13,7 @@ describe("cli json stdout contract", () => {
         await fs.mkdir(legacyDir, { recursive: true });
         await fs.writeFile(path.join(legacyDir, "clawdbot.json"), "{}", "utf8");
 
-        const env = {
+        const env: NodeJS.ProcessEnv = {
           ...process.env,
           HOME: tempHome,
           USERPROFILE: tempHome,

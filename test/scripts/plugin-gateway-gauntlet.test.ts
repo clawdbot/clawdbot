@@ -604,7 +604,7 @@ describe("plugin gateway gauntlet helpers", () => {
 
     expect(row.status).toBe(1);
     expect(row.spawnError?.code).toBe("ENOENT");
-    await expect(fs.readFile(row.logPath, "utf8")).resolves.toContain("[spawn error] ENOENT");
+    await expect(fs.readFile(row.logPath!, "utf8")).resolves.toContain("[spawn error] ENOENT");
   });
 
   it("clamps oversized measured command timers before scheduling", async () => {
@@ -624,7 +624,7 @@ describe("plugin gateway gauntlet helpers", () => {
 
     expect(row.status).toBe(0);
     expect(row.timedOut).toBe(false);
-    await expect(fs.readFile(row.logPath, "utf8")).resolves.not.toContain("ETIMEDOUT");
+    await expect(fs.readFile(row.logPath!, "utf8")).resolves.not.toContain("ETIMEDOUT");
   });
 
   it.runIf(process.platform !== "win32")(
@@ -762,8 +762,8 @@ setInterval(() => {}, 1000);
     });
 
     expect(row.status).toBe(0);
-    await expect(fs.readFile(row.logPath, "utf8")).resolves.toContain("live stdout");
-    await expect(fs.readFile(row.logPath, "utf8")).resolves.toContain("live stderr");
+    await expect(fs.readFile(row.logPath!, "utf8")).resolves.toContain("live stdout");
+    await expect(fs.readFile(row.logPath!, "utf8")).resolves.toContain("live stderr");
   });
 
   it("returns a failed row when measured command log writing fails", async () => {
@@ -1014,7 +1014,7 @@ process.exit(7);
     });
 
     expect(row.status).toBe(0);
-    const log = await fs.readFile(row.logPath, "utf8");
+    const log = await fs.readFile(row.logPath!, "utf8");
     expect(log).toContain("x".repeat(12));
     expect(log).toContain("[stdout truncated after 12 bytes]");
   });
@@ -1046,7 +1046,7 @@ process.exit(7);
     expect(relayed).toContain("x".repeat(12));
     expect(relayed).not.toContain("x".repeat(32));
     expect(relayed).toContain("[stdout relay truncated after 12 bytes]");
-    await expect(fs.readFile(row.logPath, "utf8")).resolves.toContain("x".repeat(32));
+    await expect(fs.readFile(row.logPath!, "utf8")).resolves.toContain("x".repeat(32));
   });
 
   it("force kills timed-out live measured process groups that ignore SIGTERM", async () => {

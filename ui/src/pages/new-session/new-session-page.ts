@@ -6,7 +6,9 @@ import { property, state } from "lit/decorators.js";
 import type { FsListDirResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { loadSettings } from "../../app/settings.ts";
 import { icons } from "../../components/icons.ts";
+import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import { searchForSession } from "../../lib/sessions/index.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
@@ -578,30 +580,57 @@ class NewSessionPage extends OpenClawLightDomElement {
               </div>`
             : nothing}
           ${this.error ? html`<div class="new-session-page__error">${this.error}</div>` : nothing}
-          <textarea
-            class="new-session-page__message"
-            rows="6"
-            placeholder=${t("newSession.messagePlaceholder")}
-            .value=${this.message}
-            @input=${(event: Event) => {
-              this.message = (event.target as HTMLTextAreaElement).value;
-            }}
-            @keydown=${(event: KeyboardEvent) => {
-              if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-                event.preventDefault();
-                void this.submit();
-              }
-            }}
-          ></textarea>
-          <div class="new-session-page__actions">
-            <button
-              type="button"
-              class="new-session-page__start"
-              ?disabled=${!this.canSubmit()}
-              @click=${() => void this.submit()}
-            >
-              ${this.submitting ? t("newSession.starting") : t("newSession.start")}
-            </button>
+          ${this.renderComposer()}
+        </div>
+      </div>
+    `;
+  }
+
+  private handleMessageKeydown(event: KeyboardEvent) {
+    // keyCode 229 mirrors the chat composer's IME guard: some browsers emit
+    // the candidate-confirm Enter with isComposing === false.
+    if (event.key !== "Enter" || event.shiftKey || event.isComposing || event.keyCode === 229) {
+      return;
+    }
+    // Honor the chat composer's send-shortcut setting so the draft picker
+    // sends exactly like an existing session's composer.
+    const requiresModifier = loadSettings().chatSendShortcut === "modifier-enter";
+    if (!requiresModifier || event.metaKey || event.ctrlKey) {
+      event.preventDefault();
+      void this.submit();
+    }
+  }
+
+  /** Draft message box styled as the chat composer shell so both pickers match. */
+  private renderComposer() {
+    const startLabel = this.submitting ? t("newSession.starting") : t("newSession.start");
+    return html`
+      <div class="agent-chat__input new-session-page__composer">
+        <div class="agent-chat__composer-input-row">
+          <div class="agent-chat__composer-combobox">
+            <textarea
+              class="new-session-page__message"
+              rows="4"
+              placeholder=${t("newSession.messagePlaceholder")}
+              .value=${this.message}
+              @input=${(event: Event) => {
+                this.message = (event.target as HTMLTextAreaElement).value;
+              }}
+              @keydown=${(event: KeyboardEvent) => this.handleMessageKeydown(event)}
+            ></textarea>
+          </div>
+          <div class="agent-chat__composer-actions">
+            <openclaw-tooltip content=${t("newSession.start")}>
+              <button
+                type="button"
+                class="chat-send-btn"
+                ?disabled=${!this.canSubmit()}
+                aria-label=${startLabel}
+                @click=${() => void this.submit()}
+              >
+                ${this.submitting ? icons.loader : icons.send}
+              </button>
+            </openclaw-tooltip>
           </div>
         </div>
       </div>

@@ -79,12 +79,14 @@ describe("zai fallback repro command resolution", () => {
       },
       error: () => {},
       log: () => {},
-      mkdtemp: async () => {
+      mkdtemp: (async () => {
         const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-zai-fallback-test-"));
         tempRoots.push(root);
         return root;
-      },
-      randomUUID: () => "uuid-test",
+      }) as unknown as typeof fs.mkdtemp,
+      randomUUID: (() => "uuid-test") as unknown as NonNullable<
+        NonNullable<Parameters<typeof runZaiFallbackRepro>[0]>["randomUUID"]
+      >,
       runCommand: async (label, _args, env) => {
         calls.push(label);
         if (label === "run1") {

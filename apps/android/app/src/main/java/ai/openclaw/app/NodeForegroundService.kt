@@ -10,9 +10,11 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -20,24 +22,63 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** Foreground service that keeps the Android node connection and voice capture visible to the OS. */
 class NodeForegroundService : Service() {
   private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
   private var notificationJob: Job? = null
+  private var runtimeRestoreJob: Job? = null
+  private var activeRuntime: NodeRuntime? = null
+  private var latestStartId = 0
   private var voiceCaptureMode = VoiceCaptureMode.Off
+
+  @Volatile private var disconnectRequested = false
 
   override fun onCreate() {
     super.onCreate()
     ensureChannel()
     val initial = buildNotification(title = "OpenClaw Node", text = "Starting…")
     startForegroundWithTypes(notification = initial)
+  }
 
-    val runtime = (application as NodeApp).peekRuntime()
-    if (runtime == null) {
-      stopSelf()
-      return
-    }
+  private fun startRuntimeIfNeeded(startId: Int) {
+    if (activeRuntime != null || runtimeRestoreJob?.isActive == true || disconnectRequested) return
+    val app = application as NodeApp
+    runtimeRestoreJob =
+      scope.launch(Dispatchers.Default) {
+        try {
+          restoreStickyRuntime(
+            createRuntime = app::ensureBackgroundRuntime,
+            disconnectRequested = { disconnectRequested },
+            disconnectRuntime = NodeRuntime::disconnect,
+          ) { restoredRuntime ->
+            withContext(Dispatchers.Main) {
+              runtimeRestoreJob = null
+              if (disconnectRequested) {
+                false
+              } else {
+                activeRuntime = restoredRuntime
+                observeRuntime(restoredRuntime)
+                true
+              }
+            }
+          }
+        } catch (err: CancellationException) {
+          throw err
+        } catch (err: Throwable) {
+          Log.e("OpenClawNodeService", "Failed to restore node runtime", err)
+          withContext(Dispatchers.Main) {
+            runtimeRestoreJob = null
+            if (!disconnectRequested && !stopSelfResult(startId)) {
+              startRuntimeIfNeeded(latestStartId)
+            }
+          }
+        }
+      }
+  }
+
+  private fun observeRuntime(runtime: NodeRuntime) {
     // Keep the connection tuple atomic, then split connection and capture work so notification text
     // can update without restarting runtime-owned connection work.
     notificationJob =
@@ -101,10 +142,16 @@ class NodeForegroundService : Service() {
     flags: Int,
     startId: Int,
   ): Int {
+    latestStartId = maxOf(latestStartId, startId)
     when (intent?.action) {
       ACTION_STOP -> {
-        (application as NodeApp).peekRuntime()?.disconnect()
-        stopSelf()
+        disconnectRequested = true
+        runtimeRestoreJob?.cancel()
+        runtimeRestoreJob = null
+        activeRuntime?.disconnect()
+        activeRuntime = null
+        (application as NodeApp).disconnectRuntimeAsync()
+        stopSelfResult(startId)
         return START_NOT_STICKY
       }
       ACTION_SET_VOICE_CAPTURE_MODE -> {
@@ -118,6 +165,14 @@ class NodeForegroundService : Service() {
         )
       }
     }
+    if (disconnectRequested) {
+      // A STOP can lose stopSelfResult to a newer queued start. Let the newest
+      // start id close the service instead of leaving a disconnected FGS alive.
+      stopSelfResult(startId)
+      return START_NOT_STICKY
+    }
+    // START_STICKY recreates the service in a fresh process and calls this with a null intent.
+    startRuntimeIfNeeded(startId)
     // Keep running; connection is managed by NodeRuntime (auto-reconnect + manual).
     return START_STICKY
   }
@@ -229,6 +284,31 @@ class NodeForegroundService : Service() {
       } else {
         context.startService(intent)
       }
+    }
+  }
+}
+
+/** Restores process-local state after Android recreates a sticky service in a fresh process. */
+internal suspend fun <T> restoreStickyRuntime(
+  createRuntime: () -> T,
+  disconnectRequested: () -> Boolean,
+  disconnectRuntime: (T) -> Unit,
+  activateRuntime: suspend (T) -> Boolean,
+) {
+  // A queued recovery may begin after STOP; do not construct process state once
+  // disconnect has already won. The post-create check still closes the race during construction.
+  if (disconnectRequested()) return
+  val runtime = createRuntime()
+  var activated = false
+  try {
+    if (!disconnectRequested()) {
+      activated = activateRuntime(runtime)
+    }
+  } finally {
+    // Ownership transfers only after activation. Stop/cancellation during the
+    // dispatcher hop must disconnect the recovered runtime instead of leaking it.
+    if (!activated) {
+      disconnectRuntime(runtime)
     }
   }
 }

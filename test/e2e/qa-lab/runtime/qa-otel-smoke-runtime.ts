@@ -1,6 +1,7 @@
 // QA OTEL Smoke runtime supports OpenClaw repository automation.
 
 import { spawn } from "node:child_process";
+/* oxlint-disable typescript/unbound-method -- the original stream method is invoked with process.stdout through Reflect.apply below. */
 import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -1087,7 +1088,7 @@ async function stopDockerContainer(name: string): Promise<void> {
 }
 
 type StartDockerOtelCollectorDeps = {
-  mkdtemp?: typeof mkdtemp;
+  mkdtemp?: (prefix: string) => Promise<string>;
   platform?: NodeJS.Platform;
   randomUUID?: typeof randomUUID;
   reserveLocalPort?: typeof reserveLocalPort;
@@ -1341,7 +1342,7 @@ async function runDirectTelemetryProducer(params: {
       harnessId: "qa-otel-direct",
       pluginId: "diagnostics-otel",
       provider: "openai",
-      model: "gpt-5.5",
+      model: "gpt-5.6-luna",
       channel: "qa",
       trace: harnessTrace,
     });
@@ -1349,7 +1350,7 @@ async function runDirectTelemetryProducer(params: {
       type: "run.started",
       runId: DIRECT_RUN_ID,
       provider: "openai",
-      model: "gpt-5.5",
+      model: "gpt-5.6-luna",
       channel: "qa",
       trace: runTrace,
     });
@@ -1357,7 +1358,7 @@ async function runDirectTelemetryProducer(params: {
       type: "context.assembled",
       runId: DIRECT_RUN_ID,
       provider: "openai",
-      model: "gpt-5.5",
+      model: "gpt-5.6-luna",
       channel: "qa",
       messageCount: 1,
       historyTextChars: 0,
@@ -1373,7 +1374,7 @@ async function runDirectTelemetryProducer(params: {
       runId: DIRECT_RUN_ID,
       callId: DIRECT_CALL_ID,
       provider: "openai",
-      model: "gpt-5.5",
+      model: "gpt-5.6-luna",
       api: "responses",
       transport: "direct",
       trace: modelTrace,
@@ -1399,7 +1400,7 @@ async function runDirectTelemetryProducer(params: {
         runId: DIRECT_RUN_ID,
         callId: DIRECT_CALL_ID,
         provider: "openai",
-        model: "gpt-5.5",
+        model: "gpt-5.6-luna",
         api: "responses",
         transport: "direct",
         durationMs: 5,
@@ -1421,7 +1422,7 @@ async function runDirectTelemetryProducer(params: {
         type: "run.completed",
         runId: DIRECT_RUN_ID,
         provider: "openai",
-        model: "gpt-5.5",
+        model: "gpt-5.6-luna",
         channel: "qa",
         durationMs: 8,
         outcome: "error",
@@ -1437,7 +1438,7 @@ async function runDirectTelemetryProducer(params: {
         harnessId: "qa-otel-direct",
         pluginId: "diagnostics-otel",
         provider: "openai",
-        model: "gpt-5.5",
+        model: "gpt-5.6-luna",
         channel: "qa",
         durationMs: 10,
         outcome: "error",
@@ -1716,7 +1717,7 @@ async function main() {
   const writer = createQaScriptEvidenceWriter({
     artifactBase: options.outputDir,
     logFileName: "qa-otel-smoke.log",
-    primaryModel: "gpt-5.5",
+    primaryModel: "gpt-5.6-luna",
     providerMode: "mock-openai",
     repoRoot: process.cwd(),
     target: {
@@ -1763,7 +1764,7 @@ async function main() {
     const originalStdoutWrite = process.stdout.write;
     process.stdout.write = ((chunk: string | Uint8Array, ...args: unknown[]) => {
       stdoutDiagnosticLogs.append(chunk);
-      return originalStdoutWrite.call(process.stdout, chunk, ...args);
+      return Reflect.apply(originalStdoutWrite, process.stdout, [chunk, ...args]) as boolean;
     }) as typeof process.stdout.write;
     try {
       await runDirectTelemetryProducer({

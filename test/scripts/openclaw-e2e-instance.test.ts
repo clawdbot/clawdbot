@@ -65,7 +65,9 @@ function runSourcedHelper(
 }
 
 function expectShellSuccess(result: ReturnType<typeof spawnSync>) {
-  expect(result.status, result.stderr || result.stdout || result.error?.message).toBe(0);
+  expect(result.status, String(result.stderr || result.stdout || result.error?.message || "")).toBe(
+    0,
+  );
 }
 
 function writePackageFixture(packagePath: string): void {

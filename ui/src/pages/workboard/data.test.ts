@@ -4023,7 +4023,7 @@ describe("workboard controller", () => {
         kind: "agent-session",
         engine: "codex",
         mode: "autonomous",
-        model: "openai/gpt-5.5",
+        model: "openai/gpt-5.6-sol",
         status: "running",
         sessionKey: sampleTaskSessionKey,
         runId: "run-1",
@@ -4056,7 +4056,7 @@ describe("workboard controller", () => {
       "agent",
       expect.objectContaining({
         sessionKey: sampleTaskSessionKey,
-        model: "openai/gpt-5.5",
+        model: "openai/gpt-5.6-sol",
         message: expect.stringContaining("Work on this OpenClaw Workboard card: Build board"),
       }),
     );
@@ -4071,7 +4071,7 @@ describe("workboard controller", () => {
           execution: expect.objectContaining({
             engine: "codex",
             mode: "autonomous",
-            model: "openai/gpt-5.5",
+            model: "openai/gpt-5.6-sol",
             runId: "run-1",
           }),
         }),

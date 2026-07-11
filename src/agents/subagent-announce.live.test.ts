@@ -57,7 +57,7 @@ type LiveSubagentModelConfig = {
 type LiveSubagentModelProviders = NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>;
 
 function resolveLiveSubagentModelConfig(): LiveSubagentModelConfig {
-  const modelKey = process.env.OPENCLAW_LIVE_SUBAGENT_E2E_MODEL?.trim() || "openai/gpt-5.5";
+  const modelKey = process.env.OPENCLAW_LIVE_SUBAGENT_E2E_MODEL?.trim() || "openai/gpt-5.6-luna";
   if (modelKey.startsWith("google/")) {
     return {
       modelKey,

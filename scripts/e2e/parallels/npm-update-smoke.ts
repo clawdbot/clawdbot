@@ -571,7 +571,7 @@ export class NpmUpdateSmoke {
   private tgzDir = "";
   private latestVersion = "";
   private packageSpec = "";
-  private currentHead = "";
+  currentHead = "";
   private currentHeadShort = "";
   private harnessCheckoutVersion = "";
   private harnessTargetFamily = "";

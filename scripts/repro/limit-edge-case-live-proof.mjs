@@ -71,7 +71,7 @@ async function main() {
             role: "assistant",
             content: "b",
             provider: "openai",
-            model: "gpt-5.5",
+            model: "gpt-5.6-luna",
             usage: {
               input: 1,
               output: 2,
@@ -89,7 +89,7 @@ async function main() {
             role: "assistant",
             content: "c",
             provider: "openai",
-            model: "gpt-5.5",
+            model: "gpt-5.6-luna",
             usage: {
               input: 3,
               output: 4,

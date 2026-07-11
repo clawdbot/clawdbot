@@ -6,10 +6,10 @@ import {
 } from "../../agents/run-termination.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import {
-  BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticEmbeddedRunEnded,
   markDiagnosticEmbeddedRunStarted,
+  resolveRunStaleThresholdMs,
 } from "../../logging/diagnostic-run-activity.js";
 import { diagnosticLogger as diag } from "../../logging/diagnostic-runtime.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
@@ -218,9 +218,6 @@ export const REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS = 15_000;
 // Terminal results must release the lane even if the owner never resumes.
 // Without this, abort/failure can leave the session wedged until process restart.
 export const REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS = 60_000;
-// Visible human turns may reclaim only runs with no real progress for this window.
-// Timers and user-message injection never refresh activity; agent events do.
-export const REPLY_RUN_STALE_TAKEOVER_MS = 10 * 60_000;
 
 export type ReplyOperationStaleReason = "terminal_unreleased" | "no_activity" | "stuck_recovery";
 
@@ -886,25 +883,16 @@ export function expireStaleReplyRunBySessionId(
   return operation ? expireStaleReplyOperation(operation, reason) : false;
 }
 
-/**
- * Effective staleness window for an operation. Quiet-but-alive tool phases get
- * the diagnostic blocked-tool floor: a human message must not reclaim a healthy
- * long tool that stuck recovery itself would not touch yet.
- */
-export function resolveReplyRunStaleThresholdMs(operation: ReplyOperation): number {
+// lastActivityAtMs is refreshed by agent events only; timers and user-message
+// injection never refresh it, so quiet runs age toward reclaim.
+export function isReplyRunEvidenceStale(operation: ReplyOperation): boolean {
   const activity = getDiagnosticSessionActivitySnapshot({
     sessionId: operation.sessionId,
     sessionKey: operation.key,
   });
-  return activity.activeWorkKind === "tool_call"
-    ? Math.max(REPLY_RUN_STALE_TAKEOVER_MS, BLOCKED_TOOL_CALL_ABORT_FLOOR_MS)
-    : REPLY_RUN_STALE_TAKEOVER_MS;
-}
-
-export function isReplyRunEvidenceStale(operation: ReplyOperation): boolean {
   return (
     !operation.result &&
-    Date.now() - operation.lastActivityAtMs > resolveReplyRunStaleThresholdMs(operation)
+    Date.now() - operation.lastActivityAtMs > resolveRunStaleThresholdMs(activity)
   );
 }
 

@@ -247,7 +247,7 @@ Once DMs work, you can turn your server into a full workspace where each channel
   <Step title="Allow responses without @mention">
     By default, the agent only responds in guild channels when @mentioned. On a private server you probably want it to respond to every message.
 
-    In guild channels, normal replies post automatically by default. For shared always-on rooms, opt into `messages.groupChat.visibleReplies: "message_tool"` so the agent can lurk and only post when it decides a channel reply is useful. This works best with latest-generation, tool-reliable models such as GPT 5.5. Ambient room events stay quiet unless the tool sends. See [Ambient room events](/channels/ambient-room-events) for the full lurk-mode config.
+    In guild channels, normal replies post automatically by default. For shared always-on rooms, opt into `messages.groupChat.visibleReplies: "message_tool"` so the agent can lurk and only post when it decides a channel reply is useful. This works best with latest-generation, tool-reliable models such as GPT-5.6 Sol. Ambient room events stay quiet unless the tool sends. See [Ambient room events](/channels/ambient-room-events) for the full lurk-mode config.
 
     If Discord shows typing and the logs show token usage but no posted message, check whether the turn was configured as an ambient room event or opted into message-tool visible replies.
 
@@ -1174,7 +1174,7 @@ Auto-join example:
     discord: {
       voice: {
         enabled: true,
-        model: "openai/gpt-5.5",
+        model: "openai/gpt-5.6-sol",
         autoJoin: [
           {
             guildId: "123456789012345678",
@@ -1211,7 +1211,7 @@ Notes:
 - `voice.followUsers` lets the bot join, move, and leave Discord voice with selected users. See [Follow users in voice](#follow-users-in-voice).
 - `agent-proxy` routes speech through `discord-voice`, which preserves normal owner/tool authorization for the speaker and target session but hides the agent `tts` tool because Discord voice owns playback. By default, `agent-proxy` gives the consult full owner-equivalent tool access for owner speakers (`voice.realtime.toolPolicy: "owner"`) and strongly prefers consulting the OpenClaw agent before substantive answers (`voice.realtime.consultPolicy: "always"`). In that default `always` mode, the realtime layer does not auto-speak filler before the consult answer; it captures and transcribes speech, then speaks the routed OpenClaw answer. If multiple forced consult answers finish while Discord is still playing the first answer, later exact-speech answers are queued until playback idles instead of replacing speech mid-sentence.
 - In `stt-tts` mode, STT uses `tools.media.audio`; `voice.model` does not affect transcription.
-- In realtime modes, `voice.realtime.provider`, `voice.realtime.model`, and `voice.realtime.speakerVoice` configure the realtime audio session. For OpenAI Realtime 2.1 plus the Codex brain, use `voice.realtime.model: "gpt-realtime-2.1"` and `voice.model: "openai/gpt-5.5"`.
+- In realtime modes, `voice.realtime.provider`, `voice.realtime.model`, and `voice.realtime.speakerVoice` configure the realtime audio session. For OpenAI Realtime 2.1 plus the Codex brain, use `voice.realtime.model: "gpt-realtime-2.1"` and `voice.model: "openai/gpt-5.6-sol"`.
 - Realtime voice modes include small `IDENTITY.md`, `USER.md`, and `SOUL.md` profile files in the realtime provider instructions by default so fast direct turns keep the same identity, user grounding, and persona as the routed OpenClaw agent. Set `voice.realtime.bootstrapContextFiles` to a subset to customize this, or `[]` to disable it. Only those profile files are supported; `AGENTS.md` stays in the normal agent context. The injected profile context does not replace `openclaw_agent_consult` for workspace work, current facts, memory lookup, or tool-backed actions.
 - In OpenAI `agent-proxy` realtime mode, set `voice.realtime.requireWakeName: true` to keep Discord realtime voice silent until a transcript starts or ends with a wake name. Configured wake names must be one or two words. If `voice.realtime.wakeNames` is unset, OpenClaw uses the routed agent `name` plus `OpenClaw`, falling back to the agent id plus `OpenClaw`. Wake-name gating disables realtime provider auto-response, routes accepted turns through the OpenClaw agent consult path, and gives a short spoken acknowledgement when a leading wake name is recognized from partial transcription before the final transcript arrives.
 - The OpenAI realtime provider accepts current Realtime 2 event names and legacy Codex-compatible aliases for output audio and transcript events, so compatible provider snapshots can drift without dropping assistant audio.
@@ -1299,7 +1299,7 @@ Default agent-proxy voice-channel session example:
     discord: {
       voice: {
         enabled: true,
-        model: "openai/gpt-5.5",
+        model: "openai/gpt-5.6-sol",
         followUsersEnabled: true,
         followUsers: ["123456789012345678"],
         realtime: {
@@ -1349,7 +1349,7 @@ Realtime bidi example:
       voice: {
         enabled: true,
         mode: "bidi",
-        model: "openai/gpt-5.5",
+        model: "openai/gpt-5.6-sol",
         realtime: {
           provider: "openai",
           model: "gpt-realtime-2.1",
@@ -1372,7 +1372,7 @@ Voice as an extension of an existing Discord channel session:
       voice: {
         enabled: true,
         mode: "agent-proxy",
-        model: "openai/gpt-5.5",
+        model: "openai/gpt-5.6-sol",
         agentSession: {
           mode: "target",
           target: "channel:123456789012345678",
@@ -1407,7 +1407,7 @@ Echo-heavy OpenAI Realtime example:
       voice: {
         enabled: true,
         mode: "bidi",
-        model: "openai/gpt-5.5",
+        model: "openai/gpt-5.6-sol",
         realtime: {
           provider: "openai",
           model: "gpt-realtime-2.1",

@@ -50,7 +50,7 @@ const LIVE_TIMEOUT_MS = 240_000;
 const ACP_CRON_MCP_PROBE_MAX_ATTEMPTS = 2;
 const ACP_CRON_MCP_PROBE_VERIFY_POLLS = 5;
 const ACP_CRON_MCP_PROBE_VERIFY_POLL_MS = 1_000;
-const DEFAULT_LIVE_CODEX_MODEL = "gpt-5.5";
+const DEFAULT_LIVE_CODEX_MODEL = "gpt-5.6-luna";
 const DEFAULT_LIVE_PARENT_MODEL = "openai/gpt-5.4";
 type LiveAcpAgent = "claude" | "codex" | "droid" | "gemini" | "opencode";
 

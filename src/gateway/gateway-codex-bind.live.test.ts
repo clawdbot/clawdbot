@@ -42,7 +42,7 @@ const CODEX_BIND_REQUEST_TIMEOUT_MS = resolveLiveTimeoutMs(
   process.env.OPENCLAW_LIVE_CODEX_BIND_REQUEST_TIMEOUT_MS,
   300_000,
 );
-const DEFAULT_CODEX_BIND_MODEL = "gpt-5.5";
+const DEFAULT_CODEX_BIND_MODEL = "gpt-5.6-luna";
 
 type CapturedOutboundReply = {
   accountId?: string;

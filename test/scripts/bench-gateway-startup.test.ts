@@ -1,7 +1,7 @@
 // Bench Gateway Startup tests cover bench gateway startup script behavior.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import { createServer } from "node:http";
+import { createServer, type RequestListener } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -9,7 +9,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { testing } from "../../scripts/bench-gateway-startup.ts";
 import { registerStopChildBehaviorTests } from "./bench-gateway-child-test-support.js";
 
-async function listenOnLoopback(handler: Parameters<typeof createServer>[0]) {
+async function listenOnLoopback(handler: RequestListener) {
   const server = createServer(handler);
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);

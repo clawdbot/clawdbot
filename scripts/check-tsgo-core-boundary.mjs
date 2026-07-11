@@ -10,6 +10,7 @@ const tsgoPath = path.join(repoRoot, "node_modules", ".bin", "tsgo");
 
 const coreGraphs = [
   { name: "core", config: "tsconfig.core.json" },
+  { name: "ui", config: "tsconfig.ui.json" },
   { name: "core-test", config: "test/tsconfig/tsconfig.core.test.json" },
   { name: "core-test-agents", config: "test/tsconfig/tsconfig.core.test.agents.json" },
   { name: "core-test-non-agents", config: "test/tsconfig/tsconfig.core.test.non-agents.json" },

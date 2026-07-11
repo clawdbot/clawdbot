@@ -113,6 +113,7 @@ function addLoadedPlugin(
 function createLookUpTableForTest(params: {
   manifestRegistry?: PluginLookUpTable["manifestRegistry"];
   pluginIds?: readonly string[];
+  workerProviderIds?: readonly string[];
 }): PluginLookUpTable {
   return {
     policyHash: "test",
@@ -148,6 +149,7 @@ function createLookUpTableForTest(params: {
       configuredDeferredChannelPluginIds: [],
       pluginIds: params.pluginIds ?? [],
     },
+    workerProviderIds: params.workerProviderIds ?? [],
     metrics: {
       registrySnapshotMs: 0,
       manifestRegistryMs: 0,
@@ -548,6 +550,44 @@ describe("loadGatewayPlugins", () => {
     expect(getLastPluginLoadOption("onlyPluginIds")).toEqual(["slack"]);
     expect(getLastPluginLoadOption("autoEnabledReasons")).toEqual({
       slack: ["slack configured"],
+    });
+  });
+
+  test("passes durable worker activation reasons to the runtime plugin load", () => {
+    applyPluginAutoEnable.mockReturnValue({
+      config: {},
+      changes: [],
+      autoEnabledReasons: { "qa-lab": ["static-ssh worker provider selected"] },
+    });
+    loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+
+    loadGatewayStartupPluginsForTest({
+      pluginIds: ["qa-lab"],
+      pluginLookUpTable: createLookUpTableForTest({
+        manifestRegistry: {
+          plugins: [
+            {
+              id: "qa-lab",
+              origin: "bundled",
+              channels: [],
+              providers: [],
+              cliBackends: [],
+              skills: [],
+              hooks: [],
+              rootDir: "/tmp/qa-lab",
+              source: "/tmp/qa-lab/index.js",
+              manifestPath: "/tmp/qa-lab/openclaw.plugin.json",
+              contracts: { workerProviders: ["static-ssh"] },
+            },
+          ],
+          diagnostics: [],
+        },
+        workerProviderIds: ["static-ssh"],
+      }),
+    });
+
+    expect(getLastPluginLoadOption("autoEnabledReasons")).toEqual({
+      "qa-lab": ["static-ssh durable worker lease"],
     });
   });
 

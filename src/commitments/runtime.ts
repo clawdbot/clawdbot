@@ -78,9 +78,8 @@ function clearTimer(handle: TimerHandle): void {
 }
 
 // Single-slot debounce: schedule one drain unless one is already pending. Shared
-// by enqueue (new work), the overflow branch, and the drain's non-terminal
-// failure path (so a batch restored after a timer-fired failure still gets
-// retried even when no later enqueue arrives).
+// by enqueue (new work), the overflow branch, and drain failure paths so queued
+// work still progresses after a timer-fired extraction failure.
 function scheduleDrainSoon(debounceMs: number): void {
   if (timer) {
     return;
@@ -294,6 +293,24 @@ async function hydrateBatch(
   );
 }
 
+function takeAgentBatch(
+  agentId: string,
+  maxItems: number,
+): Array<Omit<CommitmentExtractionItem, "existingPending"> & { cfg?: OpenClawConfig }> {
+  const batch = [];
+  for (let index = 0; index < queue.length && batch.length < maxItems; ) {
+    if (queue[index]?.agentId !== agentId) {
+      index += 1;
+      continue;
+    }
+    const [item] = queue.splice(index, 1);
+    if (item) {
+      batch.push(item);
+    }
+  }
+  return batch;
+}
+
 /** Drains queued extraction work in batches and returns processed item count. */
 export async function drainCommitmentExtractionQueue(): Promise<number> {
   if (draining) {
@@ -303,9 +320,15 @@ export async function drainCommitmentExtractionQueue(): Promise<number> {
   try {
     let processed = 0;
     while (queue.length > 0) {
-      const firstCfg = queue[0]?.cfg;
+      const first = queue[0];
+      if (!first) {
+        break;
+      }
+      const firstCfg = first.cfg;
       const resolved = resolveCommitmentsConfig(firstCfg);
-      const batch = queue.splice(0, resolved.extraction.batchMaxItems);
+      // Extraction inherits the first item's model, credentials, workspace, and
+      // session file. Keep every prompt and failure policy scoped to that agent.
+      const batch = takeAgentBatch(first.agentId, resolved.extraction.batchMaxItems);
       const items = await hydrateBatch(batch);
       const extractor = runtime.extractBatch ?? defaultExtractBatch;
       let result: CommitmentExtractionBatchResult;
@@ -319,6 +342,9 @@ export async function drainCommitmentExtractionQueue(): Promise<number> {
             Date.now(),
             items[0]?.nowMs ?? Date.now(),
           );
+          if (queue.length > 0) {
+            scheduleDrainSoon(resolved.extraction.debounceMs);
+          }
         } else {
           // Non-terminal failure (e.g. transient model/network error): the batch
           // was already spliced out, so restore it to the front in original order.

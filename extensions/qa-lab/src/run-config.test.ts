@@ -74,7 +74,7 @@ describe("qa run config", () => {
       normalizeQaRunSelection(
         {
           providerMode: "live-frontier",
-          primaryModel: "openai/gpt-5.5",
+          primaryModel: "openai/gpt-5.6-luna",
           alternateModel: "",
           fastMode: false,
           scenarioIds: ["thread-lifecycle", "missing", "thread-lifecycle"],
@@ -83,7 +83,7 @@ describe("qa run config", () => {
       ),
     ).toEqual({
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.6-luna",
       alternateModel: DEFAULT_LIVE_FRONTIER_MODEL,
       fastMode: true,
       scenarioIds: ["thread-lifecycle"],
@@ -127,7 +127,7 @@ describe("qa run config", () => {
   });
 
   it("keeps idle snapshots on static defaults so startup does not inspect auth profiles", () => {
-    defaultQaRuntimeModelForMode.mockReturnValue("openai/gpt-5.5");
+    defaultQaRuntimeModelForMode.mockReturnValue("openai/gpt-5.6-luna");
     defaultQaRuntimeModelForMode.mockClear();
 
     const selection = createIdleQaRunnerSnapshot(scenarios).selection;
@@ -150,8 +150,8 @@ describe("qa run config", () => {
       ),
     ).toEqual({
       providerMode: "aimock",
-      primaryModel: "aimock/gpt-5.5",
-      alternateModel: "aimock/gpt-5.5-alt",
+      primaryModel: "aimock/gpt-5.6-luna",
+      alternateModel: "aimock/gpt-5.6-luna-alt",
       fastMode: false,
       scenarioIds: ["dm-chat-baseline"],
     });
@@ -182,14 +182,14 @@ describe("qa run config", () => {
   it("prefers the Codex OAuth default when the runtime resolver says it is available", () => {
     defaultQaRuntimeModelForMode.mockImplementation((mode, options) =>
       mode === "live-frontier"
-        ? "openai/gpt-5.5"
+        ? "openai/gpt-5.6-luna"
         : defaultQaProviderModelForMode(mode as QaProviderModeInput, options),
     );
 
     expect(createDefaultQaRunSelection(scenarios)).toEqual({
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.5",
-      alternateModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.6-luna",
+      alternateModel: "openai/gpt-5.6-luna",
       fastMode: true,
       scenarioIds: ["dm-chat-baseline", "thread-lifecycle"],
     });

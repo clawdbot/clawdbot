@@ -380,6 +380,10 @@
       - any-glob-to-any-file:
           - "extensions/clawrouter/**"
           - "docs/providers/clawrouter.md"
+"extensions: crabbox":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/crabbox/**"
 "extensions: deepseek":
   - changed-files:
       - any-glob-to-any-file:
@@ -411,6 +415,8 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/anthropic/**"
+          - "docs/providers/anthropic.md"
+          - "docs/plugins/reference/anthropic.md"
 "extensions: cloudflare-ai-gateway":
   - changed-files:
       - any-glob-to-any-file:

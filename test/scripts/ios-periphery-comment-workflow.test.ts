@@ -136,7 +136,7 @@ async function runScope(options: {
     "context",
     "core",
     "github",
-  ]) as (context: typeof context, core: typeof core, github: typeof github) => Promise<void>;
+  ]) as (context: unknown, core: unknown, github: unknown) => Promise<void>;
 
   await execute(context, core, github);
   return outputs.get("should-scan");
@@ -286,9 +286,9 @@ async function runCommenter(
     "github",
   ]) as (
     require: NodeJS.Require,
-    context: typeof context,
-    core: typeof core,
-    github: typeof github,
+    context: unknown,
+    core: unknown,
+    github: unknown,
   ) => Promise<void>;
 
   await execute(createRequire(import.meta.url), context, core, github);

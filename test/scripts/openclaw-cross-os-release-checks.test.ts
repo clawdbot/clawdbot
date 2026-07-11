@@ -223,7 +223,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       ["http://127.0.0.1:18789/assets/index.css", "http://127.0.0.1:18789/assets/index.js"],
       async (url) =>
         new Response("", {
-          status: String(url).endsWith(".js") ? 404 : 200,
+          status: (url instanceof Request ? url.url : url.toString()).endsWith(".js") ? 404 : 200,
         }),
     );
 
@@ -553,10 +553,10 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         OPENCLAW_CROSS_OS_MODEL: "openai/gpt-5.4-nano",
       })?.model,
     ).toBe("openai/gpt-5.4-nano");
-    expect(resolveProviderConfig("openai", {})?.model).toBe("openai/gpt-5.5");
+    expect(resolveProviderConfig("openai", {})?.model).toBe("openai/gpt-5.6-luna");
   });
 
-  it("keeps release cross-OS OpenAI smoke on GPT-5.5", () => {
+  it("keeps release cross-OS OpenAI smoke on GPT-5.6 Luna", () => {
     const workflow = readFileSync(
       ".github/workflows/openclaw-cross-os-release-checks-reusable.yml",
       "utf8",
@@ -564,9 +564,9 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     const releaseChecks = readFileSync(".github/workflows/openclaw-release-checks.yml", "utf8");
 
     expect(workflow).toContain(
-      "OPENCLAW_CROSS_OS_OPENAI_MODEL: ${{ inputs.openai_model || vars.OPENCLAW_CROSS_OS_OPENAI_MODEL || 'openai/gpt-5.5' }}",
+      "OPENCLAW_CROSS_OS_OPENAI_MODEL: ${{ inputs.openai_model || vars.OPENCLAW_CROSS_OS_OPENAI_MODEL || 'openai/gpt-5.6-luna' }}",
     );
-    expect(releaseChecks).toContain("openai_model: openai/gpt-5.5");
+    expect(releaseChecks).toContain("openai_model: openai/gpt-5.6-luna");
   });
 
   it("keeps release smoke plugin allowlists focused on agent-turn essentials", () => {
@@ -1681,14 +1681,14 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(await canConnectToLoopbackPort(1234.5)).toBe(false);
 
     const server = createNetServer();
-    await new Promise((resolvePromise) => {
+    await new Promise<void>((resolvePromise) => {
       server.listen(0, "127.0.0.1", resolvePromise);
     });
     const address = server.address();
     const port = typeof address === "object" && address ? address.port : 0;
     expect(await canConnectToLoopbackPort(port)).toBe(true);
-    await new Promise((resolvePromise) => {
-      server.close(resolvePromise);
+    await new Promise<void>((resolvePromise) => {
+      server.close(() => resolvePromise());
     });
     for (let attempt = 0; attempt < 20; attempt += 1) {
       if (!(await canConnectToLoopbackPort(port, 100))) {

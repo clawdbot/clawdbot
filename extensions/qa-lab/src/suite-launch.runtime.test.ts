@@ -166,7 +166,7 @@ describe("qa suite runtime launcher", () => {
       repoRoot,
       outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-test", "playwright"),
       providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.5",
+      primaryModel: "mock-openai/gpt-5.6-luna",
     });
     expect(
       call.scenarios.map((scenario: { id: string; execution: { kind: string } }) => ({

@@ -56,7 +56,7 @@
 
 - **Package manager**: pnpm (`pnpm install`)
 - **Dev**: `pnpm openclaw ...` or `pnpm dev`
-- **Type-check**: `pnpm tsgo` (core production), `pnpm tsgo:prod` (core + extension production), `pnpm check:test-types` (tests)
+- **Type-check**: `pnpm tsgo` (core production), `pnpm tsgo:prod` (core + UI + extension production), `pnpm check:test-types` (tests)
 - **Lint/format**: `pnpm check`
 - **Tests**: `pnpm test`
 - **Build**: `pnpm build`

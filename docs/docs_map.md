@@ -3347,6 +3347,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Multi-instance isolation
   - H3: gateway.tls
   - H3: gateway.reload
+  - H2: Cloud worker environments
+  - H3: Crabbox profile
+  - H3: Static SSH development profile
   - H2: Hooks
   - H3: Gmail integration
   - H2: Canvas plugin host
@@ -4848,7 +4851,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Allowlist the commands
   - H3: Point exec at the node
   - H3: Local model inference
-  - H3: Codex session catalog
+  - H3: Codex sessions and transcripts
+  - H3: Claude sessions and transcripts
   - H2: Invoking commands
   - H2: Command policy
   - H2: Config (openclaw.json)
@@ -4953,6 +4957,32 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /perplexity
 - Headings:
   - H2: Related
+
+## plan/cloud-workers.md
+
+- Route: /plan/cloud-workers
+- Headings:
+  - H2: Status
+  - H2: Problem
+  - H2: Goals
+  - H2: Non-goals (v1)
+  - H2: Prior art (what we copy, what we invert)
+  - H2: Architecture decision: loop on the worker, inference through the gateway
+  - H2: Components
+  - H3: 1. Environment state machine + provider contract
+  - H3: 2. Worker bootstrap: install OpenClaw on the box
+  - H3: 3. Transport: everything over SSH
+  - H3: 4. Worker protocol (dedicated; not the node protocol)
+  - H3: 5. Session backend RPCs
+  - H3: 6. Workspace sync
+  - H3: 7. Placement state machine, sessions, and UI
+  - H2: Dispatch and handoff
+  - H2: Security model
+  - H2: Capacity
+  - H2: Lifecycle
+  - H2: Configuration surface
+  - H2: Milestones
+  - H2: Open questions
 
 ## plan/ui-channels.md
 
@@ -5477,6 +5507,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Commands
   - H2: Marketplace choices
   - H2: Bundled macOS marketplace
+  - H3: Shared plugin cache
   - H2: Remote catalog limit
   - H2: Configuration reference
   - H2: What OpenClaw checks
@@ -6092,6 +6123,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Distribution
   - H2: Surface
   - H2: Related docs
+
+## plugins/reference/crabbox.md
+
+- Route: /plugins/reference/crabbox
+- Headings:
+  - H1: Crabbox plugin
+  - H2: Distribution
+  - H2: Surface
+  - H2: Configure
 
 ## plugins/reference/deepgram.md
 
@@ -7024,6 +7064,14 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
   - H2: Related docs
 
+## plugins/reference/workspaces.md
+
+- Route: /plugins/reference/workspaces
+- Headings:
+  - H1: Workspaces plugin
+  - H2: Distribution
+  - H2: Surface
+
 ## plugins/reference/xai.md
 
 - Route: /plugins/reference/xai
@@ -7431,6 +7479,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Usage and cost tracking
   - H2: Getting started
+  - H2: Claude sessions across computers
   - H2: Thinking defaults (Claude Sonnet 5, Mythos 5, Fable 5, 4.8, and 4.6)
   - H2: Safety refusal fallback (Claude Fable 5)
   - H3: Why this exists

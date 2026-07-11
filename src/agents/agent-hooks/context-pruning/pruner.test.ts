@@ -357,6 +357,33 @@ describe("pruneContextMessages", () => {
     expect(result).toBe(messages);
   });
 
+  it("keeps soft-trim head and tail valid at UTF-16 boundaries", () => {
+    const largeText = `${"h".repeat(99)}😀${"m".repeat(100)}😀${"t".repeat(49)}`;
+    const result = pruneContextMessages({
+      messages: [
+        makeUser("summarize this"),
+        makeToolResult([{ type: "text", text: largeText }]),
+        makeAssistant([{ type: "text", text: "done" }]),
+      ],
+      settings: {
+        ...DEFAULT_CONTEXT_PRUNING_SETTINGS,
+        keepLastAssistants: 1,
+        softTrimRatio: 0,
+        hardClear: { ...DEFAULT_CONTEXT_PRUNING_SETTINGS.hardClear, enabled: false },
+        softTrim: { maxChars: 200, headChars: 100, tailChars: 50 },
+      },
+      ctx: CONTEXT_WINDOW_1M,
+      isToolPrunable: () => true,
+      contextWindowTokensOverride: 1,
+    });
+
+    const toolResult = result[1] as Extract<AgentMessage, { role: "toolResult" }>;
+    const textBlock = toolResult.content[0] as { type: "text"; text: string };
+    expect(textBlock.text).toBe(
+      `${"h".repeat(99)}\n...\n${"t".repeat(49)}\n\n[Tool result trimmed: kept first 100 chars and last 50 chars of 252 chars.]`,
+    );
+  });
+
   it("soft-trims image-containing tool results by replacing image blocks with placeholders", () => {
     const messages: AgentMessage[] = [
       makeUser("summarize this"),

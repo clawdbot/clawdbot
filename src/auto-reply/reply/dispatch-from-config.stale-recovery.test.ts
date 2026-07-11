@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
 import type { ReplyPayload } from "../types.js";
 import {
   createDispatcher,
@@ -9,7 +10,6 @@ import {
   resetPluginTtsAndThreadMocks,
   runtimePluginMocks,
 } from "./dispatch-from-config.shared.test-harness.js";
-import { REPLY_RUN_STALE_TAKEOVER_MS } from "./reply-run-registry.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
@@ -117,7 +117,7 @@ describe("dispatchReplyFromConfig stale visible admission recovery", () => {
     activeOperation.setPhase("running");
     const replyResolver = vi.fn(async () => ({ text: "telegram reply" }) satisfies ReplyPayload);
     const dispatchParams = createVisibleDispatchParams(replyResolver);
-    vi.setSystemTime(startedAt + REPLY_RUN_STALE_TAKEOVER_MS + 1);
+    vi.setSystemTime(startedAt + RUN_STALE_TAKEOVER_MS + 1);
 
     const result = await dispatchReplyFromConfig(dispatchParams);
 

@@ -153,6 +153,7 @@ describe("parallels npm update smoke", () => {
     await withEnvAsync({ OPENAI_API_KEY: "test-key" }, async () => {
       const smoke = new FailingNpmUpdateSmoke({
         ...TEST_AUTH,
+        dependencyTarballs: [],
         json: false,
         packageSpec: "openclaw@latest",
         platforms: new Set<Platform>(["linux"]),
@@ -202,6 +203,7 @@ exit 1
       () => {
         const smoke = new NpmUpdateSmoke({
           ...TEST_AUTH,
+          dependencyTarballs: [],
           json: false,
           packageSpec: "openclaw@latest",
           platforms: new Set<Platform>(["linux"]),
@@ -540,6 +542,7 @@ exit 1
       () =>
         new NpmUpdateSmoke({
           ...TEST_AUTH,
+          dependencyTarballs: [],
           json: false,
           packageSpec: "openclaw@latest",
           platforms: new Set<Platform>(["linux"]),
@@ -580,6 +583,7 @@ exit 1
         () =>
           new NpmUpdateSmoke({
             ...TEST_AUTH,
+            dependencyTarballs: [],
             json: false,
             packageSpec: "openclaw@latest",
             platforms: new Set<Platform>(["linux"]),
@@ -649,7 +653,7 @@ exit 1
       const decoded = decodePowerShellFromArgs(args);
       decodedCommands.push(decoded);
       if (options?.input) {
-        inputs.push(String(options.input));
+        inputs.push(options.input);
       }
       if (decoded.includes('cmd.exe /d /s /c start "" /b powershell.exe')) {
         return { status: 0, stderr: "", stdout: "started\n" };
@@ -812,6 +816,7 @@ exit 7
       () => {
         const smoke = new NpmUpdateSmoke({
           ...TEST_AUTH,
+          dependencyTarballs: [],
           json: false,
           packageSpec: "openclaw@latest",
           platforms: new Set<Platform>(["macos"]),
@@ -853,6 +858,7 @@ exit 7
       () => {
         const smoke = new NpmUpdateSmoke({
           ...TEST_AUTH,
+          dependencyTarballs: [],
           json: false,
           packageSpec: "openclaw@latest",
           platforms: new Set<Platform>(["macos"]),

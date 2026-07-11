@@ -407,7 +407,7 @@ describe("openclaw live updater", () => {
       "pnpm openclaw gateway restart",
       "pnpm openclaw gateway status --deep --require-rpc --json",
       "pnpm openclaw health --verbose --json",
-      "bash scripts/restart-mac.sh --sign --wait --target-only",
+      "env SKIP_TSC=1 SKIP_UI_BUILD=1 bash scripts/restart-mac.sh --sign --wait --target-only",
       "pnpm openclaw gateway status --deep --require-rpc --json",
       "pnpm openclaw health --verbose --json",
     ]);
@@ -708,7 +708,7 @@ describe("openclaw live updater", () => {
     expect(retryCommands.calls.slice(0, 3)).toEqual([
       "pnpm openclaw gateway status --deep --require-rpc --json",
       "pnpm openclaw health --verbose --json",
-      "bash scripts/restart-mac.sh --sign --wait --target-only",
+      "env SKIP_TSC=1 SKIP_UI_BUILD=1 bash scripts/restart-mac.sh --sign --wait --target-only",
     ]);
     expect(existsSync(statePath)).toBe(false);
   });

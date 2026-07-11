@@ -135,7 +135,10 @@ function readSlackDataTableCell(value: unknown, allowRichText: boolean): string 
   return undefined;
 }
 
-function parseSlackDataTable(value: unknown): ParsedSlackDataTable | undefined {
+function parseSlackDataTable(
+  value: unknown,
+  options: { enforceNativeLimits?: boolean } = {},
+): ParsedSlackDataTable | undefined {
   const block = asRecord(value);
   const caption = readNonEmptyString(block?.caption);
   if (block?.type !== "data_table" || !caption || !Array.isArray(block.rows)) {
@@ -166,6 +169,14 @@ function parseSlackDataTable(value: unknown): ParsedSlackDataTable | undefined {
     (total, cell) => total + countCharacters(cell),
     0,
   );
+  if (
+    options.enforceNativeLimits &&
+    (block.rows.length > SLACK_DATA_TABLE_ROWS_MAX + 1 ||
+      headers.length > SLACK_DATA_TABLE_COLUMNS_MAX ||
+      cellCharacterCount > SLACK_DATA_TABLE_CELL_CHARACTERS_MAX)
+  ) {
+    return undefined;
+  }
   return { caption, headers, rows, cellCharacterCount };
 }
 
@@ -178,7 +189,7 @@ export function hasSlackDataTableBlock(blocks?: readonly unknown[]): boolean {
 export function countSlackDataTableCellCharacters(value: SlackDataTableBlock): number;
 export function countSlackDataTableCellCharacters(value: unknown): number | undefined;
 export function countSlackDataTableCellCharacters(value: unknown): number | undefined {
-  return parseSlackDataTable(value)?.cellCharacterCount;
+  return parseSlackDataTable(value, { enforceNativeLimits: true })?.cellCharacterCount;
 }
 
 /** Count the aggregate native-table cell characters already present in a message. */
@@ -300,6 +311,31 @@ export function renderSlackDataTableFallbackText(value: unknown): string | undef
     });
   }
   return readNonEmptyString(block.caption)?.trim();
+}
+
+function escapeCompactFallbackCell(value: string): string {
+  return value
+    .replaceAll("\\", "\\\\")
+    .replaceAll("\t", "\\t")
+    .replaceAll("\r", "\\r")
+    .replaceAll("\n", "\\n");
+}
+
+/** Render each native table cell once for bounded, formatting-disabled delivery. */
+export function renderSlackDataTableCompactPlainTextFallback(value: unknown): string | undefined {
+  const block = asRecord(value);
+  if (block?.type !== "data_table") {
+    return undefined;
+  }
+  const parsed = parseSlackDataTable(block);
+  if (!parsed) {
+    return readNonEmptyString(block.caption)?.trim();
+  }
+  return [
+    `${escapeCompactFallbackCell(parsed.caption)} (table)`,
+    parsed.headers.map(escapeCompactFallbackCell).join("\t"),
+    ...parsed.rows.map((row) => row.map(escapeCompactFallbackCell).join("\t")),
+  ].join("\n");
 }
 
 /** Render a native table as mrkdwn without activating raw cell control tokens. */

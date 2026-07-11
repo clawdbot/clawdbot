@@ -9,20 +9,22 @@ import json
 import os
 import queue
 import re
+import stat
 import subprocess
 import sys
 import tempfile
 import textwrap
 import threading
 import time
-from pathlib import Path
+import urllib.parse
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
 
 ENGINES = ("codex", "claude", "droid", "copilot", "pi", "opencode", "cursor")
 ENGINE_ALIASES = {"cursor-agent": "cursor"}
 ENGINE_CHOICES = (*ENGINES, *ENGINE_ALIASES)
-ALL_REVIEWERS = ("codex", "claude", "copilot", "pi", "opencode")
+ALL_REVIEWERS = ("codex", "claude", "pi")
 SAFE_GIT_CONFIG_ARGS = (
     "-c",
     "core.fsmonitor=false",
@@ -57,8 +59,17 @@ SENSITIVE_PATH_PARTS = {
     ".gnupg",
     ".ssh",
     "private",
-    "secrets",
 }
+TRACKED_SENSITIVE_PATH_PARTS = SENSITIVE_PATH_PARTS - {
+    "private",
+    ".docker",
+}
+TRACKED_CREDENTIAL_DIR_PATTERN = re.compile(
+    r"^(?:.*[._-])?"
+    r"(secret|secrets|credential|credentials|service[-_]?account|private[-_]?key|api[-_]?key)"
+    r"(?:[._-].*)?$",
+    re.IGNORECASE,
+)
 SENSITIVE_NAME_PATTERNS = [
     re.compile(r"(^|/)\.env($|[._/-])", re.IGNORECASE),
     re.compile(r"(^|/)(id_rsa|id_dsa|id_ecdsa|id_ed25519)(\.pub)?$", re.IGNORECASE),
@@ -68,10 +79,76 @@ SENSITIVE_NAME_PATTERNS = [
         re.IGNORECASE,
     ),
 ]
-SECRET_VALUE_PATTERNS = [
-    re.compile(r"-----BEGIN (?:RSA |DSA |EC |OPENSSH |PGP )?PRIVATE KEY-----"),
+TRACKED_SENSITIVE_NAME_PATTERNS = [
     re.compile(
-        r"(?i)(api[_-]?key|token|secret|password)\s*[:=]\s*(?:[\"'][A-Za-z0-9_./+=-]{12,}[\"']|[A-Za-z0-9_+=/-]{20,})"
+        r"(^|/)\.env(?:$|/|[._-](?!(?:example|sample|template)$)[^/]*)",
+        re.IGNORECASE,
+    ),
+    re.compile(r"(^|/)(id_rsa|id_dsa|id_ecdsa|id_ed25519)(\.pub)?$", re.IGNORECASE),
+    re.compile(r"\.(pem|p12|pfx|key)$", re.IGNORECASE),
+    re.compile(
+        r"(^|/)(secret|secrets|credential|credentials|service[-_]?account|private[-_]?key|api[-_]?key|token|tokens)$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(^|/)(?:[^/]*[._-])?"
+        r"(secret|secrets|credential|credentials|service[-_]?account|private[-_]?key|api[-_]?key|token|tokens)"
+        r"(?:[._-][^/]*)?\.(json|ya?ml|toml|ini|conf|config|txt|csv)$",
+        re.IGNORECASE,
+    ),
+]
+TRACKED_TOKEN_CREDENTIAL_STEMS = {
+    "access",
+    "account",
+    "auth",
+    "cache",
+    "credentials",
+    "credential",
+    "device",
+    "id",
+    "prod",
+    "production",
+    "refresh",
+    "secret",
+    "secrets",
+    "session",
+    "store",
+    "token",
+    "tokens",
+    "user",
+}
+TRACKED_TOKEN_CREDENTIAL_EXTENSIONS = {
+    "",
+    ".conf",
+    ".config",
+    ".csv",
+    ".dat",
+    ".db",
+    ".enc",
+    ".ini",
+    ".json",
+    ".jsonl",
+    ".jwt",
+    ".sqlite",
+    ".sqlite3",
+    ".txt",
+    ".toml",
+    ".yaml",
+    ".yml",
+}
+SECRET_ASSIGNMENT_PATTERN = re.compile(
+    r"(?i)(?:"
+    r"[\"'](?:api[_-]?key|aws[_-]?secret[_-]?access[_-]?key|client[_-]?secret|refresh[_-]?token|access[_-]?token|auth[_-]?token|id[_-]?token|token|secret|password)[\"']"
+    r"|(?:api[_-]?key|aws[_-]?secret[_-]?access[_-]?key|client[_-]?secret|refresh[_-]?token|access[_-]?token|auth[_-]?token|id[_-]?token|token|secret|password)"
+    r")\s*[:=]\s*"
+    r"(?:\"(?P<double_value>[^\"\r\n]{12,})\"|"
+    r"'(?P<single_value>[^'\r\n]{12,})'|"
+    r"(?P<bare_value>[A-Za-z0-9_./+=:@#$%&*!?-]{20,}))"
+)
+SECRET_VALUE_PATTERNS = [
+    re.compile(
+        r"-----BEGIN (?:RSA |DSA |EC |OPENSSH |PGP |ENCRYPTED )?"
+        r"PRIVATE KEY(?: BLOCK)?-----"
     ),
     re.compile(r"(?i)bearer\s+[A-Za-z0-9._-]{20,}"),
     re.compile(r"\b(?:sk|rk|pk|org|proj)-[A-Za-z0-9_-]{20,}\b"),
@@ -83,15 +160,114 @@ SECRET_VALUE_PATTERNS = [
     re.compile(r"\b(?:A3T|AKIA|ASIA)[A-Z0-9]{16}\b"),
     re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b"),
     re.compile(r"\bya29\.[0-9A-Za-z_-]{20,}\b"),
+    re.compile(r"\beyJ[A-Za-z0-9_-]{7,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b"),
 ]
 MAX_BUNDLE_TEXT_BYTES = 180_000
+MAX_REVIEW_PROMPT_BYTES = 512_000
+SECRET_PLACEHOLDER_VALUES = {
+    "changeme",
+    "dummy",
+    "example",
+    "fake",
+    "gateway-token",
+    "not-a-real",
+    "placeholder",
+    "redacted",
+    "sample",
+    "secret-token",
+    "test-auth-token",
+    "test-token-placeholder",
+    "token-oversized",
+    "clawrouter-e2e-secret",
+    "very-long-browser-token-0123456789",
+}
+QUOTED_SECRET_REFERENCE_PATTERNS = (
+    re.compile(r"^\$[A-Za-z_][A-Za-z0-9_]*$"),
+    re.compile(r"^\$env:[A-Za-z_][A-Za-z0-9_]*$", re.IGNORECASE),
+    re.compile(r"^\$\{[A-Za-z_][A-Za-z0-9_]*\}$"),
+    re.compile(r"^\$\{\{\s*[A-Za-z_][A-Za-z0-9_.-]*\s*\}\}$"),
+    re.compile(r"^\{\{\s*[A-Za-z_][A-Za-z0-9_.-]*\s*\}\}$"),
+    re.compile(r"^op://[^\r\n]+$"),
+)
+UNQUOTED_SECRET_REFERENCE_PATTERNS = (
+    *QUOTED_SECRET_REFERENCE_PATTERNS,
+    re.compile(
+        r"^(?:process\.env|os\.environ|env|cfg|config|params|payload|provider|"
+        r"request|response|result|account|client|auth|auth_response|oauth_response|"
+        r"token_response|api_response|authentication|credentials|settings|self|this)"
+        r"(?:[.\[].*)$"
+    ),
+)
 DEFAULT_ENGINE_PATHS = ("/usr/local/bin", "/usr/bin", "/bin")
+MULTI_PROVIDER_CREDENTIAL_SUFFIXES = (
+    "_ACCESS_TOKEN",
+    "_API_KEY",
+    "_API_TOKEN",
+    "_AUTH_TOKEN",
+    "_TOKEN",
+)
+MULTI_PROVIDER_ENV_KEYS = {
+    "AWS_CONTAINER_AUTHORIZATION_TOKEN",
+    "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+    "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+    "AWS_BEDROCK_FORCE_HTTP1",
+    "AWS_BEDROCK_SKIP_AUTH",
+    "AWS_ENDPOINT_URL_BEDROCK_RUNTIME",
+    "AWS_ROLE_ARN",
+    "AWS_ROLE_SESSION_NAME",
+    "AZURE_COGNITIVE_SERVICES_RESOURCE_NAME",
+    "AZURE_OPENAI_API_VERSION",
+    "AZURE_OPENAI_BASE_URL",
+    "AZURE_OPENAI_DEPLOYMENT_NAME_MAP",
+    "AZURE_OPENAI_RESOURCE_NAME",
+    "AZURE_RESOURCE_NAME",
+    "CLOUDFLARE_ACCOUNT_ID",
+    "CLOUDFLARE_GATEWAY_ID",
+    "GCLOUD_PROJECT",
+    "GOOGLE_CLOUD_LOCATION",
+    "GOOGLE_CLOUD_PROJECT",
+    "HF_TOKEN",
+    "SNOWFLAKE_ACCOUNT",
+    "VERTEXAI_LOCATION",
+    "VERTEXAI_PROJECT",
+}
+CLAUDE_CLOUD_CREDENTIAL_ENV_KEYS = {
+    "AWS_CONTAINER_AUTHORIZATION_TOKEN",
+    "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+    "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+    "AWS_ROLE_ARN",
+    "AWS_ROLE_SESSION_NAME",
+    "AZURE_CLIENT_ID",
+    "AZURE_CLIENT_SECRET",
+    "AZURE_TENANT_ID",
+    "GCLOUD_PROJECT",
+    "GOOGLE_CLOUD_PROJECT",
+}
+CODEX_TRUST_PATH_ENV_KEYS = {
+    "CODEX_CA_CERTIFICATE",
+    "SSL_CERT_DIR",
+    "SSL_CERT_FILE",
+}
+PROVIDER_CREDENTIAL_PATH_ENV_KEYS = {
+    "AWS_CONFIG_FILE",
+    "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE",
+    "AWS_SHARED_CREDENTIALS_FILE",
+    "AWS_WEB_IDENTITY_TOKEN_FILE",
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    "NODE_EXTRA_CA_CERTS",
+    "SSL_CERT_DIR",
+    "SSL_CERT_FILE",
+}
 DEFAULT_MODEL_BY_ENGINE = {
-    "codex": "gpt-5.5",
+    "codex": "gpt-5.6-sol",
     "claude": "claude-fable-5",
 }
+DEFAULT_CODEX_ACCESS_FALLBACK_MODEL = "gpt-5.6-terra"
+DEFAULT_THINKING_BY_ENGINE = {
+    "codex": "high",
+}
 THINKING_LEVELS_BY_ENGINE = {
-    "codex": {"none", "minimal", "low", "medium", "high", "xhigh"},
+    "codex": {"none", "minimal", "low", "medium", "high", "xhigh", "max"},
     "claude": {"low", "medium", "high", "xhigh", "max"},
     "droid": {"off", "none", "low", "medium", "high", "xhigh", "max"},
     "copilot": set(),
@@ -170,6 +346,7 @@ def run(
     input_text: str | None = None,
     check: bool = True,
     env: dict[str, str] | None = None,
+    text_errors: str = SUBPROCESS_TEXT_ERRORS,
 ) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
         args,
@@ -177,7 +354,7 @@ def run(
         input=input_text,
         text=True,
         encoding=SUBPROCESS_TEXT_ENCODING,
-        errors=SUBPROCESS_TEXT_ERRORS,
+        errors=text_errors,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         env=env,
@@ -217,6 +394,44 @@ def safe_git_env(repo: Path) -> dict[str, str]:
     return env
 
 
+def global_excludes_file(repo: Path) -> Path | None:
+    env = safe_git_env(repo)
+    env.pop("GIT_CONFIG_GLOBAL", None)
+    home = Path(env["HOME"]).expanduser()
+    if not external_env_path(repo, str(home)):
+        return None
+    result = run(
+        [
+            resolve_command("git", repo),
+            "--no-optional-locks",
+            *SAFE_GIT_CONFIG_ARGS,
+            "config",
+            "--global",
+            "--path",
+            "--get",
+            "core.excludesFile",
+        ],
+        repo,
+        check=False,
+        env=env,
+    )
+    if result.returncode != 0:
+        return None
+    raw_path = result.stdout.strip()
+    if not raw_path:
+        return None
+    candidate = Path(raw_path).expanduser()
+    if not candidate.is_absolute():
+        candidate = home / candidate
+    try:
+        resolved = candidate.resolve(strict=True)
+    except OSError:
+        return None
+    if is_within(resolved, repo.resolve()) or not resolved.is_file():
+        return None
+    return resolved
+
+
 def safe_engine_path(repo: Path, extra_paths: list[Path] | None = None) -> str:
     entries: list[str] = []
     resolved_repo = repo.resolve()
@@ -245,37 +460,294 @@ def safe_engine_path(repo: Path, extra_paths: list[Path] | None = None) -> str:
     return os.pathsep.join(entries)
 
 
+def codex_tool_git_env() -> dict[str, str]:
+    env = {"GIT_CONFIG_COUNT": str(len(ENGINE_GIT_CONFIG_OVERRIDES))}
+    for index, (key, value) in enumerate(ENGINE_GIT_CONFIG_OVERRIDES):
+        env[f"GIT_CONFIG_KEY_{index}"] = key
+        env[f"GIT_CONFIG_VALUE_{index}"] = value
+    return env
+
+
+def external_env_path(repo: Path, value: str) -> bool:
+    try:
+        resolved = Path(value).expanduser().resolve()
+    except OSError:
+        return False
+    return not is_within(resolved, repo.resolve())
+
+
+def external_env_path_value(repo: Path, key: str, value: str) -> bool:
+    return normalize_external_env_path_value(repo, key, value) is not None
+
+
+def normalize_external_env_path_value(
+    repo: Path,
+    key: str,
+    value: str,
+) -> str | None:
+    values = value.split(os.pathsep) if key == "SSL_CERT_DIR" else [value]
+    normalized: list[str] = []
+    for item in values:
+        if not item:
+            return None
+        try:
+            resolved = Path(item).expanduser().resolve()
+        except OSError:
+            return None
+        if is_within(resolved, repo.resolve()):
+            return None
+        normalized.append(str(resolved))
+    return os.pathsep.join(normalized) if normalized else None
+
+
+def safe_dbus_session_address(repo: Path, value: str) -> bool:
+    match = re.fullmatch(
+        r"unix:path=(?P<path>[^,;%]+)(?:,guid=[0-9a-fA-F]+)?",
+        value,
+    )
+    if not match:
+        return False
+    path = match.group("path")
+    return Path(path).is_absolute() and external_env_path(repo, path)
+
+
+def safe_temp_root(repo: Path) -> Path:
+    try:
+        root = Path(tempfile.gettempdir()).resolve(strict=True)
+    except OSError as exc:
+        raise SystemExit(f"unable to resolve temporary directory: {exc}") from exc
+    if is_within(root, repo.resolve()):
+        raise SystemExit(
+            "temporary directory must be outside the reviewed repository; "
+            "unset or relocate TMPDIR/TMP/TEMP"
+        )
+    return root
+
+
+def safe_proxy_url(value: str) -> bool:
+    try:
+        candidate = value if "://" in value else f"http://{value}"
+        parsed = urllib.parse.urlsplit(candidate)
+        _ = parsed.port
+    except ValueError:
+        return False
+    return (
+        parsed.scheme.lower()
+        in {"http", "https", "socks", "socks4", "socks4a", "socks5", "socks5h"}
+        and bool(parsed.hostname)
+        and parsed.username is None
+        and parsed.password is None
+        and parsed.path in {"", "/"}
+        and not parsed.query
+        and not parsed.fragment
+    )
+
+
 def safe_engine_env(
     repo: Path,
     extra_paths: list[Path] | None = None,
     extra: dict[str, str] | None = None,
+    *,
+    engine: str | None = None,
 ) -> dict[str, str]:
-    blocked_exact = {
-        "BASH_ENV",
-        "ENV",
-        "GIT_CONFIG",
-        "GIT_CONFIG_GLOBAL",
-        "GIT_CONFIG_NOSYSTEM",
-        "GIT_CONFIG_SYSTEM",
-        "GIT_OPTIONAL_LOCKS",
-        "GIT_TERMINAL_PROMPT",
-        "LD_PRELOAD",
-        "NODE_OPTIONS",
-        "PYTHONHOME",
-        "PYTHONPATH",
+    common_allowed_exact = {
+        "ALL_PROXY",
+        "COMSPEC",
+        "DISABLE_AUTOUPDATER",
+        "DISABLE_ERROR_REPORTING",
+        "DISABLE_TELEMETRY",
+        "DO_NOT_TRACK",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "LANG",
+        "LC_ALL",
+        "LOGNAME",
+        "NO_PROXY",
+        "PATHEXT",
+        "SHELL",
+        "SYSTEMROOT",
+        "TEMP",
+        "TMP",
+        "TMPDIR",
+        "USER",
+        "WINDIR",
+        "all_proxy",
+        "http_proxy",
+        "https_proxy",
+        "no_proxy",
     }
-    blocked_prefixes = ("GIT_", "DYLD_")
+    codex_allowed_exact = {
+        "AZURE_OPENAI_API_KEY",
+        "AZURE_OPENAI_ENDPOINT",
+        "CODEX_API_KEY",
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "OPENAI_ORGANIZATION",
+        "OPENAI_PROJECT",
+    }
+    claude_allowed_exact = {
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_AWS_API_KEY",
+        "ANTHROPIC_AWS_BASE_URL",
+        "ANTHROPIC_AWS_WORKSPACE_ID",
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_BEDROCK_BASE_URL",
+        "ANTHROPIC_BEDROCK_MANTLE_BASE_URL",
+        "ANTHROPIC_BEDROCK_SERVICE_TIER",
+        "ANTHROPIC_CUSTOM_HEADERS",
+        "ANTHROPIC_FOUNDRY_API_KEY",
+        "ANTHROPIC_FOUNDRY_AUTH_TOKEN",
+        "ANTHROPIC_FOUNDRY_BASE_URL",
+        "ANTHROPIC_FOUNDRY_RESOURCE",
+        "ANTHROPIC_SMALL_FAST_MODEL_AWS_REGION",
+        "ANTHROPIC_VERTEX_BASE_URL",
+        "ANTHROPIC_VERTEX_PROJECT_ID",
+        "ANTHROPIC_WORKSPACE_ID",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_BEARER_TOKEN_BEDROCK",
+        "AWS_DEFAULT_REGION",
+        "AWS_PROFILE",
+        "AWS_REGION",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        "CLAUDE_CODE_API_KEY_HELPER_TTL_MS",
+        "CLAUDE_CODE_CERT_STORE",
+        "CLAUDE_CODE_CLIENT_CERT",
+        "CLAUDE_CODE_CLIENT_KEY",
+        "CLAUDE_CODE_CLIENT_KEY_PASSPHRASE",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+        "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+        "CLAUDE_CODE_OAUTH_SCOPES",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST",
+        "CLAUDE_CODE_SKIP_ANTHROPIC_AWS_AUTH",
+        "CLAUDE_CODE_SKIP_BEDROCK_AUTH",
+        "CLAUDE_CODE_SKIP_FOUNDRY_AUTH",
+        "CLAUDE_CODE_SKIP_MANTLE_AUTH",
+        "CLAUDE_CODE_SKIP_VERTEX_AUTH",
+        "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+        "CLAUDE_CODE_USE_BEDROCK",
+        "CLAUDE_CODE_USE_FOUNDRY",
+        "CLAUDE_CODE_USE_MANTLE",
+        "CLAUDE_CODE_USE_VERTEX",
+        "CLOUD_ML_REGION",
+    } | CLAUDE_CLOUD_CREDENTIAL_ENV_KEYS
+    multi_provider_allowed_exact = {
+        "ANTHROPIC_AWS_BASE_URL",
+        "ANTHROPIC_AWS_WORKSPACE_ID",
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_BEDROCK_BASE_URL",
+        "ANTHROPIC_BEDROCK_MANTLE_BASE_URL",
+        "ANTHROPIC_BEDROCK_SERVICE_TIER",
+        "ANTHROPIC_CUSTOM_HEADERS",
+        "ANTHROPIC_FOUNDRY_BASE_URL",
+        "ANTHROPIC_FOUNDRY_RESOURCE",
+        "ANTHROPIC_SMALL_FAST_MODEL_AWS_REGION",
+        "ANTHROPIC_VERTEX_BASE_URL",
+        "ANTHROPIC_VERTEX_PROJECT_ID",
+        "ANTHROPIC_WORKSPACE_ID",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_BEARER_TOKEN_BEDROCK",
+        "AWS_DEFAULT_REGION",
+        "AWS_PROFILE",
+        "AWS_REGION",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        "AZURE_OPENAI_ENDPOINT",
+        "CLOUD_ML_REGION",
+        "COPILOT_GITHUB_TOKEN",
+        "GITHUB_TOKEN",
+        "GH_TOKEN",
+        "OPENAI_BASE_URL",
+        "OPENAI_ORGANIZATION",
+        "OPENAI_PROJECT",
+    } | MULTI_PROVIDER_ENV_KEYS
+    engine_allowed_exact = {
+        "claude": claude_allowed_exact,
+        "codex": codex_allowed_exact,
+        "opencode": multi_provider_allowed_exact,
+        "pi": multi_provider_allowed_exact,
+    }.get(engine or "", set())
+    allowed_prefixes = ("AUTOREVIEW_FAKE_",)
+    allow_multi_provider_credentials = engine in {"opencode", "pi"}
     env = {
         key: value
         for key, value in os.environ.items()
-        if key not in blocked_exact and not any(key.startswith(prefix) for prefix in blocked_prefixes)
+        if (
+            key in common_allowed_exact
+            or key in engine_allowed_exact
+            or any(key.startswith(prefix) for prefix in allowed_prefixes)
+            or (
+                allow_multi_provider_credentials
+                and (
+                    key in MULTI_PROVIDER_ENV_KEYS
+                    or key.endswith(MULTI_PROVIDER_CREDENTIAL_SUFFIXES)
+                )
+            )
+        )
     }
+    for key in (
+        "ALL_PROXY",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "all_proxy",
+        "http_proxy",
+        "https_proxy",
+    ):
+        value = env.get(key)
+        if value and not safe_proxy_url(value):
+            raise SystemExit(
+                f"unsafe credentialed or malformed proxy URL in {key}; "
+                "configure a credential-free proxy URL before running autoreview"
+            )
     env["PATH"] = safe_engine_path(repo, extra_paths)
-    env["GIT_CONFIG_COUNT"] = str(len(ENGINE_GIT_CONFIG_OVERRIDES))
-    for index, (key, value) in enumerate(ENGINE_GIT_CONFIG_OVERRIDES):
-        env[f"GIT_CONFIG_KEY_{index}"] = key
-        env[f"GIT_CONFIG_VALUE_{index}"] = value
+    for key in ("HOME", "USERPROFILE"):
+        value = os.environ.get(key)
+        if value and external_env_path(repo, value):
+            env[key] = value
+    engine_config_paths = {
+        "claude": ("CLAUDE_CONFIG_DIR",),
+        "codex": ("CODEX_HOME",),
+        "pi": ("PI_CODING_AGENT_DIR",),
+    }
+    for key in engine_config_paths.get(engine or "", ()):
+        value = os.environ.get(key)
+        if value and external_env_path(repo, value):
+            env[key] = value
+    if engine == "codex":
+        dbus_address = os.environ.get("DBUS_SESSION_BUS_ADDRESS")
+        if dbus_address and safe_dbus_session_address(repo, dbus_address):
+            env["DBUS_SESSION_BUS_ADDRESS"] = dbus_address
+        xdg_runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
+        if xdg_runtime_dir and external_env_path(repo, xdg_runtime_dir):
+            env["XDG_RUNTIME_DIR"] = xdg_runtime_dir
+        for key in CODEX_TRUST_PATH_ENV_KEYS:
+            value = os.environ.get(key)
+            normalized = (
+                normalize_external_env_path_value(repo, key, value)
+                if value
+                else None
+            )
+            if normalized:
+                env[key] = normalized
+    if engine in {"claude", "opencode", "pi"}:
+        for key in PROVIDER_CREDENTIAL_PATH_ENV_KEYS:
+            value = os.environ.get(key)
+            normalized = (
+                normalize_external_env_path_value(repo, key, value)
+                if value
+                else None
+            )
+            if normalized:
+                env[key] = normalized
+    if engine == "opencode" and (xdg_data_home := os.environ.get("XDG_DATA_HOME")):
+        if external_env_path(repo, xdg_data_home):
+            env["XDG_DATA_HOME"] = xdg_data_home
+    env.update(codex_tool_git_env())
     env.update(extra or {})
+    if engine == "claude":
+        env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
     return env
 
 
@@ -399,21 +871,16 @@ def emit_heartbeat(
 def opencode_review_config(web_search: bool = True) -> dict[str, Any]:
     permission: dict[str, Any] = {
         "*": "deny",
-        "read": {
-            "*": "allow",
-            "*.env": "ask",
-            "*.env.*": "ask",
-            "*.env.example": "allow",
-        },
-        "grep": "allow",
-        "glob": "allow",
+        "read": "deny",
+        "grep": "deny",
+        "glob": "deny",
     }
     if web_search:
         permission["websearch"] = "allow"
-        permission["webfetch"] = "allow"
     else:
         permission["websearch"] = "deny"
-        permission["webfetch"] = "deny"
+    # Generic fetches can reach loopback, private, link-local, or metadata endpoints.
+    permission["webfetch"] = "deny"
     return {
         "$schema": "https://opencode.ai/config.json",
         "autoupdate": False,
@@ -434,13 +901,16 @@ def opencode_review_config(web_search: bool = True) -> dict[str, Any]:
 
 
 def opencode_review_env(web_search: bool = True) -> dict[str, str]:
-    return {
+    env = {
         "OPENCODE_DISABLE_PROJECT_CONFIG": "1",
         "OPENCODE_CONFIG_CONTENT": json.dumps(opencode_review_config(web_search), separators=(",", ":")),
         "OPENCODE_DISABLE_AUTOUPDATE": "1",
         "OPENCODE_DISABLE_AUTOCOMPACT": "1",
         "OPENCODE_DISABLE_MODELS_FETCH": "1",
     }
+    if web_search and (enable_exa := os.environ.get("OPENCODE_ENABLE_EXA")):
+        env["OPENCODE_ENABLE_EXA"] = enable_exa
+    return env
 
 
 def run_with_heartbeat(
@@ -575,12 +1045,19 @@ def run_with_stream(
 
 
 def git(repo: Path, *args: str, check: bool = True) -> str:
-    return run(
-        [resolve_command("git", repo), "--no-optional-locks", *SAFE_GIT_CONFIG_ARGS, *args],
-        repo,
-        check=check,
-        env=safe_git_env(repo),
-    ).stdout
+    try:
+        return run(
+            [resolve_command("git", repo), "--no-optional-locks", *SAFE_GIT_CONFIG_ARGS, *args],
+            repo,
+            check=check,
+            env=safe_git_env(repo),
+            text_errors="strict",
+        ).stdout
+    except UnicodeDecodeError as exc:
+        raise SystemExit(
+            "refusing non-UTF-8 Git output because paths and diff content "
+            "cannot be validated without loss"
+        ) from exc
 
 
 def git_path_list(repo: Path, *args: str, check: bool = True) -> list[str]:
@@ -593,15 +1070,18 @@ def repo_root() -> Path:
     git_bin = find_command("git", unsafe_root)
     if not git_bin:
         raise SystemExit("git executable not found. Install Git or add it to PATH.")
-    result = subprocess.run(
-        [git_bin, "--no-optional-locks", *SAFE_GIT_CONFIG_ARGS, "rev-parse", "--show-toplevel"],
-        text=True,
-        encoding=SUBPROCESS_TEXT_ENCODING,
-        errors=SUBPROCESS_TEXT_ERRORS,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env=safe_git_env(unsafe_root),
-    )
+    try:
+        result = subprocess.run(
+            [git_bin, "--no-optional-locks", *SAFE_GIT_CONFIG_ARGS, "rev-parse", "--show-toplevel"],
+            text=True,
+            encoding=SUBPROCESS_TEXT_ENCODING,
+            errors="strict",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=safe_git_env(unsafe_root),
+        )
+    except UnicodeDecodeError as exc:
+        raise SystemExit("repository root is not valid UTF-8") from exc
     if result.returncode != 0:
         raise SystemExit("autoreview must run inside a git repository")
     return Path(result.stdout.strip()).resolve()
@@ -657,7 +1137,12 @@ def find_command(name: str, repo: Path) -> str | None:
     command = Path(name)
     if has_directory_component(name, command):
         base = command if command.is_absolute() else repo / command
-        return first_executable_candidate(base)
+        if is_within(
+            Path(os.path.abspath(base)),
+            Path(os.path.abspath(repo)),
+        ):
+            return None
+        return first_executable_candidate(base, reject_root=repo.resolve())
     for part in os.environ.get("PATH", "").split(os.pathsep):
         if not part or part == ".":
             continue
@@ -696,13 +1181,17 @@ def first_executable_candidate(path: Path, *, reject_root: Path | None = None) -
         candidates = [path]
     for candidate in candidates:
         if candidate.is_file() and os.access(candidate, os.X_OK):
-            if reject_root is not None:
-                try:
-                    if is_within(candidate.resolve(), reject_root):
-                        continue
-                except OSError:
-                    continue
-            return str(candidate)
+            try:
+                lexical_candidate = Path(os.path.abspath(candidate))
+                resolved_candidate = candidate.resolve(strict=True)
+            except OSError:
+                continue
+            if reject_root is not None and (
+                is_within(lexical_candidate, reject_root)
+                or is_within(resolved_candidate, reject_root)
+            ):
+                continue
+            return str(lexical_candidate)
     return None
 
 
@@ -730,11 +1219,10 @@ def bounded(text: str, limit: int = 180_000) -> str:
 
 
 def ensure_reviewer_input_complete(reviewer: argparse.Namespace, input_truncated: bool) -> None:
-    can_recover_full_diff = reviewer.tools and reviewer.engine == "codex"
-    if input_truncated and not can_recover_full_diff:
+    if input_truncated:
         raise SystemExit(
             f"{reviewer.engine} engine refused truncated review input because it cannot recover omitted diff hunks; "
-            "reduce the change/input size or choose codex with tools enabled"
+            "reduce the change/input size"
         )
 
 
@@ -746,11 +1234,44 @@ def bounded_field(text: str, limit: int) -> str:
 
 
 def read_prefix(path: Path, limit: int) -> tuple[bytes, bool]:
+    descriptor: int | None = None
     try:
-        with path.open("rb") as handle:
-            data = handle.read(limit + 1)
+        before = path.stat(follow_symlinks=False)
+        if not stat.S_ISREG(before.st_mode):
+            raise OSError("not a regular file")
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_BINARY", 0)
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        descriptor = os.open(path, flags)
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino)
+        ):
+            raise OSError("file changed while opening")
+        chunks: list[bytes] = []
+        remaining = limit + 1
+        while remaining:
+            chunk = os.read(descriptor, remaining)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        after = os.fstat(descriptor)
+        if (
+            (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns)
+            != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+        ):
+            raise OSError("file changed while reading")
+        data = b"".join(chunks)
     except OSError as exc:
         raise SystemExit(f"unreadable file: {path}: {exc}") from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
     return data[:limit], len(data) > limit
 
 
@@ -758,10 +1279,13 @@ def read_text_with_status(path: Path, limit: int = MAX_BUNDLE_TEXT_BYTES) -> tup
     try:
         data, truncated = read_prefix(path, limit)
     except SystemExit as exc:
-        return f"[unreadable: {exc}]", False
+        return f"[unreadable: {exc}]", True
     if b"\0" in data:
-        return "[binary file omitted]", False
-    text = data.decode("utf-8", errors="replace")
+        return "[binary file omitted]", True
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return "[non-UTF-8 file omitted]", True
     if len(text) > limit:
         text = text[:limit]
         truncated = True
@@ -793,7 +1317,31 @@ def raw_repo_path_has_symlink_component(repo: Path, rel_path: Path) -> bool:
 
 
 def secret_text_risk(text: str) -> bool:
-    return any(pattern.search(text) for pattern in SECRET_VALUE_PATTERNS)
+    if any(pattern.search(text) for pattern in SECRET_VALUE_PATTERNS):
+        return True
+    for match in SECRET_ASSIGNMENT_PATTERN.finditer(text):
+        quoted = match.group("bare_value") is None
+        value = (
+            match.group("double_value")
+            or match.group("single_value")
+            or match.group("bare_value")
+        )
+        if value is None:
+            continue
+        if value.lower() in SECRET_PLACEHOLDER_VALUES:
+            continue
+        reference_patterns = (
+            QUOTED_SECRET_REFERENCE_PATTERNS
+            if quoted
+            else UNQUOTED_SECRET_REFERENCE_PATTERNS
+        )
+        if any(pattern.fullmatch(value) for pattern in reference_patterns):
+            continue
+        call_target = re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", value)
+        if not quoted and call_target and text[match.end() :].startswith("("):
+            continue
+        return True
+    return False
 
 
 def require_no_secret_values(label: str, text: str) -> None:
@@ -804,6 +1352,205 @@ def require_no_secret_values(label: str, text: str) -> None:
         )
 
 
+def unified_diff_contents(patch: str) -> tuple[str, str]:
+    old_content: list[str] = []
+    new_content: list[str] = []
+    in_hunk = False
+    prefix_columns = 1
+    for line in patch.splitlines():
+        hunk_header = re.match(r"^(@{2,})", line)
+        if hunk_header:
+            old_content.append(";")
+            new_content.append(";")
+            in_hunk = True
+            prefix_columns = len(hunk_header.group(1)) - 1
+            continue
+        if line.startswith("diff --"):
+            old_content.append(";")
+            new_content.append(";")
+            in_hunk = False
+            continue
+        prefix = line[:prefix_columns]
+        if in_hunk and len(prefix) == prefix_columns and set(prefix) <= {"+", "-", " "}:
+            content = line[prefix_columns:]
+            if set(prefix) == {" "}:
+                old_content.append(content)
+                new_content.append(content)
+            elif "+" in prefix and "-" not in prefix:
+                new_content.append(content)
+            elif "-" in prefix and "+" not in prefix:
+                old_content.append(content)
+            else:
+                old_content.append(content)
+                new_content.append(content)
+    return "\n".join(old_content), "\n".join(new_content)
+
+
+def sensitive_repo_path_risk(rel: str) -> str | None:
+    normalized = rel.replace(os.sep, "/")
+    path = Path(normalized)
+    credential_directory = any(
+        TRACKED_CREDENTIAL_DIR_PATTERN.fullmatch(part)
+        for part in path.parts[:-1]
+    )
+    if (
+        path_has_sensitive_part(normalized)
+        or credential_directory
+        or credential_store_path(normalized)
+        or token_credential_store_path(normalized)
+    ):
+        return "sensitive path"
+    if any(pattern.search(normalized) for pattern in SENSITIVE_NAME_PATTERNS):
+        return "sensitive filename"
+    return None
+
+
+def token_credential_store_path(normalized: str) -> bool:
+    path = Path(normalized)
+    parts = {part.lower() for part in path.parts}
+    return (
+        bool(parts & {"token", "tokens"})
+        and path.stem.lower() in TRACKED_TOKEN_CREDENTIAL_STEMS
+        and path.suffix.lower() in TRACKED_TOKEN_CREDENTIAL_EXTENSIONS
+    )
+
+
+def credential_store_path(normalized: str) -> bool:
+    path = Path(normalized)
+    credential_directory = any(
+        TRACKED_CREDENTIAL_DIR_PATTERN.fullmatch(part)
+        for part in path.parts[:-1]
+    )
+    credential_data_file = path.suffix.lower() not in {
+        ".c",
+        ".cc",
+        ".cpp",
+        ".cs",
+        ".go",
+        ".h",
+        ".hpp",
+        ".java",
+        ".js",
+        ".jsx",
+        ".kt",
+        ".mjs",
+        ".php",
+        ".py",
+        ".rb",
+        ".rs",
+        ".sh",
+        ".swift",
+        ".ts",
+        ".tsx",
+        ".vue",
+    }
+    return credential_directory and credential_data_file and not skill_instruction_path(path)
+
+
+def skill_instruction_path(path: Path) -> bool:
+    parts = tuple(part.lower() for part in path.parts)
+    skill_root = parts[:1] == ("skills",) or any(
+        parts[index : index + 2] in {(".agents", "skills"), (".claude", "skills")}
+        for index in range(len(parts) - 1)
+    )
+    return skill_root and path.name.lower() in {"agents.md", "claude.md", "skill.md"}
+
+
+def tracked_sensitive_repo_path_risk(rel: str) -> str | None:
+    normalized = rel.replace(os.sep, "/")
+    parts = {part.lower() for part in Path(normalized).parts}
+    if (
+        "/.config/gcloud/" in f"/{normalized.lower()}/"
+        or f"/{normalized.lower()}".endswith("/.docker/config.json")
+        or parts & TRACKED_SENSITIVE_PATH_PARTS
+        or credential_store_path(normalized)
+        or token_credential_store_path(normalized)
+    ):
+        return "sensitive path"
+    if any(pattern.search(normalized) for pattern in TRACKED_SENSITIVE_NAME_PATTERNS):
+        return "sensitive filename"
+    return None
+
+
+def validate_review_patch(
+    label: str,
+    paths: list[str],
+    patch: str,
+    limit: int = MAX_BUNDLE_TEXT_BYTES,
+) -> str:
+    blocked = [
+        f"{rel} ({risk})"
+        for rel in paths
+        if (risk := tracked_sensitive_repo_path_risk(rel)) is not None
+    ]
+    if blocked:
+        details = "\n".join(f"- {item}" for item in blocked[:20])
+        more = f"\n... {len(blocked) - 20} more" if len(blocked) > 20 else ""
+        raise SystemExit(
+            f"refusing to include tracked sensitive paths in {label}:\n"
+            f"{details}{more}"
+        )
+    require_no_secret_values(label, patch)
+    for content in unified_diff_contents(patch):
+        require_no_secret_values(label, content)
+    patch_bytes = len(patch.encode("utf-8"))
+    if patch_bytes > limit:
+        raise SystemExit(
+            f"{label} is too large to review safely "
+            f"({patch_bytes} bytes; limit {limit}); split the change into smaller review targets"
+        )
+    return patch
+
+
+def require_no_binary_diff(label: str, numstat: str) -> None:
+    binary_paths: list[str] = []
+    for record in numstat.split("\0"):
+        if not record:
+            continue
+        fields = record.split("\t", 2)
+        if len(fields) == 3 and fields[0] == "-" and fields[1] == "-":
+            binary_paths.append(fields[2])
+    if binary_paths:
+        details = "\n".join(f"- {path}" for path in binary_paths[:20])
+        more = f"\n... {len(binary_paths) - 20} more" if len(binary_paths) > 20 else ""
+        raise SystemExit(
+            f"refusing binary changes in {label} because their contents cannot be reviewed:\n"
+            f"{details}{more}"
+        )
+
+
+def require_no_gitlink_diff(label: str, raw_diff: str) -> None:
+    records = raw_diff.split("\0")
+    gitlink_paths: list[str] = []
+    for index, record in enumerate(records):
+        if not record.startswith(":"):
+            continue
+        fields = record.split()
+        if len(fields) < 5:
+            continue
+        modes: list[str] = []
+        for field_index, field in enumerate(fields):
+            candidate = field.lstrip(":") if field_index == 0 else field
+            if not re.fullmatch(r"[0-7]{6}", candidate):
+                break
+            modes.append(candidate)
+        if "160000" not in modes:
+            continue
+        path = records[index + 1] if index + 1 < len(records) else "<unknown>"
+        gitlink_paths.append(path or "<unknown>")
+    if gitlink_paths:
+        details = "\n".join(f"- {path}" for path in gitlink_paths[:20])
+        more = (
+            f"\n... {len(gitlink_paths) - 20} more"
+            if len(gitlink_paths) > 20
+            else ""
+        )
+        raise SystemExit(
+            f"refusing gitlink/submodule changes in {label} because the referenced "
+            f"dependency contents are not present in the review bundle:\n{details}{more}"
+        )
+
+
 def file_bundle_risk(
     repo: Path,
     path: Path,
@@ -811,43 +1558,79 @@ def file_bundle_risk(
     *,
     allow_binary_omission: bool = False,
 ) -> str | None:
+    return file_bundle_snapshot(
+        repo,
+        path,
+        rel,
+        allow_binary_omission=allow_binary_omission,
+    )[2]
+
+
+def file_bundle_snapshot(
+    repo: Path,
+    path: Path,
+    rel: str,
+    *,
+    allow_binary_omission: bool = False,
+) -> tuple[str, bool, str | None]:
     normalized = rel.replace(os.sep, "/")
-    if path_has_sensitive_part(normalized):
-        return "sensitive path"
-    for pattern in SENSITIVE_NAME_PATTERNS:
-        if pattern.search(normalized):
-            return "sensitive filename"
+    path_risk = sensitive_repo_path_risk(normalized)
+    if path_risk:
+        return "", True, path_risk
     if path.is_symlink():
-        return "symlink"
+        return "", True, "symlink"
     try:
         resolved = path.resolve(strict=True)
     except OSError as exc:
-        return f"unreadable file: {exc}"
+        return "", True, f"unreadable file: {exc}"
     if not is_within(resolved, repo.resolve()):
-        return "path outside repository"
+        return "", True, "path outside repository"
     if not path.is_file():
-        return "not a regular file"
+        return "", True, "not a regular file"
     try:
-        data, _ = read_prefix(path, MAX_BUNDLE_TEXT_BYTES)
+        data, truncated = read_prefix(path, MAX_BUNDLE_TEXT_BYTES)
     except SystemExit as exc:
-        return str(exc)
+        return "", True, str(exc)
     if b"\0" in data:
-        return None if allow_binary_omission else "binary file"
-    if secret_text_risk(data.decode("utf-8", errors="replace")):
-        return "secret-like content"
-    return None
+        if allow_binary_omission:
+            return "[binary file omitted]", True, None
+        return "", True, "binary file"
+    if truncated:
+        return "", True, "file too large to scan safely"
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return "", True, "non-UTF-8 file"
+    if secret_text_risk(text):
+        return "", True, "secret-like content"
+    return text, False, None
 
 
-def safe_untracked_files(repo: Path) -> list[str]:
-    files = git_path_list(repo, "ls-files", "--others", "--exclude-standard", "-z")
+def safe_untracked_file_snapshots(repo: Path) -> list[tuple[str, str, bool]]:
+    args: list[str] = []
+    if excludes_file := global_excludes_file(repo):
+        args.extend(["-c", f"core.excludesFile={excludes_file}"])
+    files = git_path_list(
+        repo,
+        *args,
+        "ls-files",
+        "--others",
+        "--exclude-standard",
+        "-z",
+    )
     blocked: list[str] = []
-    included: list[str] = []
+    included: list[tuple[str, str, bool]] = []
     for rel in files:
-        risk = file_bundle_risk(repo, repo / rel, rel, allow_binary_omission=True)
+        content, truncated, risk = file_bundle_snapshot(
+            repo,
+            repo / rel,
+            rel,
+            allow_binary_omission=True,
+        )
         if risk:
             blocked.append(f"{rel} ({risk})")
         else:
-            included.append(rel)
+            included.append((rel, content, truncated))
     if blocked:
         details = "\n".join(f"- {item}" for item in blocked[:20])
         more = f"\n... {len(blocked) - 20} more" if len(blocked) > 20 else ""
@@ -857,6 +1640,10 @@ def safe_untracked_files(repo: Path) -> list[str]:
             f"{details}{more}"
         )
     return included
+
+
+def safe_untracked_files(repo: Path) -> list[str]:
+    return [rel for rel, _content, _truncated in safe_untracked_file_snapshots(repo)]
 
 
 def local_status(repo: Path, untracked: list[str]) -> str:
@@ -869,25 +1656,57 @@ def local_status(repo: Path, untracked: list[str]) -> str:
 def local_bundle(repo: Path) -> tuple[str, bool]:
     staged_patch = git(repo, "diff", *SAFE_DIFF_FLAGS, "--cached", "--patch")
     unstaged_patch = git(repo, "diff", *SAFE_DIFF_FLAGS, "--patch")
-    untracked = safe_untracked_files(repo)
+    require_no_binary_diff(
+        "local staged diff",
+        git(repo, "diff", *SAFE_DIFF_FLAGS, "--cached", "--numstat", "-z"),
+    )
+    require_no_binary_diff(
+        "local unstaged diff",
+        git(repo, "diff", *SAFE_DIFF_FLAGS, "--numstat", "-z"),
+    )
+    require_no_gitlink_diff(
+        "local staged diff",
+        git(repo, "diff", *SAFE_DIFF_FLAGS, "--cached", "--raw", "-z"),
+    )
+    require_no_gitlink_diff(
+        "local unstaged diff",
+        git(repo, "diff", *SAFE_DIFF_FLAGS, "--raw", "-z"),
+    )
+    staged_paths = git_path_list(
+        repo,
+        "diff",
+        *SAFE_DIFF_FLAGS,
+        "--name-only",
+        "--cached",
+        "-z",
+    )
+    unstaged_paths = git_path_list(
+        repo,
+        "diff",
+        *SAFE_DIFF_FLAGS,
+        "--name-only",
+        "-z",
+    )
+    untracked_snapshots = safe_untracked_file_snapshots(repo)
+    untracked = [rel for rel, _content, _truncated in untracked_snapshots]
     if not staged_patch.strip() and not unstaged_patch.strip() and not untracked:
         raise SystemExit("no local changes to review")
+    staged_patch = validate_review_patch("local staged diff", staged_paths, staged_patch)
+    unstaged_patch = validate_review_patch("local unstaged diff", unstaged_paths, unstaged_patch)
     parts = [
         "# Git Status",
         local_status(repo, untracked),
         "# Staged Diff",
         git(repo, "diff", *SAFE_DIFF_FLAGS, "--cached", "--stat"),
-        bounded(staged_patch),
+        staged_patch,
         "# Unstaged Diff",
         git(repo, "diff", *SAFE_DIFF_FLAGS, "--stat"),
-        bounded(unstaged_patch),
+        unstaged_patch,
     ]
     input_truncated = len(staged_patch) > 180_000 or len(unstaged_patch) > 180_000
     if untracked:
         parts.append("# Untracked Files")
-        for rel in untracked:
-            path = repo / rel
-            content, truncated = read_text_with_status(path)
+        for rel, content, truncated in untracked_snapshots:
             input_truncated = input_truncated or truncated
             parts.append(f"## {rel}\n{content}")
     return "\n\n".join(parts), input_truncated
@@ -895,14 +1714,49 @@ def local_bundle(repo: Path) -> tuple[str, bool]:
 
 def branch_bundle(repo: Path, base_ref: str) -> tuple[str, bool]:
     base_ref = validate_git_ref(repo, base_ref, "base")
+    diff_range = f"{base_ref}...HEAD"
     branch_patch = git(
         repo,
         "diff",
         *SAFE_DIFF_FLAGS,
         "--patch",
         "--end-of-options",
-        f"{base_ref}...HEAD",
+        diff_range,
     )
+    branch_paths = git_path_list(
+        repo,
+        "diff",
+        *SAFE_DIFF_FLAGS,
+        "--name-only",
+        "-z",
+        "--end-of-options",
+        diff_range,
+    )
+    require_no_binary_diff(
+        "branch diff",
+        git(
+            repo,
+            "diff",
+            *SAFE_DIFF_FLAGS,
+            "--numstat",
+            "-z",
+            "--end-of-options",
+            diff_range,
+        ),
+    )
+    require_no_gitlink_diff(
+        "branch diff",
+        git(
+            repo,
+            "diff",
+            *SAFE_DIFF_FLAGS,
+            "--raw",
+            "-z",
+            "--end-of-options",
+            diff_range,
+        ),
+    )
+    branch_patch = validate_review_patch("branch diff", branch_paths, branch_patch)
     return "\n\n".join(
         [
             "# Branch Diff",
@@ -913,15 +1767,21 @@ def branch_bundle(repo: Path, base_ref: str) -> tuple[str, bool]:
                 *SAFE_DIFF_FLAGS,
                 "--stat",
                 "--end-of-options",
-                f"{base_ref}...HEAD",
+                diff_range,
             ),
-            bounded(branch_patch),
+            branch_patch,
         ]
     ), len(branch_patch) > 180_000
 
 
 def commit_bundle(repo: Path, commit_ref: str) -> tuple[str, bool]:
     commit_ref = validate_git_ref(repo, commit_ref, "commit")
+    parents = git(repo, "rev-list", "--parents", "-n", "1", commit_ref).split()
+    if len(parents) > 2:
+        raise SystemExit(
+            "commit review does not accept merge commits; review the branch diff "
+            "or an individual parent-relative commit instead"
+        )
     commit_patch = git(
         repo,
         "show",
@@ -931,6 +1791,43 @@ def commit_bundle(repo: Path, commit_ref: str) -> tuple[str, bool]:
         "--end-of-options",
         commit_ref,
     )
+    commit_paths = git_path_list(
+        repo,
+        "show",
+        *SAFE_DIFF_FLAGS,
+        "--name-only",
+        "--format=",
+        "-z",
+        "--end-of-options",
+        commit_ref,
+    )
+    require_no_binary_diff(
+        "commit diff",
+        git(
+            repo,
+            "show",
+            *SAFE_DIFF_FLAGS,
+            "--numstat",
+            "--format=",
+            "-z",
+            "--end-of-options",
+            commit_ref,
+        ),
+    )
+    require_no_gitlink_diff(
+        "commit diff",
+        git(
+            repo,
+            "show",
+            *SAFE_DIFF_FLAGS,
+            "--raw",
+            "--format=",
+            "-z",
+            "--end-of-options",
+            commit_ref,
+        ),
+    )
+    commit_patch = validate_review_patch("commit diff", commit_paths, commit_patch)
     return "\n\n".join(
         [
             "# Commit Diff",
@@ -944,7 +1841,7 @@ def commit_bundle(repo: Path, commit_ref: str) -> tuple[str, bool]:
                 "--end-of-options",
                 commit_ref,
             ),
-            bounded(commit_patch),
+            commit_patch,
         ]
     ), len(commit_patch) > 180_000
 
@@ -999,10 +1896,9 @@ def validate_evidence_file(repo: Path, raw_path: str, label: str) -> tuple[Path,
     if not is_within(path, repo.resolve()):
         raise SystemExit(f"{label} must be inside the reviewed repository: {raw_path}")
     rel = str(path.relative_to(repo.resolve()))
-    risk = file_bundle_risk(repo, path, rel)
+    content, truncated, risk = file_bundle_snapshot(repo, path, rel)
     if risk:
         raise SystemExit(f"refusing to include unsafe {label}: {rel} ({risk})")
-    content, truncated = read_text_with_status(path)
     require_no_secret_values(f"{label} {rel}", content)
     return path, content, truncated
 
@@ -1059,8 +1955,11 @@ def review_scope_policy() -> str:
 def build_prompt(repo: Path, target: str, target_ref: str | None, bundle: str, extra_prompt: str, datasets: str) -> str:
     target_line = f"{target} {target_ref}" if target_ref else target
     branch = current_branch(repo)
+    require_no_secret_values("current branch", branch)
+    if target_ref:
+        require_no_secret_values("review target ref", target_ref)
     scope_policy = review_scope_policy()
-    return textwrap.dedent(
+    prompt = textwrap.dedent(
         f"""
         You are a senior code reviewer. Review the provided git change bundle only.
 
@@ -1082,7 +1981,7 @@ def build_prompt(repo: Path, target: str, target_ref: str | None, bundle: str, e
 
         Review target: {target_line}
         Current branch: {branch}
-        Repository: {repo}
+        Repository root: .
 
         {scope_policy}
 
@@ -1094,10 +1993,22 @@ def build_prompt(repo: Path, target: str, target_ref: str | None, bundle: str, e
         {bundle}
         """
     ).strip()
+    prompt_bytes = len(prompt.encode("utf-8"))
+    if prompt_bytes > MAX_REVIEW_PROMPT_BYTES:
+        raise SystemExit(
+            f"review input is {prompt_bytes} bytes, exceeding the {MAX_REVIEW_PROMPT_BYTES}-byte aggregate limit; "
+            "reduce the change, prompt files, or datasets"
+        )
+    return prompt
 
 
-def write_json_temp(data: dict[str, Any]) -> Path:
-    handle = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
+def write_json_temp(data: dict[str, Any], temp_root: Path) -> Path:
+    handle = tempfile.NamedTemporaryFile(
+        "w",
+        suffix=".json",
+        delete=False,
+        dir=temp_root,
+    )
     with handle:
         json.dump(data, handle)
     return Path(handle.name)
@@ -1107,12 +2018,32 @@ def toml_quoted_key_segment(value: str) -> str:
     return json.dumps(value)
 
 
+def toml_inline_string_table(values: dict[str, str]) -> str:
+    entries = ", ".join(f"{key}={json.dumps(value)}" for key, value in sorted(values.items()))
+    return "{" + entries + "}"
+
+
 def codex_config_isolation_flags(repo: Path) -> list[str]:
+    tool_env = toml_inline_string_table(codex_tool_git_env())
     return [
         "-c",
         "project_doc_max_bytes=0",
         "-c",
         f"projects.{toml_quoted_key_segment(str(repo.resolve()))}.trust_level=\"untrusted\"",
+        "-c",
+        'shell_environment_policy.inherit="core"',
+        "-c",
+        "shell_environment_policy.ignore_default_excludes=false",
+        "-c",
+        f"shell_environment_policy.set={tool_env}",
+        "-c",
+        "shell_environment_policy.experimental_use_profile=false",
+        "-c",
+        "allow_login_shell=false",
+        "-c",
+        'default_permissions="autoreview"',
+        "-c",
+        'permissions.autoreview.filesystem={":minimal"="read",":workspace_roots"="read"}',
     ]
 
 
@@ -1173,8 +2104,10 @@ def load_codex_auth_config(path: Path) -> dict[str, Any]:
     return config if isinstance(config, dict) else {}
 
 
-def codex_auth_config_flags() -> list[str]:
+def codex_auth_config_flags(repo: Path) -> list[str]:
     codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
+    if not external_env_path(repo, str(codex_home)):
+        return []
     config = load_codex_auth_config(codex_home / "config.toml")
 
     allowed_values = {
@@ -1201,7 +2134,7 @@ def codex_auth_config_flags() -> list[str]:
 
 
 def codex_exec_isolation_flags() -> list[str]:
-    return ["--ignore-user-config", "--ignore-rules"]
+    return ["--ignore-user-config", "--ignore-rules", "--skip-git-repo-check"]
 
 
 def claude_review_isolation_flags() -> list[str]:
@@ -1236,10 +2169,15 @@ def parse_cli_version(text: str) -> tuple[int, int, int] | None:
 
 def ensure_claude_isolation_supported(args: argparse.Namespace, repo: Path) -> None:
     claude_bin = resolve_command(args.claude_bin, repo)
-    engine_env = safe_engine_env(repo, [Path(claude_bin).parent])
-    result = run([claude_bin, "--version"], repo, check=False, env=engine_env)
+    engine_env = safe_engine_env(
+        repo,
+        [Path(claude_bin).parent],
+        engine="claude",
+    )
+    temp_root = safe_temp_root(repo)
+    result = run([claude_bin, "--version"], temp_root, check=False, env=engine_env)
     selected_models = [args.model, *(getattr(args, "fallback_model", "") or "").split(",")]
-    uses_fable = "claude-fable-5" in selected_models
+    uses_fable = any(model in {"claude-fable-5", "fable"} for model in selected_models)
     minimum_version = CLAUDE_FABLE_MIN_VERSION if uses_fable else CLAUDE_SAFE_MODE_MIN_VERSION
     version_reason = "for claude-fable-5" if uses_fable else "for --safe-mode"
     if result.returncode != 0:
@@ -1252,9 +2190,9 @@ def ensure_claude_isolation_supported(args: argparse.Namespace, repo: Path) -> N
             f"claude engine requires Claude Code >= {format_version(minimum_version)} "
             f"{version_reason} (found {format_version(version)})"
         )
-    help_result = run([claude_bin, "--help"], repo, check=False, env=engine_env)
+    help_result = run([claude_bin, "--help"], temp_root, check=False, env=engine_env)
     help_text = f"{help_result.stdout}\n{help_result.stderr}"
-    required_flags = ["--safe-mode", "--setting-sources", "--strict-mcp-config", "--disallowedTools"]
+    required_flags = ["--safe-mode", "--setting-sources", "--strict-mcp-config", "--disallowedTools", "--tools"]
     missing = [flag for flag in required_flags if flag not in help_text]
     if help_result.returncode != 0 or missing:
         detail = ", ".join(missing) if missing else "--help failed"
@@ -1263,8 +2201,11 @@ def ensure_claude_isolation_supported(args: argparse.Namespace, repo: Path) -> N
 
 def ensure_pi_isolation_supported(args: argparse.Namespace, repo: Path) -> str:
     pi_bin = resolve_command(args.pi_bin, repo)
-    engine_env = safe_engine_env(repo, [Path(pi_bin).parent])
-    with tempfile.TemporaryDirectory(prefix="autoreview-pi-probe.") as tempdir:
+    engine_env = safe_engine_env(repo, [Path(pi_bin).parent], engine="pi")
+    with tempfile.TemporaryDirectory(
+        prefix="autoreview-pi-probe.",
+        dir=safe_temp_root(repo),
+    ) as tempdir:
         probe_cwd = Path(tempdir)
         result = run([pi_bin, "--version"], probe_cwd, check=False, env=engine_env)
         help_result = run([pi_bin, "--help"], probe_cwd, check=False, env=engine_env)
@@ -1296,6 +2237,22 @@ def format_version(version: tuple[int, int, int]) -> str:
     return ".".join(str(part) for part in version)
 
 
+SAFE_CODEX_CONFIG_KEYS = {
+    "hide_agent_reasoning",
+    "model_auto_compact_token_limit",
+    "model_auto_compact_token_limit_scope",
+    "model_context_window",
+    "model_reasoning_effort",
+    "model_reasoning_summary",
+    "model_verbosity",
+    "personality",
+    "plan_mode_reasoning_effort",
+    "service_tier",
+    "show_raw_agent_reasoning",
+    "tool_output_token_limit",
+}
+
+
 def codex_config_overrides(args: argparse.Namespace) -> list[str]:
     raw = list(getattr(args, "codex_config", None) or [])
     if not raw:
@@ -1306,8 +2263,14 @@ def codex_config_overrides(args: argparse.Namespace) -> list[str]:
         if not item:
             continue
         key, sep, value = item.partition("=")
-        if not sep or not value.strip() or not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*", key.strip()):
+        key = key.strip()
+        if not sep or not value.strip() or not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*", key):
             raise SystemExit(f"invalid Codex config override (expected key=value): {item}")
+        if key not in SAFE_CODEX_CONFIG_KEYS:
+            raise SystemExit(
+                f"unsafe Codex config override refused: {key}; "
+                "only model and response tuning keys are allowed"
+            )
         overrides.append(item)
     return overrides
 
@@ -1326,16 +2289,72 @@ def codex_speed_override(args: argparse.Namespace) -> str | None:
     return f'service_tier="{speed}"'
 
 
-def run_codex(args: argparse.Namespace, repo: Path, prompt: str) -> str:
-    if not args.tools:
-        raise SystemExit("--no-tools is not supported by the Codex engine; use --engine claude --no-tools for a no-tools run")
-    schema_path = write_json_temp(SCHEMA)
-    output_path = Path(tempfile.NamedTemporaryFile("w", suffix=".json", delete=False).name)
-    cmd = [resolve_command(args.codex_bin, repo), "--ask-for-approval", "never"]
+def codex_error_messages(result: subprocess.CompletedProcess[str]) -> list[str]:
+    messages: list[str] = []
+    for stream, accept_plain_text in (
+        (result.stderr, True),
+        (result.stdout, False),
+    ):
+        for raw_line in stream.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            if not line.startswith("{"):
+                if accept_plain_text:
+                    messages.append(line)
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict) or event.get("type") not in {
+                "error",
+                "turn.failed",
+            }:
+                continue
+            message = event.get("message")
+            if isinstance(message, str):
+                messages.append(message)
+            error = event.get("error")
+            if isinstance(error, str):
+                messages.append(error)
+            elif isinstance(error, dict) and isinstance(error.get("message"), str):
+                messages.append(error["message"])
+    return messages
+
+
+def codex_model_access_failure(result: subprocess.CompletedProcess[str], model: str) -> bool:
+    for message in codex_error_messages(result):
+        lowered = message.lower()
+        if model.lower() not in lowered:
+            continue
+        if any(
+            marker in lowered
+            for marker in (
+                "does not exist or you do not have access",
+                "do not have access to",
+                "don't have access to",
+                "does not appear in the list of models available to your account",
+                "not supported when using codex",
+            )
+        ):
+            return True
+    return False
+
+
+def codex_command(
+    args: argparse.Namespace,
+    source_repo: Path,
+    review_root: Path,
+    schema_path: Path,
+    output_path: Path,
+    model: str | None,
+) -> list[str]:
+    cmd = [resolve_command(args.codex_bin, source_repo), "--ask-for-approval", "never"]
     if args.web_search:
         cmd.append("--search")
-    if args.model:
-        cmd.extend(["--model", args.model])
+    if model:
+        cmd.extend(["--model", model])
     # User overrides go before the isolation flags so isolation stays authoritative on conflicts.
     for override in codex_config_overrides(args):
         cmd.extend(["-c", override])
@@ -1346,8 +2365,8 @@ def run_codex(args: argparse.Namespace, repo: Path, prompt: str) -> str:
     speed_override = codex_speed_override(args)
     if speed_override is not None:
         cmd.extend(["-c", speed_override])
-    cmd.extend(codex_config_isolation_flags(repo))
-    cmd.extend(codex_auth_config_flags())
+    cmd.extend(codex_config_isolation_flags(review_root))
+    cmd.extend(codex_auth_config_flags(source_repo))
     cmd.append("exec")
     if args.stream_engine_output:
         cmd.append("--json")
@@ -1356,9 +2375,7 @@ def run_codex(args: argparse.Namespace, repo: Path, prompt: str) -> str:
             *codex_exec_isolation_flags(),
             "--ephemeral",
             "-C",
-            str(repo),
-            "-s",
-            "read-only",
+            str(review_root),
             "--output-schema",
             str(schema_path),
             "--output-last-message",
@@ -1366,23 +2383,86 @@ def run_codex(args: argparse.Namespace, repo: Path, prompt: str) -> str:
             "-",
         ]
     )
-    result = run_with_heartbeat(
-        cmd,
-        repo,
-        input_text=prompt,
-        label="codex",
-        stream_output=args.stream_engine_output,
-        stream_display=CodexStreamDisplay() if args.stream_engine_output else None,
-        env=safe_engine_env(repo, [Path(cmd[0]).parent]),
-    )
+    return cmd
+
+
+def run_codex(args: argparse.Namespace, repo: Path, prompt: str) -> str:
+    if not args.tools:
+        raise SystemExit("--no-tools is not supported by the Codex engine; use --engine claude --no-tools for a no-tools run")
+    temp_root = safe_temp_root(repo)
+    schema_path = write_json_temp(SCHEMA, temp_root)
+    with tempfile.NamedTemporaryFile(
+        "w",
+        suffix=".json",
+        delete=False,
+        dir=temp_root,
+    ) as output_file:
+        output_path = Path(output_file.name)
+    models = [args.model]
+    fallback_model = getattr(args, "fallback_model", None)
+    if fallback_model and fallback_model != args.model:
+        models.append(fallback_model)
+    primary_failure: subprocess.CompletedProcess[str] | None = None
     try:
-        output = output_path.read_text()
+        # The validated bundle is the sole repository input. The empty
+        # workspace keeps ignored credentials and linked-worktree metadata
+        # outside the model's readable filesystem boundary.
+        with tempfile.TemporaryDirectory(
+            prefix="autoreview-codex-workspace.",
+            dir=temp_root,
+        ) as tempdir:
+            review_root = Path(tempdir)
+            for index, model in enumerate(models):
+                output_path.write_text("")
+                cmd = codex_command(
+                    args,
+                    repo,
+                    review_root,
+                    schema_path,
+                    output_path,
+                    model,
+                )
+                result = run_with_heartbeat(
+                    cmd,
+                    review_root,
+                    input_text=prompt,
+                    label="codex",
+                    stream_output=args.stream_engine_output,
+                    stream_display=CodexStreamDisplay() if args.stream_engine_output else None,
+                    env=safe_engine_env(
+                        repo,
+                        [Path(cmd[0]).parent],
+                        engine="codex",
+                    ),
+                    resolve_root=repo,
+                )
+                output = output_path.read_text()
+                if result.returncode == 0:
+                    return output or result.stdout
+                if (
+                    index == 0
+                    and len(models) > 1
+                    and model
+                    and codex_model_access_failure(result, model)
+                ):
+                    primary_failure = result
+                    print(
+                        f"codex model {model} is unavailable for this account; retrying with {models[1]}",
+                        file=sys.stderr,
+                    )
+                    continue
+                detail = result.stderr or result.stdout
+                if primary_failure is not None:
+                    primary_detail = primary_failure.stderr or primary_failure.stdout
+                    raise SystemExit(
+                        f"codex engine failed with primary model ({primary_failure.returncode})\n{primary_detail}\n"
+                        f"codex fallback model failed ({result.returncode})\n{detail}"
+                    )
+                raise SystemExit(f"codex engine failed ({result.returncode})\n{detail}")
     finally:
         schema_path.unlink(missing_ok=True)
         output_path.unlink(missing_ok=True)
-    if result.returncode != 0:
-        raise SystemExit(f"codex engine failed ({result.returncode})\n{result.stderr or result.stdout}")
-    return output or result.stdout
+    raise AssertionError("unreachable")
 
 
 def run_claude(args: argparse.Namespace, repo: Path, prompt: str) -> str:
@@ -1398,7 +2478,8 @@ def run_claude(args: argparse.Namespace, repo: Path, prompt: str) -> str:
         json.dumps(SCHEMA),
     ]
     if args.tools:
-        cmd.extend(["--allowedTools", claude_allowed_tools(args)])
+        allowed_tools = claude_allowed_tools(args)
+        cmd.extend(["--tools", claude_tool_inventory(args), "--allowedTools", allowed_tools])
     else:
         cmd.extend(["--tools", ""])
     if args.stream_engine_output:
@@ -1409,15 +2490,24 @@ def run_claude(args: argparse.Namespace, repo: Path, prompt: str) -> str:
         cmd.extend(["--fallback-model", args.fallback_model])
     if args.thinking:
         cmd.extend(["--effort", args.thinking])
-    result = run_with_heartbeat(
-        cmd,
-        repo,
-        input_text=prompt,
-        label="claude",
-        stream_output=args.stream_engine_output,
-        stream_display=ClaudeStreamDisplay() if args.stream_engine_output else None,
-        env=safe_engine_env(repo, [Path(cmd[0]).parent]),
-    )
+    with tempfile.TemporaryDirectory(
+        prefix="autoreview-claude-workspace.",
+        dir=safe_temp_root(repo),
+    ) as tempdir:
+        result = run_with_heartbeat(
+            cmd,
+            Path(tempdir),
+            input_text=prompt,
+            label="claude",
+            stream_output=args.stream_engine_output,
+            stream_display=ClaudeStreamDisplay() if args.stream_engine_output else None,
+            env=safe_engine_env(
+                repo,
+                [Path(cmd[0]).parent],
+                engine="claude",
+            ),
+            resolve_root=repo,
+        )
     if result.returncode != 0:
         raise SystemExit(f"claude engine failed ({result.returncode})\n{result.stderr or result.stdout}")
     return result.stdout
@@ -1426,56 +2516,15 @@ def run_claude(args: argparse.Namespace, repo: Path, prompt: str) -> str:
 def run_droid(args: argparse.Namespace, repo: Path, prompt: str) -> str:
     raise SystemExit(
         "droid engine is unavailable: the current Droid CLI cannot disable project instructions and all tools; "
-        "use codex, claude, copilot, pi, opencode, or cursor"
+        "use codex, claude, or pi"
     )
 
 
 def run_copilot(args: argparse.Namespace, repo: Path, prompt: str) -> str:
-    if args.thinking:
-        raise SystemExit("--thinking is not supported by the copilot engine")
-    if not args.tools:
-        raise SystemExit("--no-tools is not supported by the copilot engine; copilot requires a read-only file view tool to load the review bundle without exposing it in argv")
-    # Copilot child processes can briefly retain this cwd on Windows after a
-    # successful review. Cleanup failure must not replace the review result.
-    with tempfile.TemporaryDirectory(prefix="autoreview-copilot.", ignore_cleanup_errors=True) as tempdir:
-        prompt_path = Path(tempdir) / "prompt.txt"
-        prompt_path.write_text(prompt)
-        os.chmod(prompt_path, 0o600)
-        cmd = [
-            resolve_command(args.copilot_bin, repo),
-            "-C",
-            tempdir,
-            "-p",
-            "Read ./prompt.txt and follow it exactly. Return only the requested JSON object.",
-            "--output-format",
-            "json",
-            "--stream",
-            "on" if args.stream_engine_output else "off",
-            "--no-ask-user",
-            "--disable-builtin-mcps",
-        ]
-        if args.model:
-            cmd.extend(["--model", args.model])
-        available_tools = ["read_agent", "rg", "view"]
-        allowed_tools = available_tools[:]
-        if args.web_search:
-            available_tools.append("web_fetch")
-            allowed_tools.append("web_fetch")
-            cmd.append("--allow-all-urls")
-        cmd.append(f"--available-tools={','.join(available_tools)}")
-        for tool in allowed_tools:
-            cmd.append(f"--allow-tool={tool}")
-        result = run_with_heartbeat(
-            cmd,
-            Path(tempdir),
-            label="copilot",
-            stream_output=args.stream_engine_output,
-            resolve_root=repo,
-            env=safe_engine_env(repo, [Path(cmd[0]).parent]),
-        )
-    if result.returncode != 0:
-        raise SystemExit(f"copilot engine failed ({result.returncode})\n{result.stderr or result.stdout}")
-    return result.stdout
+    raise SystemExit(
+        "copilot engine is unavailable: its file tools cannot be confined to the reviewed bundle "
+        "without exposing ignored repository secrets; use codex, claude, or pi"
+    )
 
 
 def build_opencode_cmd(args: argparse.Namespace, repo: Path) -> list[str]:
@@ -1496,26 +2545,11 @@ def build_opencode_cmd(args: argparse.Namespace, repo: Path) -> list[str]:
 
 
 def run_opencode(args: argparse.Namespace, repo: Path, prompt: str) -> str:
-    if not args.tools:
-        raise SystemExit("--no-tools is not supported by the opencode engine")
-    cmd = build_opencode_cmd(args, repo)
-    with tempfile.TemporaryDirectory(prefix="autoreview-opencode-run.") as tempdir:
-        result = run_with_heartbeat(
-            cmd,
-            Path(tempdir),
-            input_text=prompt,
-            label="opencode",
-            stream_output=args.stream_engine_output,
-            env=safe_engine_env(
-                repo,
-                [Path(cmd[0]).parent],
-                opencode_review_env(args.web_search),
-            ),
-            resolve_root=repo,
-        )
-    if result.returncode != 0:
-        raise SystemExit(f"opencode engine failed ({result.returncode})\n{result.stderr or result.stdout}")
-    return result.stdout
+    raise SystemExit(
+        "opencode engine is unavailable: the current CLI contract does not prove "
+        "project-config isolation and its generic fetch tool cannot be restricted "
+        "away from private or metadata endpoints; use codex, claude, or pi"
+    )
 
 
 def cursor_local_mcp_paths(repo: Path) -> list[Path]:
@@ -1527,7 +2561,7 @@ def cursor_local_mcp_paths(repo: Path) -> list[Path]:
     return [path for path in candidates if path.exists()]
 
 
-def cursor_global_mcp_paths() -> list[Path]:
+def cursor_home_candidates() -> set[Path]:
     home_candidates = [Path.home()]
     for name in ("HOME", "USERPROFILE"):
         if value := os.environ.get(name):
@@ -1535,8 +2569,38 @@ def cursor_global_mcp_paths() -> list[Path]:
     if drive := os.environ.get("HOMEDRIVE"):
         if home_path := os.environ.get("HOMEPATH"):
             home_candidates.append(Path(f"{drive}{home_path}"))
-    paths = {home / ".cursor" / "mcp.json" for home in home_candidates}
+    return set(home_candidates)
+
+
+def cursor_global_mcp_paths() -> list[Path]:
+    paths = {home / ".cursor" / "mcp.json" for home in cursor_home_candidates()}
     return sorted((path for path in paths if path.exists()), key=str)
+
+
+def json_file_declares_hooks(path: Path) -> bool:
+    try:
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return True
+    if not isinstance(parsed, dict):
+        return False
+    if parsed.get("hooks"):
+        return True
+    enabled_plugins = parsed.get("enabledPlugins")
+    return isinstance(enabled_plugins, dict) and any(bool(enabled) for enabled in enabled_plugins.values())
+
+
+def cursor_global_hook_paths() -> list[Path]:
+    paths: set[Path] = set()
+    for home in cursor_home_candidates():
+        cursor_hooks = home / ".cursor" / "hooks.json"
+        if cursor_hooks.exists():
+            paths.add(cursor_hooks)
+        for name in ("settings.json", "settings.local.json"):
+            claude_settings = home / ".claude" / name
+            if claude_settings.exists() and json_file_declares_hooks(claude_settings):
+                paths.add(claude_settings)
+    return sorted(paths, key=str)
 
 
 def cursor_local_hook_paths(repo: Path) -> list[Path]:
@@ -1651,83 +2715,10 @@ def build_cursor_cmd(
 
 
 def run_cursor(args: argparse.Namespace, repo: Path, prompt: str) -> str:
-    if args.thinking:
-        raise SystemExit("--thinking is not supported by the cursor engine")
-    if not args.tools:
-        raise SystemExit("--no-tools is not supported by the cursor engine")
-    if not args.web_search:
-        raise SystemExit("--no-web-search is not supported by the cursor engine; Cursor CLI does not expose a documented per-run web-search disable flag")
-    local_mcp_paths = cursor_local_mcp_paths(repo)
-    global_mcp_paths = cursor_global_mcp_paths()
-    local_hook_paths = cursor_local_hook_paths(repo)
-    local_permission_paths = cursor_local_permission_paths(repo)
-    if not args.cursor_allow_workspace_instructions:
-        raise SystemExit(
-            "cursor engine requires --cursor-allow-workspace-instructions for an explicitly trusted repo; "
-            "Cursor CLI does not expose a per-run project-resource disable flag."
-        )
-    if local_hook_paths:
-        raise SystemExit(
-            "cursor engine refused project-local hooks: "
-            + format_repo_paths(repo, local_hook_paths)
-            + ". Cursor hooks execute host commands outside review tool permissions."
-        )
-    if local_mcp_paths:
-        raise SystemExit(
-            "cursor engine refused project-local MCP config: "
-            + format_repo_paths(repo, local_mcp_paths)
-            + ". Cursor MCP tools cannot be restricted to read-only review access."
-        )
-    if global_mcp_paths:
-        raise SystemExit(
-            "cursor engine refused global MCP config because Cursor can load it outside the temporary review config."
-        )
-    if local_permission_paths:
-        raise SystemExit(
-            "cursor engine refused project-local permission config: "
-            + format_repo_paths(repo, local_permission_paths)
-            + ". Project permissions can override the read-only review policy."
-        )
-    print(
-        "cursor isolation warning: trusted project-local resources are being allowed explicitly.",
-        file=sys.stderr,
+    raise SystemExit(
+        "cursor engine is unavailable: Cursor read permissions can target absolute host paths "
+        "and the CLI does not expose a proven repository-only filesystem sandbox"
     )
-    cursor_bin = resolve_command(args.cursor_bin, repo)
-    with tempfile.TemporaryDirectory(prefix="autoreview-cursor-config.") as tempdir:
-        config_dir = Path(tempdir)
-        (config_dir / "cli-config.json").write_text(
-            json.dumps(
-                {
-                    "version": 1,
-                    "editor": {"vimMode": False},
-                    "permissions": {
-                        "allow": ["Read(**)"],
-                        "deny": ["Shell(*)", "Write(**)", "Write(/**)"],
-                    },
-                }
-            )
-            + "\n"
-        )
-        engine_env = safe_engine_env(
-            repo,
-            [Path(cursor_bin).parent],
-            {"CURSOR_CONFIG_DIR": str(config_dir)},
-        )
-        cmd = build_cursor_cmd(args, repo, cursor_bin, engine_env)
-        result = run_with_heartbeat(
-            cmd,
-            repo,
-            input_text=prompt,
-            label="cursor",
-            stream_output=args.stream_engine_output,
-            stream_display=CursorStreamDisplay() if args.stream_engine_output else None,
-            env=engine_env,
-            resolve_root=repo,
-        )
-    if result.returncode != 0:
-        raise SystemExit(f"cursor engine failed ({result.returncode})\n{result.stderr or result.stdout}")
-    print_cursor_metadata(result.stdout)
-    return result.stdout
 
 
 def run_pi(args: argparse.Namespace, repo: Path, prompt: str) -> str:
@@ -1744,7 +2735,10 @@ def run_pi(args: argparse.Namespace, repo: Path, prompt: str) -> str:
     # Pi's built-in read tools accept absolute paths and have no repository
     # confinement, so an untrusted review prompt must never receive them.
     cmd.append("--no-tools")
-    with tempfile.TemporaryDirectory(prefix="autoreview-pi-run.") as tempdir:
+    with tempfile.TemporaryDirectory(
+        prefix="autoreview-pi-run.",
+        dir=safe_temp_root(repo),
+    ) as tempdir:
         result = run_with_heartbeat(
             cmd,
             Path(tempdir),
@@ -1752,7 +2746,11 @@ def run_pi(args: argparse.Namespace, repo: Path, prompt: str) -> str:
             label="pi",
             stream_output=args.stream_engine_output,
             resolve_root=repo,
-            env=safe_engine_env(repo, [Path(cmd[0]).parent]),
+            env=safe_engine_env(
+                repo,
+                [Path(cmd[0]).parent],
+                engine="pi",
+            ),
         )
     if result.returncode != 0:
         raise SystemExit(f"pi engine failed ({result.returncode})\n{result.stderr or result.stdout}")
@@ -1962,11 +2960,41 @@ def format_cursor_usage(usage: Any) -> str:
     return "cursor usage: " + " ".join(parts) if parts else "cursor usage: unavailable"
 
 
-def claude_allowed_tools(args: argparse.Namespace) -> str:
+def claude_tool_name(rule: str) -> str:
+    match = re.match(r"^([A-Za-z][A-Za-z0-9_-]*)(?:\(|$)", rule)
+    if not match:
+        raise SystemExit(f"invalid Claude tool rule: {rule}")
+    return match.group(1)
+
+
+def claude_tool_rules(args: argparse.Namespace) -> list[str]:
     tools = [tool.strip() for tool in args.claude_allowed_tools.split(",") if tool.strip()]
     if not args.web_search:
-        tools = [tool for tool in tools if tool not in {"WebSearch", "WebFetch"}]
-    return ",".join(tools)
+        tools = [tool for tool in tools if claude_tool_name(tool) not in {"WebSearch", "WebFetch"}]
+    return tools
+
+
+def claude_allowed_tools(args: argparse.Namespace) -> str:
+    return ",".join(claude_tool_rules(args))
+
+
+def claude_tool_inventory(args: argparse.Namespace) -> str:
+    safe_tools = {"WebFetch", "WebSearch"}
+    names: list[str] = []
+    for rule in claude_tool_rules(args):
+        name = claude_tool_name(rule)
+        if name not in safe_tools:
+            raise SystemExit(f"Claude review tool is not read-only: {name}")
+        if name == "WebFetch" and not re.fullmatch(
+            r"WebFetch\(domain:[A-Za-z0-9.-]+\)",
+            rule,
+        ):
+            raise SystemExit(
+                "Claude WebFetch must be constrained to one explicit domain"
+            )
+        if name not in names:
+            names.append(name)
+    return ",".join(names)
 
 
 def extract_json(text: str) -> dict[str, Any]:
@@ -1979,7 +3007,7 @@ def extract_json(text: str) -> dict[str, Any]:
         jsonl_report = extract_json_from_jsonl(stripped)
         if jsonl_report:
             return jsonl_report
-        fenced_report = extract_findings_json_from_text(stripped) or parse_json_candidate(stripped)
+        fenced_report = parse_json_candidate(stripped)
         if isinstance(fenced_report, dict) and "findings" in fenced_report:
             return fenced_report
         raise SystemExit(f"review engine returned non-JSON output: {exc}\n{stripped[:2000]}")
@@ -1992,7 +3020,7 @@ def extract_json(text: str) -> dict[str, Any]:
         if "findings" in result_object:
             return result_object
     if isinstance(parsed, dict) and isinstance(parsed.get("result"), str):
-        result_json = extract_findings_json_from_text(parsed["result"]) or parse_json_candidate(parsed["result"])
+        result_json = parse_json_candidate(parsed["result"])
         if isinstance(result_json, dict) and "findings" in result_json:
             return result_json
         raise SystemExit(f"review engine result was not structured JSON:\n{parsed['result'][:2000]}")
@@ -2053,7 +3081,7 @@ def _report_from_events(events: list[Any]) -> dict[str, Any] | None:
             if "findings" in candidate:
                 return candidate
             continue
-        parsed = extract_findings_json_from_text(candidate) or parse_json_candidate(candidate)
+        parsed = parse_json_candidate(candidate)
         if isinstance(parsed, dict) and "findings" in parsed:
             return parsed
     if terminal_candidates:
@@ -2063,11 +3091,11 @@ def _report_from_events(events: list[Any]) -> dict[str, Any] | None:
             if "findings" in candidate:
                 return candidate
             continue
-        parsed = extract_findings_json_from_text(candidate) or parse_json_candidate(candidate)
+        parsed = parse_json_candidate(candidate)
         if isinstance(parsed, dict) and "findings" in parsed:
             return parsed
     for candidate in reversed(assistant_candidates):
-        parsed = extract_findings_json_from_text(candidate) or parse_json_candidate(candidate)
+        parsed = parse_json_candidate(candidate)
         if isinstance(parsed, dict) and "findings" in parsed:
             return parsed
     return None
@@ -2084,22 +3112,6 @@ def extract_json_from_jsonl(text: str) -> dict[str, Any] | None:
         except json.JSONDecodeError:
             continue
     return _report_from_events(events)
-
-
-def extract_findings_json_from_text(text: str) -> dict[str, Any] | None:
-    stripped = text.strip()
-    decoder = json.JSONDecoder()
-    parsed: dict[str, Any] | None = None
-    for index, char in enumerate(stripped):
-        if char != "{":
-            continue
-        try:
-            candidate, _ = decoder.raw_decode(stripped[index:])
-        except json.JSONDecodeError:
-            continue
-        if isinstance(candidate, dict) and "findings" in candidate:
-            parsed = candidate
-    return parsed
 
 
 def is_structured_output_failure(message: str) -> bool:
@@ -2239,10 +3251,15 @@ if "--version" in args or "-v" in args:
     print(os.environ.get("AUTOREVIEW_FAKE_CLAUDE_VERSION", "2.1.170 (Claude Code)"))
     raise SystemExit(0)
 if "--help" in args or "-h" in args:
-    print("--safe-mode\n--setting-sources\n--strict-mcp-config\n--disallowedTools\n--print\n--json-schema")
+    print("--safe-mode\n--setting-sources\n--strict-mcp-config\n--disallowedTools\n--tools\n--print\n--json-schema")
     raise SystemExit(0)
 record = os.environ["AUTOREVIEW_FAKE_RECORD"]
-Path(record).write_text(json.dumps({"argv": args, "cwd": os.getcwd(), "stdin": sys.stdin.read()}))
+Path(record).write_text(json.dumps({
+    "argv": args,
+    "cwd": os.getcwd(),
+    "stdin": sys.stdin.read(),
+    "auto_memory_disabled": os.environ.get("CLAUDE_CODE_DISABLE_AUTO_MEMORY"),
+}))
 report = {
     "findings": [],
     "overall_correctness": "patch is correct",
@@ -2411,7 +3428,7 @@ def self_test_engine_isolation() -> int:
             model=None,
             thinking=None,
             stream_engine_output=False,
-            claude_allowed_tools="Read,Grep,Glob,WebSearch,WebFetch",
+            claude_allowed_tools="WebSearch,WebFetch(domain:docs.example.com)",
             cursor_allow_workspace_instructions=False,
         )
 
@@ -2446,26 +3463,32 @@ def self_test_engine_isolation() -> int:
             run_codex(args, repo, "review hostile patch")
             codex_record = json.loads(record_path.read_text())
             codex_argv = codex_record["argv"]
-            expected_project_override = f"projects.{toml_quoted_key_segment(str(repo.resolve()))}.trust_level=\"untrusted\""
             for required in [
                 "--ignore-user-config",
                 "--ignore-rules",
                 "project_doc_max_bytes=0",
-                expected_project_override,
                 'cli_auth_credentials_store="auto"',
                 'forced_login_method="chatgpt"',
                 'forced_chatgpt_workspace_id=["workspace-one", "workspace-two"]',
+                'default_permissions="autoreview"',
+                'permissions.autoreview.filesystem={":minimal"="read",":workspace_roots"="read"}',
                 "--ephemeral",
-                str(repo),
-                "read-only",
             ]:
                 if required not in codex_argv:
                     raise SystemExit(f"codex isolation self-test failed: missing {required}")
-            for forbidden in ["hostile-user-model"]:
+            for forbidden in ["hostile-user-model", "read-only"]:
                 if forbidden in codex_argv:
                     raise SystemExit(f"codex isolation self-test failed: leaked {forbidden}")
-            if Path(codex_record["cwd"]).resolve() != repo.resolve():
-                raise SystemExit("codex isolation self-test failed: wrong cwd")
+            codex_cwd = Path(codex_record["cwd"]).resolve()
+            if codex_cwd == repo.resolve() or is_within(codex_cwd, repo.resolve()):
+                raise SystemExit("codex isolation self-test failed: review ran inside hostile repo")
+            if str(repo) in codex_argv:
+                raise SystemExit("codex isolation self-test failed: hostile repo granted to tools")
+            expected_project_override = (
+                f"projects.{toml_quoted_key_segment(str(codex_cwd))}.trust_level=\"untrusted\""
+            )
+            if expected_project_override not in codex_argv:
+                raise SystemExit("codex isolation self-test failed: isolated project override missing")
 
             run_claude(args, repo, "review hostile patch")
             claude_record = json.loads(record_path.read_text())
@@ -2473,8 +3496,21 @@ def self_test_engine_isolation() -> int:
             for required in claude_review_isolation_flags():
                 if required not in claude_argv:
                     raise SystemExit(f"claude isolation self-test failed: missing {required}")
-            if Path(claude_record["cwd"]).resolve() != repo.resolve():
-                raise SystemExit("claude isolation self-test failed: wrong cwd")
+            allowed_tools = claude_allowed_tools(args)
+            for required in ["--tools", allowed_tools, "--allowedTools"]:
+                if required not in claude_argv:
+                    raise SystemExit(f"claude isolation self-test failed: missing {required}")
+            tools_index = claude_argv.index("--tools")
+            if claude_argv[tools_index + 1] != "WebSearch,WebFetch":
+                raise SystemExit("claude isolation self-test failed: wrong tool inventory")
+            allowed_index = claude_argv.index("--allowedTools")
+            if claude_argv[allowed_index + 1] != allowed_tools:
+                raise SystemExit("claude isolation self-test failed: scoped allowed tools lost")
+            claude_cwd = Path(claude_record["cwd"]).resolve()
+            if claude_cwd == repo.resolve() or is_within(claude_cwd, repo.resolve()):
+                raise SystemExit("claude isolation self-test failed: review ran inside hostile repo")
+            if claude_record["auto_memory_disabled"] != "1":
+                raise SystemExit("claude isolation self-test failed: auto-memory not disabled")
 
             run_pi(args, repo, f"review hostile patch\nRepository: {repo}")
             pi_record = json.loads(record_path.read_text())
@@ -2500,31 +3536,17 @@ def self_test_engine_isolation() -> int:
                 if Path(entry["cwd"]).resolve() == repo.resolve():
                     raise SystemExit("pi isolation self-test failed: probe ran inside hostile repo")
 
-            run_opencode(args, repo, "review hostile patch")
-            opencode_record = json.loads(record_path.read_text())
-            opencode_argv = opencode_record["argv"]
-            for required in ["run", "--dir", str(repo), "--pure", "--format", "json"]:
-                if required not in opencode_argv:
-                    raise SystemExit(f"opencode isolation self-test failed: missing {required}")
-            if "--dangerously-skip-permissions" in opencode_argv:
-                raise SystemExit("opencode isolation self-test failed: skip-permissions present")
-            if Path(opencode_record["cwd"]).resolve() == repo.resolve():
-                raise SystemExit("opencode isolation self-test failed: review ran inside hostile repo")
-            if opencode_record["stdin"] != "review hostile patch":
-                raise SystemExit("opencode isolation self-test failed: prompt not delivered over stdin")
-            if "review hostile patch" in opencode_argv:
-                raise SystemExit("opencode isolation self-test failed: prompt leaked into argv")
-            opencode_env = opencode_record["env"]
-            if opencode_env.get("OPENCODE_DISABLE_PROJECT_CONFIG") != "1":
-                raise SystemExit("opencode isolation self-test failed: project config env missing")
-            if opencode_env.get("OPENCODE_DISABLE_AUTOUPDATE") != "1":
-                raise SystemExit("opencode isolation self-test failed: autoupdate env missing")
-            config = json.loads(opencode_env["OPENCODE_CONFIG_CONTENT"])
-            if config.get("instructions") != [] or config.get("plugin") != [] or config.get("command") != {}:
-                raise SystemExit("opencode isolation self-test failed: project-controlled extensions not cleared")
-            for disabled_tool in ("bash", "edit", "skill", "task", "todowrite", "write"):
-                if config.get("tools", {}).get(disabled_tool) is not False:
-                    raise SystemExit(f"opencode isolation self-test failed: {disabled_tool} tool not disabled")
+            if record_path.exists():
+                record_path.unlink()
+            try:
+                run_opencode(args, repo, "review hostile patch")
+            except SystemExit as exc:
+                if "opencode engine is unavailable" not in str(exc):
+                    raise
+            else:
+                raise SystemExit("opencode isolation self-test failed: unsafe engine was allowed")
+            if record_path.exists():
+                raise SystemExit("opencode isolation self-test failed: disabled engine was invoked")
             if hostile_ps_path.exists():
                 raise SystemExit("heartbeat metrics isolation self-test failed: repo-local ps executed")
 
@@ -2533,73 +3555,12 @@ def self_test_engine_isolation() -> int:
             try:
                 run_cursor(args, repo, "review hostile patch")
             except SystemExit as exc:
-                if "requires --cursor-allow-workspace-instructions" not in str(exc):
+                if "Cursor read permissions" not in str(exc):
                     raise
             else:
-                raise SystemExit("cursor isolation self-test failed: hostile project surfaces should be refused")
+                raise SystemExit("cursor isolation self-test failed: unconfined reads were allowed")
             if record_path.exists():
-                raise SystemExit("cursor isolation self-test failed: cursor invoked despite refused project surfaces")
-
-            args.cursor_allow_workspace_instructions = True
-            try:
-                run_cursor(args, repo, "review hostile patch")
-            except SystemExit as exc:
-                if "project-local hooks" not in str(exc):
-                    raise
-            else:
-                raise SystemExit("cursor isolation self-test failed: local hooks should be refused")
-            if record_path.exists():
-                raise SystemExit("cursor isolation self-test failed: cursor invoked despite refused hooks")
-
-            for relative_path in (Path(".claude/settings.json"), Path(".claude/settings.local.json")):
-                (repo / relative_path).unlink(missing_ok=True)
-            try:
-                run_cursor(args, repo, "review hostile patch")
-            except SystemExit as exc:
-                if "project-local MCP config" not in str(exc):
-                    raise
-            else:
-                raise SystemExit("cursor isolation self-test failed: local MCP config should be refused")
-            if record_path.exists():
-                raise SystemExit("cursor isolation self-test failed: cursor invoked despite refused MCP config")
-
-            for relative_path in (
-                Path(".cursor/mcp.json"),
-                Path(".mcp.json"),
-                Path("mcp.json"),
-            ):
-                (repo / relative_path).unlink(missing_ok=True)
-            try:
-                run_cursor(args, repo, "review hostile patch")
-            except SystemExit as exc:
-                if "project-local permission config" not in str(exc):
-                    raise
-            else:
-                raise SystemExit("cursor isolation self-test failed: local permission config should be refused")
-            (repo / ".cursor" / "cli.json").unlink()
-            run_cursor(args, repo, "review hostile patch")
-            cursor_record = json.loads(record_path.read_text())
-            cursor_argv = cursor_record["argv"]
-            for required in ["--print", "--output-format", "json"]:
-                if required not in cursor_argv:
-                    raise SystemExit(f"cursor isolation self-test failed: missing {required}")
-            for forbidden in ["--workspace", "--trust"]:
-                if forbidden in cursor_argv:
-                    raise SystemExit(f"cursor isolation self-test failed: unsupported flag present: {forbidden}")
-            for required in ["--mode", "ask", "--sandbox", "enabled"]:
-                if required not in cursor_argv:
-                    raise SystemExit(f"cursor isolation self-test failed: missing {required}")
-            if Path(cursor_record["cwd"]).resolve() != repo.resolve():
-                raise SystemExit("cursor isolation self-test failed: Cursor workspace cwd should be reviewed repo")
-            if cursor_record["stdin"] != "review hostile patch":
-                raise SystemExit("cursor isolation self-test failed: prompt not delivered over stdin")
-            if "review hostile patch" in cursor_argv:
-                raise SystemExit("cursor isolation self-test failed: prompt leaked into argv")
-            cursor_config = json.loads(cursor_record["cursor_config"])
-            if cursor_config.get("permissions", {}).get("allow") != ["Read(**)"]:
-                raise SystemExit("cursor isolation self-test failed: read-only allowlist missing")
-            if cursor_config.get("permissions", {}).get("deny") != ["Shell(*)", "Write(**)", "Write(/**)"]:
-                raise SystemExit("cursor isolation self-test failed: shell/write denylist missing")
+                raise SystemExit("cursor isolation self-test failed: disabled cursor was invoked")
 
             os.environ["AUTOREVIEW_FAKE_CLAUDE_VERSION"] = "2.1.168 (Claude Code)"
             try:
@@ -2753,7 +3714,7 @@ def self_test_cursor_jsonl_parser() -> int:
 
     result_text = {
         "type": "result",
-        "result": "prefix\n```json\n" + json.dumps(report) + "\n```",
+        "result": "```json\n" + json.dumps(report) + "\n```",
         "session_id": "session",
         "request_id": "request",
     }
@@ -2776,8 +3737,12 @@ def self_test_cursor_jsonl_parser() -> int:
     else:
         raise SystemExit("cursor parser self-test failed: assistant draft masked bad result")
 
-    if extract_json("analysis before " + json.dumps(report) + " after") != report:
-        raise SystemExit("cursor parser self-test failed for embedded JSON")
+    try:
+        extract_json("analysis before " + json.dumps(report) + " after")
+    except SystemExit:
+        pass
+    else:
+        raise SystemExit("cursor parser self-test failed: embedded JSON was accepted")
 
     print("autoreview cursor jsonl parser self-test: ok")
     return 0
@@ -2814,23 +3779,16 @@ def _assert_opencode_permission(web_search: bool) -> None:
             raise SystemExit(f"opencode isolation self-test failed: {disabled_tool} tool not disabled")
     if permission.get("*") != "deny":
         raise SystemExit("opencode isolation self-test failed: default deny missing")
-    read_permission = permission.get("read")
-    if not isinstance(read_permission, dict):
-        raise SystemExit("opencode isolation self-test failed: read rules missing")
-    expected_read_rules = {
-        "*": "allow",
-        "*.env": "ask",
-        "*.env.*": "ask",
-        "*.env.example": "allow",
-    }
-    for pattern, action in expected_read_rules.items():
-        if read_permission.get(pattern) != action:
-            raise SystemExit(f"opencode isolation self-test failed: read {pattern} must be {action}")
+    for filesystem_tool in ("read", "grep", "glob"):
+        if permission.get(filesystem_tool) != "deny":
+            raise SystemExit(
+                f"opencode isolation self-test failed: {filesystem_tool} must be denied"
+            )
     expected_web = "allow" if web_search else "deny"
     if permission.get("websearch") != expected_web:
         raise SystemExit(f"opencode isolation self-test failed: websearch must be {expected_web} when web_search={web_search}")
-    if permission.get("webfetch") != expected_web:
-        raise SystemExit(f"opencode isolation self-test failed: webfetch must be {expected_web} when web_search={web_search}")
+    if permission.get("webfetch") != "deny":
+        raise SystemExit("opencode isolation self-test failed: webfetch must stay denied")
 
 
 def self_test_opencode_isolation() -> None:
@@ -3027,12 +3985,20 @@ def validate_report(report: dict[str, Any], repo: Path, changed_paths: set[str],
         location = finding.get("code_location")
         if not isinstance(location, dict):
             raise SystemExit(f"finding {index} missing code_location")
-        rel = str(location.get("file_path", "")).strip()
-        line = location.get("line")
-        if not rel or not isinstance(line, int) or line < 1:
+        raw_rel = str(location.get("file_path", "")).strip()
+        if not raw_rel:
             raise SystemExit(f"finding {index} has invalid location: {location}")
-        if Path(rel).is_absolute() or ".." in Path(rel).parts:
+        normalized_rel = raw_rel if raw_rel in changed_paths else raw_rel.replace("\\", "/")
+        while normalized_rel.startswith("./"):
+            normalized_rel = normalized_rel[2:]
+        rel_path = PurePosixPath(normalized_rel)
+        rel = rel_path.as_posix()
+        line = location.get("line")
+        if not isinstance(line, int) or line < 1:
+            raise SystemExit(f"finding {index} has invalid location: {location}")
+        if rel_path.is_absolute() or ".." in rel_path.parts or re.match(r"^[A-Za-z]:/", rel):
             raise SystemExit(f"finding {index} uses invalid file path: {rel}")
+        location["file_path"] = rel
         if rel not in changed_paths:
             ignored_findings.append((index, finding, rel, line))
             continue
@@ -3123,14 +4089,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--base")
     parser.add_argument("--commit", default="HEAD")
     parser.add_argument("--engine", choices=ENGINE_CHOICES, default=os.environ.get("AUTOREVIEW_ENGINE", "codex"))
-    parser.add_argument("--reviewers", help="Comma-separated review panel, e.g. codex,claude,cursor or codex:gpt-5.5:high.")
+    parser.add_argument("--reviewers", help="Comma-separated review panel, e.g. codex,claude,pi or codex:gpt-5.6-sol:high.")
     parser.add_argument("--panel", action="store_true", help="Run a Codex/Claude review panel unless --engine changes the first reviewer.")
     parser.add_argument(
         "--model",
         action="append",
-        help="Model for all reviewers or engine=model. Repeatable. Defaults: codex=gpt-5.5, claude=claude-fable-5.",
+        help="Model for all reviewers or engine=model. Repeatable. Defaults: codex=gpt-5.6-sol with an access-only gpt-5.6-terra retry, claude=claude-fable-5.",
     )
-    parser.add_argument("--thinking", action="append", help="Thinking/effort for all reviewers or engine=level. Repeatable. Codex: none, minimal, low, medium, high, xhigh. Claude: low, medium, high, xhigh, max. Droid: off, none, low, medium, high. Pi: off, minimal, low, medium, high, xhigh. OpenCode: minimal, low, medium, high, max. Cursor: none.")
+    parser.add_argument("--thinking", action="append", help="Thinking/effort for all reviewers or engine=level. Repeatable. Codex: none, minimal, low, medium, high, xhigh, max. Claude: low, medium, high, xhigh, max. Droid: off, none, low, medium, high. Pi: off, minimal, low, medium, high, xhigh. OpenCode: minimal, low, medium, high, max. Cursor: none.")
     parser.add_argument(
         "--fallback-model",
         action="append",
@@ -3141,7 +4107,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--codex-config",
         action="append",
-        help='Extra Codex "-c key=value" config override (TOML value), codex reviewer only. Repeatable. Env default: AUTOREVIEW_CODEX_CONFIG (semicolon-separated), e.g. service_tier="fast". Reviewed-repo isolation flags still take precedence.',
+        help='Safe Codex model/response tuning "-c key=value" override (TOML value), codex reviewer only. Repeatable. Capability-, command-, and path-bearing keys are refused. Env default: AUTOREVIEW_CODEX_CONFIG (semicolon-separated), e.g. service_tier="fast".',
     )
     parser.add_argument(
         "--codex-speed",
@@ -3160,7 +4126,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--opencode-bin", default=os.environ.get("OPENCODE_BIN", "opencode"))
     parser.add_argument("--pi-bin", default=os.environ.get("PI_BIN", "pi"))
-    parser.add_argument("--no-tools", dest="tools", action="store_false", default=True, help="Disable tools for engines that support it. Codex, copilot, opencode, and cursor reject no-tools review.")
+    parser.add_argument("--no-tools", dest="tools", action="store_false", default=True, help="Disable tools for engines that support it. Codex, Droid, copilot, opencode, and cursor reject no-tools review.")
     parser.add_argument("--self-test", action="store_true", help="Run deterministic local autoreview self-tests.")
     parser.add_argument("--self-test-opencode-jsonl-parser", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--self-test-opencode-isolation", action="store_true", help=argparse.SUPPRESS)
@@ -3172,7 +4138,7 @@ def parse_args() -> argparse.Namespace:
         "--claude-allowed-tools",
         default=os.environ.get(
             "AUTOREVIEW_CLAUDE_TOOLS",
-            "Read,Grep,Glob,WebSearch,WebFetch",
+            "WebSearch",
         ),
     )
     parser.add_argument("--prompt", action="append", help="Additional review instruction text.")
@@ -3184,20 +4150,20 @@ def parse_args() -> argparse.Namespace:
         "--stream-engine-output",
         action="store_true",
         default=os.environ.get("AUTOREVIEW_STREAM_ENGINE_OUTPUT") == "1",
-        help="Stream review engine output while preserving buffered output for validation. Codex, Claude, and Cursor filter noisy tool/status chatter.",
+        help="Stream review engine output while preserving buffered output for validation. Codex and Claude filter noisy tool/status chatter.",
     )
     parser.add_argument(
         "--cursor-allow-workspace-instructions",
         dest="cursor_allow_workspace_instructions",
         action="store_true",
         default=None,
-        help="Required opt-in for every Cursor review. Confirms the repository and its project-local resources are trusted.",
+        help="Legacy compatibility flag. Cursor review is unavailable because reads cannot be confined to the repository.",
     )
     parser.add_argument(
         "--no-cursor-allow-workspace-instructions",
         dest="cursor_allow_workspace_instructions",
         action="store_false",
-        help="Refuse Cursor review because project-local resource loading cannot be disabled.",
+        help="Legacy compatibility flag. Cursor review remains unavailable.",
     )
     parser.add_argument("--parallel-tests", help="Run a test command concurrently with review; failure fails the helper.")
     parser.add_argument(
@@ -3361,6 +4327,7 @@ def reviewer_args(args: argparse.Namespace) -> list[argparse.Namespace]:
             or global_thinking
             or env_thinking_by_engine.get(engine)
             or env_global_thinking
+            or DEFAULT_THINKING_BY_ENGINE.get(engine)
         )
         if engine == "claude":
             fallback_model = (
@@ -3369,6 +4336,8 @@ def reviewer_args(args: argparse.Namespace) -> list[argparse.Namespace]:
                 or env_fallback_by_engine.get(engine)
                 or env_global_fallback
             )
+        elif engine == "codex" and model == DEFAULT_MODEL_BY_ENGINE["codex"]:
+            fallback_model = DEFAULT_CODEX_ACCESS_FALLBACK_MODEL
         else:
             fallback_model = None
         if thinking and thinking not in THINKING_LEVELS_BY_ENGINE[engine]:
@@ -3523,18 +4492,36 @@ def preserve_env(keys: list[str]):
 def self_test_config_defaults() -> None:
     keys = [
         "AUTOREVIEW_MODEL",
-        "AUTOREVIEW_CODEX_MODEL",
-        "AUTOREVIEW_CLAUDE_MODEL",
         "AUTOREVIEW_THINKING",
-        "AUTOREVIEW_CODEX_THINKING",
-        "AUTOREVIEW_CLAUDE_THINKING",
+        "AUTOREVIEW_FALLBACK_MODEL",
         "AUTOREVIEW_CODEX_CONFIG",
         "AUTOREVIEW_CODEX_SPEED",
+        *(
+            f"AUTOREVIEW_{engine.upper()}_{suffix}"
+            for engine in ENGINES
+            for suffix in ("MODEL", "THINKING", "FALLBACK_MODEL")
+        ),
     ]
     with preserve_env(keys):
+        for key in keys:
+            os.environ.pop(key, None)
         default_codex = reviewer_args(reviewer_test_args(engine="codex"))[0]
-        if default_codex.model != "gpt-5.5":
+        if default_codex.model != "gpt-5.6-sol":
             raise SystemExit(f"self-test config defaults failed: default codex model={default_codex.model!r}")
+        if default_codex.fallback_model != "gpt-5.6-terra":
+            raise SystemExit(
+                f"self-test config defaults failed: default codex fallback={default_codex.fallback_model!r}"
+            )
+        explicit_sol = reviewer_args(reviewer_test_args(engine="codex", model=["gpt-5.6-sol"]))[0]
+        if explicit_sol.fallback_model != "gpt-5.6-terra":
+            raise SystemExit(
+                f"self-test config defaults failed: explicit Sol access fallback={explicit_sol.fallback_model!r}"
+            )
+        if default_codex.thinking != "high":
+            raise SystemExit(f"self-test config defaults failed: default codex thinking={default_codex.thinking!r}")
+        max_effort = reviewer_args(reviewer_test_args(engine="codex", thinking=["max"]))[0]
+        if max_effort.thinking != "max":
+            raise SystemExit("self-test config defaults failed: Codex max thinking should be accepted")
         default_claude = reviewer_args(reviewer_test_args(engine="claude"))[0]
         if default_claude.model != "claude-fable-5":
             raise SystemExit(f"self-test config defaults failed: default claude model={default_claude.model!r}")
@@ -3583,6 +4570,18 @@ def self_test_config_defaults() -> None:
             rejected = "invalid Codex config override" in str(error)
         if not rejected:
             raise SystemExit("self-test config defaults failed: malformed codex config override accepted")
+        rejected = False
+        try:
+            codex_config_overrides(
+                reviewer_test_args(
+                    engine="codex",
+                    codex_config=['mcp_servers.review.command="touch /tmp/owned"'],
+                )
+            )
+        except SystemExit as error:
+            rejected = "unsafe Codex config override refused" in str(error)
+        if not rejected:
+            raise SystemExit("self-test config defaults failed: capability-bearing codex config override accepted")
         os.environ.pop("AUTOREVIEW_CODEX_CONFIG")
         try:
             reviewer_args(reviewer_test_args(engine="claude", codex_config=['service_tier="fast"']))
@@ -3617,19 +4616,25 @@ def self_test_config_defaults() -> None:
 
 def self_test_fallback_scope() -> None:
     keys = [
+        "AUTOREVIEW_MODEL",
         "AUTOREVIEW_FALLBACK_MODEL",
+        "AUTOREVIEW_CODEX_MODEL",
         "AUTOREVIEW_CLAUDE_FALLBACK_MODEL",
         "AUTOREVIEW_CODEX_FALLBACK_MODEL",
     ]
     with preserve_env(keys):
+        for key in keys:
+            os.environ.pop(key, None)
         os.environ["AUTOREVIEW_FALLBACK_MODEL"] = "env-global-fallback"
         os.environ["AUTOREVIEW_CLAUDE_FALLBACK_MODEL"] = "env-claude-fallback"
         base = reviewer_test_args(reviewers="codex,claude")
         reviewers = reviewer_args(base)
         codex = next(r for r in reviewers if r.engine == "codex")
         claude = next(r for r in reviewers if r.engine == "claude")
-        if codex.fallback_model is not None:
-            raise SystemExit("self-test fallback scope failed: codex should ignore AUTOREVIEW_FALLBACK_MODEL")
+        if codex.fallback_model != "gpt-5.6-terra":
+            raise SystemExit(
+                f"self-test fallback scope failed: codex access fallback={codex.fallback_model!r}"
+            )
         if claude.fallback_model != "env-claude-fallback":
             raise SystemExit(f"self-test fallback scope failed: claude fallback={claude.fallback_model!r}")
         os.environ.pop("AUTOREVIEW_CLAUDE_FALLBACK_MODEL")
@@ -3653,7 +4658,7 @@ def self_test_fallback_scope() -> None:
         panel = reviewer_args(reviewer_test_args(reviewers="codex,claude", fallback_model=["cli-global"]))
         panel_codex = next(r for r in panel if r.engine == "codex")
         panel_claude = next(r for r in panel if r.engine == "claude")
-        if panel_codex.fallback_model is not None or panel_claude.fallback_model != "cli-global":
+        if panel_codex.fallback_model != "gpt-5.6-terra" or panel_claude.fallback_model != "cli-global":
             raise SystemExit("self-test fallback scope failed: CLI global fallback should apply only to Claude panel reviewers")
         try:
             reviewer_args(reviewer_test_args(engine="codex", fallback_model=["cli-global"]))

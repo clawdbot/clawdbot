@@ -23,10 +23,10 @@ scenario:
     - extensions/qa-lab/src/suite.ts
   execution:
     kind: flow
-    summary: Run with `pnpm openclaw qa suite --provider-mode live-frontier --model openai/gpt-5.5 --alt-model openai/gpt-5.5 --fast --thinking medium --scenario codex-harness-no-meta-leak`.
+    summary: Run with `pnpm openclaw qa suite --provider-mode live-frontier --model openai/gpt-5.6-luna --alt-model openai/gpt-5.6-luna --fast --thinking medium --scenario codex-harness-no-meta-leak`.
     config:
       requiredProvider: codex
-      requiredModel: gpt-5.5
+      requiredModel: gpt-5.6-luna
       harnessRuntime: codex
       expectedReply: QA_LEAK_OK
       prompt: |-
@@ -44,7 +44,7 @@ scenario:
 
 flow:
   steps:
-    - name: confirms GPT-5.5 Codex harness target
+    - name: confirms GPT-5.6 Luna Codex harness target
       actions:
         - set: selected
           value:

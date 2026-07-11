@@ -41,10 +41,9 @@ function requireTestConfig<T extends { test?: unknown }>(config: T): NonNullable
   return config.test as NonNullable<T["test"]>;
 }
 
-function requireWebOptimizer(testConfig: {
-  deps?: { optimizer?: { web?: { enabled?: boolean } } };
-}) {
-  const webOptimizer = testConfig.deps?.optimizer?.web;
+function requireWebOptimizer(testConfig: unknown) {
+  const webOptimizer = (testConfig as { deps?: { optimizer?: { web?: { enabled?: boolean } } } })
+    .deps?.optimizer?.web;
   if (!webOptimizer) {
     throw new Error("expected vitest web optimizer config");
   }
@@ -108,17 +107,19 @@ describe("projects vitest config", () => {
   });
 
   it("keeps root projects on their expected pool defaults", () => {
-    expect(createGatewayVitestConfig().test.pool).toBe("threads");
-    expect(createAgentsVitestConfig().test.pool).toBe("threads");
-    expect(createAgentsCoreVitestConfig().test.pool).toBe("threads");
-    expect(createAgentsEmbeddedVitestConfig().test.pool).toBe("threads");
-    expect(createAgentsSupportVitestConfig().test.pool).toBe("threads");
-    expect(createAgentsToolsVitestConfig().test.pool).toBe("threads");
-    expect(createCommandsLightVitestConfig().test.pool).toBe("threads");
-    expect(createCommandsVitestConfig().test.pool).toBe("forks");
-    expect(createPluginSdkLightVitestConfig().test.pool).toBe("threads");
-    expect(createUnitFastVitestConfig().test.pool).toBe("threads");
-    expect(createContractsVitestConfig(pluginContractPatterns).test.pool).toBe("threads");
+    expect(requireTestConfig(createGatewayVitestConfig()).pool).toBe("threads");
+    expect(requireTestConfig(createAgentsVitestConfig()).pool).toBe("threads");
+    expect(requireTestConfig(createAgentsCoreVitestConfig()).pool).toBe("threads");
+    expect(requireTestConfig(createAgentsEmbeddedVitestConfig()).pool).toBe("threads");
+    expect(requireTestConfig(createAgentsSupportVitestConfig()).pool).toBe("threads");
+    expect(requireTestConfig(createAgentsToolsVitestConfig()).pool).toBe("threads");
+    expect(requireTestConfig(createCommandsLightVitestConfig()).pool).toBe("threads");
+    expect(requireTestConfig(createCommandsVitestConfig()).pool).toBe("forks");
+    expect(requireTestConfig(createPluginSdkLightVitestConfig()).pool).toBe("threads");
+    expect(requireTestConfig(createUnitFastVitestConfig()).pool).toBe("threads");
+    expect(requireTestConfig(createContractsVitestConfig(pluginContractPatterns)).pool).toBe(
+      "threads",
+    );
   });
 
   it("honors explicit worker caps in CI vitest lanes", () => {
@@ -156,9 +157,10 @@ describe("projects vitest config", () => {
 
   it("keeps contract shards on the non-isolated runner by default", () => {
     const config = createContractsVitestConfig(pluginContractPatterns);
-    expect(config.test.pool).toBe("threads");
-    expect(config.test.isolate).toBe(false);
-    expect(normalizeConfigPath(config.test.runner)).toBe("test/non-isolated-runner.ts");
+    const testConfig = requireTestConfig(config);
+    expect(testConfig.pool).toBe("threads");
+    expect(testConfig.isolate).toBe(false);
+    expect(normalizeConfigPath(testConfig.runner)).toBe("test/non-isolated-runner.ts");
   });
 
   it("gives contract project configs unique names", () => {
@@ -185,7 +187,7 @@ describe("projects vitest config", () => {
       "src/plugins/contracts/bundled-web-search.google.contract.test.ts",
     ]);
 
-    expect(config.test.include).toEqual([
+    expect(requireTestConfig(config).include).toEqual([
       "src/plugins/contracts/bundled-web-search.google.contract.test.ts",
     ]);
   });
@@ -204,7 +206,7 @@ describe("projects vitest config", () => {
       },
     );
 
-    expect(config.test.include).toEqual([
+    expect(requireTestConfig(config).include).toEqual([
       "src/channels/plugins/contracts/directory.registry-backed-shard-a.contract.test.ts",
     ]);
   });
@@ -223,23 +225,26 @@ describe("projects vitest config", () => {
 
   it("keeps the unit lane on the non-isolated runner by default", () => {
     const config = createUnitVitestConfig();
-    expect(config.test.isolate).toBe(false);
-    expect(normalizeConfigPath(config.test.runner)).toBe("test/non-isolated-runner.ts");
+    const testConfig = requireTestConfig(config);
+    expect(testConfig.isolate).toBe(false);
+    expect(normalizeConfigPath(testConfig.runner)).toBe("test/non-isolated-runner.ts");
   });
 
   it("keeps the unit-fast lane on shared workers without the reset-heavy runner", () => {
     const config = createUnitFastVitestConfig();
-    expect(config.test.isolate).toBe(false);
-    expect(config.test.runner).toBeUndefined();
+    const testConfig = requireTestConfig(config);
+    expect(testConfig.isolate).toBe(false);
+    expect(testConfig.runner).toBeUndefined();
   });
 
   it("keeps fake-timer unit-fast files serial with the non-isolated runner", () => {
     const config = createUnitFastFakeTimersVitestConfig();
-    expect(config.test.isolate).toBe(false);
-    expect(normalizeConfigPath(config.test.runner)).toBe("test/non-isolated-runner.ts");
-    expect(config.test.fileParallelism).toBe(false);
-    expect(config.test.maxWorkers).toBe(1);
-    expect(config.test.sequence).toMatchObject({ groupOrder: 1 });
+    const testConfig = requireTestConfig(config);
+    expect(testConfig.isolate).toBe(false);
+    expect(normalizeConfigPath(testConfig.runner)).toBe("test/non-isolated-runner.ts");
+    expect(testConfig.fileParallelism).toBe(false);
+    expect(testConfig.maxWorkers).toBe(1);
+    expect(testConfig.sequence).toMatchObject({ groupOrder: 1 });
   });
 
   it("keeps the bundled lane on thread workers with the non-isolated runner", () => {

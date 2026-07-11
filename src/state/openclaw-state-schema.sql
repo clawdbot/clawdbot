@@ -1330,3 +1330,49 @@ CREATE TABLE IF NOT EXISTS session_groups (
   position INTEGER NOT NULL,
   created_at INTEGER NOT NULL
 );
+
+-- Gateway-owned durable cloud worker lifecycle. Provider-specific execution
+-- stays in plugins; this table records only core reconciliation facts.
+CREATE TABLE IF NOT EXISTS worker_environments (
+  environment_id TEXT NOT NULL PRIMARY KEY,
+  provider_id TEXT NOT NULL,
+  profile_id TEXT NOT NULL,
+  profile_snapshot_json TEXT NOT NULL,
+  provision_operation_id TEXT NOT NULL UNIQUE,
+  lease_id TEXT,
+  ssh_host TEXT,
+  ssh_port INTEGER CHECK (ssh_port IS NULL OR (ssh_port >= 1 AND ssh_port <= 65535)),
+  ssh_user TEXT,
+  ssh_host_key TEXT,
+  ssh_key_ref_json TEXT,
+  state TEXT NOT NULL CHECK (
+    state IN (
+      'requested',
+      'provisioning',
+      'bootstrapping',
+      'ready',
+      'attached',
+      'idle',
+      'draining',
+      'destroying',
+      'destroyed',
+      'failed',
+      'orphaned'
+    )
+  ),
+  bootstrap_bundle_hash TEXT,
+  bootstrap_openclaw_version TEXT,
+  bootstrap_protocol_features_json TEXT,
+  teardown_terminal_state TEXT CHECK (teardown_terminal_state IN ('destroyed', 'failed')),
+  attached_session_ids_json TEXT NOT NULL DEFAULT '[]',
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  state_changed_at_ms INTEGER NOT NULL,
+  idle_since_at_ms INTEGER,
+  destroy_requested_at_ms INTEGER,
+  last_error TEXT
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_environments_provider_lease
+  ON worker_environments(provider_id, lease_id)
+  WHERE lease_id IS NOT NULL;

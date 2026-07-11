@@ -526,7 +526,7 @@ const video = await api.runtime.mediaUnderstanding.describeVideoFile({
 
 const extraction = await api.runtime.mediaUnderstanding.extractStructuredWithModel({
   provider: "codex",
-  model: "gpt-5.5",
+  model: "gpt-5.6-sol",
   input: [
     {
       type: "image",

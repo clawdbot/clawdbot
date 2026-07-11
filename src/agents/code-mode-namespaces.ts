@@ -574,6 +574,7 @@ export type CodeModeApiVirtualFile = {
   path: string;
   description?: string;
   content: string;
+  bytes: number;
 };
 
 function buildMcpParamDocs(schema: unknown): McpApiParamDoc[] {
@@ -872,18 +873,22 @@ export function createCodeModeApiVirtualFiles(
   if (!model) {
     return [];
   }
+  const rootContent = renderMcpRootFile(model.docs);
   const files: CodeModeApiVirtualFile[] = [
     {
       path: "mcp/index.d.ts",
       description: "Root MCP namespace declaration and server list.",
-      content: renderMcpRootFile(model.docs),
+      content: rootContent,
+      bytes: Buffer.byteLength(rootContent, "utf8"),
     },
   ];
   for (const server of model.docs) {
+    const content = renderMcpServerHeader(server, server.tools);
     files.push({
       path: `mcp/${server.identifier}.d.ts`,
       description: `MCP server declaration for ${server.serverName}.`,
-      content: renderMcpServerHeader(server, server.tools),
+      content,
+      bytes: Buffer.byteLength(content, "utf8"),
     });
   }
   return files;

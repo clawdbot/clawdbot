@@ -126,7 +126,12 @@ describe("unit-fast vitest lane", () => {
       );
     `;
     configProbeResult = spawnNodeEvalSync(script, {
-      env: { ...process.env, FORCE_COLOR: "0", NO_COLOR: "1" },
+      env: {
+        ...process.env,
+        FORCE_COLOR: "0",
+        NO_COLOR: "1",
+        OPENCLAW_VITEST_INCLUDE_FILE: undefined,
+      },
       evalFlag: "-e",
       imports: ["tsx"],
     });

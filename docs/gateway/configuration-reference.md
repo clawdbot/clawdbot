@@ -310,7 +310,7 @@ conversation bindings, or any non-Codex harness.
   currently accessible app connected to the authenticated Codex account in
   each new native Codex thread. Default: `false`.
 - `plugins.entries.codex.config.codexPlugins.allow_destructive_actions`:
-  default destructive-action policy for migrated plugin app elicitations.
+  default destructive-action policy for configured plugin app elicitations.
   Use `true` to accept safe Codex approval schemas without prompting, `false`
   to decline them, `"auto"` to route Codex-required approvals through OpenClaw
   plugin approvals, or `"ask"` to prompt for every plugin write/destructive
@@ -319,12 +319,17 @@ conversation bindings, or any non-Codex harness.
   approvals reviewer for that app before the Codex thread starts.
   Default: `true`.
 - `plugins.entries.codex.config.codexPlugins.plugins.<key>.enabled`: enables a
-  migrated plugin entry when global `codexPlugins.enabled` is also true.
+  configured plugin entry when global `codexPlugins.enabled` is also true.
   Default: `true` for explicit entries.
 - `plugins.entries.codex.config.codexPlugins.plugins.<key>.marketplaceName`:
-  stable marketplace identity. V1 only supports `"openai-curated"`.
+  stable marketplace identity, required with `pluginName` for every resolved
+  entry. Supports `"openai-curated"` and `"workspace-directory"`. Entries
+  missing either identity field are ignored.
 - `plugins.entries.codex.config.codexPlugins.plugins.<key>.pluginName`: stable
-  Codex plugin identity from migration, for example `"google-calendar"`.
+  Codex plugin identity, required with `marketplaceName`. A
+  `workspace-directory` entry must use the exact marketplace-qualified
+  `summary.id` returned by `plugin/list`, for example
+  `"example-plugin@workspace-directory"`.
 - `plugins.entries.codex.config.codexPlugins.plugins.<key>.allow_destructive_actions`:
   per-plugin destructive-action override. When omitted, the global
   `allow_destructive_actions` value is used. The per-plugin value accepts the
@@ -335,10 +340,17 @@ to the human reviewer. Other apps and non-app thread approvals keep their
 configured reviewer, so mixed plugin policies do not inherit `"ask"` behavior.
 
 `codexPlugins.enabled` is the global enablement directive. Explicit plugin
-entries written by migration are the durable install and repair eligibility set.
-`plugins["*"]` is not supported, there is no `install` switch, and local
-`marketplacePath` values are intentionally not config fields because they are
-host-specific.
+entries written by migration are the durable curated install and repair
+eligibility set. Manually configured `workspace-directory` entries must already
+be installed and enabled, and their owned apps must be accessible; OpenClaw
+does not install or authenticate them. If Codex rejects the explicit workspace
+catalog request, enabled workspace entries fail closed with
+`marketplace_missing` while curated entries from the default catalog remain
+available. `plugins["*"]` is not supported, there is no `install` switch, and
+local `marketplacePath` values are intentionally not config fields because they
+are host-specific. See
+[Native Codex plugins](/plugins/codex-native-plugins) for app-server version and
+readiness requirements.
 
 `app/list` readiness checks are cached for one hour and refreshed
 asynchronously when stale. Codex thread app config is computed at Codex harness
@@ -729,6 +741,109 @@ See [Multiple Gateways](/gateway/multiple-gateways).
   - `"hybrid"` (default): try hot reload first; fall back to restart if required.
 - `debounceMs`: debounce window in ms before config changes are applied (non-negative integer; default: `300`).
 - `deferralTimeoutMs`: optional maximum time in ms to wait for in-flight operations before forcing a restart or channel hot reload. Omit it to use the default bounded wait (`300000`); set `0` to wait indefinitely and log periodic still-pending warnings.
+
+---
+
+## Cloud worker environments
+
+Cloud workers are opt-in. If `cloudWorkers` is absent, or `profiles` is empty, OpenClaw accepts no new worker creation. Durable records created earlier still reconcile and remain visible; the existing gateway/node projection is unchanged.
+
+Every worker provider must return an SSH `hostKey` from trusted provisioning output as exactly `algorithm base64`, without a hostname or comment. Bootstrap writes that key to an isolated `known_hosts` file, uses `StrictHostKeyChecking=yes`, and fails before opening a connection when the provider omits it. There is no trust-on-first-use fallback.
+
+Tunnel setup is on demand rather than part of provisioning. When started, the gateway reverse-forwards a worker-local Unix socket to its loopback WebSocket endpoint. The socket lives in a randomly allocated, owner-only remote directory; unlike a loopback TCP port, it is not reachable by other accounts on a multi-user worker and cannot collide with another environment's port. SSH keepalives and capped reconnect backoff run only while the tunnel owner remains current. Stopping the tunnel fences reconnects before closing the SSH process.
+
+Control traffic and workspace transfer use separate SSH connections. Both reuse the same resolved identity and isolated pinned `known_hosts` file, but workspace transfer does not share SSH connection multiplexing with the long-lived tunnel, so rsync cannot block control traffic.
+
+### Crabbox profile
+
+The bundled `crabbox` provider provisions an SSH-capable lease through the local Crabbox CLI. The inner `settings.provider` selects the Crabbox backend; it is separate from the outer OpenClaw provider id.
+
+```json5
+{
+  cloudWorkers: {
+    profiles: {
+      production: {
+        provider: "crabbox",
+        install: "bundle", // Default; use "npm" only for a released gateway version.
+        settings: {
+          provider: "aws",
+          class: "standard",
+          ttl: "24h",
+          idleTimeout: "60m",
+          // Optional absolute path. Default: sibling ../crabbox/bin/crabbox, then PATH.
+          binary: "/usr/local/bin/crabbox",
+        },
+        lifetime: {
+          idleTimeoutMinutes: 60,
+          maxLifetimeMinutes: 1440,
+        },
+      },
+    },
+  },
+}
+```
+
+- `settings.provider` (required): Crabbox backend passed through `--provider`. Use a backend whose inspect output includes an SSH endpoint; `aws` selects the direct AWS backend.
+- `settings.class` (required): Crabbox machine class passed to `--class`.
+- `settings.ttl` and `settings.idleTimeout` (required): positive Go duration strings passed to `--ttl` and `--idle-timeout`. These provider-side failsafes are distinct from OpenClaw's stored `lifetime` policy below.
+- `settings.binary`: optional absolute Crabbox executable path. Without it, OpenClaw checks the sibling Crabbox checkout, then executable entries on `PATH`, and finally invokes `crabbox` so a missing CLI remains a visible provider error.
+
+Unknown settings are rejected. Crabbox credentials and backend-specific account configuration remain owned by Crabbox; do not place them in `settings`. OpenClaw invokes only the local CLI and makes no provider network calls from this plugin. Provisioning always passes `--keep=true`; OpenClaw owns the external lifecycle and destroys the lease with `crabbox stop`.
+
+<Warning>
+  OpenClaw resolves Crabbox's lease-local `sshKey` path through the provider-owned secret resolver. Current `crabbox inspect --json` output does not expose a provisioned `sshHostKey`, so Crabbox-backed workers still fail closed before bootstrap or tunnel setup. Crabbox must provision an authoritative per-lease host key and return `sshHostKey` as exactly `algorithm base64`, without a hostname or comment. Its current lease-local `known_hosts` cache is not provisioning trust material.
+</Warning>
+
+### Static SSH development profile
+
+```json5
+{
+  cloudWorkers: {
+    profiles: {
+      development: {
+        provider: "static-ssh",
+        settings: {
+          host: "worker.example.test",
+          port: 22,
+          user: "openclaw",
+          hostKey: "ssh-ed25519 <base64-public-host-key>",
+          keyRef: {
+            source: "env",
+            provider: "default",
+            id: "OPENCLAW_WORKER_SSH_KEY",
+          },
+        },
+        lifetime: {
+          idleTimeoutMinutes: 60,
+          maxLifetimeMinutes: 1440,
+        },
+      },
+    },
+  },
+}
+```
+
+- `profiles`: named worker profiles with non-empty, whitespace-trimmed ids. Each profile selects a provider registered by a plugin.
+- `provider`: non-empty worker provider id. The examples use the bundled `crabbox` provider and the QA Lab `static-ssh` provider.
+- `install`: worker installation method. `"bundle"` (default) transfers a content-hashed bundle of the gateway's installed build and supports released, development, and unreleased versions. `"npm"` is an opt-in optimization for an unmodified packaged release; it installs `openclaw@<exact gateway version>` from the public npm registry and never installs `latest`.
+- Bundled provider plugins are selected automatically when configured, but explicit disables and `plugins.allow` still apply. Include the provider id (for example, `crabbox`) when an allowlist is configured. External provider plugins must also be installed and explicitly enabled.
+- `settings`: provider-owned bounded JSON. The selected plugin defines and validates its keys; use [SecretRef objects](/gateway/secrets) for secret-bearing values. The static SSH provider requires `host`, `user`, `hostKey`, and `keyRef`; `port` defaults to `22`. `hostKey` must be one OpenSSH public host-key line (`algorithm base64`) obtained from the known host or another trusted channel, with no options prefix.
+- `lifetime.idleTimeoutMinutes`: positive integer minutes stored for later idle-reclamation policy.
+- `lifetime.maxLifetimeMinutes`: positive integer minutes stored for later lifecycle policy.
+
+A supported Node runtime (22.19+, 23.11+, or 24+) must already be installed on the worker. The opt-in `"npm"` method also requires `npm` and outbound HTTPS access to the public npm registry. Networked toolchain setup is provider policy; bootstrap reports an actionable error instead of installing toolchains itself.
+
+This foundation installs and verifies the gateway build and provides tunnel start/stop lifecycle, but it does not launch the general OpenClaw CLI. The self-contained worker entry and loop land in the next cloud-worker milestone.
+
+Each durable environment record retains its validated provider settings, resolved install method, and lifetime policy in a creation-time profile snapshot. Changing or removing a named profile affects new creates; existing records continue lifecycle reconciliation with that snapshot, provided the owning plugin remains available.
+
+Lifetime values are data only in the first cloud-worker release; automatic enforcement lands with later lifecycle work. Profile changes require a gateway restart.
+
+<Warning>
+  The `static-ssh` provider is a source-tree QA Lab development harness and is excluded from packaged distributions. A worker running on its shared host can read unrelated host data, so do not use this provider as a production isolation boundary.
+  Its operator must supply the expected `hostKey`; OpenClaw will not learn or accept a key from the first connection.
+  Destroying its lease only releases OpenClaw's logical record; it does not stop or clean the host.
+</Warning>
 
 ---
 

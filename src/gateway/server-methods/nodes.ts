@@ -1225,6 +1225,10 @@ export const nodeHandlers: GatewayRequestHandlers = {
       params?: unknown;
       timeoutMs?: number;
       idempotencyKey: string;
+      turnSourceChannel?: string;
+      turnSourceTo?: string;
+      turnSourceAccountId?: string;
+      turnSourceThreadId?: string | number;
     };
     const nodeId = normalizeOptionalString(p.nodeId) ?? "";
     const command = normalizeOptionalString(p.command) ?? "";
@@ -1404,6 +1408,12 @@ export const nodeHandlers: GatewayRequestHandlers = {
         nodeSession,
         command,
         params: forwardedParams.params,
+        turnSource: {
+          channel: p.turnSourceChannel,
+          to: p.turnSourceTo,
+          accountId: p.turnSourceAccountId,
+          threadId: p.turnSourceThreadId,
+        },
         timeoutMs: p.timeoutMs,
         idempotencyKey: p.idempotencyKey,
       });

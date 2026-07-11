@@ -300,7 +300,7 @@ Users can override any backend default:
         },
       },
       model: {
-        primary: "openai/gpt-5.5",
+        primary: "openai/gpt-5.6-sol",
         fallbacks: ["acme-cli/large"],
       },
     },

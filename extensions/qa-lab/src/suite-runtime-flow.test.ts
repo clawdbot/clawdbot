@@ -198,8 +198,8 @@ describe("qa suite runtime flow", () => {
       },
       repoRoot: "/repo",
       providerMode: "mock-openai",
-      primaryModel: "openai/gpt-5.5",
-      alternateModel: "openai/gpt-5.5-mini",
+      primaryModel: "openai/gpt-5.6-luna",
+      alternateModel: "openai/gpt-5.6-luna-mini",
       mock: null,
       cfg: {} as QaSuiteRuntimeEnv["cfg"],
     } satisfies Parameters<typeof createQaSuiteScenarioFlowApi>[0]["env"];

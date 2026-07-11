@@ -299,7 +299,7 @@ const server = http.createServer((req, res) => {
     if (req.method === "GET" && url.pathname === "/v1/models") {
       writeJson(res, 200, {
         object: "list",
-        data: [{ id: "gpt-5.5", object: "model", owned_by: "openclaw-e2e" }],
+        data: [{ id: "gpt-5.6-luna", object: "model", owned_by: "openclaw-e2e" }],
       });
       return;
     }

@@ -70,7 +70,7 @@ rl.on("line", (line) => {
         name: null,
         turns: [],
       },
-      model: params?.model ?? "gpt-5.5",
+      model: params?.model ?? "gpt-5.6-luna",
       modelProvider: "openai",
       serviceTier: null,
       cwd: params?.cwd ?? process.cwd(),

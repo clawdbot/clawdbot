@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "tsBuildInfoFile": ".artifacts/tsgo-cache/ui.tsbuildinfo"
+  },
+  "include": ["ui/**/*", "src/**/*.d.ts", "packages/**/*.d.ts"],
+  "exclude": ["node_modules", "dist", "**/dist/**", "**/*.test.ts", "**/*.test.tsx", "test/**"]
+}

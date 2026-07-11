@@ -43,6 +43,7 @@ import type {
   VideoGenerationProviderPlugin,
   WebFetchProviderPlugin,
   WebSearchProviderPlugin,
+  WorkerProvider,
 } from "./types.js";
 
 type CapturedPluginCliRegistration = {
@@ -72,6 +73,7 @@ export type CapturedPluginRegistration = {
   musicGenerationProviders: MusicGenerationProviderPlugin[];
   webFetchProviders: WebFetchProviderPlugin[];
   webSearchProviders: WebSearchProviderPlugin[];
+  workerProviders: WorkerProvider[];
   migrationProviders: MigrationProviderPlugin[];
   memoryEmbeddingProviders: MemoryEmbeddingProviderAdapter[];
   sessionExtensions: PluginSessionExtensionRegistration[];
@@ -111,6 +113,7 @@ export function createCapturedPluginRegistration(params?: {
   const musicGenerationProviders: MusicGenerationProviderPlugin[] = [];
   const webFetchProviders: WebFetchProviderPlugin[] = [];
   const webSearchProviders: WebSearchProviderPlugin[] = [];
+  const workerProviders: WorkerProvider[] = [];
   const migrationProviders: MigrationProviderPlugin[] = [];
   const memoryEmbeddingProviders: MemoryEmbeddingProviderAdapter[] = [];
   const sessionExtensions: PluginSessionExtensionRegistration[] = [];
@@ -153,6 +156,7 @@ export function createCapturedPluginRegistration(params?: {
     musicGenerationProviders,
     webFetchProviders,
     webSearchProviders,
+    workerProviders,
     migrationProviders,
     memoryEmbeddingProviders,
     sessionExtensions,
@@ -262,6 +266,9 @@ export function createCapturedPluginRegistration(params?: {
         },
         registerWebSearchProvider(provider: WebSearchProviderPlugin) {
           webSearchProviders.push(provider);
+        },
+        registerWorkerProvider(provider: WorkerProvider) {
+          workerProviders.push(provider);
         },
         registerMigrationProvider(provider: MigrationProviderPlugin) {
           migrationProviders.push(provider);

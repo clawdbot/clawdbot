@@ -15,6 +15,7 @@ type Step = {
   with?: Record<string, string | number>;
 };
 type Job = {
+  name?: string;
   environment?: string;
   if?: string;
   needs?: string[] | string;

@@ -29,6 +29,8 @@ import type {
   CodexThread,
   CodexThreadListParams,
   CodexThreadListResponse,
+  CodexThreadTurnsListParams,
+  CodexThreadTurnsListResponse,
 } from "./app-server/protocol.js";
 import { CODEX_INTERACTIVE_THREAD_SOURCE_KINDS } from "./app-server/protocol.js";
 import { requestCodexAppServerClientJson } from "./app-server/request.js";
@@ -54,6 +56,7 @@ import type {
   CodexSessionCatalogParams,
   CodexSessionCatalogResult,
   CodexSessionCatalogSession,
+  CodexSessionTranscriptPage,
 } from "./session-catalog-types.js";
 
 export type {
@@ -64,10 +67,13 @@ export type {
   CodexSessionCatalogParams,
   CodexSessionCatalogResult,
   CodexSessionCatalogSession,
+  CodexSessionTranscriptPage,
 } from "./session-catalog-types.js";
 
 export const CODEX_APP_SERVER_THREADS_LIST_COMMAND = "codex.appServer.threads.list.v1";
+export const CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND = "codex.appServer.thread.turns.list.v1";
 export const CODEX_SESSION_CATALOG_METHOD = "codex.sessions.list";
+export const CODEX_SESSION_READ_METHOD = "codex.sessions.read";
 export const CODEX_SESSION_CONTINUE_METHOD = "codex.sessions.continue";
 export const CODEX_SESSION_ARCHIVE_METHOD = "codex.sessions.archive";
 
@@ -90,6 +96,9 @@ const MAX_SESSION_KEY_LENGTH = 1024;
 const MAX_METADATA_LENGTH = 500;
 const MAX_ACTIVE_FLAGS = 16;
 const MAX_ACTION_CATALOG_PAGES = 100;
+const DEFAULT_TRANSCRIPT_PAGE_LIMIT = 20;
+const MAX_TRANSCRIPT_PAGE_LIMIT = 50;
+const MAX_TRANSCRIPT_PAGE_BYTES = 20 * 1024 * 1024;
 const MAX_TITLE_SEARCH_CATALOG_PAGES = 20;
 const CODEX_SUPERVISION_SESSION_KEY_PREFIX = "harness:codex:supervision:";
 
@@ -105,6 +114,7 @@ export type CodexSessionCatalogControl = {
   withPinnedConnection<T>(run: (control: CodexSessionCatalogControl) => Promise<T>): Promise<T>;
   listPage(params: CodexSessionCatalogPageParams): Promise<CodexSessionCatalogPage>;
   listDescendantPage(params: CodexThreadListParams): Promise<CodexThreadListResponse>;
+  listTurnPage(params: CodexThreadTurnsListParams): Promise<CodexThreadTurnsListResponse>;
   readThread(threadId: string, includeTurns?: boolean): Promise<CodexThread>;
   archiveThread(threadId: string): Promise<void>;
 };
@@ -118,6 +128,7 @@ function requireCodexSessionSupervisionEnabled(pluginConfig: unknown): void {
 type CodexSessionCatalogRequestSnapshot = {
   requestTimeoutMs: number;
   listThreads(params: CodexThreadListParams, timeoutMs: number): Promise<CodexThreadListResponse>;
+  listThreadTurns(params: CodexThreadTurnsListParams): Promise<CodexThreadTurnsListResponse>;
   readThread(threadId: string, includeTurns: boolean): Promise<CodexThread>;
   archiveThread(threadId: string): Promise<void>;
 };
@@ -212,6 +223,12 @@ function createCodexSessionCatalogControlFromRequests(params: {
       params.assertEnabled();
       return thread;
     },
+    async listTurnPage(listParams) {
+      params.assertEnabled();
+      const response = await params.createRequestSnapshot().listThreadTurns(listParams);
+      params.assertEnabled();
+      return response;
+    },
     async archiveThread(threadId) {
       params.assertEnabled();
       await params.createRequestSnapshot().archiveThread(threadId);
@@ -256,6 +273,13 @@ export function createCodexSessionCatalogControl(params: {
             requestOptions,
           )
         ).thread,
+      listThreadTurns: async (listParams) =>
+        await codexControlRequest(
+          pluginConfig,
+          CODEX_CONTROL_METHODS.listThreadTurns,
+          listParams,
+          requestOptions,
+        ),
       archiveThread: async (threadId) => {
         await codexControlRequest(
           pluginConfig,
@@ -298,6 +322,14 @@ export function createCodexSessionCatalogControl(params: {
               timeoutMs: runtime.requestTimeoutMs,
             })
           ).thread,
+        listThreadTurns: async (listParams) =>
+          await requestCodexAppServerClientJson<CodexThreadTurnsListResponse>({
+            client,
+            method: CODEX_CONTROL_METHODS.listThreadTurns,
+            requestParams: listParams,
+            config: runtimeConfig,
+            timeoutMs: runtime.requestTimeoutMs,
+          }),
         archiveThread: async (threadId) => {
           await requestCodexAppServerClientJson({
             client,
@@ -964,6 +996,32 @@ export function createCodexSessionCatalogNodeHostCommands(
         }
       },
     },
+    {
+      command: CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
+      cap: CODEX_APP_SERVER_THREADS_CAPABILITY,
+      dangerous: false,
+      handle: async (paramsJSON) => {
+        const action = readNodeTranscriptParams(parseJsonParams(paramsJSON));
+        try {
+          await requireCatalogEligibleThread(control, action.threadId);
+          const page = parseTranscriptPage(
+            await control.listTurnPage({
+              threadId: action.threadId,
+              limit: action.limit,
+              sortDirection: "desc",
+              itemsView: "full",
+              ...(action.cursor ? { cursor: action.cursor } : {}),
+            }),
+          );
+          return JSON.stringify(page);
+        } catch (error) {
+          if (error instanceof CatalogParamsError) {
+            throw error;
+          }
+          throw new Error("Codex app-server transcript is unavailable", { cause: error });
+        }
+      },
+    },
   ];
 }
 
@@ -971,6 +1029,13 @@ type CodexSessionActionParams = {
   hostId: string;
   threadId: string;
 };
+
+type CodexSessionTranscriptParams = CodexSessionActionParams & {
+  cursor?: string;
+  limit: number;
+};
+
+type CodexNodeSessionTranscriptParams = Omit<CodexSessionTranscriptParams, "hostId">;
 
 function readActionParams(
   value: unknown,
@@ -999,6 +1064,148 @@ function readActionParams(
     );
   }
   return { hostId, threadId };
+}
+
+function readTranscriptParams(value: unknown): CodexSessionTranscriptParams {
+  if (!isRecord(value)) {
+    throw new CatalogParamsError("Codex session read parameters must be an object");
+  }
+  requireOnlyKeys(value, new Set(["hostId", "threadId", "cursor", "limit"]));
+  const hostId = readHostId(value.hostId);
+  const threadId = readOptionalString(value, "threadId", MAX_SESSION_ID_LENGTH);
+  if (!threadId) {
+    throw new CatalogParamsError("threadId is required");
+  }
+  const cursor = readOptionalString(value, "cursor", MAX_CURSOR_LENGTH);
+  const limit = readBoundedLimit(
+    value.limit,
+    "limit",
+    DEFAULT_TRANSCRIPT_PAGE_LIMIT,
+    MAX_TRANSCRIPT_PAGE_LIMIT,
+  );
+  return { hostId, threadId, limit, ...(cursor ? { cursor } : {}) };
+}
+
+function readNodeTranscriptParams(value: unknown): CodexNodeSessionTranscriptParams {
+  if (!isRecord(value)) {
+    throw new CatalogParamsError("Codex session read parameters must be an object");
+  }
+  requireOnlyKeys(value, new Set(["threadId", "cursor", "limit"]));
+  const threadId = readOptionalString(value, "threadId", MAX_SESSION_ID_LENGTH);
+  if (!threadId) {
+    throw new CatalogParamsError("threadId is required");
+  }
+  const cursor = readOptionalString(value, "cursor", MAX_CURSOR_LENGTH);
+  const limit = readBoundedLimit(
+    value.limit,
+    "limit",
+    DEFAULT_TRANSCRIPT_PAGE_LIMIT,
+    MAX_TRANSCRIPT_PAGE_LIMIT,
+  );
+  return { threadId, limit, ...(cursor ? { cursor } : {}) };
+}
+
+function readBoundedLimit(value: unknown, key: string, fallback: number, max: number): number {
+  if (value === undefined) {
+    return fallback;
+  }
+  if (!Number.isInteger(value) || (value as number) < 1 || (value as number) > max) {
+    throw new CatalogParamsError(`${key} must be an integer from 1 to ${max}`);
+  }
+  return value as number;
+}
+
+function parseTranscriptPage(value: unknown): CodexThreadTurnsListResponse {
+  if (
+    !isRecord(value) ||
+    !Array.isArray(value.data) ||
+    value.data.length > MAX_TRANSCRIPT_PAGE_LIMIT ||
+    value.data.some(
+      (turn) =>
+        !isRecord(turn) || !Array.isArray(turn.items) || turn.items.some((item) => !isRecord(item)),
+    )
+  ) {
+    throw new Error("Codex app-server returned an invalid transcript page");
+  }
+  const nextCursor = readControlCursor(value.nextCursor, "transcript next response");
+  const backwardsCursor = readControlCursor(value.backwardsCursor, "transcript backwards response");
+  const page: CodexThreadTurnsListResponse = {
+    data: value.data as CodexThreadTurnsListResponse["data"],
+    ...(nextCursor ? { nextCursor } : {}),
+    ...(backwardsCursor ? { backwardsCursor } : {}),
+  };
+  // A bounded item count does not bound tool output embedded in one item. Keep
+  // the page below node.invoke and Gateway WebSocket payload ceilings.
+  if (Buffer.byteLength(JSON.stringify(page), "utf8") > MAX_TRANSCRIPT_PAGE_BYTES) {
+    throw new Error("Codex app-server transcript page exceeds the safe response size");
+  }
+  return page;
+}
+
+function flattenTranscriptPageDesc(page: CodexThreadTurnsListResponse) {
+  return page.data.flatMap((turn) => turn.items.toReversed());
+}
+
+/** Reads the persisted transcript for a Gateway-local or paired-node Codex session. */
+export async function readCodexSessionTranscript(params: {
+  runtime: PluginRuntime;
+  control: CodexSessionCatalogControl;
+  hostId: string;
+  threadId: string;
+  cursor?: string;
+  limit: number;
+}): Promise<CodexSessionTranscriptPage> {
+  params.control.assertEnabled();
+  if (params.hostId === CODEX_LOCAL_SESSION_HOST_ID) {
+    await requireCatalogEligibleThread(params.control, params.threadId);
+    const page = parseTranscriptPage(
+      await params.control.listTurnPage({
+        threadId: params.threadId,
+        limit: params.limit,
+        sortDirection: "desc",
+        itemsView: "full",
+        ...(params.cursor ? { cursor: params.cursor } : {}),
+      }),
+    );
+    return {
+      hostId: params.hostId,
+      label: "Local Codex",
+      threadId: params.threadId,
+      items: flattenTranscriptPageDesc(page),
+      ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+      ...(page.backwardsCursor ? { backwardsCursor: page.backwardsCursor } : {}),
+    };
+  }
+
+  const nodeId = params.hostId.slice("node:".length);
+  const node = (await params.runtime.nodes.list()).nodes.find(
+    (candidate) =>
+      candidate.nodeId === nodeId &&
+      candidate.connected === true &&
+      candidate.commands?.includes(CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND),
+  );
+  if (!node) {
+    throw new CatalogParamsError("paired-node Codex session host is offline or unavailable");
+  }
+  const raw = await params.runtime.nodes.invoke({
+    nodeId,
+    command: CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
+    params: {
+      threadId: params.threadId,
+      limit: params.limit,
+      ...(params.cursor ? { cursor: params.cursor } : {}),
+    },
+    timeoutMs: NODE_INVOKE_TIMEOUT_MS,
+  });
+  const page = parseTranscriptPage(unwrapNodeInvokePayload(raw));
+  return {
+    hostId: params.hostId,
+    label: nodeLabel(node),
+    threadId: params.threadId,
+    items: flattenTranscriptPageDesc(page),
+    ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+    ...(page.backwardsCursor ? { backwardsCursor: page.backwardsCursor } : {}),
+  };
 }
 
 function requireIdleThread(thread: CodexThread, action: "continue" | "archive"): void {
@@ -1626,11 +1833,11 @@ export async function archiveLocalCodexSession(params: {
   });
 }
 
-/** Allows the metadata-only catalog command on supported paired-node platforms. */
+/** Allows read-only catalog and transcript commands on supported paired-node platforms. */
 export function createCodexSessionCatalogNodeInvokePolicies(): OpenClawPluginNodeInvokePolicy[] {
   return [
     {
-      commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND],
+      commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND, CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND],
       defaultPlatforms: ["macos", "linux", "windows"],
       handle: (context) => context.invokeNode(),
     },
@@ -1681,6 +1888,37 @@ export function registerCodexSessionCatalogGateway(params: {
       }
     },
     // Core node.invoke is a write-scoped method even for read-only plugin commands.
+    { scope: "operator.write" },
+  );
+  params.api.registerGatewayMethod(
+    CODEX_SESSION_READ_METHOD,
+    async ({ params: requestParams, respond }: GatewayRequestHandlerOptions) => {
+      try {
+        const action = readTranscriptParams(requestParams);
+        respond(
+          true,
+          await readCodexSessionTranscript({
+            runtime: params.api.runtime,
+            control: params.control,
+            hostId: action.hostId,
+            threadId: action.threadId,
+            cursor: action.cursor,
+            limit: action.limit,
+          }),
+        );
+      } catch (error) {
+        if (error instanceof CatalogParamsError) {
+          respond(
+            false,
+            { error: error.message },
+            errorShape(ErrorCodes.INVALID_REQUEST, error.message),
+          );
+          return;
+        }
+        const message = "Codex session transcript could not be read";
+        respond(false, { error: message }, errorShape(ErrorCodes.UNAVAILABLE, message));
+      }
+    },
     { scope: "operator.write" },
   );
   params.api.registerGatewayMethod(

@@ -862,10 +862,11 @@ class OpenClawShell extends OpenClawLightDomElement {
     const browserPanelAvailable = isBrowserPanelAvailable(gatewaySnapshot);
     const activeRoute = this.routeState.routeId ?? "chat";
     // Plugin tabs share one route; the search picks the active item.
-    const activePluginTabId =
+    const activePluginRef =
       activeRoute === "plugin"
-        ? pluginTabKey(pluginTabRefFromSearch(this.routeState.location?.search ?? ""))
-        : "";
+        ? pluginTabRefFromSearch(this.routeState.location?.search ?? "")
+        : null;
+    const activePluginTabId = activePluginRef ? pluginTabKey(activePluginRef) : "";
     const settingsTakeover = isSettingsNavigationRoute(activeRoute);
     const navDrawerOpen = this.navDrawerOpen && !this.onboarding;
     // Drawer navigation always opens expanded; the desktop collapse preference
@@ -954,6 +955,8 @@ class OpenClawShell extends OpenClawLightDomElement {
                 .basePath=${context.basePath}
                 .activeRouteId=${activeRoute}
                 .activePluginTabId=${activePluginTabId}
+                .activePluginHostId=${activePluginRef?.hostId ?? ""}
+                .activePluginThreadId=${activePluginRef?.threadId ?? ""}
                 .enabledRouteIds=${this.enabledRouteIds()}
                 .sessionKey=${this.activeSessionKey}
                 .connected=${gatewaySnapshot.connected}

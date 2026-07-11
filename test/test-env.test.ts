@@ -197,8 +197,7 @@ describe("installTestEnv", () => {
         };
       };
     };
-    const providers = copiedConfig.models?.providers;
-    requireRecord(providers, "model providers");
+    const providers = requireRecord(copiedConfig.models?.providers, "model providers");
     expect(providers.custom).toEqual({ baseUrl: "https://example.test/v1" });
 
     const agentDefaults = requireRecord(copiedConfig.agents?.defaults, "agent defaults");

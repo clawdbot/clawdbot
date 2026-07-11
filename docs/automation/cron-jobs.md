@@ -142,7 +142,7 @@ Every job carries exactly one payload kind, chosen by flag:
   Model override; must resolve to an allowed model or the run fails with a validation error.
 </ParamField>
 <ParamField path="--fallbacks" type="string">
-  Per-job fallback model list, for example `--fallbacks openai/gpt-5.5,openrouter/meta-llama/llama-3.3-70b-instruct:free`. Pass `--fallbacks ""` for a strict run with no fallbacks.
+  Per-job fallback model list, for example `--fallbacks openai/gpt-5.6-sol,openrouter/meta-llama/llama-3.3-70b-instruct:free`. Pass `--fallbacks ""` for a strict run with no fallbacks.
 </ParamField>
 <ParamField path="--clear-fallbacks" type="boolean">
   On `cron edit`, removes the per-job fallback override so the job follows configured fallback precedence. Cannot combine with `--fallbacks`.
@@ -437,7 +437,7 @@ Query-string tokens are rejected.
     curl -X POST http://127.0.0.1:18789/hooks/agent \
       -H 'Authorization: Bearer SECRET' \
       -H 'Content-Type: application/json' \
-      -d '{"message":"Summarize inbox","name":"Email","model":"openai/gpt-5.5"}'
+      -d '{"message":"Summarize inbox","name":"Email","model":"openai/gpt-5.6-sol"}'
     ```
 
     Fields: `message` (required), `name`, `agentId`, `sessionKey` (requires `hooks.allowRequestSessionKey=true`), `idempotencyKey`, `wakeMode`, `deliver`, `channel`, `to`, `model`, `thinking`, `timeoutSeconds`.

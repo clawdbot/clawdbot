@@ -207,7 +207,9 @@ import type {
   VideoGenerationProviderPlugin,
   WebFetchProviderPlugin,
   WebSearchProviderPlugin,
+  WorkerProvider,
 } from "./types.js";
+import { validateWorkerProviderContract } from "./worker-provider-registry.js";
 
 export type PluginHttpRouteRegistration = RegistryTypesPluginHttpRouteRegistration & {
   gatewayRuntimeScopeSurface?: OpenClawPluginGatewayRuntimeScopeSurface;
@@ -294,6 +296,7 @@ export type {
   PluginMemoryEmbeddingProviderRegistration,
   PluginNodeHostCommandRegistration,
   PluginProviderRegistration,
+  PluginWorkerProviderRegistration,
   PluginControlUiDescriptorRegistryRegistration,
   PluginHostedMediaResolverRegistration,
   PluginRecord,
@@ -1333,6 +1336,32 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       rootDir: record.rootDir,
     });
     return true;
+  };
+
+  const registerWorkerProvider = (record: PluginRecord, provider: WorkerProvider) => {
+    const reject = (message: string) =>
+      pushDiagnostic({ level: "error", pluginId: record.id, source: record.source, message });
+    const validation = validateWorkerProviderContract(
+      provider,
+      record.contracts?.workerProviders ?? [],
+    );
+    if (!validation.ok) {
+      reject(validation.message);
+      return;
+    }
+    const { id } = validation;
+    const existing = registry.workerProviders.get(id);
+    if (existing) {
+      reject(`worker provider already registered: ${id} (${existing.pluginId})`);
+      return;
+    }
+    registry.workerProviders.set(id, {
+      pluginId: record.id,
+      pluginName: record.name,
+      provider,
+      source: record.source,
+      rootDir: record.rootDir,
+    });
   };
 
   const registerSpeechProvider = (record: PluginRecord, provider: SpeechProviderPlugin) => {
@@ -3473,6 +3502,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               registerHostedMediaResolver: (resolver) =>
                 registerHostedMediaResolver(record, resolver),
               registerProvider: (provider) => registerProvider(record, provider),
+              registerWorkerProvider: (provider) => registerWorkerProvider(record, provider),
               registerModelCatalogProvider: (provider) =>
                 registerModelCatalogProvider(record, provider),
               registerEmbeddingProvider: (provider) =>
@@ -3970,6 +4000,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerChannel,
     registerHostedMediaResolver,
     registerProvider,
+    registerWorkerProvider,
     registerModelCatalogProvider,
     registerAgentHarness,
     registerCliBackend,

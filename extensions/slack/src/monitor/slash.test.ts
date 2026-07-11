@@ -584,6 +584,30 @@ function responseTexts(mock: ReturnType<typeof vi.fn>): unknown[] {
   );
 }
 
+function mockSixDispatchedReplies() {
+  const { deliverSlackSlashRepliesMock } = getSlackSlashMocks();
+  deliverSlackSlashRepliesMock.mockImplementation(async (params: unknown) => {
+    const { replies, responseBudget } = params as {
+      replies: Array<{ text: string }>;
+      responseBudget: { respond: (payload: { text: string }) => Promise<unknown> };
+    };
+    for (const reply of replies) {
+      await responseBudget.respond({ text: reply.text });
+    }
+  });
+  dispatchMock.mockImplementation((params: unknown) => {
+    const deliver = (
+      params as {
+        dispatcherOptions: { deliver: (payload: { text: string }) => Promise<void> };
+      }
+    ).dispatcherOptions.deliver;
+    for (let index = 0; index < 6; index += 1) {
+      void deliver({ text: `reply ${String(index + 1)}` });
+    }
+    return { counts: { final: 6, tool: 0, block: 0 } };
+  });
+}
+
 describe("Slack native command argument menus", () => {
   let harness: ReturnType<typeof createArgMenusHarness>;
   let usageHandler: (args: unknown) => Promise<void>;
@@ -867,6 +891,75 @@ describe("Slack native command argument menus", () => {
     expect(dispatchMock).toHaveBeenCalledTimes(1);
     const call = firstDispatchArg() as { ctx?: { Body?: string } };
     expect(call.ctx?.Body).toBe("/usage tokens");
+  });
+
+  it("does not apply the response_url call cap to Web API action replies", async () => {
+    mockSixDispatchedReplies();
+
+    await runArgMenuAction(argMenuHandler, {
+      action: {
+        value: encodeValue({ command: "usage", arg: "mode", value: "tokens", userId: "U1" }),
+      },
+      includeRespond: false,
+    });
+
+    expect(harness.postEphemeral).toHaveBeenCalledTimes(6);
+  });
+
+  it("keeps table fallback tokens literal in Web API action replies", async () => {
+    const tableFallback = "Account\tOwner\nprod\t<@U123> & <!channel>";
+    const { deliverSlackSlashRepliesMock } = getSlackSlashMocks();
+    deliverSlackSlashRepliesMock.mockImplementation(async (params: unknown) => {
+      const responseBudget = (
+        params as {
+          responseBudget: {
+            respond: (payload: { text: string; mrkdwn?: false }) => Promise<unknown>;
+          };
+        }
+      ).responseBudget;
+      await responseBudget.respond({ text: tableFallback, mrkdwn: false });
+    });
+    dispatchMock.mockImplementation((params: unknown) => {
+      const deliver = (
+        params as {
+          dispatcherOptions: { deliver: (payload: { text: string }) => Promise<void> };
+        }
+      ).dispatcherOptions.deliver;
+      void deliver({ text: "table reply" });
+      return { counts: { final: 1, tool: 0, block: 0 } };
+    });
+
+    await runArgMenuAction(argMenuHandler, {
+      action: {
+        value: encodeValue({ command: "usage", arg: "mode", value: "tokens", userId: "U1" }),
+      },
+      includeRespond: false,
+    });
+
+    expect(harness.postEphemeral).toHaveBeenCalledWith(
+      expect.objectContaining({ text: tableFallback, mrkdwn: false }),
+    );
+  });
+
+  it("keeps the response_url call cap on action responders", async () => {
+    mockSixDispatchedReplies();
+
+    const respond = await runArgMenuAction(argMenuHandler, {
+      action: {
+        value: encodeValue({ command: "usage", arg: "mode", value: "tokens", userId: "U1" }),
+      },
+    });
+
+    expect(respond).toHaveBeenCalledTimes(5);
+    expect(harness.postEphemeral).not.toHaveBeenCalled();
+  });
+
+  it("keeps the response_url call cap on actual slash command replies", async () => {
+    mockSixDispatchedReplies();
+
+    const { respond } = await runCommandHandler(agentStatusHandler);
+
+    expect(respond).toHaveBeenCalledTimes(5);
   });
 
   it("tracks accepted slash command activity", async () => {
@@ -1486,18 +1579,31 @@ describe("slack slash command session metadata", () => {
   });
 
   it("passes canonical hook correlation to slash reply delivery", async () => {
+    dispatchMock.mockImplementation((params: unknown) => {
+      const deliver = (
+        params as {
+          dispatcherOptions: { deliver: (payload: { text: string }) => Promise<void> };
+        }
+      ).dispatcherOptions.deliver;
+      void deliver({ text: "final answer" });
+      void deliver({ text: "second answer" });
+      return { counts: { final: 2, tool: 0, block: 0 } };
+    });
     const harness = createPolicyHarness({ groupPolicy: "open" });
     await registerAndRunPolicySlash({ harness });
     const dispatchArg = firstDispatchArg() as {
       ctx?: { OriginatingTo?: string; SessionKey?: string };
-      dispatcherOptions?: { deliver?: (payload: { text: string }) => Promise<void> };
     };
+    const responseBudget = (
+      deliverSlackSlashRepliesMock.mock.calls.at(-1)?.[0] as
+        | { responseBudget?: unknown }
+        | undefined
+    )?.responseBudget;
 
-    await dispatchArg.dispatcherOptions?.deliver?.({ text: "final answer" });
-
+    expect(deliverSlackSlashRepliesMock).toHaveBeenCalledOnce();
     expect(deliverSlackSlashRepliesMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        replies: [{ text: "final answer" }],
+        replies: [{ text: "final answer" }, { text: "second answer" }],
         messageSentHookTarget: dispatchArg.ctx?.OriginatingTo,
         sessionKeyForInternalHooks: dispatchArg.ctx?.SessionKey,
         accountId: "acct",
@@ -1505,19 +1611,24 @@ describe("slack slash command session metadata", () => {
         groupId: harness.channelId,
       }),
     );
+    expect(responseBudget).toBeDefined();
   });
 
   it("targets the channel for public slash reply hooks", async () => {
+    dispatchMock.mockImplementation((params: unknown) => {
+      const deliver = (
+        params as {
+          dispatcherOptions: { deliver: (payload: { text: string }) => Promise<void> };
+        }
+      ).dispatcherOptions.deliver;
+      void deliver({ text: "public answer" });
+      return { counts: { final: 1, tool: 0, block: 0 } };
+    });
     const harness = createPolicyHarness({
       groupPolicy: "open",
       slashEphemeral: false,
     });
     await registerAndRunPolicySlash({ harness });
-    const dispatchArg = firstDispatchArg() as {
-      dispatcherOptions?: { deliver?: (payload: { text: string }) => Promise<void> };
-    };
-
-    await dispatchArg.dispatcherOptions?.deliver?.({ text: "public answer" });
 
     expect(firstDispatchArg().ctx?.OriginatingTo).toBe(`channel:${harness.channelId}`);
     expect(deliverSlackSlashRepliesMock).toHaveBeenCalledWith(

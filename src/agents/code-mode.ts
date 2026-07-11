@@ -807,7 +807,12 @@ export class CodeModeHeadlessTimeoutError extends Error {
   }
 }
 
-function createHeadlessAbortScope(signal: AbortSignal | undefined, wallClockMs: number) {
+// Explicit return type: declaration emit cannot name the inferred AbortSignal
+// in the DOM-free core lane (@types/node keeps it in a non-exported module).
+function createHeadlessAbortScope(
+  signal: AbortSignal | undefined,
+  wallClockMs: number,
+): { signal: AbortSignal; cleanup: () => void } {
   const controller = new AbortController();
   const onAbort = () => controller.abort(signal?.reason);
   signal?.addEventListener("abort", onAbort, { once: true });

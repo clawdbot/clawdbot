@@ -49,6 +49,7 @@ export async function prepareGatewayPluginBootstrap(params: {
   activationSourceConfig?: OpenClawConfig;
   startupRuntimeConfig: OpenClawConfig;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
+  workerProviderIds?: readonly string[];
   minimalTestGateway: boolean;
   log: GatewayPluginBootstrapLog;
   loadRuntimePlugins?: boolean;
@@ -134,6 +135,7 @@ export async function prepareGatewayPluginBootstrap(params: {
           env: process.env,
           activationSourceConfig,
           metadataSnapshot: params.pluginMetadataSnapshot,
+          workerProviderIds: params.workerProviderIds ?? [],
         });
   const deferredConfiguredChannelPluginIds = [
     ...(pluginLookUpTable?.startup.configuredDeferredChannelPluginIds ?? []),

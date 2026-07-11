@@ -1,10 +1,12 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
+    // Node-side production code must not see browser globals; ui/ owns DOM via tsconfig.ui.json.
+    "lib": ["ES2023"],
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "tsBuildInfoFile": ".artifacts/tsgo-cache/core.tsbuildinfo"
   },
-  "include": ["src/**/*", "ui/**/*", "packages/**/*"],
+  "include": ["src/**/*", "packages/**/*"],
   "exclude": ["node_modules", "dist", "**/dist/**", "**/*.test.ts", "**/*.test.tsx", "test/**"]
 }

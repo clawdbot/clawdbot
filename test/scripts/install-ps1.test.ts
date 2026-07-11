@@ -4,7 +4,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
-import { createScriptTestHarness } from "./test-helpers";
+import { createScriptTestHarness } from "./test-helpers.js";
 
 const SCRIPT_PATH = "scripts/install.ps1";
 const ENTRYPOINT_RE =

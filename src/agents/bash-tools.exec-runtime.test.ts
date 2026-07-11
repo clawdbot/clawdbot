@@ -3,8 +3,10 @@
  * Covers target resolution, cursor mode tracking, exit outcome classification,
  * system events, and process lifecycle behavior.
  */
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { RunExit } from "../process/supervisor/types.js";
 import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../utils/timer-delay.js";
+import type { BashSandboxConfig } from "./bash-tools.shared.js";
 
 const requestHeartbeatMock = vi.hoisted(() => vi.fn());
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
@@ -27,15 +29,21 @@ vi.mock("../process/supervisor/index.js", () => ({
 }));
 
 let markBackgrounded: typeof import("./bash-process-registry.js").markBackgrounded;
+let getActiveBackgroundExecSessionCount: typeof import("./bash-process-registry.js").getActiveBackgroundExecSessionCount;
+let resetProcessRegistryForTests: typeof import("./bash-process-registry.js").resetProcessRegistryForTests;
 let buildExecExitOutcome: typeof import("./bash-tools.exec-runtime.js").buildExecExitOutcome;
 let detectCursorKeyMode: typeof import("./bash-tools.exec-runtime.js").detectCursorKeyMode;
 let formatExecFailureReason: typeof import("./bash-tools.exec-runtime.js").formatExecFailureReason;
 let renderExecUpdateText: typeof import("./bash-tools.exec-runtime.js").renderExecUpdateText;
 let resolveExecTarget: typeof import("./bash-tools.exec-runtime.js").resolveExecTarget;
 let runExecProcess: typeof import("./bash-tools.exec-runtime.js").runExecProcess;
+let prepareGatewaySuspend: typeof import("../infra/gateway-suspend-coordinator.js").prepareGatewaySuspend;
+let resetGatewaySuspendCoordinatorForTest: typeof import("../infra/gateway-suspend-coordinator.js").resetGatewaySuspendCoordinatorForTest;
+let resumeGatewaySuspend: typeof import("../infra/gateway-suspend-coordinator.js").resumeGatewaySuspend;
 
 beforeAll(async () => {
-  ({ markBackgrounded } = await import("./bash-process-registry.js"));
+  ({ getActiveBackgroundExecSessionCount, markBackgrounded, resetProcessRegistryForTests } =
+    await import("./bash-process-registry.js"));
   ({
     buildExecExitOutcome,
     detectCursorKeyMode,
@@ -44,13 +52,40 @@ beforeAll(async () => {
     resolveExecTarget,
     runExecProcess,
   } = await import("./bash-tools.exec-runtime.js"));
+  ({ prepareGatewaySuspend, resetGatewaySuspendCoordinatorForTest, resumeGatewaySuspend } =
+    await import("../infra/gateway-suspend-coordinator.js"));
 });
 
 beforeEach(() => {
+  resetGatewaySuspendCoordinatorForTest();
+  resetProcessRegistryForTests();
   requestHeartbeatMock.mockClear();
   enqueueSystemEventMock.mockClear();
   supervisorMock.spawn.mockReset();
 });
+
+afterEach(() => {
+  resetGatewaySuspendCoordinatorForTest();
+  resetProcessRegistryForTests();
+});
+
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, reject, resolve };
+}
+
+function prepareSuspension(requestId: string) {
+  return prepareGatewaySuspend({
+    requestId,
+    pauseScheduling: vi.fn(),
+    resumeScheduling: vi.fn(),
+  });
+}
 
 function expectExecTarget(
   actual: ReturnType<typeof resolveExecTarget>,
@@ -501,6 +536,130 @@ describe("exec notifyOnExit suppression", () => {
     expect(message).not.toContain("�");
     expect(message).toContain(tailHead);
   });
+});
+
+describe("sandbox exec finalization suspension", () => {
+  it.each([
+    {
+      scenario: "successful cleanup",
+      finalizeRejects: false,
+      processTimesOut: false,
+      expectedStatus: "completed" as const,
+      expectedFailureKind: undefined,
+    },
+    {
+      scenario: "failed cleanup",
+      finalizeRejects: true,
+      processTimesOut: false,
+      expectedStatus: "failed" as const,
+      expectedFailureKind: "runtime-error" as const,
+    },
+    {
+      scenario: "failed cleanup after a process timeout",
+      finalizeRejects: true,
+      processTimesOut: true,
+      expectedStatus: "failed" as const,
+      expectedFailureKind: "overall-timeout" as const,
+    },
+  ])(
+    "keeps suspension busy until asynchronous finalization settles after $scenario",
+    async ({ finalizeRejects, processTimesOut, expectedFailureKind, expectedStatus }) => {
+      const exit = createDeferred<RunExit>();
+      const finalization = createDeferred<void>();
+      const finalizeExec = vi.fn<NonNullable<BashSandboxConfig["finalizeExec"]>>(
+        async () => await finalization.promise,
+      );
+      supervisorMock.spawn.mockImplementationOnce(
+        async (input: { onStdout?: (chunk: string) => void }) => {
+          input.onStdout?.("sandbox output\n");
+          return {
+            runId: "sandbox-run",
+            startedAtMs: Date.now(),
+            pid: 123,
+            wait: async () => await exit.promise,
+            cancel: vi.fn(),
+          };
+        },
+      );
+
+      const run = await runExecProcess({
+        command: "sandbox-command",
+        workdir: "/tmp",
+        env: {},
+        sandbox: {
+          containerName: "sandbox",
+          workspaceDir: "/workspace",
+          containerWorkdir: "/workspace",
+          buildExecSpec: async () => ({
+            argv: ["sandbox-command"],
+            env: {},
+            stdinMode: "pipe-closed",
+            finalizeToken: "sandbox-token",
+          }),
+          finalizeExec,
+        },
+        usePty: false,
+        warnings: [],
+        maxOutput: 1000,
+        pendingMaxOutput: 1000,
+        notifyOnExit: true,
+        sessionKey: "agent:main:main",
+        timeoutSec: null,
+      });
+      markBackgrounded(run.session);
+      expect(getActiveBackgroundExecSessionCount()).toBe(1);
+
+      exit.resolve({
+        reason: processTimesOut ? "overall-timeout" : "exit",
+        exitCode: processTimesOut ? null : 0,
+        exitSignal: processTimesOut ? "SIGKILL" : null,
+        durationMs: 1,
+        stdout: "",
+        stderr: "",
+        timedOut: processTimesOut,
+        noOutputTimedOut: false,
+      });
+      await vi.waitFor(() => expect(finalizeExec).toHaveBeenCalledOnce());
+      expect(run.session.finalizing).toBe(true);
+
+      const busy = prepareSuspension(`before-finalize-${expectedFailureKind ?? "success"}`);
+      expect(busy.status).toBe("busy");
+      if (busy.status === "busy") {
+        expect(busy.blockers).toContainEqual(
+          expect.objectContaining({ kind: "background-exec", count: 1 }),
+        );
+      }
+      expect(getActiveBackgroundExecSessionCount()).toBe(1);
+
+      if (finalizeRejects) {
+        finalization.reject(new Error("sandbox finalize failed"));
+      } else {
+        finalization.resolve();
+      }
+      const outcome = await run.promise;
+
+      expect(outcome.status).toBe(expectedStatus);
+      if (outcome.status === "failed") {
+        expect(outcome.failureKind).toBe(expectedFailureKind);
+        expect(outcome.reason).toContain(
+          expectedFailureKind === "runtime-error" ? "sandbox finalize failed" : "timed out",
+        );
+      }
+      expect(finalizeExec).toHaveBeenCalledOnce();
+      expect(getActiveBackgroundExecSessionCount()).toBe(0);
+      expect(run.session.finalizing).toBe(false);
+      expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
+      expect(requireSystemEventCall()[0]).toContain(
+        expectedStatus === "failed" ? "Exec failed" : "Exec completed",
+      );
+
+      const ready = prepareSuspension(`after-finalize-${expectedFailureKind ?? "success"}`);
+      expect(ready.status).toBe("ready");
+      if (ready.status === "ready") {
+        expect(resumeGatewaySuspend(ready.suspensionId)).toMatchObject({ ok: true });
+      }
+    },
+  );
 });
 
 describe("formatExecFailureReason", () => {

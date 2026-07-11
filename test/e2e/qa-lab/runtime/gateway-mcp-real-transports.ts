@@ -276,8 +276,10 @@ function resolveChannelMcpInvocation(params: {
 function parseJsonFrame(data: RawData): Record<string, unknown> | null {
   try {
     const text = Array.isArray(data)
-      ? Buffer.concat(data).toString("utf8")
-      : Buffer.from(data).toString("utf8");
+      ? Buffer.concat(data.map((chunk) => Buffer.from(chunk))).toString("utf8")
+      : Buffer.isBuffer(data)
+        ? data.toString("utf8")
+        : Buffer.from(data).toString("utf8");
     const value = JSON.parse(text);
     return value && typeof value === "object" && !Array.isArray(value)
       ? (value as Record<string, unknown>)
@@ -720,7 +722,7 @@ async function runGatewayMcpRealTransportProducer(
   const writer = createQaScriptEvidenceWriter({
     artifactBase: options.artifactBase,
     logFileName: `${options.scenarioId}.log`,
-    primaryModel: "mock-openai/gpt-5.5",
+    primaryModel: "mock-openai/gpt-5.6-luna",
     providerMode: "mock-openai",
     repoRoot: options.repoRoot,
     target: {

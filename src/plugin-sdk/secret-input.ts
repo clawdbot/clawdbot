@@ -8,6 +8,7 @@ import {
   normalizeResolvedSecretInputString,
   normalizeSecretInputString,
 } from "../config/types.secrets.js";
+import { isValidSecretRef } from "../secrets/ref-contract.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import { buildSecretInputSchema } from "./secret-input-schema.js";
 
@@ -21,6 +22,7 @@ export {
   coerceSecretRef,
   hasConfiguredSecretInput,
   isSecretRef,
+  isValidSecretRef,
   resolveSecretInputString,
   normalizeResolvedSecretInputString,
   normalizeSecretInput,

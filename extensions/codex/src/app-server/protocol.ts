@@ -222,6 +222,20 @@ export type CodexThreadReadResponse = {
   thread: CodexThread;
 };
 
+export type CodexThreadTurnsListParams = JsonObject & {
+  threadId: string;
+  cursor?: string | null;
+  limit?: number | null;
+  sortDirection?: "asc" | "desc" | null;
+  itemsView?: "notLoaded" | "summary" | "full" | null;
+};
+
+export type CodexThreadTurnsListResponse = {
+  data: CodexTurn[];
+  nextCursor?: string | null;
+  backwardsCursor?: string | null;
+};
+
 export type CodexThreadSetNameParams = JsonObject & {
   threadId: string;
   name: string;
@@ -540,8 +554,16 @@ export type CodexPluginReadResponse = {
   plugin: CodexPluginDetail;
 };
 
+export type CodexPluginListMarketplaceKind =
+  | "local"
+  | "vertical"
+  | "workspace-directory"
+  | "shared-with-me"
+  | "created-by-me-remote";
+
 export type CodexPluginListParams = {
   cwds: string[];
+  marketplaceKinds?: CodexPluginListMarketplaceKind[];
 };
 
 export type CodexPluginReadParams = {
@@ -664,6 +686,7 @@ type CodexAppServerRequestParamsOverride = {
   "thread/archive": CodexThreadArchiveParams;
   "thread/inject_items": CodexThreadInjectItemsParams;
   "thread/list": CodexThreadListParams;
+  "thread/turns/list": CodexThreadTurnsListParams;
   "thread/name/set": CodexThreadSetNameParams;
   "thread/read": CodexThreadReadParams;
   "thread/start": CodexThreadStartParams;
@@ -698,6 +721,7 @@ type CodexAppServerRequestResultMap = {
   "thread/fork": CodexThreadForkResponse;
   "thread/inject_items": JsonValue;
   "thread/list": CodexThreadListResponse;
+  "thread/turns/list": CodexThreadTurnsListResponse;
   "thread/name/set": JsonValue;
   "thread/read": CodexThreadReadResponse;
   "thread/resume": CodexThreadResumeResponse;

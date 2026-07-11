@@ -1246,16 +1246,25 @@ async function installGitHubResolution(params: {
 function assertInstallResolutionAllowed(
   resolution: ClawHubSkillInstallResolutionResponse,
 ): Extract<ClawHubSkillInstallResolutionResponse, { ok: true }> {
-  if (resolution.ok) {
+  if (!resolution.ok) {
+    if (resolution.reason === "ambiguous_slug") {
+      const message = resolution.message ? ` ${resolution.message}` : "";
+      throw new Error(
+        `Skill "${resolution.slug}" is ambiguous on ClawHub. Install an owner-qualified skill, for example: openclaw skills install @owner/${resolution.slug}.${message}`,
+      );
+    }
+    throw new Error(resolution.message || `Skill "${resolution.slug}" is not installable.`);
+  }
+  if (resolution.installKind !== "github") {
     return resolution;
   }
-  if (resolution.reason === "ambiguous_slug") {
-    const message = resolution.message ? ` ${resolution.message}` : "";
+  const commit = normalizeGitHubCommitSegment(resolution.github.commit)?.toLowerCase();
+  if (!commit) {
     throw new Error(
-      `Skill "${resolution.slug}" is ambiguous on ClawHub. Install an owner-qualified skill, for example: openclaw skills install @owner/${resolution.slug}.${message}`,
+      `Skill "${resolution.slug}" resolved to a mutable or invalid GitHub source ref; expected a full 40-character commit SHA.`,
     );
   }
-  throw new Error(resolution.message || `Skill "${resolution.slug}" is not installable.`);
+  return { ...resolution, github: { ...resolution.github, commit } };
 }
 
 async function ensureClawHubSkillTrustAcknowledged(

@@ -611,6 +611,34 @@ describe("session history HTTP endpoints", () => {
     });
   });
 
+  test("caps all-digit direct REST history limits that exceed safe integer range", async () => {
+    const { storePath } = await seedSession({ text: "first message" });
+    await appendVisibleAssistantMessage({
+      sessionKey: "agent:main:main",
+      text: "second message",
+      storePath,
+    });
+    await appendVisibleAssistantMessage({
+      sessionKey: "agent:main:main",
+      text: "third message",
+      storePath,
+    });
+
+    await withGatewayHarness(async (harness) => {
+      const body = await readSessionHistoryBody(harness.port, "agent:main:main", {
+        query: `?limit=${"9".repeat(100)}`,
+      });
+
+      expect(body.messages?.map((message) => message.content?.[0]?.text)).toEqual([
+        "first message",
+        "second message",
+        "third message",
+      ]);
+      expect(body.hasMore).toBe(false);
+      expect(body.nextCursor).toBeUndefined();
+    });
+  });
+
   test("streams bounded history windows over SSE", async () => {
     const { storePath } = await seedSession({ text: "first message" });
 

@@ -166,7 +166,7 @@ OpenClaw. The harness then claims that provider in `supports(...)`.
 
 The bundled Codex plugin follows this pattern:
 
-- preferred user model refs: `openai/gpt-5.5`
+- preferred user model refs: `openai/gpt-5.6-sol`
 - compatibility refs: legacy `codex/gpt-*` refs remain accepted, but new
   configs should not use them as normal provider/model refs
 - harness id: `codex`
@@ -288,7 +288,7 @@ For Codex-only embedded runs:
   },
   "agents": {
     "defaults": {
-      "model": "openai/gpt-5.5"
+      "model": "openai/gpt-5.6-sol"
     }
   }
 }
@@ -322,9 +322,9 @@ Per-agent overrides use the same model-scoped shape:
     "list": [
       {
         "id": "codex-only",
-        "model": "openai/gpt-5.5",
+        "model": "openai/gpt-5.6-sol",
         "models": {
-          "openai/gpt-5.5": {
+          "openai/gpt-5.6-sol": {
             "agentRuntime": { "id": "codex" }
           }
         }

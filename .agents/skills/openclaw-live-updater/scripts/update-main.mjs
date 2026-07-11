@@ -855,9 +855,20 @@ export function maintainMain(options, dependencies = {}) {
       };
       writeMaintenanceState(statePath, pendingState);
       try {
+        // The exact-SHA JS build above already produced dist/control-ui. Letting
+        // Mac packaging rebuild it can empty dist while the live app bundle is
+        // there, defeating the staged-swap guarantee.
         runCommand(
-          "bash",
-          ["scripts/restart-mac.sh", "--sign", "--wait", "--target-only"],
+          "env",
+          [
+            "SKIP_TSC=1",
+            "SKIP_UI_BUILD=1",
+            "bash",
+            "scripts/restart-mac.sh",
+            "--sign",
+            "--wait",
+            "--target-only",
+          ],
           update.checkout,
         );
         const macTarget = verifyMacTarget(update.checkout);

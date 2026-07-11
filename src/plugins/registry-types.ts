@@ -72,6 +72,7 @@ type SpeechProviderPlugin = import("./types.js").SpeechProviderPlugin;
 type VideoGenerationProviderPlugin = import("./types.js").VideoGenerationProviderPlugin;
 type WebFetchProviderPlugin = import("./types.js").WebFetchProviderPlugin;
 type WebSearchProviderPlugin = import("./types.js").WebSearchProviderPlugin;
+type WorkerProvider = import("./types.js").WorkerProvider;
 type UnifiedModelCatalogProviderPlugin = import("./types.js").UnifiedModelCatalogProviderPlugin;
 
 /** Agent tool factory registered by one plugin runtime. */
@@ -207,6 +208,7 @@ export type PluginWebFetchProviderRegistration =
   PluginOwnedProviderRegistration<WebFetchProviderPlugin>;
 export type PluginWebSearchProviderRegistration =
   PluginOwnedProviderRegistration<WebSearchProviderPlugin>;
+export type PluginWorkerProviderRegistration = PluginOwnedProviderRegistration<WorkerProvider>;
 export type PluginMigrationProviderRegistration =
   PluginOwnedProviderRegistration<MigrationProviderPlugin>;
 export type PluginMemoryEmbeddingProviderRegistration =
@@ -467,6 +469,7 @@ export type PluginRegistry = {
   musicGenerationProviders: PluginMusicGenerationProviderRegistration[];
   webFetchProviders: PluginWebFetchProviderRegistration[];
   webSearchProviders: PluginWebSearchProviderRegistration[];
+  workerProviders: Map<string, PluginWorkerProviderRegistration>;
   migrationProviders: PluginMigrationProviderRegistration[];
   codexAppServerExtensionFactories: PluginCodexAppServerExtensionFactoryRegistration[];
   agentToolResultMiddlewares: PluginAgentToolResultMiddlewareRegistration[];

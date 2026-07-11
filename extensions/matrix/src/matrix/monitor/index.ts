@@ -46,10 +46,7 @@ import { resolveMatrixMonitorConfig } from "./config.js";
 import { createDirectRoomTracker } from "./direct.js";
 import { registerMatrixMonitorEvents } from "./events.js";
 import { createMatrixRoomMessageHandler } from "./handler.js";
-import {
-  createMatrixInboundEventDeduper,
-  type MatrixInboundEventDeduper,
-} from "./inbound-dedupe.js";
+import { createMatrixInboundEventDeduper } from "./inbound-dedupe.js";
 import { shouldPromoteRecentInviteRoom } from "./recent-invite.js";
 import { createMatrixRoomInfoResolver } from "./room-info.js";
 import { resolveMatrixRoomConfig } from "./rooms.js";
@@ -228,7 +225,6 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   let cleanedUp = false;
   let client: MatrixClient | null = null;
   let threadBindingManager: { accountId: string; stop: () => void } | null = null;
-  let inboundDeduper: MatrixInboundEventDeduper | null = null;
   const monitorTaskRunner = createMatrixMonitorTaskRunner({
     logger,
     logVerboseMessage,
@@ -248,7 +244,6 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
         await monitorTaskRunner.waitForIdle();
       }
       threadBindingManager?.stop();
-      await inboundDeduper?.stop();
       if (client) {
         await releaseSharedClientInstance(client, mode);
       }
@@ -331,7 +326,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       accountId: auth.accountId,
     });
     setActiveMatrixClient(client, auth.accountId);
-    inboundDeduper = await createMatrixInboundEventDeduper({
+    const inboundDeduper = createMatrixInboundEventDeduper({
       auth,
       env: process.env,
     });

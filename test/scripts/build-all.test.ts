@@ -333,7 +333,7 @@ describe("resolveBuildAllSteps", () => {
   });
 
   it("skips bundled tsdown declarations for runtime-only profiles", () => {
-    for (const profile of ["gatewayWatch", "qaRuntime", "cliStartup"]) {
+    for (const profile of ["gatewayWatch", "qaRuntime", "sourcePerformance", "cliStartup"]) {
       const tsdown = resolveBuildAllSteps(profile).find((step) => step.label === "tsdown");
       if (!tsdown) {
         throw new Error(`Missing ${profile} tsdown step`);
@@ -365,7 +365,7 @@ describe("resolveBuildAllSteps", () => {
   });
 
   it("preserves startup metadata only for profiles that regenerate it", () => {
-    for (const profile of ["full", "ciArtifacts", "cliStartup"]) {
+    for (const profile of ["full", "ciArtifacts", "sourcePerformance", "cliStartup"]) {
       const tsdown = resolveBuildAllSteps(profile).find((step) => step.label === "tsdown");
       if (!tsdown) {
         throw new Error(`Missing ${profile} tsdown step`);
@@ -410,6 +410,20 @@ describe("resolveBuildAllSteps", () => {
     ]);
   });
 
+  it("uses a source performance profile with QA assets and startup metadata", () => {
+    expect(resolveBuildAllSteps("sourcePerformance").map((step) => step.label)).toEqual([
+      "plugins:assets:build",
+      "tsdown",
+      "check-cli-bootstrap-imports",
+      "plugins:assets:copy",
+      "runtime-postbuild",
+      "build-stamp",
+      "runtime-postbuild-stamp",
+      "write-cli-startup-metadata",
+      "write-cli-compat",
+    ]);
+  });
+
   it("uses a CLI startup profile without generated plugin assets", () => {
     expect(resolveBuildAllSteps("cliStartup").map((step) => step.label)).toEqual([
       "tsdown",
@@ -444,26 +458,28 @@ describe("resolveBuildAllSteps", () => {
     }
   });
 
-  it("keeps generated static plugin assets enabled for the QA runtime profile", () => {
-    const runtimePostbuild = resolveBuildAllSteps("qaRuntime").find(
-      (step) => step.label === "runtime-postbuild",
-    );
-    if (!runtimePostbuild) {
-      throw new Error("Missing qaRuntime runtime-postbuild step");
-    }
+  it("keeps generated static plugin assets enabled for QA-backed profiles", () => {
+    for (const profile of ["qaRuntime", "sourcePerformance"]) {
+      const runtimePostbuild = resolveBuildAllSteps(profile).find(
+        (step) => step.label === "runtime-postbuild",
+      );
+      if (!runtimePostbuild) {
+        throw new Error(`Missing ${profile} runtime-postbuild step`);
+      }
 
-    expect(BUILD_ALL_PROFILE_STEP_ENV.qaRuntime["runtime-postbuild"]).toBeUndefined();
-    expect(
-      resolveBuildAllStep(runtimePostbuild, {
-        env: { OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "1" },
-      }).options.env,
-    ).toMatchObject({
-      OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "1",
-    });
+      expect(BUILD_ALL_PROFILE_STEP_ENV[profile]["runtime-postbuild"]).toBeUndefined();
+      expect(
+        resolveBuildAllStep(runtimePostbuild, {
+          env: { OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "1" },
+        }).options.env,
+      ).toMatchObject({
+        OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "1",
+      });
+    }
   });
 
   it("copies generated plugin assets before runtime postbuild snapshots static outputs", () => {
-    for (const profile of ["full", "ciArtifacts", "qaRuntime"]) {
+    for (const profile of ["full", "ciArtifacts", "qaRuntime", "sourcePerformance"]) {
       const labels = resolveBuildAllSteps(profile).map((step) => step.label);
       expect(labels.indexOf("plugins:assets:copy")).toBeGreaterThan(labels.indexOf("tsdown"));
       expect(labels.indexOf("runtime-postbuild")).toBeGreaterThan(
@@ -500,7 +516,7 @@ describe("resolveBuildAllSteps", () => {
   });
 
   it("keeps ui:build out of minimal backend-only profiles", () => {
-    for (const profile of ["gatewayWatch", "qaRuntime", "cliStartup"]) {
+    for (const profile of ["gatewayWatch", "qaRuntime", "sourcePerformance", "cliStartup"]) {
       const labels = resolveBuildAllSteps(profile).map((step) => step.label);
       expect(labels).not.toContain("ui:build");
     }

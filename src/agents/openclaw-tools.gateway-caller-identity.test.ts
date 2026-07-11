@@ -23,13 +23,14 @@ vi.mock("./openclaw-plugin-tools.js", () => ({
 
 import { createOpenClawTools } from "./openclaw-tools.js";
 
-function requireTool(name: string) {
+function requireTool(name: string, overrides?: Parameters<typeof createOpenClawTools>[0]) {
   const tool = createOpenClawTools({
     agentSessionKey: "agent:main:discord:channel:123",
     disableMessageTool: true,
     pluginToolAllowlist: [name],
     requesterAgentIdOverride: "main",
     wrapBeforeToolCallHook: false,
+    ...overrides,
   }).find((candidate) => candidate.name === name);
   if (!tool?.execute) {
     throw new Error(`Expected executable tool ${name}`);
@@ -48,6 +49,29 @@ describe("createOpenClawTools Gateway caller identity", () => {
       {
         agentId: "main",
         sessionKey: "agent:main:discord:channel:123",
+      },
+    ]);
+  });
+
+  it("carries trusted turn-source routing with the agent identity", async () => {
+    mocks.observedIdentities.length = 0;
+
+    const tool = requireTool("synthetic_direct_cron_plugin", {
+      agentChannel: "discord",
+      agentTo: "channel:123",
+      agentAccountId: "work",
+      agentThreadId: "thread-7",
+    });
+    await tool.execute("tool-call-2", {});
+
+    expect(mocks.observedIdentities).toEqual([
+      {
+        agentId: "main",
+        sessionKey: "agent:main:discord:channel:123",
+        turnSourceChannel: "discord",
+        turnSourceTo: "channel:123",
+        turnSourceAccountId: "work",
+        turnSourceThreadId: "thread-7",
       },
     ]);
   });

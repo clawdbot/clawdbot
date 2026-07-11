@@ -1,7 +1,11 @@
 // Codex tests cover plugin activation plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { CodexAppInventoryCache } from "./app-inventory-cache.js";
-import { CODEX_PLUGINS_MARKETPLACE_NAME, type ResolvedCodexPluginPolicy } from "./config.js";
+import {
+  CODEX_PLUGINS_MARKETPLACE_NAME,
+  CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
+  type ResolvedCodexPluginPolicy,
+} from "./config.js";
 import {
   ensureCodexAppsSubstrateConfig,
   ensureCodexPluginActivation,
@@ -284,6 +288,27 @@ describe("Codex plugin activation", () => {
       "hooks/list",
       "config/mcpServer/reload",
     ]);
+  });
+
+  it("requires workspace-directory plugins to be activated outside OpenClaw", async () => {
+    const request = vi.fn(async () => {
+      throw new Error("workspace activation must not call app-server");
+    });
+    const result = await ensureCodexPluginActivation({
+      identity: {
+        ...identity("workspace-data@workspace-directory"),
+        marketplaceName: CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
+      },
+      request,
+    });
+
+    expectActivationResult(result, {
+      ok: false,
+      reason: "disabled",
+      installAttempted: false,
+    });
+    expect(result.diagnostics[0]?.message).toContain("installed and enabled outside OpenClaw");
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("upserts native apps substrate config without clobbering other toml", async () => {

@@ -52,6 +52,15 @@ export type CodexSessionCatalogResult = {
   hosts: CodexSessionCatalogHost[];
 };
 
+export type CodexSessionTranscriptPage = {
+  hostId: string;
+  label: string;
+  threadId: string;
+  items: import("./app-server/protocol.js").CodexThreadItem[];
+  nextCursor?: string;
+  backwardsCursor?: string;
+};
+
 export type CodexSessionCatalogParams = {
   search?: string;
   limitPerHost?: number;

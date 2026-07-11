@@ -1,16 +1,16 @@
 ---
-summary: "List non-archived native Codex sessions and branch from eligible local sessions in OpenClaw"
+summary: "Browse non-archived native Codex sessions and paginated transcripts across OpenClaw nodes"
 title: "Supervise Codex sessions"
 sidebarTitle: "Codex supervision"
 read_when:
   - You want Codex Desktop or CLI sessions to appear in OpenClaw
   - You need to branch from or archive a stored or idle local Codex session
-  - You are exposing Codex session metadata from paired nodes
+  - You are exposing Codex sessions and transcript history from paired nodes
 ---
 
 Codex supervision is an opt-in capability of the official `codex` plugin. It
 shows non-archived Codex Desktop and CLI source sessions from the Gateway
-computer and opted-in paired computers in one **Codex Sessions** page.
+computer and opted-in paired computers in the sidebar and **Codex Sessions** page.
 
 The initial release deliberately keeps ownership narrow:
 
@@ -28,7 +28,8 @@ The initial release deliberately keeps ownership narrow:
 - An active source stays visible but cannot create a branch or be archived until
   its current turn finishes. If it already has a supervised Chat, **Open Chat**
   remains available.
-- A session on a paired node stays visible as metadata only. Remote continuation
+- A session on a paired node exposes its persisted transcript through bounded,
+  cursor-paginated App Server reads. Remote continuation
   requires a future streaming node bridge; remote archive additionally requires
   a runner-ownership lease or equivalent fencing.
 - Archived sessions are not listed. A stored or idle local session can be
@@ -119,7 +120,15 @@ openclaw nodes pending
 openclaw nodes approve <requestId>
 ```
 
-Open **Codex Sessions** in the Control UI. The page lists non-archived sessions
+Non-archived Codex sessions also appear in the main Control UI sidebar, grouped
+by host. Select one to read its persisted transcript. The viewer uses the latest
+Codex `thread/turns/list` API with `itemsView: "full"` and loads at most 20 turns
+per request; **Load older transcript items** follows the opaque App Server cursor from the latest page.
+Loaded pages render in chronological order. The viewer never loads an unbounded
+`thread/read` history. A page above the 20 MiB transport safety ceiling fails
+closed instead of risking the node or Gateway connection.
+
+Open **Codex Sessions** for the fleet overview. The page lists the same sessions
 grouped by host. Search matches normalized session titles; refresh and per-host
 pagination preserve healthy hosts when another host is offline or unavailable.
 Each returned search page scans a bounded number of native pages per host
@@ -293,8 +302,10 @@ codex unarchive <thread-id>
 ## Understand paired-node limits
 
 Paired nodes expose the versioned read-only
-`codex.appServer.threads.list.v1` command. The Gateway receives normalized
-metadata, not raw App Server endpoints or transcripts. The current node invoke
+`codex.appServer.threads.list.v1` and
+`codex.appServer.thread.turns.list.v1` commands. The Gateway receives normalized
+metadata and explicitly requested bounded transcript pages, never raw App Server
+endpoints. The current node invoke
 transport is request/response only, so it cannot carry the long-lived event,
 approval, and streaming lifecycle required by the Codex harness.
 
@@ -313,18 +324,19 @@ Catalog rows may include:
 - created, updated, and activity timestamps
 - source, model provider, Codex CLI version, and Git branch
 
-The paired-node projection excludes transcript previews, turns, rollout paths,
+Catalog projection excludes transcript previews, turns, rollout paths,
 the Codex home path, Git remotes, commit SHAs, and raw App Server errors. Catalog
-access requires the `operator.write` Gateway scope because fleet aggregation
-uses the standard `node.invoke` path, even though the node command is read-only.
+access and Control UI transcript reads require the `operator.write` Gateway
+scope because fleet aggregation uses the standard `node.invoke` path, even
+though both node commands are read-only.
 
 `supervision.allowRawTranscripts` and `supervision.allowWriteControls` govern
 autonomous agent and standalone MCP tools. Both default to `false`. With
 supervision enabled, `codex_threads` removes transcript previews and turns from
 list and metadata-only read results unless raw transcripts are allowed; a
 turn-inclusive read fails closed. Every fork, rename, archive, and unarchive
-requires write controls. These options do not grant additional Control UI
-actions or bypass binding, host, status, or confirmation checks.
+requires write controls. These options do not gate authenticated Control UI
+transcript viewing and do not bypass binding, host, status, or confirmation checks.
 
 ### Compatibility tools
 

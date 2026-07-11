@@ -1473,7 +1473,33 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     });
   });
 
-  it("rejects non-curated native plugin identities", () => {
+  it("parses workspace-directory native plugin identities", () => {
+    const config = readCodexPluginConfig({
+      codexPlugins: {
+        enabled: true,
+        plugins: {
+          workspaceData: {
+            marketplaceName: "workspace-directory",
+            pluginName: "workspace-data@workspace-directory",
+            allow_destructive_actions: "ask",
+          },
+        },
+      },
+    });
+
+    expect(resolveCodexPluginsPolicy(config).pluginPolicies).toStrictEqual([
+      {
+        configKey: "workspaceData",
+        marketplaceName: "workspace-directory",
+        pluginName: "workspace-data@workspace-directory",
+        enabled: true,
+        allowDestructiveActions: true,
+        destructiveApprovalMode: "ask",
+      },
+    ]);
+  });
+
+  it("rejects unsupported native plugin identities", () => {
     const config = readCodexPluginConfig({
       codexPlugins: {
         enabled: true,
@@ -1604,6 +1630,13 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
       enabled: true,
       autoInstall: true,
       marketplaceDiscoveryTimeoutMs: 60_000,
+      liveTestTimeoutMs: 60_000,
+      toolCallTimeoutMs: 60_000,
+      healthCheckEnabled: false,
+      healthCheckIntervalMinutes: 60,
+      pluginCacheMode: "independent",
+      strictReadiness: false,
+      autoRepair: false,
       pluginName: "env-fallback-plugin",
       mcpServerName: "computer-use",
       marketplaceName: "desktop-tools",
@@ -1624,6 +1657,13 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
         enabled: true,
         autoInstall: true,
         marketplaceDiscoveryTimeoutMs: 30_000,
+        liveTestTimeoutMs: 60_000,
+        toolCallTimeoutMs: 60_000,
+        healthCheckEnabled: false,
+        healthCheckIntervalMinutes: 60,
+        pluginCacheMode: "independent",
+        strictReadiness: false,
+        autoRepair: false,
         marketplaceSource: "github:example/plugins",
       },
     );
@@ -1641,9 +1681,73 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
         {
           enabled: true,
           marketplaceDiscoveryTimeoutMs: 60_000,
+          liveTestTimeoutMs: 60_000,
+          toolCallTimeoutMs: 60_000,
+          healthCheckEnabled: false,
+          healthCheckIntervalMinutes: 60,
+          pluginCacheMode: "independent",
+          strictReadiness: false,
+          autoRepair: false,
         },
       );
     }
+  });
+
+  it("resolves Computer Use operational policy knobs", () => {
+    expectFields(
+      resolveCodexComputerUseConfig({
+        pluginConfig: {
+          computerUse: {
+            enabled: true,
+            liveTestTimeoutMs: 45_000,
+            toolCallTimeoutMs: 55_000,
+            healthCheckEnabled: true,
+            healthCheckIntervalMinutes: 120,
+            pluginCacheMode: "independent",
+            strictReadiness: true,
+            autoRepair: true,
+          },
+        },
+        env: {
+          OPENCLAW_CODEX_COMPUTER_USE_HEALTH_CHECK_ENABLED: "false",
+          OPENCLAW_CODEX_COMPUTER_USE_HEALTH_CHECK_INTERVAL_MINUTES: "240",
+          OPENCLAW_CODEX_COMPUTER_USE_STRICT_READINESS: "false",
+          OPENCLAW_CODEX_COMPUTER_USE_AUTO_REPAIR: "false",
+        },
+      }),
+      "computer use config",
+      {
+        enabled: true,
+        liveTestTimeoutMs: 45_000,
+        toolCallTimeoutMs: 55_000,
+        healthCheckEnabled: true,
+        healthCheckIntervalMinutes: 120,
+        pluginCacheMode: "independent",
+        strictReadiness: true,
+        autoRepair: true,
+      },
+    );
+
+    expectFields(
+      resolveCodexComputerUseConfig({
+        pluginConfig: { computerUse: { enabled: true } },
+        env: {
+          OPENCLAW_CODEX_COMPUTER_USE_HEALTH_CHECK_ENABLED: "1",
+          OPENCLAW_CODEX_COMPUTER_USE_HEALTH_CHECK_INTERVAL_MINUTES: "90",
+          OPENCLAW_CODEX_COMPUTER_USE_STRICT_READINESS: "true",
+          OPENCLAW_CODEX_COMPUTER_USE_AUTO_REPAIR: "true",
+          OPENCLAW_CODEX_COMPUTER_USE_PLUGIN_CACHE_MODE: "stale-copy",
+        },
+      }),
+      "computer use config",
+      {
+        healthCheckEnabled: true,
+        healthCheckIntervalMinutes: 60,
+        pluginCacheMode: "independent",
+        strictReadiness: true,
+        autoRepair: true,
+      },
+    );
   });
 
   it("allows plugin config to opt in to guardian-reviewed local execution", () => {
@@ -2831,6 +2935,10 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     expect(Object.keys(supervisionEndpointVariants[1]?.properties ?? {}).toSorted()).toEqual(
       [...CODEX_SUPERVISION_WEBSOCKET_ENDPOINT_CONFIG_KEYS].toSorted(),
     );
+    expect((pluginEntryProperties.marketplaceName as { enum: string[] }).enum).toStrictEqual([
+      "openai-curated",
+      "workspace-directory",
+    ]);
   });
 
   it("does not schema-default mode-derived policy fields", async () => {

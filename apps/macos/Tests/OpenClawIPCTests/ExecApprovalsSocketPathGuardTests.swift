@@ -170,7 +170,7 @@ struct ExecApprovalsSocketPathGuardTests {
         // old filesystem assertions here flaked on their 0755 default
         // (#104019). Creation-with-0700 is covered by the explicit-path
         // tests in this suite.
-        try await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": stateDir.path]) {
+        await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": stateDir.path]) {
             let socketPath = ExecApprovalsStore.socketPath()
             #expect(socketPath == stateDir.appendingPathComponent("exec-approvals.sock").path)
         }

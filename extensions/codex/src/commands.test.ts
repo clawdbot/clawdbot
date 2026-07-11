@@ -2330,7 +2330,10 @@ describe("codex command", () => {
       text: [
         "Computer Use: ready",
         "Plugin: computer-use (installed)",
+        "Installation: installed (ok)",
         "MCP server: computer-use (1 tools)",
+        "Exposure: available (ok)",
+        "Live test: passed (1 attempt, 60000ms)",
         "Marketplace: desktop-tools",
         "Tools: list\uff3fapps",
         "Computer Use is ready.",
@@ -2340,6 +2343,38 @@ describe("codex command", () => {
       pluginConfig: undefined,
       forceEnable: false,
     });
+  });
+
+  it("formats failed Codex Computer Use live probes as not ready", async () => {
+    const readCodexComputerUseStatus = vi.fn(async () => ({
+      ...computerUseReadyStatus(),
+      ready: false,
+      reason: "live_test_failed" as const,
+      liveTest: {
+        status: "failed" as const,
+        ok: false,
+        attempted: true,
+        attempts: 2,
+        timeoutMs: 60_000,
+        retried: true,
+        repaired: false,
+        message: "Computer Use live test failed after 2 attempts: list_apps timed out",
+        error: "list_apps timed out",
+      },
+      warnings: [
+        "Computer Use live test failed, but compatibility startup remains enabled; set computerUse.strictReadiness to true to fail closed.",
+      ],
+      message:
+        "Computer Use live test failed after 2 attempts: list_apps timed out Startup is allowed because computerUse.strictReadiness is false.",
+    }));
+
+    const result = await handleCodexCommand(createContext("computer-use status"), {
+      deps: createDeps({ readCodexComputerUseStatus }),
+    });
+
+    expectResultTextContains(result, "Computer Use: not ready");
+    expectResultTextContains(result, "Live test: failed (2 attempts, 60000ms)");
+    expectResultTextContains(result, "Warning: Computer Use live test failed");
   });
 
   it("escapes Codex Computer Use status fields before chat display", async () => {
@@ -4964,6 +4999,27 @@ function computerUseReadyStatus(): CodexComputerUseStatus {
     mcpServerName: "computer-use",
     marketplaceName: "desktop-tools",
     tools: ["list_apps"],
+    installation: {
+      status: "installed",
+      ok: true,
+      message: "Computer Use plugin is installed and enabled.",
+    },
+    exposure: {
+      status: "available",
+      ok: true,
+      message: "Computer Use MCP server computer-use exposes 1 tools.",
+    },
+    liveTest: {
+      status: "passed",
+      ok: true,
+      attempted: true,
+      attempts: 1,
+      timeoutMs: 60_000,
+      retried: false,
+      repaired: false,
+      message: "Computer Use live test passed.",
+    },
+    warnings: [],
     message: "Computer Use is ready.",
   };
 }

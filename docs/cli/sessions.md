@@ -72,7 +72,7 @@ symlinks and out-of-root paths are skipped.
   "hasMore": false,
   "activeMinutes": null,
   "sessions": [
-    { "agentId": "main", "key": "agent:main:main", "model": "openai/gpt-5.5" },
+    { "agentId": "main", "key": "agent:main:main", "model": "openai/gpt-5.6-sol" },
     { "agentId": "work", "key": "agent:work:main", "model": "anthropic/claude-sonnet-4-6" }
   ]
 }

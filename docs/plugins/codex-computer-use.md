@@ -97,7 +97,7 @@ Computer Use in and lets OpenClaw install or re-enable it before the turn:
   },
   agents: {
     defaults: {
-      model: "openai/gpt-5.5",
+      model: "openai/gpt-5.6-sol",
     },
   },
 }
@@ -208,6 +208,17 @@ If you use a nonstandard Codex app path, run `/codex computer-use install
 local marketplace file path. Use `--marketplace-path` only when you have the
 marketplace JSON file path, not the bundled marketplace root.
 
+### Shared plugin cache
+
+The default `pluginCacheMode: "independent"` leaves each Codex home and its
+plugin cache unmanaged. Set `pluginCacheMode: "shared"` to copy the bundled
+Computer Use plugin into the active Codex home's discoverable plugin cache
+before app-server startup. Shared mode preserves older cached versions because
+running Codex clients can still reference their versioned plugin directories; a
+failed replacement copy also preserves the active cache. Explicit
+`marketplaceName` or `marketplacePath` configuration disables this
+reconciliation so OpenClaw does not override that selection.
+
 ## Remote catalog limit
 
 Codex app-server can list and read remote-only catalog entries, but it does
@@ -231,6 +242,13 @@ remote install is unsupported, run install with a local source or path:
 | `enabled`                       | inferred       | Require Computer Use. Defaults to true when another Computer Use field is set. |
 | `autoInstall`                   | false          | Install or re-enable from already discovered marketplaces at turn start.       |
 | `marketplaceDiscoveryTimeoutMs` | 60000          | How long install waits for Codex app-server marketplace discovery.             |
+| `liveTestTimeoutMs`             | 60000          | Timeout for the temporary readiness thread and its cleanup requests.           |
+| `toolCallTimeoutMs`             | 60000          | Timeout for the Computer Use `list_apps` readiness tool call.                  |
+| `healthCheckEnabled`            | false          | Run periodic readiness probes while the owning app-server client is active.    |
+| `healthCheckIntervalMinutes`    | 60             | Probe cadence; accepted values are 30, 60, 120, or 240 minutes.                |
+| `pluginCacheMode`               | `independent`  | Use `shared` to refresh the Codex-home cache from the bundled desktop plugin.  |
+| `strictReadiness`               | false          | Stop startup on a failed live probe instead of continuing with a warning.      |
+| `autoRepair`                    | false          | Kill stale scoped Computer Use MCP children and retry a failed probe once.     |
 | `marketplaceSource`             | unset          | Source string passed to Codex app-server `marketplace/add`.                    |
 | `marketplacePath`               | unset          | Local Codex marketplace file path containing the plugin.                       |
 | `marketplaceName`               | unset          | Registered Codex marketplace name to select.                                   |
@@ -252,6 +270,13 @@ matching config key is unset:
 | `enabled`                       | `OPENCLAW_CODEX_COMPUTER_USE`                                  |
 | `autoInstall`                   | `OPENCLAW_CODEX_COMPUTER_USE_AUTO_INSTALL`                     |
 | `marketplaceDiscoveryTimeoutMs` | `OPENCLAW_CODEX_COMPUTER_USE_MARKETPLACE_DISCOVERY_TIMEOUT_MS` |
+| `liveTestTimeoutMs`             | `OPENCLAW_CODEX_COMPUTER_USE_LIVE_TEST_TIMEOUT_MS`             |
+| `toolCallTimeoutMs`             | `OPENCLAW_CODEX_COMPUTER_USE_TOOL_CALL_TIMEOUT_MS`             |
+| `healthCheckEnabled`            | `OPENCLAW_CODEX_COMPUTER_USE_HEALTH_CHECK_ENABLED`             |
+| `healthCheckIntervalMinutes`    | `OPENCLAW_CODEX_COMPUTER_USE_HEALTH_CHECK_INTERVAL_MINUTES`    |
+| `pluginCacheMode`               | `OPENCLAW_CODEX_COMPUTER_USE_PLUGIN_CACHE_MODE`                |
+| `strictReadiness`               | `OPENCLAW_CODEX_COMPUTER_USE_STRICT_READINESS`                 |
+| `autoRepair`                    | `OPENCLAW_CODEX_COMPUTER_USE_AUTO_REPAIR`                      |
 | `marketplaceSource`             | `OPENCLAW_CODEX_COMPUTER_USE_MARKETPLACE_SOURCE`               |
 | `marketplacePath`               | `OPENCLAW_CODEX_COMPUTER_USE_MARKETPLACE_PATH`                 |
 | `marketplaceName`               | `OPENCLAW_CODEX_COMPUTER_USE_MARKETPLACE_NAME`                 |

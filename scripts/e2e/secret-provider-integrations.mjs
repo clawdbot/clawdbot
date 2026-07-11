@@ -20,7 +20,7 @@ const FILE_TOKEN = "proof-file-token";
 const MANUAL_EXEC_TOKEN = "proof-manual-exec-token";
 const PLUGIN_EXEC_TOKEN = "proof-plugin-exec-token";
 const OPENAI_PROFILE = "openai:secretref-proof";
-const OPENAI_LIVE_PROOF_MODEL = "openai/gpt-5.5";
+const OPENAI_LIVE_PROOF_MODEL = "openai/gpt-5.6-luna";
 const MAX_SECRET_PROOF_TIMER_TIMEOUT_MS = 2_147_000_000;
 const COMMAND_TIMEOUT_MS = readPositiveTimerMs(
   process.env.OPENCLAW_SECRET_PROOF_COMMAND_MS,

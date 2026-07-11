@@ -37,6 +37,7 @@ const ROOT_SECTIONS = [
   "discovery",
   "talk",
   "gateway",
+  "cloudWorkers",
   "memory",
   "plugins",
 ] as const;

@@ -429,7 +429,7 @@ describe("resolveNpmCommandInvocation", () => {
             PATH: `${dir}${delimiter}${process.env.PATH ?? ""}`,
           },
           windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-        });
+        } as { cwd: string; env: NodeJS.ProcessEnv });
 
         expect(JSON.parse(readFileSync(outputPath, "utf8"))).toEqual([
           "view",
@@ -776,7 +776,6 @@ describe("collectReleaseTagErrors", () => {
       collectReleaseTagErrors({
         packageVersion: "2026.3.10",
         releaseTag: "v2026.3.10-1",
-        now: new Date("2026-03-10T00:00:00Z"),
       }),
     ).toStrictEqual([]);
   });
@@ -786,7 +785,6 @@ describe("collectReleaseTagErrors", () => {
       collectReleaseTagErrors({
         packageVersion: "2026.3.10-1",
         releaseTag: "v2026.3.10-1",
-        now: new Date("2026-03-10T00:00:00Z"),
       }),
     ).toStrictEqual([]);
   });
@@ -796,7 +794,6 @@ describe("collectReleaseTagErrors", () => {
       collectReleaseTagErrors({
         packageVersion: "2026.3.10-beta.1",
         releaseTag: "v2026.3.10-1",
-        now: new Date("2026-03-10T00:00:00Z"),
       }),
     ).toStrictEqual([
       "Release tag v2026.3.10-1 does not match package.json version 2026.3.10-beta.1; expected v2026.3.10-beta.1.",

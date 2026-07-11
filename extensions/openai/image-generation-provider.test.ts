@@ -1021,7 +1021,7 @@ describe("openai image generation provider", () => {
     const body = request.body as Record<string, unknown>;
     expect(request.url).toBe("https://chatgpt.com/backend-api/codex/responses");
     expect(request.timeoutMs).toBe(180_000);
-    expect(body.model).toBe("gpt-5.5");
+    expect(body.model).toBe("gpt-5.6-sol");
     expect(body.instructions).toBe("You are an image generation assistant.");
     expect(body.stream).toBe(true);
     expect(body.store).toBe(false);
@@ -1039,7 +1039,7 @@ describe("openai image generation provider", () => {
     expect(body.tool_choice).toEqual({ type: "image_generation" });
     expect(postMultipartRequestMock).not.toHaveBeenCalled();
     expect(logInfoMock).toHaveBeenCalledWith(
-      "image auth selected: provider=openai mode=oauth transport=codex-responses requestedModel=gpt-image-2 responsesModel=gpt-5.5 timeoutMs=180000",
+      "image auth selected: provider=openai mode=oauth transport=codex-responses requestedModel=gpt-image-2 responsesModel=gpt-5.6-sol timeoutMs=180000",
     );
     expect(result.images).toEqual([
       {
@@ -1356,7 +1356,7 @@ describe("openai image generation provider", () => {
     expect(authResolutionCall().store).toBe(authStore);
     expect(jsonRequestCall().url).toBe("https://chatgpt.com/backend-api/codex/responses");
     expect(logInfoMock).toHaveBeenCalledWith(
-      "image auth selected: provider=openai mode=oauth transport=codex-responses requestedModel=gpt-image-2 responsesModel=gpt-5.5 timeoutMs=180000",
+      "image auth selected: provider=openai mode=oauth transport=codex-responses requestedModel=gpt-image-2 responsesModel=gpt-5.6-sol timeoutMs=180000",
     );
     expect(result.images[0]?.buffer).toEqual(Buffer.from("codex-image"));
   });
@@ -1506,7 +1506,7 @@ describe("openai image generation provider", () => {
     });
 
     expect(logInfoMock).toHaveBeenCalledWith(
-      "image auth selected: provider=openai mode=oauth fakeignored transport=codex-responses requestedModel=gpt-image-2 forged=true next responsesModel=gpt-5.5 timeoutMs=180000",
+      "image auth selected: provider=openai mode=oauth fakeignored transport=codex-responses requestedModel=gpt-image-2 forged=true next responsesModel=gpt-5.6-sol timeoutMs=180000",
     );
   });
 
@@ -1524,7 +1524,7 @@ describe("openai image generation provider", () => {
     });
 
     expect(logInfoMock).toHaveBeenCalledWith(
-      `image auth selected: provider=openai mode=oauth transport=codex-responses requestedModel=${"a".repeat(255)}... responsesModel=gpt-5.5 timeoutMs=180000`,
+      `image auth selected: provider=openai mode=oauth transport=codex-responses requestedModel=${"a".repeat(255)}... responsesModel=gpt-5.6-sol timeoutMs=180000`,
     );
   });
 

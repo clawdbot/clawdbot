@@ -144,7 +144,7 @@ describe("OpenAI plugin manifest", () => {
   it("keeps OpenAI media-understanding manifest metadata aligned with runtime audio support", () => {
     const metadata = manifest.mediaUnderstandingProviderMetadata?.openai;
     expect(metadata?.capabilities).toEqual(["image", "audio"]);
-    expect(metadata?.defaultModels?.image).toBe("gpt-5.5");
+    expect(metadata?.defaultModels?.image).toBe("gpt-5.6-sol");
     expect(metadata?.defaultModels?.audio).toBe("gpt-4o-transcribe");
     expect(metadata?.autoPriority?.image).toBe(20);
     expect(metadata?.autoPriority?.audio).toBe(20);
