@@ -43,7 +43,7 @@ function successfulRun(name: string, id: number, updatedAt: string) {
 }
 
 function collectHostedGateEvidence(options: Parameters<typeof collectHostedGateEvidenceRaw>[0]) {
-  return collectHostedGateEvidenceRaw({ nowMs, ...options });
+  return collectHostedGateEvidenceRaw({ nowMs, pr, ...options });
 }
 
 describe("verify-pr-hosted-gates", () => {
@@ -127,6 +127,30 @@ describe("verify-pr-hosted-gates", () => {
     });
   });
 
+  it("accepts recent green evidence from an earlier head of the same PR", () => {
+    const previousSha = "8d86c44c6144f8f726a460914cddb8c9c201f119";
+    const evidence = collectHostedGateEvidence({
+      sha,
+      workflowRuns: [
+        {
+          ...successfulRun("CI", 1, "2026-06-17T10:50:00Z"),
+          head_sha: previousSha,
+        },
+        {
+          ...successfulRun("CI", 2, "2026-06-17T10:54:00Z"),
+          status: "in_progress",
+          conclusion: null,
+        },
+      ],
+    });
+
+    expect(evidence).toEqual({
+      headSha: sha,
+      evidenceHeadSha: previousSha,
+      workflows: [expect.objectContaining({ name: "CI", id: 1, headSha: previousSha })],
+    });
+  });
+
   it("requires recent evidence for scheduled gates observed on the target head", () => {
     const previousSha = "8d86c44c6144f8f726a460914cddb8c9c201f119";
     const targetArmRun = {
@@ -190,6 +214,27 @@ describe("verify-pr-hosted-gates", () => {
       ).toThrow(`Missing successful CI workflow for ${sha}`);
     },
   );
+
+  it("does not reuse green evidence from another PR", () => {
+    const previousSha = "8d86c44c6144f8f726a460914cddb8c9c201f119";
+    expect(() =>
+      collectHostedGateEvidence({
+        sha,
+        workflowRuns: [
+          {
+            ...successfulRun("CI", 1, "2026-06-17T10:50:00Z"),
+            head_sha: previousSha,
+            pull_requests: [{ number: pr + 1 }],
+          },
+          {
+            ...successfulRun("CI", 2, "2026-06-17T10:54:00Z"),
+            status: "in_progress",
+            conclusion: null,
+          },
+        ],
+      }),
+    ).toThrow(`Missing successful CI workflow for ${sha}`);
+  });
 
   it("requires the complete recent gate cohort from the recorded head", () => {
     const previousSha = "8d86c44c6144f8f726a460914cddb8c9c201f119";
@@ -292,6 +337,7 @@ describe("verify-pr-hosted-gates", () => {
     const recentUnrelatedRun = {
       ...successfulRun("CI", 4, "2026-06-17T10:50:00Z"),
       head_sha: unrelatedSha,
+      pull_requests: [{ number: pr + 1 }],
     };
     expect(() =>
       collectHostedGateEvidence({
@@ -649,7 +695,20 @@ describe("verify-pr-hosted-gates", () => {
       `repos/openclaw/openclaw/actions/runs?head_sha=${sha}&per_page=100&page=1`,
       `repos/openclaw/openclaw/actions/runs?head_sha=${previousSha}&per_page=100&page=1`,
     ]);
-    expect(HOSTED_GATE_MAX_AGE_HOURS).toBe(24);
+    expect(HOSTED_GATE_MAX_AGE_HOURS).toBe(12);
+  });
+
+  it("queries recent pull-request runs for the head branch", () => {
+    expect(
+      workflowRunQueryPaths("openclaw/openclaw", {
+        sha,
+        recentSha: "",
+        headBranch: "codex/relax hosted gates",
+      }),
+    ).toEqual([
+      `repos/openclaw/openclaw/actions/runs?head_sha=${sha}&per_page=100&page=1`,
+      "repos/openclaw/openclaw/actions/runs?branch=codex%2Frelax%20hosted%20gates&event=pull_request&per_page=100&page=1",
+    ]);
   });
 
   it("bounds workflow-run pagination to GitHub's search result limit", () => {
