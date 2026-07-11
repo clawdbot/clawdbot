@@ -79,6 +79,7 @@ run_with_timeout() {
 }
 
 resolve_package_tgz() {
+  local -a package_args
   if [ -n "$PACKAGE_TGZ" ]; then
     if [ ! -f "$PACKAGE_TGZ" ]; then
       echo "OPENCLAW_BUN_GLOBAL_SMOKE_PACKAGE_TGZ does not exist: $PACKAGE_TGZ" >&2
@@ -105,12 +106,16 @@ resolve_package_tgz() {
   PACK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-bun-pack.XXXXXX")"
 
   echo "==> Pack OpenClaw tarball"
+  package_args=(
+    --skip-build
+    --output-dir "$PACK_DIR"
+    --output-name openclaw-current.tgz
+  )
+  if [[ "${OPENCLAW_BUN_GLOBAL_SMOKE_ALLOW_UNRELEASED_CHANGELOG:-true}" == "true" ]]; then
+    package_args+=(--allow-unreleased-changelog)
+  fi
   PACKAGE_TGZ="$(
-    node scripts/package-openclaw-for-docker.mjs \
-      --allow-unreleased-changelog \
-      --skip-build \
-      --output-dir "$PACK_DIR" \
-      --output-name openclaw-current.tgz
+    node scripts/package-openclaw-for-docker.mjs "${package_args[@]}"
   )"
   if [ -z "$PACKAGE_TGZ" ] || [ ! -f "$PACKAGE_TGZ" ]; then
     echo "missing packed OpenClaw tarball" >&2

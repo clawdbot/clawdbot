@@ -76,6 +76,7 @@ describe("install smoke no-push root image transport", () => {
     });
     expect(delegated.uses).toBe("./.github/workflows/install-smoke-reusable.yml");
     expect(delegated.with).toMatchObject({
+      allow_unreleased_changelog: true,
       ref: "${{ github.sha }}",
       run_bun_global_install_smoke:
         "${{ github.event_name == 'schedule' || inputs.run_bun_global_install_smoke }}",
@@ -88,6 +89,10 @@ describe("install smoke no-push root image transport", () => {
     const workflow = readWorkflow(INSTALL_SMOKE_REUSABLE);
     expect(workflow.on?.schedule).toBeUndefined();
     expect(workflow.on?.workflow_dispatch).toBeUndefined();
+    expect(workflow.on?.workflow_call?.inputs?.allow_unreleased_changelog).toMatchObject({
+      default: false,
+      type: "boolean",
+    });
     expect(workflow.on?.workflow_call?.inputs?.root_image_transport).toBeUndefined();
     expect(workflow.permissions).toEqual({
       actions: "read",
@@ -266,6 +271,21 @@ describe("install smoke no-push root image transport", () => {
     expect(caller.with).toMatchObject({
       ref: "${{ needs.resolve_target.outputs.revision }}",
       run_bun_global_install_smoke: true,
+    });
+    expect(caller.with).not.toHaveProperty("allow_unreleased_changelog");
+  });
+
+  it("passes package changelog intent only to current-tree smoke scripts", () => {
+    const workflow = readWorkflow(INSTALL_SMOKE_REUSABLE);
+    expect(step(job(workflow, "installer_smoke"), "Run installer docker tests").env).toMatchObject({
+      OPENCLAW_INSTALL_SMOKE_ALLOW_UNRELEASED_CHANGELOG: "${{ inputs.allow_unreleased_changelog }}",
+    });
+    expect(
+      step(job(workflow, "bun_global_install_smoke"), "Run Bun global install image-provider smoke")
+        .env,
+    ).toMatchObject({
+      OPENCLAW_BUN_GLOBAL_SMOKE_ALLOW_UNRELEASED_CHANGELOG:
+        "${{ inputs.allow_unreleased_changelog }}",
     });
   });
 });

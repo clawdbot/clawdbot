@@ -3,6 +3,11 @@ name: Install Smoke (Reusable)
 on:
   workflow_call:
     inputs:
+      allow_unreleased_changelog:
+        description: Allow Unreleased changelog notes when packaging the current tree
+        required: false
+        default: false
+        type: boolean
       ref:
         description: Git ref to validate
         required: false
@@ -705,6 +710,7 @@ jobs:
 
       - name: Run installer docker tests
         env:
+          OPENCLAW_INSTALL_SMOKE_ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog }}
           OPENCLAW_INSTALL_URL: file:///tmp/openclaw-install.sh
           OPENCLAW_INSTALL_CLI_URL: file:///tmp/openclaw-install-cli.sh
           OPENCLAW_NO_ONBOARD: "1"
@@ -862,6 +868,7 @@ jobs:
 
       - name: Run Bun global install image-provider smoke
         env:
+          OPENCLAW_BUN_GLOBAL_SMOKE_ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog }}
           OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE: ${{ needs.root_dockerfile_image.outputs.image_ref }}
           OPENCLAW_BUN_GLOBAL_SMOKE_HOST_BUILD: "0"
         run: bash scripts/e2e/bun-global-install-smoke.sh

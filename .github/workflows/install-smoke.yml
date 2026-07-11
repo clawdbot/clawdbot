@@ -33,6 +33,7 @@ jobs:
       packages: read
     uses: ./.github/workflows/install-smoke-reusable.yml
     with:
+      allow_unreleased_changelog: true
       ref: ${{ github.sha }}
       run_bun_global_install_smoke: ${{ github.event_name == 'schedule' || inputs.run_bun_global_install_smoke }}
       update_baseline_version: ${{ inputs.update_baseline_version || 'latest' }}

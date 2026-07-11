@@ -425,6 +425,9 @@ export async function writeRunSummary(logDir, summary, env = process.env) {
   const file = path.join(logDir, "summary.json");
   const payload = {
     ...summary,
+    // Summary reruns do not carry failure-index commands, so preserve this exact package intent.
+    allowUnreleasedChangelog:
+      env.OPENCLAW_DOCKER_E2E_ALLOW_UNRELEASED_CHANGELOG === "true" ? true : undefined,
     packageArtifactName: env.OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME || undefined,
     finishedAt: new Date().toISOString(),
     github: {

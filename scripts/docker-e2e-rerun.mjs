@@ -140,7 +140,9 @@ function trustedReuseInputsFromCommand(command) {
 function reuseInputsFromJson(parsed) {
   const bareImage = maybeGhcrImage(parsed.images?.bare);
   const functionalImage = maybeGhcrImage(parsed.images?.functional);
+  const allowUnreleasedChangelog = parsed.allowUnreleasedChangelog === true ? "true" : undefined;
   return {
+    ...(allowUnreleasedChangelog ? { allowUnreleasedChangelog } : {}),
     ...(bareImage ? { bareImage } : {}),
     ...(functionalImage ? { functionalImage } : {}),
   };

@@ -873,6 +873,11 @@ printf 'status=%s\\n' "$status"
 
     expect(script).toContain('node "$HARNESS_ROOT/scripts/package-openclaw-for-docker.mjs"');
     expect(script).toContain("--allow-unreleased-changelog");
+    expect(script).toContain("OPENCLAW_INSTALL_SMOKE_ALLOW_UNRELEASED_CHANGELOG");
+    expect(script).toContain(
+      'if [[ "${OPENCLAW_INSTALL_SMOKE_ALLOW_UNRELEASED_CHANGELOG:-true}" == "true" ]]',
+    );
+    expect(script).toContain("package_args+=(--allow-unreleased-changelog)");
     expect(script).toContain('--source-dir "$ROOT_DIR"');
     expect(script).toContain('--pack-json "$pack_json_file"');
     expect(script).toContain("--skip-build");
@@ -1173,6 +1178,11 @@ describe("bun global install smoke", () => {
 
     expect(script).toContain("node scripts/package-openclaw-for-docker.mjs");
     expect(script).toContain("--allow-unreleased-changelog");
+    expect(script).toContain("OPENCLAW_BUN_GLOBAL_SMOKE_ALLOW_UNRELEASED_CHANGELOG");
+    expect(script).toContain(
+      'if [[ "${OPENCLAW_BUN_GLOBAL_SMOKE_ALLOW_UNRELEASED_CHANGELOG:-true}" == "true" ]]',
+    );
+    expect(script).toContain("package_args+=(--allow-unreleased-changelog)");
     expect(script).toContain("--skip-build");
     expect(script).toContain("--output-name openclaw-current.tgz");
     expect(script).not.toContain("npm pack --ignore-scripts --json --pack-destination");
@@ -1578,6 +1588,7 @@ chmod +x "$BUN_INSTALL/bin/openclaw"
       "./.github/actions/setup-node-env",
     );
     expect(step("Run installer docker tests").env).toMatchObject({
+      OPENCLAW_INSTALL_SMOKE_ALLOW_UNRELEASED_CHANGELOG: "${{ inputs.allow_unreleased_changelog }}",
       OPENCLAW_INSTALL_SMOKE_SOURCE_DIR: "${{ github.workspace }}/candidate",
     });
     expect(step("Run installer docker tests").run).toBe("bash scripts/test-install-sh-docker.sh");

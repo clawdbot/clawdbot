@@ -303,7 +303,7 @@ process.stdout.write(packageJson.version);
 prepare_update_tarball() {
   local pack_json_file
   local baseline_pack_json_file
-  local package_args
+  local -a package_args
   local package_tgz
   local packed_update_version
   pack_json_file="${UPDATE_DIR}/pack.json"
@@ -324,12 +324,14 @@ prepare_update_tarball() {
     fi
     UPDATE_EXPECT_VERSION="$(read_candidate_version)"
     package_args=(
-      --allow-unreleased-changelog
       --source-dir "$ROOT_DIR"
       --output-dir "$UPDATE_DIR"
       --pack-json "$pack_json_file"
       --skip-build
     )
+    if [[ "${OPENCLAW_INSTALL_SMOKE_ALLOW_UNRELEASED_CHANGELOG:-true}" == "true" ]]; then
+      package_args+=(--allow-unreleased-changelog)
+    fi
     package_tgz="$(
       node "$HARNESS_ROOT/scripts/package-openclaw-for-docker.mjs" "${package_args[@]}"
     )"
