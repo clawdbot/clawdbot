@@ -160,9 +160,7 @@ export function enqueueSystemEventEntry(
   // reaches a prompt. Trusted-internal producers (tagged `trusted: true`) carry
   // workspace/subagent data that may legitimately contain those markers and are
   // preserved verbatim.
-  const cleaned = (
-    options.trusted === true ? text : sanitizeInboundSystemTags(text)
-  ).trim();
+  const cleaned = (options.trusted === true ? text : sanitizeInboundSystemTags(text)).trim();
   if (!cleaned) {
     return null;
   }

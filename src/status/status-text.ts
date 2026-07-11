@@ -20,8 +20,8 @@ import {
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../agents/openai-routing.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
-import { getVolitionalCompactionCount } from "../agents/tools/request-compaction-tool.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
+import { getVolitionalCompactionCount } from "../agents/tools/request-compaction-tool.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,

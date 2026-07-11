@@ -20,11 +20,11 @@ import {
   resetSubagentRegistryForTests,
   testing as subagentRegistryTesting,
 } from "../../agents/subagent-registry.js";
-import type { SessionEntry } from "../../config/sessions.js";
 import {
   registerSubagentTraceparentHandoff,
   resetSubagentTraceparentHandoffsForTests,
 } from "../../agents/subagent-traceparent-handoff.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import {
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,

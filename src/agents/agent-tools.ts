@@ -104,11 +104,11 @@ import {
   type ToolSearchCatalogRef,
   type ToolSearchCatalogToolExecutor,
 } from "./tool-search.js";
-import type { RequestCompactionToolOpts } from "./tools/request-compaction-tool.js";
 import {
   replaceWithEffectiveCronCreatorToolAllowlist,
   type CronCreatorToolAllowlistEntry,
 } from "./tools/cron-tool.js";
+import type { RequestCompactionToolOpts } from "./tools/request-compaction-tool.js";
 
 const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);
 
