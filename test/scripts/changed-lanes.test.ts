@@ -406,6 +406,55 @@ describe("scripts/changed-lanes", () => {
     }
   });
 
+  it("includes committed and untracked added files in the changed format check", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-lanes-added-format-");
+    git(dir, ["init", "-q", "--initial-branch=main"]);
+    writeRepoFile(dir, "README.md", "initial\n");
+    git(dir, ["add", "."]);
+    git(dir, [
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "user.name=Test User",
+      "commit",
+      "-q",
+      "-m",
+      "initial",
+    ]);
+    git(dir, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    git(dir, ["switch", "-q", "-c", "feature"]);
+    writeRepoFile(dir, "src/committed.test.ts", "export const committed={value:1};\n");
+    git(dir, ["add", "src/committed.test.ts"]);
+    git(dir, [
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "user.name=Test User",
+      "commit",
+      "-q",
+      "-m",
+      "add test",
+    ]);
+    writeRepoFile(dir, "src/untracked.test.ts", "export const untracked={value:1};\n");
+    writeRepoFile(dir, "--help", "ignored\n");
+
+    const paths = listChangedPathsFromGit({ base: "origin/main", cwd: dir });
+    const plan = createChangedCheckPlan(detectChangedLanes(paths));
+
+    expect(paths).toEqual(["--help", "src/committed.test.ts", "src/untracked.test.ts"]);
+    expect(plan.commands.find((command) => command.name === "format changed files")).toEqual({
+      name: "format changed files",
+      args: [
+        "format:check",
+        "--no-error-on-unmatched-pattern",
+        "--",
+        "--help",
+        "src/committed.test.ts",
+        "src/untracked.test.ts",
+      ],
+    });
+  });
+
   it("uses the merge commit first parent instead of a stale PR payload base", () => {
     const { dir, staleBase } = createSyntheticMergeRepo("openclaw-changed-lanes-merge-");
 
@@ -1128,6 +1177,7 @@ describe("scripts/changed-lanes", () => {
       "plugin-sdk wildcard re-exports",
       "duplicate scan target coverage",
       "dependency pin guard",
+      "format changed files",
       "package patch guard",
       "test temp creation report (warning-only)",
       "typecheck core tests",
@@ -1411,6 +1461,7 @@ describe("scripts/changed-lanes", () => {
       "lint:extensions:no-plugin-sdk-wildcard-reexports",
       "dup:check:coverage",
       "deps:pins:check",
+      "format:check",
       "scripts/generate-npm-shrinkwrap.mjs",
       "deps:patches:check",
       "release-metadata:check",
@@ -1926,6 +1977,10 @@ describe("scripts/changed-lanes", () => {
       },
       { name: "duplicate scan target coverage", args: ["dup:check:coverage"] },
       { name: "dependency pin guard", args: ["deps:pins:check"] },
+      {
+        name: "format changed files",
+        args: ["format:check", "--no-error-on-unmatched-pattern", "--", "docs/ci.md", "README.md"],
+      },
       { name: "package patch guard", args: ["deps:patches:check"] },
     ]);
   });

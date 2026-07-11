@@ -287,6 +287,14 @@ export function createChangedCheckPlan(result, options = {}) {
   add("plugin-sdk wildcard re-exports", ["lint:extensions:no-plugin-sdk-wildcard-reexports"]);
   add("duplicate scan target coverage", ["dup:check:coverage"]);
   add("dependency pin guard", ["deps:pins:check"]);
+  if (result.paths.length > 0) {
+    add("format changed files", [
+      "format:check",
+      "--no-error-on-unmatched-pattern",
+      "--",
+      ...result.paths,
+    ]);
+  }
   const shrinkwrapGuardCommand = createShrinkwrapGuardCommand(result.paths);
   if (shrinkwrapGuardCommand) {
     addCommand(
