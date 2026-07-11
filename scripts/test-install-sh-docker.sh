@@ -324,6 +324,7 @@ prepare_update_tarball() {
     fi
     UPDATE_EXPECT_VERSION="$(read_candidate_version)"
     package_args=(
+      --allow-unreleased-changelog
       --source-dir "$ROOT_DIR"
       --output-dir "$UPDATE_DIR"
       --pack-json "$pack_json_file"

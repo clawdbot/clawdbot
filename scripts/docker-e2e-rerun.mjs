@@ -98,6 +98,7 @@ const TRUSTED_WORKFLOW_INPUTS = new Map([
   ["published_upgrade_survivor_baseline", "publishedUpgradeSurvivorBaseline"],
   ["published_upgrade_survivor_baselines", "publishedUpgradeSurvivorBaselines"],
   ["published_upgrade_survivor_scenarios", "publishedUpgradeSurvivorScenarios"],
+  ["allow_unreleased_changelog", "allowUnreleasedChangelog"],
 ]);
 
 const REUSE_INPUT_KEYS = [
@@ -106,6 +107,7 @@ const REUSE_INPUT_KEYS = [
   "publishedUpgradeSurvivorBaseline",
   "publishedUpgradeSurvivorBaselines",
   "publishedUpgradeSurvivorScenarios",
+  "allowUnreleasedChangelog",
 ];
 
 const WORKFLOW_INPUT_RE = /(?:^|\s)-f\s+([a-z0-9_]+)=('([^']*)'|[^\s]+)/gu;
@@ -122,8 +124,12 @@ function trustedReuseInputsFromCommand(command) {
     if (!target || !value) {
       continue;
     }
-    const normalized =
-      target === "bareImage" || target === "functionalImage" ? maybeGhcrImage(value) : value;
+    let normalized = value;
+    if (target === "bareImage" || target === "functionalImage") {
+      normalized = maybeGhcrImage(value);
+    } else if (target === "allowUnreleasedChangelog" && value !== "true") {
+      normalized = "";
+    }
     if (normalized) {
       inputs[target] = normalized;
     }
@@ -234,6 +240,9 @@ function ghWorkflowCommand(lanes, ref, workflow, reuseInputs = {}) {
   }
   if (reuseInputs.bareImage || reuseInputs.functionalImage) {
     fields.push("-f", "shared_image_policy=existing-only");
+  }
+  if (reuseInputs.allowUnreleasedChangelog === "true") {
+    fields.push("-f", "allow_unreleased_changelog=true");
   }
   if (reuseInputs.publishedUpgradeSurvivorBaseline) {
     fields.push(

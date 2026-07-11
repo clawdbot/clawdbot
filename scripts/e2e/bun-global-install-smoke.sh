@@ -107,6 +107,7 @@ resolve_package_tgz() {
   echo "==> Pack OpenClaw tarball"
   PACKAGE_TGZ="$(
     node scripts/package-openclaw-for-docker.mjs \
+      --allow-unreleased-changelog \
       --skip-build \
       --output-dir "$PACK_DIR" \
       --output-name openclaw-current.tgz

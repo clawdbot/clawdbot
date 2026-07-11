@@ -315,6 +315,7 @@ docker_e2e_prepare_package_tgz() {
   local pack_status=0
   package_tgz="$(
     node "$ROOT_DIR/scripts/package-openclaw-for-docker.mjs" \
+      --allow-unreleased-changelog \
       --output-dir "$pack_dir" \
       --output-name openclaw-current.tgz
   )" || pack_status="$?"

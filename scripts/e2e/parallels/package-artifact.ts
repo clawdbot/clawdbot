@@ -178,6 +178,7 @@ export async function packOpenClaw(input: {
       "node",
       [
         "scripts/package-openclaw-for-docker.mjs",
+        "--allow-unreleased-changelog",
         "--skip-build",
         "--source-dir",
         repoRoot,

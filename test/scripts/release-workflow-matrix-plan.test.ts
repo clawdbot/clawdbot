@@ -132,6 +132,24 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
       required: false,
       type: "boolean",
     });
+    expect(definition.on.workflow_dispatch.inputs.allow_unreleased_changelog).toEqual(
+      definition.on.workflow_call.inputs.allow_unreleased_changelog,
+    );
+    expect(definition.on.workflow_call.inputs.allow_unreleased_changelog).toMatchObject({
+      default: false,
+      required: false,
+      type: "boolean",
+    });
+    expect(definition.env.OPENCLAW_DOCKER_E2E_ALLOW_UNRELEASED_CHANGELOG).toBe(
+      "${{ inputs.allow_unreleased_changelog }}",
+    );
+    const packageStep = definition.jobs.prepare_docker_e2e_image.steps.find(
+      (step) => step.name === "Pack OpenClaw package for Docker E2E",
+    );
+    expect(packageStep.env.ALLOW_UNRELEASED_CHANGELOG).toBe(
+      "${{ inputs.allow_unreleased_changelog }}",
+    );
+    expect(packageStep.run).toContain("package_args+=(--allow-unreleased-changelog)");
   });
 
   it.each(PROFILE_EXPECTATIONS)(

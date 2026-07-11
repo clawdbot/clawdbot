@@ -119,6 +119,11 @@ on:
         required: false
         default: false
         type: boolean
+      allow_unreleased_changelog:
+        description: Allow current-tree QA packaging to use Unreleased notes when no exact version section exists
+        required: false
+        default: false
+        type: boolean
   workflow_call:
     inputs:
       advisory:
@@ -128,6 +133,11 @@ on:
         type: boolean
       live_advisory:
         description: Treat only live-provider suite failures as advisory for the caller; repo and Docker E2E stay blocking
+        required: false
+        default: false
+        type: boolean
+      allow_unreleased_changelog:
+        description: Allow current-tree QA packaging to use Unreleased notes when no exact version section exists
         required: false
         default: false
         type: boolean
@@ -378,6 +388,7 @@ permissions:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.15.0"
+  OPENCLAW_DOCKER_E2E_ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog }}
 
 jobs:
   validate_selected_ref:
@@ -1906,13 +1917,21 @@ jobs:
 
       - name: Pack OpenClaw package for Docker E2E
         if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_name == '' && inputs.package_artifact_run_id == ''
+        env:
+          ALLOW_UNRELEASED_CHANGELOG: ${{ inputs.allow_unreleased_changelog }}
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p .artifacts/docker-e2e-package
-          node scripts/package-openclaw-for-docker.mjs \
-            --output-dir .artifacts/docker-e2e-package \
+          package_args=(
+            --output-dir .artifacts/docker-e2e-package
             --output-name openclaw-current.tgz
+          )
+          # Only current-tree QA callers opt in; release and package-candidate callers stay strict.
+          if [[ "$ALLOW_UNRELEASED_CHANGELOG" == "true" ]]; then
+            package_args+=(--allow-unreleased-changelog)
+          fi
+          node scripts/package-openclaw-for-docker.mjs "${package_args[@]}"
 
       - name: Validate OpenClaw Docker E2E package
         id: package
