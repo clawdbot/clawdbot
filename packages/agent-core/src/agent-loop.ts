@@ -319,6 +319,9 @@ function observeRepeatedToolError(params: {
     return undefined;
   }
   const primary = failures[0];
+  if (!primary) {
+    throw new Error("Expected at least one repeated tool error failure.");
+  }
   const argumentSummarySource =
     failures.length === 1
       ? primary.normalizedArgs
