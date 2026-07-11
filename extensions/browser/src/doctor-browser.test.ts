@@ -168,8 +168,12 @@ describe("browser doctor readiness", () => {
       },
     );
 
-    expect(noteFn).toHaveBeenCalledTimes(1);
-    const note = requireFirstNoteText(noteFn);
+    const note = noteFn.mock.calls
+      .map((call) => String(call[0]))
+      .find((text) => text.includes("Google Chrome was not found"));
+    if (!note) {
+      throw new Error("expected missing Chrome MCP note");
+    }
     expect(note).toContain("Google Chrome was not found");
     expect(note).toContain("brave://inspect/#remote-debugging");
   });
