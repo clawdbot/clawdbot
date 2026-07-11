@@ -1175,12 +1175,9 @@ function shouldSkipActiveMemoryForHarnessSession(params: {
       sessionKey,
       readConsistency: "latest",
     });
-    // A missing reserved key must not synthesize work, while unlocked rows are
-    // grandfathered user sessions from before the namespace was introduced.
-    return (
-      entry?.modelSelectionLocked === true ||
-      (entry === undefined && isAgentHarnessSessionKey(sessionKey))
-    );
+    // Reserved harness sessions own their model/runtime boundary even when a
+    // durable row already exists; active-memory must not inject a sidecar model.
+    return entry?.modelSelectionLocked === true || isAgentHarnessSessionKey(sessionKey);
   } catch {
     // Recall is optional. If durable ownership cannot be checked, do not risk
     // crossing a harness/model boundary with an independently selected model.

@@ -141,6 +141,7 @@ import {
   resolveCodexModelBackedReviewerPolicyContext,
   resolveOpenClawExecPolicyForCodexAppServer,
   shouldAutoApproveCodexAppServerApprovals,
+  withMcpElicitationsApprovalPolicy,
   type CodexAppServerRuntimeOptions,
 } from "./config.js";
 import {
@@ -1750,7 +1751,13 @@ export async function runCodexAppServerAttempt(
       stream: "codex_app_server.lifecycle",
       data: { phase: "startup" },
     });
-    const attemptAppServer = withCodexAppServerFastModeServiceTier(appServer, runtimeParams);
+    const baseAttemptAppServer = withCodexAppServerFastModeServiceTier(appServer, runtimeParams);
+    const attemptAppServer = computerUseConfig.enabled
+      ? {
+          ...baseAttemptAppServer,
+          approvalPolicy: withMcpElicitationsApprovalPolicy(baseAttemptAppServer.approvalPolicy),
+        }
+      : baseAttemptAppServer;
     pluginAppServer = attemptAppServer;
     const startupResult = await startCodexAttemptThread({
       attemptClientFactory,

@@ -1158,7 +1158,7 @@ describe("CLI attempt execution", () => {
       tmpDir,
       { filterExternalAuthProfiles: false, syncExternalCli: false },
     );
-    expect(() =>
+    await expect(
       runAgentAttempt({
         providerOverride: "google",
         originalProvider: "google",
@@ -1198,7 +1198,7 @@ describe("CLI attempt execution", () => {
         storePath,
         sessionHasHistory: false,
       }),
-    ).toThrow(/cannot use auth profile "vercel-ai-gateway:default"/);
+    ).rejects.toThrow(/cannot use auth profile "vercel-ai-gateway:default"/);
 
     expect(runCliAgentMock).not.toHaveBeenCalled();
   });

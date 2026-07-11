@@ -15,6 +15,7 @@ import {
 import {
   resolveCodexAppServerRuntimeOptions,
   resolveCodexComputerUseConfig,
+  withMcpElicitationsApprovalPolicy,
   type CodexComputerUseConfig,
   type ResolvedCodexComputerUseConfig,
 } from "./config.js";
@@ -564,7 +565,7 @@ export async function runCodexComputerUseLiveTest(params: {
           input: [],
           developerInstructions: COMPUTER_USE_LIVE_TEST_THREAD_NAME,
           sandbox: "danger-full-access",
-          approvalPolicy: "never",
+          approvalPolicy: withMcpElicitationsApprovalPolicy("never"),
           ephemeral: true,
         },
         {
