@@ -3,6 +3,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { loggingState } from "../logging/state.js";
 import { registerCommandsCli } from "./catalog-cli.js";
 
+const callNodeDiagnosticsGatewayCliMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./nodes-cli/rpc.js", () => ({
+  callNodeDiagnosticsGatewayCli: callNodeDiagnosticsGatewayCliMock,
+}));
+
 const loadPluginCliDescriptorEntriesMock = vi.hoisted(() =>
   vi.fn<typeof import("../plugins/cli-registry-loader.js").loadPluginCliDescriptorEntries>(
     async () => [],
@@ -45,6 +51,7 @@ async function captureStdout(run: () => Promise<void> | void): Promise<string> {
 
 describe("tools commands cli", () => {
   afterEach(() => {
+    callNodeDiagnosticsGatewayCliMock.mockReset();
     loadPluginCliDescriptorEntriesMock.mockReset();
     loadPluginCliDescriptorEntriesMock.mockResolvedValue([]);
     loggingState.forceConsoleToStderr = false;
@@ -135,6 +142,73 @@ describe("tools commands cli", () => {
 
     expect(parsed.found).toBe(true);
     expect(parsed.runtimeCommands).toHaveLength(1);
+  });
+
+  it("includes commands from one connected paired node when requested", async () => {
+    callNodeDiagnosticsGatewayCliMock.mockResolvedValue({
+      ts: 42,
+      nodeId: "node-1",
+      displayName: "Desk",
+      connected: true,
+      commands: ["system.run"],
+    });
+
+    const output = await captureStdout(async () => {
+      await createProgram().parseAsync([
+        "node",
+        "openclaw",
+        "tools",
+        "commands",
+        "list",
+        "--json",
+        "--node",
+        "node-1",
+      ]);
+    });
+    const parsed = JSON.parse(output) as {
+      counts: { nodeCommands: number };
+      cli: {
+        nodeCommandScope: string;
+        nodeCommands: Array<{ command: string; discoveryMode: string }>;
+      };
+    };
+
+    expect(callNodeDiagnosticsGatewayCliMock).toHaveBeenCalledWith(
+      "node.describe",
+      expect.objectContaining({ json: true }),
+      { nodeId: "node-1" },
+    );
+    expect(parsed.counts.nodeCommands).toBe(1);
+    expect(parsed.cli.nodeCommandScope).toBe("live-gateway-query");
+    expect(parsed.cli.nodeCommands[0]).toMatchObject({
+      command: "system.run",
+      discoveryMode: "runtime-node-query",
+    });
+  });
+
+  it("fails without JSON output when the selected node is disconnected", async () => {
+    callNodeDiagnosticsGatewayCliMock.mockResolvedValue({
+      nodeId: "node-1",
+      connected: false,
+      commands: ["system.run"],
+    });
+
+    const output = await captureStdout(async () => {
+      await expect(
+        createProgram().parseAsync([
+          "node",
+          "openclaw",
+          "tools",
+          "commands",
+          "list",
+          "--json",
+          "--node",
+          "node-1",
+        ]),
+      ).rejects.toThrow("not connected");
+    });
+
+    expect(output).toBe("");
   });
 
   it("loads plugin descriptors only when requested and keeps JSON clean", async () => {

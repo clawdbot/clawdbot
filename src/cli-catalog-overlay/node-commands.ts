@@ -43,6 +43,8 @@ export type CliCatalogNodeCommand = {
   readonly sourceKind: CliCatalogNodeCommandSourceKind;
   readonly sourceId: string;
   readonly discoveryMode: CliCatalogNodeCommandDiscoveryMode;
+  readonly observedAtMs?: number;
+  readonly metadataCompleteness?: "identifier-only" | "enriched";
   readonly visibility: readonly CliCatalogVisibility[];
 };
 

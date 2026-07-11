@@ -84,6 +84,7 @@ describe("command inventory list", () => {
     const list = buildCatalogList({ nodeCommands: sampleNodeCommands });
 
     expect(list.counts.nodeCommands).toBe(1);
+    expect(list.collection.nodeCommands).toBe("caller-supplied");
     expect(list.cli.nodeCommands[0]).toMatchObject({
       id: "node:demo-filesystem:filesystem.read",
       command: "filesystem.read",
@@ -93,6 +94,29 @@ describe("command inventory list", () => {
     });
   });
 
+  it("reports live Gateway node command collection at both inventory levels", () => {
+    const list = buildCatalogList({
+      nodeCommands: [
+        {
+          ...sampleNodeCommands[0]!,
+          id: "node:live-node:device.info",
+          command: "device.info",
+          title: "device.info",
+          nodeId: "live-node",
+          sourceKind: "node-runtime",
+          sourceId: "live-node:device.info",
+          discoveryMode: "runtime-node-query",
+          metadataCompleteness: "identifier-only",
+          visibility: ["audit", "operator"],
+        },
+      ],
+    });
+
+    expect(list.counts.nodeCommands).toBe(1);
+    expect(list.collection.nodeCommands).toBe("live-gateway-query");
+    expect(list.cli.nodeCommandScope).toBe("live-gateway-query");
+  });
+
   it("renders a Markdown command inventory", () => {
     const markdown = renderCatalogListMarkdown();
 
@@ -100,7 +124,7 @@ describe("command inventory list", () => {
     expect(markdown).toContain("- CLI descriptors:");
     expect(markdown).toContain("- Command routes:");
     expect(markdown).toContain("- Runtime command scope: current-invocation-registered-tree");
-    expect(markdown).toContain("- Supplied node commands: 0");
+    expect(markdown).toContain("- Node commands: 0");
     expect(markdown).toContain("- Node command scope: caller-supplied");
     expect(markdown).toContain(
       "| `gateway-status` | `unknown` | `unknown` | unknown | `gateway status` |",

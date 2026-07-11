@@ -62,10 +62,20 @@ type CliCatalogListRoutedOperation = {
 };
 
 type CliCatalogRuntimeCommandScope = "current-invocation-registered-tree";
-type CliCatalogNodeCommandScope = "caller-supplied";
+type CliCatalogNodeCommandScope = "caller-supplied" | "live-gateway-query" | "mixed";
 
 const RUNTIME_COMMAND_SCOPE: CliCatalogRuntimeCommandScope = "current-invocation-registered-tree";
-const NODE_COMMAND_SCOPE: CliCatalogNodeCommandScope = "caller-supplied";
+function resolveNodeCommandScope(
+  commands: readonly CliCatalogNodeCommand[],
+): CliCatalogNodeCommandScope {
+  const liveCount = commands.filter(
+    (command) => command.discoveryMode === "runtime-node-query",
+  ).length;
+  if (liveCount === 0) {
+    return "caller-supplied";
+  }
+  return liveCount === commands.length ? "live-gateway-query" : "mixed";
+}
 
 export type CliCatalogList = {
   readonly schemaVersion: 1;
@@ -83,7 +93,7 @@ export type CliCatalogList = {
     readonly commandRoutes: "complete";
     readonly runtimeCommands: "collected" | "not-requested";
     readonly pluginCommands: "collected" | "not-requested";
-    readonly nodeCommands: "caller-supplied" | "not-requested";
+    readonly nodeCommands: CliCatalogNodeCommandScope | "not-requested";
   };
   readonly cli: {
     readonly descriptors: readonly CliCatalogListDescriptor[];
@@ -199,6 +209,7 @@ export function buildCatalogList(
   const runtimeCommands = params.runtimeCommands ?? [];
   const pluginCommands = params.pluginCommands ?? [];
   const nodeCommands = buildNodeCommandCatalog(params.nodeCommands);
+  const nodeCommandScope = resolveNodeCommandScope(nodeCommands);
   return {
     schemaVersion: 1,
     generatedFrom: "command-inventory",
@@ -215,14 +226,14 @@ export function buildCatalogList(
       commandRoutes: "complete",
       runtimeCommands: params.runtimeCommands === undefined ? "not-requested" : "collected",
       pluginCommands: params.pluginCommands === undefined ? "not-requested" : "collected",
-      nodeCommands: params.nodeCommands === undefined ? "not-requested" : "caller-supplied",
+      nodeCommands: params.nodeCommands === undefined ? "not-requested" : nodeCommandScope,
     },
     cli: {
       descriptors,
       commandRoutes,
       routedOperations,
       runtimeCommandScope: RUNTIME_COMMAND_SCOPE,
-      nodeCommandScope: NODE_COMMAND_SCOPE,
+      nodeCommandScope,
       runtimeCommands,
       pluginCommands,
       nodeCommands,
@@ -251,7 +262,7 @@ export function renderCatalogListMarkdown(
     `- Runtime commands: ${list.counts.runtimeCommands}`,
     `- Runtime command scope: ${list.cli.runtimeCommandScope}`,
     `- Plugin descriptor commands: ${list.counts.pluginCommands}`,
-    `- Supplied node commands: ${list.counts.nodeCommands}`,
+    `- Node commands: ${list.counts.nodeCommands}`,
     `- Node command scope: ${list.cli.nodeCommandScope}`,
     "",
     "## Routed operations",
