@@ -281,6 +281,40 @@ describe("openrouter provider hooks", () => {
     expect(contribution?.dynamicSuffix).toContain("Final Fusion model: google/gemini-3.5-flash.");
   });
 
+  it("keeps bounded Fusion model IDs on valid UTF-16 boundaries", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const boundaryModelId = `${"a".repeat(255)}😀tail`;
+    const contribution = provider.resolveSystemPromptContribution?.({
+      provider: "openrouter",
+      modelId: "openrouter/fusion",
+      promptMode: "full",
+      config: {
+        agents: {
+          defaults: {
+            models: {
+              "openrouter/fusion": {
+                params: {
+                  extraBody: {
+                    plugins: [
+                      {
+                        id: "fusion",
+                        analysis_models: [boundaryModelId],
+                        model: boundaryModelId,
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    } as never);
+
+    expect(contribution?.dynamicSuffix).toContain(`Analysis models: ${"a".repeat(255)}.`);
+    expect(contribution?.dynamicSuffix).toContain(`Final Fusion model: ${"a".repeat(255)}.`);
+  });
+
   it("describes Fusion config from the canonical OpenRouter model key", async () => {
     const provider = await registerSingleProviderPlugin(openrouterPlugin);
     const contribution = provider.resolveSystemPromptContribution?.({

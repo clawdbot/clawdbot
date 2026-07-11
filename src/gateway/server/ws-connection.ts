@@ -426,7 +426,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
 
     const isExpectedLocalAppStartupAbort = (code: number) =>
       openedDuringStartup &&
-      code === 1006 &&
+      (code === 1001 || code === 1006) &&
       lastHandshakePhase === "ws_upgrade_started" &&
       !hasReceivedPreauthFrame &&
       lastFrameType === undefined &&

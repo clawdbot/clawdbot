@@ -408,7 +408,11 @@ export async function summarizeInStages(params: {
   }
 
   if (partialSummaries.length === 1) {
-    return partialSummaries[0];
+    const summary = partialSummaries.at(0);
+    if (summary === undefined) {
+      throw new Error("Compaction summary plan produced no summary");
+    }
+    return summary;
   }
 
   // Capture once so timestamps are strictly monotonic across
@@ -417,7 +421,10 @@ export async function summarizeInStages(params: {
   const summaryMessages: AgentMessage[] = partialSummaries.map((summary, index) => {
     // serializeConversation preserves content but not timestamps, so chronology
     // must be explicit in the text consumed by the merge model.
-    const chunk = plan.chunks[index];
+    const chunk = plan.chunks.at(index);
+    if (!chunk) {
+      throw new Error(`Compaction summary plan is missing chunk ${index}`);
+    }
     const timeRange = extractChunkTimeRange(chunk);
     const label =
       index === 0

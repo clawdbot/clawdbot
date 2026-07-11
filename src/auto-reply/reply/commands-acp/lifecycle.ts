@@ -775,6 +775,7 @@ async function runAcpSteer(params: {
   await acpManager.runTurn({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
+    provenance: "agent",
     text: params.instruction,
     mode: "steer",
     requestId: params.requestId,

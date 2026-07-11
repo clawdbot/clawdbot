@@ -324,9 +324,12 @@ function capPendingBuffer(buffer: string[], pendingCharsInput: number, cap: numb
   }
   if (buffer.length && pendingChars > cap) {
     const overflow = pendingChars - cap;
-    const previousLength = buffer[0].length;
-    buffer[0] = sliceUtf16Safe(buffer[0], overflow);
-    pendingChars -= previousLength - buffer[0].length;
+    const firstChunk = buffer.at(0);
+    if (firstChunk !== undefined) {
+      const trimmedChunk = sliceUtf16Safe(firstChunk, overflow);
+      buffer[0] = trimmedChunk;
+      pendingChars -= firstChunk.length - trimmedChunk.length;
+    }
   }
   return pendingChars;
 }

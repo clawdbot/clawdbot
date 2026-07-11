@@ -288,11 +288,14 @@ function shouldCloseSmartQuotedValueAt(
 }
 
 function decodeSmartQuotedJsonStringEscapes(value: string): string {
-  return value.replace(/\\(?:(["\\/bfnrt])|u([0-9a-fA-F]{4}))/g, (_match, escaped, hex) =>
-    typeof hex === "string"
-      ? String.fromCharCode(Number.parseInt(hex, 16))
-      : TOOLCALL_REPAIR_JSON_STRING_ESCAPES[escaped as string],
-  );
+  return value.replace(/\\(?:(["\\/bfnrt])|u([0-9a-fA-F]{4}))/g, (match, escaped, hex) => {
+    if (typeof hex === "string") {
+      return String.fromCharCode(Number.parseInt(hex, 16));
+    }
+    return typeof escaped === "string"
+      ? (TOOLCALL_REPAIR_JSON_STRING_ESCAPES[escaped] ?? match)
+      : match;
+  });
 }
 
 function readSmartQuotedValue(

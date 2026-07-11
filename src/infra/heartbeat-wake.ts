@@ -39,6 +39,7 @@ export type HeartbeatWakeSource =
   | "background-task"
   | "background-task-blocked"
   | "acp-spawn"
+  | "session-state"
   | "cli-watchdog"
   | "restart-sentinel"
   | "retry"

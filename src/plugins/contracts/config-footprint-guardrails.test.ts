@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../../config/bundled-channel-config-metadata.generated.js";
 import { computeBaseConfigSchemaResponse } from "../../config/schema-base.js";
+import { listGitTrackedFiles } from "../../test-utils/repo-files.js";
 
 const SRC_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const REPO_ROOT = resolve(SRC_ROOT, "..");
@@ -211,5 +212,36 @@ describe("config footprint guardrails", () => {
     expect(legacySource).toContain("Compatibility surface for bundled channel schemas");
     expect(legacySource).toContain("openclaw/plugin-sdk/bundled-channel-config-schema");
     expect(legacySource).toContain('export * from "./bundled-channel-config-schema.js";');
+    // Non-canonical facades are re-export shells over the canonical
+    // channel-config-schema module; only bundled provider schemas bypass it.
+    const primitivesSource = readSource("src/plugin-sdk/channel-config-primitives.ts");
+    expect(primitivesSource).toContain('from "./channel-config-schema.js";');
+    expect(primitivesSource).not.toContain("../channels/");
+    expect(primitivesSource).not.toContain("../config/");
+    expect(bundledSource).toContain('from "./channel-config-schema.js";');
+    expect(bundledSource).not.toContain("../channels/");
+  });
+
+  it("keeps internal src imports off the non-canonical channel config schema facades", () => {
+    // channel-config-schema is the canonical internal module; the primitives,
+    // bundled, and legacy shells stay export-compatible for plugins only.
+    const allowedShellImporters = new Set([
+      // The deprecated alias shell re-exports the bundled facade by design.
+      "src/plugin-sdk/channel-config-schema-legacy.ts",
+      // This guardrail file embeds facade specifiers in shell-shape assertions.
+      "src/plugins/contracts/config-footprint-guardrails.test.ts",
+    ]);
+    const facadeImportPattern =
+      /\bfrom\s*["'][^"']*(?:channel-config-primitives|bundled-channel-config-schema|channel-config-schema-legacy)(?:\.js)?["']/u;
+    const files = listGitTrackedFiles({ repoRoot: REPO_ROOT, pathspecs: "src" }) ?? [];
+
+    const offenders = files.filter((file) => {
+      if (!(file.endsWith(".ts") || file.endsWith(".tsx")) || allowedShellImporters.has(file)) {
+        return false;
+      }
+      return facadeImportPattern.test(readFileSync(resolve(REPO_ROOT, file), "utf8"));
+    });
+
+    expect(offenders).toStrictEqual([]);
   });
 });

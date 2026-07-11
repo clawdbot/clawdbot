@@ -31,6 +31,7 @@ describe("AcpSessionManager runtime handles", () => {
 
     const manager = new AcpSessionManager();
     await manager.runTurn({
+      provenance: "system",
       cfg: baseCfg,
       sessionKey: "agent:codex:acp:session-1",
       text: "first",
@@ -38,6 +39,7 @@ describe("AcpSessionManager runtime handles", () => {
       requestId: "r1",
     });
     await manager.runTurn({
+      provenance: "system",
       cfg: baseCfg,
       sessionKey: "agent:codex:acp:session-1",
       text: "second",
@@ -81,6 +83,7 @@ describe("AcpSessionManager runtime handles", () => {
 
     const manager = new AcpSessionManager();
     await manager.runTurn({
+      provenance: "system",
       cfg: allowlistCfg,
       sessionKey: "agent:codex:acp:session-1",
       text: "first",
@@ -88,6 +91,7 @@ describe("AcpSessionManager runtime handles", () => {
       requestId: "r1",
     });
     await manager.runTurn({
+      provenance: "system",
       cfg: denyCfg,
       sessionKey: "agent:codex:acp:session-1",
       text: "second",
@@ -129,6 +133,7 @@ describe("AcpSessionManager runtime handles", () => {
 
     const manager = new AcpSessionManager();
     await manager.runTurn({
+      provenance: "system",
       cfg: baseCfg,
       sessionKey: "agent:codex:acp:session-1",
       text: "first",
@@ -136,6 +141,7 @@ describe("AcpSessionManager runtime handles", () => {
       requestId: "r1",
     });
     await manager.runTurn({
+      provenance: "system",
       cfg: baseCfg,
       sessionKey: "agent:codex:acp:session-1",
       text: "second",
@@ -190,6 +196,7 @@ describe("AcpSessionManager runtime handles", () => {
 
     const manager = new AcpSessionManager();
     await manager.runTurn({
+      provenance: "system",
       cfg: baseCfg,
       sessionKey: "agent:codex:acp:session-1",
       text: "first",
@@ -210,6 +217,7 @@ describe("AcpSessionManager runtime handles", () => {
     });
 
     await manager.runTurn({
+      provenance: "system",
       cfg: baseCfg,
       sessionKey: "agent:codex:acp:session-1",
       text: "second",
@@ -235,6 +243,7 @@ describe("AcpSessionManager runtime handles", () => {
 
     const managerA = new AcpSessionManager();
     await managerA.runTurn({
+      provenance: "system",
       cfg: baseCfg,
       sessionKey: "agent:codex:acp:session-1",
       text: "before restart",
@@ -243,6 +252,7 @@ describe("AcpSessionManager runtime handles", () => {
     });
     const managerB = new AcpSessionManager();
     await managerB.runTurn({
+      provenance: "system",
       cfg: baseCfg,
       sessionKey: "agent:codex:acp:session-1",
       text: "after restart",
@@ -280,6 +290,7 @@ describe("AcpSessionManager runtime handles", () => {
 
     const manager = new AcpSessionManager();
     await manager.runTurn({
+      provenance: "system",
       cfg: baseCfg,
       sessionKey,
       text: "after restart",
@@ -323,6 +334,7 @@ describe("AcpSessionManager runtime handles", () => {
 
     const manager = new AcpSessionManager();
     await manager.runTurn({
+      provenance: "system",
       cfg: baseCfg,
       sessionKey,
       text: "after restart",
@@ -361,6 +373,7 @@ describe("AcpSessionManager runtime handles", () => {
 
     const manager = new AcpSessionManager();
     await manager.runTurn({
+      provenance: "system",
       cfg: baseCfg,
       sessionKey,
       text: "after restart",
@@ -397,6 +410,7 @@ describe("AcpSessionManager runtime handles", () => {
 
     const manager = new AcpSessionManager();
     await manager.runTurn({
+      provenance: "system",
       cfg: baseCfg,
       sessionKey,
       text: "after restart",
@@ -433,6 +447,7 @@ describe("AcpSessionManager runtime handles", () => {
 
     const manager = new AcpSessionManager();
     await manager.runTurn({
+      provenance: "system",
       cfg: baseCfg,
       sessionKey,
       text: "after restart",
@@ -474,6 +489,7 @@ describe("AcpSessionManager runtime handles", () => {
 
     const manager = new AcpSessionManager();
     await manager.runTurn({
+      provenance: "system",
       cfg: baseCfg,
       sessionKey,
       text: "after restart",
@@ -562,6 +578,7 @@ describe("AcpSessionManager runtime handles", () => {
 
     const manager = new AcpSessionManager();
     await manager.runTurn({
+      provenance: "system",
       cfg: baseCfg,
       sessionKey,
       text: "after restart",

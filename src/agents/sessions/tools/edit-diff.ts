@@ -125,7 +125,11 @@ function getReplacementLineRange(lines: LineSpan[], replacement: TextReplacement
   }
 
   let endLine = startLine;
-  while (endLine < lines.length && lines[endLine].end < replacementEnd) {
+  while (endLine < lines.length) {
+    const line = lines.at(endLine);
+    if (!line || line.end >= replacementEnd) {
+      break;
+    }
     endLine++;
   }
   if (endLine >= lines.length) {
@@ -136,8 +140,7 @@ function getReplacementLineRange(lines: LineSpan[], replacement: TextReplacement
 
 function applyReplacements(content: string, replacements: TextReplacement[], offset = 0): string {
   let result = content;
-  for (let i = replacements.length - 1; i >= 0; i--) {
-    const replacement = replacements[i];
+  for (const replacement of replacements.toReversed()) {
     const matchIndex = replacement.matchIndex - offset;
     result =
       result.slice(0, matchIndex) +
@@ -185,8 +188,13 @@ function applyReplacementsPreservingUnchangedLines(
   let result = "";
   for (const group of groups) {
     result += originalLines.slice(originalLineIndex, group.startLine).join("");
-    const groupStartOffset = baseLines[group.startLine].start;
-    const groupEndOffset = baseLines[group.endLine - 1].end;
+    const firstLine = baseLines.at(group.startLine);
+    const lastLine = baseLines.at(group.endLine - 1);
+    if (!firstLine || !lastLine) {
+      throw new Error("Replacement group is outside the base content.");
+    }
+    const groupStartOffset = firstLine.start;
+    const groupEndOffset = lastLine.end;
     result += applyReplacements(
       baseContent.slice(groupStartOffset, groupEndOffset),
       group.replacements,
@@ -274,8 +282,8 @@ function truncateCandidateText(text: string, maxChars: number): string {
   }
   const cut =
     maxChars > 0 &&
-    /[\uD800-\uDBFF]/.test(text[maxChars - 1]) &&
-    /[\uDC00-\uDFFF]/.test(text[maxChars])
+    /[\uD800-\uDBFF]/.test(text.charAt(maxChars - 1)) &&
+    /[\uDC00-\uDFFF]/.test(text.charAt(maxChars))
       ? maxChars - 1
       : maxChars;
   return text.slice(0, cut);
@@ -319,7 +327,7 @@ function describeIndentation(line: string): string {
 function firstDifferenceIndex(left: string, right: string): number {
   const sharedLength = Math.min(left.length, right.length);
   for (let index = 0; index < sharedLength; index++) {
-    if (left[index] !== right[index]) {
+    if (left.charAt(index) !== right.charAt(index)) {
       return index;
     }
   }
@@ -461,8 +469,8 @@ export function applyEditsToNormalizedContent(
     newText: normalizeToLF(edit.newText),
   }));
 
-  for (let i = 0; i < normalizedEdits.length; i++) {
-    if (normalizedEdits[i].oldText.length === 0) {
+  for (const [i, edit] of normalizedEdits.entries()) {
+    if (edit.oldText.length === 0) {
       throw getEmptyOldTextError(path, i, normalizedEdits.length);
     }
   }
@@ -476,8 +484,7 @@ export function applyEditsToNormalizedContent(
     : normalizedContent;
 
   const matchedEdits: MatchedEdit[] = [];
-  for (let i = 0; i < normalizedEdits.length; i++) {
-    const edit = normalizedEdits[i];
+  for (const [i, edit] of normalizedEdits.entries()) {
     const matchResult = fuzzyFindText(replacementBaseContent, edit.oldText);
     if (!matchResult.found) {
       throw getNotFoundError(path, i, normalizedEdits.length, normalizedContent, edit.oldText);
@@ -498,8 +505,11 @@ export function applyEditsToNormalizedContent(
 
   matchedEdits.sort((a, b) => a.matchIndex - b.matchIndex);
   for (let i = 1; i < matchedEdits.length; i++) {
-    const previous = matchedEdits[i - 1];
-    const current = matchedEdits[i];
+    const previous = matchedEdits.at(i - 1);
+    const current = matchedEdits.at(i);
+    if (!previous || !current) {
+      continue;
+    }
     if (previous.matchIndex + previous.matchLength > current.matchIndex) {
       throw new Error(
         `edits[${previous.editIndex}] and edits[${current.editIndex}] overlap in ${path}. Merge them into one edit or target disjoint regions.`,
@@ -558,8 +568,7 @@ export function generateDiffString(
   let lastWasChange = false;
   let firstChangedLine: number | undefined;
 
-  for (let i = 0; i < parts.length; i++) {
-    const part = parts[i];
+  for (const [i, part] of parts.entries()) {
     const raw = part.value.split("\n");
     if (raw[raw.length - 1] === "") {
       raw.pop();
@@ -587,7 +596,8 @@ export function generateDiffString(
       lastWasChange = true;
     } else {
       // Context lines - only show a few before/after changes
-      const nextPartIsChange = i < parts.length - 1 && (parts[i + 1].added || parts[i + 1].removed);
+      const nextPart = parts.at(i + 1);
+      const nextPartIsChange = Boolean(nextPart?.added || nextPart?.removed);
       const hasLeadingChange = lastWasChange;
       const hasTrailingChange = nextPartIsChange;
 

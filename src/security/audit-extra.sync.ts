@@ -5,14 +5,11 @@ import {
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { pickSandboxToolPolicy } from "../agents/sandbox-tool-policy.js";
+import { resolveConfiguredToolPolicies } from "../agents/agent-tools.policy.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { isDangerousNetworkMode, normalizeNetworkMode } from "../agents/sandbox/network-mode.js";
-import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
-import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
 import { getBlockedBindReason } from "../agents/sandbox/validate-sandbox-security.js";
 import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
-import { resolveToolProfilePolicy } from "../agents/tool-policy.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -25,6 +22,7 @@ import {
   resolveNodeCommandAllowlist,
 } from "../gateway/node-command-policy.js";
 import { collectAuditModelRefs } from "./audit-model-refs.js";
+import { GATEWAY_CONTROL_PLANE_TOOLS } from "./dangerous-tools.js";
 
 /**
  * Synchronous security audit collector functions.
@@ -279,36 +277,6 @@ function listKnownNodeCommands(cfg: OpenClawConfig): Set<string> {
   return out;
 }
 
-function resolveToolPolicies(params: {
-  cfg: OpenClawConfig;
-  agentTools?: AgentToolsConfig;
-  sandboxMode?: "off" | "non-main" | "all";
-  agentId?: string | null;
-}): SandboxToolPolicy[] {
-  const policies: SandboxToolPolicy[] = [];
-  const profile = params.agentTools?.profile ?? params.cfg.tools?.profile;
-  const profilePolicy = resolveToolProfilePolicy(profile);
-  if (profilePolicy) {
-    policies.push(profilePolicy);
-  }
-
-  const globalPolicy = pickSandboxToolPolicy(params.cfg.tools ?? undefined);
-  if (globalPolicy) {
-    policies.push(globalPolicy);
-  }
-
-  const agentPolicy = pickSandboxToolPolicy(params.agentTools);
-  if (agentPolicy) {
-    policies.push(agentPolicy);
-  }
-
-  if (params.sandboxMode === "all") {
-    policies.push(resolveSandboxToolPolicyForAgent(params.cfg, params.agentId ?? undefined));
-  }
-
-  return policies;
-}
-
 function looksLikeNodeCommandPattern(value: string): boolean {
   if (!value) {
     return false;
@@ -500,15 +468,14 @@ function listPotentialMultiUserSignals(cfg: OpenClawConfig): string[] {
   return Array.from(out);
 }
 
-function collectRiskyToolExposureContexts(cfg: OpenClawConfig): {
-  riskyContexts: string[];
-  hasRuntimeRisk: boolean;
-} {
-  const contexts: Array<{
-    label: string;
-    agentId?: string;
-    tools?: AgentToolsConfig;
-  }> = [{ label: "agents.defaults" }];
+type AuditAgentToolContext = {
+  label: string;
+  agentId?: string;
+  tools?: AgentToolsConfig;
+};
+
+function listAuditAgentToolContexts(cfg: OpenClawConfig): AuditAgentToolContext[] {
+  const contexts: AuditAgentToolContext[] = [{ label: "agents.defaults" }];
   for (const agent of cfg.agents?.list ?? []) {
     if (!agent || typeof agent !== "object" || typeof agent.id !== "string") {
       continue;
@@ -519,12 +486,18 @@ function collectRiskyToolExposureContexts(cfg: OpenClawConfig): {
       tools: agent.tools,
     });
   }
+  return contexts;
+}
 
+function collectRiskyToolExposureContexts(cfg: OpenClawConfig): {
+  riskyContexts: string[];
+  hasRuntimeRisk: boolean;
+} {
   const riskyContexts: string[] = [];
   let hasRuntimeRisk = false;
-  for (const context of contexts) {
+  for (const context of listAuditAgentToolContexts(cfg)) {
     const sandboxMode = resolveSandboxConfigForAgent(cfg, context.agentId).mode;
-    const policies = resolveToolPolicies({
+    const policies = resolveConfiguredToolPolicies({
       cfg,
       agentTools: context.tools,
       sandboxMode,
@@ -553,6 +526,30 @@ function collectRiskyToolExposureContexts(cfg: OpenClawConfig): {
   }
 
   return { riskyContexts, hasRuntimeRisk };
+}
+
+function collectControlPlaneToolExposureContexts(cfg: OpenClawConfig): string[] {
+  const exposedContexts: string[] = [];
+  for (const context of listAuditAgentToolContexts(cfg)) {
+    const sandboxMode = resolveSandboxConfigForAgent(cfg, context.agentId).mode;
+    const policies = resolveConfiguredToolPolicies({
+      cfg,
+      agentTools: context.tools,
+      sandboxMode,
+      agentId: context.agentId ?? null,
+    });
+    const controlPlaneTools = GATEWAY_CONTROL_PLANE_TOOLS.filter((tool) =>
+      isToolAllowedByPolicies(tool, policies),
+    );
+    if (controlPlaneTools.length === 0) {
+      continue;
+    }
+    const profile = context.tools?.profile ?? cfg.tools?.profile ?? "none";
+    exposedContexts.push(
+      `${context.label} (profile=${profile}; controlPlane=[${controlPlaneTools.join(", ")}])`,
+    );
+  }
+  return exposedContexts;
 }
 
 // --------------------------------------------------------------------------
@@ -1205,6 +1202,21 @@ export function collectExposureMatrixFindings(cfg: OpenClawConfig): SecurityAudi
         "Prompt injection in open conversations can trigger command/file actions in these contexts.",
       remediation:
         'For open groups or DMs, prefer tools.profile="messaging" (or deny group:runtime/group:fs), set tools.fs.workspaceOnly=true, and use agents.defaults.sandbox.mode="all" for exposed agents.',
+    });
+  }
+
+  const controlPlaneContexts = collectControlPlaneToolExposureContexts(cfg);
+  if (controlPlaneContexts.length > 0) {
+    findings.push({
+      checkId: "security.exposure.open_groups_with_control_plane_tools",
+      severity: "critical",
+      title: "Open group/DM policy with gateway/cron control-plane tools exposed",
+      detail:
+        `Found inbound policy="open" at:\n${openInboundPolicies.map((p) => `- ${p}`).join("\n")}\n` +
+        `Control-plane tool exposure contexts:\n${controlPlaneContexts.map((line) => `- ${line}`).join("\n")}\n` +
+        "Prompt injection in open conversations can trigger persistent gateway config changes or scheduled automation.",
+      remediation:
+        'For open groups or DMs, deny control-plane tools (`gateway`, `cron`) and prefer tools.profile="messaging". Tighten dmPolicy/groupPolicy to pairing or allowlist when possible.',
     });
   }
 

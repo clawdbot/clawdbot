@@ -2,6 +2,7 @@
 // message/poll path while preserving media policy and transcript mirrors.
 import type { AgentToolResult } from "../../agents/runtime/index.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import type { ChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import type { ConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
@@ -57,6 +58,8 @@ export type OutboundSendContext = {
   mediaAccess?: OutboundMediaAccess;
   mediaReadFile?: OutboundMediaReadFile;
   accountId?: string | null;
+  /** Known destination conversation kind prepared by the caller. */
+  conversationType?: ChatType;
   sessionId?: string;
   inboundEventKind?: InboundEventKind;
   gateway?: OutboundGatewayContext;
@@ -134,6 +137,7 @@ async function sendCoreMessage(params: {
     asVoice: params.asVoice,
     channel: params.ctx.channel || undefined,
     accountId: params.ctx.accountId ?? undefined,
+    conversationType: params.ctx.conversationType,
     replyToId: params.replyToId,
     threadId: params.threadId,
     gifPlayback: params.gifPlayback,

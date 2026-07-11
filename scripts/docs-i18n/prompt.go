@@ -62,11 +62,11 @@ func translationPrompt(srcLang, tgtLang string, glossary []GlossaryEntry) string
 	switch {
 	case strings.EqualFold(tgtLang, "zh-CN"):
 		// Keep this prompt as stable as possible; it has lots of tuning baked into the wording.
-		return strings.TrimSpace(fmt.Sprintf(zhCNPromptTemplate, srcLabel, tgtLabel, thirdPartyUILabelRule, glossaryBlock))
+		return strings.TrimSpace(fmt.Sprintf(zhCNPromptTemplate, srcLabel, tgtLabel, documentationQualityRules, glossaryBlock))
 	case strings.EqualFold(tgtLang, "ja-JP"):
-		return strings.TrimSpace(fmt.Sprintf(jaJPPromptTemplate, srcLabel, tgtLabel, thirdPartyUILabelRule, glossaryBlock))
+		return strings.TrimSpace(fmt.Sprintf(jaJPPromptTemplate, srcLabel, tgtLabel, documentationQualityRules, glossaryBlock))
 	default:
-		return strings.TrimSpace(fmt.Sprintf(genericPromptTemplate, srcLabel, tgtLabel, localePromptRules(tgtLang), thirdPartyUILabelRule, glossaryBlock))
+		return strings.TrimSpace(fmt.Sprintf(genericPromptTemplate, srcLabel, tgtLabel, localePromptRules(tgtLang), documentationQualityRules, glossaryBlock))
 	}
 }
 
@@ -79,7 +79,11 @@ func localePromptRules(tgtLang string) string {
 	}
 }
 
-const thirdPartyUILabelRule = `- Preserve exact third-party UI text, including button names, menu items, setting names, form field labels, and navigation paths such as “Review + create” -> “Create”. Translate the surrounding explanation, but do not translate, apply glossary substitutions to, or invent localized third-party UI labels. This exception overrides the general instruction to translate headings and labels and the mandatory glossary rule below.`
+const documentationQualityRules = `- Preserve exact third-party UI labels only when the source clearly uses them as literal interface text: buttons, menu items, settings, form fields, option values, or arrow-separated navigation paths. Indicators include instructions to click, open, select, toggle, copy, or configure an item, plus tables that name fields in a third-party interface. Keep each protected label's spelling, capitalization, punctuation, and Markdown emphasis exactly.
+- Translate the surrounding actions and explanations. Do not preserve ordinary prose merely because it is bold, quoted, title-cased, or inside a table. Translate normal headings, emphasis, descriptions, conceptual labels, and ordinary table headers.
+- Label precedence, highest to lowest: literal third-party UI text; locale-specific fixed terminology stated in this prompt; supplied glossary mappings; normal translation. A higher rule overrides every lower rule and the general instructions to translate all prose, headings, and labels. OpenClaw-owned UI and documentation labels use the highest applicable fixed term or glossary mapping; otherwise translate them normally.
+- Preserve technical meaning over literal wording. Keep authentication, authorization, credentials, tokens, passwords, secrets, identities, and accounts distinct unless the source explicitly equates them. Preserve negation, conditions, scope, singular/plural meaning, and requirement strength such as “must”, “required”, “only”, and “never”.
+- Use one established target-language term per concept within a page. Avoid unnecessary English except for protected literals, code, URLs, and product names.`
 
 const zhCNPromptTemplate = `You are a translation function, not a chat assistant.
 Translate from %s to %s.
@@ -102,7 +106,7 @@ Rules:
 - Use fluent, idiomatic technical Chinese; avoid slang or jokes.
 - Use neutral documentation tone; prefer “你/你的”, avoid “您/您的”.
 %s
-- Glossary terms are mandatory. When a source term matches a glossary entry, use
+- Glossary terms are mandatory under the label precedence rules above. When a source term matches a glossary entry, use
   the glossary target exactly, including headings, link labels, and short
   UI-style labels.
 - If a glossary target is identical to the source text, preserve that term in
@@ -140,7 +144,7 @@ Rules:
 - Use fluent, idiomatic technical Japanese; avoid slang or jokes.
 - Use neutral documentation tone; avoid overly formal honorifics (e.g., avoid “〜でございます”).
 %s
-- Glossary terms are mandatory. When a source term matches a glossary entry, use
+- Glossary terms are mandatory under the label precedence rules above. When a source term matches a glossary entry, use
   the glossary target exactly, including headings, link labels, and short
   UI-style labels.
 - If a glossary target is identical to the source text, preserve that term in
@@ -178,7 +182,7 @@ Rules:
 - Use neutral documentation tone.
 %s
 %s
-- Glossary terms are mandatory. When a source term matches a glossary entry, use
+- Glossary terms are mandatory under the label precedence rules above. When a source term matches a glossary entry, use
   the glossary target exactly, including headings, link labels, and short
   UI-style labels.
 - If a glossary target is identical to the source text, preserve that term in
@@ -197,7 +201,7 @@ func buildGlossaryPrompt(glossary []GlossaryEntry) string {
 		return ""
 	}
 	var lines []string
-	lines = append(lines, "Required terminology (use exactly when the source term matches):")
+	lines = append(lines, "Required terminology (use exactly when the source term matches, except for higher-precedence literal third-party UI text and locale-specific fixed terminology):")
 	for _, entry := range glossary {
 		if entry.Source == "" || entry.Target == "" {
 			continue

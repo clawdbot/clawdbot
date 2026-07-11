@@ -118,7 +118,8 @@ function resolveOpenClawMcpEnvTemplates(value: unknown, env?: Record<string, str
   }
   if (typeof value === "string") {
     return value.replace(OPENCLAW_MCP_ENV_TEMPLATE_PATTERN, (match, name: string) => {
-      return Object.hasOwn(env, name) ? env[name] : match;
+      const replacement = env[name];
+      return Object.hasOwn(env, name) && replacement !== undefined ? replacement : match;
     });
   }
   if (Array.isArray(value)) {

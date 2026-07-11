@@ -42,6 +42,7 @@ describe("OpenAI provider Codex transport hooks", () => {
   it("stores device-code logins as OpenAI OAuth profiles", async () => {
     const provider = buildOpenAIProvider();
     const deviceCodeMethod = provider.auth?.find((method) => method.id === "device-code");
+    const controller = new AbortController();
     loginOpenAICodexDeviceCodeMock.mockResolvedValueOnce({
       access: "access-token",
       refresh: "refresh-token",
@@ -58,7 +59,12 @@ describe("OpenAI provider Codex transport hooks", () => {
       runtime: { log: vi.fn(), error: vi.fn() },
       config: {},
       oauth: {},
+      signal: controller.signal,
     } as never);
+
+    expect(loginOpenAICodexDeviceCodeMock).toHaveBeenCalledWith(
+      expect.objectContaining({ signal: controller.signal }),
+    );
 
     expect(result?.profiles?.[0]).toMatchObject({
       profileId: "openai:default",

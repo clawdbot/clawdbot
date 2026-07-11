@@ -38,6 +38,9 @@ const GENERIC_CORE_PLUGIN_OWNER_NAME_PATTERN =
 const PACKAGE_CONTRACT_SCAN_TIMEOUT_MS = 240_000;
 const DEPRECATED_EXTENSION_SDK_SPECIFIERS = new Set([
   "openclaw/plugin-sdk",
+  // Bundled code uses the canonical channel-config-schema subpath; the
+  // primitives/legacy shells stay export-compatible for third parties only.
+  "openclaw/plugin-sdk/channel-config-primitives",
   "openclaw/plugin-sdk/channel-config-schema-legacy",
   "openclaw/plugin-sdk/compat",
   "openclaw/plugin-sdk/testing",

@@ -95,13 +95,18 @@ describe("scripts/pr wrappers", () => {
     expect(dirtyLinkedResult.stderr).toContain("scripts/pr wrapper files have uncommitted changes");
     expect(git(linked, ["restore", "scripts/pr-lib/merge.sh"]).status).toBe(0);
 
+    // A dirty canonical checkout no longer blocks a linked worktree whose
+    // committed wrapper matches the origin/main trust anchor; without that
+    // anchor it must still refuse.
     writeFileSync(join(repo, "scripts", "pr-lib", "merge.sh"), "# dirty canonical\n");
     const dirtyResult = spawnSync(join(linked, "scripts", "pr"), ["ls"], {
       cwd: linked,
       encoding: "utf8",
     });
     expect(dirtyResult.status).toBe(1);
-    expect(dirtyResult.stderr).toContain("scripts/pr wrapper files have uncommitted changes");
+    expect(dirtyResult.stderr).toContain(
+      "scripts/pr implementation differs between this worktree and the canonical checkout",
+    );
     expect(git(repo, ["restore", "scripts/pr-lib/merge.sh"]).status).toBe(0);
 
     writeFileSync(join(linked, "scripts", "pr-lib", "merge.sh"), "# linked\n");
@@ -116,7 +121,61 @@ describe("scripts/pr wrappers", () => {
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(
-      "scripts/pr implementation differs between this worktree and the canonical checkout.",
+      "scripts/pr implementation differs between this worktree and the canonical checkout",
+    );
+  });
+
+  it("runs the local wrapper when it matches origin/main and the canonical checkout is parked elsewhere", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-pr-wrapper-anchor-"));
+    const repo = join(dir, "repo");
+    const linked = join(dir, "linked");
+    mkdirSync(join(repo, "scripts", "lib"), { recursive: true });
+    mkdirSync(join(repo, "scripts", "pr-lib"), { recursive: true });
+    writeFileSync(join(repo, "scripts", "pr"), readScript("scripts/pr"));
+    writeFileSync(join(repo, "scripts", "lib", "plain-gh.sh"), "# canonical\n");
+    writeFileSync(join(repo, "scripts", "pr-lib", "merge.sh"), "# canonical\n");
+    chmodSync(join(repo, "scripts", "pr"), 0o755);
+
+    const git = (cwd: string, args: string[]) =>
+      spawnSync("git", args, { cwd, encoding: "utf8", stdio: "pipe" });
+    expect(git(repo, ["init", "-b", "main"]).status).toBe(0);
+    expect(git(repo, ["config", "user.name", "OpenClaw Test"]).status).toBe(0);
+    expect(git(repo, ["config", "user.email", "test@example.invalid"]).status).toBe(0);
+    expect(git(repo, ["add", "scripts"]).status).toBe(0);
+    expect(git(repo, ["commit", "-m", "test: canonical wrapper"]).status).toBe(0);
+    // The linked worktree keeps main's wrapper; origin/main anchors trust.
+    expect(git(repo, ["update-ref", "refs/remotes/origin/main", "main"]).status).toBe(0);
+    expect(git(repo, ["worktree", "add", "-b", "feature", linked]).status).toBe(0);
+
+    // Park the canonical checkout on a release-style branch with a different
+    // wrapper revision, the exact contention that used to block landings.
+    expect(git(repo, ["switch", "-c", "release/test-train"]).status).toBe(0);
+    writeFileSync(join(repo, "scripts", "pr-lib", "merge.sh"), "# release drift\n");
+    expect(git(repo, ["add", "scripts/pr-lib/merge.sh"]).status).toBe(0);
+    expect(git(repo, ["commit", "-m", "test: release drift"]).status).toBe(0);
+
+    const result = spawnSync(join(linked, "scripts", "pr"), ["ls"], {
+      cwd: linked,
+      encoding: "utf8",
+    });
+
+    expect(result.stderr).not.toContain("Refusing to silently substitute");
+    expect(result.stderr).not.toContain("scripts/pr implementation differs");
+    expect(result.stderr).not.toContain("uncommitted changes");
+
+    // A local branch literally named "origin/main" must not spoof the trust
+    // anchor: only the remote-tracking ref counts.
+    expect(git(repo, ["update-ref", "-d", "refs/remotes/origin/main"]).status).toBe(0);
+    expect(git(repo, ["update-ref", "refs/heads/origin/main", "main"]).status).toBe(0);
+    const spoofed = spawnSync(join(linked, "scripts", "pr"), ["ls"], {
+      cwd: linked,
+      encoding: "utf8",
+    });
+    rmSync(dir, { recursive: true, force: true });
+
+    expect(spoofed.status).toBe(1);
+    expect(spoofed.stderr).toContain(
+      "scripts/pr implementation differs between this worktree and the canonical checkout",
     );
   });
 

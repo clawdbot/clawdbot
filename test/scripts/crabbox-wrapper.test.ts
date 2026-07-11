@@ -70,6 +70,10 @@ function writeFakeCrabbox(binDir: string, helpText: string): string {
       `  printf "%s" ${shellSingleQuote(helpText)}`,
       "  exit 0",
       "fi",
+      'if [ "$1" = "run" ] && [ -n "${OPENCLAW_FAKE_CRABBOX_RUN_STATUS:-}" ] && [ "$OPENCLAW_FAKE_CRABBOX_RUN_STATUS" != "0" ]; then',
+      '  printf "%s\\n" "fake run failure" >&2',
+      '  exit "$OPENCLAW_FAKE_CRABBOX_RUN_STATUS"',
+      "fi",
       'if [ "$1" = "config" ] && [ "$2" = "show" ]; then',
       '  for arg in "$@"; do',
       '    if [ "$arg" = "--json" ]; then',
@@ -201,6 +205,10 @@ function writeFakeCrabbox(binDir: string, helpText: string): string {
     'if (args[0] === "run" && args[1] === "--help") {',
     `  process.stdout.write(${JSON.stringify(helpText)});`,
     "  process.exit(0);",
+    "}",
+    'if (args[0] === "run" && Number.parseInt(process.env.OPENCLAW_FAKE_CRABBOX_RUN_STATUS || "0", 10) !== 0) {',
+    "  process.stderr.write('fake run failure\\n');",
+    "  process.exit(Number.parseInt(process.env.OPENCLAW_FAKE_CRABBOX_RUN_STATUS, 10));",
     "}",
     `require(${JSON.stringify(helperPath)});`,
   ].join("\n");
@@ -650,6 +658,30 @@ describe("scripts/crabbox-wrapper", () => {
 
     expect(result.status).toBe(0);
     expect(parseFakeCrabboxOutput(result).args).toContain("local-container");
+  });
+
+  it("hints at lease expiry when a reused-lease run fails fast", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "local-container", "--id", "tbx_expired_fixture", "--", "echo ok"],
+      { env: { OPENCLAW_FAKE_CRABBOX_RUN_STATUS: "1" } },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "run --id tbx_expired_fixture failed fast; reusable leases expire after their idle timeout",
+    );
+  });
+
+  it("keeps failed runs without a reused lease free of the expiry hint", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "local-container", "--", "echo ok"],
+      { env: { OPENCLAW_FAKE_CRABBOX_RUN_STATUS: "1" } },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).not.toContain("failed fast; reusable leases expire");
   });
 
   it("requires a current Crabbox binary for Blacksmith Testbox runs", () => {

@@ -9,7 +9,7 @@ export {
   readReactionParams,
   readStringParam,
 } from "openclaw/plugin-sdk/channel-actions";
-export { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-primitives";
+export { buildChannelConfigSchema, GoogleChatConfigSchema } from "./config-api.js";
 export type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
@@ -25,7 +25,6 @@ export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-o
 export { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
 export { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 export type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-export { GoogleChatConfigSchema } from "openclaw/plugin-sdk/bundled-channel-config-schema";
 export {
   GROUP_POLICY_BLOCKED_LABEL,
   resolveAllowlistProviderRuntimeGroupPolicy,

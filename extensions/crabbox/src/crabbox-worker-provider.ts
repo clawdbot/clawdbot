@@ -10,6 +10,7 @@ import {
   type WorkerProvider,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { runCommandWithTimeout, type SpawnResult } from "openclaw/plugin-sdk/process-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 export const CRABBOX_WORKER_PROVIDER_ID = "crabbox";
 const CRABBOX_KEY_REF_PROVIDER = "crabbox";
@@ -264,7 +265,8 @@ function commandDetail(result: SpawnResult): string {
   if (!raw) {
     return "";
   }
-  const redacted = redactSensitiveText(raw).replace(/\s+/gu, " ").slice(0, MAX_ERROR_DETAIL_CHARS);
+  const compressed = redactSensitiveText(raw).replace(/\s+/gu, " ");
+  const redacted = truncateUtf16Safe(compressed, MAX_ERROR_DETAIL_CHARS);
   return redacted ? `: ${redacted}` : "";
 }
 

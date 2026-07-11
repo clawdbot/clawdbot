@@ -127,7 +127,10 @@ async function resolveLiveCacheProviderPool(params: {
     } else {
       params.regressions.push(warning);
     }
-    params.summary[error.provider].skipped = true;
+    const providerSummary = params.summary[error.provider];
+    if (providerSummary) {
+      providerSummary.skipped = true;
+    }
     logLiveCache(warning);
     return undefined;
   }
@@ -762,6 +765,11 @@ export async function runLiveCacheRegression(): Promise<LiveCacheRegressionResul
     anthropic: {},
     openai: {},
   };
+  const openaiSummary = summary.openai;
+  const anthropicSummary = summary.anthropic;
+  if (!openaiSummary || !anthropicSummary) {
+    throw new Error("Live cache summary providers were not initialized");
+  }
   const openai = await resolveLiveCacheProviderPool({
     config: {
       provider: "openai",
@@ -801,7 +809,7 @@ export async function runLiveCacheRegression(): Promise<LiveCacheRegressionResul
       logLiveCache(
         `openai ${lane} best ${formatUsage(openaiResult.best?.usage ?? {})} rate=${openaiResult.best?.hitRate.toFixed(3) ?? "0.000"}`,
       );
-      summary.openai[lane] = {
+      openaiSummary[lane] = {
         best: openaiResult.best?.usage,
         hitRate: openaiResult.best?.hitRate,
         attempts: openaiAttempt.attempts,
@@ -809,11 +817,11 @@ export async function runLiveCacheRegression(): Promise<LiveCacheRegressionResul
       };
       appendBaselineFindings({ regressions, warnings }, openaiAttempt.findings);
     } else {
-      summary.openai[lane] = { skipped: true };
+      openaiSummary[lane] = { skipped: true };
     }
 
     if (!anthropic) {
-      summary.anthropic[lane] = { skipped: true };
+      anthropicSummary[lane] = { skipped: true };
       continue;
     }
     const { attempt: anthropicAttempt } = await runAnthropicCacheLane({
@@ -825,7 +833,7 @@ export async function runLiveCacheRegression(): Promise<LiveCacheRegressionResul
       warnings,
     });
     if (!anthropicAttempt) {
-      summary.anthropic[lane] = { skipped: true };
+      anthropicSummary[lane] = { skipped: true };
       continue;
     }
     const anthropicResult = anthropicAttempt.result;
@@ -835,7 +843,7 @@ export async function runLiveCacheRegression(): Promise<LiveCacheRegressionResul
     logLiveCache(
       `anthropic ${lane} best ${formatUsage(anthropicResult.best?.usage ?? {})} rate=${anthropicResult.best?.hitRate.toFixed(3) ?? "0.000"}`,
     );
-    summary.anthropic[lane] = {
+    anthropicSummary[lane] = {
       best: anthropicResult.best?.usage,
       hitRate: anthropicResult.best?.hitRate,
       attempts: anthropicAttempt.attempts,
@@ -853,7 +861,7 @@ export async function runLiveCacheRegression(): Promise<LiveCacheRegressionResul
     : undefined;
   if (disabled) {
     logLiveCache(`anthropic disabled ${formatUsage(disabled.disabled?.usage ?? {})}`);
-    summary.anthropic.disabled = {
+    anthropicSummary.disabled = {
       disabled: disabled.disabled?.usage,
     };
     assertAgainstBaseline({
@@ -864,7 +872,7 @@ export async function runLiveCacheRegression(): Promise<LiveCacheRegressionResul
       warnings,
     });
   } else {
-    summary.anthropic.disabled = { skipped: true };
+    anthropicSummary.disabled = { skipped: true };
   }
 
   logLiveCache(`cache regression summary ${JSON.stringify(summary)}`);

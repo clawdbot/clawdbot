@@ -264,6 +264,9 @@ export async function runProviderPluginAuthMethodUnpersisted(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   runtime: RuntimeEnv;
+  signal?: AbortSignal;
+  /** Force remote/manual browser presentation for a connected GUI client. */
+  isRemote?: boolean;
   prompter: WizardPrompter;
   method: ProviderAuthMethod;
   agentDir: string;
@@ -279,11 +282,16 @@ export async function runProviderPluginAuthMethodUnpersisted(params: {
     workspaceDir: params.workspaceDir,
     prompter: params.prompter,
     runtime: params.runtime,
+    ...(params.signal ? { signal: params.signal } : {}),
     opts: params.opts,
     secretInputMode: params.secretInputMode,
     allowSecretRefPrompt: params.allowSecretRefPrompt,
-    isRemote: isRemoteEnvironment(),
+    isRemote: params.isRemote ?? isRemoteEnvironment(),
     openUrl: async (url) => {
+      if (params.isRemote === true) {
+        await params.prompter.openUrl?.(url);
+        return;
+      }
       await openUrl(url);
     },
     oauth: {

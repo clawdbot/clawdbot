@@ -11,6 +11,7 @@ import {
   ACT_MAX_BATCH_DEPTH,
   ACT_MAX_CLICK_DELAY_MS,
   ACT_MAX_WAIT_TIME_MS,
+  BROWSER_ACTION_NAVIGATION_GRACE_MS,
   resolveActInteractionTimeoutMs,
   resolveActWaitTimeoutMs,
 } from "./act-policy.js";
@@ -62,7 +63,6 @@ type TargetOpts = {
   targetId?: string;
 };
 
-const INTERACTION_NAVIGATION_GRACE_MS = 250;
 const ACT_DOWNLOAD_MAX_DRAIN_MS = 1_000;
 
 function interactionNavigationPolicy(
@@ -276,7 +276,7 @@ function observeDelayedInteractionNavigation(
         mainFrameNavigated: didCrossDocumentUrlChange(page, previousUrl),
         subframes,
       });
-    }, INTERACTION_NAVIGATION_GRACE_MS);
+    }, BROWSER_ACTION_NAVIGATION_GRACE_MS);
     const cleanup = () => {
       clearTimeout(timeout);
       // Call off directly on page (not via a cached reference) to preserve
@@ -363,7 +363,7 @@ function scheduleDelayedInteractionNavigationGuard(
           subframes,
         },
       }).then(() => settle(), settle);
-    }, INTERACTION_NAVIGATION_GRACE_MS);
+    }, BROWSER_ACTION_NAVIGATION_GRACE_MS);
     const cleanup = () => {
       clearTimeout(timeout);
       page.off!("framenavigated", onFrameNavigated);
@@ -571,7 +571,7 @@ async function awaitNavigationGuardedInteraction<T>(
           // The canonical post-check can settle on the first safe navigation.
           // Keep request interception for the full grace after the raw action.
           const elapsedMs = Math.max(0, Date.now() - actionSettledAtMs);
-          const remainingMs = Math.max(0, INTERACTION_NAVIGATION_GRACE_MS - elapsedMs);
+          const remainingMs = Math.max(0, BROWSER_ACTION_NAVIGATION_GRACE_MS - elapsedMs);
           if (remainingMs > 0) {
             await new Promise<void>((resolve) => {
               setTimeout(resolve, remainingMs);
@@ -1869,13 +1869,13 @@ export async function executeActViaPlaywright(
     },
   });
   const downloadGraceMs = actionNeedsStandaloneDownloadGrace(opts.action, navigationPolicy)
-    ? INTERACTION_NAVIGATION_GRACE_MS
+    ? BROWSER_ACTION_NAVIGATION_GRACE_MS
     : 0;
   const drainDownloads = async (firstEventGraceMs = downloadGraceMs) =>
     await downloadCapture.drain({
       firstEventGraceMs,
       maxWaitMs: ACT_DOWNLOAD_MAX_DRAIN_MS,
-      quietMs: INTERACTION_NAVIGATION_GRACE_MS,
+      quietMs: BROWSER_ACTION_NAVIGATION_GRACE_MS,
     });
   const dialogAbort = createObservedDialogAbortSignalForPage({
     page,
@@ -1917,7 +1917,7 @@ export async function executeActViaPlaywright(
     try {
       const failureGraceMs =
         dialogAbort.signal.aborted && actionUsesNavigationRequestGuard(opts.action)
-          ? INTERACTION_NAVIGATION_GRACE_MS
+          ? BROWSER_ACTION_NAVIGATION_GRACE_MS
           : downloadGraceMs;
       await drainDownloads(failureGraceMs);
     } catch (downloadErr) {

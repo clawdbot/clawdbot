@@ -686,6 +686,19 @@ describe("chat compaction divider", () => {
   });
 });
 
+describe("chat conversation width", () => {
+  it("applies a configured width once to the centered transcript frame", () => {
+    const container = renderChatView({
+      chatMessageMaxWidth: "82%",
+      messages: [{ role: "assistant", content: "hello", timestamp: 1 }],
+    });
+    const chat = container.querySelector<HTMLElement>(".chat");
+
+    expect(chat?.style.getPropertyValue("--chat-thread-max-width")).toBe("82%");
+    expect(chat?.style.getPropertyValue("--chat-message-max-width")).toBe("100%");
+  });
+});
+
 describe("direct thread avatar mode", () => {
   function sessionsListWithKind(sessionKey: string, kind: "direct" | "group" | "global") {
     return {

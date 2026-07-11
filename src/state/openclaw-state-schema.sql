@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS audit_events (
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,
   event_id TEXT NOT NULL UNIQUE,
   source_id TEXT NOT NULL UNIQUE,
+  schema_version INTEGER NOT NULL DEFAULT 1,
   source_sequence INTEGER NOT NULL,
   occurred_at INTEGER NOT NULL,
   kind TEXT NOT NULL,
@@ -72,12 +73,25 @@ CREATE TABLE IF NOT EXISTS audit_events (
   error_code TEXT,
   actor_type TEXT NOT NULL,
   actor_id TEXT NOT NULL,
-  agent_id TEXT NOT NULL,
+  agent_id TEXT,
   session_key TEXT,
   session_id TEXT,
-  run_id TEXT NOT NULL,
+  run_id TEXT,
   tool_call_id TEXT,
-  tool_name TEXT
+  tool_name TEXT,
+  direction TEXT,
+  channel TEXT,
+  conversation_kind TEXT,
+  message_outcome TEXT,
+  reason_code TEXT,
+  delivery_kind TEXT,
+  failure_stage TEXT,
+  duration_ms INTEGER,
+  result_count INTEGER,
+  account_ref TEXT,
+  conversation_ref TEXT,
+  message_ref TEXT,
+  target_ref TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_audit_events_time
@@ -97,6 +111,66 @@ CREATE INDEX IF NOT EXISTS idx_audit_events_kind_sequence
 
 CREATE INDEX IF NOT EXISTS idx_audit_events_status_sequence
   ON audit_events(status, sequence DESC);
+
+CREATE INDEX IF NOT EXISTS idx_audit_events_channel_sequence
+  ON audit_events(channel, sequence DESC);
+
+CREATE INDEX IF NOT EXISTS idx_audit_events_direction_sequence
+  ON audit_events(direction, sequence DESC);
+
+CREATE TABLE IF NOT EXISTS audit_identity_keys (
+  id INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
+  key_id TEXT NOT NULL,
+  key BLOB NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS session_state_events (
+  sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+  dedupe_key TEXT UNIQUE,
+  session_key TEXT NOT NULL,
+  session_id TEXT,
+  agent_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  actor_type TEXT NOT NULL,
+  actor_id TEXT,
+  run_id TEXT,
+  occurred_at INTEGER NOT NULL,
+  summary TEXT NOT NULL,
+  payload_json TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_state_events_session_sequence
+  ON session_state_events(session_key, sequence DESC);
+
+CREATE INDEX IF NOT EXISTS idx_session_state_events_time
+  ON session_state_events(occurred_at DESC, sequence DESC);
+
+CREATE TABLE IF NOT EXISTS session_state_heads (
+  session_key TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  last_sequence INTEGER NOT NULL,
+  pruned_max_sequence INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (session_key, agent_id)
+);
+
+-- Watcher identity is the bare session key, matching the process-local system-event
+-- queue it feeds. Producers only create rows for agent-qualified watcher keys;
+-- bare keys (session.scope="global") are ambiguous across agents and are excluded
+-- from the notice protocol until watcher identity is agent-scoped end-to-end.
+CREATE TABLE IF NOT EXISTS session_watch_cursors (
+  watcher_session_key TEXT NOT NULL,
+  target_session_key TEXT NOT NULL,
+  last_seen_sequence INTEGER NOT NULL DEFAULT 0,
+  notified_sequence INTEGER NOT NULL DEFAULT 0,
+  material_sequence INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (watcher_session_key, target_session_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_watch_cursors_target
+  ON session_watch_cursors(target_session_key);
 
 CREATE TABLE IF NOT EXISTS diagnostic_stability_bundles (
   bundle_key TEXT NOT NULL PRIMARY KEY,

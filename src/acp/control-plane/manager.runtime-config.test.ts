@@ -100,6 +100,7 @@ describe("AcpSessionManager runtime config", () => {
     expect(runtimeState.setMode).not.toHaveBeenCalled();
 
     await manager.runTurn({
+      provenance: "system",
       cfg: baseCfg,
       sessionKey: "agent:codex:acp:session-1",
       text: "do work",
@@ -171,6 +172,7 @@ describe("AcpSessionManager runtime config", () => {
 
     const manager = new AcpSessionManager();
     await manager.runTurn({
+      provenance: "system",
       cfg: baseCfg,
       sessionKey: "agent:codex:acp:session-1",
       text: "do work",
@@ -245,6 +247,7 @@ describe("AcpSessionManager runtime config", () => {
     });
 
     await manager.runTurn({
+      provenance: "system",
       cfg: baseCfg,
       sessionKey: "agent:codex:acp:session-1",
       text: "do work",
@@ -334,6 +337,7 @@ describe("AcpSessionManager runtime config", () => {
 
     const manager = new AcpSessionManager();
     await manager.runTurn({
+      provenance: "system",
       cfg: baseCfg,
       sessionKey,
       text: "learn prompt session",
@@ -409,6 +413,7 @@ describe("AcpSessionManager runtime config", () => {
 
     const manager = new AcpSessionManager();
     await manager.runTurn({
+      provenance: "system",
       cfg: baseCfg,
       sessionKey: "agent:codex:acp:session-1",
       text: "do work",
@@ -464,6 +469,7 @@ describe("AcpSessionManager runtime config", () => {
 
     const manager = new AcpSessionManager();
     await manager.runTurn({
+      provenance: "system",
       cfg: baseCfg,
       sessionKey: "agent:opencode:acp:session-1",
       text: "do work",
@@ -503,6 +509,7 @@ describe("AcpSessionManager runtime config", () => {
     const manager = new AcpSessionManager();
     await expectRejectedRecord(
       manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:opencode:acp:session-1",
         text: "do work",
@@ -549,6 +556,7 @@ describe("AcpSessionManager runtime config", () => {
     const manager = new AcpSessionManager();
     await expectRejectedRecord(
       manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:opencode:acp:session-1",
         text: "do work",
@@ -586,6 +594,7 @@ describe("AcpSessionManager runtime config", () => {
 
     const manager = new AcpSessionManager();
     await manager.runTurn({
+      provenance: "system",
       cfg: baseCfg,
       sessionKey: "agent:claude:acp:session-1",
       text: "do work",
@@ -628,6 +637,7 @@ describe("AcpSessionManager runtime config", () => {
 
     const manager = new AcpSessionManager();
     await manager.runTurn({
+      provenance: "system",
       cfg: baseCfg,
       sessionKey: "agent:gemini:acp:session-1",
       text: "do work",
@@ -691,6 +701,7 @@ describe("AcpSessionManager runtime config", () => {
 
     const manager = new AcpSessionManager();
     await manager.runTurn({
+      provenance: "system",
       cfg: baseCfg,
       sessionKey,
       text: "first",
@@ -714,6 +725,7 @@ describe("AcpSessionManager runtime config", () => {
     expect(currentEntry.acp.cwd).toBe("/workspace/next");
 
     await manager.runTurn({
+      provenance: "system",
       cfg: baseCfg,
       sessionKey,
       text: "second",

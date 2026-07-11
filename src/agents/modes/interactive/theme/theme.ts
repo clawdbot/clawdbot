@@ -186,8 +186,8 @@ const GRAY_VALUES = Array.from({ length: 24 }, (_, i) => 8 + i * 10);
 function findClosestCubeIndex(value: number): number {
   let minDist = Infinity;
   let minIdx = 0;
-  for (let i = 0; i < CUBE_VALUES.length; i++) {
-    const dist = Math.abs(value - CUBE_VALUES[i]);
+  for (const [i, cubeValue] of CUBE_VALUES.entries()) {
+    const dist = Math.abs(value - cubeValue);
     if (dist < minDist) {
       minDist = dist;
       minIdx = i;
@@ -199,8 +199,8 @@ function findClosestCubeIndex(value: number): number {
 function findClosestGrayIndex(gray: number): number {
   let minDist = Infinity;
   let minIdx = 0;
-  for (let i = 0; i < GRAY_VALUES.length; i++) {
-    const dist = Math.abs(gray - GRAY_VALUES[i]);
+  for (const [i, grayValue] of GRAY_VALUES.entries()) {
+    const dist = Math.abs(gray - grayValue);
     if (dist < minDist) {
       minDist = dist;
       minIdx = i;
@@ -232,6 +232,9 @@ function rgbTo256(r: number, g: number, b: number): number {
   const cubeR = CUBE_VALUES[rIdx];
   const cubeG = CUBE_VALUES[gIdx];
   const cubeB = CUBE_VALUES[bIdx];
+  if (cubeR === undefined || cubeG === undefined || cubeB === undefined) {
+    throw new Error("Invalid 256-color cube index");
+  }
   const cubeIndex = 16 + 36 * rIdx + 6 * gIdx + bIdx;
   const cubeDist = colorDistance(r, g, b, cubeR, cubeG, cubeB);
 
@@ -239,6 +242,9 @@ function rgbTo256(r: number, g: number, b: number): number {
   const gray = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
   const grayIdx = findClosestGrayIndex(gray);
   const grayValue = GRAY_VALUES[grayIdx];
+  if (grayValue === undefined) {
+    throw new Error("Invalid 256-color grayscale index");
+  }
   const grayIndex = 232 + grayIdx;
   const grayDist = colorDistance(r, g, b, grayValue, grayValue, grayValue);
 
@@ -313,7 +319,11 @@ function resolveVarRefs(
     throw new Error(`Variable reference not found: ${value}`);
   }
   visited.add(value);
-  return resolveVarRefs(vars[value], vars, visited);
+  const resolved = vars[value];
+  if (resolved === undefined) {
+    throw new Error(`Variable reference not found: ${value}`);
+  }
+  return resolveVarRefs(resolved, vars, visited);
 }
 
 function resolveThemeColors<T extends Record<string, ColorValue>>(
@@ -515,7 +525,10 @@ function parseThemeJsonContent(label: string, content: string): ThemeJson {
 function loadThemeJson(name: string): ThemeJson {
   const builtinThemes = getBuiltinThemes();
   if (name in builtinThemes) {
-    return builtinThemes[name];
+    const builtinTheme = builtinThemes[name];
+    if (builtinTheme) {
+      return builtinTheme;
+    }
   }
   const registeredTheme = registeredThemes.get(name);
   if (registeredTheme?.sourcePath) {

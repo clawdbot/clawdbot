@@ -75,6 +75,7 @@ function createContainerMock(
   const start = vi.fn<FleetContainerRuntime["start"]>(async () => undefined);
   const stop = vi.fn<FleetContainerRuntime["stop"]>(async () => undefined);
   const restart = vi.fn<FleetContainerRuntime["restart"]>(async () => undefined);
+  const logs = vi.fn<FleetContainerRuntime["logs"]>(async () => undefined);
   const remove = vi.fn<FleetContainerRuntime["remove"]>(async () => {
     inspect.mockResolvedValue({ kind: "missing", state: "missing" });
   });
@@ -91,6 +92,7 @@ function createContainerMock(
       start,
       stop,
       restart,
+      logs,
       remove,
     },
     assertLocal,
@@ -104,6 +106,7 @@ function createContainerMock(
     start,
     stop,
     restart,
+    logs,
     remove,
   };
 }

@@ -704,10 +704,9 @@ function findLiveSessionModelSwitchRedirectIndex(params: {
   currentIndex: number;
 }): number | null {
   const targetKey = modelKey(params.error.provider, params.error.model);
-  for (let i = params.currentIndex + 1; i < params.candidates.length; i += 1) {
-    const candidate = params.candidates[i];
+  for (const [offset, candidate] of params.candidates.slice(params.currentIndex + 1).entries()) {
     if (modelKey(candidate.provider, candidate.model) === targetKey) {
-      return i;
+      return params.currentIndex + 1 + offset;
     }
   }
   return null;
@@ -1503,7 +1502,10 @@ async function runWithModelFallbackInternal<T>(
   const requestedCandidate = candidates[0];
 
   for (let i = 0; i < candidates.length; i += 1) {
-    const candidate = candidates[i];
+    const candidate = candidates.at(i);
+    if (!candidate) {
+      throw new Error(`Missing model fallback candidate at index ${i}`);
+    }
     const candidateHarnessAuth = await resolveModelFallbackCandidateHarnessAuthPrecheck({
       cfg: params.cfg,
       agentId: params.agentId,
@@ -2032,8 +2034,7 @@ export async function runWithImageModelFallback<T>(params: {
   const attempts: FallbackAttempt[] = [];
   let lastError: unknown;
 
-  for (let i = 0; i < candidates.length; i += 1) {
-    const candidate = candidates[i];
+  for (const [i, candidate] of candidates.entries()) {
     const attemptRun = await runFallbackAttempt({
       run: params.run,
       ...candidate,

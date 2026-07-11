@@ -46,6 +46,7 @@ describe("AcpSessionManager cancelSession", () => {
 
       const manager = new AcpSessionManager();
       const runPromise = manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:child-1",
         text: "long task",

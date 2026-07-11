@@ -348,11 +348,18 @@ export type DiagnosticsCacheTraceConfig = {
 
 export type AuditConfig = {
   /**
-   * Record metadata-only audit events (agent runs and tool actions) into the
-   * shared state database. Content is never stored. Default: true. Disabling
-   * stops new writes; existing records stay readable until they expire.
+   * Record metadata-only run, tool, and enabled message lifecycle events into
+   * the shared state database. Content is never stored. Default: true. This is
+   * startup-scoped; disabling stops new event inserts after restart while retained
+   * records stay readable until they expire.
    */
   enabled?: boolean;
+  /**
+   * Record content-free message lifecycle metadata. `direct` records only
+   * known direct conversations; `all` also records group, channel, and
+   * unknown conversation kinds. Default: `off`.
+   */
+  messages?: "off" | "direct" | "all";
 };
 
 export type DiagnosticsConfig = {

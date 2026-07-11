@@ -15,7 +15,10 @@ function parseDiffLine(line: string): { prefix: string; lineNum: string; content
   if (!match) {
     return null;
   }
-  return { prefix: match[1], lineNum: match[2], content: match[3] };
+  const [, prefix, lineNum, content] = match;
+  return prefix !== undefined && lineNum !== undefined && content !== undefined
+    ? { prefix, lineNum, content }
+    : null;
 }
 
 /**
@@ -92,7 +95,10 @@ export function renderDiff(diffText: string, _options: RenderDiffOptions = {}): 
 
   let i = 0;
   while (i < lines.length) {
-    const line = lines[i];
+    const line = lines.at(i);
+    if (line === undefined) {
+      break;
+    }
     const parsed = parseDiffLine(line);
 
     if (!parsed) {
@@ -105,7 +111,8 @@ export function renderDiff(diffText: string, _options: RenderDiffOptions = {}): 
       // Collect consecutive removed lines
       const removedLines: { lineNum: string; content: string }[] = [];
       while (i < lines.length) {
-        const p = parseDiffLine(lines[i]);
+        const currentLine = lines.at(i);
+        const p = currentLine === undefined ? null : parseDiffLine(currentLine);
         if (!p || p.prefix !== "-") {
           break;
         }
@@ -116,7 +123,8 @@ export function renderDiff(diffText: string, _options: RenderDiffOptions = {}): 
       // Collect consecutive added lines
       const addedLines: { lineNum: string; content: string }[] = [];
       while (i < lines.length) {
-        const p = parseDiffLine(lines[i]);
+        const currentLine = lines.at(i);
+        const p = currentLine === undefined ? null : parseDiffLine(currentLine);
         if (!p || p.prefix !== "+") {
           break;
         }
@@ -129,6 +137,9 @@ export function renderDiff(diffText: string, _options: RenderDiffOptions = {}): 
       if (removedLines.length === 1 && addedLines.length === 1) {
         const removed = removedLines[0];
         const added = addedLines[0];
+        if (!removed || !added) {
+          continue;
+        }
 
         const { removedLine, addedLine } = renderIntraLineDiff(
           replaceTabs(removed.content),

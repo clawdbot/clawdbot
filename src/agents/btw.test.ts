@@ -2,6 +2,7 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
+import { looksLikeSecretSentinel, resolveSecretSentinel } from "../secrets/sentinel.js";
 
 const streamSimpleMock = vi.fn();
 const readFileMock = vi.fn();
@@ -1383,7 +1384,10 @@ describe("runBtwSideQuestion", () => {
       id: "gpt-5.4",
       baseUrl: "https://api.enterprise.githubcopilot.com",
     });
-    expectRecordFields(streamOptions, { apiKey: "copilot-runtime-token" });
+    const streamKey = (streamOptions as { apiKey?: string }).apiKey ?? "";
+    expect(looksLikeSecretSentinel(streamKey)).toBe(true);
+    expect(streamKey).not.toBe("copilot-runtime-token");
+    expect(resolveSecretSentinel(streamKey)).toBe("copilot-runtime-token");
   });
 
   it("uses the provider's stream fn when registered so provider URL construction runs (#68336)", async () => {

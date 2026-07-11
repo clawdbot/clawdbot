@@ -3,7 +3,10 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  OPENCLAW_STATE_SCHEMA_VERSION,
+} from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import {
@@ -118,11 +121,11 @@ describe("startup migration checkpoint", () => {
     const dbPath = resolveOpenClawStateSqlitePath(env);
     mkdirSync(path.dirname(dbPath), { recursive: true });
     const db = new sqlite.DatabaseSync(dbPath);
-    db.exec("PRAGMA user_version = 2;");
+    db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};`);
     db.close();
 
     expect(() => acquireStartupMigrationLease({ env, nowMs: 1000, owner: "first" })).toThrow(
-      "newer schema version 2",
+      `newer schema version ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`,
     );
 
     const verify = new sqlite.DatabaseSync(dbPath, { readOnly: true });

@@ -17,6 +17,7 @@ const HOST_KEY_ERROR =
   "Crabbox inspect does not expose the SSH host key required by the worker provider contract";
 const OPENCLAW_ROOT = path.resolve(path.sep, "workspace", "openclaw");
 const SIBLING_BINARY = path.resolve(OPENCLAW_ROOT, "../crabbox/bin/crabbox");
+const INSPECT_FAILURE_PREFIX = "Crabbox inspect failed with exit code 2: ";
 const PROFILE = {
   provider: "aws",
   class: "standard",
@@ -61,6 +62,24 @@ function providerWithRunner(runCommand: CrabboxCommandRunner) {
     pathEnv: "",
     isExecutable: (candidate) => candidate === SIBLING_BINARY,
   });
+}
+
+function hasLoneSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        index += 1;
+        continue;
+      }
+      return true;
+    }
+    if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
 }
 
 describe("Crabbox worker provider", () => {
@@ -632,14 +651,45 @@ describe("Crabbox worker provider", () => {
   it("bounds and redacts CLI failure details", async () => {
     const secret = ["sk", "abcdefghijklmnop"].join("-");
     const provider = providerWithRunner(async () =>
-      commandResult({ code: 2, stderr: `${secret} ${"failure ".repeat(200)}` }),
+      commandResult({
+        code: 2,
+        stderr: `${secret} ${"failure ".repeat(200)}`,
+        stdout: "stdout must not replace stderr",
+      }),
     );
 
     const error = await provider.inspect(lifecycleLease()).catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(Error);
     const message = error instanceof Error ? error.message : "";
     expect(message).not.toContain(secret);
-    expect(message.length).toBeLessThan(600);
+    expect(message).not.toContain("stdout must not replace stderr");
+    expect(message).toHaveLength(INSPECT_FAILURE_PREFIX.length + 512);
+  });
+
+  it("preserves UTF-16 boundaries in provider failure details", async () => {
+    const prefix = "x".repeat(511);
+    const provider = providerWithRunner(async () =>
+      commandResult({ code: 2, stderr: `${prefix}😀after` }),
+    );
+
+    const error = await provider.inspect(lifecycleLease()).catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(Error);
+    const message = error instanceof Error ? error.message : "";
+    expect(message).toBe(`${INSPECT_FAILURE_PREFIX}${prefix}`);
+    expect(hasLoneSurrogate(message)).toBe(false);
+  });
+
+  it("keeps a complete boundary pair when falling back to stdout", async () => {
+    const detail = `${"x".repeat(510)}😀`;
+    const provider = providerWithRunner(async () =>
+      commandResult({ code: 2, stdout: `${detail}after` }),
+    );
+
+    const error = await provider.inspect(lifecycleLease()).catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(Error);
+    const message = error instanceof Error ? error.message : "";
+    expect(message).toBe(`${INSPECT_FAILURE_PREFIX}${detail}`);
+    expect(hasLoneSurrogate(message)).toBe(false);
   });
 
   it("destroys absent and already-stopped leases idempotently", async () => {

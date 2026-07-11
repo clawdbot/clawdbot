@@ -109,8 +109,7 @@ function buildPdfExtractionContext(
   > = [];
 
   // Add extracted text and images
-  for (let i = 0; i < extractions.length; i++) {
-    const extraction = extractions[i];
+  for (const [i, extraction] of extractions.entries()) {
     if (extraction.text.trim()) {
       const label = extractions.length > 1 ? `[PDF ${i + 1} text]\n` : "[PDF text]\n";
       content.push({ type: "text", text: label + extraction.text });
@@ -540,22 +539,20 @@ export function createPdfTool(options?: {
         getExtractions,
       });
 
-      const pdfDetails =
-        loadedPdfs.length === 1
-          ? {
-              pdf: loadedPdfs[0].resolvedPath,
-              ...(loadedPdfs[0].rewrittenFrom
-                ? { rewrittenFrom: loadedPdfs[0].rewrittenFrom }
-                : {}),
-            }
-          : {
-              pdfs: loadedPdfs.map((p) =>
-                Object.assign(
-                  { pdf: p.resolvedPath },
-                  p.rewrittenFrom ? { rewrittenFrom: p.rewrittenFrom } : {},
-                ),
+      const singlePdf = loadedPdfs.length === 1 ? loadedPdfs.at(0) : undefined;
+      const pdfDetails = singlePdf
+        ? {
+            pdf: singlePdf.resolvedPath,
+            ...(singlePdf.rewrittenFrom ? { rewrittenFrom: singlePdf.rewrittenFrom } : {}),
+          }
+        : {
+            pdfs: loadedPdfs.map((p) =>
+              Object.assign(
+                { pdf: p.resolvedPath },
+                p.rewrittenFrom ? { rewrittenFrom: p.rewrittenFrom } : {},
               ),
-            };
+            ),
+          };
 
       return buildTextToolResult(result, { native: result.native, ...pdfDetails });
     },

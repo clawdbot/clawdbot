@@ -1618,6 +1618,7 @@
                       "gateway/health",
                       "gateway/heartbeat",
                       "gateway/doctor",
+                      "gateway/audit",
                       "logging",
                       "gateway/opentelemetry",
                       "gateway/prometheus",

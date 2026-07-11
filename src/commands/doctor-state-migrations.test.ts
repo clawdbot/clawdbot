@@ -23,6 +23,7 @@ import type { InstalledPluginInstallRecordInfo } from "../plugins/installed-plug
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  OPENCLAW_STATE_SCHEMA_VERSION,
 } from "../state/openclaw-state-db.js";
 import { loadTaskFlowRegistryStateFromSqlite } from "../tasks/task-flow-registry.store.sqlite.js";
 import { loadTaskRegistryStateFromSqlite } from "../tasks/task-registry.store.sqlite.js";
@@ -1019,7 +1020,7 @@ describe("doctor legacy state migrations", () => {
     const stateDatabasePath = createLegacyAgentDatabaseRegistry(stateDir);
     const { DatabaseSync } = requireNodeSqlite();
     const seededDb = new DatabaseSync(stateDatabasePath);
-    seededDb.exec("PRAGMA user_version = 2;");
+    seededDb.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};`);
     seededDb.close();
 
     const detected = await detectLegacyStateMigrations({
@@ -1030,7 +1031,9 @@ describe("doctor legacy state migrations", () => {
     const result = await runLegacyStateMigrations({ detected });
     expect(result.changes).toStrictEqual([]);
     expect(result.warnings).toHaveLength(1);
-    expect(result.warnings[0]).toContain("uses newer schema version 2");
+    expect(result.warnings[0]).toContain(
+      `uses newer schema version ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`,
+    );
 
     const db = new DatabaseSync(stateDatabasePath);
     try {

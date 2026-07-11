@@ -76,6 +76,7 @@ function createContainerMock(
   const start = vi.fn<FleetContainerRuntime["start"]>(async () => undefined);
   const stop = vi.fn<FleetContainerRuntime["stop"]>(async () => undefined);
   const restart = vi.fn<FleetContainerRuntime["restart"]>(async () => undefined);
+  const logs = vi.fn<FleetContainerRuntime["logs"]>(async () => undefined);
   const remove = vi.fn<FleetContainerRuntime["remove"]>(async () => {
     inspect.mockResolvedValue({ kind: "missing", state: "missing" });
   });
@@ -92,6 +93,7 @@ function createContainerMock(
       start,
       stop,
       restart,
+      logs,
       remove,
     },
     assertLocal,
@@ -105,6 +107,7 @@ function createContainerMock(
     start,
     stop,
     restart,
+    logs,
     remove,
   };
 }
@@ -304,6 +307,53 @@ describe("fleet service", () => {
     await expect(service.lifecycle("acme", action)).resolves.toEqual({ tenant: "acme", action });
 
     expect(containers[action]).toHaveBeenCalledWith("docker", "openclaw-cell-acme");
+  });
+
+  it("streams logs only after proving container ownership", async () => {
+    const containers = createContainerMock();
+    const service = createFleetService({ env, containers: containers.runtime, now: () => 1000 });
+    await service.create({ tenant: "acme", gatewayToken: "token" });
+    containers.inspect.mockResolvedValue(runningInspection());
+
+    await expect(
+      service.logs({ tenant: "acme", follow: true, tail: 100, since: "10m" }),
+    ).resolves.toBeUndefined();
+
+    expect(containers.logs).toHaveBeenCalledWith("docker", "openclaw-cell-acme", {
+      follow: true,
+      tail: 100,
+      since: "10m",
+    });
+  });
+
+  it.each(["foreign", "missing", "unavailable"] as const)(
+    "refuses %s log inspection before streaming",
+    async (kind) => {
+      const inspection: FleetContainerInspectResult =
+        kind === "foreign"
+          ? runningInspection({ labels: {} })
+          : kind === "missing"
+            ? { kind: "missing", state: "missing" }
+            : { kind: "unavailable", state: "unknown", error: "daemon unavailable" };
+      const containers = createContainerMock();
+      const service = createFleetService({ env, containers: containers.runtime, now: () => 1000 });
+      await service.create({ tenant: "acme", gatewayToken: "token" });
+      containers.inspect.mockResolvedValue(inspection);
+
+      await expect(service.logs({ tenant: "acme" })).rejects.toThrow();
+      expect(containers.logs).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refuses logs when the recorded runtime is unavailable", async () => {
+    const containers = createContainerMock();
+    const service = createFleetService({ env, containers: containers.runtime, now: () => 1000 });
+    await service.create({ tenant: "acme", gatewayToken: "token" });
+    containers.assertLocal.mockRejectedValue(new Error("daemon unavailable"));
+
+    await expect(service.logs({ tenant: "acme" })).rejects.toThrow(/daemon unavailable/iu);
+    expect(containers.inspect).not.toHaveBeenCalled();
+    expect(containers.logs).not.toHaveBeenCalled();
   });
 
   it("carries inspected environment and resources through upgrade", async () => {

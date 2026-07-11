@@ -23,6 +23,7 @@ import {
   listAuditEvents,
   pruneExpiredAuditEvents,
   recordAuditEvent,
+  testApi as auditStoreTestApi,
 } from "./audit-event-store.js";
 import type { AuditEventInput } from "./audit-event-types.js";
 import type { AuditEventWriter } from "./audit-event-writer.js";
@@ -34,7 +35,7 @@ function createDatabaseOptions() {
 }
 
 function auditInput(overrides: Partial<AuditEventInput> = {}): AuditEventInput {
-  return {
+  const input = {
     sourceSequence: 1,
     occurredAt: Date.now(),
     kind: "agent_run",
@@ -48,6 +49,12 @@ function auditInput(overrides: Partial<AuditEventInput> = {}): AuditEventInput {
     runId: "run-1",
     ...overrides,
   };
+  return {
+    ...input,
+    sourceId:
+      overrides.sourceId ??
+      `${input.runId}:${input.sourceSequence}:${input.occurredAt}:${input.action}`,
+  } as AuditEventInput;
 }
 
 function agentEvent(overrides: Partial<AgentEventPayload>): AgentEventPayload {
@@ -159,6 +166,17 @@ describe("audit event persistence", () => {
     expect(listAuditEvents({ database, limit: 10 }).events).toHaveLength(1);
   });
 
+  it("rejects persisted run lifecycle tuples outside the closed contract", () => {
+    const database = createDatabaseOptions();
+    recordAuditEvent(auditInput(), database);
+    const { db } = openOpenClawStateDatabase(database);
+    db.prepare("UPDATE audit_events SET status = ? WHERE kind = 'agent_run'").run("failed");
+
+    expect(() => listAuditEvents({ database, limit: 10 })).toThrow(
+      "corrupt audit event row 1: invalid status",
+    );
+  });
+
   it("caps actual rows without treating dedupe sequence gaps as retained records", () => {
     const database = createDatabaseOptions();
     const occurredAt = Date.now();
@@ -171,6 +189,75 @@ describe("audit event persistence", () => {
     recordAuditEvent(auditInput({ occurredAt: occurredAt + 1, sourceSequence: 2 }), database);
 
     expect(listAuditEvents({ database, limit: 10 }).events).toHaveLength(2);
+  });
+
+  it("prunes row overflow in batches instead of scanning the full cap per insert", () => {
+    const database = createDatabaseOptions();
+    const { db } = openOpenClawStateDatabase(database);
+    const occurredAt = Date.now();
+    const insert = db.prepare(
+      `INSERT INTO audit_events (
+         event_id, source_id, source_sequence, occurred_at, kind, action, status,
+         actor_type, actor_id, agent_id, run_id
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    for (let sequence = 1; sequence <= 4; sequence += 1) {
+      insert.run(
+        `event-${sequence}`,
+        `source-${sequence}`,
+        sequence,
+        occurredAt + sequence,
+        "agent_run",
+        "agent.run.started",
+        "started",
+        "agent",
+        "main",
+        "main",
+        `run-${sequence}`,
+      );
+    }
+
+    auditStoreTestApi.pruneAuditEventsAfterInsert(db, occurredAt + 4, {
+      maxRows: 3,
+      pruneBatchRows: 1,
+    });
+    expect(listAuditEvents({ database, limit: 10 }).events.map((event) => event.sequence)).toEqual([
+      4, 3,
+    ]);
+
+    insert.run(
+      "event-5",
+      "source-5",
+      5,
+      occurredAt + 5,
+      "agent_run",
+      "agent.run.started",
+      "started",
+      "agent",
+      "main",
+      "main",
+      "run-5",
+    );
+    auditStoreTestApi.pruneAuditEventsAfterInsert(db, occurredAt + 5, {
+      maxRows: 3,
+      pruneBatchRows: 1,
+    });
+    expect(listAuditEvents({ database, limit: 10 }).events.map((event) => event.sequence)).toEqual([
+      5, 4, 3,
+    ]);
+  });
+
+  it("rolls back an insert whose sequence cannot be represented safely", () => {
+    const database = createDatabaseOptions();
+    const { db } = openOpenClawStateDatabase(database);
+    db.prepare("INSERT INTO sqlite_sequence (name, seq) VALUES ('audit_events', ?)").run(
+      Number.MAX_SAFE_INTEGER,
+    );
+
+    expect(() => recordAuditEvent(auditInput(), database)).toThrow(
+      "audit event sequence is outside the supported integer range",
+    );
+    expect(db.prepare("SELECT COUNT(*) AS count FROM audit_events").get()).toEqual({ count: 0 });
   });
 
   it("keeps reused run ids distinct across actual event timestamps", () => {

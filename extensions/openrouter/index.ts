@@ -15,6 +15,7 @@ import {
   getOpenRouterModelCapabilities,
   loadOpenRouterModelCapabilities,
 } from "openclaw/plugin-sdk/provider-stream-family";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { buildOpenRouterImageGenerationProvider } from "./image-generation-provider.js";
 import { openrouterMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { isOpenRouterMistralModelId, normalizeOpenRouterApiModelId } from "./models.js";
@@ -99,19 +100,21 @@ function sanitizePromptModelId(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
-  const normalized = Array.from(value)
-    .filter((char) => {
-      const codePoint = char.codePointAt(0) ?? 0;
-      return (
-        codePoint > 0x1f &&
-        (codePoint < 0x7f || codePoint > 0x9f) &&
-        codePoint !== 0x2028 &&
-        codePoint !== 0x2029
-      );
-    })
-    .join("")
-    .trim()
-    .slice(0, MAX_PROMPT_MODEL_ID_DISPLAY_CHARS);
+  const normalized = truncateUtf16Safe(
+    Array.from(value)
+      .filter((char) => {
+        const codePoint = char.codePointAt(0) ?? 0;
+        return (
+          codePoint > 0x1f &&
+          (codePoint < 0x7f || codePoint > 0x9f) &&
+          codePoint !== 0x2028 &&
+          codePoint !== 0x2029
+        );
+      })
+      .join("")
+      .trim(),
+    MAX_PROMPT_MODEL_ID_DISPLAY_CHARS,
+  );
   return normalized || undefined;
 }
 

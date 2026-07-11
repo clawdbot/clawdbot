@@ -60,11 +60,6 @@ import {
   sendVideoMsg,
   sendVoice,
 } from "./outbound-media-send.js";
-import {
-  checkMessageReplyLimit,
-  MESSAGE_REPLY_LIMIT,
-  recordMessageReply,
-} from "./outbound-reply.js";
 import type {
   MediaOutboundContext,
   MediaTargetContext,
@@ -94,8 +89,8 @@ const mediaPathDecodeLog = {
  */
 export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
   const { to, account } = ctx;
-  let { text, replyToId } = ctx;
-  let fallbackToProactive = false;
+  const { replyToId } = ctx;
+  let { text } = ctx;
 
   initApiConfig(account.appId, { markdownSupport: account.markdownSupport });
 
@@ -107,32 +102,6 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
       2,
     ),
   );
-
-  if (replyToId) {
-    const limitCheck = checkMessageReplyLimit(replyToId);
-
-    if (!limitCheck.allowed) {
-      if (limitCheck.shouldFallbackToProactive) {
-        debugWarn(
-          `[qqbot] sendText: passive reply unavailable, falling back to proactive send - ${limitCheck.message}`,
-        );
-        fallbackToProactive = true;
-        replyToId = null;
-      } else {
-        debugError(
-          `[qqbot] sendText: passive reply was blocked without a fallback path - ${limitCheck.message}`,
-        );
-        return {
-          channel: "qqbot",
-          error: limitCheck.message,
-        };
-      }
-    } else {
-      debugLog(
-        `[qqbot] sendText: remaining passive replies for ${replyToId}: ${limitCheck.remaining}/${MESSAGE_REPLY_LIMIT}`,
-      );
-    }
-  }
 
   text = normalizeMediaTags(text);
 
@@ -223,9 +192,6 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
           const result = await senderSendText(deliveryTarget, item.content, creds, {
             msgId: replyToId ?? undefined,
           });
-          if (replyToId) {
-            recordMessageReply(replyToId);
-          }
           lastResult = {
             channel: "qqbot",
             messageId: result.id,
@@ -277,13 +243,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
         error: "Proactive messages require non-empty content (--message cannot be empty)",
       };
     }
-    if (fallbackToProactive) {
-      debugLog(
-        `[qqbot] sendText: [fallback] sending proactive message to ${to}, length=${text.length}`,
-      );
-    } else {
-      debugLog(`[qqbot] sendText: sending proactive message to ${to}, length=${text.length}`);
-    }
+    debugLog(`[qqbot] sendText: sending proactive message to ${to}, length=${text.length}`);
   }
 
   if (!account.appId || !account.clientSecret) {
@@ -302,9 +262,6 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
     const result = await senderSendText(deliveryTarget, text, creds, {
       msgId: replyToId ?? undefined,
     });
-    if (replyToId) {
-      recordMessageReply(replyToId);
-    }
     return {
       channel: "qqbot",
       messageId: result.id,

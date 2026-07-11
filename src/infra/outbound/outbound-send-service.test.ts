@@ -350,6 +350,7 @@ describe("executeSendAction", () => {
         channel: "demo-outbound",
         params: {},
         sessionKey: "agent:main:directchat:group:ops",
+        conversationType: "channel",
         requesterAccountId: "source-account",
         requesterSenderId: "attacker",
         accountId: "destination-account",
@@ -361,6 +362,7 @@ describe("executeSendAction", () => {
 
     expectSingleCallFields(mocks.sendMessage, {
       requesterSessionKey: "agent:main:directchat:group:ops",
+      conversationType: "channel",
       requesterAccountId: "source-account",
       requesterSenderId: "attacker",
       accountId: "destination-account",

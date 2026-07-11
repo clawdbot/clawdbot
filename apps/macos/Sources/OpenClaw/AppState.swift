@@ -31,8 +31,10 @@ final class AppState {
     @ObservationIgnored private let execApprovalsDefaultsAsyncResolver:
         @MainActor () async -> Result<ExecApprovalsResolvedDefaults, ExecApprovalsReadError>
     @ObservationIgnored private let execApprovalsReadRetryDelay: Duration
+    @ObservationIgnored let bundleLocationAllowsPersistentIntegration: Bool
     @ObservationIgnored private var execApprovalsReadRetryTask: Task<Void, Never>?
     @ObservationIgnored private var execApprovalsReadGeneration = 0
+    @ObservationIgnored private var isHydratingLaunchAtLogin = false
     private var isInitializing = true
     private var isApplyingRemoteTokenConfig = false
     private enum GatewayConfigSyncState: Equatable {
@@ -57,53 +59,29 @@ final class AppState {
         action()
     }
 
-    enum ConnectionMode: String {
-        case unconfigured
-        case local
-        case remote
-    }
-
-    enum RemoteTransport: String {
-        case ssh
-        case direct
-    }
-
-    struct RemoteGatewayConfigDraft {
-        var transport: RemoteTransport
-        var remoteUrl: String
-        var remoteHost: String?
-        var remoteTarget: String
-        var remoteIdentity: String
-        var remoteToken: String
-        var remoteTokenDirty: Bool
-    }
-
-    struct GatewayConfigSyncDraft {
-        var connectionMode: ConnectionMode
-        var remoteTransport: RemoteTransport
-        var remoteTarget: String
-        var remoteIdentity: String
-        var remoteUrl: String
-        var remoteToken: String
-        var remoteTokenDirty: Bool
-    }
-
-    private struct GatewaySelectionSnapshot: Equatable {
-        let connectionMode: ConnectionMode
-        let remoteTransport: RemoteTransport
-        let remoteUrl: String
-        let remoteTarget: String
-    }
-
     var isPaused: Bool {
         didSet { self.ifNotPreview { UserDefaults.standard.set(self.isPaused, forKey: pauseDefaultsKey) } }
     }
 
     var launchAtLogin: Bool {
         didSet {
-            guard !self.isInitializing else { return }
+            guard Self.shouldPersistLaunchAtLoginChange(
+                isInitializing: self.isInitializing,
+                isHydrating: self.isHydratingLaunchAtLogin,
+                isEnabling: self.launchAtLogin,
+                bundleLocationAllowsPersistentIntegration: self.bundleLocationAllowsPersistentIntegration)
+            else { return }
             self.ifNotPreview { Task { AppStateStore.updateLaunchAtLogin(enabled: self.launchAtLogin) } }
         }
+    }
+
+    static func shouldPersistLaunchAtLoginChange(
+        isInitializing: Bool,
+        isHydrating: Bool,
+        isEnabling: Bool,
+        bundleLocationAllowsPersistentIntegration: Bool) -> Bool
+    {
+        !isInitializing && !isHydrating && (!isEnabling || bundleLocationAllowsPersistentIntegration)
     }
 
     var onboardingSeen: Bool {
@@ -343,6 +321,8 @@ final class AppState {
     {
         let isPreview = preview || ProcessInfo.processInfo.isRunningTests
         self.isPreview = isPreview
+        self.bundleLocationAllowsPersistentIntegration =
+            isPreview || ApplicationRelocator.currentBundleAllowsPersistentIntegration()
         self.execApprovalsDefaultsAsyncResolver = execApprovalsDefaultsAsyncResolver
         self.execApprovalsReadRetryDelay = execApprovalsReadRetryDelay
         if !isPreview {
@@ -463,7 +443,7 @@ final class AppState {
         if !self.isPreview {
             Task.detached(priority: .utility) { [weak self] in
                 let current = await LaunchAgentManager.status()
-                await MainActor.run { [weak self] in self?.launchAtLogin = current }
+                await MainActor.run { [weak self] in self?.hydrateLaunchAtLogin(current) }
             }
         }
 
@@ -489,6 +469,13 @@ final class AppState {
         if !self.isPreview {
             self.startConfigWatcher()
         }
+    }
+
+    private func hydrateLaunchAtLogin(_ enabled: Bool) {
+        // Reading launchd state must not rewrite a valid plist with this process's transient bundle path.
+        self.isHydratingLaunchAtLogin = true
+        self.launchAtLogin = enabled
+        self.isHydratingLaunchAtLogin = false
     }
 
     @MainActor
@@ -1161,6 +1148,46 @@ extension AppState {
         state.remoteProjectRoot = "~/Projects/openclaw"
         state.remoteCliPath = ""
         return state
+    }
+}
+
+extension AppState {
+    enum ConnectionMode: String {
+        case unconfigured
+        case local
+        case remote
+    }
+
+    enum RemoteTransport: String {
+        case ssh
+        case direct
+    }
+
+    struct RemoteGatewayConfigDraft {
+        var transport: RemoteTransport
+        var remoteUrl: String
+        var remoteHost: String?
+        var remoteTarget: String
+        var remoteIdentity: String
+        var remoteToken: String
+        var remoteTokenDirty: Bool
+    }
+
+    struct GatewayConfigSyncDraft {
+        var connectionMode: ConnectionMode
+        var remoteTransport: RemoteTransport
+        var remoteTarget: String
+        var remoteIdentity: String
+        var remoteUrl: String
+        var remoteToken: String
+        var remoteTokenDirty: Bool
+    }
+
+    private struct GatewaySelectionSnapshot: Equatable {
+        let connectionMode: ConnectionMode
+        let remoteTransport: RemoteTransport
+        let remoteUrl: String
+        let remoteTarget: String
     }
 }
 

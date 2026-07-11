@@ -7,6 +7,7 @@ const mocks = await vi.hoisted(async () => {
     create: vi.fn(),
     list: vi.fn(),
     status: vi.fn(),
+    logs: vi.fn(),
     lifecycle: vi.fn(),
     upgrade: vi.fn(),
     remove: vi.fn(),
@@ -19,6 +20,7 @@ vi.mock("../../fleet/service.runtime.js", () => ({
     create: mocks.create,
     list: mocks.list,
     status: mocks.status,
+    logs: mocks.logs,
     lifecycle: mocks.lifecycle,
     upgrade: mocks.upgrade,
     remove: mocks.remove,
@@ -28,6 +30,7 @@ vi.mock("../../fleet/service.runtime.js", () => ({
 import {
   runFleetCreateCommand,
   runFleetListCommand,
+  runFleetLogsCommand,
   runFleetRemoveCommand,
   runFleetStatusCommand,
 } from "./commands.runtime.js";
@@ -95,6 +98,16 @@ describe("fleet command output", () => {
     await runFleetListCommand({ json: true });
 
     expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledWith({ cells });
+  });
+
+  it("delegates logs without adding formatted output", async () => {
+    const options = { tenant: "acme", follow: true, tail: 100, since: "10m" };
+
+    await runFleetLogsCommand(options);
+
+    expect(mocks.logs).toHaveBeenCalledWith(options);
+    expect(mocks.defaultRuntime.log).not.toHaveBeenCalled();
+    expect(mocks.defaultRuntime.writeJson).not.toHaveBeenCalled();
   });
 
   it("writes status JSON and describes retained data on removal", async () => {

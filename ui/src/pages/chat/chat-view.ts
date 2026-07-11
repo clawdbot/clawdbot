@@ -310,7 +310,12 @@ export function renderChat(props: ChatProps) {
       })}
       class="card chat"
       style=${styleMap(
-        props.chatMessageMaxWidth ? { "--chat-message-max-width": props.chatMessageMaxWidth } : {},
+        props.chatMessageMaxWidth
+          ? {
+              "--chat-thread-max-width": props.chatMessageMaxWidth,
+              "--chat-message-max-width": "100%",
+            }
+          : {},
       )}
       @drop=${(event: DragEvent) => {
         event.preventDefault();

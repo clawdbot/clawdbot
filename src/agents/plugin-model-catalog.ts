@@ -56,6 +56,9 @@ export function decodePluginModelCatalogRelativePathPluginId(
     return undefined;
   }
   const encodedPluginId = relativePath.split(/[\\/]/)[1];
+  if (!encodedPluginId) {
+    return undefined;
+  }
   try {
     return decodeURIComponent(encodedPluginId);
   } catch {

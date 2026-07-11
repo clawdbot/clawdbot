@@ -1510,6 +1510,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Create options
   - H2: fleet list
   - H2: fleet status
+  - H2: fleet logs
   - H2: fleet start, fleet stop, and fleet restart
   - H2: fleet upgrade
   - H2: fleet rm
@@ -2859,6 +2860,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Listing and reading sessions
   - H2: Sending cross-session messages
   - H2: Status and orchestration helpers
+  - H2: Session state changes
   - H2: Spawning sub-agents
   - H2: Visibility
   - H2: Further reading
@@ -3127,6 +3129,20 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Where logs go
   - H2: Extract logs
   - H2: Notes
+  - H2: Related
+
+## gateway/audit.md
+
+- Route: /gateway/audit
+- Headings:
+  - H1: Audit history
+  - H2: Record families
+  - H2: Message lifecycle events
+  - H3: Conversation-kind classification
+  - H2: Privacy model
+  - H2: Coverage and proof limits
+  - H2: Storage, retention, and migration
+  - H2: Querying
   - H2: Related
 
 ## gateway/authentication.md
@@ -7205,6 +7221,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /plugins/sdk-channel-outbound
 - Headings:
   - H2: Adapter
+  - H2: Plain-text sanitization
   - H2: Delivery Evidence
   - H2: Existing outbound adapters
   - H2: Durable sends

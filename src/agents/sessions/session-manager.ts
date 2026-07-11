@@ -354,9 +354,9 @@ export function parseSessionEntries(content: string): FileEntry[] {
 }
 
 export function getLatestCompactionEntry(entries: SessionEntry[]): CompactionEntry | null {
-  for (let i = entries.length - 1; i >= 0; i--) {
-    if (entries[i].type === "compaction") {
-      return entries[i] as CompactionEntry;
+  for (const entry of entries.toReversed()) {
+    if (entry.type === "compaction") {
+      return entry;
     }
   }
   return null;
@@ -590,7 +590,7 @@ function hasCacheableSessionHeader(entries: FileEntry[]): boolean {
     return true;
   }
   const header = entries[0];
-  if (header.type !== "session" || typeof (header as { id?: unknown }).id !== "string") {
+  if (!header || header.type !== "session" || typeof header.id !== "string") {
     return false;
   }
 
@@ -901,8 +901,9 @@ function revalidateLoadedSessionFile(
 // mutations from leaking back into the cache).
 function copyFileEntries(entries: readonly FileEntry[]): FileEntry[] {
   const copy = entries.slice();
-  if (copy.length > 0 && copy[0].type === "session" && Object.isFrozen(copy[0])) {
-    copy[0] = cloneFileEntry(copy[0]);
+  const header = copy.at(0);
+  if (header?.type === "session" && Object.isFrozen(header)) {
+    copy[0] = cloneFileEntry(header);
   }
   return copy;
 }
@@ -1319,7 +1320,7 @@ async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
       return null;
     }
     const header = entries[0];
-    if (header.type !== "session") {
+    if (!header || header.type !== "session") {
       return null;
     }
 
@@ -2507,8 +2508,7 @@ export class SessionManager {
     // Walk entries in reverse to find the latest session_info entry.
     // Empty names explicitly clear the session title.
     const entries = this.getEntries();
-    for (let i = entries.length - 1; i >= 0; i--) {
-      const entry = entries[i];
+    for (const entry of entries.toReversed()) {
       if (entry.type === "session_info") {
         return entry.name?.trim() || undefined;
       }

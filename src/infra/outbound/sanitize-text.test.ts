@@ -42,6 +42,17 @@ describe("sanitizeForPlainText", () => {
     expect(sanitizeForPlainText("<code>foo()</code>")).toBe("`foo()`");
   });
 
+  it("converts attributed inline tags without matching tag-name prefixes", () => {
+    const attributed = `<strong title="b>"><em title='i>'><del data-note="s>"><code class='c>'>x</code></del></em></strong>`;
+    expect(sanitizeForPlainText(attributed)).toBe("*_~`x`~_*");
+    expect(sanitizeForPlainText(attributed, { style: "markdown" })).toBe("**_~~`x`~~_**");
+    expect(
+      sanitizeForPlainText(
+        '<bold title="b">b</bold><strikeout title="s">s</strikeout><codebase>c</codebase>',
+      ),
+    ).toBe("bsc");
+  });
+
   // --- block elements -----------------------------------------------------
 
   it("converts <p> and <div> to newlines", () => {
@@ -51,6 +62,9 @@ describe("sanitizeForPlainText", () => {
   it("converts headings to bold text with newlines", () => {
     expect(sanitizeForPlainText("<h1>Title</h1>")).toBe("\n*Title*\n");
     expect(sanitizeForPlainText("<h3>Section</h3>")).toBe("\n*Section*\n");
+    expect(sanitizeForPlainText('<h2 title="section">Markdown</h2>', { style: "markdown" })).toBe(
+      "\n**Markdown**\n",
+    );
   });
 
   it("converts <li> to bullet points", () => {

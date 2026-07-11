@@ -429,7 +429,7 @@ function getAccountId(accessToken: string): string | null {
  * @param options.originator - OAuth originator parameter (defaults to "openclaw")
  */
 export async function loginOpenAICodex(options: {
-  onAuth: (info: { url: string; instructions?: string }) => void;
+  onAuth: (info: { url: string; instructions?: string }) => Promise<void> | void;
   onPrompt: (prompt: OAuthPrompt) => Promise<string>;
   onProgress?: (message: string) => void;
   onManualCodeInput?: () => Promise<string>;
@@ -443,7 +443,7 @@ export async function loginOpenAICodex(options: {
   let code: string | undefined;
   try {
     throwIfOAuthLoginAborted(options.signal);
-    options.onAuth({
+    await options.onAuth({
       url,
       instructions: "A browser window should open. Complete login to finish.",
     });

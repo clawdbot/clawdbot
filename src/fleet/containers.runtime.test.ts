@@ -23,6 +23,7 @@ import {
   createFleetContainerRuntime,
   type CellContainerProfile,
   type FleetContainerCommandExecutor,
+  type FleetContainerStreamExecutor,
 } from "./containers.runtime.js";
 
 function successfulExecutor() {
@@ -389,6 +390,61 @@ describe("fleet container runtime", () => {
       ["rm", "--force", "cell-acme"],
       ["rm", "cell-acme"],
     ]);
+  });
+
+  it.each([
+    [{}, ["logs", "cell-acme"]],
+    [{ follow: true }, ["logs", "--follow", "cell-acme"]],
+    [{ tail: 200 }, ["logs", "--tail", "200", "cell-acme"]],
+    [{ since: "10m" }, ["logs", "--since", "10m", "cell-acme"]],
+    [
+      { follow: true, tail: 100, since: "2026-07-11T10:00:00Z" },
+      ["logs", "--follow", "--tail", "100", "--since", "2026-07-11T10:00:00Z", "cell-acme"],
+    ],
+  ] as const)("streams logs with exact argv for %o", async (options, expectedArgs) => {
+    const stream = vi.fn<FleetContainerStreamExecutor>(async () => ({ code: 0, signal: null }));
+    const runtime = createFleetContainerRuntime(successfulExecutor(), stream);
+
+    await expect(runtime.logs("podman", "cell-acme", options)).resolves.toBeUndefined();
+
+    expect(stream).toHaveBeenCalledWith("podman", expectedArgs);
+  });
+
+  it.each(["", "-1h", "10 m", "10m\n"])("rejects unsafe --since value %o", async (since) => {
+    const stream = vi.fn<FleetContainerStreamExecutor>(async () => ({ code: 0, signal: null }));
+    const runtime = createFleetContainerRuntime(successfulExecutor(), stream);
+
+    await expect(runtime.logs("docker", "cell-acme", { since })).rejects.toThrow(/--since/iu);
+    expect(stream).not.toHaveBeenCalled();
+  });
+
+  it("reports stream failures but accepts operator interrupt while following", async () => {
+    const stream = vi.fn<FleetContainerStreamExecutor>();
+    const runtime = createFleetContainerRuntime(successfulExecutor(), stream);
+    stream
+      .mockResolvedValueOnce({ code: 7, signal: null })
+      .mockResolvedValueOnce({ code: 130, signal: null })
+      .mockResolvedValueOnce({ code: 130, signal: null })
+      .mockResolvedValueOnce({ code: null, signal: "SIGTERM" })
+      .mockResolvedValueOnce({ code: null, signal: "SIGTERM" });
+
+    await expect(runtime.logs("podman", "cell-acme", {})).rejects.toThrow(
+      /podman logs failed with exit code 7/iu,
+    );
+    await expect(runtime.logs("podman", "cell-acme", { follow: true })).resolves.toBeUndefined();
+    await expect(runtime.logs("podman", "cell-acme", {})).rejects.toThrow(
+      /podman logs failed with exit code 130/iu,
+    );
+    // A forwarded termination signal ends a follow stream cleanly but fails a bounded read.
+    await expect(runtime.logs("podman", "cell-acme", { follow: true })).resolves.toBeUndefined();
+    await expect(runtime.logs("podman", "cell-acme", {})).rejects.toThrow(
+      /podman logs failed with signal SIGTERM/iu,
+    );
+    // Crash signals are never masked as operator stops, even while following.
+    stream.mockResolvedValueOnce({ code: null, signal: "SIGSEGV" });
+    await expect(runtime.logs("podman", "cell-acme", { follow: true })).rejects.toThrow(
+      /podman logs failed with signal SIGSEGV/iu,
+    );
   });
 
   it("creates and removes a labeled per-cell network", async () => {

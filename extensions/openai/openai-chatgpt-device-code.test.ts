@@ -153,6 +153,38 @@ describe("loginOpenAICodexDeviceCode", () => {
     }
   });
 
+  it("aborts device-code polling without another request", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    try {
+      const fetchMock = vi
+        .fn<typeof fetch>()
+        .mockResolvedValueOnce(
+          createJsonResponse({
+            device_auth_id: "device-auth-123",
+            user_code: "CODE-12345",
+            interval: "5",
+          }),
+        )
+        .mockResolvedValueOnce(new Response(null, { status: 404 }));
+
+      const login = loginOpenAICodexDeviceCode({
+        fetchFn: fetchMock,
+        onVerification: async () => {},
+        signal: controller.signal,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+
+      controller.abort(new Error("cancelled"));
+      await expect(login).rejects.toThrow("cancelled");
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("treats JWT-derived expiry fallback as an absolute timestamp", async () => {
     const accessToken = createJwt({
       exp: Math.floor(Date.now() / 1000) + 600,

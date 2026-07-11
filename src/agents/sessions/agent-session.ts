@@ -177,11 +177,15 @@ export function parseSkillBlock(text: string): ParsedSkillBlock | null {
   if (!match) {
     return null;
   }
+  const [, name, location, content, userMessage] = match;
+  if (name === undefined || location === undefined || content === undefined) {
+    return null;
+  }
   return {
-    name: match[1],
-    location: match[2],
-    content: match[3],
-    userMessage: match[4]?.trim() || undefined,
+    name,
+    location,
+    content,
+    userMessage: userMessage?.trim() || undefined,
   };
 }
 
@@ -682,8 +686,7 @@ export class AgentSession {
       return false;
     }
 
-    for (let i = event.messages.length - 1; i >= 0; i--) {
-      const message = event.messages[i];
+    for (const message of event.messages.toReversed()) {
       if (message.role === "assistant") {
         return this.isRetryableError(message);
       }
@@ -707,8 +710,7 @@ export class AgentSession {
   /** Find the last assistant message in agent state (including aborted ones) */
   private findLastAssistantMessage(): AssistantMessage | undefined {
     const messages = this.agent.state.messages;
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const msg = messages[i];
+    for (const msg of messages.toReversed()) {
       if (msg.role === "assistant") {
         return msg;
       }
@@ -1682,7 +1684,10 @@ export class AgentSession {
     const len = scopedModels.length;
     const nextIndex =
       direction === "forward" ? (currentIndex + 1) % len : (currentIndex - 1 + len) % len;
-    const next = scopedModels[nextIndex];
+    const next = scopedModels.at(nextIndex);
+    if (!next) {
+      throw new Error("Scoped model cycle produced an invalid index");
+    }
     const thinkingLevel = this.getThinkingLevelForModelSwitch(next.thinkingLevel);
 
     // Apply model
@@ -1718,7 +1723,10 @@ export class AgentSession {
     const len = availableModels.length;
     const nextIndex =
       direction === "forward" ? (currentIndex + 1) % len : (currentIndex - 1 + len) % len;
-    const nextModel = availableModels[nextIndex];
+    const nextModel = availableModels.at(nextIndex);
+    if (!nextModel) {
+      throw new Error("Available model cycle produced an invalid index");
+    }
 
     const thinkingLevel = this.getThinkingLevelForModelSwitch();
     this.agent.state.model = nextModel;
@@ -1778,7 +1786,10 @@ export class AgentSession {
     const levels = this.getAvailableThinkingLevels();
     const currentIndex = levels.indexOf(this.thinkingLevel);
     const nextIndex = (currentIndex + 1) % levels.length;
-    const nextLevel = levels[nextIndex];
+    const nextLevel = levels.at(nextIndex);
+    if (!nextLevel) {
+      return undefined;
+    }
 
     this.setThinkingLevel(nextLevel);
     return nextLevel;
@@ -2099,7 +2110,7 @@ export class AgentSession {
       // Remove the error message from agent state (it IS saved to session for history,
       // but we don't want it in context for the retry)
       const messages = this.agent.state.messages;
-      if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
+      if (messages.at(-1)?.role === "assistant") {
         this.agent.state.messages = messages.slice(0, -1);
       }
       return await this.runAutoCompaction("overflow", true);
@@ -2118,10 +2129,10 @@ export class AgentSession {
       // Verify the usage source is post-compaction. Kept pre-compaction messages
       // have stale usage reflecting the old (larger) context and would falsely
       // trigger compaction right after one just finished.
-      const usageMsg = messages[estimate.lastUsageIndex];
+      const usageMsg = messages.at(estimate.lastUsageIndex);
       if (
         compactionEntry &&
-        usageMsg.role === "assistant" &&
+        usageMsg?.role === "assistant" &&
         usageMsg.timestamp <= new Date(compactionEntry.timestamp).getTime()
       ) {
         return false;
@@ -2688,7 +2699,7 @@ export class AgentSession {
 
     // Remove error message from agent state (keep in session for history)
     const messages = this.agent.state.messages;
-    if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
+    if (messages.at(-1)?.role === "assistant") {
       this.agent.state.messages = messages.slice(0, -1);
     }
 
@@ -3185,8 +3196,7 @@ export class AgentSession {
       // Check if there's a valid assistant usage after the compaction boundary
       const compactionIndex = branchEntries.lastIndexOf(latestCompaction);
       let hasPostCompactionUsage = false;
-      for (let i = branchEntries.length - 1; i > compactionIndex; i--) {
-        const entry = branchEntries[i];
+      for (const entry of branchEntries.slice(compactionIndex + 1).toReversed()) {
         if (entry.type === "message" && entry.message.role === "assistant") {
           const assistant = entry.message;
           if (assistant.stopReason !== "aborted" && assistant.stopReason !== "error") {

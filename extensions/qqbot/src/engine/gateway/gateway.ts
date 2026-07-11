@@ -9,6 +9,7 @@ import { initCommands } from "../commands/slash-commands-impl.js";
 import { resolveGroupCommandLevelFromAccountConfig } from "../config/group.js";
 import { createNodeSessionStoreReader } from "../group/activation.js";
 import type { HistoryEntry } from "../group/history.js";
+import { claimMessageReply } from "../messaging/outbound-reply.js";
 import { setOutboundAudioPort } from "../messaging/outbound.js";
 import {
   clearTokenCache,
@@ -288,6 +289,13 @@ async function startTypingForEvent(
     const creds = accountToCreds(account);
     const rawNotifyFn = createRawInputNotifyFn(account.appId);
     const sendNotifyAndStartKeepAlive = async () => {
+      // Typing and text share QQ's five passive calls. Keep one slot for the
+      // final reply. The claim stays inside this retried closure so each wire
+      // attempt consumes its own slot.
+      const passive = claimMessageReply(event.messageId, 1);
+      if (!passive.allowed) {
+        return { keepAlive: null };
+      }
       const resp = await senderSendInputNotify({
         openid: event.senderId,
         creds,

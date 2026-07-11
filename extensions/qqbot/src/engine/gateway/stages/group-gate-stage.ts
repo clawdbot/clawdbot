@@ -1,13 +1,12 @@
 // Qqbot plugin module implements group gate stage behavior.
 import type { HistoryPort } from "../../adapter/history.port.js";
 import type { QQBotInboundAccess } from "../../adapter/index.js";
-import type { MentionGatePort } from "../../adapter/mention-gate.port.js";
 import { classifyCoreCommandForGroup } from "../../commands/command-visibility.js";
 import { DEFAULT_GROUP_PROMPT, resolveGroupSettings } from "../../config/group.js";
 import { resolveGroupActivation } from "../../group/activation.js";
 import { toAttachmentSummaries, type HistoryEntry } from "../../group/history.js";
 import { detectWasMentioned, hasAnyMention, resolveImplicitMention } from "../../group/mention.js";
-import type { GroupMessageGateResult } from "../../group/message-gating.js";
+import { resolveGroupMessageGate } from "../../group/message-gating.js";
 import { getRefIndex } from "../../ref/store.js";
 import type { InboundContext, InboundGroupInfo, InboundPipelineDeps } from "../inbound-context.js";
 import { isMergedTurn, type QueuedMessage } from "../message-queue.js";
@@ -74,7 +73,7 @@ export function runGroupGateStage(input: GroupGateStageInput): GroupGateStageRes
   const commandAuthorized =
     deps.allowTextCommands !== false && input.access.commandAccess.authorized;
 
-  const gate = resolveGateWithPort({
+  const gate = resolveGroupMessageGate({
     mentionGatePort: deps.adapters.mentionGate,
     ignoreOtherMentions,
     hasAnyMention: anyMention,
@@ -134,69 +133,6 @@ export function runGroupGateStage(input: GroupGateStageInput): GroupGateStageRes
   }
 
   return { kind: "skip", groupInfo, skipReason: gate.action };
-}
-
-function resolveGateWithPort(params: {
-  mentionGatePort: MentionGatePort;
-  ignoreOtherMentions: boolean;
-  hasAnyMention: boolean;
-  wasMentioned: boolean;
-  implicitMention: boolean;
-  allowTextCommands: boolean;
-  isControlCommand: boolean;
-  commandAuthorized: boolean;
-  requireMention: boolean;
-}): GroupMessageGateResult {
-  if (
-    params.ignoreOtherMentions &&
-    params.hasAnyMention &&
-    !params.wasMentioned &&
-    !params.implicitMention
-  ) {
-    return {
-      action: "drop_other_mention",
-      effectiveWasMentioned: false,
-      shouldBypassMention: false,
-    };
-  }
-
-  const decision = params.mentionGatePort.resolveInboundMentionDecision({
-    facts: {
-      canDetectMention: true,
-      wasMentioned: params.wasMentioned,
-      hasAnyMention: params.hasAnyMention,
-      implicitMentionKinds: params.implicitMention ? ["reply_to_bot"] : [],
-    },
-    policy: {
-      isGroup: true,
-      requireMention: params.requireMention,
-      allowTextCommands: params.allowTextCommands,
-      hasControlCommand: params.isControlCommand,
-      commandAuthorized: params.commandAuthorized,
-    },
-  });
-
-  if (params.allowTextCommands && params.isControlCommand && !params.commandAuthorized) {
-    return {
-      action: "block_unauthorized_command",
-      effectiveWasMentioned: false,
-      shouldBypassMention: false,
-    };
-  }
-
-  if (decision.shouldSkip) {
-    return {
-      action: "skip_no_mention",
-      effectiveWasMentioned: decision.effectiveWasMentioned,
-      shouldBypassMention: decision.shouldBypassMention,
-    };
-  }
-
-  return {
-    action: "pass",
-    effectiveWasMentioned: decision.effectiveWasMentioned,
-    shouldBypassMention: decision.shouldBypassMention,
-  };
 }
 
 function recordGroupHistory(params: {

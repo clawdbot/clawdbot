@@ -19,7 +19,7 @@ const ARTIFACT_FALLBACK_REQUIRED_WORKFLOWS = [
 ];
 const WORKFLOW_RUNS_PAGE_SIZE = 100;
 const MAX_WORKFLOW_RUN_SEARCH_RESULTS = 1_000;
-export const HOSTED_GATE_MAX_AGE_HOURS = 12;
+export const HOSTED_GATE_MAX_AGE_HOURS = 24;
 const HOSTED_GATE_MAX_AGE_MS = HOSTED_GATE_MAX_AGE_HOURS * 60 * 60 * 1_000;
 const HOSTED_GATE_CLOCK_SKEW_MS = 5 * 60 * 1_000;
 
@@ -143,65 +143,71 @@ function isRecentRun(run, nowMs) {
   );
 }
 
-function preferredCiRun(runs) {
+function isSuccessfulRecentRun(run, nowMs) {
+  return run?.status === "completed" && run.conclusion === "success" && isRecentRun(run, nowMs);
+}
+
+function preferredCiRun(runs, nowMs) {
   const scheduledRuns = runs.filter((run) => run.event === "pull_request");
   const latestScheduledRun = latestRun(scheduledRuns);
-  const failedScheduledRun = latestRun(
-    scheduledRuns.filter(
-      (run) =>
-        run.status === "completed" && !["success", "cancelled", "skipped"].includes(run.conclusion),
-    ),
+  const latestCompletedScheduledRun = latestRun(
+    scheduledRuns.filter((run) => run.status === "completed"),
   );
-  if (failedScheduledRun && latestScheduledRun?.status !== "completed") {
-    return failedScheduledRun;
+  const latestManualRun = latestRun(runs.filter((run) => run.event === "workflow_dispatch"));
+
+  // Manual proof may replace stale scheduled success or a pending run,
+  // never an unresolved terminal non-success.
+  if (latestCompletedScheduledRun && latestCompletedScheduledRun.conclusion !== "success") {
+    return latestCompletedScheduledRun;
   }
-  if (latestScheduledRun?.status === "completed") {
+  if (latestScheduledRun?.status === "completed" && isRecentRun(latestScheduledRun, nowMs)) {
     return latestScheduledRun;
   }
-  return latestRun(runs.filter((run) => run.event === "workflow_dispatch")) ?? latestScheduledRun;
+  return latestManualRun ?? latestScheduledRun;
 }
 
 function successfulRunOrThrow(
   runs,
   workflowName,
   sha,
-  { allowManual = true, requireRecent = false, nowMs = Date.now() } = {},
+  { allowManual = true, nowMs = Date.now() } = {},
 ) {
-  const matchingRuns = matchingAuthoritativeRuns(runs, workflowName, sha, allowManual).filter(
-    (run) => !requireRecent || (run?.event === "pull_request" && isRecentRun(run, nowMs)),
-  );
-  const run = workflowName === "CI" ? preferredCiRun(matchingRuns) : latestRun(matchingRuns);
-  if (!run || run.status !== "completed" || run.conclusion !== "success") {
+  const matchingRuns = matchingAuthoritativeRuns(runs, workflowName, sha, allowManual);
+  const run = workflowName === "CI" ? preferredCiRun(matchingRuns, nowMs) : latestRun(matchingRuns);
+  if (!isSuccessfulRecentRun(run, nowMs)) {
     throw new Error(
-      `Missing successful ${requireRecent ? "recent " : ""}${workflowName} workflow for ${sha}. Observed: ${formatObservedRuns(matchingRuns)}`,
+      `Missing successful recent ${workflowName} workflow for ${sha}. Observed: ${formatObservedRuns(matchingRuns)}`,
     );
   }
   return run;
 }
 
-function successfulReleaseGateFallback(workflowRuns, sha) {
-  const fallback = latestRun(workflowRuns.filter((run) => isReleaseGateCiRun(run, sha)));
-  if (fallback?.status !== "completed" || fallback.conclusion !== "success") {
-    return null;
-  }
-  return fallback;
+function hasSuccessfulRecentReleaseGate(workflowRuns, sha, nowMs) {
+  const releaseGate = latestRun(workflowRuns.filter((run) => isReleaseGateCiRun(run, sha)));
+  return isSuccessfulRecentRun(releaseGate, nowMs);
 }
 
-function canCoverQueuedBuildArtifacts(workflowRuns, sha) {
-  if (!successfulReleaseGateFallback(workflowRuns, sha)) {
+function canCoverQueuedBuildArtifacts(workflowRuns, sha, nowMs) {
+  if (!hasSuccessfulRecentReleaseGate(workflowRuns, sha, nowMs)) {
     return false;
   }
   const supportingGatesPassed = ARTIFACT_FALLBACK_REQUIRED_WORKFLOWS.every((workflowName) => {
-    const run = latestRun(matchingAuthoritativeRuns(workflowRuns, workflowName, sha));
-    return run?.status === "completed" && run.conclusion === "success";
+    const run = latestRun(matchingAuthoritativeRuns(workflowRuns, workflowName, sha, false));
+    return isSuccessfulRecentRun(run, nowMs);
   });
   if (!supportingGatesPassed) {
     return false;
   }
-  const buildArtifactRuns = matchingAuthoritativeRuns(workflowRuns, BUILD_ARTIFACTS_WORKFLOW, sha);
+  const buildArtifactRuns = matchingAuthoritativeRuns(
+    workflowRuns,
+    BUILD_ARTIFACTS_WORKFLOW,
+    sha,
+    false,
+  );
   const latestBuildArtifactRun = latestRun(buildArtifactRuns);
   return (
     latestBuildArtifactRun?.status === "queued" &&
+    isRecentRun(latestBuildArtifactRun, nowMs) &&
     buildArtifactRuns.every(
       (run) =>
         run.status === "queued" || (run.status === "completed" && run.conclusion === "success"),
@@ -241,15 +247,13 @@ export function collectHostedGateEvidence({
     throw new Error("workflowRuns must be an array.");
   }
 
-  const collectForSha = (evidenceSha, requireRecent, requiredScheduledWorkflows = new Set()) => {
-    const allowManual = !requireRecent;
+  const collectForSha = (evidenceSha, { allowManual, requiredScheduledWorkflows = new Set() }) => {
     const workflows = [];
     const fallbackCoveredWorkflows = [];
     if (!changelogOnly) {
       workflows.push(
         successfulRunOrThrow(workflowRuns, "CI", evidenceSha, {
           allowManual,
-          requireRecent,
           nowMs,
         }),
       );
@@ -267,7 +271,7 @@ export function collectHostedGateEvidence({
       if (
         allowManual &&
         workflowName === BUILD_ARTIFACTS_WORKFLOW &&
-        canCoverQueuedBuildArtifacts(workflowRuns, evidenceSha)
+        canCoverQueuedBuildArtifacts(workflowRuns, evidenceSha, nowMs)
       ) {
         fallbackCoveredWorkflows.push({
           name: workflowName,
@@ -279,7 +283,6 @@ export function collectHostedGateEvidence({
       workflows.push(
         successfulRunOrThrow(workflowRuns, workflowName, evidenceSha, {
           allowManual,
-          requireRecent,
           nowMs,
         }),
       );
@@ -290,7 +293,7 @@ export function collectHostedGateEvidence({
   let evidenceSha = sha;
   let selected;
   try {
-    selected = collectForSha(sha, false);
+    selected = collectForSha(sha, { allowManual: true });
   } catch (exactError) {
     const currentWorkflowNames = ["CI", ...SCHEDULED_HOSTED_WORKFLOWS];
     const currentHeadHasTerminalNonSuccess = currentWorkflowNames.some((workflowName) => {
@@ -337,7 +340,10 @@ export function collectHostedGateEvidence({
     let fallbackError;
     for (const fallbackSha of new Set(fallbackShas)) {
       try {
-        selected = collectForSha(fallbackSha, true, targetScheduledWorkflows);
+        selected = collectForSha(fallbackSha, {
+          allowManual: false,
+          requiredScheduledWorkflows: targetScheduledWorkflows,
+        });
         evidenceSha = fallbackSha;
         break;
       } catch (error) {

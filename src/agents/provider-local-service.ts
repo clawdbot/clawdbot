@@ -537,7 +537,11 @@ function appendLocalServiceOutputTail(
     return redacted;
   }
   let start = bytes.byteLength - LOCAL_SERVICE_OUTPUT_TAIL_MAX_BYTES;
-  while (start < bytes.byteLength && (bytes[start] & 0xc0) === 0x80) {
+  while (start < bytes.byteLength) {
+    const byte = bytes.at(start);
+    if (byte === undefined || (byte & 0xc0) !== 0x80) {
+      break;
+    }
     start += 1;
   }
   return bytes.subarray(start).toString("utf8");

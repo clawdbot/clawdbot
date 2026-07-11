@@ -101,6 +101,7 @@ const mocks = vi.hoisted(() => ({
   callGatewayLeastPrivilege: vi.fn(),
   randomIdempotencyKey: vi.fn(() => "idem-gateway-action"),
   maybeApplyTtsToPayload: vi.fn(async (params: { payload: unknown }) => params.payload),
+  prepareOutboundMirrorRoute: vi.fn(),
 }));
 
 vi.mock("./channel-resolution.js", () => ({
@@ -148,7 +149,12 @@ vi.mock("../../channels/plugins/bootstrap-registry.js", () => ({
 vi.mock("./message-action-threading.js", async () => {
   const { createOutboundThreadingMock } =
     await import("./message-action-threading.test-helpers.js");
-  return createOutboundThreadingMock();
+  const threading = createOutboundThreadingMock();
+  mocks.prepareOutboundMirrorRoute.mockImplementation(threading.prepareOutboundMirrorRoute);
+  return {
+    ...threading,
+    prepareOutboundMirrorRoute: mocks.prepareOutboundMirrorRoute,
+  };
 });
 
 function createAlwaysConfiguredPluginConfig(account: Record<string, unknown> = { enabled: true }) {
@@ -312,6 +318,7 @@ describe("runMessageAction plugin dispatch", () => {
     mocks.maybeApplyTtsToPayload.mockImplementation(
       async (params: { payload: unknown }) => params.payload,
     );
+    mocks.prepareOutboundMirrorRoute.mockClear();
   });
 
   describe("alias-based plugin action dispatch", () => {
@@ -2206,6 +2213,17 @@ describe("runMessageAction plugin dispatch", () => {
         handledBy: "core",
         payload: { ok: true },
       });
+      mocks.prepareOutboundMirrorRoute.mockResolvedValueOnce({
+        resolvedThreadId: undefined,
+        outboundRoute: {
+          sessionKey: "agent:main:cardchat:channel:test-card",
+          baseSessionKey: "agent:main:cardchat:channel:test-card",
+          peer: { kind: "channel", id: "test-card" },
+          chatType: "channel",
+          from: "cardchat:channel:test-card",
+          to: "channel:test-card",
+        },
+      });
       setActivePluginRegistry(
         createTestRegistry([
           {
@@ -2245,6 +2263,7 @@ describe("runMessageAction plugin dispatch", () => {
           clientName: "cli",
           mode: "cli",
         },
+        agentId: "main",
         dryRun: false,
       });
 
@@ -2254,6 +2273,11 @@ describe("runMessageAction plugin dispatch", () => {
       expect(mocks.callGatewayLeastPrivilege).not.toHaveBeenCalled();
       const executeCall = readMockCallArg(mocks.executeSendAction, "execute send call");
       expectRecordFields(executeCall, { message: "Deployment trend" }, "execute send call");
+      expectRecordFields(
+        readRecordField(executeCall, "ctx", "execute send context"),
+        { conversationType: "channel" },
+        "execute send context",
+      );
       expectRecordFields(
         readRecordField(executeCall, "payload", "execute send payload"),
         { text: "Deployment trend", presentation },

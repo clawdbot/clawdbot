@@ -269,7 +269,7 @@ export class EmbeddedBlockChunker {
     }
 
     const nextStart =
-      absoluteBreakIdx < source.length && /\s/.test(source[absoluteBreakIdx])
+      absoluteBreakIdx < source.length && /\s/.test(source.charAt(absoluteBreakIdx))
         ? absoluteBreakIdx + 1
         : absoluteBreakIdx;
     return { start: skipLeadingNewlines(source, nextStart), reopenFence: undefined };
@@ -375,7 +375,7 @@ export class EmbeddedBlockChunker {
     }
 
     for (let i = window.length - 1; i >= minChars; i--) {
-      if (/\s/.test(window[i]) && isSafeFenceBreak(fenceSpans, offset + i)) {
+      if (/\s/.test(window.charAt(i)) && isSafeFenceBreak(fenceSpans, offset + i)) {
         return { index: i };
       }
     }

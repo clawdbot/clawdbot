@@ -190,7 +190,6 @@ async function setRuntimeApiKeyForCompletion(params: {
       config: params.cfg,
     });
     const protectedAuth = protectPreparedProviderRuntimeAuth({
-      sourceApiKey: params.apiKey,
       provider: params.model.provider,
       preparedAuth: {
         apiKey: copilotToken.token,
@@ -205,7 +204,6 @@ async function setRuntimeApiKeyForCompletion(params: {
     };
   }
   const preparedAuth = protectPreparedProviderRuntimeAuth({
-    sourceApiKey: params.apiKey,
     provider: params.model.provider,
     preparedAuth: await prepareProviderRuntimeAuth({
       provider: params.model.provider,

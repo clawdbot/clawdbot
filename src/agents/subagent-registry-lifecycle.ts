@@ -14,6 +14,7 @@ import {
 } from "../process/gateway-work-admission.js";
 import { defaultRuntime } from "../runtime.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
+import { recordSubagentTerminalState } from "../sessions/session-state-events.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import type { DetachedTaskFindResult } from "../tasks/detached-task-runtime-contract.js";
@@ -1903,6 +1904,17 @@ export function createSubagentRegistryLifecycleController(params: {
       return;
     }
     const isProvisionalKill = entry.killReconciliation !== undefined;
+    // Record only the current, non-superseded callback with a committed outcome; the
+    // run-terminal dedupe key is first-write-wins, so a provisional/stale status here
+    // would permanently mislabel the signal-log terminal kind.
+    if (!isProvisionalKill && entry.outcome?.status && entry.outcome.status !== "unknown") {
+      recordSubagentTerminalState({
+        childSessionKey: entry.childSessionKey,
+        runId: entry.runId,
+        requesterSessionKey: entry.requesterSessionKey,
+        outcomeStatus: entry.outcome.status,
+      });
+    }
 
     if (!completeParams.suppressSessionEffects) {
       try {

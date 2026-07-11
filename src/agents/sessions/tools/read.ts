@@ -360,7 +360,11 @@ export function createReadToolDefinition(
               let outputText: string;
               if (truncation.firstLineExceedsLimit) {
                 // First line alone exceeds the byte limit. Point the model at a bash fallback.
-                const firstLineSize = formatSize(Buffer.byteLength(allLines[startLine], "utf-8"));
+                const firstLine = allLines.at(startLine);
+                if (firstLine === undefined) {
+                  throw new Error("Requested line is outside the file.");
+                }
+                const firstLineSize = formatSize(Buffer.byteLength(firstLine, "utf-8"));
                 outputText = `[Line ${startLineDisplay} is ${firstLineSize}, exceeds ${formatSize(DEFAULT_MAX_BYTES)} limit. Use bash: sed -n '${startLineDisplay}p' ${quotePosixShellArg(path)} | head -c ${DEFAULT_MAX_BYTES}]`;
                 details = { truncation };
               } else if (truncation.truncated) {

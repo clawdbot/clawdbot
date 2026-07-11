@@ -630,7 +630,7 @@ export function mergeAuthProfileStores(
                 profiles[profileId] || !removedRuntimeExternalProfileIds.has(profileId),
             ),
           ])
-          .filter(([, profileIds]) => profileIds.length > 0),
+          .filter(([, profileIds]) => Array.isArray(profileIds) && profileIds.length > 0),
       )
     : undefined;
   const mergedLastGood = mergeRecord(base.lastGood, override.lastGood);

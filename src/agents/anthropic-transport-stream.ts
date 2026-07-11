@@ -410,6 +410,9 @@ function convertAnthropicMessages(
     : findActiveAnthropicToolTurnAssistantIndex(transformedMessages);
   for (let i = 0; i < transformedMessages.length; i += 1) {
     const msg = transformedMessages[i];
+    if (!msg) {
+      continue;
+    }
     if (msg.role === "user") {
       const isRuntimeContextCarrier = msg.runtimeContextCarrier === true;
       if (typeof msg.content === "string") {
@@ -564,11 +567,11 @@ function convertAnthropicMessages(
         },
       ];
       let j = i + 1;
-      while (j < transformedMessages.length && transformedMessages[j].role === "toolResult") {
-        const nextMsg = transformedMessages[j] as Extract<
-          Context["messages"][number],
-          { role: "toolResult" }
-        >;
+      while (j < transformedMessages.length) {
+        const nextMsg = transformedMessages.at(j);
+        if (nextMsg?.role !== "toolResult") {
+          break;
+        }
         toolResults.push({
           type: "tool_result",
           tool_use_id: nextMsg.toolCallId,
@@ -1467,8 +1470,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               costModel = { ...model, cost: CLAUDE_FABLE_5_FALLBACK_MODEL_COST };
               calculateCost(costModel, output.usage);
               eventSink.push({ type: "start", partial: output as never });
-              for (let i = 0; i < output.content.length; i += 1) {
-                const block = output.content[i];
+              for (const [i, block] of output.content.entries()) {
                 if (block.type !== "text") {
                   continue;
                 }

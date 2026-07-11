@@ -1,5 +1,7 @@
 import AppKit
 import Foundation
+import OpenClawChatUI
+import OpenClawProtocol
 import SwiftUI
 
 enum OnboardingProviderIcon {
@@ -52,11 +54,25 @@ enum OnboardingProviderIcon {
     }
 }
 
+enum OnboardingProviderAuthLink {
+    static func safeURL(_ rawValue: String?) -> URL? {
+        guard let rawValue,
+              let url = URL(string: rawValue),
+              url.scheme?.lowercased() == "https",
+              url.host() != nil,
+              url.user() == nil,
+              url.password() == nil
+        else { return nil }
+        return url
+    }
+}
+
 struct OnboardingAISetupView: View {
     @Bindable var model: OnboardingAISetupModel
     var crestodianChat: CrestodianOnboardingChatModel
     @Binding var showCrestodianChat: Bool
     var retryConfiguredGatewayProbe: () -> Void
+    @State private var openedProviderAuthURL: URL?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -70,6 +86,15 @@ struct OnboardingAISetupView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .sheet(isPresented: self.$showCrestodianChat) {
             self.crestodianSheet
+        }
+        .sheet(isPresented: Binding(
+            get: { self.model.activeAuthOption != nil },
+            set: {
+                if !$0 {
+                    self.model.cancelProviderAuth()
+                }
+            })) {
+                self.providerAuthSheet
         }
     }
 
@@ -156,6 +181,7 @@ struct OnboardingAISetupView: View {
         }
 
         if !self.model.connected, self.model.providerCatalogLoaded {
+            self.providerAuthSection
             self.manualSection
         }
 
@@ -353,9 +379,10 @@ struct OnboardingAISetupView: View {
         return false
     }
 
+    @ViewBuilder
     private var manualSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if self.model.manualProviders.isEmpty {
+        if self.model.manualProviders.isEmpty {
+            if self.model.authOptions.isEmpty {
                 OnboardingErrorCard(
                     title: "No key-based providers are available",
                     message: "Enable or install a text-inference provider plugin on this Gateway, then check again.",
@@ -364,21 +391,199 @@ struct OnboardingAISetupView: View {
                 {
                     self.model.retryFromScratch()
                 }
-            } else if self.model.candidates.isEmpty || self.model.showManualEntry {
-                self.manualForm
-            } else {
-                Button {
-                    withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
-                        self.model.showManualEntry = true
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 10) {
+                if self.model.candidates.isEmpty || self.model.showManualEntry {
+                    self.manualForm
+                } else {
+                    Button {
+                        withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
+                            self.model.showManualEntry = true
+                        }
+                    } label: {
+                        Label("Connect with an API key or token instead…", systemImage: "key")
+                            .font(.callout)
                     }
-                } label: {
-                    Label("Connect with an API key or token instead…", systemImage: "key")
-                        .font(.callout)
+                    .buttonStyle(.link)
+                    .disabled(self.model.isBusy)
                 }
-                .buttonStyle(.link)
-                .disabled(self.model.isBusy)
             }
         }
+    }
+
+    @ViewBuilder
+    private var providerAuthSection: some View {
+        if !self.model.authOptions.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Sign in with a provider")
+                    .font(.headline)
+                Text(
+                    "Use an existing subscription or provider account. " +
+                        "OpenClaw opens the provider’s own sign-in flow, then verifies it with a real reply.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                let featured = self.model.authOptions.filter(\.featured)
+                let more = self.model.authOptions.filter { !$0.featured }
+                ForEach(featured) { option in
+                    self.providerAuthRow(option)
+                }
+                if !more.isEmpty {
+                    DisclosureGroup("More sign-in options") {
+                        VStack(spacing: 8) {
+                            ForEach(more) { option in
+                                self.providerAuthRow(option)
+                            }
+                        }
+                        .padding(.top, 6)
+                    }
+                    .font(.callout)
+                }
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color(NSColor.controlBackgroundColor)))
+        }
+    }
+
+    private func providerAuthRow(_ option: OnboardingAISetupModel.AuthOption) -> some View {
+        Button {
+            self.openedProviderAuthURL = nil
+            self.model.startProviderAuth(option)
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: option
+                    .kind == "device-code" ? "link.badge.plus" : "person.crop.circle.badge.checkmark")
+                    .font(.title3)
+                    .frame(width: 24)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(option.label)
+                        .font(.callout.weight(.semibold))
+                    if let hint = option.hint, !hint.isEmpty {
+                        Text(hint)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.leading)
+                    }
+                }
+                Spacer(minLength: 0)
+                Text(option.kind == "device-code" ? "Pair" : "Sign in")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Color.accentColor)
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(self.model.isBusy)
+        .openClawSelectableRowChrome(selected: false)
+    }
+
+    private var providerAuthSheet: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(self.model.activeAuthOption?.label ?? "Provider sign-in")
+                        .font(.title3.weight(.semibold))
+                    Text("Credentials stay on this Gateway and are saved only after the live test succeeds.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+
+            if let step = self.model.authStep {
+                if let title = step.title, !title.isEmpty {
+                    Text(title).font(.headline)
+                }
+                if let message = step.message, !message.isEmpty {
+                    ScrollView {
+                        Text(message)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: 190)
+                }
+                if let url = OnboardingProviderAuthLink.safeURL(step.externalurl) {
+                    Link("Open sign-in page…", destination: url)
+                        .font(.caption.weight(.semibold))
+                }
+                self.authStepInput(step)
+            } else if self.model.authBusy {
+                HStack(spacing: 10) {
+                    ProgressView().controlSize(.small)
+                    Text("Starting secure sign-in…")
+                }
+            }
+
+            if let error = self.model.authError {
+                OnboardingErrorCard(
+                    title: "Sign-in didn’t complete",
+                    message: error.summary,
+                    details: error.detail,
+                    docsSlug: "concepts/model-providers",
+                    retryTitle: nil,
+                    retry: nil)
+            }
+
+            Spacer(minLength: 0)
+            HStack {
+                Button("Cancel") { self.model.cancelProviderAuth() }
+                Spacer(minLength: 0)
+                if self.model.authStep != nil {
+                    Button(self.authContinueTitle) { self.model.continueProviderAuth() }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(self.model.authBusy)
+                }
+            }
+        }
+        .padding(22)
+        .frame(width: 560)
+        .frame(minHeight: 330)
+        .onAppear {
+            self.openProviderAuthURLIfNeeded(self.model.authStep?.externalurl)
+        }
+        .onChange(of: self.model.authStep?.externalurl) { _, rawURL in
+            self.openProviderAuthURLIfNeeded(rawURL)
+        }
+    }
+
+    private func openProviderAuthURLIfNeeded(_ rawURL: String?) {
+        guard let url = OnboardingProviderAuthLink.safeURL(rawURL),
+              url != openedProviderAuthURL
+        else { return }
+        self.openedProviderAuthURL = url
+        NSWorkspace.shared.open(url)
+    }
+
+    @ViewBuilder
+    private func authStepInput(_ step: WizardStep) -> some View {
+        switch wizardStepType(step) {
+        case "text":
+            if step.sensitive == true {
+                SecureField(step.placeholder ?? "Value", text: self.$model.authText)
+                    .textFieldStyle(.roundedBorder)
+            } else {
+                TextField(step.placeholder ?? "Value", text: self.$model.authText)
+                    .textFieldStyle(.roundedBorder)
+            }
+        case "select":
+            Picker("Option", selection: self.$model.authSelection) {
+                ForEach(Array(self.model.authWizardOptions.enumerated()), id: \.offset) { index, option in
+                    Text(option.label).tag(index)
+                }
+            }
+        case "confirm":
+            Toggle("Confirm", isOn: self.$model.authConfirmation)
+        default:
+            EmptyView()
+        }
+    }
+
+    private var authContinueTitle: String {
+        guard let step = model.authStep else { return "Continue" }
+        return wizardStepType(step) == "note" ? "Continue" : "Submit"
     }
 
     private var manualForm: some View {
@@ -411,7 +616,7 @@ struct OnboardingAISetupView: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(self.model.isBusy ||
+                .disabled(self.model.manualTesting ||
                     self.model.manualKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             Text(self.manualProviderHelp)

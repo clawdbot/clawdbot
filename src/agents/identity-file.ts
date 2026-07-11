@@ -191,6 +191,9 @@ export function mergeIdentityMarkdownContent(
 
     if (matchingIndexes.length > 0) {
       const [firstIndex, ...duplicateIndexes] = matchingIndexes;
+      if (firstIndex === undefined) {
+        continue;
+      }
       nextLines[firstIndex] = buildIdentityLine(label, value);
       for (const duplicateIndex of duplicateIndexes.toReversed()) {
         nextLines.splice(duplicateIndex, 1);

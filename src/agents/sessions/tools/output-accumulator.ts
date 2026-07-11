@@ -200,12 +200,16 @@ export class OutputAccumulator {
     }
 
     let start = buffer.length - this.maxRollingBytes;
-    while (start < buffer.length && (buffer[start] & 0xc0) === 0x80) {
+    while (start < buffer.length) {
+      const byte = buffer.at(start);
+      if (byte === undefined || (byte & 0xc0) !== 0x80) {
+        break;
+      }
       start++;
     }
 
     this.tailStartsAtLineBoundary =
-      start === 0 ? this.tailStartsAtLineBoundary : buffer[start - 1] === 0x0a;
+      start === 0 ? this.tailStartsAtLineBoundary : buffer.at(start - 1) === 0x0a;
     this.tailText = buffer.subarray(start).toString("utf-8");
     this.tailBytes = byteLength(this.tailText);
   }

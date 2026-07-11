@@ -3,7 +3,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { collectDeprecatedInternalConfigApiViolations } from "./lib/deprecated-config-api-guard.mjs";
-import { buildDeprecatedPluginSdkModuleSpecifiers } from "./lib/deprecated-plugin-sdk-usage.mjs";
+import {
+  BANNED_INTERNAL_PLUGIN_SDK_FACADE_MODULES,
+  buildDeprecatedPluginSdkModuleSpecifiers,
+} from "./lib/deprecated-plugin-sdk-usage.mjs";
 import { escapeRegExp } from "./lib/regexp.mjs";
 
 const repoRoot = process.cwd();
@@ -96,7 +99,7 @@ function collectModuleSpecifierRuleViolations(rule) {
       `\\bexport\\s+(?:type\\s+)?(?:\\*\\s+from\\s+|[^"']+?\\s+from\\s+)["'](${specifierPattern})["']`,
       "gu",
     ),
-    new RegExp(`\\bimport\\(\\s*["'](${specifierPattern})["']\\s*\\)`, "gu"),
+    new RegExp(`\\bimport\\s*\\(\\s*["'](${specifierPattern})["']\\s*[,)]`, "gu"),
   ];
   const violations = [];
 
@@ -129,6 +132,54 @@ function collectRuleViolations(rule) {
   return collectIdentifierRuleViolations(rule);
 }
 
+const internalFacadeImportPatterns = [
+  /\bimport\s+(?:type\s+)?(?:[^"']+?\s+from\s+)?["']([^"']+)["']/gu,
+  /\bexport\s+(?:type\s+)?(?:\*\s+(?:as\s+\w+\s+)?from\s+|[^"']+?\s+from\s+)["']([^"']+)["']/gu,
+  // Trailing [,)] keeps `import("spec", { with: ... })` attribute forms covered.
+  /\bimport\s*\(\s*["']([^"']+)["']\s*[,)]/gu,
+  /\brequire\s*\(\s*["']([^"']+)["']\s*\)/gu,
+];
+
+// Maps any import form (package specifier or relative path) to an extension-less
+// repo module path so banned facades cannot be reached through any spelling.
+// tsconfig aliases both openclaw/plugin-sdk/* and @openclaw/plugin-sdk/* to src/plugin-sdk/*.
+function resolveInternalFacadeModulePath(repoPath, specifier) {
+  const stripped = specifier.replace(/\.[cm]?[jt]sx?$/u, "");
+  const packageSubpath = stripped.replace(/^@?openclaw\/plugin-sdk\//u, "");
+  if (packageSubpath !== stripped) {
+    return `src/plugin-sdk/${packageSubpath}`;
+  }
+  if (!stripped.startsWith(".")) {
+    return null;
+  }
+  return path.posix.normalize(path.posix.join(path.posix.dirname(repoPath), stripped));
+}
+
+function collectBannedInternalFacadeImportViolations(rule) {
+  const bansByModulePath = new Map(
+    BANNED_INTERNAL_PLUGIN_SDK_FACADE_MODULES.map((ban) => [ban.modulePath, ban]),
+  );
+  const violations = [];
+  for (const root of rule.roots) {
+    for (const filePath of walk(path.join(repoRoot, root), rule)) {
+      const repoPath = toRepoPath(filePath);
+      const source = fs.readFileSync(filePath, "utf8");
+      for (const pattern of internalFacadeImportPatterns) {
+        for (const match of source.matchAll(pattern)) {
+          const resolved = resolveInternalFacadeModulePath(repoPath, match[1]);
+          const ban = resolved ? bansByModulePath.get(resolved) : undefined;
+          if (!ban || (ban.allowedImporters ?? []).includes(repoPath)) {
+            continue;
+          }
+          const line = source.slice(0, match.index).split("\n").length;
+          violations.push(`${repoPath}:${line}: ${match[1]} (use ${ban.canonical})`);
+        }
+      }
+    }
+  }
+  return violations;
+}
+
 const rules = [
   {
     id: "internal-config-api",
@@ -147,6 +198,12 @@ const rules = [
     message: "extensions must use focused non-deprecated plugin SDK subpaths",
   },
   {
+    // Deprecated facades stay exported for third-party plugins, but internal code
+    // must not reach them via package specifier or relative import.
+    id: "facade-internal-imports",
+    collect: () => collectBannedInternalFacadeImportViolations({ roots: ["src", "extensions"] }),
+  },
+  {
     id: "message-api",
     roots: ["src", "extensions", "packages"],
     names: [
@@ -161,8 +218,6 @@ const rules = [
       "deliverDurableInboundReplyPayload",
     ],
     allowedFiles: [
-      "src/channels/turn/durable-delivery.ts",
-      "src/channels/turn/kernel.ts",
       "src/channels/message/inbound-reply-dispatch.ts",
       "src/infra/outbound/deliver-runtime.ts",
       "src/infra/outbound/deliver.ts",

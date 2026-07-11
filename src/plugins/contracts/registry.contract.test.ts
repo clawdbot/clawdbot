@@ -190,6 +190,7 @@ describe("plugin contract registry", () => {
       {
         provider: "github-copilot",
         method: "device",
+        appGuidedAuth: "device-code",
         appGuidedSecret: true,
         choiceId: "github-copilot",
         choiceLabel: "GitHub Copilot",
@@ -206,6 +207,7 @@ describe("plugin contract registry", () => {
       {
         provider: "github-copilot",
         method: "device-enterprise",
+        appGuidedAuth: "device-code",
         choiceId: "github-copilot-enterprise",
         choiceLabel: "GitHub Copilot (Enterprise / data residency)",
         choiceHint: "Device login against your GitHub Enterprise (*.ghe.com) tenant",

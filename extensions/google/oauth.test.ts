@@ -804,13 +804,14 @@ describe("loginGeminiCliOAuth", () => {
     isRemote: boolean;
     openUrl: () => Promise<void>;
     log: (msg: string) => void;
-    note: () => Promise<void>;
+    note: (message?: string, title?: string) => Promise<void>;
     prompt: () => Promise<string>;
     progress: { update: () => void; stop: () => void };
   }) => Promise<{ projectId?: string }>;
 
   async function runRemoteLoginWithCapturedAuthUrl(loginGeminiCliOAuth: LoginGeminiCliOAuthFn) {
     let authUrl = "";
+    const notes: string[] = [];
     const result = await loginGeminiCliOAuth({
       isRemote: true,
       openUrl: async () => {},
@@ -820,14 +821,18 @@ describe("loginGeminiCliOAuth", () => {
           authUrl = found[0];
         }
       },
-      note: async () => {},
+      note: async (message?: string) => {
+        if (message) {
+          notes.push(message);
+        }
+      },
       prompt: async () => {
         const state = new URL(authUrl).searchParams.get("state");
         return `http://localhost:8085/oauth2callback?code=oauth-code&state=${state}`;
       },
       progress: { update: () => {}, stop: () => {} },
     });
-    return { result, authUrl };
+    return { result, authUrl, notes };
   }
 
   async function runProjectDiscoveryExpectingProjectId(projectId: string) {
@@ -835,6 +840,33 @@ describe("loginGeminiCliOAuth", () => {
     const result = await resolveGoogleOAuthIdentity("access-token");
     expect(result.projectId).toBe(projectId);
   }
+
+  it("propagates cancellation through Gemini identity and project discovery", async () => {
+    const controller = new AbortController();
+    const signals: Array<AbortSignal | null | undefined> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        signals.push(init?.signal);
+        if (url === USERINFO_URL) {
+          return new Response(JSON.stringify({ email: "test@example.com" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        controller.abort(new Error("setup cancelled"));
+        throw controller.signal.reason;
+      }),
+    );
+
+    const { resolveGoogleOAuthIdentity } = await import("./oauth.project.js");
+    await expect(resolveGoogleOAuthIdentity("access-token", controller.signal)).rejects.toThrow(
+      "setup cancelled",
+    );
+    expect(signals).toEqual([controller.signal, controller.signal]);
+  });
 
   let envSnapshot: Partial<Record<(typeof ENV_KEYS)[number], string>>;
   let setOAuthSettingsFsForTest: typeof import("./oauth.settings.js").setOAuthSettingsFsForTest;
@@ -928,7 +960,9 @@ describe("loginGeminiCliOAuth", () => {
     });
 
     const { loginGeminiCliOAuth } = await import("./oauth.js");
-    const { authUrl } = await runRemoteLoginWithCapturedAuthUrl(loginGeminiCliOAuth);
+    const { authUrl, notes } = await runRemoteLoginWithCapturedAuthUrl(loginGeminiCliOAuth);
+
+    expect(notes).toContainEqual(expect.stringContaining(authUrl));
 
     const authState = requireString(new URL(authUrl).searchParams.get("state"), "OAuth state");
 

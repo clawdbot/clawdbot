@@ -234,6 +234,3 @@ export async function deliverInboundReplyWithMessageSendContext(
   }
   return { status: "handled_visible", delivery };
 }
-
-/** @deprecated Use `deliverInboundReplyWithMessageSendContext`. */
-export const deliverDurableInboundReplyPayload = deliverInboundReplyWithMessageSendContext;

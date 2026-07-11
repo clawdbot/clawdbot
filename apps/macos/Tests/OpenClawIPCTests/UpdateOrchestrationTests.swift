@@ -17,6 +17,16 @@ struct UpdateOrchestrationTests {
         #expect(allowedSparkleChannels(forGatewayUpdateChannel: nil).isEmpty)
     }
 
+    #if canImport(Sparkle)
+    @Test func `Sparkle stays unavailable until launch relocation finishes`() {
+        let updater = SparkleUpdaterController(savedAutoUpdate: false)
+
+        #expect(!updater.isAvailable)
+        updater.checkForUpdates(nil)
+        #expect(!updater.isAvailable)
+    }
+    #endif
+
     @Test func `dashboard accepts only start update payloads`() {
         #expect(DashboardWindowController.isStartUpdateRequest(["type": "start-update"]))
         #expect(!DashboardWindowController.isStartUpdateRequest(["type": "update.run"]))

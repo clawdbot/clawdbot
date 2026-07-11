@@ -250,8 +250,12 @@ function decodeJwtExpiryMs(token: string): number | null {
   if (parts.length < 2) {
     return null;
   }
+  const encodedPayload = parts.at(1);
+  if (!encodedPayload) {
+    return null;
+  }
   try {
-    const payloadRaw = Buffer.from(parts[1], "base64url").toString("utf8");
+    const payloadRaw = Buffer.from(encodedPayload, "base64url").toString("utf8");
     const payload = JSON.parse(payloadRaw) as { exp?: unknown };
     if (typeof payload.exp !== "number" || !Number.isFinite(payload.exp) || payload.exp <= 0) {
       return null;
@@ -267,8 +271,12 @@ function decodeJwtIdentityClaims(token: string): { sub?: string; email?: string 
   if (parts.length < 2) {
     return {};
   }
+  const encodedPayload = parts.at(1);
+  if (!encodedPayload) {
+    return {};
+  }
   try {
-    const payloadRaw = Buffer.from(parts[1], "base64url").toString("utf8");
+    const payloadRaw = Buffer.from(encodedPayload, "base64url").toString("utf8");
     const payload = JSON.parse(payloadRaw) as { sub?: unknown; email?: unknown };
     const sub = typeof payload.sub === "string" && payload.sub ? payload.sub : undefined;
     const email = typeof payload.email === "string" && payload.email ? payload.email : undefined;

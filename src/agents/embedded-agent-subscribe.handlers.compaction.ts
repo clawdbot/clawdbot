@@ -5,6 +5,7 @@
  */
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { recordSessionCompacted } from "../sessions/session-state-events.js";
 import {
   normalizeCompactionTrigger,
   type CompactionCounterAttribution,
@@ -126,6 +127,12 @@ export function handleCompactionEnd(ctx: EmbeddedAgentSubscribeContext, evt: Com
         : undefined;
     ctx.noteCompactionTokensAfter(tokensAfter);
     compactionCountAfter = ctx.getCompactionCount();
+    recordSessionCompacted({
+      sessionKey: ctx.params.sessionKey,
+      operationId: `${ctx.params.runId}:${compactionCountAfter}`,
+      agentId: ctx.params.agentId,
+      runId: ctx.params.runId,
+    });
     ctx.log.info(`embedded run ${kind} complete`, {
       event: "embedded_run_compaction_end",
       runId: ctx.params.runId,

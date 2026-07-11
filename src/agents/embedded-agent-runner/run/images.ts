@@ -146,9 +146,7 @@ export function mergePromptAttachmentImages(params: {
         promptImages.push(image);
       }
     }
-    while (inlineIndex < existingImages.length) {
-      promptImages.push(existingImages[inlineIndex++]);
-    }
+    promptImages.push(...existingImages.slice(inlineIndex));
     while (offloadedIndex < offloadedImages.length) {
       const image = offloadedImages[offloadedIndex++];
       if (image) {
@@ -251,9 +249,13 @@ function extractTrailingAttachmentMediaUris(prompt: string, count: number): stri
     uris.push(match[1]);
   }
   for (let left = 0, right = uris.length - 1; left < right; left += 1, right -= 1) {
-    const uri = uris[left];
-    uris[left] = uris[right];
-    uris[right] = uri;
+    const leftUri = uris.at(left);
+    const rightUri = uris.at(right);
+    if (leftUri === undefined || rightUri === undefined) {
+      break;
+    }
+    uris[left] = rightUri;
+    uris[right] = leftUri;
   }
   return uris;
 }
@@ -374,6 +376,9 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
   let match: RegExpExecArray | null;
   while ((match = MEDIA_ATTACHED_PATTERN.exec(prompt)) !== null) {
     const content = match[1];
+    if (content === undefined) {
+      continue;
+    }
 
     // Skip "[media attached: N files]" header lines
     if (/^\d+\s+files?$/i.test(content.trim())) {
@@ -384,8 +389,9 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
     // This must be tested before the extension-based path regex because the
     // URI has no file extension suffix in its base form.
     const mediaUriMatch = content.match(MEDIA_URI_REGEX);
-    if (mediaUriMatch && !mediaUriMatch[1].includes("\0")) {
-      const uri = `media://inbound/${mediaUriMatch[1]}`;
+    const mediaId = mediaUriMatch?.at(1);
+    if (mediaId && !mediaId.includes("\0")) {
+      const uri = `media://inbound/${mediaId}`;
       const dedupeKey = normalizeRefForDedupe(uri);
       if (!seen.has(dedupeKey)) {
         seen.add(dedupeKey);

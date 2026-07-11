@@ -12,7 +12,6 @@ import {
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { toHistoryMediaEntries } from "../inbound-event/media.js";
 import { createChannelReplyPipeline } from "../message/reply-pipeline.js";
-import type { CreateChannelReplyPipelineParams } from "../message/reply-pipeline.js";
 import { recordChannelBotPairLoopAndCheckSuppression } from "./bot-loop-protection.js";
 import {
   EMPTY_CHANNEL_TURN_DISPATCH_COUNTS,
@@ -37,7 +36,6 @@ export { createChannelHistoryWindow } from "./history-window.js";
 export type { ChannelHistoryWindow } from "./history-window.js";
 export type { ChannelBotLoopProtectionFacts } from "./bot-loop-protection.js";
 export {
-  deliverDurableInboundReplyPayload,
   deliverInboundReplyWithMessageSendContext,
   isDurableInboundReplyDeliveryHandled,
   throwIfDurableInboundReplyDeliveryFailed,
@@ -107,18 +105,6 @@ const DEFAULT_EVENT_CLASS: ChannelEventClass = {
   canStartAgentTurn: true,
 };
 const log = createSubsystemLogger("channels/turn/kernel");
-
-/**
- * @deprecated Compatibility assembly for legacy buffered reply dispatchers.
- * New channel plugins should expose `defineChannelMessageAdapter(...)` from
- * `openclaw/plugin-sdk/channel-outbound` and route send/receive behavior through
- * the message lifecycle helpers.
- */
-export function createChannelTurnReplyPipeline(
-  params: CreateChannelReplyPipelineParams,
-): ReturnType<typeof createChannelReplyPipeline> {
-  return createChannelReplyPipeline(params);
-}
 
 function isAdmission(value: unknown): value is ChannelTurnAdmission {
   if (!value || typeof value !== "object") {

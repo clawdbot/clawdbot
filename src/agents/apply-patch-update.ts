@@ -111,8 +111,8 @@ function applyReplacements(
         result.splice(startIndex, 1);
       }
     }
-    for (let i = 0; i < newLines.length; i += 1) {
-      result.splice(startIndex + i, 0, newLines[i]);
+    for (const [i, line] of newLines.entries()) {
+      result.splice(startIndex + i, 0, line);
     }
   }
   return result;
@@ -171,7 +171,9 @@ function linesMatch(
   normalize: (value: string) => string,
 ): boolean {
   for (let idx = 0; idx < pattern.length; idx += 1) {
-    if (normalize(lines[start + idx]) !== normalize(pattern[idx])) {
+    const line = lines.at(start + idx);
+    const expected = pattern.at(idx);
+    if (line === undefined || expected === undefined || normalize(line) !== normalize(expected)) {
       return false;
     }
   }

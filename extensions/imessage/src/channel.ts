@@ -351,7 +351,9 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
         chunker: chunkTextForOutbound,
         chunkerMode: "text",
         textChunkLimit: 4000,
-        sanitizeText: ({ text }) => sanitizeForPlainText(sanitizeOutboundText(text)),
+        // Native formatting consumes Markdown ranges, so preserve bold and strike semantics.
+        sanitizeText: ({ text }) =>
+          sanitizeForPlainText(sanitizeOutboundText(text), { style: "markdown" }),
         shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload, hint }) =>
           shouldSuppressLocalIMessageExecApprovalPrompt({ cfg, accountId, payload, hint }),
         deliveryCapabilities: {

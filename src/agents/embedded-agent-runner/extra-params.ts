@@ -929,7 +929,9 @@ function normalizeDeepSeekV4CandidateId(modelId: unknown): string | undefined {
   if (typeof modelId !== "string") {
     return undefined;
   }
-  const withoutSuffix = modelId.trim().toLowerCase().split(":", 1)[0];
+  const normalized = modelId.trim().toLowerCase();
+  const suffixIndex = normalized.indexOf(":");
+  const withoutSuffix = suffixIndex === -1 ? normalized : normalized.slice(0, suffixIndex);
   return withoutSuffix.split("/").pop();
 }
 

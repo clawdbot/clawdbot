@@ -75,8 +75,17 @@ function isExpectedCompactionAppend(entryId: string, appendedText: string): bool
     return false;
   }
   try {
-    const entry = JSON.parse(lines[0]) as { type?: unknown; id?: unknown };
-    return entry.type === "compaction" && entry.id === entryId;
+    const line = lines.at(0);
+    if (!line) {
+      return false;
+    }
+    const entry: unknown = JSON.parse(line);
+    return (
+      typeof entry === "object" &&
+      entry !== null &&
+      Reflect.get(entry, "type") === "compaction" &&
+      Reflect.get(entry, "id") === entryId
+    );
   } catch {
     return false;
   }
@@ -768,7 +777,11 @@ export function installSessionToolResultGuard(
         }
         return undefined;
       }
-      nextMessage = sanitized[0];
+      const sanitizedMessage = sanitized.at(0);
+      if (!sanitizedMessage) {
+        return undefined;
+      }
+      nextMessage = sanitizedMessage;
     }
     const nextRole = (nextMessage as { role?: unknown }).role;
 

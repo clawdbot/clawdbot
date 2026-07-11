@@ -160,7 +160,10 @@ export function resolveConfiguredToolPolicies(params: {
 }): SandboxToolPolicy[] {
   const policies: SandboxToolPolicy[] = [];
   const profile = params.agentTools?.profile ?? params.cfg.tools?.profile;
-  const profilePolicy = resolveToolProfilePolicy(profile);
+  const profileAlsoAllow =
+    resolveExplicitProfileAlsoAllow(params.agentTools) ??
+    resolveExplicitProfileAlsoAllow(params.cfg.tools);
+  const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), profileAlsoAllow);
   if (profilePolicy) {
     policies.push(profilePolicy);
   }

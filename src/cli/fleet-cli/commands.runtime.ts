@@ -5,6 +5,7 @@ import {
   type FleetCreateOptions,
   type FleetHealthResult,
   type FleetLifecycleAction,
+  type FleetLogsOptions,
 } from "../../fleet/service.runtime.js";
 import { defaultRuntime } from "../../runtime.js";
 
@@ -84,6 +85,10 @@ export async function runFleetStatusCommand(options: {
   defaultRuntime.log(`Created: ${result.created}`);
   defaultRuntime.log(`Data: ${result.dataDir}`);
   defaultRuntime.log(`Health: ${formatHealth(result.health)}`);
+}
+
+export async function runFleetLogsCommand(options: FleetLogsOptions): Promise<void> {
+  await fleetService.logs(options);
 }
 
 export async function runFleetLifecycleCommand(options: {

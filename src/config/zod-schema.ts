@@ -747,6 +747,7 @@ export const OpenClawSchema = z
     audit: z
       .object({
         enabled: z.boolean().optional(),
+        messages: z.union([z.literal("off"), z.literal("direct"), z.literal("all")]).optional(),
       })
       .strict()
       .optional(),

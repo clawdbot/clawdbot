@@ -117,6 +117,13 @@ export type FleetStatusResult = {
 
 export type FleetLifecycleAction = "start" | "stop" | "restart";
 
+export type FleetLogsOptions = {
+  tenant: string;
+  follow?: boolean;
+  tail?: number;
+  since?: string;
+};
+
 export type FleetActionResult = {
   tenant: string;
   action: FleetLifecycleAction | "upgrade" | "rm";
@@ -402,6 +409,19 @@ export function createFleetService(options: FleetServiceOptions = {}) {
           await containers[action](record.runtime, record.containerName);
           return { tenant: record.tenantId, action };
         },
+      });
+    },
+
+    async logs(logOptions: FleetLogsOptions): Promise<void> {
+      const record = requireCell(env, validateTenantId(logOptions.tenant));
+      await containers.assertLocal(record.runtime);
+      const inspection = await containers.inspect(record.runtime, record.containerName);
+      // Ownership must be proven before inheriting stdio; never stream a foreign name-squatting container.
+      assertManagedInspection(record, inspection);
+      await containers.logs(record.runtime, record.containerName, {
+        follow: logOptions.follow,
+        tail: logOptions.tail,
+        since: logOptions.since,
       });
     },
 

@@ -198,6 +198,8 @@ const SCREENSHOT_SHARE_UNAVAILABLE =
 
 const LEGACY_BROWSER_ACT_REQUEST_KEYS = [
   "kind",
+  "actions",
+  "stopOnError",
   "targetId",
   "ref",
   "doubleClick",
@@ -381,6 +383,9 @@ async function callBrowserProxy(params: {
     {
       nodeId: params.nodeId,
       command: "browser.proxy",
+      // node.invoke owns a separate watchdog from browser.proxy. Keep both
+      // bounded, with enough outer slack for the proxy result to cross back.
+      timeoutMs: gatewayTimeoutMs,
       params: {
         method: params.method,
         path: params.path,

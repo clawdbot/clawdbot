@@ -7,6 +7,8 @@ import {
   requireTaskByRunId,
   withAcpManagerTaskStateDir,
 } from "../../../test/helpers/acp-manager-task-state.js";
+import { listSessionStateEventsSince } from "../../sessions/session-state-events.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { isAcpTurnActive } from "./active-turns.js";
 import {
   AcpRuntimeError,
@@ -22,6 +24,7 @@ import {
   hoisted,
   installAcpSessionManagerTestLifecycle,
   mockCallArg,
+  mockParentedAcpSessionEntries,
   readySessionMeta,
   type OpenClawConfig,
   resetAcpSessionManagerForTests,
@@ -82,6 +85,7 @@ describe("AcpSessionManager", () => {
     } as OpenClawConfig;
 
     await manager.runTurn({
+      provenance: "system",
       cfg,
       sessionKey: "main",
       text: "after restart",
@@ -101,6 +105,46 @@ describe("AcpSessionManager", () => {
       { state: "running", skipMaintenance: true, takeCacheOwnership: true },
       { state: "idle", skipMaintenance: true, takeCacheOwnership: true },
     ]);
+  });
+
+  it("records parented ACP turns only for human provenance", async () => {
+    await withAcpManagerTaskStateDir(async () => {
+      const runtimeState = createRuntime();
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      const childSessionKey = "agent:main:acp:child-state";
+      mockParentedAcpSessionEntries({
+        childSessionKey,
+        parentSessionKey: "agent:main:main",
+      });
+      const manager = new AcpSessionManager();
+
+      await manager.runTurn({
+        provenance: "human",
+        cfg: baseCfg,
+        sessionKey: childSessionKey,
+        text: "human turn",
+        mode: "prompt",
+        requestId: "human-state-turn",
+      });
+      await manager.runTurn({
+        provenance: "system",
+        cfg: baseCfg,
+        sessionKey: childSessionKey,
+        text: "system turn",
+        mode: "prompt",
+        requestId: "system-state-turn",
+      });
+
+      expect(listSessionStateEventsSince(childSessionKey, "main", 0, 200).events).toMatchObject([
+        { kind: "human_direct_message", runId: "human-state-turn" },
+        { kind: "run_completed", runId: "human-state-turn" },
+        { kind: "run_completed", runId: "system-state-turn" },
+      ]);
+      closeOpenClawStateDatabaseForTest();
+    });
   });
 
   it("tracks parented direct ACP turns in the task registry", async () => {
@@ -173,6 +217,7 @@ describe("AcpSessionManager", () => {
 
       const manager = new AcpSessionManager();
       await manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:child-1",
         text: "Implement the feature and report back",
@@ -259,6 +304,7 @@ describe("AcpSessionManager", () => {
 
       const manager = new AcpSessionManager();
       await manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:child-1",
         text: "Print the current directory in Korean",
@@ -310,6 +356,7 @@ describe("AcpSessionManager", () => {
 
     const manager = new AcpSessionManager();
     const first = manager.runTurn({
+      provenance: "system",
       cfg: baseCfg,
       sessionKey: "agent:codex:acp:session-1",
       text: "first",
@@ -323,6 +370,7 @@ describe("AcpSessionManager", () => {
       { interval: 1 },
     );
     const second = manager.runTurn({
+      provenance: "system",
       cfg: baseCfg,
       sessionKey: "agent:codex:acp:session-1",
       text: "second",
@@ -377,6 +425,7 @@ describe("AcpSessionManager", () => {
 
       const manager = new AcpSessionManager();
       const turn = manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:child-1",
         text: "long running",
@@ -455,6 +504,7 @@ describe("AcpSessionManager", () => {
 
       const manager = new AcpSessionManager();
       const turn = manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:child-1",
         text: "slow init",
@@ -527,6 +577,7 @@ describe("AcpSessionManager", () => {
       const manager = new AcpSessionManager();
       await expect(
         manager.runTurn({
+          provenance: "system",
           cfg: baseCfg,
           sessionKey: "agent:codex:acp:child-1",
           text: "stale resume",
@@ -569,6 +620,7 @@ describe("AcpSessionManager", () => {
 
     const manager = new AcpSessionManager();
     const first = manager.runTurn({
+      provenance: "system",
       cfg: baseCfg,
       sessionKey: "agent:codex:acp:session-1",
       text: "first",
@@ -584,6 +636,7 @@ describe("AcpSessionManager", () => {
 
     const abortController = new AbortController();
     const second = manager.runTurn({
+      provenance: "system",
       cfg: baseCfg,
       sessionKey: "agent:codex:acp:session-1",
       text: "second",
@@ -659,6 +712,7 @@ describe("AcpSessionManager", () => {
       } as OpenClawConfig;
 
       const first = manager.runTurn({
+        provenance: "system",
         cfg,
         sessionKey: "agent:codex:acp:session-1",
         text: "first",
@@ -674,6 +728,7 @@ describe("AcpSessionManager", () => {
       );
 
       const second = manager.runTurn({
+        provenance: "system",
         cfg,
         sessionKey: "agent:codex:acp:session-1",
         text: "second",
@@ -731,6 +786,7 @@ describe("AcpSessionManager", () => {
     try {
       const manager = new AcpSessionManager();
       await manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:session-1",
         text: "first",
@@ -789,6 +845,7 @@ describe("AcpSessionManager", () => {
       } as OpenClawConfig;
 
       const first = manager.runTurn({
+        provenance: "system",
         cfg,
         sessionKey: "agent:codex:acp:session-a",
         text: "first",
@@ -813,6 +870,7 @@ describe("AcpSessionManager", () => {
 
       await expectRejectedRecord(
         manager.runTurn({
+          provenance: "system",
           cfg,
           sessionKey: "agent:codex:acp:session-b",
           text: "second",
@@ -869,6 +927,7 @@ describe("AcpSessionManager", () => {
     await Promise.race([
       Promise.all([
         manager.runTurn({
+          provenance: "system",
           cfg: baseCfg,
           sessionKey: "agent:codex:acp:session-a",
           text: "first",
@@ -876,6 +935,7 @@ describe("AcpSessionManager", () => {
           requestId: "r1",
         }),
         manager.runTurn({
+          provenance: "system",
           cfg: baseCfg,
           sessionKey: "agent:codex:acp:session-b",
           text: "second",
@@ -917,6 +977,7 @@ describe("AcpSessionManager", () => {
 
     const manager = new AcpSessionManager();
     await manager.runTurn({
+      provenance: "system",
       cfg: limitedCfg,
       sessionKey: "agent:codex:acp:session-a",
       text: "first",
@@ -926,6 +987,7 @@ describe("AcpSessionManager", () => {
 
     await expectRejectedRecord(
       manager.runTurn({
+        provenance: "system",
         cfg: limitedCfg,
         sessionKey: "agent:codex:acp:session-b",
         text: "second",
@@ -975,6 +1037,7 @@ describe("AcpSessionManager", () => {
     const manager = new AcpSessionManager();
     await expect(
       manager.runTurn({
+        provenance: "system",
         cfg,
         sessionKey,
         text: "hello",
@@ -1029,6 +1092,7 @@ describe("AcpSessionManager", () => {
 
       const manager = new AcpSessionManager();
       await manager.runTurn({
+        provenance: "system",
         cfg: limitedCfg,
         sessionKey: "agent:codex:acp:session-a",
         text: "first",
@@ -1047,6 +1111,7 @@ describe("AcpSessionManager", () => {
 
       await expect(
         manager.runTurn({
+          provenance: "system",
           cfg: limitedCfg,
           sessionKey: "agent:codex:acp:session-b",
           text: "second",
@@ -1247,6 +1312,7 @@ describe("AcpSessionManager", () => {
     const manager = new AcpSessionManager();
     await expect(
       manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey,
         text: "who are you?",
@@ -1362,6 +1428,7 @@ describe("AcpSessionManager", () => {
 
       const manager = new AcpSessionManager();
       await manager.runTurn({
+        provenance: "system",
         cfg,
         sessionKey: "agent:codex:acp:session-a",
         text: "first",
@@ -1371,6 +1438,7 @@ describe("AcpSessionManager", () => {
 
       vi.advanceTimersByTime(2_000);
       await manager.runTurn({
+        provenance: "system",
         cfg,
         sessionKey: "agent:codex:acp:session-b",
         text: "second",
@@ -1417,6 +1485,7 @@ describe("AcpSessionManager", () => {
 
     const manager = new AcpSessionManager();
     await manager.runTurn({
+      provenance: "system",
       cfg: baseCfg,
       sessionKey: "agent:codex:acp:session-1",
       text: "ok",
@@ -1425,6 +1494,7 @@ describe("AcpSessionManager", () => {
     });
     await expectRejectedRecord(
       manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:session-1",
         text: "boom",
@@ -1461,6 +1531,7 @@ describe("AcpSessionManager", () => {
     const manager = new AcpSessionManager();
     await expectRejectedRecord(
       manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:session-1",
         text: "do work",

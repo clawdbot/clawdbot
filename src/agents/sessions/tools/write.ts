@@ -183,14 +183,19 @@ function updateWriteHighlightCacheIncremental(
 
   const segments = deltaNormalized.split("\n");
   const lastIndex = cache.normalizedLines.length - 1;
-  cache.normalizedLines[lastIndex] += segments[0];
+  const firstSegment = segments.at(0);
+  const currentLastLine = cache.normalizedLines.at(lastIndex);
+  if (firstSegment === undefined || currentLastLine === undefined) {
+    return rebuildWriteHighlightCacheFull(rawPath, fileContent);
+  }
+  cache.normalizedLines[lastIndex] = currentLastLine + firstSegment;
   cache.highlightedLines[lastIndex] = highlightSingleLine(
     cache.normalizedLines[lastIndex],
     cache.lang,
   );
-  for (let i = 1; i < segments.length; i++) {
-    cache.normalizedLines.push(segments[i]);
-    cache.highlightedLines.push(highlightSingleLine(segments[i], cache.lang));
+  for (const segment of segments.slice(1)) {
+    cache.normalizedLines.push(segment);
+    cache.highlightedLines.push(highlightSingleLine(segment, cache.lang));
   }
   refreshWriteHighlightPrefix(cache);
   return cache;

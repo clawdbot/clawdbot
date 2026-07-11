@@ -12,6 +12,7 @@ import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  OPENCLAW_STATE_SCHEMA_VERSION,
 } from "../state/openclaw-state-db.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
@@ -372,6 +373,66 @@ function createEnv(stateDir: string): NodeJS.ProcessEnv {
     HOME: path.dirname(stateDir),
     OPENCLAW_STATE_DIR: stateDir,
   };
+}
+
+async function createLegacyAuditLedger(stateDir: string): Promise<string> {
+  const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+  await fs.mkdir(path.dirname(databasePath), { recursive: true });
+  const db = new DatabaseSync(databasePath);
+  try {
+    db.exec(`
+      PRAGMA user_version = 1;
+      CREATE TABLE audit_events (
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_id TEXT NOT NULL UNIQUE,
+        source_id TEXT NOT NULL UNIQUE,
+        source_sequence INTEGER NOT NULL,
+        occurred_at INTEGER NOT NULL,
+        kind TEXT NOT NULL,
+        action TEXT NOT NULL,
+        status TEXT NOT NULL,
+        error_code TEXT,
+        actor_type TEXT NOT NULL,
+        actor_id TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        session_key TEXT,
+        session_id TEXT,
+        run_id TEXT NOT NULL,
+        tool_call_id TEXT,
+        tool_name TEXT
+      );
+      INSERT INTO audit_events (
+        sequence,
+        event_id,
+        source_id,
+        source_sequence,
+        occurred_at,
+        kind,
+        action,
+        status,
+        actor_type,
+        actor_id,
+        agent_id,
+        run_id
+      ) VALUES (
+        3,
+        'event-before-v2',
+        'run-before-v2:1:100:agent.run.started',
+        1,
+        100,
+        'agent_run',
+        'agent.run.started',
+        'started',
+        'agent',
+        'main',
+        'main',
+        'run-before-v2'
+      );
+    `);
+  } finally {
+    db.close();
+  }
+  return databasePath;
 }
 
 async function createLegacyStateFixture(params?: { includePreKey?: boolean }) {
@@ -1744,6 +1805,52 @@ describe("state migrations", () => {
     expect(migrateLegacyState).toHaveBeenCalledOnce();
   });
 
+  it("previews and repairs the released audit ledger before other state migrations", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const databasePath = await createLegacyAuditLedger(stateDir);
+    const cfg = createConfig();
+
+    const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
+    expect(detected.preview).toContain(
+      "- Shared SQLite schema: audit event ledger → versioned message lifecycle schema",
+    );
+
+    const result = await runLegacyStateMigrations({ detected, config: cfg, env });
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toContain(
+      "Migrated shared state audit event ledger → versioned message lifecycle schema",
+    );
+
+    closeOpenClawStateDatabaseForTest();
+    const db = new DatabaseSync(databasePath);
+    try {
+      expect(
+        db
+          .prepare(
+            "SELECT sequence, event_id, source_id, schema_version FROM audit_events WHERE event_id = ?",
+          )
+          .get("event-before-v2"),
+      ).toEqual({
+        sequence: 3,
+        event_id: "event-before-v2",
+        source_id: "run-before-v2:1:100:agent.run.started",
+        schema_version: 1,
+      });
+      expect(db.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+      });
+    } finally {
+      db.close();
+    }
+
+    const after = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
+    expect(after.preview).not.toContain(
+      "- Shared SQLite schema: audit event ledger → versioned message lifecycle schema",
+    );
+  });
+
   it("does not run plugin doctor migrations after shared state schema repair fails", async () => {
     const root = await createTempDir();
     const stateDir = path.join(root, ".openclaw");
@@ -1753,7 +1860,7 @@ describe("state migrations", () => {
     await fs.mkdir(path.dirname(stateDbPath), { recursive: true });
     const db = new DatabaseSync(stateDbPath);
     try {
-      db.exec("PRAGMA user_version = 2;");
+      db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};`);
     } finally {
       db.close();
     }
@@ -1785,6 +1892,34 @@ describe("state migrations", () => {
     expect(result.warnings[0]).toContain("Failed migrating shared state database schema");
     expect(detectLegacyState).not.toHaveBeenCalled();
     expect(migrateLegacyState).not.toHaveBeenCalled();
+  });
+
+  it("does not mutate other legacy state after shared schema repair fails", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    const stateDbPath = path.join(stateDir, "state", "openclaw.sqlite");
+    const voiceWakePath = path.join(stateDir, "settings", "voicewake.json");
+    await fs.mkdir(path.dirname(stateDbPath), { recursive: true });
+    await fs.mkdir(path.dirname(voiceWakePath), { recursive: true });
+    await fs.writeFile(voiceWakePath, JSON.stringify({ triggers: ["leave-me"] }), "utf8");
+    const db = new DatabaseSync(stateDbPath);
+    try {
+      db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};`);
+    } finally {
+      db.close();
+    }
+
+    const result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+
+    expect(result.migrated).toBe(false);
+    expect(result.skipped).toBe(false);
+    expect(result.changes).toStrictEqual([]);
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toContain("Failed migrating shared state database schema");
+    await expect(fs.readFile(voiceWakePath, "utf8")).resolves.toContain("leave-me");
+    await expect(fs.stat(`${voiceWakePath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("reports plugin detector failures in read-only legacy state detection", async () => {

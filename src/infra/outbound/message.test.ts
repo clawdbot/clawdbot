@@ -220,6 +220,7 @@ describe("sendMessage", () => {
       to: "123456",
       content: "hi",
       requesterSessionKey: "agent:main:directchat:group:ops",
+      conversationType: "channel",
       requesterAccountId: "work",
       requesterSenderId: "attacker",
       mirror: {
@@ -232,6 +233,8 @@ describe("sendMessage", () => {
       deliveryParams.session,
       {
         key: "agent:main:directchat:group:ops",
+        conversationType: "group",
+        conversationKind: "channel",
         requesterAccountId: "work",
         requesterSenderId: "attacker",
       },

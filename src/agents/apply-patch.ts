@@ -539,7 +539,10 @@ function parseOneHunk(lines: string[], lineNumber: number): { hunk: Hunk; consum
   if (lines.length === 0) {
     throw new Error(`Invalid patch hunk at line ${lineNumber}: empty hunk`);
   }
-  const firstLine = lines[0].trim();
+  const firstLine = lines.at(0)?.trim();
+  if (firstLine === undefined) {
+    throw new Error(`Invalid patch hunk at line ${lineNumber}: empty hunk`);
+  }
   if (firstLine.startsWith(ADD_FILE_MARKER)) {
     const targetPath = firstLine.slice(ADD_FILE_MARKER.length);
     let contents = "";
@@ -581,12 +584,16 @@ function parseOneHunk(lines: string[], lineNumber: number): { hunk: Hunk; consum
 
     const chunks: UpdateFileChunk[] = [];
     while (remaining.length > 0) {
-      if (remaining[0].trim() === "") {
+      const firstRemaining = remaining.at(0);
+      if (firstRemaining === undefined) {
+        break;
+      }
+      if (firstRemaining.trim() === "") {
         remaining = remaining.slice(1);
         consumed += 1;
         continue;
       }
-      if (remaining[0].startsWith("***")) {
+      if (firstRemaining.startsWith("***")) {
         break;
       }
       const { chunk, consumed: chunkLines } = parseUpdateFileChunk(
@@ -634,14 +641,15 @@ function parseUpdateFileChunk(
 
   let changeContext: string | undefined;
   let startIndex = 0;
-  if (lines[0] === EMPTY_CHANGE_CONTEXT_MARKER) {
+  const firstLine = lines.at(0);
+  if (firstLine === EMPTY_CHANGE_CONTEXT_MARKER) {
     startIndex = 1;
-  } else if (lines[0].startsWith(CHANGE_CONTEXT_MARKER)) {
-    changeContext = lines[0].slice(CHANGE_CONTEXT_MARKER.length);
+  } else if (firstLine?.startsWith(CHANGE_CONTEXT_MARKER)) {
+    changeContext = firstLine.slice(CHANGE_CONTEXT_MARKER.length);
     startIndex = 1;
   } else if (!allowMissingContext) {
     throw new Error(
-      `Invalid patch hunk at line ${lineNumber}: Expected update hunk to start with a @@ context marker, got: '${lines[0]}'`,
+      `Invalid patch hunk at line ${lineNumber}: Expected update hunk to start with a @@ context marker, got: '${firstLine}'`,
     );
   }
 

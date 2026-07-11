@@ -38,9 +38,11 @@ describe("runGitHubCopilotDeviceFlow — normal flow", () => {
   it("bounds requests and returns authorized status and access token on successful flow", async () => {
     let callIdx = 0;
     const requestTimeouts: Array<number | undefined> = [];
+    const controller = new AbortController();
     setGitHubCopilotDeviceFlowFetchGuardForTesting(async (params) => {
       callIdx += 1;
       requestTimeouts.push(params.timeoutMs);
+      expect(params.signal).toBe(controller.signal);
       if (callIdx === 1) {
         expect(params.url).toBe(DEVICE_CODE_URL);
         return guardResponse(VALID_DEVICE_CODE_BODY);
@@ -54,7 +56,7 @@ describe("runGitHubCopilotDeviceFlow — normal flow", () => {
     });
 
     const showCode = vi.fn(async () => {});
-    const result = await runGitHubCopilotDeviceFlow({ showCode });
+    const result = await runGitHubCopilotDeviceFlow({ showCode, signal: controller.signal });
 
     expect(result).toEqual({ status: "authorized", accessToken: "ghu_tok_xyz" });
     expect(showCode).toHaveBeenCalledWith({

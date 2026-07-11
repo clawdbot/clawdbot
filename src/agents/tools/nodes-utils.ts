@@ -110,14 +110,14 @@ export function selectDefaultNodeFromList(
   const connected = withCapability.filter((n) => n.connected);
   const candidates = connected.length > 0 ? connected : withCapability;
   if (candidates.length === 1) {
-    return candidates[0];
+    return candidates.at(0) ?? null;
   }
 
   const preferLocalMac = options.preferLocalMac ?? true;
   if (preferLocalMac) {
     const local = candidates.filter(isLocalMacNode);
     if (local.length === 1) {
-      return local[0];
+      return local.at(0) ?? null;
     }
   }
 

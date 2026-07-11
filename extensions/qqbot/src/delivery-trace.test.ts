@@ -6,9 +6,9 @@
 // reply budget accounting (engine/gateway/typing-keepalive.ts +
 // gateway.ts startTypingForEvent), the static block-deliver pipeline
 // (engine/gateway/outbound-dispatch.ts deliver wiring →
-// engine/messaging/outbound-deliver.ts), and the budget-limited channel
-// outbound send path (engine/messaging/outbound.ts sendText with
-// ReplyLimiter proactive fallback) — against a recording ApiClient mock, so
+// engine/messaging/outbound-deliver.ts), and the common budget-limited sender
+// path (engine/messaging/sender.ts text/media sends with ReplyLimiter proactive
+// fallback) — against a recording ApiClient mock, so
 // OUT events are the raw QQ Open Platform HTTP calls. Every wire call that
 // carries `msg_id` + `msg_seq` spends QQ's ≤5-per-msg_id passive reply
 // budget; typing renewals count against it, which is the point of this
@@ -22,10 +22,6 @@
 //   that re-sends the accumulated partial text unchanged (abortStreaming only
 //   runs when finalization throws, and performFlush/finalize have no dirty
 //   check against the last sent chunk).
-// - The gateway deliver/static-final path sends passive replies via
-//   sender.sendText directly and never consults the ReplyLimiter; only the
-//   channel outbound path (outbound.ts sendText) has the proactive fallback,
-//   so typing spends + tool sends + final can exceed QQ's server budget.
 // Refresh goldens with OPENCLAW_TRACE_UPDATE=1 (see delivery-trace harness docs).
 import {
   deliveryTraceScenarios,
@@ -37,7 +33,7 @@ import {
   type WireRecorder,
 } from "openclaw/plugin-sdk/channel-contract-testing";
 import { chunkMarkdownText } from "openclaw/plugin-sdk/reply-runtime";
-import { describe, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { TYPING_INPUT_SECOND, TypingKeepAlive } from "./engine/gateway/typing-keepalive.js";
 import { createQQBotMarkdownChunker } from "./engine/messaging/markdown-table-chunking.js";
 import {
@@ -46,6 +42,7 @@ import {
   TEXT_CHUNK_LIMIT,
   type DeliverDeps,
 } from "./engine/messaging/outbound-deliver.js";
+import { checkMessageReplyLimit, claimMessageReply } from "./engine/messaging/outbound-reply.js";
 import {
   sendDocument,
   sendMedia as sendOutboundMedia,
@@ -256,8 +253,8 @@ function setupQqbotTrace(recorder: WireRecorder, msgId: string) {
   // Replica of the outbound-dispatch.ts block-deliver wiring for a visible
   // final payload (silent/media-only gates and group-skip branches are not
   // exercised by these scripts). Deliver-first finals lock the controller and
-  // fall back to the static passive send path — which never consults the
-  // ReplyLimiter (AS-IS budget wart pinned by the budget-exhaustion golden).
+  // fall back to the static sender path, which shares the same passive budget
+  // and proactive fallback as channel outbound sends.
   const deliverFinal = async (payload: {
     text?: string;
     mediaUrls?: string[];
@@ -302,8 +299,8 @@ function setupQqbotTrace(recorder: WireRecorder, msgId: string) {
 
   // tool-progress "result" steps stand in for message-tool sends replying to
   // the same inbound message. Those ride the channel outbound seam
-  // (channel.ts sendText → outbound.ts sendText), the only path that consults
-  // the ReplyLimiter (4 passive replies per msg_id, then proactive fallback).
+  // (channel.ts sendText → outbound.ts sendText → sender.ts sendText), which
+  // shares one five-request budget with typing and static final delivery.
   let toolSendCount = 0;
   const sendViaChannelOutbound = async () => {
     toolSendCount += 1;
@@ -321,6 +318,10 @@ function setupQqbotTrace(recorder: WireRecorder, msgId: string) {
         // Replica of gateway.ts startTypingForEvent: initial input_notify
         // (first budget spend), then the keepalive loop with
         // TYPING_RENEWAL_LIMIT renewals reserving one reply for the final.
+        const passive = claimMessageReply(msgId, 1);
+        if (!passive.allowed) {
+          break;
+        }
         await sendInputNotify({
           openid: OPENID,
           creds: accountToCreds(account),
@@ -400,10 +401,9 @@ const QQBOT_TRACE_SCENARIOS: readonly DeliveryTraceScenario[] = [
   qqbotScenario("streaming-happy-c2c", deliveryTraceScenarios["streaming-happy"].steps),
   // Budget lifecycle against one msg_id: initial input_notify plus exactly
   // TYPING_RENEWAL_LIMIT (3) renewals, then a renewal-free tick proving the
-  // reserved final reply; five message-tool sends where the ReplyLimiter
-  // allows 4 passive replies and falls back to a proactive body (no
-  // msg_id/msg_seq) for the fifth; and a static final that still sends
-  // passively because the deliver path never consults the limiter (AS-IS).
+  // reserved final reply; five message-tool sends where only the first can
+  // claim the fifth passive slot; then a static final. Every later text send
+  // falls back to a proactive body without msg_id/msg_seq.
   qqbotScenario("budget-exhaustion", [
     { kind: "reply-start" },
     { kind: "advance", ms: 5000 },
@@ -435,20 +435,40 @@ const QQBOT_TRACE_SCENARIOS: readonly DeliveryTraceScenario[] = [
   ]),
 ];
 
+const EXPECTED_REPLY_BUDGET_REMAINING: Readonly<Record<string, number>> = {
+  "streaming-happy-c2c": 3,
+  "budget-exhaustion": 0,
+  "media-interrupt": 1,
+};
+
 describe("qqbot delivery trace goldens", () => {
   for (const scenario of QQBOT_TRACE_SCENARIOS) {
-    it(`records ${scenario.name}`, async () => {
+    const scenarioName = scenario.name;
+    it(`records ${scenarioName}`, async () => {
+      const msgId = `qq-msg-${scenarioName}`;
       try {
         const events = await runDeliveryTraceScenario({
           scenario,
           // Distinct msg_id per scenario keeps the module-global ReplyLimiter
           // and upload caches from leaking budget state across scenarios.
-          setup: (recorder) => setupQqbotTrace(recorder, `qq-msg-${scenario.name}`),
+          setup: (recorder) => setupQqbotTrace(recorder, msgId),
         });
         expectDeliveryTraceMatchesGolden({
-          goldenUrl: new URL(`./__traces__/${scenario.name}.trace.jsonl`, import.meta.url),
+          goldenUrl: new URL(`./__traces__/${scenarioName}.trace.jsonl`, import.meta.url),
           events,
         });
+        const expectedRemaining = EXPECTED_REPLY_BUDGET_REMAINING[scenarioName];
+        if (expectedRemaining !== undefined) {
+          const finalOffsetMs = events.at(-1)?.at ?? 0;
+          vi.useFakeTimers({ now: Date.UTC(2026, 0, 1) + finalOffsetMs });
+          try {
+            // Each stream session and media message consumes one shared slot;
+            // uploads and later chunks within a session do not.
+            expect(checkMessageReplyLimit(msgId).remaining).toBe(expectedRemaining);
+          } finally {
+            vi.useRealTimers();
+          }
+        }
       } finally {
         wire.recorder = null;
       }

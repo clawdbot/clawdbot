@@ -298,10 +298,14 @@ describe("prepareSimpleCompletionModel", () => {
       githubToken: "ghu_test",
       config: undefined,
     });
-    expect(hoisted.setRuntimeApiKeyMock).toHaveBeenCalledWith(
-      "github-copilot",
-      "copilot-runtime-token",
-    );
+    const [storedProvider, storedKey] = hoisted.setRuntimeApiKeyMock.mock.calls[0] as [
+      string,
+      string,
+    ];
+    expect(storedProvider).toBe("github-copilot");
+    expect(looksLikeSecretSentinel(storedKey)).toBe(true);
+    expect(storedKey).not.toBe("copilot-runtime-token");
+    expect(resolveSecretSentinel(storedKey)).toBe("copilot-runtime-token");
   });
 
   it("returns exchanged copilot token in auth.apiKey for github-copilot provider", async () => {
@@ -334,7 +338,8 @@ describe("prepareSimpleCompletionModel", () => {
 
     // Callers must only receive the short-lived Copilot runtime token. The
     // original GitHub token is broader auth material and must not leave prep.
-    expect(result.auth.apiKey).toBe("copilot-runtime-token");
+    expect(looksLikeSecretSentinel(result.auth.apiKey ?? "")).toBe(true);
+    expect(resolveSecretSentinel(result.auth.apiKey ?? "")).toBe("copilot-runtime-token");
     expect(result.auth.apiKey).not.toBe("ghu_original_github_token");
   });
 
@@ -516,13 +521,18 @@ describe("prepareSimpleCompletionModel", () => {
     expect(runtimeAuthInput.context?.authMode).toBe("api-key");
     expect(runtimeAuthInput.context?.modelId).toBe("anthropic.claude-opus-4-7");
     expect(runtimeAuthInput.context?.profileId).toBe("mantle");
-    expect(hoisted.setRuntimeApiKeyMock).toHaveBeenCalledWith(
-      "amazon-bedrock-mantle",
-      "bedrock-runtime-token",
-    );
+    const [storedProvider, storedKey] = hoisted.setRuntimeApiKeyMock.mock.calls[0] as [
+      string,
+      string,
+    ];
+    expect(storedProvider).toBe("amazon-bedrock-mantle");
+    expect(looksLikeSecretSentinel(storedKey)).toBe(true);
+    expect(storedKey).not.toBe("bedrock-runtime-token");
+    expect(resolveSecretSentinel(storedKey)).toBe("bedrock-runtime-token");
     expectPreparedModelResult(result);
     expect(result.model.baseUrl).toBe("https://bedrock-mantle.us-east-1.api.aws/anthropic");
-    expect(result.auth.apiKey).toBe("bedrock-runtime-token");
+    expect(looksLikeSecretSentinel(result.auth.apiKey ?? "")).toBe(true);
+    expect(resolveSecretSentinel(result.auth.apiKey ?? "")).toBe("bedrock-runtime-token");
   });
 
   it("can skip agent model/auth discovery for config-scoped one-shot completions", async () => {

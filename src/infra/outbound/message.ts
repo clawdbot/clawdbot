@@ -1,6 +1,7 @@
 // Outbound message entrypoint resolves channel/target, durable capability
 // requirements, payload plans, gateway fallback, and optional mirroring.
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import type { ChatType } from "../../channels/chat-type.js";
 import { deriveDurableFinalDeliveryRequirements } from "../../channels/message/capabilities.js";
 import {
   sendDurableMessageBatch,
@@ -76,6 +77,8 @@ type MessageSendParams = {
   gifPlayback?: boolean;
   forceDocument?: boolean;
   accountId?: string;
+  /** Known destination conversation kind prepared by the caller. */
+  conversationType?: ChatType;
   replyToId?: string;
   threadId?: string | number;
   dryRun?: boolean;
@@ -382,6 +385,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       cfg,
       agentId: params.agentId,
       sessionKey: params.requesterSessionKey ?? params.mirror?.sessionKey,
+      conversationType: params.conversationType,
       requesterAccountId: params.requesterAccountId ?? params.accountId,
       requesterSenderId: params.requesterSenderId,
       requesterSenderName: params.requesterSenderName,

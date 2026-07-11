@@ -221,7 +221,10 @@ function mergeCatalogEntries(models: ModelCatalogEntry[], entries: ModelCatalogE
       indexByKey.set(key, models.length - 1);
       continue;
     }
-    models[existingIndex] = overlayCatalogMetadata(models[existingIndex], entry);
+    const existing = models.at(existingIndex);
+    if (existing) {
+      models[existingIndex] = overlayCatalogMetadata(existing, entry);
+    }
   }
 }
 

@@ -368,7 +368,10 @@ async function resolveComputerNode(
     return match;
   }
   if (eligible.length === 1) {
-    return eligible[0];
+    const node = eligible.at(0);
+    if (node) {
+      return node;
+    }
   }
   if (eligible.length === 0) {
     throw new Error(
@@ -500,7 +503,10 @@ function computerFrameImageIdentity(
   if (images.length !== 1) {
     return undefined;
   }
-  const image = images[0];
+  const image = images.at(0);
+  if (!image) {
+    return undefined;
+  }
   return crypto
     .createHash("sha256")
     .update(JSON.stringify([image.mimeType, image.data]))

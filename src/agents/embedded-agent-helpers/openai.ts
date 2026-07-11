@@ -454,10 +454,13 @@ export function downgradeOpenAIReasoningBlocks(
     type AssistantContentBlock = (typeof assistantMsg.content)[number];
 
     const nextContent: AssistantContentBlock[] = [];
-    for (let i = 0; i < assistantMsg.content.length; i++) {
-      const block = assistantMsg.content[i];
-      if (!block || typeof block !== "object") {
-        nextContent.push(block as AssistantContentBlock);
+    for (const [i, block] of assistantMsg.content.entries()) {
+      if (!block) {
+        changed = true;
+        continue;
+      }
+      if (typeof block !== "object") {
+        nextContent.push(block);
         continue;
       }
       const record = block as OpenAIThinkingBlock;

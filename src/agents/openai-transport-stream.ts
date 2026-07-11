@@ -1147,7 +1147,9 @@ function convertResponsesMessages(
     if (!id.includes("|")) {
       return normalizeIdPart(id);
     }
-    const [callId, itemId] = id.split("|");
+    const separatorIndex = id.indexOf("|");
+    const callId = id.slice(0, separatorIndex);
+    const itemId = id.slice(separatorIndex + 1);
     const normalizedCallId = normalizeIdPart(callId);
     const isForeignToolCall = source.provider !== model.provider || source.api !== model.api;
     let normalizedItemId = isForeignToolCall
@@ -1278,7 +1280,9 @@ function convertResponsesMessages(
           output.push(messageItem as ResponseInputItem);
           previousReplayItemWasReasoning = false;
         } else if (block.type === "toolCall") {
-          const [callId, itemIdRaw] = block.id.split("|");
+          const separatorIndex = block.id.indexOf("|");
+          const callId = separatorIndex === -1 ? block.id : block.id.slice(0, separatorIndex);
+          const itemIdRaw = separatorIndex === -1 ? undefined : block.id.slice(separatorIndex + 1);
           const itemId =
             shouldReplayResponsesItemIds && !(isDifferentModel && itemIdRaw?.startsWith("fc_"))
               ? itemIdRaw
@@ -1305,7 +1309,9 @@ function convertResponsesMessages(
       const hasText = sanitizedTextResult.trim().length > 0;
       const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
       const hasImages = msg.content.some((item) => item.type === "image");
-      const [callId] = msg.toolCallId.split("|");
+      const separatorIndex = msg.toolCallId.indexOf("|");
+      const callId =
+        separatorIndex === -1 ? msg.toolCallId : msg.toolCallId.slice(0, separatorIndex);
       messages.push({
         type: "function_call_output",
         call_id: callId,
@@ -1538,13 +1544,16 @@ async function processResponsesStream(
     const compatible = uniqueCandidates.filter((state) => !identitiesConflict(state, identity));
     const matches = compatible.filter((state) => sharesIdentity(state, identity));
     if (matches.length === 1) {
-      return adoptToolCallIdentity(matches[0], identity);
+      const match = matches.at(0);
+      return match ? adoptToolCallIdentity(match, identity) : undefined;
     }
     // Only a sole active call may adopt an identity it did not already know.
     // Parallel calls require a positive match so missing indices stay fail-closed.
-    return uniqueCandidates.length === 1 && compatible.length === 1 && matches.length === 0
-      ? adoptToolCallIdentity(compatible[0], identity)
-      : undefined;
+    if (uniqueCandidates.length !== 1 || compatible.length !== 1 || matches.length !== 0) {
+      return undefined;
+    }
+    const candidate = compatible.at(0);
+    return candidate ? adoptToolCallIdentity(candidate, identity) : undefined;
   };
   const resolveStreamingToolCall = (
     event: Record<string, unknown>,

@@ -78,10 +78,10 @@ function normalizeProviderModelsForConfig(
       const existingIndex = seenById.get(id);
       if (existingIndex !== undefined) {
         mutated = true;
-        nextModels[existingIndex] = mergeNormalizedProviderModel(
-          nextModels[existingIndex],
-          normalizedModel,
-        );
+        const existing = nextModels.at(existingIndex);
+        if (existing) {
+          nextModels[existingIndex] = mergeNormalizedProviderModel(existing, normalizedModel);
+        }
         continue;
       }
       seenById.set(id, nextModels.length);

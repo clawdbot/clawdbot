@@ -34,7 +34,10 @@ export function mergeAttemptToolMediaPayloads(params: {
   const payloads = params.payloads?.length ? [...params.payloads] : [];
   const payloadIndex = payloads.findIndex((payload) => !payload.isReasoning);
   if (payloadIndex >= 0) {
-    const payload = payloads[payloadIndex];
+    const payload = payloads.at(payloadIndex);
+    if (!payload) {
+      return payloads;
+    }
     if (
       params.sourceReplyDeliveryMode === "message_tool_only" &&
       getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror

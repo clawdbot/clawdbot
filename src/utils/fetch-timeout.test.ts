@@ -191,6 +191,28 @@ describe("buildTimeoutAbortSignal", () => {
     expect(JSON.stringify(record)).not.toContain(SYNTHETIC_TELEGRAM_BOT_TOKEN);
   });
 
+  it("does not split surrogate pairs at the fallback timeout URL boundary", async () => {
+    const visiblePrefix = "x".repeat(499);
+    const record = await captureTimeoutLogUrl(`${visiblePrefix}🚀tail`);
+    const expectedUrl = `${visiblePrefix}...`;
+
+    expect(record.url).toBe(expectedUrl);
+    expect(record.consoleMessage).toBe(
+      `fetch timeout after 25ms (elapsed 25ms) operation=unit-test url=${expectedUrl}`,
+    );
+  });
+
+  it("keeps the full ASCII budget in fallback timeout URL logs", async () => {
+    const visiblePrefix = "x".repeat(500);
+    const record = await captureTimeoutLogUrl(`${visiblePrefix}tail`);
+    const expectedUrl = `${visiblePrefix}...`;
+
+    expect(record.url).toBe(expectedUrl);
+    expect(record.consoleMessage).toBe(
+      `fetch timeout after 25ms (elapsed 25ms) operation=unit-test url=${expectedUrl}`,
+    );
+  });
+
   it.each([
     ["https://example.com/bot/settings?safe=1", "https://example.com/bot/settings"],
     ["https://example.com/bots/chat?safe=1", "https://example.com/bots/chat"],

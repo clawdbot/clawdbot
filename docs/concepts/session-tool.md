@@ -81,6 +81,16 @@ When route metadata is available, `session_status` also includes a visible `Rout
 - `active` is the current live-run route. It is only reported for the live or current session being handled now.
 - `deliveryContext` is the persisted delivery route stored on the session, which OpenClaw can reuse for later delivery even when the active surface differs.
 
+## Session state changes
+
+OpenClaw keeps a best-effort signal log for selected session state changes: direct human messages to child sessions, child-run completion or failure, child creation, goal changes, and compaction. The log contains metadata and one-line summaries, never message content. Its `stateVersion` is the session's signal-log head, not a transactional change-data-capture version; the session-store mutation and signal append use separate storage, so a failed append is logged without failing the originating turn.
+
+`sessions_list` includes `stateVersion` on rows with logged changes. `session_status` always returns `stateVersion` in structured details. Pass `changesSince: <previousStateVersion>` to retrieve up to 200 retained events after that version; this read does not acknowledge or advance parent notification cursors. A `historyGap: true` result means the requested version predates retained history, so refresh the whole session state instead of treating the response as an exact delta.
+
+When another actor sends a direct human turn to a watched child or changes its goal, the parent receives a system notice telling it to call `session_status` with its last-seen version. Main-session parents are proactively woken. Nested sub-agent parents receive the notice on their next turn because heartbeat routing cannot target their queue directly. Completion announcements remain the owner for ordinary child-run completion delivery.
+
+History is bounded to 30 days and 50,000 rows, while per-session heads remain monotonic after pruning. Notice delivery uses the gateway's in-memory system-event queue and assumes one gateway process owns delivery for the shared state database. Multiple gateways still share the durable log and `changesSince` reconciliation surface, but v1 does not push notices across processes. Parent notices require an agent-qualified parent session key; under `session.scope="global"` the shared `global` key is ambiguous across agents, so those parents get the durable log and `changesSince` but no proactive notices in v1.
+
 `sessions_yield` intentionally ends the current turn so the next message can be the follow-up event you are waiting for. Use it after spawning sub-agents when you want completion results to arrive as the next message instead of building poll loops.
 
 `subagents` is the visibility helper for already spawned OpenClaw sub-agents. It supports `action: "list"` to inspect active/recent runs.
@@ -119,6 +129,7 @@ Default is `tree`. Sandboxed sessions are clamped to `tree` regardless of config
 ## Further reading
 
 - [Session Management](/concepts/session): routing, lifecycle, maintenance
+- [Sub-agents](/tools/subagents): child-session lifecycle and delivery
 - [ACP Agents](/tools/acp-agents): external harness spawning
 - [Multi-agent](/concepts/multi-agent): multi-agent architecture
 - [Gateway Configuration](/gateway/configuration): session tool config knobs

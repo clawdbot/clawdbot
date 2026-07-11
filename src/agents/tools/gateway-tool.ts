@@ -366,7 +366,9 @@ function isAllowedGatewayConfigPath(path: string): boolean {
       return false;
     }
     for (let i = 0; i < patternSegments.length; i += 1) {
-      if (!pathSegmentMatches(patternSegments[i], pathSegments[i])) {
+      const patternSegment = patternSegments.at(i);
+      const pathSegment = pathSegments.at(i);
+      if (!patternSegment || !pathSegment || !pathSegmentMatches(patternSegment, pathSegment)) {
         return false;
       }
     }

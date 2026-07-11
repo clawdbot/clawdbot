@@ -25,6 +25,7 @@ import {
   type MessageResponse,
 } from "../types.js";
 import { normalizeMediaTags } from "../utils/media-tags.js";
+import { claimMessageReply } from "./outbound-reply.js";
 import type { OutboundMediaAccessContext } from "./outbound-types.js";
 import type { MediaTargetContext } from "./outbound.js";
 import { getMessageApi } from "./sender.js";
@@ -1000,6 +1001,14 @@ export class StreamingController {
         return;
       }
       const firstText = safeText;
+      // A stream session is one passive reply: claim once before its first
+      // POST, then reuse the same msg_seq for all later chunks in the session.
+      const passive = claimMessageReply(this.deps.replyToMsgId);
+      if (!passive.allowed) {
+        this.logWarn(`stream budget unavailable; falling back to static delivery`);
+        this.transition("aborted", "doStartStreaming", "passive_budget_exhausted");
+        return;
+      }
       const resp = await this.sendStreamChunk(
         firstText,
         StreamInputState.GENERATING,

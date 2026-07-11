@@ -8,7 +8,7 @@ import (
 func TestCacheNamespaceIncludesPromptVersion(t *testing.T) {
 	t.Parallel()
 
-	if want := "prompt=1"; !strings.Contains(cacheNamespace(), want) {
+	if want := "prompt=2"; !strings.Contains(cacheNamespace(), want) {
 		t.Fatalf("expected cache namespace to contain %q, got %q", want, cacheNamespace())
 	}
 }

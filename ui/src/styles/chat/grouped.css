@@ -326,7 +326,7 @@ img.chat-avatar {
 }
 
 .chat-thread--direct .chat-group {
-  margin-left: 8px;
+  margin-inline: 0;
 }
 
 .chat-thread--direct .chat-group.assistant .chat-group-messages {

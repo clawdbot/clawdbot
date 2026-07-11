@@ -658,6 +658,7 @@ still need normal device approval for scope upgrades.
 
 ## Related
 
+- [Session tools and state changes](/concepts/session-tool)
 - [ACP agents](/tools/acp-agents)
 - [Agent send](/tools/agent-send)
 - [Background tasks](/automation/tasks)

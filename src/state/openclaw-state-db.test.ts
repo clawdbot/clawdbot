@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { readCronRunLogEntriesSync } from "../cron/run-log.js";
@@ -19,7 +20,10 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
+  detectOpenClawStateDatabaseSchemaMigrations,
   openOpenClawStateDatabase,
+  OPENCLAW_STATE_SCHEMA_VERSION,
+  repairOpenClawStateDatabaseSchema,
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
@@ -50,6 +54,174 @@ function statfsFixture(type: number): ReturnType<typeof fs.statfsSync> {
     frsize: 1024,
     ffree: 0,
   };
+}
+
+function createLegacyAuditStateDatabase(stateDir: string): string {
+  const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+  fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+  const { DatabaseSync } = requireNodeSqlite();
+  const db = new DatabaseSync(databasePath);
+  try {
+    db.exec(`
+      PRAGMA user_version = 1;
+      CREATE TABLE schema_meta (
+        meta_key TEXT NOT NULL PRIMARY KEY,
+        role TEXT NOT NULL,
+        schema_version INTEGER NOT NULL,
+        agent_id TEXT,
+        app_version TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      INSERT INTO schema_meta (
+        meta_key,
+        role,
+        schema_version,
+        created_at,
+        updated_at
+      ) VALUES ('primary', 'global', 1, 10, 10);
+      CREATE TABLE audit_events (
+        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_id TEXT NOT NULL UNIQUE,
+        source_id TEXT NOT NULL UNIQUE,
+        source_sequence INTEGER NOT NULL,
+        occurred_at INTEGER NOT NULL,
+        kind TEXT NOT NULL,
+        action TEXT NOT NULL,
+        status TEXT NOT NULL,
+        error_code TEXT,
+        actor_type TEXT NOT NULL,
+        actor_id TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        session_key TEXT,
+        session_id TEXT,
+        run_id TEXT NOT NULL,
+        tool_call_id TEXT,
+        tool_name TEXT
+      );
+      CREATE INDEX idx_audit_events_time
+        ON audit_events(occurred_at DESC, sequence DESC);
+      CREATE INDEX idx_audit_events_agent_sequence
+        ON audit_events(agent_id, sequence DESC);
+      CREATE INDEX idx_audit_events_session_sequence
+        ON audit_events(session_key, sequence DESC);
+      CREATE INDEX idx_audit_events_run_sequence
+        ON audit_events(run_id, sequence DESC);
+      CREATE INDEX idx_audit_events_kind_sequence
+        ON audit_events(kind, sequence DESC);
+      CREATE INDEX idx_audit_events_status_sequence
+        ON audit_events(status, sequence DESC);
+      INSERT INTO audit_events (
+        sequence,
+        event_id,
+        source_id,
+        source_sequence,
+        occurred_at,
+        kind,
+        action,
+        status,
+        actor_type,
+        actor_id,
+        agent_id,
+        run_id
+      ) VALUES (
+        7,
+        'event-legacy',
+        'run-legacy:1:100:agent.run.started',
+        1,
+        100,
+        'agent_run',
+        'agent.run.started',
+        'started',
+        'agent',
+        'main',
+        'main',
+        'run-legacy'
+      );
+      UPDATE sqlite_sequence SET seq = 40 WHERE name = 'audit_events';
+    `);
+  } finally {
+    db.close();
+  }
+  return databasePath;
+}
+
+function createCanonicalAuditStateDatabase(stateDir: string): string {
+  const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
+  const databasePath = database.path;
+  closeOpenClawStateDatabaseForTest();
+  return databasePath;
+}
+
+function rebuildAuditEventsTable(
+  db: DatabaseSync,
+  transformCreateSql: (sql: string) => string,
+): void {
+  const table = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'audit_events'")
+    .get() as { sql?: unknown } | undefined;
+  if (typeof table?.sql !== "string") {
+    throw new Error("missing audit_events table SQL");
+  }
+  const indexes = db
+    .prepare(
+      `SELECT sql
+         FROM sqlite_master
+        WHERE type = 'index'
+          AND tbl_name = 'audit_events'
+          AND sql IS NOT NULL
+        ORDER BY name`,
+    )
+    .all() as Array<{ sql?: unknown }>;
+  const transformedCreateSql = transformCreateSql(table.sql);
+  if (transformedCreateSql === table.sql) {
+    throw new Error("audit_events test schema transform did not change the table");
+  }
+  db.exec("DROP TABLE audit_events");
+  db.exec(transformedCreateSql);
+  for (const index of indexes) {
+    if (typeof index.sql !== "string") {
+      throw new Error("missing audit_events index SQL");
+    }
+    db.exec(index.sql);
+  }
+}
+
+function insertAuditMarker(
+  db: DatabaseSync,
+  eventId: string,
+  sourceId: string,
+  sequence = 7,
+): void {
+  db.prepare(
+    `INSERT INTO audit_events (
+       sequence, event_id, source_id, source_sequence, occurred_at, kind, action, status,
+       actor_type, actor_id
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    sequence,
+    eventId,
+    sourceId,
+    sequence,
+    100,
+    "message",
+    "message.inbound.processed",
+    "succeeded",
+    "system",
+    "gateway",
+  );
+}
+
+function expectNoncanonicalAuditSchemaRejected(stateDir: string, databasePath: string): void {
+  const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+  expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([
+    { kind: "audit-events-v2", path: databasePath },
+  ]);
+  expect(() => openOpenClawStateDatabase(options)).toThrow(/noncanonical audit event schema/);
+  expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+    changes: [],
+    warnings: [expect.stringContaining("cannot be repaired automatically")],
+  });
 }
 
 afterAll(() => {
@@ -91,6 +263,408 @@ describe("openclaw state database", () => {
       createSqliteSchemaShapeFromSql(new URL("./openclaw-state-schema.sql", import.meta.url)),
     );
     expect(database.path).toBe(path.join(stateDir, "state", "openclaw.sqlite"));
+  });
+
+  it("migrates the released audit ledger to message-compatible attribution exactly once", () => {
+    const stateDir = createTempStateDir();
+    const databasePath = createLegacyAuditStateDatabase(stateDir);
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+
+    expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([
+      { kind: "audit-events-v2", path: databasePath },
+    ]);
+    expect(() => openOpenClawStateDatabase(options)).toThrow(/legacy audit event schema/);
+
+    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+      changes: ["Migrated shared state audit event ledger → versioned message lifecycle schema"],
+      warnings: [],
+    });
+    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({ changes: [], warnings: [] });
+    expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([]);
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const db = new DatabaseSync(databasePath);
+    try {
+      const columns = db.prepare("PRAGMA table_info(audit_events)").all() as Array<{
+        name: string;
+        notnull: number;
+      }>;
+      const nullability = new Map(columns.map((column) => [column.name, column.notnull === 0]));
+      expect(nullability.get("schema_version")).toBe(false);
+      expect(nullability.get("source_sequence")).toBe(false);
+      expect(nullability.get("actor_id")).toBe(false);
+      expect(nullability.get("agent_id")).toBe(true);
+      expect(nullability.get("run_id")).toBe(true);
+      expect(columns.map((column) => column.name)).toEqual(
+        expect.arrayContaining([
+          "direction",
+          "channel",
+          "conversation_kind",
+          "message_outcome",
+          "reason_code",
+          "delivery_kind",
+          "failure_stage",
+          "duration_ms",
+          "result_count",
+          "account_ref",
+          "conversation_ref",
+          "message_ref",
+          "target_ref",
+        ]),
+      );
+      expect(db.prepare("SELECT * FROM audit_events").get()).toMatchObject({
+        sequence: 7,
+        event_id: "event-legacy",
+        source_id: "run-legacy:1:100:agent.run.started",
+        schema_version: 1,
+        source_sequence: 1,
+        agent_id: "main",
+        run_id: "run-legacy",
+        channel: null,
+        direction: null,
+      });
+
+      db.prepare(
+        `INSERT INTO audit_events (
+           event_id,
+           source_id,
+           source_sequence,
+           occurred_at,
+           kind,
+           action,
+           status,
+           actor_type,
+           actor_id,
+           direction,
+           channel,
+           conversation_kind,
+           account_ref
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        "event-message",
+        "message-source",
+        2,
+        200,
+        "message",
+        "message.received",
+        "succeeded",
+        "channel_sender",
+        "hmac-sha256:v1:sender",
+        "inbound",
+        "telegram",
+        "direct",
+        "hmac-sha256:v1:account",
+      );
+      expect(
+        db
+          .prepare(
+            "SELECT sequence, schema_version, source_sequence, actor_id, agent_id, run_id FROM audit_events WHERE event_id = ?",
+          )
+          .get("event-message"),
+      ).toEqual({
+        sequence: 41,
+        schema_version: 1,
+        source_sequence: 2,
+        actor_id: "hmac-sha256:v1:sender",
+        agent_id: null,
+        run_id: null,
+      });
+      const indexNames = (
+        db.prepare("PRAGMA index_list(audit_events)").all() as Array<{ name: string }>
+      ).map((index) => index.name);
+      expect(indexNames).toEqual(
+        expect.arrayContaining([
+          "idx_audit_events_time",
+          "idx_audit_events_agent_sequence",
+          "idx_audit_events_session_sequence",
+          "idx_audit_events_run_sequence",
+          "idx_audit_events_kind_sequence",
+          "idx_audit_events_status_sequence",
+          "idx_audit_events_channel_sequence",
+          "idx_audit_events_direction_sequence",
+        ]),
+      );
+      expect(readSqliteNumberPragma(db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+      expect(
+        db.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get(),
+      ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
+      expect(() =>
+        db
+          .prepare(
+            "INSERT INTO audit_identity_keys (id, key_id, key, created_at) VALUES (1, ?, ?, ?)",
+          )
+          .run("key-v1", new Uint8Array([1, 2, 3]), 100),
+      ).not.toThrow();
+      expect(() =>
+        db
+          .prepare(
+            "INSERT INTO audit_identity_keys (id, key_id, key, created_at) VALUES (2, ?, ?, ?)",
+          )
+          .run("key-v2", new Uint8Array([4, 5, 6]), 200),
+      ).toThrow();
+    } finally {
+      db.close();
+    }
+  });
+
+  it("preserves an empty audit ledger's sequence high-water mark", () => {
+    const stateDir = createTempStateDir();
+    const databasePath = createLegacyAuditStateDatabase(stateDir);
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacy = new DatabaseSync(databasePath);
+    legacy.exec(
+      "DELETE FROM audit_events; UPDATE sqlite_sequence SET seq = 73 WHERE name = 'audit_events';",
+    );
+    legacy.close();
+
+    expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
+
+    const migrated = new DatabaseSync(databasePath);
+    try {
+      migrated
+        .prepare(
+          `INSERT INTO audit_events (
+             event_id, source_id, source_sequence, occurred_at, kind, action, status,
+             actor_type, actor_id
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          "event-after-empty-migration",
+          "source-after-empty-migration",
+          1,
+          200,
+          "message",
+          "message.inbound.processed",
+          "succeeded",
+          "system",
+          "gateway",
+        );
+      expect(
+        migrated
+          .prepare("SELECT sequence FROM audit_events WHERE event_id = ?")
+          .get("event-after-empty-migration"),
+      ).toEqual({ sequence: 74 });
+    } finally {
+      migrated.close();
+    }
+  });
+
+  it("refuses an audit sequence high-water mark outside the supported cursor range", () => {
+    const stateDir = createTempStateDir();
+    const databasePath = createLegacyAuditStateDatabase(stateDir);
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacy = new DatabaseSync(databasePath);
+    legacy.exec("UPDATE sqlite_sequence SET seq = 9007199254740992 WHERE name = 'audit_events';");
+    legacy.close();
+
+    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+      changes: [],
+      warnings: [expect.stringContaining("exceeds the supported integer range")],
+    });
+
+    const preserved = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(
+        preserved
+          .prepare(
+            "SELECT CAST(seq AS TEXT) AS seq FROM sqlite_sequence WHERE name = 'audit_events'",
+          )
+          .get(),
+      ).toEqual({ seq: "9007199254740992" });
+      expect(
+        preserved.prepare("SELECT event_id FROM audit_events WHERE sequence = 7").get(),
+      ).toEqual({ event_id: "event-legacy" });
+    } finally {
+      preserved.close();
+    }
+  });
+
+  it("lets normal open create an audit ledger for a pre-v2 database", () => {
+    const stateDir = createTempStateDir();
+    const databasePath = createLegacyAuditStateDatabase(stateDir);
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacy = new DatabaseSync(databasePath);
+    legacy.exec("DROP TABLE audit_events");
+    legacy.close();
+
+    expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([]);
+    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({ changes: [], warnings: [] });
+    const beforeOpen = new DatabaseSync(databasePath, { readOnly: true });
+    expect(readSqliteNumberPragma(beforeOpen, "user_version")).toBe(1);
+    beforeOpen.close();
+
+    const opened = openOpenClawStateDatabase(options);
+    expect(
+      opened.db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'audit_events'")
+        .get(),
+    ).toEqual({ name: "audit_events" });
+    expect(readSqliteNumberPragma(opened.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+  });
+
+  it("refuses to rebuild a noncanonical audit table with unknown data columns", () => {
+    const stateDir = createTempStateDir();
+    const databasePath = createLegacyAuditStateDatabase(stateDir);
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const { DatabaseSync } = requireNodeSqlite();
+    const customized = new DatabaseSync(databasePath);
+    customized.exec("ALTER TABLE audit_events ADD COLUMN operator_note TEXT;");
+    customized
+      .prepare("UPDATE audit_events SET operator_note = ? WHERE event_id = ?")
+      .run("preserve-me", "event-legacy");
+    customized.close();
+
+    const result = repairOpenClawStateDatabaseSchema(options);
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([expect.stringContaining("cannot be repaired automatically")]);
+
+    const preserved = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(
+        preserved
+          .prepare("SELECT operator_note FROM audit_events WHERE event_id = ?")
+          .get("event-legacy"),
+      ).toEqual({ operator_note: "preserve-me" });
+    } finally {
+      preserved.close();
+    }
+  });
+
+  it("refuses a v2 audit ledger without source identity uniqueness", () => {
+    const stateDir = createTempStateDir();
+    const databasePath = createCanonicalAuditStateDatabase(stateDir);
+    const { DatabaseSync } = requireNodeSqlite();
+    const malformed = new DatabaseSync(databasePath);
+    rebuildAuditEventsTable(malformed, (sql) =>
+      sql.replace("source_id TEXT NOT NULL UNIQUE", "source_id TEXT NOT NULL"),
+    );
+    insertAuditMarker(malformed, "event-duplicate-source-1", "duplicate-source", 7);
+    insertAuditMarker(malformed, "event-duplicate-source-2", "duplicate-source", 8);
+    malformed.close();
+
+    expectNoncanonicalAuditSchemaRejected(stateDir, databasePath);
+
+    const preserved = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(
+        preserved
+          .prepare("SELECT COUNT(*) AS count FROM audit_events WHERE source_id = ?")
+          .get("duplicate-source"),
+      ).toEqual({ count: 2 });
+    } finally {
+      preserved.close();
+    }
+  });
+
+  it.each([
+    ["a non-primary sequence", "sequence INTEGER"],
+    ["a sequence without AUTOINCREMENT", "sequence INTEGER PRIMARY KEY"],
+  ])("refuses a v2 audit ledger with %s", (_label, sequenceDeclaration) => {
+    const stateDir = createTempStateDir();
+    const databasePath = createCanonicalAuditStateDatabase(stateDir);
+    const { DatabaseSync } = requireNodeSqlite();
+    const malformed = new DatabaseSync(databasePath);
+    rebuildAuditEventsTable(malformed, (sql) =>
+      sql.replace("sequence INTEGER PRIMARY KEY AUTOINCREMENT", sequenceDeclaration),
+    );
+    insertAuditMarker(malformed, "event-sequence-shape", "source-sequence-shape");
+    malformed.close();
+
+    expectNoncanonicalAuditSchemaRejected(stateDir, databasePath);
+
+    const preserved = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(
+        preserved
+          .prepare("SELECT sequence FROM audit_events WHERE event_id = ?")
+          .get("event-sequence-shape"),
+      ).toEqual({ sequence: 7 });
+    } finally {
+      preserved.close();
+    }
+  });
+
+  it("refuses a v2 audit ledger with an extra column without dropping its data", () => {
+    const stateDir = createTempStateDir();
+    const databasePath = createCanonicalAuditStateDatabase(stateDir);
+    const { DatabaseSync } = requireNodeSqlite();
+    const malformed = new DatabaseSync(databasePath);
+    malformed.exec("ALTER TABLE audit_events ADD COLUMN operator_note TEXT");
+    insertAuditMarker(malformed, "event-v2-custom-column", "source-v2-custom-column");
+    malformed
+      .prepare("UPDATE audit_events SET operator_note = ? WHERE event_id = ?")
+      .run("preserve-v2", "event-v2-custom-column");
+    malformed.close();
+
+    expectNoncanonicalAuditSchemaRejected(stateDir, databasePath);
+
+    const preserved = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(
+        preserved
+          .prepare("SELECT operator_note FROM audit_events WHERE event_id = ?")
+          .get("event-v2-custom-column"),
+      ).toEqual({ operator_note: "preserve-v2" });
+    } finally {
+      preserved.close();
+    }
+  });
+
+  it("refuses to recreate a missing v2 audit ledger", () => {
+    const stateDir = createTempStateDir();
+    const databasePath = createCanonicalAuditStateDatabase(stateDir);
+    const { DatabaseSync } = requireNodeSqlite();
+    const malformed = new DatabaseSync(databasePath);
+    malformed.exec("DROP TABLE audit_events");
+    malformed.close();
+
+    expectNoncanonicalAuditSchemaRejected(stateDir, databasePath);
+
+    const preserved = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(
+        preserved
+          .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'audit_events'")
+          .get(),
+      ).toBeUndefined();
+    } finally {
+      preserved.close();
+    }
+  });
+
+  it("refuses a malformed audit identity key singleton table", () => {
+    const stateDir = createTempStateDir();
+    const databasePath = createCanonicalAuditStateDatabase(stateDir);
+    const { DatabaseSync } = requireNodeSqlite();
+    const malformed = new DatabaseSync(databasePath);
+    malformed.exec(`
+      DROP TABLE audit_identity_keys;
+      CREATE TABLE audit_identity_keys (
+        id INTEGER NOT NULL PRIMARY KEY CHECK (id > 0),
+        key_id TEXT NOT NULL,
+        key BLOB NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+    `);
+    malformed
+      .prepare("INSERT INTO audit_identity_keys (id, key_id, key, created_at) VALUES (?, ?, ?, ?)")
+      .run(2, "malformed-key", new Uint8Array([1, 2, 3]), 100);
+    malformed.close();
+
+    expectNoncanonicalAuditSchemaRejected(stateDir, databasePath);
+
+    const preserved = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(preserved.prepare("SELECT id, key_id FROM audit_identity_keys").get()).toEqual({
+        id: 2,
+        key_id: "malformed-key",
+      });
+    } finally {
+      preserved.close();
+    }
   });
 
   it("creates the bounded skill curator tables", () => {
@@ -881,7 +1455,7 @@ describe("openclaw state database", () => {
     expect(readSqliteNumberPragma(database.db, "busy_timeout")).toBe(30_000);
     expect(readSqliteNumberPragma(database.db, "foreign_keys")).toBe(1);
     expect(readSqliteNumberPragma(database.db, "synchronous")).toBe(1);
-    expect(readSqliteNumberPragma(database.db, "user_version")).toBe(1);
+    expect(readSqliteNumberPragma(database.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
     expect(readSqliteNumberPragma(database.db, "wal_autocheckpoint")).toBe(1000);
     const journalMode = database.db.prepare("PRAGMA journal_mode").get() as
       | { journal_mode?: string }
@@ -916,7 +1490,7 @@ describe("openclaw state database", () => {
         database.db,
         stateDb.selectFrom("schema_meta").select(["role", "schema_version"]),
       ),
-    ).toEqual({ role: "global", schema_version: 1 });
+    ).toEqual({ role: "global", schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
   });
 
   it("refuses to open newer global schema versions", () => {
@@ -925,14 +1499,14 @@ describe("openclaw state database", () => {
     fs.mkdirSync(path.dirname(databasePath), { recursive: true });
     const { DatabaseSync } = requireNodeSqlite();
     const db = new DatabaseSync(databasePath);
-    db.exec("PRAGMA user_version = 2;");
+    db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};`);
     db.close();
 
     expect(() =>
       openOpenClawStateDatabase({
         env: { OPENCLAW_STATE_DIR: stateDir },
       }),
-    ).toThrow(/newer schema version 2/);
+    ).toThrow(new RegExp(`newer schema version ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`));
   });
 
   it("does not chmod shared parent directories for explicit database paths", () => {
@@ -963,7 +1537,7 @@ describe("openclaw state database", () => {
     expect(first.db.isOpen).toBe(true);
     expect(second.db.isOpen).toBe(true);
     expect(openOpenClawStateDatabase({ path: firstPath })).toBe(first);
-    expect(readSqliteNumberPragma(first.db, "user_version")).toBe(1);
+    expect(readSqliteNumberPragma(first.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
   });
 
   it("keys explicit relative paths by resolved database pathname", () => {

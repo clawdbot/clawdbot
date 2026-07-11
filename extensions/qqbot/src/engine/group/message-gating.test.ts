@@ -1,14 +1,21 @@
 // Qqbot tests cover message gating plugin behavior.
+import { resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-mention-gating";
 import { describe, expect, it } from "vitest";
+import type { MentionGatePort } from "../adapter/mention-gate.port.js";
 import {
   resolveGroupMessageGate,
   type GroupMessageGateInput,
   type GroupMessageGateResult,
 } from "./message-gating.js";
 
+// Real SDK-backed port so these tests prove gate parity against the canonical
+// mention decision engine, not a stub.
+const mentionGatePort: MentionGatePort = { resolveInboundMentionDecision };
+
 // Compose a full input so each test can override just the interesting axis.
 function input(overrides: Partial<GroupMessageGateInput>): GroupMessageGateInput {
   return {
+    mentionGatePort,
     ignoreOtherMentions: false,
     hasAnyMention: false,
     wasMentioned: false,
@@ -17,7 +24,6 @@ function input(overrides: Partial<GroupMessageGateInput>): GroupMessageGateInput
     isControlCommand: false,
     commandAuthorized: false,
     requireMention: true,
-    canDetectMention: true,
     ...overrides,
   };
 }
@@ -113,13 +119,6 @@ describe("engine/group/message-gating", () => {
 
     it("passes through when requireMention is off", () => {
       const result = resolveGroupMessageGate(input({ requireMention: false }));
-      expectAction(result, "pass");
-    });
-
-    it("passes through when mention cannot be detected (DMs)", () => {
-      const result = resolveGroupMessageGate(
-        input({ requireMention: true, canDetectMention: false }),
-      );
       expectAction(result, "pass");
     });
   });

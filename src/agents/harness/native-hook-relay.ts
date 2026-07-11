@@ -1770,7 +1770,10 @@ function updateJsonHash(hash: ReturnType<typeof createHash>, value: JsonValue): 
   for (const key of keys) {
     hash.update(JSON.stringify(key));
     hash.update(":");
-    updateJsonHash(hash, value[key]);
+    const item = value[key];
+    if (item !== undefined) {
+      updateJsonHash(hash, item);
+    }
     hash.update(",");
   }
   if (truncated) {
@@ -1784,7 +1787,10 @@ function updateJsonHash(hash: ReturnType<typeof createHash>, value: JsonValue): 
       }
       hash.update(JSON.stringify(key));
       hash.update(":");
-      updateJsonHash(hash, value[key]);
+      const item = value[key];
+      if (item !== undefined) {
+        updateJsonHash(hash, item);
+      }
       hash.update(",");
     }
   }
@@ -1909,7 +1915,10 @@ function snapshotJsonValue(value: JsonValue, state: { remainingStringLength: num
   const snapshot: Record<string, JsonValue> = {};
   const keys = Object.keys(value);
   for (const key of keys.slice(0, MAX_NATIVE_HOOK_RELAY_HISTORY_OBJECT_KEYS)) {
-    snapshot[snapshotString(key, state)] = snapshotJsonValue(value[key], state);
+    const item = value[key];
+    if (item !== undefined) {
+      snapshot[snapshotString(key, state)] = snapshotJsonValue(item, state);
+    }
   }
   if (keys.length > MAX_NATIVE_HOOK_RELAY_HISTORY_OBJECT_KEYS) {
     snapshot["[truncated]"] = keys.length - MAX_NATIVE_HOOK_RELAY_HISTORY_OBJECT_KEYS;

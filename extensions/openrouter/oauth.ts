@@ -171,6 +171,7 @@ export async function exchangeOpenRouterOAuthCode(params: {
   code: string;
   codeVerifier: string;
   fetchImpl?: typeof fetch;
+  signal?: AbortSignal;
 }): Promise<OpenRouterOAuthKeyResult> {
   const fetchImpl = params.fetchImpl ?? fetch;
   const response = await fetchImpl(OPENROUTER_OAUTH_TOKEN_URL, {
@@ -184,7 +185,9 @@ export async function exchangeOpenRouterOAuthCode(params: {
       code_verifier: params.codeVerifier,
       code_challenge_method: OPENROUTER_OAUTH_CODE_CHALLENGE_METHOD,
     }),
-    signal: AbortSignal.timeout(OPENROUTER_OAUTH_FETCH_TIMEOUT_MS),
+    signal: params.signal
+      ? AbortSignal.any([params.signal, AbortSignal.timeout(OPENROUTER_OAUTH_FETCH_TIMEOUT_MS)])
+      : AbortSignal.timeout(OPENROUTER_OAUTH_FETCH_TIMEOUT_MS),
   });
   const body = await readResponseBody(response);
   if (!response.ok) {
@@ -200,6 +203,7 @@ export async function waitForOpenRouterOAuthCallback(params: {
   expectedState: string;
   timeoutMs?: number;
   onProgress?: (message: string) => void;
+  signal?: AbortSignal;
 }): Promise<OpenRouterOAuthCallbackResult> {
   const timeoutMs = params.timeoutMs ?? OPENROUTER_OAUTH_TIMEOUT_MS;
   return new Promise<OpenRouterOAuthCallbackResult>((resolve, reject) => {
@@ -276,6 +280,7 @@ export async function waitForOpenRouterOAuthCallback(params: {
       if (timeout) {
         clearTimeout(timeout);
       }
+      params.signal?.removeEventListener("abort", onAbort);
       try {
         server.close();
       } catch {
@@ -289,6 +294,13 @@ export async function waitForOpenRouterOAuthCallback(params: {
         resolve(result);
       }
     };
+
+    const onAbort = () => finish(new Error("OpenRouter OAuth cancelled"));
+    params.signal?.addEventListener("abort", onAbort, { once: true });
+    if (params.signal?.aborted) {
+      onAbort();
+      return;
+    }
 
     server.once("error", (err) => {
       finish(err instanceof Error ? err : new Error("OpenRouter OAuth callback server error"));
@@ -341,12 +353,24 @@ async function resolveOpenRouterOAuthCode(
 
   if (ctx.isRemote) {
     ctx.runtime.log(`\nOpen this URL in your LOCAL browser:\n\n${params.authorizeUrl}\n`);
+    await ctx.openUrl(params.authorizeUrl);
+    await ctx.prompter.note(
+      `Open this URL in your LOCAL browser:\n\n${params.authorizeUrl}`,
+      "OpenRouter OAuth",
+    );
     return await promptForOpenRouterRedirect(ctx, params.state);
   }
 
   const callbackPromise = params
-    .waitForCallback({ expectedState: params.state, onProgress: params.onProgress })
-    .catch(async () => {
+    .waitForCallback({
+      expectedState: params.state,
+      onProgress: params.onProgress,
+      ...(ctx.signal ? { signal: ctx.signal } : {}),
+    })
+    .catch(async (error: unknown) => {
+      if (ctx.signal?.aborted) {
+        throw error;
+      }
       params.onProgress("OAuth callback not detected; waiting for redirect URL...");
       return { code: await promptForOpenRouterRedirect(ctx, params.state), state: params.state };
     });
@@ -385,6 +409,7 @@ export async function loginOpenRouterOAuth(
       code,
       codeVerifier: pkce.verifier,
       fetchImpl: options.fetchImpl,
+      ...(ctx.signal ? { signal: ctx.signal } : {}),
     });
     progress.stop("OpenRouter OAuth complete");
 

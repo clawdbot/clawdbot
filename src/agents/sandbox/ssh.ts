@@ -115,7 +115,7 @@ function assertValidExecRemoteCommand(command: string): void {
     if (!frame) {
       throw new Error("Malformed SSH/OpenShell exec command: parser state underflow.");
     }
-    const char = command[index];
+    const char = command.charAt(index);
 
     if (frame.escaping) {
       frame.escaping = false;
@@ -250,12 +250,15 @@ function assertValidExecRemoteCommand(command: string): void {
     throw new Error("Malformed SSH/OpenShell exec command: trailing backslash escape.");
   }
   if (pendingHeredocs.length > 0) {
+    const pending = pendingHeredocs.at(0);
+    if (!pending) {
+      throw new Error("Malformed SSH/OpenShell exec command: parser state underflow.");
+    }
     throw new Error(
-      `Malformed SSH/OpenShell exec command: unterminated here-doc ${pendingHeredocs[0].delimiter}.`,
+      `Malformed SSH/OpenShell exec command: unterminated here-doc ${pending.delimiter}.`,
     );
   }
-  for (let index = frames.length - 1; index >= 0; index -= 1) {
-    const frame = frames[index];
+  for (const frame of frames.toReversed()) {
     if (frame.quote === "single") {
       throw new Error("Malformed SSH/OpenShell exec command: unclosed single quote.");
     }
@@ -389,10 +392,11 @@ function readPlaceholderToken(command: string, index: number): string | null {
 
 function hasRedirectionTargetAfter(command: string, index: number): boolean {
   let cursor = index;
-  while (command[cursor] === " " || command[cursor] === "\t") {
+  while (command.charAt(cursor) === " " || command.charAt(cursor) === "\t") {
     cursor += 1;
   }
-  return command[cursor] !== undefined && !/[;&|()<>\r\n]/.test(command[cursor]);
+  const next = command.charAt(cursor);
+  return next !== "" && !/[;&|()<>\r\n]/.test(next);
 }
 
 function isLikelyGeneratedWorkflowPlaceholder(command: string, index: number): boolean {
@@ -672,9 +676,13 @@ export async function runSshSandboxCommand(
     remoteCommand: params.remoteCommand,
     tty: params.tty,
   });
+  const [executable, ...args] = argv;
+  if (!executable) {
+    throw new Error("SSH command argv is empty");
+  }
   const sshEnv = sanitizeEnvVars(process.env).allowed;
   return await new Promise<SandboxBackendCommandResult>((resolve, reject) => {
-    const child = spawn(argv[0], argv.slice(1), {
+    const child = spawn(executable, args, {
       stdio: ["pipe", "pipe", "pipe"],
       env: sshEnv,
       signal: params.signal,
@@ -798,13 +806,17 @@ export async function uploadDirectoryToSshTarget(params: {
     session: params.session,
     remoteCommand,
   });
+  const [sshExecutable, ...sshArgs] = sshArgv;
+  if (!sshExecutable) {
+    throw new Error("SSH command argv is empty");
+  }
   const sshEnv = sanitizeEnvVars(process.env).allowed;
   await new Promise<void>((resolve, reject) => {
     const tar = spawn("tar", ["-C", params.localDir, "-cf", "-", "."], {
       stdio: ["ignore", "pipe", "pipe"],
       signal: params.signal,
     });
-    const ssh = spawn(sshArgv[0], sshArgv.slice(1), {
+    const ssh = spawn(sshExecutable, sshArgs, {
       stdio: ["pipe", "pipe", "pipe"],
       env: sshEnv,
       signal: params.signal,

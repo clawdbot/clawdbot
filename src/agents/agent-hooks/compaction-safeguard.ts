@@ -679,8 +679,8 @@ function splitPreservedRecentTurns(params: {
   }
   const conversationIndexes: number[] = [];
   const userIndexes: number[] = [];
-  for (let i = 0; i < params.messages.length; i += 1) {
-    const role = (params.messages[i] as { role?: unknown }).role;
+  for (const [i, message] of params.messages.entries()) {
+    const role = message.role;
     if (role === "user" || role === "assistant") {
       conversationIndexes.push(i);
       if (role === "user") {
@@ -722,11 +722,10 @@ function splitPreservedRecentTurns(params: {
     return { summarizableMessages: params.messages, preservedMessages: [] };
   }
   const preservedToolCallIds = new Set<string>();
-  for (let i = 0; i < params.messages.length; i += 1) {
+  for (const [i, message] of params.messages.entries()) {
     if (!preservedIndexSet.has(i)) {
       continue;
     }
-    const message = params.messages[i];
     if (message.role !== "assistant") {
       continue;
     }
@@ -744,14 +743,13 @@ function splitPreservedRecentTurns(params: {
       }
     }
     if (preservedStartIndex >= 0) {
-      for (let i = preservedStartIndex; i < params.messages.length; i += 1) {
-        const message = params.messages[i];
+      for (const [offset, message] of params.messages.slice(preservedStartIndex).entries()) {
         if (message.role !== "toolResult") {
           continue;
         }
         const toolResultId = extractToolResultId(message);
         if (toolResultId && preservedToolCallIds.has(toolResultId)) {
-          preservedIndexSet.add(i);
+          preservedIndexSet.add(preservedStartIndex + offset);
         }
       }
     }
@@ -825,8 +823,7 @@ function formatSplitTurnContextSection(messages: AgentMessage[]): string {
 }
 
 function extractLatestUserAsk(messages: AgentMessage[]): string | null {
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const message = messages[i];
+  for (const message of messages.toReversed()) {
     if (message.role !== "user") {
       continue;
     }

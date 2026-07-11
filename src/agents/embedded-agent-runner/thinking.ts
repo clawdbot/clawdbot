@@ -261,7 +261,8 @@ export function stripInvalidThinkingSignatures(
   let latestAssistantIndex = -1;
   if (preserveLatestAssistant) {
     for (let i = messages.length - 1; i >= 0; i -= 1) {
-      if (isAssistantMessageWithContent(messages[i])) {
+      const message = messages.at(i);
+      if (message && isAssistantMessageWithContent(message)) {
         latestAssistantIndex = i;
         break;
       }
@@ -271,8 +272,7 @@ export function stripInvalidThinkingSignatures(
   let touched = false;
   const out: AgentMessage[] = [];
 
-  for (let i = 0; i < messages.length; i += 1) {
-    const message = messages[i];
+  for (const [i, message] of messages.entries()) {
     if (!isAssistantMessageWithContent(message)) {
       out.push(message);
       continue;
@@ -324,7 +324,8 @@ export function stripInvalidThinkingSignatures(
 export function dropThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
   let latestAssistantIndex = -1;
   for (let i = messages.length - 1; i >= 0; i -= 1) {
-    if (isAssistantMessageWithContent(messages[i])) {
+    const message = messages.at(i);
+    if (message && isAssistantMessageWithContent(message)) {
       latestAssistantIndex = i;
       break;
     }
@@ -332,8 +333,7 @@ export function dropThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
 
   let touched = false;
   const out: AgentMessage[] = [];
-  for (let i = 0; i < messages.length; i += 1) {
-    const msg = messages[i];
+  for (const [i, msg] of messages.entries()) {
     if (!isAssistantMessageWithContent(msg)) {
       out.push(msg);
       continue;
@@ -367,8 +367,9 @@ function shouldPreserveCurrentToolTurnReasoning(
   index: number,
   latestUserIndex: number,
 ): boolean {
-  const message = messages[index];
+  const message = messages.at(index);
   if (
+    !message ||
     index < latestUserIndex ||
     !isAssistantMessageWithContent(message) ||
     !hasAssistantToolCall(message)
@@ -377,7 +378,7 @@ function shouldPreserveCurrentToolTurnReasoning(
   }
 
   for (let i = index - 1; i >= 0; i -= 1) {
-    const role = (messages[i] as { role?: unknown })?.role;
+    const role = messages.at(i)?.role;
     if (role === "user") {
       break;
     }
@@ -387,9 +388,9 @@ function shouldPreserveCurrentToolTurnReasoning(
   }
 
   for (let i = index + 1; i < messages.length; i += 1) {
-    const next = messages[i];
-    const role = (next as { role?: unknown })?.role;
-    if (isToolResultMessage(next)) {
+    const next = messages.at(i);
+    const role = next?.role;
+    if (next && isToolResultMessage(next)) {
       return true;
     }
     if (role === "user") {
@@ -403,7 +404,8 @@ function shouldPreserveCurrentToolTurnReasoning(
 export function shouldPreserveLatestAssistantThinking(messages: AgentMessage[]): boolean {
   let latestAssistantIndex = -1;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (isAssistantMessageWithContent(messages[index])) {
+    const message = messages.at(index);
+    if (message && isAssistantMessageWithContent(message)) {
       latestAssistantIndex = index;
       break;
     }
@@ -417,7 +419,7 @@ export function shouldPreserveLatestAssistantThinking(messages: AgentMessage[]):
 
   let latestUserIndex = -1;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if ((messages[index] as { role?: unknown })?.role === "user") {
+    if (messages.at(index)?.role === "user") {
       latestUserIndex = index;
       break;
     }
@@ -457,7 +459,7 @@ function stripAllThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
 export function dropReasoningFromHistory(messages: AgentMessage[]): AgentMessage[] {
   let latestUserIndex = -1;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if ((messages[index] as { role?: unknown })?.role === "user") {
+    if (messages.at(index)?.role === "user") {
       latestUserIndex = index;
       break;
     }
@@ -465,8 +467,7 @@ export function dropReasoningFromHistory(messages: AgentMessage[]): AgentMessage
 
   let touched = false;
   const out: AgentMessage[] = [];
-  for (let index = 0; index < messages.length; index += 1) {
-    const message = messages[index];
+  for (const [index, message] of messages.entries()) {
     if (!isAssistantMessageWithContent(message)) {
       out.push(message);
       continue;

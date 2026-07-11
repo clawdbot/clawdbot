@@ -131,6 +131,15 @@ function getImportBasename(importPath: string): string {
   return importPath.split("/").at(-1) ?? importPath;
 }
 
+function readImportBindingName(binding: string): string {
+  return (
+    binding
+      .trim()
+      .replace(/^type\s+/u, "")
+      .split(/\s+as\s+/u)[0] ?? ""
+  );
+}
+
 function collectBundledPluginIds(): Set<string> {
   const extensionFiles = listGitFiles(path.join(repoRoot, "extensions"));
   if (extensionFiles) {
@@ -358,12 +367,43 @@ describe("non-extension test boundaries", () => {
     expect(offenders).toStrictEqual([]);
   });
 
-  it("keeps bundled extension sources off deprecated channel config schema aliases", () => {
+  it("keeps bundled extension sources on the canonical channel config schema facade", () => {
     const files = walkCode(path.join(repoRoot, "extensions"));
+    // The legacy/primitives shells stay export-compatible for third-party
+    // plugins only; bundled code imports channel-config-schema, plus the
+    // bundled facade strictly for retained bundled provider schemas.
+    const bannedSpecifiers = [
+      "openclaw/plugin-sdk/channel-config-schema-legacy",
+      "openclaw/plugin-sdk/channel-config-primitives",
+    ];
+    const bundledProviderSchemaNames = new Set([
+      "DiscordConfigSchema",
+      "GoogleChatConfigSchema",
+      "IMessageConfigSchema",
+      "MSTeamsConfigSchema",
+      "SignalConfigSchema",
+      "SlackConfigSchema",
+      "TelegramConfigSchema",
+      "WhatsAppConfigSchema",
+    ]);
+    const bundledFacadeBindingPattern =
+      /\b(?:import|export)\s+(?:type\s+)?\{(?<bindings>[^}]*)\}\s*from\s*["']openclaw\/plugin-sdk\/bundled-channel-config-schema["']/gu;
 
-    const offenders = files.filter((file) => {
+    const offenders = files.flatMap((file) => {
       const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
-      return source.includes("openclaw/plugin-sdk/channel-config-schema-legacy");
+      const fileOffenders = bannedSpecifiers
+        .filter((specifier) => source.includes(specifier))
+        .map((specifier) => `${file}: ${specifier}`);
+      for (const match of source.matchAll(bundledFacadeBindingPattern)) {
+        const genericBindings = (match.groups?.bindings ?? "")
+          .split(",")
+          .map(readImportBindingName)
+          .filter((name) => name.length > 0 && !bundledProviderSchemaNames.has(name));
+        fileOffenders.push(
+          ...genericBindings.map((name) => `${file}: bundled-channel-config-schema#${name}`),
+        );
+      }
+      return fileOffenders;
     });
 
     expect(offenders).toStrictEqual([]);

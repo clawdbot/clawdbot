@@ -29,6 +29,7 @@ import {
   resolveRuntimeImageSanitization,
   wrapExternalContent,
 } from "./browser-tool.runtime.js";
+import { resolveBrowserActRequestTimeoutMs } from "./browser/act-policy.js";
 import {
   DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
   DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS,
@@ -47,7 +48,6 @@ const browserToolActionDeps = {
   imageResultFromFile,
 };
 
-const BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS = 5_000;
 const BROWSER_DOWNLOAD_REQUEST_TIMEOUT_SLACK_MS = 5_000;
 
 type BrowserActRequest = Parameters<typeof browserAct>[1];
@@ -128,20 +128,7 @@ function withConfiguredActTimeout(
 }
 
 function resolveActProxyTimeoutMs(request: BrowserActRequest): number | undefined {
-  const candidateTimeouts: number[] = [];
-  const explicitTimeout = normalizePositiveTimeoutMs(
-    (request as BrowserActRequestWithTimeout).timeoutMs,
-  );
-  if (explicitTimeout !== undefined) {
-    candidateTimeouts.push(explicitTimeout + BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS);
-  }
-  if (request.kind === "wait") {
-    const waitDuration = normalizeNonNegativeDurationMs(request.timeMs);
-    if (waitDuration !== undefined) {
-      candidateTimeouts.push(waitDuration + BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS);
-    }
-  }
-  return candidateTimeouts.length ? Math.max(...candidateTimeouts) : undefined;
+  return resolveBrowserActRequestTimeoutMs(request);
 }
 
 export const testing = {

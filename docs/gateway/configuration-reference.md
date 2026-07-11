@@ -553,7 +553,7 @@ See [Inferred commitments](/concepts/commitments).
       // toolTitles: false, // opt-in AI purpose titles for tool calls (spends utility-model tokens)
       // embedSandbox: "scripts", // strict | scripts | trusted
       // allowExternalEmbedUrls: false, // dangerous: allow absolute external http(s) embed URLs
-      // chatMessageMaxWidth: "min(1280px, 82%)", // optional grouped chat message max-width
+      // chatMessageMaxWidth: "min(1280px, 82%)", // optional centered chat transcript max-width
       // allowedOrigins: ["https://control.example.com"], // required for non-loopback Control UI
       // dangerouslyAllowHostHeaderOriginFallback: false, // dangerous Host-header origin fallback mode
       // allowInsecureAuth: false,
@@ -635,7 +635,7 @@ See [Inferred commitments](/concepts/commitments).
   Default `false`.
 - `controlUi.allowedOrigins`: explicit browser-origin allowlist for Gateway WebSocket connects. Required for public non-loopback browser origins. Private same-origin LAN/Tailnet UI loads from loopback, RFC1918/link-local, `.local`, `.ts.net`, or Tailscale CGNAT hosts are accepted without enabling Host-header fallback.
 - `controlUi.toolTitles`: opt in to AI-generated purpose titles for tool calls in Control UI chat. Default: `false` (tool rendering stays fully deterministic with no background model calls). When enabled, the `chat.toolTitles` method labels complex calls through standard utility-model routing — the agent's `utilityModel` (an operator decision that may send bounded tool arguments to the chosen provider, like every utility task), or the session provider's declared small-model default (OpenAI → `gpt-5.6-luna`, Anthropic → `claude-haiku-4-5`) — and caches results in the per-agent state database so repeat views never re-bill. `utilityModel: \"\"` disables titles like every other utility task; titles never fall back to the primary model.
-- `controlUi.chatMessageMaxWidth`: optional max-width for grouped Control UI chat messages. Accepts constrained CSS width values such as `960px`, `82%`, `min(1280px, 82%)`, and `calc(100% - 2rem)`.
+- `controlUi.chatMessageMaxWidth`: optional max-width for the centered Control UI chat transcript. Accepts constrained CSS width values such as `960px`, `82%`, `min(1280px, 82%)`, and `calc(100% - 2rem)`.
 - `controlUi.dangerouslyAllowHostHeaderOriginFallback`: dangerous mode that enables Host-header origin fallback for deployments that intentionally rely on Host-header origin policy.
 - `terminal.enabled`: opt in to the admin-scoped operator terminal. Default: `false`. The terminal starts a host PTY in the selected agent workspace, inherits the Gateway process environment, and is refused for agents with `sandbox.mode: "all"`. Enable it only for trusted operator deployments; changing it restarts the Gateway and updates the Control UI content security policy.
 - `terminal.shell`: optional shell executable. When unset, OpenClaw uses `$SHELL` on Unix and `%ComSpec%` on Windows.
@@ -1203,22 +1203,43 @@ Notes:
 {
   audit: {
     enabled: true,
+    messages: "off", // off | direct | all
   },
 }
 ```
 
 The Gateway records **metadata-only** audit events for agent runs and tool
-actions into the shared state database: identity, timing, tool names, and
-terminal outcomes — never prompts, messages, tool arguments, results, or raw
-error text. Records expire after 30 days and the ledger is capped at 100,000
-rows. Query them with [`openclaw audit`](/cli/audit) or the
-[`audit.list`](/gateway/protocol#audit-ledger-rpc) Gateway RPC.
+actions into the shared state database. Message lifecycle metadata is a
+separate opt-in. The ledger stores identity, timing, tool names, and normalized
+outcomes, but never prompts, message bodies, tool arguments, results, or raw
+error text. Message rows do not store raw platform account, conversation,
+message, and target ids. Run/tool session keys remain available for correlation
+and can themselves contain platform account or peer ids. Records
+expire after 30 days and the ledger is capped at 100,000 rows. Query them with
+[`openclaw audit`](/cli/audit) or the
+[`audit.activity.list`](/gateway/protocol#audit-ledger-rpc) Gateway RPC. See
+[Audit history](/gateway/audit) for the full data model, privacy semantics,
+and coverage limits.
 
 - `enabled`: record new audit events (default: `true`). The ledger is on by
   default because an audit trail enabled only after an incident cannot explain
-  the incident. Setting `false` stops new writes immediately; existing records
-  stay readable until they expire. Turning it back on resumes recording from
-  that point — the gap is not backfilled.
+  the incident. Setting `false` stops new event inserts after the Gateway restarts;
+  existing records stay readable until they expire. Turning it back on resumes
+  recording from that point — the gap is not backfilled.
+- `messages`: message metadata scope (default: `"off"`). `"direct"` records
+  known direct conversations only. `"all"` also records group, channel, and
+  unknown conversation kinds. Both modes remain content-free and replace raw
+  identifiers with installation-local keyed pseudonyms where correlation is
+  available. These are correlation aids rather than anonymization; the state
+  database stores the derivation key, but RPC and CLI exports do not.
+
+The running Gateway captures `audit.enabled` and `audit.messages` at startup;
+restart it after changing either setting. Message coverage currently includes
+accepted inbound messages that reach core dispatch and one terminal row per
+original logical outbound reply payload that reaches shared durable delivery.
+Plugin-local and direct-send paths that bypass those shared boundaries are not
+yet covered. The bounded background
+writer is best-effort, not a lossless compliance archive.
 
 ---
 

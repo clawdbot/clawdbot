@@ -132,13 +132,18 @@ async function readOpenAICodexDeviceBody(response: Response): Promise<string> {
   );
 }
 
-async function requestOpenAICodexDeviceCode(fetchFn: typeof fetch): Promise<RequestedDeviceCode> {
+async function requestOpenAICodexDeviceCode(
+  fetchFn: typeof fetch,
+  signal?: AbortSignal,
+): Promise<RequestedDeviceCode> {
+  signal?.throwIfAborted();
   const response = await fetchFn(`${OPENAI_AUTH_BASE_URL}/api/accounts/deviceauth/usercode`, {
     method: "POST",
     headers: resolveOpenAICodexDeviceCodeHeaders("application/json"),
     body: JSON.stringify({
       client_id: OPENAI_CODEX_CLIENT_ID,
     }),
+    ...(signal ? { signal } : {}),
   });
 
   const bodyText = await readOpenAICodexDeviceBody(response);
@@ -179,10 +184,12 @@ async function pollOpenAICodexDeviceCode(params: {
   deviceAuthId: string;
   userCode: string;
   intervalMs: number;
+  signal?: AbortSignal;
 }): Promise<DeviceCodeAuthorizationCode> {
   const deadline = Date.now() + OPENAI_CODEX_DEVICE_CODE_TIMEOUT_MS;
 
   while (Date.now() < deadline) {
+    params.signal?.throwIfAborted();
     const response = await params.fetchFn(`${OPENAI_AUTH_BASE_URL}/api/accounts/deviceauth/token`, {
       method: "POST",
       headers: resolveOpenAICodexDeviceCodeHeaders("application/json"),
@@ -190,6 +197,7 @@ async function pollOpenAICodexDeviceCode(params: {
         device_auth_id: params.deviceAuthId,
         user_code: params.userCode,
       }),
+      ...(params.signal ? { signal: params.signal } : {}),
     });
 
     const bodyText = await readOpenAICodexDeviceBody(response);
@@ -207,9 +215,10 @@ async function pollOpenAICodexDeviceCode(params: {
     }
 
     if (response.status === 403 || response.status === 404) {
-      await new Promise((resolve) => {
-        setTimeout(resolve, resolveNextDeviceCodePollDelayMs(params.intervalMs, deadline));
-      });
+      await waitForDeviceCodePoll(
+        resolveNextDeviceCodePollDelayMs(params.intervalMs, deadline),
+        params.signal,
+      );
       continue;
     }
 
@@ -229,7 +238,9 @@ async function exchangeOpenAICodexDeviceCode(params: {
   fetchFn: typeof fetch;
   authorizationCode: string;
   codeVerifier: string;
+  signal?: AbortSignal;
 }): Promise<OpenAICodexDeviceCodeCredentials> {
+  params.signal?.throwIfAborted();
   const response = await params.fetchFn(`${OPENAI_AUTH_BASE_URL}/oauth/token`, {
     method: "POST",
     headers: resolveOpenAICodexDeviceCodeHeaders("application/x-www-form-urlencoded"),
@@ -240,6 +251,7 @@ async function exchangeOpenAICodexDeviceCode(params: {
       client_id: OPENAI_CODEX_CLIENT_ID,
       code_verifier: params.codeVerifier,
     }),
+    ...(params.signal ? { signal: params.signal } : {}),
   });
 
   const bodyText = await readOpenAICodexDeviceBody(response);
@@ -276,11 +288,12 @@ export async function loginOpenAICodexDeviceCode(params: {
   fetchFn?: typeof fetch;
   onVerification: (prompt: OpenAICodexDeviceCodePrompt) => Promise<void> | void;
   onProgress?: (message: string) => void;
+  signal?: AbortSignal;
 }): Promise<OpenAICodexDeviceCodeCredentials> {
   const fetchFn = params.fetchFn ?? fetch;
 
   params.onProgress?.("Requesting device code…");
-  const deviceCode = await requestOpenAICodexDeviceCode(fetchFn);
+  const deviceCode = await requestOpenAICodexDeviceCode(fetchFn, params.signal);
 
   await params.onVerification({
     verificationUrl: deviceCode.verificationUrl,
@@ -294,6 +307,7 @@ export async function loginOpenAICodexDeviceCode(params: {
     deviceAuthId: deviceCode.deviceAuthId,
     userCode: deviceCode.userCode,
     intervalMs: deviceCode.intervalMs,
+    ...(params.signal ? { signal: params.signal } : {}),
   });
 
   params.onProgress?.("Exchanging device code…");
@@ -301,5 +315,26 @@ export async function loginOpenAICodexDeviceCode(params: {
     fetchFn,
     authorizationCode: authorization.authorizationCode,
     codeVerifier: authorization.codeVerifier,
+    ...(params.signal ? { signal: params.signal } : {}),
+  });
+}
+
+function waitForDeviceCodePoll(ms: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) {
+    return new Promise((resolve) => {
+      setTimeout(resolve, ms);
+    });
+  }
+  signal.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal.reason instanceof Error ? signal.reason : new Error("Device login cancelled"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
   });
 }

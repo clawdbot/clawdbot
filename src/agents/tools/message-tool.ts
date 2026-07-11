@@ -767,6 +767,9 @@ function buildPollSchema() {
   };
   for (const name of SHARED_POLL_CREATION_PARAM_NAMES) {
     const def = POLL_CREATION_PARAM_DEFS[name];
+    if (!def) {
+      continue;
+    }
     switch (def.kind) {
       case "string":
         props[name] = Type.Optional(Type.String());

@@ -401,6 +401,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.terminate(nil)
             return
         }
+        switch ApplicationRelocator.handleLaunch() {
+        case .terminating:
+            return
+        case let .continueLaunch(startUpdater):
+            if startUpdater {
+                self.updaterController.start()
+            }
+        }
         // Remote startup can spawn an SSH child. Admit tunnel work only after the
         // singleton check so a short-lived handoff process cannot orphan that child.
         GatewayEndpointStore.admitPrimaryAppLaunch()
@@ -671,7 +679,12 @@ protocol UpdaterProviding: AnyObject {
     var automaticallyDownloadsUpdates: Bool { get set }
     var isAvailable: Bool { get }
     var updateStatus: UpdateStatus { get }
+    func start()
     func checkForUpdates(_ sender: Any?)
+}
+
+extension UpdaterProviding {
+    func start() {}
 }
 
 /// No-op updater used for debug/dev runs to suppress Sparkle dialogs.
@@ -704,12 +717,18 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding {
         updaterDelegate: self,
         userDriverDelegate: nil)
     let updateStatus = UpdateStatus()
+    private var started = false
 
     init(savedAutoUpdate: Bool) {
         super.init()
         let updater = self.controller.updater
         updater.automaticallyChecksForUpdates = savedAutoUpdate
         updater.automaticallyDownloadsUpdates = savedAutoUpdate
+    }
+
+    func start() {
+        guard !self.started else { return }
+        self.started = true
         self.controller.startUpdater()
     }
 
@@ -724,10 +743,11 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding {
     }
 
     var isAvailable: Bool {
-        true
+        self.started
     }
 
     func checkForUpdates(_ sender: Any?) {
+        guard self.started else { return }
         self.controller.checkForUpdates(sender)
     }
 

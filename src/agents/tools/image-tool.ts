@@ -700,7 +700,10 @@ async function runImagePrompt(params: {
       const describeImage =
         imageProvider?.describeImage ?? imageToolProviderDeps.describeImageWithModel;
       if (params.images.length === 1) {
-        const image = params.images[0];
+        const image = params.images.at(0);
+        if (!image) {
+          throw new Error("Image input disappeared during model execution");
+        }
         const described = await describeImage({
           buffer: image.buffer,
           fileName: "image-1",
@@ -1071,22 +1074,20 @@ export function createImageTool(options?: {
         workspaceDir: options?.workspaceDir,
       });
 
-      const imageDetails =
-        loadedImages.length === 1
-          ? {
-              image: loadedImages[0].resolvedImage,
-              ...(loadedImages[0].rewrittenFrom
-                ? { rewrittenFrom: loadedImages[0].rewrittenFrom }
-                : {}),
-            }
-          : {
-              images: loadedImages.map((img) =>
-                Object.assign(
-                  { image: img.resolvedImage },
-                  img.rewrittenFrom ? { rewrittenFrom: img.rewrittenFrom } : {},
-                ),
+      const singleImage = loadedImages.length === 1 ? loadedImages.at(0) : undefined;
+      const imageDetails = singleImage
+        ? {
+            image: singleImage.resolvedImage,
+            ...(singleImage.rewrittenFrom ? { rewrittenFrom: singleImage.rewrittenFrom } : {}),
+          }
+        : {
+            images: loadedImages.map((img) =>
+              Object.assign(
+                { image: img.resolvedImage },
+                img.rewrittenFrom ? { rewrittenFrom: img.rewrittenFrom } : {},
               ),
-            };
+            ),
+          };
 
       return buildTextToolResult(result, imageDetails);
     },

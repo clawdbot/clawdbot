@@ -9,6 +9,7 @@ const mocks = await vi.hoisted(async () => {
     runFleetCreateCommand: vi.fn(),
     runFleetListCommand: vi.fn(),
     runFleetStatusCommand: vi.fn(),
+    runFleetLogsCommand: vi.fn(),
     runFleetLifecycleCommand: vi.fn(),
     runFleetUpgradeCommand: vi.fn(),
     runFleetRemoveCommand: vi.fn(),
@@ -23,6 +24,7 @@ vi.mock("./commands.runtime.js", () => ({
   runFleetCreateCommand: mocks.runFleetCreateCommand,
   runFleetListCommand: mocks.runFleetListCommand,
   runFleetStatusCommand: mocks.runFleetStatusCommand,
+  runFleetLogsCommand: mocks.runFleetLogsCommand,
   runFleetLifecycleCommand: mocks.runFleetLifecycleCommand,
   runFleetUpgradeCommand: mocks.runFleetUpgradeCommand,
   runFleetRemoveCommand: mocks.runFleetRemoveCommand,
@@ -117,6 +119,17 @@ describe("fleet cli", () => {
     expect(mocks.runFleetListCommand).toHaveBeenCalledWith({ json: true });
   });
 
+  it("normalizes logs options", async () => {
+    await runFleetCli(["logs", "acme", "--follow", "--tail", "100", "--since", "10m"]);
+
+    expect(mocks.runFleetLogsCommand).toHaveBeenCalledWith({
+      tenant: "acme",
+      follow: true,
+      tail: 100,
+      since: "10m",
+    });
+  });
+
   it("normalizes remove safety flags", async () => {
     await runFleetCli(["rm", "tenant-a", "--purge-data", "--force"]);
 
@@ -141,8 +154,13 @@ describe("fleet cli", () => {
       argv: ["create", "tenant-a", "--cpus", "0"],
       error: /--cpus must be a positive number/,
     },
-  ])("rejects invalid create options: $argv", async ({ argv, error }) => {
+    {
+      argv: ["logs", "tenant-a", "--tail", "1.5"],
+      error: /--tail must be a positive integer/,
+    },
+  ])("rejects invalid options: $argv", async ({ argv, error }) => {
     await expect(runFleetCli(argv)).rejects.toThrow(error);
     expect(mocks.runFleetCreateCommand).not.toHaveBeenCalled();
+    expect(mocks.runFleetLogsCommand).not.toHaveBeenCalled();
   });
 });

@@ -59,6 +59,7 @@ import type { ProviderAuthMethod, ProviderAuthResult } from "../plugins/types.js
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
+import type { WizardPrompter } from "../wizard/prompts.js";
 import { appendCrestodianAuditEntry } from "./audit.js";
 import {
   projectDefaultInferenceRoute,
@@ -112,10 +113,22 @@ export type SetupInferenceManualProvider = {
   hint?: string;
 };
 
+export type SetupInferenceAuthOption = {
+  /** Provider-auth choice id sent to `crestodian.setup.auth.start`. */
+  id: string;
+  label: string;
+  hint?: string;
+  groupLabel?: string;
+  kind: "oauth" | "device-code";
+  featured: boolean;
+};
+
 export type SetupInferenceDetection = {
   candidates: SetupInferenceCandidate[];
   /** Text-inference key/token methods exposed by installed provider manifests. */
   manualProviders: SetupInferenceManualProvider[];
+  /** Interactive provider-owned browser and device-code sign-in methods. */
+  authOptions: SetupInferenceAuthOption[];
   /** Resolved workspace the setup apply would use (display + default). */
   workspace: string;
   configuredModel?: string;
@@ -165,7 +178,7 @@ export type BoundVerifySetupInferenceResult =
   | { ok: false; status: SetupInferenceFailureStatus; error: string };
 
 export type ActivateSetupInferenceParams = {
-  kind: InferenceBackendKind | "api-key";
+  kind: InferenceBackendKind | "api-key" | "provider-auth";
   /** Exact explicit model to probe and persist instead of the route's starter model. */
   modelRef?: string;
   /** Manual step only: provider-auth choice returned by detection. */
@@ -177,8 +190,49 @@ export type ActivateSetupInferenceParams = {
   /** False when an enclosing persistent-operation boundary owns the setup audit. */
   recordSetupAudit?: boolean;
   runtime: RuntimeEnv;
+  /** Interactive provider login transport, required for `provider-auth`. */
+  prompter?: WizardPrompter;
+  /** Cancels provider-owned browser callbacks and device-code polling. */
+  signal?: AbortSignal;
+  /** Session cancellation gate; interactive credentials must never persist after cancel. */
+  isCancelled?: () => boolean;
+  onCommitStarted?: () => void;
   deps?: ActivateSetupInferenceDeps;
 };
+
+class SetupInferenceCancelledError extends Error {
+  constructor() {
+    super("Provider login was cancelled.");
+  }
+}
+
+function throwIfSetupInferenceCancelled(
+  params: Pick<ActivateSetupInferenceParams, "signal" | "isCancelled">,
+): void {
+  if (params.signal?.aborted || params.isCancelled?.()) {
+    throw new SetupInferenceCancelledError();
+  }
+}
+
+async function waitForProviderAuth<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) {
+    return await promise;
+  }
+  if (signal.aborted) {
+    throw new SetupInferenceCancelledError();
+  }
+  let rejectAborted: ((reason: unknown) => void) | undefined;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    rejectAborted = reject;
+  });
+  const onAbort = () => rejectAborted?.(new SetupInferenceCancelledError());
+  signal.addEventListener("abort", onAbort, { once: true });
+  try {
+    return await Promise.race([promise, aborted]);
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+  }
+}
 
 type SetupInferenceRunEmbeddedAgent = (
   params: Parameters<typeof import("../agents/embedded-agent.js").runEmbeddedAgent>[0] & {
@@ -277,6 +331,39 @@ export function listSetupInferenceManualProviders(
   );
 }
 
+export function listSetupInferenceAuthOptions(
+  authChoices: readonly ProviderAuthChoiceMetadata[],
+): SetupInferenceAuthOption[] {
+  const choices = new Map<string, SetupInferenceAuthOption>();
+  for (const choice of authChoices) {
+    const id = choice.choiceId.trim();
+    if (
+      !id ||
+      choices.has(id) ||
+      !supportsTextInference(choice.onboardingScopes) ||
+      choice.assistantVisibility === "manual-only" ||
+      !choice.appGuidedAuth
+    ) {
+      continue;
+    }
+    choices.set(id, {
+      id,
+      label: choice.choiceLabel,
+      ...(choice.choiceHint?.trim() ? { hint: choice.choiceHint.trim() } : {}),
+      ...(choice.groupLabel?.trim() ? { groupLabel: choice.groupLabel.trim() } : {}),
+      kind: choice.appGuidedAuth,
+      featured: choice.onboardingFeatured === true,
+    });
+  }
+  return [...choices.values()].toSorted(
+    (a, b) =>
+      Number(b.featured) - Number(a.featured) ||
+      (a.groupLabel ?? a.label).localeCompare(b.groupLabel ?? b.label, "en") ||
+      a.label.localeCompare(b.label, "en") ||
+      a.id.localeCompare(b.id, "en"),
+  );
+}
+
 export async function detectSetupInference(
   deps: DetectSetupInferenceDeps = {},
 ): Promise<SetupInferenceDetection> {
@@ -314,6 +401,7 @@ export async function detectSetupInference(
   return {
     candidates,
     manualProviders: listSetupInferenceManualProviders(authChoices),
+    authOptions: listSetupInferenceAuthOptions(authChoices),
     workspace,
     ...(configuredModel ? { configuredModel } : {}),
     setupComplete: Boolean(configuredModel),
@@ -543,7 +631,12 @@ function resolveSetupAgentRuntimeId(
   if (kind === "codex-cli") {
     return "codex";
   }
-  if (kind === "openai-api-key" || kind === "anthropic-api-key" || kind === "api-key") {
+  if (
+    kind === "openai-api-key" ||
+    kind === "anthropic-api-key" ||
+    kind === "api-key" ||
+    kind === "provider-auth"
+  ) {
     return "openclaw";
   }
   return undefined;
@@ -739,7 +832,7 @@ function canonicalizeSetupModelRef(params: {
 }
 
 async function buildTestPlan(params: {
-  kind: InferenceBackendKind | "api-key";
+  kind: InferenceBackendKind | "api-key" | "provider-auth";
   modelRef?: string;
   authChoice?: string;
   apiKey?: string;
@@ -748,6 +841,10 @@ async function buildTestPlan(params: {
   pluginWorkspaceDir: string;
   agentDir: string;
   runtime: RuntimeEnv;
+  prompter?: WizardPrompter;
+  signal?: AbortSignal;
+  isCancelled?: () => boolean;
+  isRemoteProviderAuth?: boolean;
   deps: ActivateSetupInferenceDeps;
 }): Promise<SetupInferenceTestPlan | { error: string }> {
   const { kind, cfg, workspaceDir } = params;
@@ -880,9 +977,11 @@ async function buildTestPlan(params: {
         persistModelRef: modelRef,
       };
     }
-    case "api-key": {
+    case "api-key":
+    case "provider-auth": {
+      const interactive = kind === "provider-auth";
       const apiKey = params.apiKey?.trim();
-      if (!apiKey) {
+      if (!interactive && !apiKey) {
         return { error: "Enter an API key or token first." };
       }
       const authChoice = params.authChoice?.trim();
@@ -897,8 +996,17 @@ async function buildTestPlan(params: {
             },
           )
         : undefined;
-      if (!choice || !supportsManualSecret(choice)) {
-        return { error: "That key-based provider is not available on this Gateway." };
+      if (
+        !choice ||
+        !supportsTextInference(choice.onboardingScopes) ||
+        (!interactive && !supportsManualSecret(choice)) ||
+        (interactive && (choice.assistantVisibility === "manual-only" || !choice.appGuidedAuth))
+      ) {
+        return {
+          error: interactive
+            ? "That provider login is not available on this Gateway."
+            : "That key-based provider is not available on this Gateway.",
+        };
       }
       const enableResult = (params.deps.enablePluginInConfig ?? enablePluginInConfig)(
         cfg,
@@ -923,13 +1031,44 @@ async function buildTestPlan(params: {
       );
       const method = provider?.auth.find((candidate) => candidate.id === choice.methodId);
       const resolved = provider && method ? { provider, method } : null;
-      if (!resolved || !supportsTextInference(resolved.method.wizard?.onboardingScopes)) {
-        return { error: "That key-based provider is not available on this Gateway." };
+      if (
+        !resolved ||
+        !supportsTextInference(resolved.method.wizard?.onboardingScopes) ||
+        (interactive && resolved.method.kind !== "oauth" && resolved.method.kind !== "device_code")
+      ) {
+        return {
+          error: interactive
+            ? "That provider login is not available on this Gateway."
+            : "That key-based provider is not available on this Gateway.",
+        };
       }
       let result: ProviderAuthResult;
       let preparedConfig: OpenClawConfig;
       try {
-        if (resolved.method.kind === "api_key" || resolved.method.kind === "token") {
+        if (interactive) {
+          if (!params.prompter) {
+            return { error: "This provider login requires an interactive setup session." };
+          }
+          throwIfSetupInferenceCancelled(params);
+          result = await waitForProviderAuth(
+            runProviderPluginAuthMethodUnpersisted({
+              config: enableResult.config,
+              runtime: params.runtime,
+              ...(params.signal ? { signal: params.signal } : {}),
+              isRemote: params.isRemoteProviderAuth,
+              prompter: params.prompter,
+              method: resolved.method,
+              agentDir: params.agentDir,
+              workspaceDir,
+            }),
+            params.signal,
+          );
+          throwIfSetupInferenceCancelled(params);
+          preparedConfig = applyProviderPluginAuthMethodResultConfig({
+            config: enableResult.config,
+            result,
+          });
+        } else if (resolved.method.kind === "api_key" || resolved.method.kind === "token") {
           result = await runProviderPluginAuthMethodUnpersisted({
             config: enableResult.config,
             runtime: params.runtime,
@@ -939,7 +1078,7 @@ async function buildTestPlan(params: {
             workspaceDir,
             secretInputMode: "plaintext",
             allowSecretRefPrompt: false,
-            opts: { token: apiKey, tokenProvider: resolved.provider.id },
+            opts: { token: apiKey!, tokenProvider: resolved.provider.id },
           });
           preparedConfig = applyProviderPluginAuthMethodResultConfig({
             config: enableResult.config,
@@ -951,7 +1090,7 @@ async function buildTestPlan(params: {
             baseConfig: cfg,
             choice,
             method: resolved.method,
-            apiKey,
+            apiKey: apiKey!,
             agentDir: params.agentDir,
             workspaceDir,
           });
@@ -959,9 +1098,12 @@ async function buildTestPlan(params: {
           preparedConfig = prepared.config;
         }
       } catch (error) {
+        if (error instanceof SetupInferenceCancelledError || params.signal?.aborted) {
+          return { error: "Provider login was cancelled." };
+        }
         const detail = error instanceof Error ? error.message : String(error);
         return {
-          error: `${resolved.provider.label} could not prepare this credential for app-guided setup: ${detail}`,
+          error: `${resolved.provider.label} could not prepare this ${interactive ? "login" : "credential"} for app-guided setup: ${detail}`,
         };
       }
       const modelRef = result.defaultModel
@@ -1122,6 +1264,9 @@ export async function activateSetupInference(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const redacted = await redactSetupInferenceError(message, params.apiKey);
+    if (error instanceof SetupInferenceCancelledError || params.signal?.aborted) {
+      return { ok: false, status: "unavailable", error: "Provider login was cancelled." };
+    }
     if (error instanceof SetupInferenceActivationUnavailableError) {
       return { ok: false, status: "unavailable", error: redacted };
     }
@@ -1175,6 +1320,12 @@ async function activateSetupInferenceUnredacted(
       pluginWorkspaceDir: workspace,
       agentDir: testAgentDir,
       runtime: params.runtime,
+      ...(params.prompter ? { prompter: params.prompter } : {}),
+      ...(params.signal ? { signal: params.signal } : {}),
+      ...(params.isCancelled ? { isCancelled: params.isCancelled } : {}),
+      ...(params.kind === "provider-auth"
+        ? { isRemoteProviderAuth: params.surface === "gateway" }
+        : {}),
       deps,
     });
     if ("error" in plan) {
@@ -1396,15 +1547,28 @@ async function activateSetupInferenceUnredacted(
       };
     }
 
-    const test = await runSetupInferenceTest({
-      plan: testPlan,
-      tempDir,
-      deps,
-      // The setup probe is evidence, not an auth-store mutation. Manual keys
-      // already exist in the isolated store and every other route stays read-only.
-      authProfileStateMode: "read-only",
-      requireExecutionOwner: true,
-    });
+    if (params.signal?.aborted || params.isCancelled?.()) {
+      return { ok: false, status: "unavailable", error: "Provider login was cancelled." };
+    }
+    let test: Awaited<ReturnType<typeof runSetupInferenceTest>>;
+    try {
+      test = await runSetupInferenceTest({
+        plan: testPlan,
+        tempDir,
+        deps,
+        // The setup probe is evidence, not an auth-store mutation. Manual keys
+        // already exist in the isolated store and every other route stays read-only.
+        authProfileStateMode: "read-only",
+        requireExecutionOwner: true,
+        ...(params.signal ? { signal: params.signal } : {}),
+      });
+      throwIfSetupInferenceCancelled(params);
+    } catch (error) {
+      if (error instanceof SetupInferenceCancelledError || params.signal?.aborted) {
+        return { ok: false, status: "unavailable", error: "Provider login was cancelled." };
+      }
+      throw error;
+    }
     if (!test.ok) {
       return test;
     }
@@ -1589,6 +1753,7 @@ async function activateSetupInferenceUnredacted(
           .transformConfigWithPendingPluginInstalls;
       let manualAuthReceipt: ManualAuthPersistenceReceipt | undefined;
       if (plan.manualAuth) {
+        throwIfSetupInferenceCancelled(params);
         const initialCandidate = stageCandidate(cfg);
         const initialRoute = await projectDefaultInferenceRoute(initialCandidate);
         const resolvedRoute = await resolveCrestodianConfiguredRouteFromConfig(initialCandidate);
@@ -1632,6 +1797,7 @@ async function activateSetupInferenceUnredacted(
       }
       let commitMayHaveStarted = false;
       try {
+        throwIfSetupInferenceCancelled(params);
         const committed = await transformConfig({
           base: "source",
           // The transform stays side-effect free so a config conflict can retry
@@ -1707,6 +1873,8 @@ async function activateSetupInferenceUnredacted(
             }
             // Once this callback returns, the config writer owns the candidate.
             // Any later throw may be post-commit and needs reconciliation.
+            throwIfSetupInferenceCancelled(params);
+            params.onCommitStarted?.();
             commitMayHaveStarted = true;
             return { nextConfig };
           },
@@ -2608,6 +2776,7 @@ async function runSetupInferenceTest(params: {
   deps: ActivateSetupInferenceDeps;
   authProfileStateMode: "read-write" | "read-only";
   requireExecutionOwner: boolean;
+  signal?: AbortSignal;
 }): Promise<
   | { ok: true; latencyMs: number; auth: AgentExecutionAuthBinding }
   | {
@@ -2667,6 +2836,7 @@ async function runSetupInferenceTest(params: {
         onSuccessfulAuthBinding: (binding) => {
           successfulAuth = binding;
         },
+        ...(params.signal ? { abortSignal: params.signal } : {}),
       })) as RunResult;
     } else {
       const runEmbedded =
@@ -2705,7 +2875,11 @@ async function runSetupInferenceTest(params: {
         onSuccessfulAuthBinding: (binding) => {
           successfulAuth = binding;
         },
+        ...(params.signal ? { abortSignal: params.signal } : {}),
       })) as RunResult;
+    }
+    if (params.signal?.aborted) {
+      throw new SetupInferenceCancelledError();
     }
     const terminalError = extractRunTerminalError(result);
     if (terminalError) {

@@ -19,6 +19,10 @@ import {
   peekSystemEventEntries,
   type SystemEvent,
 } from "../../infra/system-events.js";
+import {
+  acknowledgeSessionStateNotices,
+  decodeSessionStateNoticeContextKey,
+} from "../../sessions/session-state-events.js";
 import { defaultRuntime } from "../../runtime.js";
 
 function isCronContextSystemEvent(event: SystemEvent): boolean {
@@ -135,6 +139,14 @@ export async function drainFormattedSystemEvents(params: {
     }),
   );
   await ackDrainedSessionDeliveries(queued);
+  const sessionStateTargets = queued
+    .map((event) =>
+      event.contextKey ? decodeSessionStateNoticeContextKey(event.contextKey) : undefined,
+    )
+    .filter((target): target is string => target !== undefined);
+  if (sessionStateTargets.length > 0) {
+    acknowledgeSessionStateNotices(params.sessionKey, sessionStateTargets);
+  }
   // Emit `continuation.queue.drain` on every drain, including empty drains;
   // absence of work is still a drain tick. Continuation-prefix detection is
   // best-effort, while structural traceparent reconstruction belongs to the

@@ -1,6 +1,10 @@
 // Tests for gateway runtime subscription wiring.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { emitAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
+import {
+  emitAgentAuditEvent,
+  emitAgentEvent,
+  resetAgentEventsForTest,
+} from "../infra/agent-events.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import {
@@ -34,20 +38,26 @@ const mockLog: SubsystemLogger = {
 
 const auditTestState = vi.hoisted(() => ({
   enabled: true,
+  messageMode: "off" as "off" | "direct" | "all",
   created: 0,
+  recorded: 0,
   stopped: 0,
 }));
 
 vi.mock("../audit/audit-config.js", () => ({
   isAuditLedgerEnabled: () => auditTestState.enabled,
+  resolveAuditMessageMode: () => auditTestState.messageMode,
 }));
 
-vi.mock("../audit/agent-event-audit.js", () => ({
-  createAgentEventAuditRecorder: () => {
+vi.mock("../audit/audit-recorder.js", () => ({
+  createAuditEventRecorder: () => {
     auditTestState.created += 1;
     return {
-      record: vi.fn(),
+      record: vi.fn(() => {
+        auditTestState.recorded += 1;
+      }),
       recordTool: vi.fn(),
+      recordMessage: vi.fn(),
       stop: vi.fn(async () => {
         auditTestState.stopped += 1;
       }),
@@ -97,7 +107,9 @@ describe("startGatewayEventSubscriptions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     auditTestState.enabled = true;
+    auditTestState.messageMode = "off";
     auditTestState.created = 0;
+    auditTestState.recorded = 0;
     auditTestState.stopped = 0;
     installInMemoryTaskRegistryRuntime();
   });
@@ -116,18 +128,29 @@ describe("startGatewayEventSubscriptions", () => {
     unsubs = startGatewayEventSubscriptions(createParams());
 
     expect(auditTestState.created).toBe(1);
+    emitAgentAuditEvent({ runId: "enabled-audit", stream: "lifecycle", data: { phase: "start" } });
+    expect(auditTestState.recorded).toBe(1);
     await unsubs.agentUnsub();
     expect(auditTestState.stopped).toBe(1);
   });
 
-  it("creates no audit recorder when audit.enabled is false", async () => {
+  it("keeps retention maintenance but creates no producers when audit.enabled is false", async () => {
     auditTestState.enabled = false;
     unsubs = startGatewayEventSubscriptions(createParams());
 
-    expect(auditTestState.created).toBe(0);
+    expect(auditTestState.created).toBe(1);
+    emitAgentAuditEvent({
+      runId: "disabled-private",
+      stream: "lifecycle",
+      data: { phase: "start" },
+    });
+    emitAgentEvent({ runId: "disabled-public", stream: "lifecycle", data: { phase: "start" } });
+    expect(auditTestState.recorded).toBe(0);
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledOnce());
+    warn.mockClear();
     // Disabled wiring must still unsubscribe cleanly.
     await unsubs.agentUnsub();
-    expect(auditTestState.stopped).toBe(0);
+    expect(auditTestState.stopped).toBe(1);
   });
 
   it("logs lazy agent event module failures", async () => {

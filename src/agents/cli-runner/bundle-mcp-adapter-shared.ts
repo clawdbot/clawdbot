@@ -28,12 +28,14 @@ export function decodeHeaderEnvPlaceholder(
   value: string,
 ): { envVar: string; bearer: boolean } | null {
   const bearerMatch = /^Bearer \${([A-Z0-9_]+)}$/.exec(value);
-  if (bearerMatch) {
-    return { envVar: bearerMatch[1], bearer: true };
+  const bearerEnvVar = bearerMatch?.at(1);
+  if (bearerEnvVar) {
+    return { envVar: bearerEnvVar, bearer: true };
   }
   const envMatch = /^\${([A-Z0-9_]+)}$/.exec(value);
-  if (envMatch) {
-    return { envVar: envMatch[1], bearer: false };
+  const envVar = envMatch?.at(1);
+  if (envVar) {
+    return { envVar, bearer: false };
   }
   return null;
 }

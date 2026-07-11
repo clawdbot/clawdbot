@@ -702,7 +702,7 @@ function resolveDetailFromKeys(
     return undefined;
   }
   if (entries.length === 1) {
-    return entries[0].value;
+    return entries.at(0)?.value;
   }
 
   const seen = new Set<string>();

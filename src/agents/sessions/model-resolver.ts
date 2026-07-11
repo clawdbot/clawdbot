@@ -141,7 +141,10 @@ function buildFallbackModel(
     return undefined;
   }
 
-  const baseModel = providerModels[0];
+  const baseModel = providerModels.at(0);
+  if (!baseModel) {
+    return undefined;
+  }
 
   return {
     ...baseModel,
@@ -523,10 +526,13 @@ export async function findInitialModel(options: {
 
   // 2. Use first model from scoped models (skip if continuing/resuming)
   if (scopedModels.length > 0 && !isContinuing) {
+    const scopedModel = scopedModels.at(0);
+    if (!scopedModel) {
+      throw new Error("Scoped model list became empty during selection");
+    }
     return {
-      model: scopedModels[0].model,
-      thinkingLevel:
-        scopedModels[0].thinkingLevel ?? defaultThinkingLevel ?? DEFAULT_THINKING_LEVEL,
+      model: scopedModel.model,
+      thinkingLevel: scopedModel.thinkingLevel ?? defaultThinkingLevel ?? DEFAULT_THINKING_LEVEL,
       fallbackMessage: undefined,
     };
   }

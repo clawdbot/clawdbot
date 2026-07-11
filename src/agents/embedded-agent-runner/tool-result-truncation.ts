@@ -553,6 +553,7 @@ export function truncateOversizedToolResultsInMessages(
   const projectionKeys = projectionState
     ? getToolResultProjectionKeys(messages, projectionState)
     : [];
+  const hasFrozenProjectionBaseline = (projectionState?.frozen.size ?? 0) > 0;
   const branch = messages.map((message, index) => {
     const projectionKey = projectionKeys[index];
     const projectedMessage = projectionKey
@@ -576,6 +577,13 @@ export function truncateOversizedToolResultsInMessages(
         !projectionKey ||
         !projectionState?.frozen.has(projectionKey) ||
         (projectedMessage !== undefined && mergedMessage === message),
+      // Steering and follow-up messages can follow fresh tool results before dispatch.
+      // Reduce frozen history first so message position cannot make fresh output disappear.
+      deferAggregateRecovery:
+        projectionKey !== undefined &&
+        projectionState !== undefined &&
+        hasFrozenProjectionBaseline &&
+        !projectionState.frozen.has(projectionKey),
     };
   });
   const plan = buildToolResultReplacementPlan({
@@ -661,6 +669,7 @@ type ToolResultBranchEntry = {
   type: string;
   message?: AgentMessage;
   aggregateEligible?: boolean;
+  deferAggregateRecovery?: boolean;
 };
 
 type ToolResultReplacement = {
@@ -808,7 +817,13 @@ function buildAggregateToolResultReplacements(params: {
       (
         item,
       ): item is {
-        entry: { id: string; type: string; message: AgentMessage; aggregateEligible?: boolean };
+        entry: {
+          id: string;
+          type: string;
+          message: AgentMessage;
+          aggregateEligible?: boolean;
+          deferAggregateRecovery?: boolean;
+        };
         index: number;
       } =>
         item.entry.type === "message" &&
@@ -822,7 +837,8 @@ function buildAggregateToolResultReplacements(params: {
       spillSourceMessage: params.spillSourceBranch?.[item.index]?.message ?? item.entry.message,
       textLength: getToolResultTextLength(item.entry.message),
       aggregateEligible: item.entry.aggregateEligible !== false,
-      protectedFromAggregateRecovery: protectedEntryIds.has(item.entry.id),
+      deferredByFreshProjection: item.entry.deferAggregateRecovery === true,
+      protectedByTrailingBatch: protectedEntryIds.has(item.entry.id),
     }))
     .filter((item) => item.textLength > 0);
 
@@ -845,7 +861,7 @@ function buildAggregateToolResultReplacements(params: {
   let remainingReduction = totalChars - params.aggregateBudgetChars;
   const replacements: Array<{ entryId: string; message: AgentMessage }> = [];
   const aggregateRecoveryCandidates = candidates
-    .filter((item) => !item.protectedFromAggregateRecovery)
+    .filter((item) => !item.deferredByFreshProjection && !item.protectedByTrailingBatch)
     .toSorted((a, b) => {
       if (a.index !== b.index) {
         return a.index - b.index;
@@ -854,9 +870,12 @@ function buildAggregateToolResultReplacements(params: {
     });
   const recoveryCandidates = [
     ...aggregateRecoveryCandidates.filter((item) => item.aggregateEligible),
-    // Frozen bytes move only after fresh output is exhausted and the hard aggregate
-    // guard still overflows; starting from the frozen projection makes this shrink-only.
+    // Start from frozen projections before touching deferred fresh results. Reusing their
+    // projected text keeps this shrink-only and preserves prompt-cache stability.
     ...aggregateRecoveryCandidates.filter((item) => !item.aggregateEligible),
+    ...candidates.filter(
+      (item) => item.deferredByFreshProjection && !item.protectedByTrailingBatch,
+    ),
   ];
 
   // Spend aggregate reduction on older entries first so fresh tool output stays intact.

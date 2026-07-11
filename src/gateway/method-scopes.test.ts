@@ -42,6 +42,7 @@ describe("method scope resolution", () => {
   it.each([
     ["sessions.resolve", ["operator.read"]],
     ["tasks.list", ["operator.read"]],
+    ["audit.activity.list", ["operator.read"]],
     ["audit.list", ["operator.read"]],
     ["tasks.get", ["operator.read"]],
     ["taskSuggestions.list", ["operator.read"]],

@@ -154,8 +154,10 @@ function ensureAgentSchema(db: DatabaseSync, agentId: string, pathname: string):
   runSqliteImmediateTransactionSync(db, () => {
     // Ownership and version checks must share the write transaction with the
     // schema update; concurrent openers must not overwrite another agent.
-    assertSupportedAgentSchemaVersion(db, pathname);
+    // Role/ownership gates before version: user_version is only meaningful
+    // within one schema role, and the global state DB now carries version 2.
     assertExistingSchemaOwner(readExistingSchemaMeta(db), agentId, pathname);
+    assertSupportedAgentSchemaVersion(db, pathname);
     // Version 1 keyed sources by path/source. Stable IDs keep FTS rowids valid
     // across VACUUM and make update/delete trigger lookups constant-time.
     migrateMemoryIndexSourcesIdentity(db);

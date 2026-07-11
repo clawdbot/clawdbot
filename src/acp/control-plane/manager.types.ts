@@ -38,6 +38,7 @@ export type AcpSessionResolution =
       kind: "ready";
       sessionKey: string;
       meta: SessionAcpMeta;
+      entry?: SessionEntry;
     };
 
 /** Input required to create or resume an ACP runtime session. */
@@ -61,6 +62,7 @@ export type AcpTurnAttachment = {
 export type AcpRunTurnInput = {
   cfg: OpenClawConfig;
   sessionKey: string;
+  provenance: "human" | "agent" | "system";
   text: string;
   attachments?: AcpTurnAttachment[];
   mode: AcpRuntimePromptMode;

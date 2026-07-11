@@ -1,8 +1,6 @@
 // Telegram API module exposes the plugin public contract.
-export {
-  buildChannelConfigSchema,
-  TelegramConfigSchema,
-} from "openclaw/plugin-sdk/bundled-channel-config-schema";
+export { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
+export { TelegramConfigSchema } from "openclaw/plugin-sdk/bundled-channel-config-schema";
 export {
   normalizeTelegramCommandDescription,
   normalizeTelegramCommandName,

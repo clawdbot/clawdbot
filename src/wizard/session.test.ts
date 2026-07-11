@@ -1,5 +1,5 @@
 // Wizard session tests cover session creation and state transitions.
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { WizardSession } from "./session.js";
 
 function noteRunner() {
@@ -63,6 +63,22 @@ describe("WizardSession", () => {
     await session.answer(first.step.id, null);
     const done = await session.next();
     expect(done.done).toBe(true);
+  });
+
+  test("attaches an explicit browser destination to the next client step", async () => {
+    const session = new WizardSession(async (prompter) => {
+      await prompter.openUrl?.("https://provider.example/oauth?state=state-1");
+      await prompter.text({ message: "Paste the redirect URL" });
+    });
+
+    const first = await session.next();
+    expect(first.step?.externalUrl).toBe("https://provider.example/oauth?state=state-1");
+    expect(first.step?.type).toBe("text");
+    if (!first.step) {
+      throw new Error("expected provider sign-in step");
+    }
+    await session.answer(first.step.id, "http://localhost/callback?code=done");
+    expect((await session.next()).status).toBe("done");
   });
 
   test("invalid answers throw", async () => {
@@ -131,6 +147,62 @@ describe("WizardSession", () => {
     const done = await session.next();
     expect(done.done).toBe(true);
     expect(done.status).toBe("cancelled");
+    expect(session.signal.aborted).toBe(true);
+  });
+
+  test("refuses cancellation after the durable commit point", async () => {
+    let finish!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const session = new WizardSession(async () => {
+      await gate;
+    });
+
+    session.lockCancellation();
+    expect(session.cancel()).toBe(false);
+    expect(session.getStatus()).toBe("running");
+    expect(session.signal.aborted).toBe(false);
+
+    finish();
+    expect((await session.next()).status).toBe("done");
+  });
+
+  test("expires an abandoned interactive session", async () => {
+    vi.useFakeTimers();
+    try {
+      const session = new WizardSession(
+        async (prompter) => {
+          await prompter.text({ message: "Name" });
+        },
+        { timeoutMs: 1_000 },
+      );
+
+      expect((await session.next()).step?.type).toBe("text");
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      const done = await session.next();
+      expect(done.status).toBe("cancelled");
+      expect(session.signal.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("a runner finishing after cancellation cannot overwrite cancelled state", async () => {
+    let finish!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const session = new WizardSession(async () => {
+      await gate;
+    });
+
+    session.cancel();
+    finish();
+    await Promise.resolve();
+
+    expect((await session.next()).status).toBe("cancelled");
   });
 
   test("does not lose terminal completion when the last answer finishes the runner immediately", async () => {

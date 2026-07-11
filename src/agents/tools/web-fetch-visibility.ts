@@ -56,29 +56,32 @@ function isStyleHidden(style: string): boolean {
   for (const [prop, pattern] of HIDDEN_STYLE_PATTERNS) {
     const escapedProp = prop.replace(/-/g, "\\-");
     const match = style.match(new RegExp(`(?:^|;)\\s*${escapedProp}\\s*:\\s*([^;]+)`, "i"));
-    if (match && pattern.test(match[1])) {
+    const value = match?.at(1);
+    if (value && pattern.test(value)) {
       return true;
     }
   }
 
   // clip-path: none is not hidden, but positive percentage inset() clipping hides content.
   const clipPath = style.match(/(?:^|;)\s*clip-path\s*:\s*([^;]+)/i);
-  if (clipPath && !/^\s*none\s*$/i.test(clipPath[1])) {
-    if (/inset\s*\(\s*(?:0*\.\d+|[1-9]\d*(?:\.\d+)?)%/i.test(clipPath[1])) {
+  const clipPathValue = clipPath?.at(1);
+  if (clipPathValue && !/^\s*none\s*$/i.test(clipPathValue)) {
+    if (/inset\s*\(\s*(?:0*\.\d+|[1-9]\d*(?:\.\d+)?)%/i.test(clipPathValue)) {
       return true;
     }
   }
 
   // transform: scale(0)
   const transform = style.match(/(?:^|;)\s*transform\s*:\s*([^;]+)/i);
-  if (transform) {
-    if (/scale\s*\(\s*0\s*\)/i.test(transform[1])) {
+  const transformValue = transform?.at(1);
+  if (transformValue) {
+    if (/scale\s*\(\s*0\s*\)/i.test(transformValue)) {
       return true;
     }
-    if (/translateX\s*\(\s*-\d{4,}px\s*\)/i.test(transform[1])) {
+    if (/translateX\s*\(\s*-\d{4,}px\s*\)/i.test(transformValue)) {
       return true;
     }
-    if (/translateY\s*\(\s*-\d{4,}px\s*\)/i.test(transform[1])) {
+    if (/translateY\s*\(\s*-\d{4,}px\s*\)/i.test(transformValue)) {
       return true;
     }
   }
@@ -89,11 +92,11 @@ function isStyleHidden(style: string): boolean {
   const overflow = style.match(/(?:^|;)\s*overflow\s*:\s*([^;]+)/i);
   if (
     width &&
-    /^\s*0(px)?\s*$/i.test(width[1]) &&
+    /^\s*0(px)?\s*$/i.test(width.at(1) ?? "") &&
     height &&
-    /^\s*0(px)?\s*$/i.test(height[1]) &&
+    /^\s*0(px)?\s*$/i.test(height.at(1) ?? "") &&
     overflow &&
-    /^\s*hidden\s*$/i.test(overflow[1])
+    /^\s*hidden\s*$/i.test(overflow.at(1) ?? "")
   ) {
     return true;
   }
@@ -101,10 +104,10 @@ function isStyleHidden(style: string): boolean {
   // Offscreen positioning: left/top far negative
   const left = style.match(/(?:^|;)\s*left\s*:\s*([^;]+)/i);
   const top = style.match(/(?:^|;)\s*top\s*:\s*([^;]+)/i);
-  if (left && /^\s*-\d{4,}px\s*$/i.test(left[1])) {
+  if (left && /^\s*-\d{4,}px\s*$/i.test(left.at(1) ?? "")) {
     return true;
   }
-  if (top && /^\s*-\d{4,}px\s*$/i.test(top[1])) {
+  if (top && /^\s*-\d{4,}px\s*$/i.test(top.at(1) ?? "")) {
     return true;
   }
 

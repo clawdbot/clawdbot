@@ -269,6 +269,9 @@ function normalizeLegacyToolResultId(
     return message;
   }
   const [toolCall] = toolCalls;
+  if (!toolCall) {
+    return message;
+  }
   const toolResultName = normalizeOptionalString((message as { toolName?: unknown }).toolName);
   const toolCallName = normalizeOptionalString(toolCall.name);
   if (toolResultName && toolCallName && toolResultName !== toolCallName) {
@@ -365,10 +368,9 @@ function repairToolCallInputs(
   const preservedThinkingToolCallIds = new Set<string>();
   const priorToolCallIds = new Set<string>();
 
-  for (let index = 0; index < messages.length; index += 1) {
-    const msg = messages[index];
+  for (const [index, msg] of messages.entries()) {
     if (!msg || typeof msg !== "object") {
-      out.push(msg);
+      changed = true;
       continue;
     }
 
@@ -633,9 +635,9 @@ export function repairToolUseResultPairing(
   };
 
   for (let i = 0; i < messages.length; i += 1) {
-    const msg = messages[i];
+    const msg = messages.at(i);
     if (!msg || typeof msg !== "object") {
-      out.push(msg);
+      changed = true;
       continue;
     }
 
@@ -675,9 +677,9 @@ export function repairToolUseResultPairing(
 
     let j = i + 1;
     for (; j < messages.length; j += 1) {
-      const next = messages[j];
+      const next = messages.at(j);
       if (!next || typeof next !== "object") {
-        remainder.push(next);
+        changed = true;
         continue;
       }
 

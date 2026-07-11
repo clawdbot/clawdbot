@@ -61,7 +61,7 @@ function resolvePruneBeforeIndex(messages: AgentMessage[]): number {
   if (completedTurnStarts.length <= PRESERVE_RECENT_COMPLETED_TURNS) {
     return -1;
   }
-  return completedTurnStarts[completedTurnStarts.length - PRESERVE_RECENT_COMPLETED_TURNS];
+  return completedTurnStarts.at(-PRESERVE_RECENT_COMPLETED_TURNS) ?? -1;
 }
 
 function pruneHistoryMediaReferenceText(text: string): string {

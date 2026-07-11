@@ -2,6 +2,11 @@
 // checks, adapter sends, transcript mirroring, and payload outcomes.
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  onTrustedMessageAuditEvent,
+  resetMessageAuditEventsForTest,
+  type TrustedMessageAuditEvent,
+} from "../../audit/message-audit-events.js";
 import { chunkText } from "../../auto-reply/chunk.js";
 import { createMessageReceiptFromOutboundResults } from "../../channels/message/receipt.js";
 import type { ChannelMessageSendTextContext } from "../../channels/message/types.js";
@@ -306,6 +311,7 @@ describe("deliverOutboundPayloads", () => {
 
   beforeEach(() => {
     resetDiagnosticEventsForTest();
+    resetMessageAuditEventsForTest();
     releasePinnedPluginChannelRegistry();
     setActivePluginRegistry(defaultRegistry);
     mocks.appendAssistantMessageToSessionTranscript.mockClear();
@@ -348,6 +354,7 @@ describe("deliverOutboundPayloads", () => {
 
   afterEach(() => {
     resetDiagnosticEventsForTest();
+    resetMessageAuditEventsForTest();
     releasePinnedPluginChannelRegistry();
     setActivePluginRegistry(emptyRegistry);
   });
@@ -1418,21 +1425,36 @@ describe("deliverOutboundPayloads", () => {
   });
 
   it("requires durable queue writes when requested", async () => {
+    const events: TrustedMessageAuditEvent[] = [];
+    const unsubscribe = onTrustedMessageAuditEvent((event) => events.push(event));
     queueMocks.enqueueDelivery.mockRejectedValueOnce(new Error("queue offline"));
     const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1" });
 
-    await expect(
-      deliverOutboundPayloads({
-        cfg: {},
-        channel: "matrix",
-        to: "!room:example",
-        payloads: [{ text: "hi" }],
-        deps: { matrix: sendMatrix },
-        queuePolicy: "required",
-      }),
-    ).rejects.toThrow("queue offline");
+    try {
+      await expect(
+        deliverOutboundPayloads({
+          cfg: {},
+          channel: "matrix",
+          to: "!room:example",
+          payloads: [{ text: "hi" }],
+          deps: { matrix: sendMatrix },
+          queuePolicy: "required",
+        }),
+      ).rejects.toThrow("queue offline");
+    } finally {
+      unsubscribe();
+    }
 
     expect(sendMatrix).not.toHaveBeenCalled();
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      action: "message.outbound.finished",
+      status: "failed",
+      outcome: "failed",
+      failureStage: "queue",
+      resultCount: 0,
+    });
+    expect(JSON.stringify(events)).not.toContain("queue offline");
   });
 
   it("falls back to direct send when best-effort queue writes fail", async () => {
@@ -2122,6 +2144,107 @@ describe("deliverOutboundPayloads", () => {
     ).not.toContain("secret delivery body");
   });
 
+  it("emits one metadata-only audit terminal for a successful logical payload", async () => {
+    const events: TrustedMessageAuditEvent[] = [];
+    const unsubscribe = onTrustedMessageAuditEvent((event) => events.push(event));
+    const sendMatrix = vi.fn().mockResolvedValue({
+      messageId: "platform-message-1",
+      roomId: "!room:example",
+    });
+
+    try {
+      await deliverOutboundPayloads({
+        cfg: matrixChunkConfig,
+        channel: "matrix",
+        to: "!room:target",
+        accountId: "account-1",
+        payloads: [{ text: "secret delivery body" }],
+        deps: { matrix: sendMatrix },
+        session: {
+          key: "secret-session-key",
+          agentId: "agent-main",
+          conversationType: "direct",
+        },
+        replyPayloadSendingHook: {
+          kind: "final",
+          runId: "run-1",
+          context: { channelId: "matrix" },
+        },
+      });
+    } finally {
+      unsubscribe();
+    }
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      sourceId: "message:outbound:queue:mock-queue-id:payload:0",
+      kind: "message",
+      action: "message.outbound.finished",
+      status: "succeeded",
+      actorType: "agent",
+      actorId: "agent-main",
+      agentId: "agent-main",
+      runId: "run-1",
+      direction: "outbound",
+      channel: "matrix",
+      // Policy conversationType alone must not claim "direct" for a room
+      // target; only declared destination facts or a matching route may.
+      conversationKind: "unknown",
+      outcome: "sent",
+      deliveryKind: "text",
+      resultCount: 1,
+      accountId: "account-1",
+      targetId: "!room:target",
+      conversationId: "!room:example",
+      messageId: "platform-message-1",
+    });
+    expect(typeof events[0]?.durationMs).toBe("number");
+    expect(JSON.stringify(events)).not.toContain("secret delivery body");
+    expect(JSON.stringify(events)).not.toContain("secret-session-key");
+  });
+
+  it("audits one durable terminal per logical payload in a mixed batch", async () => {
+    const events: TrustedMessageAuditEvent[] = [];
+    const unsubscribe = onTrustedMessageAuditEvent((event) => events.push(event));
+    const sendMatrix = vi.fn().mockResolvedValue({
+      messageId: "visible",
+      roomId: "!room:example",
+    });
+
+    try {
+      await deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "NO_REPLY" }, { text: "visible reply" }],
+        deps: { matrix: sendMatrix },
+      });
+    } finally {
+      unsubscribe();
+    }
+
+    expect(sendMatrix).toHaveBeenCalledTimes(1);
+    expect(events).toHaveLength(2);
+    expect(events.map((event) => event.outcome)).toEqual(["suppressed", "sent"]);
+    expect(events[0]).toMatchObject({
+      sourceId: "message:outbound:queue:mock-queue-id:payload:0",
+      status: "blocked",
+      actorType: "system",
+      actorId: "gateway",
+      conversationKind: "unknown",
+      reasonCode: "no_visible_payload",
+      resultCount: 0,
+    });
+    expect(events[0]).not.toHaveProperty("deliveryKind");
+    expect(events[1]).toMatchObject({
+      sourceId: "message:outbound:queue:mock-queue-id:payload:1",
+      status: "succeeded",
+      outcome: "sent",
+      resultCount: 1,
+      messageId: "visible",
+    });
+  });
+
   it("keeps requester session channel authoritative for delivery media policy", async () => {
     const resolveMediaAccessSpy = vi.spyOn(
       mediaCapabilityModule,
@@ -2302,6 +2425,8 @@ describe("deliverOutboundPayloads", () => {
   });
 
   it("scopes media access after reply payload hooks add local media", async () => {
+    const auditEvents: TrustedMessageAuditEvent[] = [];
+    const unsubscribeAudit = onTrustedMessageAuditEvent((event) => auditEvents.push(event));
     hookMocks.runner.hasHooks.mockImplementation(
       (hookName?: string) => hookName === "reply_payload_sending",
     );
@@ -2334,6 +2459,7 @@ describe("deliverOutboundPayloads", () => {
         context: { channelId: "matrix", conversationId: "!room:example" },
       },
     });
+    unsubscribeAudit();
 
     const [mediaAccessOptions] = requireMockCall(resolveMediaAccessSpy, "media access") as [
       {
@@ -2348,6 +2474,8 @@ describe("deliverOutboundPayloads", () => {
     const sendOptions = requireMatrixSendCall(sendMatrix)[2] as Record<string, unknown>;
     expect(sendOptions.mediaUrl).toBe("file:///tmp/hook-added.png");
     expect(typeof sendOptions.mediaReadFile).toBe("function");
+    expect(auditEvents).toHaveLength(1);
+    expect(auditEvents[0]).toMatchObject({ outcome: "sent", deliveryKind: "media" });
     resolveMediaAccessSpy.mockRestore();
   });
 
@@ -2587,10 +2715,10 @@ describe("deliverOutboundPayloads", () => {
     expect(results).toHaveLength(1);
     expect(results[0]?.channel).toBe("matrix");
     expect(results[0]?.messageId).toBe("visible");
-    expect(payloadOutcomes).toHaveLength(1);
-    const payloadOutcome = payloadOutcomes[0] as { index?: unknown; status?: unknown } | undefined;
-    expect(payloadOutcome?.index).toBe(1);
-    expect(payloadOutcome?.status).toBe("sent");
+    expect(payloadOutcomes).toMatchObject([
+      { index: 0, status: "suppressed", reason: "no_visible_payload" },
+      { index: 1, status: "sent" },
+    ]);
   });
 
   it("strips internal runtime scaffolding added by message_sending hooks before delivery", async () => {
@@ -4089,6 +4217,41 @@ describe("deliverOutboundPayloads", () => {
     expect(warnMessage).toContain("db connection lost");
   });
 
+  it("emits a stable terminal when best-effort marker fallback ack precedes provider rejection", async () => {
+    const events: TrustedMessageAuditEvent[] = [];
+    const unsubscribe = onTrustedMessageAuditEvent((event) => events.push(event));
+    queueMocks.markDeliveryPlatformSendAttemptStarted.mockRejectedValueOnce(
+      new Error("pre-send marker offline"),
+    );
+    const sendMatrix = vi.fn().mockRejectedValueOnce(new Error("provider rejected send"));
+
+    try {
+      await expect(
+        deliverOutboundPayloads({
+          cfg: {},
+          channel: "matrix",
+          to: "!room:example",
+          payloads: [{ text: "secret body" }],
+          deps: { matrix: sendMatrix },
+          queuePolicy: "best_effort",
+        }),
+      ).rejects.toThrow("provider rejected send");
+    } finally {
+      unsubscribe();
+    }
+
+    expect(queueMocks.ackDelivery).toHaveBeenCalledWith("mock-queue-id", undefined);
+    expect(queueMocks.failDelivery).not.toHaveBeenCalled();
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      sourceId: "message:outbound:queue:mock-queue-id:payload:0",
+      outcome: "failed",
+      failureStage: "platform_send",
+    });
+    expect(JSON.stringify(events)).not.toContain("secret body");
+    expect(JSON.stringify(events)).not.toContain("provider rejected send");
+  });
+
   it("writes raw payloads to the queue before normalization", async () => {
     const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m-raw", roomId: "!room:example" });
     const rawPayloads: DeliverOutboundPayload[] = [
@@ -4985,6 +5148,8 @@ describe("deliverOutboundPayloads", () => {
   });
 
   it("fails sends when required delivery pinning fails", async () => {
+    const events: TrustedMessageAuditEvent[] = [];
+    const unsubscribe = onTrustedMessageAuditEvent((event) => events.push(event));
     const sendText = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-1" });
     const pinDeliveredMessage = vi.fn().mockRejectedValue(new Error("pin denied"));
     setActivePluginRegistry(
@@ -5000,14 +5165,73 @@ describe("deliverOutboundPayloads", () => {
       ]),
     );
 
-    await expect(
-      deliverOutboundPayloads({
-        cfg: {},
-        channel: "matrix",
-        to: "!room:1",
-        payloads: [{ text: "hello", delivery: { pin: { enabled: true, required: true } } }],
-      }),
-    ).rejects.toThrow("pin denied");
+    try {
+      await expect(
+        deliverOutboundPayloads({
+          cfg: {},
+          channel: "matrix",
+          to: "!room:1",
+          payloads: [{ text: "hello", delivery: { pin: { enabled: true, required: true } } }],
+          skipQueue: true,
+        }),
+      ).rejects.toThrow("pin denied");
+    } finally {
+      unsubscribe();
+    }
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      status: "failed",
+      errorCode: "message_delivery_partial_failure",
+      outcome: "failed",
+      failureStage: "platform_send",
+      deliveryKind: "text",
+      resultCount: 1,
+      messageId: "mx-1",
+    });
+    expect(JSON.stringify(events)).not.toContain("pin denied");
+  });
+
+  it("keeps adapter side effects unknown when required pinning has no message identity", async () => {
+    const events: TrustedMessageAuditEvent[] = [];
+    const unsubscribe = onTrustedMessageAuditEvent((event) => events.push(event));
+    const sendText = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "" });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: { deliveryMode: "direct", sendText },
+          }),
+        },
+      ]),
+    );
+
+    try {
+      await expect(
+        deliverOutboundPayloads({
+          cfg: {},
+          channel: "matrix",
+          to: "!room:1",
+          payloads: [{ text: "hello", delivery: { pin: { enabled: true, required: true } } }],
+          skipQueue: true,
+        }),
+      ).rejects.toThrow("no delivered message id was returned");
+    } finally {
+      unsubscribe();
+    }
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      status: "unknown",
+      outcome: "unknown",
+      failureStage: "platform_send",
+      resultCount: 0,
+    });
+    expect(events[0]).not.toHaveProperty("errorCode");
+    expect(events[0]).not.toHaveProperty("deliveryKind");
   });
 
   it("pins the first delivered text chunk for chunked payloads", async () => {

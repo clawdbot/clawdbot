@@ -125,6 +125,21 @@ http://127.0.0.1:<host-port>/healthz
 
 The health result is `ok`, `failed`, or `skipped`. `/healthz` proves Gateway liveness, not full readiness of every configured channel or plugin. The probe is skipped when there is no usable local endpoint to check.
 
+## `fleet logs`
+
+Stream a cell's container logs directly to the terminal:
+
+```bash
+openclaw fleet logs acme
+openclaw fleet logs acme --follow
+openclaw fleet logs acme --tail 200
+openclaw fleet logs acme --since 10m
+```
+
+Fleet verifies the registered container's ownership labels before reading any logs, so it refuses a foreign container using the expected cell name. Press Ctrl-C to end `--follow` without treating the operator stop as a command failure.
+
+`fleet logs` has no `--json` mode because container logs are a raw stdout/stderr stream. For scripts, bound the output with `--tail` and use ordinary shell redirection or pipelines.
+
 ## `fleet start`, `fleet stop`, and `fleet restart`
 
 Control an existing cell with its recorded runtime:

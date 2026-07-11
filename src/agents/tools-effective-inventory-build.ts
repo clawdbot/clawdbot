@@ -119,8 +119,10 @@ export function buildReadableToolsByName(
   }
   for (let index = 0; index < toolCount; index += 1) {
     try {
-      const tool = tools[index];
-      toolsByName.set(tool.name, tool);
+      const tool = tools.at(index);
+      if (tool) {
+        toolsByName.set(tool.name, tool);
+      }
     } catch {
       // Unreadable entries are reported by the schema projection diagnostics.
     }

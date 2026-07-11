@@ -100,7 +100,7 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "audit",
-    description: "Inspect metadata-only agent run and tool action records",
+    description: "Inspect metadata-only run, tool, and message lifecycle records",
     hasSubcommands: false,
   },
   {

@@ -263,7 +263,6 @@ async function prepareResolvedImageRuntime(
       config: params.cfg,
     });
     const protectedAuth = protectPreparedProviderRuntimeAuth({
-      sourceApiKey: apiKey,
       provider: model.provider,
       preparedAuth: { apiKey: copilotToken.token, baseUrl: copilotToken.baseUrl },
     });

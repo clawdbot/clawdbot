@@ -17,6 +17,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { prepareOomScoreAdjustedSpawn } from "openclaw/plugin-sdk/process-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { ensurePortAvailable } from "../infra/ports.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
@@ -1308,7 +1309,7 @@ export async function launchOpenClawChrome(
             return await launchOnceAndWait(false);
           }
           const stderrHint = redactedStderrOutput
-            ? `\nChrome stderr:\n${redactedStderrOutput.slice(-CHROME_STDERR_HINT_MAX_CHARS)}`
+            ? `\nChrome stderr:\n${sliceUtf16Safe(redactedStderrOutput, -CHROME_STDERR_HINT_MAX_CHARS)}`
             : "";
           const launchHints = chromeLaunchHints({
             stderrOutput,

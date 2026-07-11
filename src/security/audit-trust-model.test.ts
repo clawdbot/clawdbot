@@ -231,6 +231,124 @@ describe("security audit trust model findings", () => {
           ).toBe(false);
         },
       },
+      {
+        name: "flags open groupPolicy when coding profile exposes cron",
+        cfg: {
+          channels: { whatsapp: { groupPolicy: "open" } },
+          tools: { elevated: { enabled: false }, profile: "coding" },
+        } satisfies OpenClawConfig,
+        assert: (findings: ReturnType<typeof audit>) => {
+          const finding = findings.find(
+            (entry) => entry.checkId === "security.exposure.open_groups_with_control_plane_tools",
+          );
+          expect(finding?.severity).toBe("critical");
+          expect(finding?.detail).toContain("channels.whatsapp.groupPolicy");
+          expect(finding?.detail).toContain("controlPlane=[cron]");
+          expect(finding?.detail).not.toContain("controlPlane=[gateway, cron]");
+        },
+      },
+      {
+        name: "flags open dmPolicy when gateway is explicitly allowed",
+        cfg: {
+          channels: { slack: { dmPolicy: "open" } },
+          tools: { elevated: { enabled: false }, allow: ["gateway"] },
+        } satisfies OpenClawConfig,
+        assert: (findings: ReturnType<typeof audit>) => {
+          const finding = findings.find(
+            (entry) => entry.checkId === "security.exposure.open_groups_with_control_plane_tools",
+          );
+          expect(finding?.severity).toBe("critical");
+          expect(finding?.detail).toContain("channels.slack.dmPolicy");
+          expect(finding?.detail).toContain("controlPlane=[gateway]");
+        },
+      },
+      {
+        name: "flags global alsoAllow that widens a restrictive profile",
+        cfg: {
+          channels: { slack: { dmPolicy: "open" } },
+          tools: {
+            elevated: { enabled: false },
+            profile: "messaging",
+            alsoAllow: ["cron"],
+          },
+        } satisfies OpenClawConfig,
+        assert: (findings: ReturnType<typeof audit>) => {
+          const finding = findings.find(
+            (entry) => entry.checkId === "security.exposure.open_groups_with_control_plane_tools",
+          );
+          expect(finding?.detail).toContain(
+            "agents.defaults (profile=messaging; controlPlane=[cron])",
+          );
+        },
+      },
+      {
+        name: "reports per-agent control-plane exposure",
+        cfg: {
+          channels: { whatsapp: { groupPolicy: "open" } },
+          tools: { elevated: { enabled: false }, profile: "messaging" },
+          agents: {
+            list: [{ id: "ops", tools: { profile: "messaging", alsoAllow: ["gateway"] } }],
+          },
+        } satisfies OpenClawConfig,
+        assert: (findings: ReturnType<typeof audit>) => {
+          const finding = findings.find(
+            (entry) => entry.checkId === "security.exposure.open_groups_with_control_plane_tools",
+          );
+          expect(finding?.detail).toContain(
+            "agents.list.ops (profile=messaging; controlPlane=[gateway])",
+          );
+          expect(finding?.detail).not.toContain("agents.defaults (profile=messaging");
+        },
+      },
+      {
+        name: "does not flag control-plane exposure when gateway and cron are denied",
+        cfg: {
+          channels: { whatsapp: { groupPolicy: "open" } },
+          tools: {
+            elevated: { enabled: false },
+            profile: "coding",
+            deny: ["gateway", "cron"],
+          },
+        } satisfies OpenClawConfig,
+        assert: (findings: ReturnType<typeof audit>) => {
+          expect(
+            findings.some(
+              (finding) =>
+                finding.checkId === "security.exposure.open_groups_with_control_plane_tools",
+            ),
+          ).toBe(false);
+        },
+      },
+      {
+        name: "does not classify other owner-only tools as control-plane exposure",
+        cfg: {
+          channels: { whatsapp: { groupPolicy: "open" } },
+          tools: { elevated: { enabled: false }, allow: ["nodes", "computer"] },
+        } satisfies OpenClawConfig,
+        assert: (findings: ReturnType<typeof audit>) => {
+          expect(
+            findings.some(
+              (finding) =>
+                finding.checkId === "security.exposure.open_groups_with_control_plane_tools",
+            ),
+          ).toBe(false);
+        },
+      },
+      {
+        name: "does not flag control-plane exposure when inbound policy is not open",
+        cfg: {
+          channels: { whatsapp: { groupPolicy: "allowlist" } },
+          tools: { elevated: { enabled: false }, profile: "coding" },
+        } satisfies OpenClawConfig,
+        assert: (findings: ReturnType<typeof audit>) => {
+          expect(
+            findings.some(
+              (finding) =>
+                finding.checkId === "security.exposure.open_groups_with_control_plane_tools",
+            ),
+          ).toBe(false);
+        },
+      },
     ] as const;
 
     for (const testCase of cases) {

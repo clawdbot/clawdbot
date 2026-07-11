@@ -837,6 +837,7 @@ describe("EmbeddedTuiBackend", () => {
       sessionKey: "agent:main:main",
       storePath: "/tmp/openclaw-sessions.json",
       objective: "Ship Goal",
+      actor: { type: "human" },
       fallbackEntry: {
         sessionId: expect.any(String),
         updatedAt: expect.any(Number),

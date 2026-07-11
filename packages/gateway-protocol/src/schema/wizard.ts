@@ -82,6 +82,7 @@ export const WizardStepSchema = Type.Object(
     placeholder: Type.Optional(Type.String()),
     sensitive: Type.Optional(Type.Boolean()),
     executor: Type.Optional(Type.Union([Type.Literal("gateway"), Type.Literal("client")])),
+    externalUrl: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
 );

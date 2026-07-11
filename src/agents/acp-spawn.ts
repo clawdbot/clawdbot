@@ -71,6 +71,7 @@ import {
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
+import { recordSubagentSpawned } from "../sessions/session-state-events.js";
 import { createRunningTaskRun } from "../tasks/detached-task-runtime.js";
 import { listTasksForOwnerKey } from "../tasks/runtime-internal.js";
 import { deliveryContextFromSession, normalizeDeliveryContext } from "../utils/delivery-context.js";
@@ -1533,6 +1534,14 @@ export async function spawnAcpDirect(
   });
   const childIdem = crypto.randomUUID();
   let childRunId: string = childIdem;
+  // ACP children take this branch instead of spawnSubagentDirect; without this the
+  // signal log has no child_spawned event and the parent cursor is never seeded.
+  recordSubagentSpawned({
+    childSessionKey: sessionKey,
+    childRunId: childIdem,
+    requesterSessionKey: requesterInternalKey,
+    agentId: targetAgentId,
+  });
   const streamLogPath =
     effectiveStreamToParent && parentSessionKey
       ? resolveAcpSpawnStreamLogPath({

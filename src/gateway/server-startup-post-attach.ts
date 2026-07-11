@@ -17,6 +17,7 @@ import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cach
 import type { PluginRegistry } from "../plugins/registry.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
+import { sweepSessionStateWatchNotices } from "../sessions/session-state-events.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
@@ -1390,6 +1391,10 @@ export async function startGatewayPostAttachRuntime(
         log: params.log,
         refreshLatestUpdateRestartSentinel: runtimeDeps.refreshLatestUpdateRestartSentinel,
       });
+      const sessionStateSweepHandle = setImmediate(() => {
+        sweepSessionStateWatchNotices();
+      });
+      sessionStateSweepHandle.unref?.();
       if (!hasGatewayStartHooks(sidecarsResult.pluginRegistry)) {
         return;
       }

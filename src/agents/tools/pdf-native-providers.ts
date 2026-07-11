@@ -273,8 +273,12 @@ export async function geminiAnalyzePdf(params: {
     throw new Error("Gemini PDF returned no candidates.");
   }
 
-  const textParts = candidates[0].content?.parts?.filter((p) => typeof p.text === "string") ?? [];
-  const text = textParts.map((p) => p.text!).join("");
+  const candidate = candidates.at(0);
+  if (!candidate) {
+    throw new Error("Gemini PDF returned no candidates.");
+  }
+  const textParts = candidate.content?.parts?.filter((part) => typeof part.text === "string") ?? [];
+  const text = textParts.map((part) => part.text).join("");
 
   if (!text.trim()) {
     throw new Error("Gemini PDF returned no text.");

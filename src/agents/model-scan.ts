@@ -429,7 +429,11 @@ async function mapWithConcurrency<T, R>(
       if (current >= items.length) {
         return;
       }
-      results[current] = await fn(items[current], current);
+      const item = items.at(current);
+      if (item === undefined) {
+        return;
+      }
+      results[current] = await fn(item, current);
       completed += 1;
       opts?.onProgress?.(completed, items.length);
     }

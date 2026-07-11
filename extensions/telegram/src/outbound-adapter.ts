@@ -249,7 +249,9 @@ export function createTelegramOutboundAdapter(
     chunkerMode: "markdown",
     extractMarkdownImages: true,
     textChunkLimit: TELEGRAM_TEXT_CHUNK_LIMIT,
-    sanitizeText: ({ text }) => sanitizeForPlainText(sanitizeAssistantVisibleText(text)),
+    // Default Telegram delivery reparses this result as Markdown; use its bold and strike delimiters.
+    sanitizeText: ({ text }) =>
+      sanitizeForPlainText(sanitizeAssistantVisibleText(text), { style: "markdown" }),
     shouldSuppressLocalPayloadPrompt: options.shouldSuppressLocalPayloadPrompt,
     beforeDeliverPayload: options.beforeDeliverPayload,
     shouldTreatDeliveredTextAsVisible: options.shouldTreatDeliveredTextAsVisible,

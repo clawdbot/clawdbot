@@ -220,7 +220,7 @@ function isValidIsoDate(value: string): boolean {
     return false;
   }
   const [year, month, day] = value.split("-").map((part) => Number.parseInt(part, 10));
-  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
+  if (year === undefined || month === undefined || day === undefined) {
     return false;
   }
 
@@ -236,6 +236,9 @@ export function isoToPerplexityDate(iso: string): string | undefined {
     return undefined;
   }
   const [, year, month, day] = match;
+  if (year === undefined || month === undefined || day === undefined) {
+    return undefined;
+  }
   return `${Number.parseInt(month, 10)}/${Number.parseInt(day, 10)}/${year}`;
 }
 
@@ -248,6 +251,9 @@ export function normalizeToIsoDate(value: string): string | undefined {
   const match = trimmed.match(PERPLEXITY_DATE_PATTERN);
   if (match) {
     const [, month, day, year] = match;
+    if (year === undefined || month === undefined || day === undefined) {
+      return undefined;
+    }
     const iso = `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
     return isValidIsoDate(iso) ? iso : undefined;
   }
@@ -314,17 +320,19 @@ export function normalizeFreshness(
 
   const lower = normalizeLowercaseStringOrEmpty(trimmed);
   if (BRAVE_FRESHNESS_SHORTCUTS.has(lower)) {
-    return provider === "brave" ? lower : FRESHNESS_TO_RECENCY[lower];
+    const recency = FRESHNESS_TO_RECENCY[lower];
+    return provider === "brave" ? lower : recency;
   }
   if (PERPLEXITY_RECENCY_VALUES.has(lower)) {
-    return provider === "perplexity" ? lower : RECENCY_TO_FRESHNESS[lower];
+    const freshness = RECENCY_TO_FRESHNESS[lower];
+    return provider === "perplexity" ? lower : freshness;
   }
   if (provider === "brave") {
     const match = trimmed.match(BRAVE_FRESHNESS_RANGE);
     if (match) {
       const [, start, end] = match;
       // Brave accepts explicit ISO ranges; Perplexity only supports recency buckets here.
-      if (isValidIsoDate(start) && isValidIsoDate(end) && start <= end) {
+      if (start && end && isValidIsoDate(start) && isValidIsoDate(end) && start <= end) {
         return `${start}to${end}`;
       }
     }

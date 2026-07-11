@@ -299,6 +299,8 @@ jobs:
             eventName === "workflow_dispatch" &&
             historicalTargetApproved &&
             checkoutRevision !== workflowRevision;
+          const frozenTarget =
+            eventName === "workflow_dispatch" && checkoutRevision !== workflowRevision;
 
           const nodeTestPlan = await import("./scripts/lib/ci-node-test-plan.mjs");
           const createNodeTestPlan =
@@ -444,7 +446,7 @@ jobs:
           const protocolCoverageRequested = runNode || runIosBuild || runAndroid;
           const runProtocolEventCoverage =
             protocolCoverageRequested &&
-            (!historicalTarget || existsSync("scripts/check-protocol-event-coverage.mjs"));
+            (!frozenTarget || existsSync("scripts/check-protocol-event-coverage.mjs"));
 
           const manifest = {
             docs_only: docsOnly,

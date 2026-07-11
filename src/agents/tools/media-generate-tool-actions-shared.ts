@@ -106,7 +106,10 @@ export function createMediaGenerateProviderListActionResult<
   );
 
   const lines = providerDetails.flatMap((details, index) => {
-    const provider = params.providers[index];
+    const provider = params.providers.at(index);
+    if (!provider) {
+      return [];
+    }
     const authHints = getProviderEnvVars(provider.id);
     const capabilities = params.summarizeCapabilities(provider);
     const modelLine = details.models.length > 0 ? details.models.join(", ") : "unknown";

@@ -643,6 +643,7 @@
       "provider": "google-gemini-cli",
       "method": "oauth",
       "choiceId": "google-gemini-cli",
+      "appGuidedAuth": "oauth",
       "choiceLabel": "Gemini CLI OAuth",
       "choiceHint": "Google OAuth with project-aware token payload",
       "groupId": "google",

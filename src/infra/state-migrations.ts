@@ -4413,7 +4413,13 @@ export async function detectLegacyStateMigrations(params: {
     );
   }
   if (stateSchemaMigrations.length > 0) {
-    preview.push("- Shared SQLite schema: agent database registry primary key → agent_id,path");
+    for (const migration of stateSchemaMigrations) {
+      preview.push(
+        migration.kind === "agent-databases-composite-primary-key"
+          ? "- Shared SQLite schema: agent database registry primary key → agent_id,path"
+          : "- Shared SQLite schema: audit event ledger → versioned message lifecycle schema",
+      );
+    }
     preview.push(
       "- Rerun doctor after shared SQLite schema repair to detect plugin state migrations",
     );
@@ -5915,6 +5921,15 @@ export async function autoMigrateLegacyState(params: {
   const stateSchema = repairOpenClawStateDatabaseSchema({
     env: { ...env, OPENCLAW_STATE_DIR: stateDir },
   });
+  if (stateSchema.warnings.length > 0) {
+    return {
+      migrated: stateDirResult.migrated || stateSchema.changes.length > 0,
+      skipped: false,
+      changes: [...stateDirResult.changes, ...stateSchema.changes],
+      warnings: [...stateDirResult.warnings, ...stateSchema.warnings],
+      ...(stateDirResult.notices?.length ? { notices: stateDirResult.notices } : {}),
+    };
+  }
   const pluginDoctorConfig = params.pluginDoctorConfig ?? params.cfg;
   const pluginSessionStoreAgentIds = listPluginDoctorSessionStoreAgentIds({
     config: pluginDoctorConfig,

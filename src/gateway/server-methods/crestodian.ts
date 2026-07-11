@@ -5,6 +5,7 @@ import {
   errorShape,
   validateCrestodianChatParams,
   validateCrestodianSetupActivateParams,
+  validateCrestodianSetupAuthStartParams,
   validateCrestodianSetupDetectParams,
   validateCrestodianSetupVerifyParams,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -15,6 +16,7 @@ import { formatCrestodianStartupMessage } from "../../crestodian/overview.js";
 import { enqueueCommandInLane, setCommandLaneConcurrency } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { defaultRuntime } from "../../runtime.js";
+import { WizardSession } from "../../wizard/session.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -32,6 +34,7 @@ export type CrestodianChatSession =
   GatewayRequestContext["crestodianSessions"] extends Map<string, infer Session> ? Session : never;
 
 const MAX_CRESTODIAN_SESSIONS = 8;
+const PROVIDER_AUTH_SESSION_TIMEOUT_MS = 25 * 60 * 1000;
 const CRESTODIAN_GATEWAY_EXECUTION_KEY = "gateway";
 const crestodianGatewayExecutionQueue = new KeyedAsyncQueue();
 const crestodianSessionQueues = new WeakMap<Map<string, CrestodianChatSession>, KeyedAsyncQueue>();
@@ -45,11 +48,11 @@ function getCrestodianSessionQueue(sessions: Map<string, CrestodianChatSession>)
   return queue;
 }
 
-async function runCrestodianGatewayTask(task: () => Promise<void>): Promise<void> {
+async function runCrestodianGatewayTask<T>(task: () => Promise<T>): Promise<T> {
   // Track every accepted RPC as active, never queued: restart draining snapshots
   // active ids, so a queued Crestodian request could otherwise outlive its socket.
   setCommandLaneConcurrency(CommandLane.Crestodian, Number.MAX_SAFE_INTEGER);
-  await enqueueCommandInLane(CommandLane.Crestodian, () =>
+  return await enqueueCommandInLane(CommandLane.Crestodian, () =>
     // Bound expensive detection, activation, and agent turns without hiding
     // accepted work from restart draining. This also makes session eviction and
     // setup writes atomic with respect to other Crestodian gateway requests.
@@ -128,6 +131,59 @@ export const crestodianHandlers: GatewayRequestHandlers = {
       const { verifySetupInference } = await import("../../crestodian/setup-inference.js");
       respond(true, await verifySetupInference({ runtime: defaultRuntime }), undefined);
     });
+  },
+  /** Start one provider-owned OAuth/device-code login over the shared wizard transport. */
+  "crestodian.setup.auth.start": async ({ params, respond, context }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateCrestodianSetupAuthStartParams,
+        "crestodian.setup.auth.start",
+        respond,
+      )
+    ) {
+      return;
+    }
+    if (context.findRunningWizard()) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "wizard already running"));
+      return;
+    }
+    const sessionId = params.sessionId;
+    const session = new WizardSession(
+      async (prompter, signal) => {
+        // Match setup.activate's lock order: setup admission before the Gateway
+        // queue. Both stay held for the session, so a relaunched client cannot
+        // start competing setup work while this server-owned flow can commit.
+        const result = await runExclusiveCrestodianSetupActivation(async () =>
+          runCrestodianGatewayTask(async () => {
+            const { activateSetupInference } = await import("../../crestodian/setup-inference.js");
+            return await activateSetupInference({
+              kind: "provider-auth",
+              authChoice: params.authChoice,
+              ...(params.workspace !== undefined ? { workspace: params.workspace } : {}),
+              surface: "gateway",
+              runtime: {
+                ...defaultRuntime,
+                exit: (code: number | undefined): never => {
+                  throw new Error(`setup step exited with code ${String(code)}`);
+                },
+              },
+              prompter,
+              signal,
+              isCancelled: () => signal.aborted,
+              onCommitStarted: () => session.lockCancellation(),
+            });
+          }),
+        );
+        if (!result.ok) {
+          throw new Error(result.error);
+        }
+      },
+      { timeoutMs: PROVIDER_AUTH_SESSION_TIMEOUT_MS },
+    );
+    context.wizardSessions.set(sessionId, session);
+    // Return ownership immediately so the client can cancel while provider auth waits.
+    respond(true, { sessionId, done: false, status: "running" }, undefined);
   },
   /**
    * Structured onboarding: live-test one candidate and persist it on success.

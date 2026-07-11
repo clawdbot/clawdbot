@@ -63,7 +63,13 @@ type XaiOAuthIdentity = {
 type XaiOAuthFetchOptions = {
   fetchImpl?: typeof fetch;
   now?: () => number;
+  signal?: AbortSignal;
 };
+
+function xaiOAuthFetchSignal(signal?: AbortSignal): AbortSignal {
+  const timeout = AbortSignal.timeout(XAI_OAUTH_FETCH_TIMEOUT_MS);
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
 
 type XaiDeviceCodeResponse = {
   deviceCode: string;
@@ -147,7 +153,7 @@ async function fetchXaiOAuthDiscoveryDocument(
       Accept: "application/json",
       "User-Agent": xaiUserAgent(),
     },
-    signal: AbortSignal.timeout(XAI_OAUTH_FETCH_TIMEOUT_MS),
+    signal: xaiOAuthFetchSignal(options.signal),
   });
   return readStringRecord(await readJsonResponse(response, "xAI OAuth discovery"));
 }
@@ -324,7 +330,7 @@ async function exchangeXaiOAuthToken(
           "User-Agent": xaiUserAgent(),
         },
         body: toFormUrlEncoded(params.body),
-        signal: AbortSignal.timeout(XAI_OAUTH_FETCH_TIMEOUT_MS),
+        signal: xaiOAuthFetchSignal(params.signal),
       });
     } catch (err) {
       // Transport failures are not safe to retry for refresh grants: xAI rotates
@@ -371,7 +377,7 @@ async function requestXaiDeviceCode(
         client_id: XAI_OAUTH_CLIENT_ID,
         scope: XAI_OAUTH_SCOPE,
       }),
-      signal: AbortSignal.timeout(XAI_OAUTH_FETCH_TIMEOUT_MS),
+      signal: xaiOAuthFetchSignal(params.signal),
     },
   );
   const json = readStringRecord(await readJsonResponse(response, "xAI device code request"));
@@ -444,7 +450,7 @@ async function pollXaiDeviceCodeToken(
           client_id: XAI_OAUTH_CLIENT_ID,
           device_code: params.deviceCode,
         }),
-        signal: AbortSignal.timeout(XAI_OAUTH_FETCH_TIMEOUT_MS),
+        signal: xaiOAuthFetchSignal(params.signal),
       },
     );
     let body: unknown;
@@ -465,16 +471,18 @@ async function pollXaiDeviceCodeToken(
 
     const error = parseXaiOAuthErrorResponse(body).error;
     if (error === "authorization_pending") {
-      await new Promise((resolve) => {
-        setTimeout(resolve, resolveNextXaiDeviceCodePollDelayMs(intervalMs, deadlineMs));
-      });
+      await waitForXaiDeviceCodePoll(
+        resolveNextXaiDeviceCodePollDelayMs(intervalMs, deadlineMs),
+        params.signal,
+      );
       continue;
     }
     if (error === "slow_down") {
       intervalMs += XAI_DEVICE_CODE_SLOW_DOWN_INCREMENT_MS;
-      await new Promise((resolve) => {
-        setTimeout(resolve, resolveNextXaiDeviceCodePollDelayMs(intervalMs, deadlineMs));
-      });
+      await waitForXaiDeviceCodePoll(
+        resolveNextXaiDeviceCodePollDelayMs(intervalMs, deadlineMs),
+        params.signal,
+      );
       continue;
     }
     if (error === "access_denied" || error === "authorization_denied") {
@@ -494,6 +502,29 @@ async function pollXaiDeviceCodeToken(
   }
 
   throw new Error("xAI device authorization timed out");
+}
+
+async function waitForXaiDeviceCodePoll(delayMs: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) {
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, delayMs);
+    });
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timeout);
+      reject(signal.reason instanceof Error ? signal.reason : new Error("xAI login cancelled"));
+    };
+    const timeout = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) {
+      onAbort();
+    }
+  });
 }
 
 function decodeJwtPayload(token: string | undefined): Record<string, unknown> {
@@ -575,13 +606,19 @@ async function noteXaiDeviceCode(
 export async function loginXaiDeviceCode(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {
   const progress = ctx.prompter.progress("Starting xAI OAuth...");
   try {
-    const discovery = await fetchXaiDeviceCodeDiscovery();
+    const discovery = await fetchXaiDeviceCodeDiscovery(
+      ctx.signal ? { signal: ctx.signal } : undefined,
+    );
     progress.update("Requesting xAI OAuth device code...");
     const deviceCode = await requestXaiDeviceCode({
       deviceAuthorizationEndpoint: discovery.deviceAuthorizationEndpoint,
+      ...(ctx.signal ? { signal: ctx.signal } : {}),
     });
-    await noteXaiDeviceCode(ctx, deviceCode);
     const browserUrl = deviceCode.verificationUriComplete ?? deviceCode.verificationUri;
+    if (ctx.isRemote) {
+      await ctx.openUrl(browserUrl);
+    }
+    await noteXaiDeviceCode(ctx, deviceCode);
     const logUrl = deviceCode.verificationUri;
     if (ctx.isRemote) {
       ctx.runtime.log(`\nOpen this URL in your LOCAL browser:\n\n${logUrl}\n`);
@@ -600,6 +637,7 @@ export async function loginXaiDeviceCode(ctx: ProviderAuthContext): Promise<Prov
       deviceCode: deviceCode.deviceCode,
       expiresInMs: deviceCode.expiresInMs,
       intervalMs: deviceCode.intervalMs,
+      ...(ctx.signal ? { signal: ctx.signal } : {}),
     });
     const identity = resolveXaiOAuthIdentity(tokens);
     progress.stop("xAI OAuth complete");

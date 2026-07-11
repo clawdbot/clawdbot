@@ -422,7 +422,7 @@ function pruneAuthProfileStoreReferences(
             provider,
             profileIds.filter((profileId) => keptOrderProfileIds.has(profileId)),
           ])
-          .filter(([, profileIds]) => profileIds.length > 0),
+          .filter(([, profileIds]) => Array.isArray(profileIds) && profileIds.length > 0),
       )
     : undefined;
   store.lastGood = store.lastGood

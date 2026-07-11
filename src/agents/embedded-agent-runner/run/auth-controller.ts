@@ -144,7 +144,6 @@ export function createEmbeddedRunAuthController(params: {
       },
     });
     return protectPreparedProviderRuntimeAuth({
-      sourceApiKey: prepareParams.apiKey,
       provider: prepareParams.runtimeModel.provider,
       preparedAuth,
     });

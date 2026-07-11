@@ -42,6 +42,7 @@ import {
   SetupInferenceActivationIndeterminateError,
   activateSetupInference as activateSetupInferenceImpl,
   detectSetupInference,
+  listSetupInferenceAuthOptions,
   listSetupInferenceManualProviders,
   resolveCrestodianInferenceForPersistentApply,
   verifySetupInference,
@@ -388,6 +389,56 @@ describe("detectSetupInference", () => {
         id: "zeta-api-key",
         label: "Zeta API key",
         hint: "Direct key",
+      },
+    ]);
+  });
+
+  it("lists provider-owned OAuth and device-code methods without compatibility aliases", () => {
+    const choices: ProviderAuthChoiceMetadata[] = [
+      {
+        pluginId: "openai",
+        providerId: "openai",
+        methodId: "oauth",
+        choiceId: "openai",
+        choiceLabel: "ChatGPT Login",
+        choiceHint: "Browser sign-in",
+        groupLabel: "OpenAI",
+        onboardingFeatured: true,
+        appGuidedAuth: "oauth",
+      },
+      {
+        pluginId: "github-copilot",
+        providerId: "github-copilot",
+        methodId: "device",
+        choiceId: "github-copilot",
+        choiceLabel: "GitHub Copilot",
+        appGuidedAuth: "device-code",
+      },
+      {
+        pluginId: "xai",
+        providerId: "xai",
+        methodId: "device-code",
+        choiceId: "xai-device-code",
+        choiceLabel: "xAI device code",
+        assistantVisibility: "manual-only",
+        appGuidedAuth: "device-code",
+      },
+    ];
+
+    expect(listSetupInferenceAuthOptions(choices)).toEqual([
+      {
+        id: "openai",
+        label: "ChatGPT Login",
+        hint: "Browser sign-in",
+        groupLabel: "OpenAI",
+        kind: "oauth",
+        featured: true,
+      },
+      {
+        id: "github-copilot",
+        label: "GitHub Copilot",
+        kind: "device-code",
+        featured: false,
       },
     ]);
   });
@@ -1592,6 +1643,130 @@ describe("activateSetupInference", () => {
       },
     });
     expect(result).toMatchObject({ ok: false, status: "unavailable" });
+  });
+
+  it("runs provider OAuth interactively and persists it only after the live probe", async () => {
+    const stateDir = await makeTempDir();
+    const agentDir = path.join(stateDir, "agent");
+    const initialConfig = {
+      agents: { list: [{ id: "main", default: true, agentDir }] },
+    } satisfies OpenClawConfig;
+    resolveAgentDir(initialConfig, "main");
+    const runAuth = vi.fn(async () => ({
+      profiles: [
+        {
+          profileId: "openai:default",
+          credential: {
+            type: "oauth" as const,
+            provider: "openai",
+            access: "access-token",
+            refresh: "refresh-token",
+            expires: Date.now() + 60_000,
+          },
+        },
+      ],
+      defaultModel: "openai/gpt-5.5",
+    }));
+    const provider: ProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      pluginId: "openai",
+      auth: [{ id: "oauth", label: "OAuth", kind: "oauth", run: runAuth }],
+    };
+    const runEmbeddedAgent = vi.fn(
+      async (params: SuccessfulRunParams & { authProfileId?: string }) =>
+        successfulRun("openai", "gpt-5.5", params),
+    );
+    const configHarness = createConfigTransformHarness(initialConfig);
+
+    try {
+      const result = await activateSetupInference({
+        kind: "provider-auth",
+        authChoice: "openai",
+        workspace: "/tmp/openclaw-workspace",
+        surface: "gateway",
+        runtime,
+        prompter: { note: vi.fn(async () => {}) } as never,
+        deps: {
+          readConfigFileSnapshot: vi.fn(async () => ({
+            exists: true,
+            valid: true,
+            path: "/tmp/openclaw.json",
+            issues: [],
+            config: initialConfig,
+            sourceConfig: initialConfig,
+            runtimeConfig: initialConfig,
+          })) as never,
+          resolvePluginProviders: () => [provider],
+          resolveManifestProviderAuthChoice: () => ({
+            pluginId: "openai",
+            providerId: "openai",
+            methodId: "oauth",
+            choiceId: "openai",
+            choiceLabel: "ChatGPT Login",
+            appGuidedAuth: "oauth",
+          }),
+          runEmbeddedAgent: runEmbeddedAgent as never,
+          transformConfigWithPendingPluginInstalls: configHarness.transform as never,
+          createTempDir: makeTempDir,
+        },
+      });
+
+      expect(result).toMatchObject({ ok: true, modelRef: "openai/gpt-5.5" });
+      expect(runAuth).toHaveBeenCalledOnce();
+      const activatedProfileId = runEmbeddedAgent.mock.calls[0]?.[0].authProfileId;
+      if (!activatedProfileId) {
+        throw new Error("expected setup auth profile");
+      }
+      expect(activatedProfileId).toMatch(/^openai:setup-/);
+      expect(readAuthProfileStoreForTest(agentDir).profiles[activatedProfileId]).toMatchObject({
+        type: "oauth",
+        provider: "openai",
+        access: "access-token",
+      });
+      expect(configHarness.current()).toMatchObject({
+        agents: { defaults: { model: `openai/gpt-5.5@${activatedProfileId}` } },
+      });
+    } finally {
+      await removeOAuthTestTempRoot(stateDir);
+    }
+  });
+
+  it("does not probe or persist an interactive login after session cancellation", async () => {
+    const runAuth = vi.fn(async () => ({ profiles: [], defaultModel: "openai/gpt-5.5" }));
+    const runEmbeddedAgent = vi.fn();
+    const provider: ProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      pluginId: "openai",
+      auth: [{ id: "oauth", label: "OAuth", kind: "oauth", run: runAuth }],
+    };
+
+    const result = await activateSetupInference({
+      kind: "provider-auth",
+      authChoice: "openai",
+      surface: "gateway",
+      runtime,
+      prompter: {} as never,
+      isCancelled: () => true,
+      deps: {
+        resolvePluginProviders: () => [provider],
+        resolveManifestProviderAuthChoice: () => ({
+          pluginId: "openai",
+          providerId: "openai",
+          methodId: "oauth",
+          choiceId: "openai",
+          choiceLabel: "ChatGPT Login",
+          appGuidedAuth: "oauth",
+        }),
+        runEmbeddedAgent: runEmbeddedAgent as never,
+        createTempDir: makeTempDir,
+      },
+    });
+
+    expect(result).toMatchObject({ ok: false, error: "Provider login was cancelled." });
+    expect(runAuth).not.toHaveBeenCalled();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
   it.each([

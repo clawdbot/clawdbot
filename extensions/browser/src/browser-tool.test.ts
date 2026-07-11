@@ -474,6 +474,7 @@ function nodeInvokeCall(callIndex: number): {
   request: {
     nodeId?: string;
     command?: string;
+    timeoutMs?: number;
     params?: {
       method?: string;
       path?: string;
@@ -491,6 +492,7 @@ function nodeInvokeCall(callIndex: number): {
   const request = mockCallArg<{
     nodeId?: string;
     command?: string;
+    timeoutMs?: number;
     params?: {
       method?: string;
       path?: string;
@@ -1909,14 +1911,20 @@ describe("browser tool act compatibility", () => {
     await tool.execute?.("call-1", {
       action: "act",
       target: "node",
-      request: { kind: "wait", timeMs: 20_000 },
+      request: { kind: "wait", timeMs: 20_000, text: "ready" },
     });
 
     const { options, request } = lastNodeInvokeCall();
-    expect(options.timeoutMs).toBe(55_000);
+    expect(options.timeoutMs).toBe(75_000);
+    expect(request.timeoutMs).toBe(75_000);
     expect(request.params?.path).toBe("/act");
-    expect(request.params?.body).toEqual({ kind: "wait", timeMs: 20_000, timeoutMs: 45_000 });
-    expect(request.params?.timeoutMs).toBe(45_000 + 5_000);
+    expect(request.params?.body).toEqual({
+      kind: "wait",
+      timeMs: 20_000,
+      text: "ready",
+      timeoutMs: 45_000,
+    });
+    expect(request.params?.timeoutMs).toBe(70_000);
   });
 
   it("honors string act request timeouts when sizing node proxy calls", async () => {
@@ -1925,18 +1933,47 @@ describe("browser tool act compatibility", () => {
     await tool.execute?.("call-1", {
       action: "act",
       target: "node",
-      request: { kind: "wait", timeMs: "20000", timeoutMs: "45000" },
+      request: { kind: "wait", timeMs: "20000", text: "ready", timeoutMs: "45000" },
     });
 
     const { options, request } = lastNodeInvokeCall();
-    expect(options.timeoutMs).toBe(55_000);
+    expect(options.timeoutMs).toBe(75_000);
     expect(request.params?.path).toBe("/act");
     expect(request.params?.body).toEqual({
       kind: "wait",
       timeMs: "20000",
+      text: "ready",
       timeoutMs: "45000",
     });
-    expect(request.params?.timeoutMs).toBe(50_000);
+    expect(request.params?.timeoutMs).toBe(70_000);
+  });
+
+  it("sizes node proxy calls for recursively nested batch execution", async () => {
+    mockSingleBrowserProxyNode();
+    const tool = createBrowserTool();
+
+    await tool.execute?.("call-1", {
+      action: "act",
+      target: "node",
+      request: {
+        kind: "batch",
+        actions: [
+          { kind: "wait", timeMs: 30_000 },
+          {
+            kind: "batch",
+            actions: [
+              { kind: "wait", timeMs: 30_000 },
+              { kind: "wait", timeMs: 30_000 },
+            ],
+          },
+        ],
+      },
+    });
+
+    const { options, request } = lastNodeInvokeCall();
+    expect(request.params?.timeoutMs).toBe(95_000);
+    expect(request.timeoutMs).toBe(100_000);
+    expect(options.timeoutMs).toBe(100_000);
   });
 
   it("rejects fractional act request timeouts before node proxy calls", async () => {

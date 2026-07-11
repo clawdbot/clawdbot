@@ -13,6 +13,7 @@ const tempDirs: string[] = [];
 
 function input(): AuditEventInput {
   return {
+    sourceId: "run-1:1:started",
     sourceSequence: 1,
     occurredAt: Date.now(),
     kind: "agent_run",

@@ -1254,6 +1254,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       ),
       mediaAccess,
       accountId: accountId ?? undefined,
+      conversationType: outboundRoute?.chatType,
       sessionId: input.sessionId,
       inboundEventKind: input.inboundEventKind,
       gateway,

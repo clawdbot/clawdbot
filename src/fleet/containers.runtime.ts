@@ -1,6 +1,8 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { attachChildProcessBridge } from "../process/child-process-bridge.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import {
   buildCellCreateArgs,
@@ -28,6 +30,33 @@ export type FleetContainerCommandExecutor = (
   args: string[],
   options: FleetContainerCommandOptions,
 ) => Promise<FleetContainerCommandResult>;
+
+export type FleetContainerStreamResult = {
+  code: number | null;
+  signal: NodeJS.Signals | null;
+};
+
+// Mirrors the termination set attachChildProcessBridge forwards, plus SIGPIPE for a
+// downstream reader (e.g. `| head`) closing the inherited stdout mid-stream.
+const DELIBERATE_STREAM_STOP_SIGNALS = new Set<NodeJS.Signals>([
+  "SIGINT",
+  "SIGTERM",
+  "SIGHUP",
+  "SIGQUIT",
+  "SIGBREAK",
+  "SIGPIPE",
+]);
+
+export type FleetContainerStreamExecutor = (
+  runtime: FleetContainerRuntimeName,
+  args: string[],
+) => Promise<FleetContainerStreamResult>;
+
+export type FleetContainerLogsOptions = {
+  follow?: boolean;
+  tail?: number;
+  since?: string;
+};
 
 export type FleetContainerInspectResult =
   | {
@@ -379,6 +408,20 @@ const defaultFleetContainerCommandExecutor: FleetContainerCommandExecutor = asyn
   return normalized;
 };
 
+const defaultFleetContainerStreamExecutor: FleetContainerStreamExecutor = (runtime, args) =>
+  new Promise<FleetContainerStreamResult>((resolve, reject) => {
+    // Logs carry no environment or token arguments, so this narrow inherited-stdio seam needs no redaction.
+    const child = spawn(runtime, args, { stdio: ["ignore", "inherit", "inherit"] });
+    // Forward every termination signal (SIGINT/SIGTERM/SIGHUP/...), not just Ctrl-C:
+    // a supervisor signaling only the CLI PID must never orphan a follow stream that
+    // holds the inherited stdio descriptors. The bridge detaches itself on child exit.
+    attachChildProcessBridge(child);
+    child.once("error", reject);
+    child.once("close", (code, signal) => {
+      resolve({ code, signal });
+    });
+  });
+
 function isMissingContainerError(stderr: string): boolean {
   const normalized = stderr.toLowerCase();
   return (
@@ -407,8 +450,32 @@ function validateNetworkName(networkName: string): string {
   return normalized;
 }
 
+function buildLogsArgs(containerName: string, options: FleetContainerLogsOptions): string[] {
+  const args = ["logs"];
+  if (options.follow) {
+    args.push("--follow");
+  }
+  if (options.tail !== undefined) {
+    if (!Number.isSafeInteger(options.tail) || options.tail < 1) {
+      throw new Error("Fleet logs --tail must be a positive integer.");
+    }
+    args.push("--tail", String(options.tail));
+  }
+  if (options.since !== undefined) {
+    if (!options.since || options.since.startsWith("-") || /[\s\p{Cc}]/u.test(options.since)) {
+      throw new Error(
+        "Fleet logs --since must be non-empty, must not start with '-', and must not contain whitespace or control characters.",
+      );
+    }
+    args.push("--since", options.since);
+  }
+  args.push(containerName);
+  return args;
+}
+
 export function createFleetContainerRuntime(
   executor: FleetContainerCommandExecutor = defaultFleetContainerCommandExecutor,
+  streamExecutor: FleetContainerStreamExecutor = defaultFleetContainerStreamExecutor,
 ) {
   const execute = async (
     runtime: FleetContainerRuntimeName,
@@ -578,6 +645,30 @@ export function createFleetContainerRuntime(
 
     async restart(runtime: FleetContainerRuntimeName, containerName: string): Promise<void> {
       await execute(runtime, ["restart", containerName]);
+    },
+
+    async logs(
+      runtime: FleetContainerRuntimeName,
+      containerName: string,
+      options: FleetContainerLogsOptions,
+    ): Promise<void> {
+      const result = await streamExecutor(runtime, buildLogsArgs(containerName, options));
+      if (result.code === 0) {
+        return;
+      }
+      // A follow stream ended by a deliberate stop — a forwarded termination signal,
+      // a closed downstream pipe, or docker/podman's own Ctrl-C translation to 130 —
+      // is not a failure. Crash signals (SIGSEGV, SIGKILL, ...) stay errors.
+      const deliberateStop =
+        result.signal !== null && DELIBERATE_STREAM_STOP_SIGNALS.has(result.signal);
+      if (options.follow && (deliberateStop || result.code === 130)) {
+        return;
+      }
+      throw new Error(
+        `${runtime} logs failed with ${
+          result.signal ? `signal ${result.signal}` : `exit code ${result.code ?? 1}`
+        }.`,
+      );
     },
 
     async remove(

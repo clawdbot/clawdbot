@@ -219,7 +219,6 @@ export default definePluginEntry({
           token: ctx.token,
           baseUrl: configuredBaseUrl(ctx.config),
           timeoutMs: ctx.timeoutMs,
-          fetchFn: ctx.fetchFn,
         }),
     });
   },

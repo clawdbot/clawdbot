@@ -601,8 +601,7 @@ export function resolveAgentIdsByWorkspacePath(
   const ids = listAgentIds(cfg);
   const matches: Array<{ id: string; workspaceDir: string; order: number }> = [];
 
-  for (let index = 0; index < ids.length; index += 1) {
-    const id = ids[index];
+  for (const [index, id] of ids.entries()) {
     const workspaceDir = normalizePathForComparison(resolveAgentWorkspaceDir(cfg, id));
     if (!isPathInside(workspaceDir, normalizedWorkspacePath)) {
       continue;

@@ -282,7 +282,7 @@ describe("OpenRouter OAuth", () => {
     const fetchImpl = vi.fn<typeof fetch>(async () =>
       jsonResponse({ key: "sk-or-v1-test", user_id: "user-1" }),
     );
-    const { ctx, progress, text, log, openUrl } = createOpenRouterOAuthContext({
+    const { ctx, progress, note, text, log, openUrl } = createOpenRouterOAuthContext({
       isRemote: true,
     });
 
@@ -292,8 +292,12 @@ describe("OpenRouter OAuth", () => {
       fetchImpl,
     });
 
-    expect(openUrl).not.toHaveBeenCalled();
+    expect(openUrl).toHaveBeenCalledWith(expect.stringContaining("https://openrouter.ai/auth?"));
     expect(log.mock.calls[0]?.[0]).toContain("https://openrouter.ai/auth?");
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("https://openrouter.ai/auth?"),
+      "OpenRouter OAuth",
+    );
     expect(text).toHaveBeenCalledWith(
       expect.objectContaining({
         message: "Paste the OpenRouter redirect URL",

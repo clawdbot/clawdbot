@@ -11,6 +11,8 @@ openclaw-chat-page {
 }
 
 .chat {
+  --chat-thread-max-width: 48rem;
+
   position: relative;
   display: flex;
   flex-direction: column;
@@ -77,6 +79,8 @@ openclaw-chat-page {
   /* Grow, shrink, and use 0 base for proper scrolling */
   overflow-y: auto;
   overflow-x: hidden;
+  scrollbar-gutter: stable both-edges;
+  scrollbar-color: var(--muted-strong) transparent;
   /* The tall top inset is a titlebar band: it keeps the floating rail
      openers (.chat-floating-toggles, 28px at top 10px) clear of the first
      message and gives the native macOS app an empty strip that starts a
@@ -89,6 +93,14 @@ openclaw-chat-page {
   background: transparent;
 }
 
+:root .chat-thread::-webkit-scrollbar-thumb {
+  background: var(--muted-strong);
+}
+
+:root .chat-thread::-webkit-scrollbar-thumb:hover {
+  background: var(--text);
+}
+
 /* Split panes spend their top row on the pane header (which is both the
    toggle host and the drag surface), so their threads keep a compact inset.
    The single-pane view is also an openclaw-chat-pane but renders no header,
@@ -99,6 +111,13 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 
 .chat-thread-inner > :first-child {
   margin-top: 0 !important;
+}
+
+.chat-thread-inner {
+  box-sizing: border-box;
+  width: calc(100% - 36px);
+  max-width: var(--chat-thread-max-width);
+  margin-inline: auto;
 }
 
 /* New messages indicator - floating pill above compose */

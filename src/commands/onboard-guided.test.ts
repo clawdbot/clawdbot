@@ -79,6 +79,7 @@ function detection(
   return {
     candidates: [candidate("claude-cli", "Claude Code")],
     manualProviders: [],
+    authOptions: [],
     workspace: "/tmp/openclaw-workspace",
     setupComplete: false,
     ...overrides,

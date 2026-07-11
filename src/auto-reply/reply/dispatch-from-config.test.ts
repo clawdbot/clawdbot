@@ -88,6 +88,10 @@ const diagnosticMocks = vi.hoisted(() => ({
     }),
   ),
 }));
+const messageAuditMocks = vi.hoisted(() => ({
+  enabled: true,
+  emitTrustedMessageAuditEvent: vi.fn<(event: unknown) => void>(),
+}));
 const hookMocks = vi.hoisted(() => ({
   registry: {
     plugins: [] as Array<{
@@ -474,6 +478,10 @@ vi.mock("../../logging/diagnostic.js", () => ({
       stuckSessionWarnMs,
       config?.diagnostics?.stuckSessionAbortMs ?? Math.max(300_000, stuckSessionWarnMs * 3),
     ),
+}));
+vi.mock("../../audit/message-audit-events.js", () => ({
+  emitTrustedMessageAuditEvent: messageAuditMocks.emitTrustedMessageAuditEvent,
+  hasTrustedMessageAuditListeners: () => messageAuditMocks.enabled,
 }));
 vi.mock("../../config/sessions/thread-info.js", () => ({
   parseSessionThreadInfo: (sessionKey: string | undefined) =>
@@ -990,6 +998,12 @@ async function dispatchTwiceWithFreshDispatchers(params: Omit<DispatchReplyArgs,
   return [first, second] as const;
 }
 
+function messageAuditEvents(): Array<Record<string, unknown>> {
+  return messageAuditMocks.emitTrustedMessageAuditEvent.mock.calls.map(([event]) =>
+    event && typeof event === "object" ? (event as Record<string, unknown>) : {},
+  );
+}
+
 describe("dispatchReplyFromConfig", () => {
   beforeEach(() => {
     clearAgentHarnesses();
@@ -1143,6 +1157,8 @@ describe("dispatchReplyFromConfig", () => {
     agentEventMocks.emitAgentAuditEvent.mockReset();
     agentEventMocks.onAgentEvent.mockReset();
     agentEventMocks.onAgentEvent.mockReturnValue(() => {});
+    messageAuditMocks.enabled = true;
+    messageAuditMocks.emitTrustedMessageAuditEvent.mockReset();
     sessionBindingMocks.listBySession.mockReset();
     sessionBindingMocks.listBySession.mockReturnValue([]);
     pluginConversationBindingMocks.shownFallbackNoticeBindingIds.clear();
@@ -1302,6 +1318,14 @@ describe("dispatchReplyFromConfig", () => {
       counts: { tool: 0, block: 0, final: 0 },
     });
     expect(replyResolver).not.toHaveBeenCalled();
+    expect(messageAuditMocks.emitTrustedMessageAuditEvent).toHaveBeenCalledOnce();
+    expect(messageAuditEvents()[0]).toEqual(
+      expect.objectContaining({
+        status: "blocked",
+        outcome: "skipped",
+        reasonCode: "reply_operation_aborted",
+      }),
+    );
     activeOperation.complete();
   });
 
@@ -1345,6 +1369,14 @@ describe("dispatchReplyFromConfig", () => {
     });
     expect(replyResolver).not.toHaveBeenCalled();
     expect(replyRunRegistry.get(sessionKey)).toBe(activeOperation);
+    expect(messageAuditMocks.emitTrustedMessageAuditEvent).toHaveBeenCalledOnce();
+    expect(messageAuditEvents()[0]).toEqual(
+      expect.objectContaining({
+        status: "blocked",
+        outcome: "skipped",
+        reasonCode: "reply_operation_active",
+      }),
+    );
     activeOperation.complete();
   });
 
@@ -6083,6 +6115,89 @@ describe("dispatchReplyFromConfig", () => {
     expect(lifecycleEvent?.stream).toBe("lifecycle");
     expect(lifecycleEvent?.data?.phase).toBe("error");
     expect(String(lifecycleEvent?.data?.error)).toContain("ACP exploded");
+    expect(messageAuditMocks.emitTrustedMessageAuditEvent).toHaveBeenCalledOnce();
+    expect(messageAuditEvents()[0]).toEqual(
+      expect.objectContaining({
+        status: "failed",
+        outcome: "failed",
+        errorCode: "message_processing_failed",
+        reasonCode: "acp_dispatch_failed",
+      }),
+    );
+    expect(JSON.stringify(messageAuditEvents()[0])).not.toContain("ACP exploded");
+  });
+
+  it("audits aborted ACP turns as skipped", async () => {
+    setNoAbort();
+    const abortController = new AbortController();
+    const runtime = createAcpRuntime([]);
+    runtime.runTurn.mockImplementation(async function* () {
+      abortController.abort();
+      yield { type: "done" };
+    });
+    acpMocks.readAcpSessionEntry.mockReturnValue({
+      sessionKey: "agent:codex-acp:session-1",
+      storeSessionKey: "agent:codex-acp:session-1",
+      cfg: {},
+      storePath: "/tmp/mock-sessions.json",
+      entry: {},
+      acp: {
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: "runtime:1",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: Date.now(),
+      },
+    });
+    acpMocks.requireAcpRuntimeBackend.mockReturnValue({
+      id: "acpx",
+      runtime,
+    });
+    hookMocks.runner.runReplyDispatch.mockImplementationOnce(async (event, contextUnknown) => {
+      const context = contextUnknown as Record<string, unknown>;
+      return (
+        (await tryDispatchAcpReplyHook(
+          event as never,
+          {
+            ...context,
+            abortSignal: abortController.signal,
+          } as never,
+        )) ?? undefined
+      );
+    });
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        SessionKey: "agent:codex-acp:session-1",
+        BodyForAgent: "stop this turn",
+      }),
+      cfg: {
+        diagnostics: { enabled: true },
+        acp: {
+          enabled: true,
+          dispatch: { enabled: true },
+          stream: { coalesceIdleMs: 0, maxChunkChars: 128 },
+        },
+      } as OpenClawConfig,
+      dispatcher: createDispatcher(),
+    });
+
+    expect(messageAuditMocks.emitTrustedMessageAuditEvent).toHaveBeenCalledOnce();
+    expect(messageAuditEvents()[0]).toEqual(
+      expect.objectContaining({
+        status: "blocked",
+        outcome: "skipped",
+        reasonCode: "acp_dispatch_aborted",
+      }),
+    );
+    expect(messageAuditEvents()[0]).not.toHaveProperty("errorCode");
+    const diagnosticEvent = diagnosticMocks.logMessageProcessed.mock.calls
+      .map(([event]) => event as { outcome?: unknown; reason?: unknown })
+      .find((event) => event.reason === "acp_aborted");
+    expect(diagnosticEvent?.outcome).toBe("completed");
   });
 
   it("posts a one-time resolved-session-id notice in thread after the first ACP turn", async () => {
@@ -7303,6 +7418,237 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it("audits completed inbound message processing", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    vi.mocked(dispatcher.getQueuedCounts).mockReturnValue({ tool: 1, block: 0, final: 1 });
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "  ",
+      AccountId: "acc-1",
+      NativeChannelId: "  ",
+      OriginatingTo: "C123",
+      SenderId: "U123",
+      SessionKey: "agent:main:slack:direct:C123",
+      MessageSid: "msg-audit-1",
+      MessageSidFull: "  ",
+      ChatType: "dm",
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyOptions: { runId: "run-audit-1" },
+      replyResolver: async () => ({ text: "hi" }) satisfies ReplyPayload,
+    });
+
+    expect(messageAuditMocks.emitTrustedMessageAuditEvent).toHaveBeenCalledTimes(1);
+    expect(messageAuditEvents()[0]).toEqual(
+      expect.objectContaining({
+        occurredAt: expect.any(Number),
+        kind: "message",
+        action: "message.inbound.processed",
+        status: "succeeded",
+        actorType: "channel_sender",
+        actorId: "U123",
+        agentId: "main",
+        runId: "run-audit-1",
+        direction: "inbound",
+        channel: "slack",
+        conversationKind: "direct",
+        outcome: "completed",
+        durationMs: expect.any(Number),
+        resultCount: 2,
+        accountId: "acc-1",
+        conversationId: "C123",
+        messageId: "msg-audit-1",
+      }),
+    );
+  });
+
+  it("uses finalized reply-dispatch counts for the inbound terminal", async () => {
+    setNoAbort();
+    hookMocks.runner.runReplyDispatch.mockImplementationOnce(async (_event, contextUnknown) => {
+      const context = contextUnknown as {
+        recordProcessed: (outcome: "completed", options: { reason: string }) => void;
+      };
+      context.recordProcessed("completed", { reason: "acp_dispatch" });
+      return {
+        handled: true,
+        queuedFinal: true,
+        counts: { tool: 2, block: 3, final: 4 },
+      };
+    });
+    const dispatcher = createDispatcher();
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        MessageSid: "msg-audit-routed-counts",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+    });
+
+    expect(result.counts).toEqual({ tool: 2, block: 3, final: 4 });
+    expect(messageAuditEvents()[0]).toEqual(
+      expect.objectContaining({
+        reasonCode: "acp_dispatch_completed",
+        resultCount: 9,
+      }),
+    );
+  });
+
+  it("correlates inbound processing with the generated agent run", async () => {
+    setNoAbort();
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "slack", Surface: "slack" }),
+      cfg: emptyConfig,
+      dispatcher: createDispatcher(),
+      replyResolver: async (_ctx, options) => {
+        options?.onAgentRunStart?.("generated-run-audit-1");
+        return { text: "hi" } satisfies ReplyPayload;
+      },
+    });
+
+    expect(messageAuditEvents()[0]).toEqual(
+      expect.objectContaining({ runId: "generated-run-audit-1" }),
+    );
+  });
+
+  it("audits setup failures without replacing the dispatch error", async () => {
+    setNoAbort();
+    runtimePluginMocks.ensureRuntimePluginsLoaded.mockImplementationOnce(() => {
+      throw new Error("setup failed");
+    });
+
+    await expect(
+      dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: "slack",
+          Surface: "slack",
+          MessageSid: "msg-audit-setup-failure",
+        }),
+        cfg: emptyConfig,
+        dispatcher: createDispatcher(),
+      }),
+    ).rejects.toThrow("setup failed");
+
+    expect(messageAuditMocks.emitTrustedMessageAuditEvent).toHaveBeenCalledOnce();
+    expect(messageAuditEvents()[0]).toEqual(
+      expect.objectContaining({
+        status: "failed",
+        outcome: "failed",
+        errorCode: "message_processing_failed",
+        resultCount: 0,
+      }),
+    );
+    expect(JSON.stringify(messageAuditEvents()[0])).not.toContain("setup failed");
+  });
+
+  it("skips inbound audit attribution work when no listener is registered", async () => {
+    setNoAbort();
+    messageAuditMocks.enabled = false;
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "slack", Surface: "slack" }),
+      cfg: emptyConfig,
+      dispatcher: createDispatcher(),
+      replyResolver: async () => ({ text: "hi" }) satisfies ReplyPayload,
+    });
+
+    expect(messageAuditMocks.emitTrustedMessageAuditEvent).not.toHaveBeenCalled();
+  });
+
+  it("does not let an audit emission failure reject successful dispatch", async () => {
+    setNoAbort();
+    messageAuditMocks.emitTrustedMessageAuditEvent.mockImplementationOnce(() => {
+      throw new Error("audit unavailable");
+    });
+
+    await expect(
+      dispatchReplyFromConfig({
+        ctx: buildTestCtx({ Provider: "slack", Surface: "slack" }),
+        cfg: emptyConfig,
+        dispatcher: createDispatcher(),
+        replyResolver: async () => ({ text: "hi" }) satisfies ReplyPayload,
+      }),
+    ).resolves.toMatchObject({ counts: expect.any(Object) });
+  });
+
+  it("does not include message content or session identifiers in inbound audit events", async () => {
+    setNoAbort();
+    const privateBody = "private inbound body 7ca58b";
+    const privateSessionKey = "agent:private:slack:direct:C999";
+    const privateSenderName = "Private Sender Name 7ca58b";
+    const privateSenderUsername = "private-sender-7ca58b";
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "slack",
+        Surface: "slack",
+        AccountId: "acc-private",
+        NativeChannelId: "C999",
+        SessionKey: privateSessionKey,
+        MessageSid: "msg-audit-private",
+        Body: privateBody,
+        BodyForAgent: privateBody,
+        CommandBody: privateBody,
+        RawBody: privateBody,
+        SenderName: privateSenderName,
+        SenderUsername: privateSenderUsername,
+      }),
+      cfg: emptyConfig,
+      dispatcher: createDispatcher(),
+      replyResolver: async () => ({ text: "hi" }) satisfies ReplyPayload,
+    });
+
+    expect(messageAuditMocks.emitTrustedMessageAuditEvent).toHaveBeenCalledTimes(1);
+    const event = messageAuditEvents()[0];
+    const serializedEvent = JSON.stringify(event);
+    expect(event).toEqual(
+      expect.objectContaining({
+        action: "message.inbound.processed",
+        actorType: "system",
+        actorId: "gateway",
+      }),
+    );
+    expect(event).not.toHaveProperty("body");
+    expect(event).not.toHaveProperty("sessionKey");
+    expect(event).not.toHaveProperty("error");
+    expect(serializedEvent).not.toContain(privateBody);
+    expect(serializedEvent).not.toContain(privateSessionKey);
+    expect(serializedEvent).not.toContain(privateSenderName);
+    expect(serializedEvent).not.toContain(privateSenderUsername);
+  });
+
+  it("records the routing channel id ahead of surface and provider", async () => {
+    setNoAbort();
+    // SDK plugin channels may set only OriginatingChannel, and it is the id
+    // outbound rows record; it must win over Surface/Provider variants.
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        OriginatingChannel: "clickclack",
+        AccountId: "acc-plugin",
+        MessageSid: "msg-audit-plugin-channel",
+      }),
+      cfg: emptyConfig,
+      dispatcher: createDispatcher(),
+      replyResolver: async () => ({ text: "hi" }) satisfies ReplyPayload,
+    });
+
+    expect(messageAuditMocks.emitTrustedMessageAuditEvent).toHaveBeenCalledTimes(1);
+    expect(messageAuditEvents()[0]).toEqual(
+      expect.objectContaining({
+        action: "message.inbound.processed",
+        channel: "clickclack",
+      }),
+    );
+  });
+
   it("emits diagnostics when enabled", async () => {
     setNoAbort();
     const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
@@ -8056,6 +8402,15 @@ describe("dispatchReplyFromConfig", () => {
     expect(replyRunRegistry.isActive(sessionKey)).toBe(false);
     expect(mutationRan).toBe(true);
     expect(replyResolver).not.toHaveBeenCalled();
+    expect(messageAuditMocks.emitTrustedMessageAuditEvent).toHaveBeenCalledOnce();
+    expect(messageAuditEvents()[0]).toEqual(
+      expect.objectContaining({
+        status: "blocked",
+        outcome: "skipped",
+        reasonCode: "reply_operation_aborted",
+      }),
+    );
+    expect(messageAuditEvents()[0]).not.toHaveProperty("errorCode");
     externalLifecycleRequest.emitDestroy();
   });
 
@@ -9083,7 +9438,7 @@ describe("dispatchReplyFromConfig", () => {
         RawBody: "hello",
         Body: "hello",
       }),
-      cfg: emptyConfig,
+      cfg: { diagnostics: { enabled: true } } as OpenClawConfig,
       dispatcher,
       replyResolver,
     });
@@ -9094,6 +9449,21 @@ describe("dispatchReplyFromConfig", () => {
     expect(finalNotice?.text).not.toContain("boom");
     expect(replyResolver).not.toHaveBeenCalled();
     expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
+    expect(messageAuditMocks.emitTrustedMessageAuditEvent).toHaveBeenCalledOnce();
+    expect(messageAuditEvents()[0]).toEqual(
+      expect.objectContaining({
+        status: "failed",
+        outcome: "failed",
+        errorCode: "message_processing_failed",
+        reasonCode: "plugin_bound_error",
+      }),
+    );
+    expect(messageAuditEvents()[0]).not.toHaveProperty("error");
+    expect(JSON.stringify(messageAuditEvents()[0])).not.toContain("boom");
+    const diagnosticEvent = diagnosticMocks.logMessageProcessed.mock.calls
+      .map(([event]) => event as { outcome?: unknown; reason?: unknown })
+      .find((event) => event.reason === "plugin-bound-error");
+    expect(diagnosticEvent?.outcome).toBe("completed");
   });
 
   it("marks diagnostics skipped for duplicate inbound messages", async () => {
@@ -9120,6 +9490,21 @@ describe("dispatchReplyFromConfig", () => {
       .find((event) => event.outcome === "skipped");
     expect(skippedEvent?.channel).toBe("whatsapp");
     expect(skippedEvent?.reason).toBe("duplicate");
+    expect(messageAuditMocks.emitTrustedMessageAuditEvent).toHaveBeenCalledTimes(2);
+    const skippedAuditEvent = messageAuditEvents().find((event) => event.outcome === "skipped");
+    expect(skippedAuditEvent).toEqual(
+      expect.objectContaining({
+        action: "message.inbound.processed",
+        status: "blocked",
+        actorType: "system",
+        actorId: "gateway",
+        direction: "inbound",
+        channel: "whatsapp",
+        outcome: "skipped",
+        reasonCode: "duplicate",
+      }),
+    );
+    expect(skippedAuditEvent).not.toHaveProperty("reason");
   });
 
   it("keeps duplicate skip diagnostics inside the active inbound trace", async () => {
@@ -9214,6 +9599,20 @@ describe("dispatchReplyFromConfig", () => {
       .find((event) => event.outcome === "error");
     expect(errorEvent?.channel).toBe("whatsapp");
     expect(errorEvent?.error).toBe("Error: dispatch failed");
+    expect(messageAuditMocks.emitTrustedMessageAuditEvent).toHaveBeenCalledTimes(2);
+    const failedAuditEvent = messageAuditEvents().find((event) => event.outcome === "failed");
+    expect(failedAuditEvent).toEqual(
+      expect.objectContaining({
+        action: "message.inbound.processed",
+        status: "failed",
+        direction: "inbound",
+        channel: "whatsapp",
+        outcome: "failed",
+        errorCode: "message_processing_failed",
+      }),
+    );
+    expect(failedAuditEvent).not.toHaveProperty("error");
+    expect(JSON.stringify(failedAuditEvent)).not.toContain("dispatch failed");
   });
 
   it("poisons inbound dedupe when dispatch fails after a block reply", async () => {

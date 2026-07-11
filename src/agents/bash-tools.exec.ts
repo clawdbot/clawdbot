@@ -397,7 +397,7 @@ function stripPreflightEnvPrefix(argv: string[]): string[] {
     return argv;
   }
   let idx = 0;
-  while (idx < argv.length && isShellEnvAssignmentToken(argv[idx])) {
+  while (idx < argv.length && isShellEnvAssignmentToken(argv.at(idx) ?? "")) {
     idx += 1;
   }
   if (!isEnvExecutableToken(argv[idx])) {
@@ -405,7 +405,10 @@ function stripPreflightEnvPrefix(argv: string[]): string[] {
   }
   idx += 1;
   while (idx < argv.length) {
-    const token = argv[idx];
+    const token = argv.at(idx);
+    if (token === undefined) {
+      break;
+    }
     if (token === "--") {
       idx += 1;
       break;
@@ -418,7 +421,8 @@ function stripPreflightEnvPrefix(argv: string[]): string[] {
       break;
     }
     idx += 1;
-    const option = token.split("=", 1)[0];
+    const equalsIndex = token.indexOf("=");
+    const option = token.includes("=") ? token.slice(0, equalsIndex) : token;
     if (
       PREFLIGHT_ENV_OPTIONS_WITH_VALUES.has(option) &&
       !token.includes("=") &&
@@ -433,10 +437,13 @@ function stripPreflightEnvPrefix(argv: string[]): string[] {
 function findFirstPythonScriptArg(tokens: string[]): string | null {
   const optionsWithSeparateValue = new Set(["-W", "-X", "-Q", "--check-hash-based-pycs"]);
   for (let i = 0; i < tokens.length; i += 1) {
-    const token = tokens[i];
+    const token = tokens.at(i);
+    if (token === undefined) {
+      break;
+    }
     if (token === "--") {
-      const next = tokens[i + 1];
-      return normalizeLowercaseStringOrEmpty(next).endsWith(".py") ? next : null;
+      const next = tokens.at(i + 1);
+      return next && normalizeLowercaseStringOrEmpty(next).endsWith(".py") ? next : null;
     }
     if (token === "-") {
       return null;
@@ -465,11 +472,14 @@ function findNodeScriptArgs(tokens: string[]): string[] {
   let entryScript: string | null = null;
   let hasInlineEvalOrPrint = false;
   for (let i = 0; i < tokens.length; i += 1) {
-    const token = tokens[i];
+    const token = tokens.at(i);
+    if (token === undefined) {
+      break;
+    }
     if (token === "--") {
       if (!hasInlineEvalOrPrint && !entryScript) {
-        const next = tokens[i + 1];
-        if (normalizeLowercaseStringOrEmpty(next).endsWith(".js")) {
+        const next = tokens.at(i + 1);
+        if (next && normalizeLowercaseStringOrEmpty(next).endsWith(".js")) {
           entryScript = next;
         }
       }
@@ -491,8 +501,8 @@ function findNodeScriptArgs(tokens: string[]): string[] {
       continue;
     }
     if (optionsWithSeparateValue.has(token)) {
-      const next = tokens[i + 1];
-      if (normalizeLowercaseStringOrEmpty(next).endsWith(".js")) {
+      const next = tokens.at(i + 1);
+      if (next && normalizeLowercaseStringOrEmpty(next).endsWith(".js")) {
         preloadScripts.push(next);
       }
       i += 1;
@@ -537,10 +547,13 @@ function extractInterpreterScriptTargetFromArgv(
     return null;
   }
   let commandIdx = 0;
-  while (commandIdx < argv.length && /^[A-Za-z_][A-Za-z0-9_]*=.*$/u.test(argv[commandIdx])) {
+  while (
+    commandIdx < argv.length &&
+    /^[A-Za-z_][A-Za-z0-9_]*=.*$/u.test(argv.at(commandIdx) ?? "")
+  ) {
     commandIdx += 1;
   }
-  const executable = normalizeOptionalLowercaseString(argv[commandIdx]);
+  const executable = normalizeOptionalLowercaseString(argv.at(commandIdx));
   if (!executable) {
     return null;
   }
@@ -956,16 +969,19 @@ function extractShellWrappedCommandPayload(
   }
   const shortOptionsWithSeparateValue = new Set(["-O", "-o"]);
   for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i];
+    const arg = args.at(i);
+    if (arg === undefined) {
+      break;
+    }
     if (arg === "--") {
       return null;
     }
     if (arg === "-c") {
-      return args[i + 1] ?? null;
+      return args.at(i + 1) ?? null;
     }
     if (/^-[A-Za-z]+$/u.test(arg)) {
       if (arg.includes("c")) {
-        return args[i + 1] ?? null;
+        return args.at(i + 1) ?? null;
       }
       if (shortOptionsWithSeparateValue.has(arg)) {
         i += 1;
@@ -974,7 +990,7 @@ function extractShellWrappedCommandPayload(
     }
     if (/^--[A-Za-z0-9][A-Za-z0-9-]*(?:=.*)?$/u.test(arg)) {
       if (!arg.includes("=")) {
-        const next = args[i + 1];
+        const next = args.at(i + 1);
         if (next && next !== "--" && !next.startsWith("-")) {
           i += 1;
         }

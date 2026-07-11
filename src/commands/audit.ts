@@ -1,8 +1,9 @@
-/** Operator CLI for bounded metadata-only run/tool audit pages. */
+/** Operator CLI for bounded metadata-only activity audit pages. */
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type {
-  AuditEvent,
+  AuditActivityListParams,
+  AuditActivityListResult,
   AuditListParams,
   AuditListResult,
 } from "../../packages/gateway-protocol/src/index.js";
@@ -19,13 +20,27 @@ export type AuditListCommandOptions = {
   agentId?: string;
   sessionKey?: string;
   runId?: string;
-  kind?: AuditListParams["kind"];
-  status?: AuditListParams["status"];
+  kind?: AuditActivityListParams["kind"];
+  status?: AuditActivityListParams["status"];
+  direction?: AuditActivityListParams["direction"];
+  channel?: string;
   after?: string;
   before?: string;
   cursor?: string;
   limit?: string;
   json?: boolean;
+};
+
+type AuditCliEvent = {
+  occurredAt: number;
+  kind: string;
+  status: string;
+  action: string;
+  direction?: string;
+  channel?: string;
+  agentId?: string;
+  runId?: string;
+  toolName?: string;
 };
 
 function parseAuditTimestamp(value: string | undefined, flag: string): number | undefined {
@@ -70,13 +85,15 @@ function short(value: string | undefined, maxChars: number): string {
     : `${truncateUtf16Safe(sanitized, maxChars - 1)}…`;
 }
 
-function formatAuditRows(events: AuditEvent[]): string[] {
-  const rows = ["TIME\tKIND\tSTATUS\tAGENT\tRUN\tACTION"];
+function formatAuditRows(events: readonly AuditCliEvent[]): string[] {
+  const rows = ["TIME\tKIND\tDIRECTION\tCHANNEL\tSTATUS\tAGENT\tRUN\tACTION"];
   for (const event of events) {
     rows.push(
       [
         timestampMsToIsoString(event.occurredAt) ?? String(event.occurredAt),
         event.kind,
+        short(event.direction, 10),
+        short(event.channel, 18),
         event.status,
         short(event.agentId, 18),
         short(event.runId, 18),
@@ -87,28 +104,98 @@ function formatAuditRows(events: AuditEvent[]): string[] {
   return rows;
 }
 
+function isUnsupportedActivityMethodError(value: unknown): value is Error {
+  // Frozen shipped-gateway strings: pre-activity gateways answer unknown
+  // methods with "unknown method: ..." or fail closed to operator.admin. A
+  // current gateway registers audit.activity.list at operator.read, so it can
+  // never emit these for this method; matching them only triggers the legacy
+  // audit.list fallback.
+  return (
+    value instanceof Error &&
+    value.name === "GatewayClientRequestError" &&
+    (value as Error & { gatewayCode?: unknown }).gatewayCode === "INVALID_REQUEST" &&
+    (value.message === "unknown method: audit.activity.list" ||
+      value.message === "missing scope: operator.admin")
+  );
+}
+
+function hasMessageSpecificFilters(options: AuditListCommandOptions): boolean {
+  return (
+    options.kind === "message" || options.direction !== undefined || options.channel !== undefined
+  );
+}
+
+function validateAuditKind(kind: AuditListCommandOptions["kind"]): void {
+  if (kind !== undefined && kind !== "agent_run" && kind !== "tool_action" && kind !== "message") {
+    throw new Error("--kind must be agent_run, tool_action, or message.");
+  }
+}
+
+function toLegacyAuditListParams(params: AuditActivityListParams): AuditListParams {
+  return {
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    ...(params.runId ? { runId: params.runId } : {}),
+    ...(params.kind === "agent_run" || params.kind === "tool_action" ? { kind: params.kind } : {}),
+    ...(params.status ? { status: params.status } : {}),
+    ...(params.after !== undefined ? { after: params.after } : {}),
+    ...(params.before !== undefined ? { before: params.before } : {}),
+    ...(params.limit !== undefined ? { limit: params.limit } : {}),
+    ...(params.cursor ? { cursor: params.cursor } : {}),
+  };
+}
+
+async function queryAuditActivity(
+  params: AuditActivityListParams,
+  options: AuditListCommandOptions,
+): Promise<AuditActivityListResult | AuditListResult> {
+  try {
+    return await callGateway<AuditActivityListResult>({
+      method: "audit.activity.list",
+      params,
+    });
+  } catch (error) {
+    if (!isUnsupportedActivityMethodError(error)) {
+      throw error;
+    }
+    if (hasMessageSpecificFilters(options)) {
+      throw new Error(
+        "The connected Gateway does not support message audit filters. Upgrade the Gateway to use --kind message, --direction, or --channel.",
+        { cause: error },
+      );
+    }
+    return await callGateway<AuditListResult>({
+      method: "audit.list",
+      params: toLegacyAuditListParams(params),
+    });
+  }
+}
+
 /** Query one stable page. JSON output is a bounded export with its next cursor. */
 export async function auditListCommand(
   options: AuditListCommandOptions,
   runtime: RuntimeEnv,
 ): Promise<void> {
+  validateAuditKind(options.kind);
   const after = parseAuditTimestamp(options.after, "--after");
   const before = parseAuditTimestamp(options.before, "--before");
   if (after !== undefined && before !== undefined && after > before) {
     throw new Error("--after must not be later than --before.");
   }
-  const params: AuditListParams = {
+  const params: AuditActivityListParams = {
     limit: parseAuditLimit(options.limit),
     ...(options.agentId ? { agentId: options.agentId } : {}),
     ...(options.sessionKey ? { sessionKey: options.sessionKey } : {}),
     ...(options.runId ? { runId: options.runId } : {}),
     ...(options.kind ? { kind: options.kind } : {}),
     ...(options.status ? { status: options.status } : {}),
+    ...(options.direction ? { direction: options.direction } : {}),
+    ...(options.channel ? { channel: options.channel } : {}),
     ...(after !== undefined ? { after } : {}),
     ...(before !== undefined ? { before } : {}),
     ...(options.cursor ? { cursor: options.cursor } : {}),
   };
-  const result = await callGateway<AuditListResult>({ method: "audit.list", params });
+  const result = await queryAuditActivity(params, options);
   if (options.json) {
     writeRuntimeJson(runtime, result);
     return;
@@ -121,4 +208,12 @@ export async function auditListCommand(
   }
 }
 
-export const testApi = { formatAuditRows, parseAuditLimit, parseAuditTimestamp };
+export const testApi = {
+  formatAuditRows,
+  hasMessageSpecificFilters,
+  isUnsupportedActivityMethodError,
+  parseAuditLimit,
+  parseAuditTimestamp,
+  toLegacyAuditListParams,
+  validateAuditKind,
+};

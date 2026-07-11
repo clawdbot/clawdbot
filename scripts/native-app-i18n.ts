@@ -931,11 +931,9 @@ export function assignNativeI18nIds(
         compareCodePoints(left.source, right.source),
     )
     .map((entry) => {
-      const previousId = previousIds.get(nativeEntryIdentity(entry));
-      const digest = createHash("sha256")
-        .update(nativeEntryIdentity(entry))
-        .digest("hex")
-        .slice(0, 16);
+      const identity = nativeEntryIdentity(entry);
+      const previousId = previousIds.get(identity);
+      const digest = createHash("sha256").update(identity).digest("hex").slice(0, 16);
       const baseId = `native.${entry.surface}.${digest}`;
       let id = previousId && !seen.has(previousId) ? previousId : baseId;
       for (let suffix = 2; seen.has(id); suffix += 1) {

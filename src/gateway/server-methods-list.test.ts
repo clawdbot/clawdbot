@@ -45,7 +45,9 @@ describe("listGatewayMethods", () => {
   it("advertises Crestodian setup methods with their dispatch policy", () => {
     const methods = listGatewayMethods();
     expect(methods).toContain("crestodian.setup.verify");
+    expect(methods).toContain("crestodian.setup.auth.start");
     expect(coreGatewayHandlers["crestodian.setup.verify"]).toEqual(expect.any(Function));
+    expect(coreGatewayHandlers["crestodian.setup.auth.start"]).toEqual(expect.any(Function));
     expect(
       CORE_GATEWAY_METHOD_SPECS.find((spec) => spec.name === "crestodian.setup.verify")
         ?.controlPlaneWrite,
@@ -60,11 +62,21 @@ describe("listGatewayMethods", () => {
     expect(methods.indexOf("crestodian.setup.verify")).toBeGreaterThan(
       methods.indexOf("tts.speak"),
     );
-    expect(methods.indexOf("wizard.start")).toBe(methods.indexOf("crestodian.setup.activate") + 1);
+    expect(methods.indexOf("crestodian.setup.auth.start")).toBe(
+      methods.indexOf("crestodian.setup.activate") + 1,
+    );
+    expect(methods.indexOf("wizard.start")).toBe(
+      methods.indexOf("crestodian.setup.auth.start") + 1,
+    );
   });
 
   it("advertises Control UI session pull request detection", () => {
     expect(listGatewayMethods()).toContain("controlUi.sessionPullRequests");
+  });
+
+  it("advertises the versioned activity audit method", () => {
+    expect(listGatewayMethods()).toContain("audit.activity.list");
+    expect(coreGatewayHandlers["audit.activity.list"]).toBeTypeOf("function");
   });
 
   it("does not advertise hidden core handlers", () => {

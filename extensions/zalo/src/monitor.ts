@@ -49,6 +49,11 @@ import {
   tryHandleHostedZaloMediaRequest,
 } from "./outbound-media.js";
 
+/** Default idle timeout for Zalo inbound photo downloads (30 seconds). */
+export const ZALO_MEDIA_READ_IDLE_TIMEOUT_MS = 30_000;
+/** Maximum wait for Zalo inbound photo response headers (120 seconds). */
+export const ZALO_MEDIA_RESPONSE_HEADER_TIMEOUT_MS = 120_000;
+
 type ZaloMonitorOptions = {
   token: string;
   account: ResolvedZaloAccount;
@@ -378,7 +383,14 @@ async function handleImageMessage(params: ZaloImageMessageParams): Promise<void>
   if (photo_url) {
     try {
       const maxBytes = mediaMaxMb * 1024 * 1024;
-      const saved = await core.channel.media.saveRemoteMedia({ url: photo_url, maxBytes });
+      // Without header/idle deadlines, a stalled photo_url host can block inbound
+      // image preprocessing indefinitely (idle timeout never starts).
+      const saved = await core.channel.media.saveRemoteMedia({
+        url: photo_url,
+        maxBytes,
+        responseHeaderTimeoutMs: ZALO_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
+        readIdleTimeoutMs: ZALO_MEDIA_READ_IDLE_TIMEOUT_MS,
+      });
       mediaPath = saved.path;
       mediaType = saved.contentType;
     } catch (err) {

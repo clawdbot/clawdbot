@@ -15,6 +15,7 @@ import { Type } from "typebox";
 import { ACT_MAX_VIEWPORT_DIMENSION } from "./browser/act-policy.js";
 
 const BROWSER_ACT_KINDS = [
+  "batch",
   "click",
   "clickCoords",
   "type",
@@ -72,6 +73,9 @@ const BrowserActSchema = Type.Object({
   // Common fields
   targetId: Type.Optional(Type.String({ description: TAB_REFERENCE_DESCRIPTION })),
   ref: Type.Optional(Type.String()),
+  // batch - permissive children keep the provider schema flat; runtime validates each action.
+  actions: Type.Optional(Type.Array(Type.Object({}, { additionalProperties: true }))),
+  stopOnError: Type.Optional(Type.Boolean()),
   // click
   doubleClick: Type.Optional(Type.Boolean()),
   button: Type.Optional(Type.String()),
@@ -149,6 +153,8 @@ export const BrowserToolSchema = Type.Object({
   promptText: Type.Optional(Type.String()),
   // Legacy flattened act params (preferred: request={...})
   kind: Type.Optional(stringEnum(BROWSER_ACT_KINDS)),
+  actions: Type.Optional(Type.Array(Type.Object({}, { additionalProperties: true }))),
+  stopOnError: Type.Optional(Type.Boolean()),
   doubleClick: Type.Optional(Type.Boolean()),
   button: Type.Optional(Type.String()),
   modifiers: Type.Optional(Type.Array(Type.String())),

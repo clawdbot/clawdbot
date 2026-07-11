@@ -27,7 +27,8 @@ export function collectHostedGateEvidence({
   changelogOnly?: boolean | undefined;
   nowMs?: number | undefined;
 }): {
-  headSha: unknown;
+  headSha: string;
+  evidenceHeadSha?: string;
   workflows: {
     id: unknown;
     name: unknown;
@@ -39,6 +40,11 @@ export function collectHostedGateEvidence({
     createdAt: unknown;
     updatedAt: unknown;
     url: unknown;
+  }[];
+  fallbackCoveredWorkflows?: {
+    name: string;
+    coveredBy: string;
+    reason: string;
   }[];
 };
 export function workflowRunQueryPaths(
@@ -56,4 +62,4 @@ export function workflowRunQueryPaths(
 ): string[];
 export function main(argv?: string[]): void;
 export const SCHEDULED_HOSTED_WORKFLOWS: string[];
-export const HOSTED_GATE_MAX_AGE_HOURS: 12;
+export const HOSTED_GATE_MAX_AGE_HOURS: 24;

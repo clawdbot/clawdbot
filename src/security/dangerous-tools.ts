@@ -36,8 +36,18 @@ export const DEFAULT_GATEWAY_HTTP_TOOL_DENY = [
 ] as const;
 
 /**
+ * Persistent control-plane tools that can change Gateway configuration or
+ * create scheduled automation.
+ */
+export const GATEWAY_CONTROL_PLANE_TOOLS = ["cron", "gateway"] as const;
+
+/**
  * Core tools that require sender owner identity on Gateway-scoped surfaces.
  * `gateway.tools.allow` can remove the default HTTP deny only for owner/trusted-operator
  * callers; non-owner identity-bearing callers must not receive server-credential wrappers.
  */
-export const GATEWAY_OWNER_ONLY_CORE_TOOLS = ["cron", "gateway", "nodes", "computer"] as const;
+export const GATEWAY_OWNER_ONLY_CORE_TOOLS = [
+  ...GATEWAY_CONTROL_PLANE_TOOLS,
+  "nodes",
+  "computer",
+] as const;

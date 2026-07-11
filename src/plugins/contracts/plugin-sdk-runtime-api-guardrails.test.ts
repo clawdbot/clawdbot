@@ -86,7 +86,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
   })]: [
     'export { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";',
     'export { createActionGate, jsonResult, readNumberParam, readReactionParams, readStringParam } from "openclaw/plugin-sdk/channel-actions";',
-    'export { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-primitives";',
+    'export { buildChannelConfigSchema, GoogleChatConfigSchema } from "./config-api.js";',
     'export type { ChannelMessageActionAdapter, ChannelMessageActionName, ChannelStatusIssue } from "openclaw/plugin-sdk/channel-contract";',
     'export { missingTargetError } from "openclaw/plugin-sdk/channel-feedback";',
     'export { createAccountStatusSink, runPassiveAccountLifecycle } from "openclaw/plugin-sdk/channel-outbound";',
@@ -95,7 +95,6 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";',
     'export { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";',
     'export type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";',
-    'export { GoogleChatConfigSchema } from "openclaw/plugin-sdk/bundled-channel-config-schema";',
     'export { GROUP_POLICY_BLOCKED_LABEL, resolveAllowlistProviderRuntimeGroupPolicy, resolveDefaultGroupPolicy, warnMissingProviderGroupPolicyFallbackOnce } from "openclaw/plugin-sdk/runtime-group-policy";',
     'export { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";',
     'export type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";',

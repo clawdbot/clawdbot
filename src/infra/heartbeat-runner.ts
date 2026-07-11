@@ -1043,6 +1043,9 @@ function inferHeartbeatWakeSourceFromReason(reason?: string): HeartbeatWakeSourc
   if (trimmed.startsWith("acp:spawn:")) {
     return "acp-spawn";
   }
+  if (trimmed.startsWith("session-state:")) {
+    return "session-state";
+  }
   return undefined;
 }
 
@@ -1064,6 +1067,7 @@ function resolveHeartbeatWakePayloadFlags(params: {
     isWakePayload:
       source === "hook" ||
       source === "acp-spawn" ||
+      source === "session-state" ||
       reason === "wake" ||
       isContinuationHeartbeatWakeReason(reason),
   };
@@ -2446,7 +2450,11 @@ export async function runHeartbeatOnce(opts: {
   }
 }
 
-export const testing = { truncateHeartbeatPreview };
+export const testing = {
+  inferHeartbeatWakeSourceFromReason,
+  resolveHeartbeatWakePayloadFlags,
+  truncateHeartbeatPreview,
+};
 
 export function startHeartbeatRunner(opts: {
   cfg?: OpenClawConfig;

@@ -517,9 +517,13 @@ async function runOpenAICodexDeviceCode(ctx: ProviderAuthContext) {
   const spin = ctx.prompter.progress("Starting device code flow…");
   try {
     const creds = await loginOpenAICodexDeviceCode({
+      ...(ctx.signal ? { signal: ctx.signal } : {}),
       onProgress: (message) => spin.update(message),
       onVerification: async ({ verificationUrl, userCode, expiresInMs }) => {
         const expiresInMinutes = Math.max(1, Math.round(expiresInMs / 60_000));
+        if (ctx.isRemote) {
+          await ctx.openUrl(verificationUrl);
+        }
         // The prompter note is the user-facing TTY surface, so remote/headless
         // users need the code there; keep the persistent runtime log URL-only.
         await ctx.prompter.note(

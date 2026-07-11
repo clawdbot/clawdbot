@@ -12,6 +12,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { imessagePlugin } from "./channel.js";
 import { createIMessageTestPlugin } from "./imessage.test-plugin.js";
+import { extractMarkdownFormatRuns } from "./markdown-format.js";
 
 beforeEach(() => {
   resetFacadeRuntimeStateForTest();
@@ -109,6 +110,20 @@ describe("createIMessageTestPlugin", () => {
       media: true,
       replyTo: true,
       messageSendingHooks: true,
+    });
+  });
+
+  it("preserves sanitized HTML formatting as native ranges", () => {
+    const text = `<strong title="b>">bold</strong> <del data-note='s>'>strike</del>`;
+    const sanitized = imessagePlugin.outbound?.sanitizeText?.({ text, payload: { text } });
+
+    expect(sanitized).toBe("**bold** ~~strike~~");
+    expect(extractMarkdownFormatRuns(sanitized ?? "")).toEqual({
+      text: "bold strike",
+      ranges: [
+        { start: 0, length: 4, styles: ["bold"] },
+        { start: 5, length: 6, styles: ["strikethrough"] },
+      ],
     });
   });
 

@@ -27,6 +27,10 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import {
+  getSessionStateVersion,
+  listSessionStateEventsSince,
+} from "../../sessions/session-state-events.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { BuildStatusTextParams } from "../../status/status-text.types.js";
 import { buildTaskStatusSnapshotForRelatedSessionKeyForOwner } from "../../tasks/task-owner-access.js";
@@ -55,7 +59,11 @@ import {
   SESSION_STATUS_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
-import { normalizeToolModelOverride, readStringParam } from "./common.js";
+import {
+  normalizeToolModelOverride,
+  readNonNegativeIntegerParam,
+  readStringParam,
+} from "./common.js";
 import {
   listImplicitDefaultDirectFallbackKeys,
   resolveImplicitCurrentSessionFallback,
@@ -76,6 +84,7 @@ import {
 const SessionStatusToolSchema = Type.Object({
   sessionKey: Type.Optional(Type.String()),
   model: Type.Optional(Type.String()),
+  changesSince: Type.Optional(Type.Integer({ minimum: 0 })),
 });
 
 type CommandsStatusRuntimeModule = {
@@ -221,6 +230,16 @@ function formatSessionStatusRouteContext(details: SessionStatusRouteDetails): st
     return undefined;
   }
   return `Route context:
+\`\`\`json
+${JSON.stringify(details, null, 2)}
+\`\`\``;
+}
+
+function formatSessionStateChanges(details: {
+  stateVersion: number;
+  stateChanges: ReturnType<typeof listSessionStateEventsSince>;
+}): string {
+  return `Session state changes:
 \`\`\`json
 ${JSON.stringify(details, null, 2)}
 \`\`\``;
@@ -395,6 +414,7 @@ export function createSessionStatusTool(opts?: {
     parameters: SessionStatusToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
+      const changesSince = readNonNegativeIntegerParam(params, "changesSince");
       const cfg = opts?.config ?? getRuntimeConfig();
       const { mainKey, alias, effectiveRequesterKey } = resolveSandboxedSessionToolContext({
         cfg,
@@ -866,11 +886,19 @@ export function createSessionStatusTool(opts?: {
         isLiveRunSession: isLiveRouteSession,
       });
       const routeContextText = formatSessionStatusRouteContext(routeDetails);
-      const visibleStatusText = routeContextText
-        ? `${fullStatusText}
-
-${routeContextText}`
-        : fullStatusText;
+      const stateVersion = getSessionStateVersion(resolved.key, agentId);
+      const stateChanges =
+        changesSince !== undefined
+          ? listSessionStateEventsSince(resolved.key, agentId, changesSince, 200)
+          : undefined;
+      const extraBlocks = [
+        routeContextText,
+        stateChanges ? formatSessionStateChanges({ stateVersion, stateChanges }) : undefined,
+      ].filter((block): block is string => Boolean(block));
+      const visibleStatusText =
+        extraBlocks.length > 0
+          ? `${fullStatusText}\n\n${extraBlocks.join("\n\n")}`
+          : fullStatusText;
       const modelOverrideForResult =
         modelRaw === undefined
           ? undefined
@@ -886,6 +914,8 @@ ${routeContextText}`
           ok: true,
           sessionKey: resolved.key,
           changedModel,
+          stateVersion,
+          ...(stateChanges ? { stateChanges } : {}),
           ...(modelRaw !== undefined
             ? {
                 model: resultOverrideModel ?? defaultModelForCard,

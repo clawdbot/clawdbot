@@ -1132,6 +1132,9 @@ function writeSutConfig(params: {
         },
       ],
     },
+    // Exercise the opt-in message audit surface: the DM probe should produce
+    // inbound/outbound rows under the privacy-sensitive "direct" mode.
+    audit: { enabled: true, messages: "direct" },
     channels: {
       telegram: {
         allowFrom: [params.testerId],

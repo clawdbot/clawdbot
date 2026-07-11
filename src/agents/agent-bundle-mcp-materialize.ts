@@ -94,14 +94,14 @@ function toJsonAgentToolResult(params: {
 }
 
 function requireStringArg(input: unknown, key: string): string {
-  if (
-    !input ||
-    typeof input !== "object" ||
-    typeof (input as Record<string, unknown>)[key] !== "string"
-  ) {
+  if (!input || typeof input !== "object") {
     throw new Error(`${key} is required`);
   }
-  return (input as Record<string, string>)[key];
+  const value = Reflect.get(input, key);
+  if (typeof value !== "string") {
+    throw new Error(`${key} is required`);
+  }
+  return value;
 }
 
 function optionalStringRecordArg(input: unknown, key: string): Record<string, string> | undefined {

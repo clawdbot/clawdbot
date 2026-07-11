@@ -528,6 +528,9 @@ export default definePluginEntry({
         {
           showCode: async ({ verificationUrl, userCode, expiresInMs }) => {
             const expiresInMinutes = Math.max(1, Math.round(expiresInMs / 60_000));
+            if (ctx.isRemote) {
+              await ctx.openUrl(verificationUrl);
+            }
             await ctx.prompter.note(
               [
                 "Open this URL in your browser and enter the code below.",
@@ -540,9 +543,14 @@ export default definePluginEntry({
               "Authorize GitHub Copilot",
             );
           },
-          openUrl: async (url) => {
-            await ctx.openUrl(url);
-          },
+          ...(ctx.isRemote
+            ? {}
+            : {
+                openUrl: async (url: string) => {
+                  await ctx.openUrl(url);
+                },
+              }),
+          ...(ctx.signal ? { signal: ctx.signal } : {}),
         },
         normalizedDomain,
       );

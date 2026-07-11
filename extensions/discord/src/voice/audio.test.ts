@@ -133,4 +133,24 @@ describe("createDiscordOpusPlaybackStream child stream errors", () => {
       expect(ffmpeg.kill).toHaveBeenCalledWith("SIGKILL");
     },
   );
+
+  it("bounds multibyte ffmpeg stderr by bytes without a replacement character", async () => {
+    const ffmpeg = createFakeFfmpeg();
+    spawnMock.mockReturnValue(ffmpeg);
+
+    const playback = createDiscordOpusPlaybackStream("input.mp3");
+    const errorSeen = new Promise<Error>((resolve) => {
+      playback.once("error", resolve);
+    });
+
+    ffmpeg.stderr.write("é".repeat(4095));
+    ffmpeg.stderr.write("😀");
+    ffmpeg.emit("close", 1, null);
+
+    const error = await errorSeen;
+    const stderrText = error.message.replace(/^ffmpeg exited with code 1: /, "");
+    expect(stderrText).toBe("é".repeat(4095));
+    expect(Buffer.byteLength(stderrText)).toBeLessThanOrEqual(8192);
+    expect(stderrText).not.toContain("\uFFFD");
+  });
 });

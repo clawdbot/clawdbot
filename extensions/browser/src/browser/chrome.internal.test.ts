@@ -592,6 +592,37 @@ describe("chrome.ts internal", () => {
         ...overrides,
       }) as unknown as ResolvedBrowserConfig;
 
+    const captureFailedLaunchStderr = async (params: {
+      port: number;
+      chunks: readonly (Buffer | string)[];
+    }) => {
+      stubBrowserExecutableAndPrefs("present");
+      const proc = makeFakeProc();
+      spawnMock.mockImplementation(() => {
+        queueMicrotask(() => {
+          for (const chunk of params.chunks) {
+            proc.stderr.emit("data", chunk);
+          }
+        });
+        return proc;
+      });
+      mockExpiredLaunchPollingClock();
+      vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("ECONNREFUSED")));
+
+      const result = await launchOpenClawChrome(
+        makeResolved({ localLaunchTimeoutMs: 1 }),
+        makeProfile(params.port),
+      ).catch((err: unknown) => err);
+      if (!(result instanceof Error)) {
+        throw new Error("expected managed Chrome launch to fail");
+      }
+      return {
+        error: result,
+        proc,
+        stderrHint: result.message.split("Chrome stderr:\n")[1] ?? "",
+      };
+    };
+
     it("rejects a remote profile before attempting to spawn", async () => {
       const profile = {
         name: "openclaw",
@@ -1381,56 +1412,39 @@ describe("chrome.ts internal", () => {
     });
 
     it("keeps only a bounded UTF-8-safe newest stderr tail when launch fails after large stderr", async () => {
-      const executablePath = path.join(tmpDir, "chrome");
-      await fsp.writeFile(executablePath, "");
-      vi.spyOn(fs, "existsSync").mockImplementation((p) => {
-        const s = String(p);
-        if (s === executablePath || s.endsWith("Local State") || s.endsWith("Preferences")) {
-          return true;
-        }
-        return false;
-      });
-      const fakeProc = makeFakeProc();
       const oldMarker = "older-stderr-marker";
       const newestMarker = "newest-stderr-marker";
       const splitEmoji = Buffer.from("🦞");
       const newestLine = Buffer.from(`\n${newestMarker}\n`);
       const tailMaxBytes = 64 * 1024;
       const filler = Buffer.alloc(tailMaxBytes + 2 - splitEmoji.length - newestLine.length, "x");
-      spawnMock.mockImplementation(() => {
-        void Promise.resolve().then(() => {
-          fakeProc.stderr.emit("data", Buffer.from(`${oldMarker}\n`));
-          fakeProc.stderr.emit("data", splitEmoji.subarray(0, 2));
-          fakeProc.stderr.emit("data", Buffer.concat([splitEmoji.subarray(2), filler, newestLine]));
-        });
-        return fakeProc;
+      const { error, proc, stderrHint } = await captureFailedLaunchStderr({
+        port: 55557,
+        chunks: [
+          Buffer.from(`${oldMarker}\n`),
+          splitEmoji.subarray(0, 2),
+          Buffer.concat([splitEmoji.subarray(2), filler, newestLine]),
+        ],
       });
-      let now = 1_000_000;
-      vi.spyOn(Date, "now").mockImplementation(() => now);
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async () => {
-          now += 10_000;
-          throw new Error("ECONNREFUSED");
-        }),
-      );
 
-      const profile = { ...makeProfile(55557), executablePath } as ResolvedBrowserProfile;
-      let message = "";
-      try {
-        await launchOpenClawChrome(makeResolved({ localLaunchTimeoutMs: 1 }), profile);
-      } catch (err) {
-        message = err instanceof Error ? err.message : String(err);
-      }
-
-      expect(message).toMatch(/Failed to start Chrome CDP/);
-      expect(message).toContain("Chrome stderr:");
-      const stderrHint = message.split("Chrome stderr:\n")[1] ?? "";
+      expect(error.message).toMatch(/Failed to start Chrome CDP/);
       expect(stderrHint).not.toContain(oldMarker);
       expect(stderrHint).toContain(newestMarker);
       expect(stderrHint).not.toContain("�");
       expect(stderrHint.length).toBeLessThanOrEqual(CHROME_STDERR_HINT_MAX_CHARS);
-      expect(fakeProc.kill).toHaveBeenCalledWith("SIGKILL");
+      expect(proc.kill).toHaveBeenCalledWith("SIGKILL");
+    });
+
+    it("does not split a surrogate pair at the stderr hint char-cap boundary", async () => {
+      const newestMarker = "newest-stderr-marker";
+      const tail = `${newestMarker}${"y".repeat(CHROME_STDERR_HINT_MAX_CHARS - 1 - newestMarker.length)}`;
+      // The raw cap starts on 🦞's low surrogate; the safe slice drops the pair.
+      const { stderrHint } = await captureFailedLaunchStderr({
+        port: 55559,
+        chunks: [`${"x".repeat(50)}🦞${tail}`],
+      });
+
+      expect(stderrHint).toBe(tail);
     });
 
     it("keeps early missing-display diagnostics for launch hints after the stderr tail rolls", async () => {

@@ -68,9 +68,10 @@ export function buildGoogleGeminiCliProvider(): ProviderPlugin {
               isRemote: ctx.isRemote,
               openUrl: ctx.openUrl,
               log: (msg) => ctx.runtime.log(msg),
-              note: ctx.prompter.note,
+              note: (message, title) => ctx.prompter.note(message, title),
               prompt: async (message) => ctx.prompter.text({ message }),
               progress: spin,
+              ...(ctx.signal ? { signal: ctx.signal } : {}),
             });
 
             spin.stop("Gemini CLI OAuth complete");

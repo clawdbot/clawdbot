@@ -42,8 +42,7 @@ function findTranscriptRewriteMatches(
   const matchedIndices: number[] = [];
   let bytesFreed = 0;
 
-  for (let index = 0; index < branch.length; index++) {
-    const entry = branch[index];
+  for (const [index, entry] of branch.entries()) {
     if (entry.type !== "message") {
       continue;
     }
@@ -221,11 +220,11 @@ export function rewriteTranscriptEntriesInSessionManager(params: {
     };
   }
 
-  const firstMatchedEntry = branch[matchedIndices[0]] as
-    | Extract<SessionBranchEntry, { type: "message" }>
-    | undefined;
+  const firstMatchedIndex = matchedIndices.at(0);
+  const firstMatchedEntry =
+    firstMatchedIndex === undefined ? undefined : branch.at(firstMatchedIndex);
   // matchedIndices only contains indices of branch "message" entries.
-  if (!firstMatchedEntry) {
+  if (!firstMatchedEntry || firstMatchedEntry.type !== "message") {
     return {
       changed: false,
       bytesFreed: 0,
@@ -244,8 +243,7 @@ export function rewriteTranscriptEntriesInSessionManager(params: {
   // re-running persistence hooks or size truncation on replayed messages.
   const appendMessage = getRawSessionAppendMessage(params.sessionManager);
   const rewrittenEntryIds = new Map<string, string>();
-  for (let index = matchedIndices[0]; index < branch.length; index++) {
-    const entry = branch[index];
+  for (const entry of branch.slice(firstMatchedIndex)) {
     const replacement = entry.type === "message" ? replacementsById.get(entry.id) : undefined;
     const newEntryId =
       replacement === undefined
@@ -360,10 +358,10 @@ export function rewriteTranscriptEntriesInState(params: {
     };
   }
 
-  const firstMatchedEntry = branch[matchedIndices[0]] as
-    | Extract<SessionBranchEntry, { type: "message" }>
-    | undefined;
-  if (!firstMatchedEntry) {
+  const firstMatchedIndex = matchedIndices.at(0);
+  const firstMatchedEntry =
+    firstMatchedIndex === undefined ? undefined : branch.at(firstMatchedIndex);
+  if (!firstMatchedEntry || firstMatchedEntry.type !== "message") {
     return {
       changed: false,
       bytesFreed: 0,
@@ -376,7 +374,7 @@ export function rewriteTranscriptEntriesInState(params: {
   if (params.allowedRewriteSuffixEntryIds) {
     const allowedIds = new Set(params.allowedRewriteSuffixEntryIds);
     const hasUnexpectedSuffixEntry = branch
-      .slice(matchedIndices[0])
+      .slice(firstMatchedIndex)
       .some((entry) => typeof entry.id === "string" && !allowedIds.has(entry.id));
     if (hasUnexpectedSuffixEntry) {
       return {
@@ -397,8 +395,7 @@ export function rewriteTranscriptEntriesInState(params: {
 
   const appendedEntries: TranscriptPersistedEntry[] = [];
   const rewrittenEntryIds = new Map<string, string>();
-  for (let index = matchedIndices[0]; index < branch.length; index++) {
-    const entry = branch[index];
+  for (const entry of branch.slice(firstMatchedIndex)) {
     const replacement = entry.type === "message" ? replacementsById.get(entry.id) : undefined;
     const newEntry =
       replacement === undefined

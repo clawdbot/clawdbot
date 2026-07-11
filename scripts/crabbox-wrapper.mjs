@@ -3441,6 +3441,11 @@ if (fullCheckout) {
   }
 }
 const childInvocation = spawnInvocation(binary, childArgs, childEnv, process.platform);
+// Fast-fail hint context: run --id reuse dies in under a second when the
+// lease hit its idle timeout, with only a bare nonzero exit from the binary.
+const reusedRunLeaseId = normalizedArgs[0] === "run" ? optionValue(normalizedArgs, "--id") : "";
+const childStartedAtMs = Date.now();
+const FAST_FAIL_HINT_WINDOW_MS = 15_000;
 const child = spawn(childInvocation.command, childInvocation.args, {
   cwd: childCwd,
   stdio: "inherit",
@@ -3503,7 +3508,17 @@ child.on("exit", (code, signal) => {
     process.exit(signalExitCodes.get(signal) ?? 1);
     return;
   }
-  process.exit(fullCheckoutAvailable ? (exitCode ?? 1) : 1);
+  const finalExitCode = fullCheckoutAvailable ? (exitCode ?? 1) : 1;
+  if (
+    finalExitCode !== 0 &&
+    reusedRunLeaseId &&
+    Date.now() - childStartedAtMs < FAST_FAIL_HINT_WINDOW_MS
+  ) {
+    console.error(
+      `[crabbox] run --id ${reusedRunLeaseId} failed fast; reusable leases expire after their idle timeout and rejected flags also exit immediately. Check the first error line above, verify the lease with \`node scripts/crabbox-wrapper.mjs list\`, or warm a fresh one with \`node scripts/crabbox-wrapper.mjs warmup\`.`,
+    );
+  }
+  process.exit(finalExitCode);
 });
 
 child.on("error", (error) => {

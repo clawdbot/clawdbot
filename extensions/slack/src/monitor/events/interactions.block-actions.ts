@@ -40,7 +40,6 @@ import { escapeSlackMrkdwn } from "../mrkdwn.js";
 type InteractionMessageBlock = {
   type?: string;
   block_id?: string;
-  elements?: Array<{ action_id?: string }>;
 };
 
 type SelectOption = {
@@ -283,15 +282,6 @@ export function summarizeAction(action: Record<string, unknown>): SlackActionSum
     workflowTriggerUrl: typed.workflow?.trigger_url,
     workflowId: typed.workflow?.workflow_id,
   };
-}
-
-function isBulkActionsBlock(block: InteractionMessageBlock): boolean {
-  return (
-    block.type === "actions" &&
-    Array.isArray(block.elements) &&
-    block.elements.length > 0 &&
-    block.elements.every((el) => typeof el.action_id === "string" && el.action_id.includes("_all_"))
-  );
 }
 
 function formatInteractionSelectionLabel(params: {
@@ -828,7 +818,7 @@ function buildSlackConfirmationBlocks(params: {
     summary: params.parsed.actionSummary,
     buttonText: params.parsed.typedActionWithText.text?.text,
   });
-  let updatedBlocks = params.originalBlocks.map((block) => {
+  return params.originalBlocks.map((block) => {
     const typedBlock = block as InteractionMessageBlock;
     if (typedBlock.type === "actions" && typedBlock.block_id === params.parsed.blockId) {
       return {
@@ -845,25 +835,7 @@ function buildSlackConfirmationBlocks(params: {
       };
     }
     return block;
-  });
-  const hasRemainingIndividualActionRows = updatedBlocks.some((block) => {
-    const typedBlock = block as InteractionMessageBlock;
-    return typedBlock.type === "actions" && !isBulkActionsBlock(typedBlock);
-  });
-  if (!hasRemainingIndividualActionRows) {
-    updatedBlocks = updatedBlocks.filter((block, index) => {
-      const typedBlock = block as InteractionMessageBlock;
-      if (isBulkActionsBlock(typedBlock)) {
-        return false;
-      }
-      if (typedBlock.type !== "divider") {
-        return true;
-      }
-      const next = updatedBlocks[index + 1] as InteractionMessageBlock | undefined;
-      return !next || !isBulkActionsBlock(next);
-    });
-  }
-  return updatedBlocks as (Block | KnownBlock)[];
+  }) as (Block | KnownBlock)[];
 }
 
 async function updateSlackLegacyBlockAction(params: {

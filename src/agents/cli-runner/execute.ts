@@ -1135,8 +1135,9 @@ export async function executePreparedCliRun(
               const candidates = cliLoopbackCalls.filter((candidate) =>
                 matchesCliLoopbackCall(previous.toolName, previous.args, candidate.current),
               );
-              if (candidates.length === 1 && !candidates[0]?.ambiguous) {
-                candidates[0].current = current;
+              const candidate = candidates.at(0);
+              if (candidates.length === 1 && candidate && !candidate.ambiguous) {
+                candidate.current = current;
               } else if (candidates.length > 0) {
                 markCliLoopbackCallsAmbiguous(candidates);
               }

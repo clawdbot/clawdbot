@@ -384,8 +384,11 @@ export function extractThinkingFromTaggedStream(text: string): string {
     return "";
   }
   const closeMatches = [...text.matchAll(THINKING_TAG_CLOSE_GLOBAL_RE)];
-  const lastOpen = openMatches[openMatches.length - 1];
-  const lastClose = closeMatches[closeMatches.length - 1];
+  const lastOpen = openMatches.at(-1);
+  const lastClose = closeMatches.at(-1);
+  if (!lastOpen) {
+    return "";
+  }
   if (lastClose && (lastClose.index ?? -1) > (lastOpen.index ?? -1)) {
     return closed;
   }

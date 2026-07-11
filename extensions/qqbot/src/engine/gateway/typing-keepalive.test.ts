@@ -1,6 +1,13 @@
 // Qqbot tests cover typing keepalive plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ReplyLimiter } from "../messaging/reply-limiter.js";
 import { TypingKeepAlive, TYPING_INPUT_SECOND, TYPING_RENEWAL_LIMIT } from "./typing-keepalive.js";
+
+function createTypingClaim(messageId: string) {
+  const limiter = new ReplyLimiter({ limit: 5 });
+  limiter.record(messageId); // Initial input_notify.
+  return (id: string, reserve: number) => limiter.claim(id, reserve);
+}
 
 describe("TypingKeepAlive", () => {
   afterEach(() => {
@@ -17,6 +24,8 @@ describe("TypingKeepAlive", () => {
       sendInputNotify,
       "openid-1",
       "msg-1",
+      undefined,
+      createTypingClaim("msg-1"),
     );
 
     keepAlive.start();
@@ -43,6 +52,8 @@ describe("TypingKeepAlive", () => {
       sendInputNotify,
       "openid-1",
       "msg-1",
+      undefined,
+      createTypingClaim("msg-1"),
     );
 
     keepAlive.start();
@@ -67,16 +78,18 @@ describe("TypingKeepAlive", () => {
       sendInputNotify,
       "openid-1",
       "msg-1",
+      undefined,
+      createTypingClaim("msg-1"),
     );
 
     keepAlive.start();
 
-    // First tick: the failed attempt and its token-refresh retry both spend budget.
+    // First tick: the failed attempt and its token-refresh retry both claim the shared budget.
     await vi.advanceTimersByTimeAsync(5_000);
     expect(clearCache).toHaveBeenCalledTimes(1);
     expect(sendInputNotify).toHaveBeenCalledTimes(2);
 
-    // Only one renewal remains before the reserved final-reply slot.
+    // Only one renewal attempt remains before the reserved final-reply slot.
     await vi.advanceTimersByTimeAsync(20_000);
     expect(sendInputNotify).toHaveBeenCalledTimes(TYPING_RENEWAL_LIMIT);
   });
@@ -96,6 +109,8 @@ describe("TypingKeepAlive", () => {
       sendInputNotify,
       "openid-1",
       "msg-1",
+      undefined,
+      createTypingClaim("msg-1"),
     );
 
     keepAlive.start();

@@ -105,6 +105,20 @@ export function registerFleetCli(program: Command): void {
       await runtime.runFleetStatusCommand({ tenant, ...options });
     });
 
+  fleet
+    .command("logs")
+    .description("Stream tenant cell container logs")
+    .argument("<tenant>", "Tenant slug")
+    .option("--follow", "Follow log output", false)
+    .option("--tail <count>", "Number of lines to show", (value: string) =>
+      parseStrictPositiveIntOption(value, "--tail"),
+    )
+    .option("--since <value>", "Show logs since a duration or timestamp")
+    .action(async (tenant: string, options: { follow: boolean; tail?: number; since?: string }) => {
+      const runtime = await loadFleetRuntime();
+      await runtime.runFleetLogsCommand({ tenant, ...options });
+    });
+
   for (const action of ["start", "stop", "restart"] as const) {
     fleet
       .command(action)

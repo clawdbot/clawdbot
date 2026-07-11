@@ -479,7 +479,7 @@ describe("xAI OAuth", () => {
 
     const result = await loginXaiDeviceCode(ctx);
 
-    expect(openUrl).not.toHaveBeenCalled();
+    expect(openUrl).toHaveBeenCalledWith("https://accounts.x.ai/oauth2/device?user_code=ABCD-1234");
     expect(note).toHaveBeenCalledWith(expect.stringContaining("ABCD-1234"), "xAI OAuth");
     const remoteLog = log.mock.calls[0]?.[0];
     expect(remoteLog).toContain("https://accounts.x.ai/oauth2/device");

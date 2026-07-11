@@ -269,4 +269,35 @@ describe("chutes plugin OAuth", () => {
     expect(credentials.accountId).toBeUndefined();
     expect(timeoutSpy).toHaveBeenCalledTimes(2);
   });
+
+  it("cancels authentication when the caller aborts during userinfo", async () => {
+    const controller = new AbortController();
+    const reason = new Error("cancelled by caller");
+    const fetchFn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = fetchInputUrl(input);
+      if (url === CHUTES_TOKEN_ENDPOINT) {
+        return new Response(
+          '{"access_token":"at_cancel","refresh_token":"rt_cancel","expires_in":3600}',
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (url === CHUTES_USERINFO_ENDPOINT) {
+        controller.abort(reason);
+        return await rejectWhenAborted(init);
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    await expect(
+      loginChutes({
+        app: { clientId: "cid_test", redirectUri: REDIRECT_URI, scopes: ["openid"] },
+        manual: true,
+        createState: () => "state_test",
+        onAuth: vi.fn(async () => {}),
+        onPrompt: vi.fn(async () => `${REDIRECT_URI}?code=code_test&state=state_test`),
+        fetchFn,
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(reason);
+  });
 });

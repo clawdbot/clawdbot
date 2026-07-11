@@ -6,6 +6,8 @@
  */
 
 import { createTypingKeepaliveLoop } from "openclaw/plugin-sdk/channel-outbound";
+import { claimMessageReply } from "../messaging/outbound-reply.js";
+import type { ReplyLimitResult } from "../messaging/reply-limiter.js";
 import { formatErrorMessage } from "../utils/format.js";
 
 /** Function that sends a typing indicator to one user. */
@@ -26,7 +28,6 @@ export const TYPING_RENEWAL_LIMIT =
   QQ_C2C_PASSIVE_REPLY_LIMIT - INITIAL_TYPING_NOTIFY_COUNT - FINAL_REPLY_RESERVE_COUNT;
 
 export class TypingKeepAlive {
-  private renewalsRemaining = TYPING_RENEWAL_LIMIT;
   private stopped = false;
   // Core loop owns the interval and in-flight tick suppression; budget
   // accounting in sendAttempt() decides when it must stop for good.
@@ -40,8 +41,12 @@ export class TypingKeepAlive {
     private readonly clearCache: () => void,
     private readonly sendInputNotify: SendInputNotifyFn,
     private readonly openid: string,
-    private readonly msgId: string | undefined,
+    private readonly msgId: string,
     private readonly log?: { debug?: (msg: string) => void },
+    private readonly claimPassiveReply: (
+      messageId: string,
+      reserve: number,
+    ) => ReplyLimitResult = claimMessageReply,
   ) {}
 
   /** Start periodic keep-alive sends. */
@@ -77,19 +82,23 @@ export class TypingKeepAlive {
   }
 
   private async sendAttempt(token: string): Promise<void> {
-    if (this.stopped || this.renewalsRemaining <= 0) {
-      this.stop();
+    if (this.stopped) {
       return;
     }
 
-    // Count attempts, not successes (token-refresh retries included): a failed
-    // call may still consume QQ's msg_id budget, so keep FINAL_REPLY_RESERVE_COUNT safe.
-    this.renewalsRemaining--;
+    // Claim before every wire attempt: a failed request may still have consumed
+    // QQ's msg_id budget, while the final text slot must remain available.
+    const claim = this.claimPassiveReply(this.msgId, FINAL_REPLY_RESERVE_COUNT);
+    if (!claim.allowed) {
+      this.log?.debug?.(`Typing keep-alive budget exhausted for ${this.openid}`);
+      this.stop();
+      return;
+    }
     try {
       await this.sendInputNotify(token, this.openid, this.msgId, TYPING_INPUT_SECOND);
       this.log?.debug?.(`Typing keep-alive sent to ${this.openid}`);
     } finally {
-      if (this.renewalsRemaining <= 0) {
+      if (claim.remaining <= FINAL_REPLY_RESERVE_COUNT) {
         this.log?.debug?.(`Typing keep-alive budget exhausted for ${this.openid}`);
         this.stop();
       }

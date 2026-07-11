@@ -1317,6 +1317,10 @@
         "description": "Show /status-like card for current/visible session: model, usage, time, cost, tasks. Use `sessionKey=\"current\"` for current session; UI labels like `openclaw-tui` are not keys. `model` sets session override; `model=default` resets. Use for active model/session config questions.",
         "inputSchema": {
           "properties": {
+            "changesSince": {
+              "minimum": 0,
+              "type": "integer"
+            },
             "model": {
               "type": "string"
             },

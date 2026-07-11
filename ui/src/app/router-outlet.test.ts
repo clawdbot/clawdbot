@@ -1,17 +1,8 @@
 import { createRouter, definePage, type Router } from "@openclaw/uirouter";
 import { html, type LitElement } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { retryStaleChunkReload, scheduleStaleChunkReload } from "./stale-chunk-reload.ts";
+import { resetStaleChunkReloadStateForTest } from "./stale-chunk-reload.ts";
 import "./router-outlet.ts";
-
-vi.mock("./stale-chunk-reload.ts", async (importActual) => {
-  const actual = await importActual<typeof import("./stale-chunk-reload.ts")>();
-  return {
-    ...actual,
-    retryStaleChunkReload: vi.fn(async () => true),
-    scheduleStaleChunkReload: vi.fn(async () => false),
-  };
-});
 
 type RouteId = "page";
 type TestContext = { label: string };
@@ -57,7 +48,8 @@ async function settleOutlet(outlet: RouterOutletElement): Promise<void> {
 
 afterEach(() => {
   document.body.replaceChildren();
-  vi.clearAllMocks();
+  resetStaleChunkReloadStateForTest();
+  vi.unstubAllGlobals();
 });
 
 describe("openclaw-router-outlet", () => {
@@ -129,8 +121,10 @@ describe("openclaw-router-outlet", () => {
     router.stop();
   });
 
-  it("recovers stale-chunk import failures with a document reload instead of revalidate", async () => {
+  it("schedules stale-chunk recovery and falls back to revalidation while offline", async () => {
     let loadCount = 0;
+    const fetchMock = vi.fn(async () => new Response(null, { status: 503 }));
+    vi.stubGlobal("fetch", fetchMock);
     const router = createRouter<RouteId, TestContext, TestModule, TestData>({
       routes: [
         definePage({
@@ -155,13 +149,13 @@ describe("openclaw-router-outlet", () => {
     const alert = outlet.querySelector('[role="alert"]');
     expect(alert?.textContent).toContain("Importing a module script failed.");
     expect(alert?.textContent).toContain("Reload the page");
-    expect(vi.mocked(scheduleStaleChunkReload)).toHaveBeenCalled();
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(loadCount).toBe(1);
 
     outlet.querySelector<HTMLButtonElement>("button")?.click();
-    await settleOutlet(outlet);
+    await vi.waitFor(() => expect(loadCount).toBe(2));
 
-    expect(vi.mocked(retryStaleChunkReload)).toHaveBeenCalledTimes(1);
-    expect(loadCount).toBe(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     outlet.remove();
     router.stop();
   });
