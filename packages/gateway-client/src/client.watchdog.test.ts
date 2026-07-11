@@ -275,14 +275,19 @@ describe("GatewayClient", () => {
       });
     });
 
-    let resolveFirstHello!: () => void;
-    let resolveSecondHello!: () => void;
+    const firstHelloResolvers: Array<() => void> = [];
+    const secondHelloResolvers: Array<() => void> = [];
     const firstHello = new Promise<void>((resolve) => {
-      resolveFirstHello = resolve;
+      firstHelloResolvers.push(resolve);
     });
     const secondHello = new Promise<void>((resolve) => {
-      resolveSecondHello = resolve;
+      secondHelloResolvers.push(resolve);
     });
+    const resolveFirstHello = firstHelloResolvers.at(0);
+    const resolveSecondHello = secondHelloResolvers.at(0);
+    if (!resolveFirstHello || !resolveSecondHello) {
+      throw new Error("hello promises did not initialize their resolvers");
+    }
     const closeEvents: Array<{ code: number; reason: string }> = [];
     let helloCount = 0;
     const client = new GatewayClient({

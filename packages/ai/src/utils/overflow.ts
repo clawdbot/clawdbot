@@ -142,9 +142,11 @@ function resolveContextInputTokens(message: AssistantMessage): number | undefine
 export function isContextOverflow(message: AssistantMessage, contextWindow?: number): boolean {
   // Case 1: Check error message patterns
   if (message.stopReason === "error" && message.errorMessage) {
+    // Hoist so the regex closures keep the narrowing without assertions.
+    const errorMessage = message.errorMessage;
     // Skip messages matching known non-overflow patterns (e.g. throttling / rate-limit)
-    const isNonOverflow = NON_OVERFLOW_PATTERNS.some((p) => p.test(message.errorMessage!));
-    if (!isNonOverflow && OVERFLOW_PATTERNS.some((p) => p.test(message.errorMessage!))) {
+    const isNonOverflow = NON_OVERFLOW_PATTERNS.some((p) => p.test(errorMessage));
+    if (!isNonOverflow && OVERFLOW_PATTERNS.some((p) => p.test(errorMessage))) {
       return true;
     }
   }

@@ -150,6 +150,17 @@ describe("OpenAI tool projection", () => {
     });
   });
 
+  it("classifies sparse descriptors as unreadable tools", () => {
+    const tools: Array<{ name: string; parameters: Record<string, unknown> }> = [];
+    tools.length = 1;
+
+    expect(projectOpenAITools(tools)).toEqual({
+      inputToolCount: 1,
+      tools: [],
+      diagnostics: [{ toolIndex: 0, violations: ["tool[0] is unreadable"] }],
+    });
+  });
+
   it("rejects pinned and required choices when their function tools are unavailable", () => {
     const projection = projectOpenAITools([
       {

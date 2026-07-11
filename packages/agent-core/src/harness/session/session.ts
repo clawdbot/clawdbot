@@ -81,8 +81,7 @@ export function buildSessionContext(pathEntries: SessionTreeEntry[]): SessionCon
     // Replay only the compacted entry's retained tail plus newer branch entries; older
     // transcript content is represented by the synthetic compaction summary above.
     let foundFirstKept = false;
-    for (let i = 0; i < compactionIdx; i++) {
-      const entry = pathEntries[i];
+    for (const entry of pathEntries.slice(0, compactionIdx)) {
       if (entry.id === compaction.firstKeptEntryId) {
         foundFirstKept = true;
       }
@@ -90,8 +89,8 @@ export function buildSessionContext(pathEntries: SessionTreeEntry[]): SessionCon
         appendMessage(entry);
       }
     }
-    for (let i = compactionIdx + 1; i < pathEntries.length; i++) {
-      appendMessage(pathEntries[i]);
+    for (const entry of pathEntries.slice(compactionIdx + 1)) {
+      appendMessage(entry);
     }
   } else {
     for (const entry of pathEntries) {

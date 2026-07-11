@@ -14,22 +14,33 @@ if (
 ) {
   throw new Error("expected strict-ratchet tsconfig includes to be strings");
 }
-const includedPackageDirs = config.include
-  .filter((entry) => entry.startsWith("packages/") && entry.endsWith("/src/**/*"))
-  .map((entry) => entry.replace(/\/src\/\*\*\/\*$/u, ""));
+const includedPackages = config.include
+  .filter(
+    (entry) =>
+      entry.startsWith("packages/") &&
+      (entry.endsWith("/**/*") || entry.endsWith("/*.ts") || entry.endsWith("/**/*.ts")),
+  )
+  .map((include) => ({
+    include,
+    packageDir: include.replace(/\/(?:src\/\*\*\/\*|\*\.ts|\*\*\/\*\.ts)$/u, ""),
+  }));
+const includedPackageDirs = includedPackages.map(({ packageDir }) => packageDir);
 
 describe("strict ratchet routing", () => {
   it("keeps the changed-lane package list pinned to the tsconfig", () => {
     expect(includedPackageDirs).toEqual(STRICT_RATCHET_PACKAGE_DIRS);
   });
 
-  it.each(includedPackageDirs)("routes %s changes through the ratchet lane", (packageDir) => {
-    const result = detectChangedLanes([`${packageDir}/src/example.ts`]);
-    const plan = createChangedCheckPlan(result);
+  it.each(includedPackages)(
+    "routes $packageDir changes through the ratchet lane",
+    ({ include }) => {
+      const result = detectChangedLanes([include.replace(/(?:\*\*\/\*|\*)/u, "example")]);
+      const plan = createChangedCheckPlan(result);
 
-    expect(result.lanes.strictRatchet).toBe(true);
-    expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:strict-ratchet");
-  });
+      expect(result.lanes.strictRatchet).toBe(true);
+      expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:strict-ratchet");
+    },
+  );
 
   it("routes the ratchet tsconfig through its lane", () => {
     expect(detectChangedLanes(["tsconfig.strict-ratchet.json"]).lanes.strictRatchet).toBe(true);

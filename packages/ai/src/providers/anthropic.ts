@@ -29,7 +29,6 @@ import type {
   ThinkingContent,
   Tool,
   ToolCall,
-  ToolResultMessage,
 } from "../types.js";
 import { createDeferredEventBuffer } from "../utils/deferred-event-buffer.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
@@ -688,8 +687,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
             costModel = { ...model, cost: CLAUDE_FABLE_5_FALLBACK_MODEL_COST };
             calculateCost(costModel, output.usage);
             eventSink.push({ type: "start", partial: output });
-            for (let i = 0; i < blocks.length; i += 1) {
-              const block = blocks[i];
+            for (const [i, block] of blocks.entries()) {
               if (block.type !== "text") {
                 continue;
               }
@@ -1450,6 +1448,9 @@ function convertMessages(
 
   for (let i = 0; i < transformedMessages.length; i++) {
     const msg = transformedMessages[i];
+    if (!msg) {
+      continue;
+    }
 
     if (msg.role === "user") {
       const isRuntimeContextCarrier = msg.runtimeContextCarrier === true;
@@ -1517,9 +1518,12 @@ function convertMessages(
           }
           // Redacted thinking: pass the opaque payload back as redacted_thinking
           if (block.redacted) {
+            if (!block.thinkingSignature) {
+              throw new Error("redacted thinking block is missing its opaque signature");
+            }
             blocks.push({
               type: "redacted_thinking",
-              data: block.thinkingSignature!,
+              data: block.thinkingSignature,
             });
             continue;
           }
@@ -1579,8 +1583,11 @@ function convertMessages(
       });
 
       let j = i + 1;
-      while (j < transformedMessages.length && transformedMessages[j].role === "toolResult") {
-        const nextMsg = transformedMessages[j] as ToolResultMessage;
+      while (j < transformedMessages.length) {
+        const nextMsg = transformedMessages.at(j);
+        if (nextMsg?.role !== "toolResult") {
+          break;
+        }
         toolResults.push({
           type: "tool_result",
           tool_use_id: nextMsg.toolCallId,
@@ -1603,13 +1610,16 @@ function convertMessages(
 
     for (let i = params.length - 1; i >= 0; i--) {
       const message = params[i];
-      if (message.role !== "user" || cacheBreakpointOptOutParamIndexes.has(i)) {
+      if (!message || message.role !== "user" || cacheBreakpointOptOutParamIndexes.has(i)) {
         continue;
       }
 
       if (Array.isArray(message.content)) {
         for (let j = message.content.length - 1; j >= 0; j--) {
           const block = message.content[j];
+          if (!block) {
+            continue;
+          }
           if (block.type === "text" || block.type === "image") {
             if (fallbackToolResult && messageCacheControlLimit === 1) {
               applyContentBlockCacheControl(fallbackToolResult, cacheControl);

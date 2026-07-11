@@ -127,19 +127,6 @@ openclaw-chat-pane {
   }
 }
 
-/* Native macOS floats the traffic lights plus the titlebar accessory
-   (sidebar toggle, back/forward — DashboardWindowController) over the
-   top-left ~194px of the page. With the nav column collapsed the split view
-   is the window's top surface, so reserve the titlebar band above the pane
-   headers; this also keeps the header buttons clear of the AppKit drag
-   region (x 78-254, y < 46) that would swallow their clicks. Drawer widths
-   (<=1100px) reserve a 58px topbar row instead (layout.mobile.css). */
-@media (min-width: 1101px) {
-  html.openclaw-native-macos .shell--nav-collapsed .chat-split-view {
-    padding-top: var(--openclaw-native-titlebar-height, 50px);
-  }
-}
-
 .chat-pane__header {
   display: flex;
   flex: 0 0 auto;
@@ -177,4 +164,40 @@ openclaw-chat-pane {
   align-items: center;
   gap: 2px;
   flex: 0 0 auto;
+}
+
+/* Native macOS: with the nav column collapsed the top-left pane header is the
+   window's top surface, so its content shifts right of the floating window
+   chrome (Safari-style) instead of hiding under it. Traffic lights end at
+   x=78; newer apps (openclaw-native-nav) also float the titlebar accessory
+   (sidebar toggle + back/forward, DashboardWindowController) ending ~x=194.
+   Drawer widths (<=1100px) reserve a 58px topbar row instead
+   (layout.mobile.css). The first column's min-width grows by the extra inset
+   (90/204 minus the 12px base padding): the header's action row cannot
+   shrink, and the cell's overflow:hidden would clip the close/split buttons
+   at the 320px column minimum otherwise. */
+@media (min-width: 1101px) {
+  html.openclaw-native-macos .shell--nav-collapsed .chat-split-view__column:first-child {
+    min-width: 398px;
+  }
+
+  html.openclaw-native-macos
+    .shell--nav-collapsed
+    .chat-split-view__column:first-child
+    > .chat-split-view__cell:first-child
+    .chat-pane__header {
+    padding-left: 90px;
+  }
+
+  html.openclaw-native-nav .shell--nav-collapsed .chat-split-view__column:first-child {
+    min-width: 512px;
+  }
+
+  html.openclaw-native-nav
+    .shell--nav-collapsed
+    .chat-split-view__column:first-child
+    > .chat-split-view__cell:first-child
+    .chat-pane__header {
+    padding-left: 204px;
+  }
 }

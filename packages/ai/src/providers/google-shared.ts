@@ -144,7 +144,8 @@ function getGeminiMajorVersion(modelId: string): number | undefined {
   if (!match) {
     return undefined;
   }
-  return Number.parseInt(match[1], 10);
+  const majorVersion = match.at(1);
+  return majorVersion === undefined ? undefined : Number.parseInt(majorVersion, 10);
 }
 
 function supportsMultimodalFunctionResponse(modelId: string): boolean {

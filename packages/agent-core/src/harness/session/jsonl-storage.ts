@@ -192,16 +192,19 @@ async function loadJsonlStorage(
     throw invalidSession(filePath, "missing session header");
   }
 
-  const header = parseHeaderLine(lines[headerIndex], filePath);
+  const headerLine = lines.at(headerIndex);
+  if (headerLine === undefined) {
+    throw invalidSession(filePath, "missing session header");
+  }
+  const header = parseHeaderLine(headerLine, filePath);
   const entries: SessionTreeEntry[] = [];
   let leafId: string | null = null;
   let appendParentId: string | null = null;
-  for (let lineIndex = headerIndex + 1; lineIndex < lines.length; lineIndex++) {
-    const line = lines[lineIndex];
+  for (const [offset, line] of lines.slice(headerIndex + 1).entries()) {
     if (!line.trim()) {
       continue;
     }
-    const entry = parseEntryLine(line, filePath, lineIndex + 1);
+    const entry = parseEntryLine(line, filePath, headerIndex + offset + 2);
     entries.push(entry);
     const leafUpdate = leafIdUpdateAfterEntry(entry);
     if (leafUpdate !== undefined) {

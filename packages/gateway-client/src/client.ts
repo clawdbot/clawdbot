@@ -804,10 +804,14 @@ export class GatewayClient {
     if (this.pendingStop?.ws === ws) {
       return this.pendingStop;
     }
-    let resolve!: () => void;
+    const resolvers: Array<() => void> = [];
     const promise = new Promise<void>((res) => {
-      resolve = res;
+      resolvers.push(res);
     });
+    const resolve = resolvers.at(0);
+    if (!resolve) {
+      throw new Error("pending stop promise did not initialize its resolver");
+    }
     this.pendingStop = { ws, promise, resolve };
     return this.pendingStop;
   }

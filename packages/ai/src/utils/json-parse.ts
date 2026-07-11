@@ -37,7 +37,7 @@ export function repairJson(json: string): string {
   let stringValuePrefix = "";
 
   for (let index = 0; index < json.length; index++) {
-    const char = json[index];
+    const char = json.charAt(index);
 
     if (!inString) {
       repaired += char;
@@ -56,8 +56,8 @@ export function repairJson(json: string): string {
     }
 
     if (char === "\\") {
-      const nextChar = json[index + 1];
-      if (nextChar === undefined) {
+      const nextChar = json.charAt(index + 1);
+      if (!nextChar) {
         repaired += "\\\\";
         continue;
       }

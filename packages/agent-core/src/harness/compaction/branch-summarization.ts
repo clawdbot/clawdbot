@@ -95,9 +95,9 @@ export function collectEntriesForBranchSummaryFromBranches<TEntry extends Branch
 ): CollectBranchPathEntriesResult<TEntry> {
   const oldPath = new Set(oldBranch.map((entry) => entry.id));
   let commonAncestorId: string | null = null;
-  for (let i = targetBranch.length - 1; i >= 0; i--) {
-    if (oldPath.has(targetBranch[i].id)) {
-      commonAncestorId = targetBranch[i].id;
+  for (const targetEntry of targetBranch.toReversed()) {
+    if (oldPath.has(targetEntry.id)) {
+      commonAncestorId = targetEntry.id;
       break;
     }
   }
@@ -184,8 +184,7 @@ export function prepareBranchEntries(
       }
     }
   }
-  for (let i = entries.length - 1; i >= 0; i--) {
-    const entry = entries[i];
+  for (const entry of entries.toReversed()) {
     const message = getMessageFromEntry(entry);
     if (!message) {
       continue;

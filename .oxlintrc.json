@@ -236,7 +236,17 @@
         "packages/terminal-core/**/*.ts",
         "packages/normalization-core/**/*.ts",
         "packages/model-catalog-core/**/*.ts",
-        "packages/web-content-core/**/*.ts"
+        "packages/web-content-core/**/*.ts",
+        "packages/agent-core/**/*.ts",
+        "packages/acp-core/**/*.ts",
+        "packages/ai/**/*.ts",
+        "packages/gateway-client/**/*.ts",
+        "packages/gateway-protocol/**/*.ts",
+        "packages/llm-core/**/*.ts",
+        "packages/media-core/**/*.ts",
+        "packages/media-generation-core/**/*.ts",
+        "packages/plugin-package-contract/**/*.ts",
+        "packages/sdk/**/*.ts"
       ],
       "rules": {
         "typescript/no-non-null-assertion": "error"

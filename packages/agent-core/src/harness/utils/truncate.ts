@@ -111,7 +111,7 @@ function replaceUnpairedSurrogates(content: string): string {
       if (i + 1 < content.length) {
         const next = content.charCodeAt(i + 1);
         if (next >= 0xdc00 && next <= 0xdfff) {
-          output += content[i] + content[i + 1];
+          output += content.charAt(i) + content.charAt(i + 1);
           i++;
           continue;
         }
@@ -120,7 +120,7 @@ function replaceUnpairedSurrogates(content: string): string {
     } else if (code >= 0xdc00 && code <= 0xdfff) {
       output += "�";
     } else {
-      output += content[i];
+      output += content.charAt(i);
     }
   }
   return output;
@@ -217,8 +217,7 @@ export function truncateHead(content: string, options: TruncationOptions = {}): 
   let outputBytesCount = 0;
   let truncatedBy: "lines" | "bytes" = input.totalLines > input.maxLines ? "lines" : "bytes";
 
-  for (let i = 0; i < input.lines.length && i < input.maxLines; i++) {
-    const line = input.lines[i];
+  for (const [i, line] of input.lines.slice(0, input.maxLines).entries()) {
     const lineBytes = utf8ByteLength(line) + (i > 0 ? 1 : 0); // +1 for newline
 
     if (outputBytesCount + lineBytes > input.maxBytes) {
@@ -273,7 +272,10 @@ export function truncateTail(content: string, options: TruncationOptions = {}): 
   let lastLinePartial = false;
 
   for (let i = input.lines.length - 1; i >= 0 && outputLinesArr.length < input.maxLines; i--) {
-    const line = input.lines[i];
+    const line = input.lines.at(i);
+    if (line === undefined) {
+      continue;
+    }
     const lineBytes = utf8ByteLength(line) + (outputLinesArr.length > 0 ? 1 : 0); // +1 for newline
 
     if (outputBytesCount + lineBytes > input.maxBytes) {

@@ -83,8 +83,7 @@ export function clampThinkingLevel<TApi extends Api>(
   // stronger levels so unsupported xhigh/max requests cannot increase cost.
   const thinkingLevelMap = resolveThinkingLevelMap(model);
   if ((level === "xhigh" || level === "max") && thinkingLevelMap?.[level] === null) {
-    for (let i = requestedIndex - 1; i >= 0; i--) {
-      const candidate = EXTENDED_THINKING_LEVELS[i];
+    for (const candidate of EXTENDED_THINKING_LEVELS.slice(0, requestedIndex).toReversed()) {
       if (availableLevels.includes(candidate)) {
         return candidate;
       }
@@ -92,14 +91,12 @@ export function clampThinkingLevel<TApi extends Api>(
   }
 
   // Prefer the next stronger available level, then walk down if the request was above the model cap.
-  for (let i = requestedIndex; i < EXTENDED_THINKING_LEVELS.length; i++) {
-    const candidate = EXTENDED_THINKING_LEVELS[i];
+  for (const candidate of EXTENDED_THINKING_LEVELS.slice(requestedIndex)) {
     if (availableLevels.includes(candidate)) {
       return candidate;
     }
   }
-  for (let i = requestedIndex - 1; i >= 0; i--) {
-    const candidate = EXTENDED_THINKING_LEVELS[i];
+  for (const candidate of EXTENDED_THINKING_LEVELS.slice(0, requestedIndex).toReversed()) {
     if (availableLevels.includes(candidate)) {
       return candidate;
     }

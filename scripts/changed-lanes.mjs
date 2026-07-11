@@ -25,6 +25,16 @@ export const STRICT_RATCHET_PACKAGE_DIRS = [
   "packages/normalization-core",
   "packages/model-catalog-core",
   "packages/web-content-core",
+  "packages/ai",
+  "packages/agent-core",
+  "packages/acp-core",
+  "packages/gateway-client",
+  "packages/gateway-protocol",
+  "packages/llm-core",
+  "packages/media-core",
+  "packages/media-generation-core",
+  "packages/plugin-package-contract",
+  "packages/sdk",
 ];
 const TEST_ROOT_TYPECHECK_PATH_RE =
   /^(?:test\/(?!fixtures\/).*\.(?:[cm]?ts|[cm]?tsx)|test\/tsconfig\/tsconfig\.test\.root\.json)$/u;

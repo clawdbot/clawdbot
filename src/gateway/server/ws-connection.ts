@@ -3,10 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { Socket } from "node:net";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { RawData, WebSocket, WebSocketServer } from "ws";
-import {
-  GATEWAY_STARTUP_CLOSE_CODE,
-  GATEWAY_STARTUP_PENDING_CLOSE_CAUSE,
-} from "../../../packages/gateway-protocol/src/startup-unavailable.js";
+import { GATEWAY_STARTUP_PENDING_CLOSE_CAUSE } from "../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { getRuntimeConfig } from "../../config/io.js";
 import { upsertPresence } from "../../infra/system-presence.js";
 import { logRejectedLargePayload } from "../../logging/diagnostic-payload.js";
@@ -464,8 +461,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         ...closeMeta,
       };
       if (!client) {
-        const isExpectedStartupRetryClose =
-          closeCause === GATEWAY_STARTUP_PENDING_CLOSE_CAUSE && code === GATEWAY_STARTUP_CLOSE_CODE;
+        const isExpectedStartupRetryClose = closeCause === GATEWAY_STARTUP_PENDING_CLOSE_CAUSE;
         const logFn =
           isNoisySwiftPmHelperClose(requestUserAgent, remoteAddr) ||
           isExpectedStartupRetryClose ||
