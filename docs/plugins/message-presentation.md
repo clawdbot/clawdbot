@@ -69,7 +69,8 @@ type MessagePresentationBlock =
     };
 
 type MessagePresentationAction =
-  { type: "command"; command: string } | { type: "callback"; value: string };
+  | { type: "command"; command: string }
+  | { type: "callback"; value: string };
 
 type MessagePresentationButton = {
   label: string;

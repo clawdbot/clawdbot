@@ -184,7 +184,7 @@ function consumeRemovedLineEnd(text: string, end: number): number {
 
 function findUtf8OverCapOffset(text: string, start: number): number | null {
   let bytes = 0;
-  for (let index = start; index < text.length;) {
+  for (let index = start; index < text.length; ) {
     const code = text.codePointAt(index) ?? 0;
     index += code > 0xffff ? 2 : 1;
     bytes += code <= 0x7f ? 1 : code <= 0x7ff ? 2 : code <= 0xffff ? 3 : 4;
@@ -427,7 +427,7 @@ function findPotentialCallStart(
   atLineStart: boolean,
   matcher: PlainTextToolCallNameMatcher,
 ): number | null {
-  for (let index = 0; index < text.length;) {
+  for (let index = 0; index < text.length; ) {
     const lineStart =
       (index === 0 && atLineStart) || text[index - 1] === "\n" || text[index - 1] === "\r";
     if (!lineStart) {

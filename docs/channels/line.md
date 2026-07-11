@@ -181,7 +181,9 @@ messages.
       },
       flexMessage: {
         altText: "Status card",
-        contents: {/* Flex payload */},
+        contents: {
+          /* Flex payload */
+        },
       },
       templateMessage: {
         type: "confirm",

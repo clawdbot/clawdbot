@@ -110,7 +110,7 @@ type SlackCodeMarker = "`" | "```";
 
 function tokenizeSlackMrkdwn(text: string): string[] {
   const tokens: string[] = [];
-  for (let index = 0; index < text.length;) {
+  for (let index = 0; index < text.length; ) {
     if (text.startsWith("```", index)) {
       tokens.push("```");
       index += 3;

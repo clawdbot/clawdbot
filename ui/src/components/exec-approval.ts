@@ -111,7 +111,8 @@ function renderPluginBody(active: ExecApprovalRequest) {
   return html`
     ${active.pluginDescription
       ? html`<pre class="exec-approval-command mono" style="white-space:pre-wrap">
-${active.pluginDescription}</pre>`
+${active.pluginDescription}</pre
+        >`
       : nothing}
     <div class="exec-approval-meta">
       ${renderMetaRow(t("execApproval.labels.severity"), active.pluginSeverity)}

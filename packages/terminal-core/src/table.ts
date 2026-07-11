@@ -82,7 +82,7 @@ function wrapLine(text: string, width: number): string[] {
 
   type Token = { kind: "ansi" | "char"; value: string };
   const tokens: Token[] = [];
-  for (let i = 0; i < text.length;) {
+  for (let i = 0; i < text.length; ) {
     if (text[i] === ESC) {
       // SGR: ESC [ ... m
       if (text[i + 1] === "[") {

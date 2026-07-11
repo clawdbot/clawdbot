@@ -196,10 +196,16 @@ change:
   "aliases": { "<table>": { "<value>": "<label>" } },
   "output": {
     "sep": "", // joins surviving pieces
-    "default": [/* pieces */], // fallback for any surface
+    "default": [
+      /* pieces */
+    ], // fallback for any surface
     "surfaces": {
-      "discord": [/* pieces */],
-      "telegram": [/* pieces */],
+      "discord": [
+        /* pieces */
+      ],
+      "telegram": [
+        /* pieces */
+      ],
     },
   },
 }
