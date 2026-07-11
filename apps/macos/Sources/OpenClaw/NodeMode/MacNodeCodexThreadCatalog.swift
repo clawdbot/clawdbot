@@ -131,6 +131,7 @@ enum MacNodeCodexThreadCatalog {
     static let defaultUserMacOSBetaAppExecutable = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Applications/Codex Beta.app/Contents/Resources/codex")
         .path
+    static let defaultTimeoutSeconds: Double = 24
     private static let maxSessionIdLength = 256
     private static let maxSessionNameLength = 500
     private static let maxCwdLength = 4096
@@ -208,7 +209,7 @@ enum MacNodeCodexThreadCatalog {
         arguments: [String]? = nil,
         cwd: URL? = nil,
         clearEnv: [String] = [],
-        timeoutSeconds: Double = 12,
+        timeoutSeconds: Double = MacNodeCodexThreadCatalog.defaultTimeoutSeconds,
         maxLineBytes: Int = 5 * 1024 * 1024) async throws -> String
     {
         let params = try self.decodeParams(paramsJSON)
@@ -226,7 +227,7 @@ enum MacNodeCodexThreadCatalog {
     private static func list(
         params: ListParams,
         invocation: ResolvedInvocation,
-        timeoutSeconds: Double = 12,
+        timeoutSeconds: Double = MacNodeCodexThreadCatalog.defaultTimeoutSeconds,
         maxLineBytes: Int = 5 * 1024 * 1024) async throws -> String
     {
         guard params.searchTerm != nil else {

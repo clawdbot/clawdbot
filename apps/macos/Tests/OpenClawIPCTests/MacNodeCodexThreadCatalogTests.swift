@@ -940,6 +940,10 @@ struct MacNodeCodexThreadCatalogTests {
         #expect((decoded["sessions"] as? [Any])?.count == 50)
     }
 
+    @Test func `default deadline allows cold large catalog scans`() {
+        #expect(MacNodeCodexThreadCatalog.defaultTimeoutSeconds == 24)
+    }
+
     @Test func `rejects unknown and out of range params before launch`() async {
         let cases = [
             (#"{"extra":true}"#, "unknown Codex session catalog parameter: extra"),

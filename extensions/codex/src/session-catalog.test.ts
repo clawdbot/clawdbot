@@ -752,6 +752,7 @@ describe("Codex supervision catalog", () => {
         nodeId: "devbox",
         command: CODEX_APP_SERVER_THREADS_LIST_COMMAND,
         params: expect.not.objectContaining({ archived: expect.anything() }),
+        timeoutMs: 28_000,
       }),
     );
     expect(JSON.stringify(result)).not.toContain("private");

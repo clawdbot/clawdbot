@@ -396,6 +396,46 @@ describe("createWebhookHandler", () => {
     expect(deliver).toHaveBeenCalledTimes(1);
   });
 
+  it("keys invalid-token throttling by trusted forwarded client IP", async () => {
+    const deliver = vi.fn().mockResolvedValue(null);
+    const handler = createWebhookHandler({
+      account: makeAccount({
+        accountId: "preauth-forwarded-ip-scope-" + Date.now(),
+        rateLimitPerMinute: 1,
+      }),
+      trustedProxies: ["127.0.0.1"],
+      deliver,
+      log,
+    });
+
+    for (let i = 0; i < 2; i += 1) {
+      const invalidReq = makeReq(
+        "POST",
+        makeFormBody({
+          token: "wrong-token",
+          user_id: "123",
+          username: "testuser",
+          text: "Hello",
+        }),
+        { headers: { "x-forwarded-for": "198.51.100.9" } },
+      );
+      (invalidReq.socket as { remoteAddress?: string }).remoteAddress = "127.0.0.1";
+      const invalidRes = makeRes();
+      await handler(invalidReq, invalidRes);
+      expect(invalidRes.status).toBe(i === 0 ? 401 : 429);
+    }
+
+    const validReq = makeReq("POST", validBody, {
+      headers: { "x-forwarded-for": "203.0.113.11" },
+    });
+    (validReq.socket as { remoteAddress?: string }).remoteAddress = "127.0.0.1";
+    const validRes = makeRes();
+    await handler(validReq, validRes);
+
+    expect(validRes.status).toBe(204);
+    expect(deliver).toHaveBeenCalledTimes(1);
+  });
+
   it("does not spend invalid-token budget on successful requests", async () => {
     const deliver = vi.fn().mockResolvedValue(null);
     const handler = createWebhookHandler({
