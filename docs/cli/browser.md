@@ -61,6 +61,11 @@ openclaw browser --browser-profile openclaw reset-profile
 ```
 
 - `doctor --deep` adds a live snapshot probe: useful when basic CDP readiness is green but you want proof the current tab can be inspected.
+- For a running local managed profile, `status` and `doctor` report cached
+  graphics diagnostics from Chrome: hardware/software classification, renderer,
+  backend, device/driver, feature and disabled-status details, and accelerated
+  video capabilities. `status --json` returns the full structured payload.
+  Passive status never launches Chrome just to collect these facts.
 - `stop` closes the active control session and clears temporary emulation overrides even for `attachOnly` and remote CDP profiles where OpenClaw did not launch the browser process itself. For local managed profiles, `stop` also stops the spawned browser process.
 - `start --headless` applies only to that start request, and only when OpenClaw launches a local managed browser. It does not rewrite `browser.headless` or profile config, and is a no-op for an already-running browser.
 - On Linux hosts without `DISPLAY` or `WAYLAND_DISPLAY`, local managed profiles run headless automatically unless `OPENCLAW_BROWSER_HEADLESS=0`, `browser.headless=false`, or `browser.profiles.<name>.headless=false` explicitly requests a visible browser.

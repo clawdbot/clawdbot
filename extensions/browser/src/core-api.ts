@@ -64,6 +64,7 @@ export type {
   BrowserDeleteProfileResult,
   BrowserDoctorCheck,
   BrowserDoctorReport,
+  BrowserGraphicsDiagnostics,
   BrowserImportProfileResult,
   BrowserFormField,
   BrowserResetProfileResult,

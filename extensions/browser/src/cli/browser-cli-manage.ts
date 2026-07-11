@@ -3,6 +3,7 @@
  * checks.
  */
 import type { Command } from "commander";
+import { formatBrowserGraphicsSummary } from "../browser/chrome.graphics.js";
 import { runCommandWithRuntime } from "../core-api.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
@@ -33,6 +34,7 @@ type BrowserDoctorCheck = {
   name: string;
   ok: boolean;
   detail?: string;
+  warning?: boolean;
 };
 
 function resolveProfileQuery(
@@ -157,7 +159,8 @@ function logBrowserTabs(tabs: BrowserTab[], json?: boolean) {
 }
 
 function formatDoctorLine(check: BrowserDoctorCheck): string {
-  return `${check.ok ? "OK" : "FAIL"} ${check.name}${check.detail ? `: ${check.detail}` : ""}`;
+  const prefix = check.warning ? "WARN" : check.ok ? "OK" : "FAIL";
+  return `${prefix} ${check.name}${check.detail ? `: ${check.detail}` : ""}`;
 }
 
 function isGatewaySecretRefUnavailableErrorShape(error: unknown): boolean {
@@ -215,6 +218,14 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
       ? `running${status.cdpReady === false ? ", CDP not ready" : ""}`
       : "not running; run `openclaw browser start`",
   });
+  if (status.graphics) {
+    checks.push({
+      name: "graphics",
+      ok: true,
+      warning: status.graphics.status === "unavailable",
+      detail: formatBrowserGraphicsSummary(status.graphics),
+    });
+  }
 
   try {
     const profiles = await callBrowserRequest<{ profiles: ProfileStatus[] }>(
@@ -384,6 +395,9 @@ export function registerBrowserManageCommands(
               status.headlessSource ? ` (${status.headlessSource})` : ""
             }`,
             `profileColor: ${status.color}`,
+            ...(status.graphics
+              ? [`graphics: ${formatBrowserGraphicsSummary(status.graphics)}`]
+              : []),
             ...(status.detectError ? [`detectError: ${status.detectError}`] : []),
           ].join("\n"),
         );

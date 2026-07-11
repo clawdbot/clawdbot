@@ -8,6 +8,10 @@ import { redactCdpUrl } from "../cdp.helpers.js";
 import { snapshotAria } from "../cdp.js";
 import { getChromeMcpPid, takeChromeMcpSnapshot } from "../chrome-mcp.js";
 import { resolveBrowserExecutableForPlatform } from "../chrome.executables.js";
+import {
+  getCachedChromeGraphicsDiagnostics,
+  inspectChromeGraphicsDiagnostics,
+} from "../chrome.graphics.js";
 import { resolveManagedBrowserHeadlessMode } from "../config.js";
 import { buildBrowserDoctorReport } from "../doctor.js";
 import { BrowserError, toBrowserErrorResponse } from "../errors.js";
@@ -29,6 +33,7 @@ import {
 
 const STATUS_CDP_HTTP_TIMEOUT_MS = 300;
 const STATUS_CDP_TRANSPORT_TIMEOUT_MS = 600;
+const STATUS_GRAPHICS_COMMAND_TIMEOUT_MS = 1_000;
 const STATUS_CHROME_MCP_TOTAL_TIMEOUT_MS = 7_000;
 const STATUS_CHROME_MCP_TRANSPORT_TIMEOUT_MS = 5_000;
 
@@ -169,6 +174,25 @@ async function buildBrowserStatus(req: BrowserRequest, ctx: BrowserRouteContext)
       })();
 
   const profileState = current.profiles.get(profileCtx.profile.name);
+  const running = profileState?.running;
+  const canInspectManagedGraphics =
+    capabilities.mode === "local-managed" &&
+    cdpReady &&
+    running &&
+    !profileState?.reconcile &&
+    running.cdpPort === profileCtx.profile.cdpPort;
+  const graphics = canInspectManagedGraphics
+    ? await getCachedChromeGraphicsDiagnostics(
+        running,
+        async () =>
+          await inspectChromeGraphicsDiagnostics(`http://127.0.0.1:${running.cdpPort}`, {
+            httpTimeoutMs: STATUS_CDP_HTTP_TIMEOUT_MS,
+            handshakeTimeoutMs: STATUS_CDP_TRANSPORT_TIMEOUT_MS,
+            commandTimeoutMs: STATUS_GRAPHICS_COMMAND_TIMEOUT_MS,
+            ssrfPolicy: current.resolved.ssrfPolicy,
+          }),
+      )
+    : null;
   let detectedBrowser: string | null = null;
   let detectedExecutablePath: string | null = null;
   let detectError: string | null = null;
@@ -223,6 +247,7 @@ async function buildBrowserStatus(req: BrowserRequest, ctx: BrowserRouteContext)
     noSandbox: current.resolved.noSandbox,
     executablePath: profileCtx.profile.executablePath ?? null,
     attachOnly: profileCtx.profile.attachOnly,
+    graphics,
   };
 }
 

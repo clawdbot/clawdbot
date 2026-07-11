@@ -1667,21 +1667,6 @@ describe("doctor health contributions", () => {
     expect(contributionChecks.map((check) => check.id)).toEqual(contributionIds);
   });
 
-  it("keeps local audio inventory in the lint flow", async () => {
-    const contribution = requireDoctorContribution("doctor:local-audio-acceleration");
-    const contributionChecks = await resolveDoctorContributionHealthChecks();
-
-    expect(contribution.healthCheckIds).toEqual(["core/doctor/local-audio-acceleration"]);
-    expect(
-      contributionChecks.find((check) => check.id === "core/doctor/local-audio-acceleration"),
-    ).toBeDefined();
-
-    await contribution.run({} as DoctorContributionRunContext);
-
-    expect(mocks.getHealthCheck).not.toHaveBeenCalled();
-    expect(mocks.note).not.toHaveBeenCalled();
-  });
-
   it("keeps systemd linger opt-in and reports disabled linger when selected", async () => {
     const contributionChecks = await resolveDoctorContributionHealthChecks();
     const systemdLingerCheck = contributionChecks.find(
