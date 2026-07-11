@@ -634,7 +634,6 @@ describe("config schema", () => {
         },
       }),
     ).toThrow();
-
   });
 
   it("merges plugin ui hints", () => {
