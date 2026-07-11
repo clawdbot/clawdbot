@@ -612,7 +612,20 @@
 }
 
 .sidebar-codex-sessions {
+  display: flex;
+  flex-direction: column;
+  /* Shrink + scroll inside the sidebar body: without min-height 0 a long
+     catalog grows past the shell body and paints over the sidebar footer. */
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
   padding: 0 10px 12px;
+}
+
+/* Same contract as .sidebar-recent-sessions > *: fixed-height rows must not
+   flex-shrink inside the scroller or they overlap the following group. */
+.sidebar-codex-sessions > * {
+  flex: 0 0 auto;
 }
 
 .sidebar-codex-sessions__truncated {
@@ -627,11 +640,6 @@
   align-items: center;
   gap: 8px;
   text-decoration: none;
-}
-
-.sidebar-codex-sessions .sidebar-recent-session__body {
-  min-width: 0;
-  flex: 1;
 }
 
 .codex-transcript {

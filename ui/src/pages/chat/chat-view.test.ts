@@ -1463,7 +1463,7 @@ describe("chat composer workbench", () => {
 
     // A collapsed rail renders nothing — no icon strip in the layout.
     expect(container.querySelector(".chat-workspace-rail")).toBeNull();
-    const toggle = container.querySelector<HTMLButtonElement>(".chat-workspace-open");
+    const toggle = container.querySelector<HTMLButtonElement>(".chat-workspace-toggle");
     expect(toggle?.getAttribute("aria-label")).toBe("Show session files");
     expect(toggle?.getAttribute("aria-expanded")).toBe("false");
     expect(toggle?.getAttribute("aria-keyshortcuts")).toBe("Meta+Shift+B");
@@ -1523,7 +1523,7 @@ describe("chat composer workbench", () => {
       },
     });
 
-    expect(container.querySelector(".chat-workspace-open")).toBeNull();
+    expect(container.querySelector(".chat-workspace-toggle")).toBeNull();
     expect(container.querySelector(".chat-workspace-rail")).toBeNull();
   });
 

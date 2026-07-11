@@ -2133,7 +2133,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
           this.onNavigate?.("chat");
         }}
       >
-        <span class="sidebar-recent-session__body">
+        <span class="sidebar-recent-session__text">
           <span class="sidebar-recent-session__name">${t("nav.chat")}</span>
         </span>
       </a>

@@ -127,12 +127,28 @@ openclaw-chat-pane {
   }
 }
 
+/* Native macOS floats the traffic lights plus the titlebar accessory
+   (sidebar toggle, back/forward — DashboardWindowController) over the
+   top-left ~194px of the page. With the nav column collapsed the split view
+   is the window's top surface, so reserve the titlebar band above the pane
+   headers; this also keeps the header buttons clear of the AppKit drag
+   region (x 78-254, y < 46) that would swallow their clicks. Drawer widths
+   (<=1100px) reserve a 58px topbar row instead (layout.mobile.css). */
+@media (min-width: 1101px) {
+  html.openclaw-native-macos .shell--nav-collapsed .chat-split-view {
+    padding-top: var(--openclaw-native-titlebar-height, 50px);
+  }
+}
+
 .chat-pane__header {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
   gap: 8px;
-  min-height: 36px;
+  /* 48px centers the 28px actions on the app's shared 24px chrome
+     centerline (sidebar brand row, floating toggles), so split headers
+     line up with the sidebar across the top of the shell. */
+  min-height: 48px;
   padding: 0 6px 0 12px;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
   background: color-mix(in srgb, var(--panel) 62%, transparent);
@@ -161,14 +177,4 @@ openclaw-chat-pane {
   align-items: center;
   gap: 2px;
   flex: 0 0 auto;
-}
-
-.chat-pane__actions .btn--icon {
-  width: 28px;
-  /* .btn--icon's min-width: 36px otherwise wins over width and stretches
-     these into 36x28 pills. */
-  min-width: 28px;
-  height: 28px;
-  min-height: 28px;
-  padding: 5px;
 }

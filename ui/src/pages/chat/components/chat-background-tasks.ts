@@ -308,7 +308,6 @@ export function backgroundTasksActiveCount(props: BackgroundTasksProps | undefin
 
 export function renderBackgroundTasksToggle(
   backgroundTasks: BackgroundTasksProps | undefined,
-  variant: "pane-header" | "floating",
 ): TemplateResult | typeof nothing {
   if (!backgroundTasks) {
     return nothing;
@@ -319,9 +318,7 @@ export function renderBackgroundTasksToggle(
   return html`
     <openclaw-tooltip .content=${label}>
       <button
-        class="${variant === "pane-header"
-          ? "btn btn--ghost btn--icon"
-          : "btn btn--sm btn--icon chat-tasks-open"} chat-tasks-toggle"
+        class="btn btn--ghost btn--icon chat-icon-btn chat-tasks-toggle"
         type="button"
         aria-label=${label}
         aria-expanded=${String(expanded)}

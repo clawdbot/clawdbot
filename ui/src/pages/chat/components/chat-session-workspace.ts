@@ -706,7 +706,6 @@ export function sessionWorkspaceModifiedCount(
  * this button is the only pointer affordance (⇧⌘B still works). */
 export function renderSessionWorkspaceToggle(
   sessionWorkspace: SessionWorkspaceProps | undefined,
-  variant: "pane-header" | "floating",
 ): TemplateResult | typeof nothing {
   if (!sessionWorkspace) {
     return nothing;
@@ -717,9 +716,7 @@ export function renderSessionWorkspaceToggle(
   return html`
     <openclaw-tooltip .content=${`${label} (⇧⌘B)`}>
       <button
-        class="${variant === "pane-header"
-          ? "btn btn--ghost btn--icon"
-          : "btn btn--sm btn--icon chat-workspace-open"} chat-workspace-toggle"
+        class="btn btn--ghost btn--icon chat-icon-btn chat-workspace-toggle"
         type="button"
         aria-label=${label}
         aria-keyshortcuts="Meta+Shift+B"
@@ -741,7 +738,6 @@ export function renderSessionWorkspaceToggle(
  * gateway does not advertise sessions.diff. */
 export function renderSessionDiffToggle(
   sessionWorkspace: SessionWorkspaceProps | undefined,
-  variant: "pane-header" | "floating",
 ): TemplateResult | typeof nothing {
   if (!sessionWorkspace?.onOpenDiff) {
     return nothing;
@@ -750,9 +746,7 @@ export function renderSessionDiffToggle(
   return html`
     <openclaw-tooltip .content=${label}>
       <button
-        class="${variant === "pane-header"
-          ? "btn btn--ghost btn--icon"
-          : "btn btn--sm btn--icon chat-diff-open"} chat-session-diff-toggle"
+        class="btn btn--ghost btn--icon chat-icon-btn chat-session-diff-toggle"
         type="button"
         aria-label=${label}
         @click=${sessionWorkspace.onOpenDiff}

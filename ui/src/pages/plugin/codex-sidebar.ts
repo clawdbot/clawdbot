@@ -8,21 +8,20 @@ import { OpenClawLightDomContentsElement } from "../../lit/openclaw-element.ts";
 import {
   getClaudeSessionsState,
   loadClaudeSessions,
-  loadMoreClaudeSessions,
   stopClaudeSessionsPolling,
 } from "./claude-sessions-controller.ts";
 import {
   getCodexSessionsState,
   loadCodexSessions,
-  loadMoreCodexSessions,
   stopCodexSessionsPolling,
   type CodexSessionPayload,
 } from "./codex-sessions-controller.ts";
 import { pluginTabSearch } from "./route.ts";
 
 const SIDEBAR_REFRESH_INTERVAL_MS = 30_000;
-const MAX_CATALOG_PAGES_PER_HOST = 100;
-const MAX_CATALOG_SESSIONS_PER_HOST = 4_000;
+/* The sidebar is a quick-jump list: it renders only the newest sessions per
+   host. The full catalog stays on the sessions page behind "View all". */
+const SIDEBAR_SESSIONS_PER_HOST = 10;
 
 function sessionTitle(session: CodexSessionPayload, catalogKind: "codex" | "claude"): string {
   return (
@@ -49,7 +48,6 @@ export class CodexSidebar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) onOpenSession?: (hostId: string, threadId: string) => void;
   @property({ attribute: false }) onViewAll?: () => void;
   @state() private revision = 0;
-  @state() private truncatedHostIds = new Set<string>();
 
   private readonly controllerHost = {};
   private loadedClient: GatewayBrowserClient | null = null;
@@ -114,15 +112,6 @@ export class CodexSidebar extends OpenClawLightDomContentsElement {
     }
   }
 
-  private async loadMoreSessions(hostId: string): Promise<void> {
-    const catalogState = this.sessionsState();
-    if (this.catalogKind === "claude") {
-      await loadMoreClaudeSessions(catalogState, this.client, hostId);
-    } else {
-      await loadMoreCodexSessions(catalogState, this.client, hostId);
-    }
-  }
-
   private clearRefreshTimer(): void {
     if (this.refreshTimer) {
       globalThis.clearTimeout(this.refreshTimer);
@@ -132,10 +121,11 @@ export class CodexSidebar extends OpenClawLightDomContentsElement {
 
   private beginRefresh(): void {
     this.clearRefreshTimer();
-    this.truncatedHostIds = new Set();
+    // Token guards the refresh chain across client switches: a stale load must
+    // not schedule a second timer next to the replacement client's chain.
     const token = {};
     this.hydrationToken = token;
-    void this.loadAllPages(token).finally(() => {
+    void this.loadSessions().finally(() => {
       if (this.hydrationToken !== token || !this.loadedClient) {
         return;
       }
@@ -144,48 +134,6 @@ export class CodexSidebar extends OpenClawLightDomContentsElement {
         SIDEBAR_REFRESH_INTERVAL_MS,
       );
     });
-  }
-
-  private async loadAllPages(token: object): Promise<void> {
-    const sessionsState = this.sessionsState();
-    const seenCursors = new Set<string>();
-    const pageCounts = new Map<string, number>();
-    await this.loadSessions();
-    if (this.catalogKind === "claude") {
-      this.truncatedHostIds = new Set(
-        sessionsState.hosts.filter((host) => host.nextCursor).map((host) => host.hostId),
-      );
-      return;
-    }
-    while (this.hydrationToken === token) {
-      const hostIds = sessionsState.hosts
-        .filter((host) => {
-          const pageCount = pageCounts.get(host.hostId) ?? 1;
-          const reachedBudget =
-            pageCount >= MAX_CATALOG_PAGES_PER_HOST ||
-            host.sessions.length >= MAX_CATALOG_SESSIONS_PER_HOST;
-          if (host.nextCursor && reachedBudget) {
-            this.truncatedHostIds = new Set(this.truncatedHostIds).add(host.hostId);
-            return false;
-          }
-          const cursorKey = `${host.hostId}\u0000${host.nextCursor ?? ""}`;
-          if (!host.connected || host.error || !host.nextCursor || seenCursors.has(cursorKey)) {
-            return false;
-          }
-          seenCursors.add(cursorKey);
-          return true;
-        })
-        .map((host) => host.hostId);
-      if (hostIds.length === 0) {
-        return;
-      }
-      await Promise.all(
-        hostIds.map(async (hostId) => {
-          await this.loadMoreSessions(hostId);
-          pageCounts.set(hostId, (pageCounts.get(hostId) ?? 1) + 1);
-        }),
-      );
-    }
   }
 
   private sessionSearch(hostId: string, threadId: string): string {
@@ -231,22 +179,17 @@ export class CodexSidebar extends OpenClawLightDomContentsElement {
             ${icons.terminal}
           </button>
         </div>
-        ${hosts.map(
-          (host) => html`
+        ${hosts.map((host) => {
+          const sessions = host.sessions.slice(0, SIDEBAR_SESSIONS_PER_HOST);
+          const truncated = Boolean(host.nextCursor) || host.sessions.length > sessions.length;
+          return html`
             <div class="sidebar-recent-sessions__group" data-codex-host-id=${host.hostId}>
               <div class="sidebar-recent-sessions__head">
                 <span class="sidebar-recent-sessions__label-text">${host.label}</span>
                 <span class="sidebar-session-group-count">${host.sessions.length}</span>
               </div>
-              ${this.truncatedHostIds.has(host.hostId)
-                ? html`<div class="sidebar-codex-sessions__truncated">
-                    ${this.catalogKind === "claude"
-                      ? t("claudeSessions.sidebar.truncated")
-                      : t("codexSessions.sidebar.truncated")}
-                  </div>`
-                : nothing}
               <div class="sidebar-recent-sessions__list">
-                ${host.sessions.map((session) => {
+                ${sessions.map((session) => {
                   const active =
                     this.selectedHostId === host.hostId &&
                     this.selectedThreadId === session.threadId;
@@ -272,7 +215,7 @@ export class CodexSidebar extends OpenClawLightDomContentsElement {
                         this.onOpenSession?.(host.hostId, session.threadId);
                       }}
                     >
-                      <span class="sidebar-recent-session__body">
+                      <span class="sidebar-recent-session__text">
                         <span class="sidebar-recent-session__name"
                           >${sessionTitle(session, this.catalogKind)}</span
                         >
@@ -282,9 +225,16 @@ export class CodexSidebar extends OpenClawLightDomContentsElement {
                   `;
                 })}
               </div>
+              ${truncated
+                ? html`<div class="sidebar-codex-sessions__truncated">
+                    ${this.catalogKind === "claude"
+                      ? t("claudeSessions.sidebar.truncated")
+                      : t("codexSessions.sidebar.truncated")}
+                  </div>`
+                : nothing}
             </div>
-          `,
-        )}
+          `;
+        })}
       </section>
     `;
   }

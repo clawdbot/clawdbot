@@ -1,0 +1,9 @@
+{"seq":1,"at":0,"dir":"in","kind":"reply-start"}
+{"seq":2,"at":0,"dir":"out","kind":"assistant.threads.setStatus","data":{"payload":{"channel_id":"C0TRACE","loading_messages":["Reading the thread...","Checking context...","Working through the request...","Putting it all together..."],"status":"is typing...","thread_ts":"ts#1"},"result":{"ok":true},"target":"C0TRACE/ts#1"}}
+{"seq":3,"at":0,"dir":"in","kind":"partial","data":{"text":"All checks passed."}}
+{"seq":4,"at":300,"dir":"in","kind":"final","data":{"text":"All checks passed. Ship it."}}
+{"seq":5,"at":300,"dir":"out","kind":"users.info","data":{"payload":{"user":"U0TRACE"},"result":{"team_id":"T0TRACE"},"target":"U0TRACE"}}
+{"seq":6,"at":300,"dir":"in","kind":"idle"}
+{"seq":7,"at":300,"dir":"out","kind":"assistant.threads.setStatus","data":{"payload":{"channel_id":"C0TRACE","status":"","thread_ts":"ts#1"},"result":{"ok":true},"target":"C0TRACE/ts#1"}}
+{"seq":8,"at":300,"dir":"out","kind":"chat.startStream","data":{"payload":{"channel":"C0TRACE","recipient_team_id":"T0TRACE","recipient_user_id":"U0TRACE","thread_ts":"ts#1"},"result":{"error":"method_not_supported_for_channel_type","ok":false},"target":"C0TRACE"}}
+{"seq":9,"at":300,"dir":"out","kind":"chat.postMessage","data":{"payload":{"channel":"C0TRACE","text":"All checks passed. Ship it.","thread_ts":"ts#1","unfurl_links":false},"result":{"ts":"ts#2"},"target":"C0TRACE"}}

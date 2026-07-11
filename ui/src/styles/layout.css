@@ -194,7 +194,10 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
 
 .settings-sidebar__header {
   flex-shrink: 0;
-  padding: 14px 12px 6px;
+  /* 8px top pad centers the 32px back button on the shared 24px chrome
+     centerline, mirroring .sidebar-shell; macOS overrides with titlebar
+     clearance. */
+  padding: 8px 12px 6px;
 }
 
 .settings-sidebar__back {
@@ -717,7 +720,10 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
   flex-direction: column;
   min-height: 0;
   flex: 1;
-  padding: 14px 10px 12px;
+  /* 9px top pad centers the brand row's 30px icons on the app's shared
+     24px chrome centerline (pane-header actions, floating toggles). The
+     macOS app overrides this with its 50px titlebar clearance. */
+  padding: 9px 10px 12px;
   border: none;
   border-radius: 0;
   background: transparent;
@@ -817,6 +823,9 @@ html.openclaw-native-nav .shell-nav-expand:focus-visible {
   flex: 1;
   display: flex;
   flex-direction: column;
+  /* Children manage their own scrolling; clip so an overgrown section can
+     never paint over the sidebar footer. */
+  overflow: hidden;
 }
 
 .sidebar-shell__footer {

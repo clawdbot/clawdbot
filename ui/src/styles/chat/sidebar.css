@@ -55,29 +55,35 @@
    free as a window-drag surface in the native macOS app. */
 .chat-floating-toggles {
   position: absolute;
-  top: 10px;
-  right: 10px;
+  /* 8px top + 2px row padding keeps the 28px buttons on the shared 24px
+     chrome centerline (sidebar brand row, pane-header actions). */
+  top: 8px;
+  right: 8px;
   z-index: 12;
   display: flex;
-  gap: 6px;
+  /* Same tight spacing as .chat-pane__actions so both rows read identical. */
+  gap: 2px;
+  /* Ghost buttons carry no chrome of their own, but scrolled thread content
+     passes under this row; a frosted wash keeps the icons legible without
+     reading as boxed buttons. Invisible over the empty titlebar band. */
+  padding: 2px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
 }
 
-.chat-workspace-open,
-.chat-tasks-open,
-.chat-diff-open,
-.chat-open-split-view {
-  /* Match the 28px pane-header/split-view openers; .btn--icon's
-     min-width/height of 36px would win otherwise. */
+/* Compact icon button shared by the split-pane header actions and the
+   floating toggles above: one borderless 28px design so both surfaces match.
+   Sizing only — chrome stays ghost; .btn--icon's 36px min-width/height would
+   win otherwise. The floating row sits in the thread's reserved titlebar band
+   (never over content), so it needs no backdrop of its own. */
+.chat-icon-btn {
   width: 28px;
   min-width: 28px;
   height: 28px;
   min-height: 28px;
   padding: 5px;
-  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
-  background: color-mix(in srgb, var(--panel) 92%, transparent);
-  box-shadow: var(--shadow-sm);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
 }
 
 /* The workspace rail adapts to the pane width (side column on wide panes,
@@ -86,8 +92,7 @@
    side-dock only, so its toggles still hide on narrow viewports until it
    grows a narrow presentation. */
 @media (max-width: 1120px) {
-  .chat-tasks-open,
-  .chat-pane__actions .chat-tasks-toggle {
+  .chat-tasks-toggle {
     display: none;
   }
 }
@@ -1745,7 +1750,7 @@
 /* ── Session diff panel (sessions.diff sidebar content) ── */
 
 /* The floating diff opener sits in the .chat-floating-toggles row and shares
-   the .chat-workspace-open sizing/chrome rules near the top of this file. */
+   the .chat-icon-btn sizing/chrome rules near the top of this file. */
 
 .session-diff {
   display: flex;

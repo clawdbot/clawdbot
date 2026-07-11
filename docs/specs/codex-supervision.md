@@ -39,8 +39,9 @@ plan:
   no-other-runner confirmation.
 - Show active local sources without new-branch or archive controls while still
   allowing an existing supervised Chat to open.
-- Show every row in the main sidebar and provide bounded, cursor-paginated
-  transcript reads for local and paired-node rows.
+- Show the newest rows per host in the main sidebar, keep the full catalog on
+  the sessions page, and provide bounded, cursor-paginated transcript reads for
+  local and paired-node rows.
 - Isolate catalog failures by host.
 
 The catalog is the non-archived collection. A row within it can still have an

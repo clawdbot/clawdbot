@@ -1208,14 +1208,14 @@ class ChatPane extends OpenClawLightDomElement {
              drag-and-drop. -->
         <span class="chat-pane__session-title" title=${this.paneTitle}>${this.paneTitle}</span>
         <div class="chat-pane__actions">
-          ${renderSessionDiffToggle(sessionWorkspace, "pane-header")}
-          ${renderBackgroundTasksToggle(backgroundTasks, "pane-header")}
-          ${renderSessionWorkspaceToggle(sessionWorkspace, "pane-header")}
+          ${renderSessionDiffToggle(sessionWorkspace)}
+          ${renderBackgroundTasksToggle(backgroundTasks)}
+          ${renderSessionWorkspaceToggle(sessionWorkspace)}
           ${!this.narrow
             ? html`
                 <openclaw-tooltip .content=${t("chat.splitView.splitDown")}>
                   <button
-                    class="btn btn--ghost btn--icon"
+                    class="btn btn--ghost btn--icon chat-icon-btn"
                     type="button"
                     aria-label=${t("chat.splitView.splitDown")}
                     @click=${() => this.onSplitDown?.(this.paneId)}
@@ -1225,7 +1225,7 @@ class ChatPane extends OpenClawLightDomElement {
                 </openclaw-tooltip>
                 <openclaw-tooltip .content=${t("chat.splitView.splitRight")}>
                   <button
-                    class="btn btn--ghost btn--icon"
+                    class="btn btn--ghost btn--icon chat-icon-btn"
                     type="button"
                     aria-label=${t("chat.splitView.splitRight")}
                     @click=${() => this.onSplitRight?.(this.paneId)}
@@ -1237,7 +1237,7 @@ class ChatPane extends OpenClawLightDomElement {
             : nothing}
           <openclaw-tooltip .content=${t("chat.splitView.closePane")}>
             <button
-              class="btn btn--ghost btn--icon"
+              class="btn btn--ghost btn--icon chat-icon-btn"
               type="button"
               aria-label=${t("chat.splitView.closePane")}
               @click=${() => this.onClosePane?.(this.paneId)}

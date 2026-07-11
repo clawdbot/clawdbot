@@ -81,6 +81,15 @@ describeControlUiE2e("Claude Sessions mocked Gateway E2E", () => {
     const desktop = session("desktop-thread", "Desktop architecture review", "claude-desktop");
     const cli = session("cli-thread", "CLI release checklist", "claude-cli");
     const olderCli = session("older-cli-thread", "Older CLI investigation", "claude-cli");
+    // Long names + more sessions than the sidebar cap: the sidebar must
+    // ellipsize titles and keep the overflow in the full catalog.
+    const backlog = Array.from({ length: 10 }, (_, index) =>
+      session(
+        `backlog-thread-${index + 1}`,
+        `Backlog investigation ${index + 1} with a deliberately long title that must truncate in the sidebar`,
+        "claude-cli",
+      ),
+    );
     const gateway = await installMockGateway(page, {
       controlUiTabs: [
         {
@@ -118,7 +127,7 @@ describeControlUiE2e("Claude Sessions mocked Gateway E2E", () => {
                     kind: "gateway",
                     label: "Claude Gateway",
                     nextCursor: "catalog-page-2",
-                    sessions: [desktop, cli],
+                    sessions: [desktop, cli, ...backlog],
                   },
                 ],
               },
@@ -164,6 +173,15 @@ describeControlUiE2e("Claude Sessions mocked Gateway E2E", () => {
       await page.locator('[data-codex-thread-id="cli-thread"]').waitFor();
       await page.getByRole("heading", { name: "CLI release checklist" }).waitFor();
       await page.getByText("Claude sessions", { exact: true }).last().waitFor();
+      // Sidebar shows only the newest sessions per host plus a truncation
+      // note; the rest stays on the catalog page.
+      await expect
+        .poll(() => page.locator(".sidebar-codex-sessions [data-codex-thread-id]").count())
+        .toBe(10);
+      await page
+        .locator(".sidebar-codex-sessions")
+        .getByText("More sessions are available in the full catalog.")
+        .waitFor();
       await page.getByRole("button", { name: "Load more" }).click();
       await page.getByText("Older CLI investigation", { exact: true }).waitFor();
       await captureUiProof(page, "01-sidebar-and-catalog.png");

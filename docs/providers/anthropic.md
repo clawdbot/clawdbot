@@ -205,8 +205,8 @@ enabled by default; a native macOS node advertises the read-only Claude session
 commands when the local `~/.claude/projects/` directory exists. Approve the
 node pairing upgrade when those commands first appear.
 
-The sidebar keeps the newest bounded page from each host. Open **Claude
-Sessions** and use **Load more** on a host to browse older catalog pages without
+The sidebar shows the newest sessions from each host. Open **Claude
+Sessions** and use **Load more** on a host to browse the full catalog without
 turning each sidebar refresh into a full disk scan.
 
 Selecting a row reads the newest transcript page first. **Load older transcript

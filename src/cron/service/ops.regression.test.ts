@@ -14,6 +14,13 @@ import {
   setCommandLaneConcurrency,
   waitForActiveTasks,
 } from "../../process/command-queue.js";
+import {
+  getActiveGatewayRootWorkCount,
+  isGatewaySubordinateWorkAdmissionClosed,
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+  tryBeginGatewayRootWorkAdmission,
+} from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
 import { saveCronStore } from "../store.js";
 import { enqueueRun, remove, run, start } from "./ops.js";
@@ -58,6 +65,115 @@ function expectIsolatedRunJobId(
 }
 
 describe("cron service ops regressions", () => {
+  it("transfers queued manual runs out of the released request root", async () => {
+    vi.useRealTimers();
+    resetGatewayWorkAdmission();
+    clearCommandLane(CommandLane.Cron);
+    setCommandLaneConcurrency(CommandLane.Cron, 1);
+
+    const childLane = "cron-manual-admission-child";
+    clearCommandLane(childLane);
+    setCommandLaneConcurrency(childLane, 1);
+    const store = opsRegressionFixtures.makeStorePath();
+    const now = Date.parse("2026-02-06T10:05:00.000Z");
+    const job = createDueIsolatedJob({
+      id: "manual-admission-continuation",
+      nowMs: now,
+      nextRunAtMs: now,
+    });
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+    const enterRunner = createDeferred<void>();
+    const runnerStarted = createDeferred<void>();
+    const finished = createDeferred<void>();
+    let terminalEvent: CronEvent | undefined;
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => {
+        runnerStarted.resolve();
+        await enterRunner.promise;
+        expect(isGatewaySubordinateWorkAdmissionClosed()).toBe(false);
+        await enqueueCommandInLane(childLane, async () => undefined);
+        return { status: "ok" as const };
+      }),
+      onEvent: (event) => {
+        if (event.jobId === job.id && event.action === "finished") {
+          terminalEvent = event;
+          finished.resolve();
+        }
+      },
+    });
+    const requestRoot = tryBeginGatewayRootWorkAdmission();
+    expect(requestRoot?.ownsRoot).toBe(true);
+
+    try {
+      await requestRoot?.run(async () => {
+        expectQueuedRunAck(await enqueueRun(state, job.id, "force"));
+        await runnerStarted.promise;
+        expect(getActiveGatewayRootWorkCount()).toBe(2);
+      });
+      requestRoot?.release();
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+
+      enterRunner.resolve();
+      await finished.promise;
+      await waitForActiveTasks(5_000);
+      expect(terminalEvent).toMatchObject({ status: "ok" });
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    } finally {
+      requestRoot?.release();
+      enterRunner.resolve();
+      clearCommandLane(childLane);
+      clearCommandLane(CommandLane.Cron);
+      resetGatewayWorkAdmission();
+    }
+  });
+
+  it("emits a terminal error when detached admission is already closed", async () => {
+    vi.useRealTimers();
+    resetGatewayWorkAdmission();
+    const store = opsRegressionFixtures.makeStorePath();
+    const now = Date.parse("2026-02-06T10:05:00.000Z");
+    const job = createDueIsolatedJob({
+      id: "manual-admission-closed",
+      nowMs: now,
+      nextRunAtMs: now,
+    });
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+    const finished = createDeferred<CronEvent>();
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      onEvent: (event) => {
+        if (event.jobId === job.id && event.action === "finished") {
+          finished.resolve(event);
+        }
+      },
+    });
+
+    try {
+      markGatewayRestartDraining();
+      expectQueuedRunAck(await enqueueRun(state, job.id, "force"));
+      await expect(finished.promise).resolves.toMatchObject({
+        status: "error",
+        error: expect.stringContaining("gateway is draining for restart"),
+      });
+    } finally {
+      resetGatewayWorkAdmission();
+    }
+  });
+
   it("repairs missing job state during startup", async () => {
     const scheduledAt = Date.now() + 60_000;
     const store = opsRegressionFixtures.makeStorePath();

@@ -1045,7 +1045,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
     try {
       await page.goto(`${server.baseUrl}chat`);
-      await page.locator(".chat-workspace-open").click();
+      await page.locator(".chat-workspace-toggle").click();
       await page.getByText("AGENTS.md").waitFor({ timeout: 10_000 });
 
       await page.getByRole("button", { name: "Copy path" }).click();
@@ -1116,7 +1116,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.goto(`${server.baseUrl}chat`);
       // Collapsed rails render nothing; the floating opener (with the
       // changed-file badge) is the only pointer affordance.
-      const opener = page.locator(".chat-workspace-open");
+      const opener = page.locator(".chat-workspace-toggle");
       await opener.waitFor({ timeout: 10_000 });
       expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
       expect(await page.locator(".chat-workspace-rail").count()).toBe(0);
@@ -1188,7 +1188,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
     try {
       await page.goto(`${server.baseUrl}chat`);
-      await page.locator(".chat-workspace-open").click();
+      await page.locator(".chat-workspace-toggle").click();
       await page.locator(".chat-workspace-rail__file-name", { hasText: "file-60.ts" }).waitFor({
         timeout: 10_000,
       });
