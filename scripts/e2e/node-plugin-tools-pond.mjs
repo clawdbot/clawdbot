@@ -14,7 +14,10 @@ const PLUGIN_ID = "pond-node-tools";
 const MCP_PLUGIN_ID = "node-mcp";
 const MCP_SERVER_NAME = "pond";
 const MCP_TOOL_NAME = "pond_echo";
+const SHARED_TOOL_NAME = "pond_shared_probe";
 const SKILL_NAME = "pond-node-skill";
+const LIVE_MODEL = "anthropic/claude-sonnet-4-6";
+const LIVE_TURN_TIMEOUT_MS = 60_000;
 const require = createRequire(import.meta.url);
 let verboseOutput = false;
 
@@ -88,7 +91,7 @@ async function writeJson(filePath, value, options = {}) {
   await fs.writeFile(filePath, data, "utf8");
 }
 
-async function writeProofPlugin(rootDir, nodeLabel) {
+async function writeProofPlugin(rootDir, nodeLabel, options = {}) {
   const pluginDir = path.join(rootDir, "plugin");
   const pluginPath = path.join(pluginDir, "pond-node-tools.mjs");
   await fs.mkdir(pluginDir, { recursive: true });
@@ -109,6 +112,23 @@ async function writeProofPlugin(rootDir, nodeLabel) {
     type: "module",
     openclaw: { extensions: ["./pond-node-tools.mjs"] },
   });
+  const sharedToolRegistration = options.sharedTool
+    ? `
+    api.registerNodeHostCommand({
+      command: "pond.sharedProbe",
+      agentTool: {
+        name: ${JSON.stringify(SHARED_TOOL_NAME)},
+        description: "Return the node label for collision-disambiguation proof.",
+        parameters: {
+          type: "object",
+          properties: {},
+          additionalProperties: false
+        },
+        defaultPlatforms: ["linux", "macos"]
+      },
+      handle: async () => JSON.stringify(${JSON.stringify(`${nodeLabel}-shared-ok`)})
+    });`
+    : "";
   const source = `
 import os from "node:os";
 
@@ -152,7 +172,7 @@ export default {
           hostname: os.hostname(),
           params: readParams(paramsJSON)
         })
-    });
+    });${sharedToolRegistration}
   }
 };
 `.trimStart();
@@ -162,35 +182,41 @@ export default {
 
 async function writeProofMcpServer(rootDir) {
   const serverPath = path.join(rootDir, "mcp", "pond-echo.mjs");
+  const callLogPath = path.join(rootDir, "mcp", "calls.jsonl");
   const sdkMcpServerPath = require.resolve("@modelcontextprotocol/sdk/server/mcp.js");
   const sdkStdioServerPath = require.resolve("@modelcontextprotocol/sdk/server/stdio.js");
   const zodPath = require.resolve("zod");
   await fs.mkdir(path.dirname(serverPath), { recursive: true });
   const source = `#!/usr/bin/env node
+import { appendFile } from "node:fs/promises";
 import { McpServer } from ${JSON.stringify(sdkMcpServerPath)};
 import { StdioServerTransport } from ${JSON.stringify(sdkStdioServerPath)};
 import { z } from ${JSON.stringify(zodPath)};
 
+const callLogPath = ${JSON.stringify(callLogPath)};
 const server = new McpServer({ name: "pond-echo-fixture", version: "1.0.0" });
 
 server.tool(
   ${JSON.stringify(MCP_TOOL_NAME)},
   "Echo a pond proof payload.",
   { text: z.string() },
-  async ({ text }) => ({
-    content: [{ type: "text", text: JSON.stringify({ text }) }],
-  }),
+  async ({ text }) => {
+    await appendFile(callLogPath, JSON.stringify({ text }) + "\\n", "utf8");
+    return {
+      content: [{ type: "text", text: JSON.stringify({ text }) }],
+    };
+  },
 );
 
 await server.connect(new StdioServerTransport());
 `;
   await fs.writeFile(serverPath, source, { encoding: "utf8", mode: 0o755 });
-  return serverPath;
+  return { callLogPath, serverPath };
 }
 
 async function writeProofSkill(stateDir, proof) {
   const skillPath = path.join(stateDir, "skills", SKILL_NAME, "SKILL.md");
-  const content = `---\nname: ${SKILL_NAME}\ndescription: Pond node-hosted skill proof\n---\n\n# Pond node skill\n\nProof token: ${proof}\n`;
+  const content = `---\nname: ${SKILL_NAME}\ndescription: Pond node-hosted skill proof\n---\n\n# Pond node skill\n\nWhen asked for the pond marker, reply with exactly ${proof}.\n`;
   await fs.mkdir(path.dirname(skillPath), { recursive: true });
   await fs.writeFile(skillPath, content, "utf8");
   return skillPath;
@@ -202,8 +228,11 @@ async function prepareRoleState(baseDir, role, token, nodeLabel, options = {}) {
   const configPath = path.join(rootDir, "openclaw.json");
   await fs.mkdir(rootDir, { recursive: true, mode: 0o700 });
   await fs.chmod(rootDir, 0o700);
-  const pluginPath = await writeProofPlugin(rootDir, nodeLabel);
-  const mcpServerPath = options.nodeSurfaces ? await writeProofMcpServer(rootDir) : undefined;
+  const pluginPath = await writeProofPlugin(rootDir, nodeLabel, {
+    sharedTool: options.sharedTool === true,
+  });
+  const mcpFixture = options.nodeSurfaces ? await writeProofMcpServer(rootDir) : undefined;
+  const mcpServerPath = mcpFixture?.serverPath;
   const skillPath = options.nodeSurfaces
     ? await writeProofSkill(stateDir, options.skillProofToken)
     : undefined;
@@ -214,9 +243,24 @@ async function prepareRoleState(baseDir, role, token, nodeLabel, options = {}) {
         mode: "local",
         bind: "lan",
         auth: { mode: "token", token },
-        nodes: { allowCommands: ["pond.echo", "system.run"] },
+        nodes: {
+          allowCommands: [
+            "pond.echo",
+            ...(options.sharedTool ? ["pond.sharedProbe"] : []),
+            "system.run",
+          ],
+        },
       },
       tools: { exec: { host: "node", security: "full", ask: "off" } },
+      ...(options.liveModel
+        ? {
+            agents: {
+              defaults: {
+                model: { primary: options.liveModel, fallbacks: [] },
+              },
+            },
+          }
+        : {}),
       plugins: {
         load: { paths: [pluginPath] },
         entries: { [PLUGIN_ID]: { enabled: true } },
@@ -244,8 +288,8 @@ async function prepareRoleState(baseDir, role, token, nodeLabel, options = {}) {
     [SESSION_KEY]: {
       sessionId: "pond-proof-main",
       updatedAt: now(),
-      modelProvider: "openai",
-      model: "gpt-5.5",
+      modelProvider: options.liveModel ? "anthropic" : "openai",
+      model: options.liveModel ? "claude-sonnet-4-6" : "gpt-5.5",
     },
   });
   await writeJson(
@@ -257,7 +301,15 @@ async function prepareRoleState(baseDir, role, token, nodeLabel, options = {}) {
     },
     { mode: 0o600 },
   );
-  return { rootDir, stateDir, configPath, pluginPath, mcpServerPath, skillPath };
+  return {
+    rootDir,
+    stateDir,
+    configPath,
+    pluginPath,
+    mcpServerPath,
+    mcpCallLogPath: mcpFixture?.callLogPath,
+    skillPath,
+  };
 }
 
 function childEnv(state, token, nodeLabel) {
@@ -540,6 +592,13 @@ async function readEffectiveMcpProofTools(rpc) {
   );
 }
 
+async function readEffectiveSharedProofTools(rpc) {
+  const result = await rpc.request("tools.effective", { sessionKey: SESSION_KEY });
+  return flattenEffectiveTools(result).filter(
+    (tool) => tool.pluginId === PLUGIN_ID && tool.id.endsWith(`_${SHARED_TOOL_NAME}`),
+  );
+}
+
 async function readProofSkills(rpc) {
   const result = await rpc.request("skills.status", { agentId: "main" });
   const locatorSuffix = `/skills/${SKILL_NAME}/SKILL.md`;
@@ -595,6 +654,127 @@ async function invokeMcpProofTool(rpc, tool, proof) {
     throw new Error(`MCP proof token missing from ${tool.id} output: ${JSON.stringify(output)}`);
   }
   return { tool: tool.id, output };
+}
+
+function assertToolIds(label, tools, expectedIds) {
+  const actual = tools.map((tool) => tool.id).toSorted((a, b) => a.localeCompare(b));
+  const expected = [...expectedIds].toSorted((a, b) => a.localeCompare(b));
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    throw new Error(`${label}: expected ${expected.join(", ")}, got ${actual.join(", ")}`);
+  }
+}
+
+function expectedNodeToolId(nodeId, baseName) {
+  let fragment = nodeId
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 32);
+  fragment = fragment || "node";
+  if (!/^[a-z]/.test(fragment)) {
+    fragment = `node_${fragment}`.slice(0, 32);
+  }
+  return `${fragment}_${baseName}`;
+}
+
+async function runLiveAgentTurn(rpc, { label, message, sessionKey }) {
+  const idempotencyKey = `pond-live-${label}-${crypto.randomBytes(8).toString("hex")}`;
+  const payload = await rpc.request(
+    "agent",
+    {
+      sessionKey,
+      idempotencyKey,
+      message,
+      deliver: false,
+      timeout: LIVE_TURN_TIMEOUT_MS / 1_000,
+    },
+    { expectFinal: true, timeoutMs: LIVE_TURN_TIMEOUT_MS },
+  );
+  if (payload?.status !== "ok") {
+    throw new Error(`${label} agent turn failed: ${JSON.stringify(payload)}`);
+  }
+  const { extractAgentReplyTexts } = await import("./lib/agent-turn-output.mjs");
+  const replies = extractAgentReplyTexts(JSON.stringify(payload));
+  const reply = replies.join("\n").trim();
+  if (!reply) {
+    throw new Error(`${label} agent turn returned no assistant text: ${JSON.stringify(payload)}`);
+  }
+  return { reply, runId: payload.runId };
+}
+
+async function runLiveChecks({ rpc, mcpTool, mcpCallLogPath, nodes, skillMarker }) {
+  if (!mcpTool || !mcpCallLogPath) {
+    throw new Error("live MCP proof requires a published tool and call-log path");
+  }
+  const startedAt = now();
+  logStep(`running live agent turns with ${LIVE_MODEL}`);
+
+  const mcpToken = proofToken();
+  const mcpTurn = await runLiveAgentTurn(rpc, {
+    label: "mcp",
+    sessionKey: "agent:main:pond-live-mcp",
+    message: `Call the tool ${mcpTool.id} with text ${JSON.stringify(mcpToken)}. Reply with exactly the text the tool returned. Do not call any other tool.`,
+  });
+  if (!mcpTurn.reply.includes(mcpToken)) {
+    throw new Error(`live MCP reply missing ${mcpToken}: ${JSON.stringify(mcpTurn.reply)}`);
+  }
+  await waitFor("live MCP fixture call log", 10_000, async () => {
+    try {
+      return (await fs.readFile(mcpCallLogPath, "utf8")).includes(mcpToken);
+    } catch {
+      return false;
+    }
+  });
+
+  const skillTurn = await runLiveAgentTurn(rpc, {
+    label: "skill",
+    sessionKey: "agent:main:pond-live-skill",
+    message: `What is the pond marker? Follow the ${SKILL_NAME} skill. Reply with exactly the marker and nothing else.`,
+  });
+  if (!skillTurn.reply.includes(skillMarker)) {
+    throw new Error(`live skill reply missing ${skillMarker}: ${JSON.stringify(skillTurn.reply)}`);
+  }
+
+  const sharedTools = await waitFor("two disambiguated shared proof tools", 30_000, async () => {
+    const tools = await readEffectiveSharedProofTools(rpc);
+    return tools.length === 2 ? tools : null;
+  });
+  const pondANode = nodes.find((node) => node.displayName === "Pond A");
+  const pondBNode = nodes.find((node) => node.displayName === "Pond B");
+  if (!pondANode?.nodeId || !pondBNode?.nodeId) {
+    throw new Error(
+      `live shared-tool proof could not resolve Pond A/B nodes: ${JSON.stringify(nodes)}`,
+    );
+  }
+  const expectedSharedIds = [
+    expectedNodeToolId(pondANode.nodeId, SHARED_TOOL_NAME),
+    expectedNodeToolId(pondBNode.nodeId, SHARED_TOOL_NAME),
+  ];
+  assertToolIds("shared proof tool names", sharedTools, expectedSharedIds);
+  const pondBTool = sharedTools.find((tool) => tool.id === expectedSharedIds[1]);
+  if (!pondBTool) {
+    throw new Error("pond-b shared proof tool missing after deterministic-name assertion");
+  }
+  const sharedTurn = await runLiveAgentTurn(rpc, {
+    label: "shared",
+    sessionKey: "agent:main:pond-live-shared",
+    message: `Call the tool ${pondBTool.id} with no arguments. Reply with exactly its output. Do not call any other tool.`,
+  });
+  const sharedMarker = "pond-b-shared-ok";
+  if (!sharedTurn.reply.includes(sharedMarker)) {
+    throw new Error(
+      `live shared-tool reply missing ${sharedMarker}: ${JSON.stringify(sharedTurn.reply)}`,
+    );
+  }
+
+  return {
+    model: LIVE_MODEL,
+    durationMs: now() - startedAt,
+    mcp: { tool: mcpTool.id, runId: mcpTurn.runId, proofToken: mcpToken },
+    skill: { name: SKILL_NAME, runId: skillTurn.runId, marker: skillMarker },
+    shared: { tools: sharedTools, selected: pondBTool.id, runId: sharedTurn.runId, sharedMarker },
+  };
 }
 
 async function runVerify({ url, token, expectedNodes }) {
@@ -702,6 +882,7 @@ async function runNode(args) {
 }
 
 async function runLocal(args) {
+  const live = args.live === true;
   const token = String(args.token || proofToken());
   const mcpProofToken = proofToken();
   const skillProofToken = proofToken();
@@ -709,10 +890,16 @@ async function runLocal(args) {
   const baseDir = String(
     args.baseDir || (await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-node-plugin-tools-"))),
   );
-  const gatewayState = await prepareRoleState(baseDir, "gateway", token, "gateway");
-  const nodeAState = await prepareRoleState(baseDir, "pond-a", token, "pond-a");
+  const gatewayState = await prepareRoleState(baseDir, "gateway", token, "gateway", {
+    liveModel: live ? LIVE_MODEL : undefined,
+    sharedTool: live,
+  });
+  const nodeAState = await prepareRoleState(baseDir, "pond-a", token, "pond-a", {
+    sharedTool: live,
+  });
   const nodeBState = await prepareRoleState(baseDir, "pond-b", token, "pond-b", {
     nodeSurfaces: true,
+    sharedTool: live,
     skillProofToken,
   });
   const children = [];
@@ -855,7 +1042,7 @@ async function runLocal(args) {
         childOptions(nodeBState, "pond-b-restart"),
       );
       children.push(restartedB);
-      await waitForProofNodes(rpc, 2);
+      const reconnectedNodes = await waitForProofNodes(rpc, 2);
       const afterReconnectTools = await waitFor(
         "two effective proof tools after reconnect",
         30_000,
@@ -882,6 +1069,15 @@ async function runLocal(args) {
         const skills = await readProofSkills(rpc);
         return skills.length === 1 ? skills : null;
       });
+      const liveResult = live
+        ? await runLiveChecks({
+            rpc,
+            mcpTool: afterReconnectMcpTools[0],
+            mcpCallLogPath: nodeBState.mcpCallLogPath,
+            nodes: reconnectedNodes,
+            skillMarker: skillProofToken,
+          })
+        : undefined;
       logStep("all node-hosted surface checks passed");
       console.log(
         JSON.stringify(
@@ -900,6 +1096,7 @@ async function runLocal(args) {
             afterReconnectMcpTools,
             afterReconnectMcpOutput,
             afterReconnectSkills,
+            ...(liveResult ? { live: liveResult } : {}),
           },
           null,
           2,
@@ -917,6 +1114,11 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   verboseOutput = args.verbose === true;
   const mode = args._[0] ?? "local";
+  if (args.live === true && !process.env.ANTHROPIC_API_KEY?.trim()) {
+    console.error("--live requires ANTHROPIC_API_KEY");
+    process.exitCode = 2;
+    return;
+  }
   if (mode === "gateway") {
     await runGateway(args);
     return;
@@ -942,7 +1144,7 @@ async function main() {
     return;
   }
   throw new Error(
-    "usage: node scripts/e2e/node-plugin-tools-pond.mjs [local|gateway|node|verify] [--build]",
+    "usage: node scripts/e2e/node-plugin-tools-pond.mjs [local|gateway|node|verify] [--build] [--live]",
   );
 }
 
