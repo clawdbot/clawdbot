@@ -425,7 +425,7 @@
           },
           "dtmfDelayMs": {
             "type": "number",
-            "default": 2500
+            "default": 12000
           },
           "postDtmfSpeechDelayMs": {
             "type": "number",

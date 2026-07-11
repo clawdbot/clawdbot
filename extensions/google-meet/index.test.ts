@@ -679,6 +679,7 @@ describe("google-meet plugin", () => {
       "chrome.bargeInRmsThreshold",
       "chrome.bargeInPeakThreshold",
       "chrome.bargeInCooldownMs",
+      "voiceCall.dtmfDelayMs",
       "voiceCall.postDtmfSpeechDelayMs",
     ]) {
       expect(entry.configSchema.uiHints?.[key]).toHaveProperty("advanced", true);
@@ -704,6 +705,14 @@ describe("google-meet plugin", () => {
     expect(requireConfigProperty(chromeProperties, "bargeInCooldownMs")).toEqual({
       type: "number",
       default: 900,
+    });
+    const defaultConfig = resolveGoogleMeetConfig({});
+    expect(defaultConfig.voiceCall.dtmfDelayMs).toBe(12000);
+    expect(
+      requireConfigProperty(configSchema.properties?.voiceCall?.properties, "dtmfDelayMs"),
+    ).toEqual({
+      type: "number",
+      default: defaultConfig.voiceCall.dtmfDelayMs,
     });
     expect(
       requireConfigProperty(
