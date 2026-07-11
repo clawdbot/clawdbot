@@ -34,7 +34,11 @@ import {
   type MessagePayloadObject,
   type TopLevelComponents,
 } from "./internal/discord.js";
-import { createDiscordClient, stripUndefinedFields } from "./send.shared.js";
+import {
+  createDiscordClient,
+  createDiscordMessageNonce,
+  stripUndefinedFields,
+} from "./send.shared.js";
 import { DiscordUiContainer } from "./ui.js";
 
 type PendingApproval = {
@@ -593,16 +597,24 @@ export const discordApprovalNativeRuntime = createChannelApprovalNativeRuntimeAd
         token: resolved.context.token,
         accountId: resolved.accountId,
       });
+      // Each destination is a distinct logical create. Reuse its nonce only across
+      // retries so multi-target approvals cannot deduplicate into the wrong channel.
+      const body = {
+        ...pendingPayload.body,
+        nonce: createDiscordMessageNonce(),
+        enforce_nonce: true,
+      };
       const message = (await discordRequest(
         () =>
           createChannelMessage<{ id: string; channel_id: string }>(
             rest,
             preparedTarget.discordChannelId,
             {
-              body: pendingPayload.body,
+              body,
             },
           ),
         plannedTarget.surface === "origin" ? "send-approval-channel" : "send-approval",
+        { safety: "nonce-protected-create" },
       )) as { id: string; channel_id: string };
       if (!message?.id) {
         if (plannedTarget.surface === "origin") {

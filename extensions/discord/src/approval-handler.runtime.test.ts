@@ -43,6 +43,36 @@ async function buildExecApprovalPayloadText(commandText: string): Promise<string
 }
 
 describe("discordApprovalNativeRuntime", () => {
+  it("keeps create-only nonce fields out of the shared multi-target payload", async () => {
+    const pending = await discordApprovalNativeRuntime.presentation.buildPendingPayload({
+      cfg: {} as never,
+      accountId: "main",
+      context: { token: "discord-token", config: {} as never },
+      request: {
+        id: "approval-1",
+        request: { command: "hostname" },
+        createdAtMs: 0,
+        expiresAtMs: 1_000,
+      },
+      approvalKind: "exec",
+      nowMs: 0,
+      view: {
+        approvalKind: "exec",
+        phase: "pending",
+        approvalId: "approval-1",
+        title: "Exec Approval Required",
+        commandText: "hostname",
+        commandPreview: null,
+        expiresAtMs: 1_000,
+        metadata: [],
+        actions: [],
+      },
+    });
+
+    expect(pending.body).not.toHaveProperty("nonce");
+    expect(pending.body).not.toHaveProperty("enforce_nonce");
+  });
+
   it("does not split emoji graphemes when truncating exec command previews", async () => {
     const prefix = "a".repeat(999);
 

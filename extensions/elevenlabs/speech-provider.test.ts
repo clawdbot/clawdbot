@@ -3,17 +3,20 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { isValidElevenLabsVoiceId } from "./shared.js";
 import { buildElevenLabsSpeechProvider } from "./speech-provider.js";
 
+const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
+
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  fetchWithSsrFGuard: async ({
-    url,
-    init,
-  }: {
+  fetchWithSsrFGuard: async (params: {
     url: string;
     init?: RequestInit;
-  }): Promise<{ response: Response; release: () => Promise<void> }> => ({
-    response: await globalThis.fetch(url, init),
-    release: vi.fn(async () => {}),
-  }),
+    timeoutMs?: number;
+  }): Promise<{ response: Response; release: () => Promise<void> }> => {
+    fetchWithSsrFGuardMock(params);
+    return {
+      response: await globalThis.fetch(params.url, params.init),
+      release: vi.fn(async () => {}),
+    };
+  },
   ssrfPolicyFromHttpBaseUrlAllowedHostname: () => undefined,
 }));
 
@@ -38,6 +41,7 @@ describe("elevenlabs speech provider", () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    fetchWithSsrFGuardMock.mockClear();
     vi.restoreAllMocks();
   });
 
@@ -52,6 +56,20 @@ describe("elevenlabs speech provider", () => {
       "eleven_turbo_v2_5",
       "eleven_monolingual_v1",
     ]);
+  });
+
+  it("forwards the core-resolved voice-list timeout", async () => {
+    globalThis.fetch = vi.fn(async () => Response.json({ voices: [] })) as unknown as typeof fetch;
+    const provider = buildElevenLabsSpeechProvider();
+
+    await provider.listVoices?.({
+      providerConfig: { apiKey: "xi-test" },
+      timeoutMs: 30_000,
+    });
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: 30_000 }),
+    );
   });
 
   it("keeps non-equivalent deprecated ElevenLabs TTS model IDs", async () => {

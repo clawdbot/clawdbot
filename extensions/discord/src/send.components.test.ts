@@ -178,12 +178,21 @@ describe("sendDiscordComponentMessage", () => {
     expect(patchMock).toHaveBeenCalledTimes(1);
     const [patchUrl, patchRequest] = readMockCall(patchMock, 0) as [
       string,
-      { body?: { flags?: unknown; components?: unknown[] } },
+      {
+        body?: {
+          flags?: unknown;
+          components?: unknown[];
+          nonce?: unknown;
+          enforce_nonce?: unknown;
+        };
+      },
     ];
     expect(patchUrl).toContain("/channels/chan-1/messages/msg1");
     expect(patchRequest?.body?.flags).toBe(MessageFlags.IsComponentsV2);
     expect(Array.isArray(patchRequest?.body?.components)).toBe(true);
     expect(patchRequest?.body?.components).toHaveLength(1);
+    expect(patchRequest?.body).not.toHaveProperty("nonce");
+    expect(patchRequest?.body).not.toHaveProperty("enforce_nonce");
     expect(registerMock).toHaveBeenCalledTimes(1);
     const args = readRecordArg(registerMock, 0, 0);
     expect(args.messageId).toBe("msg1");

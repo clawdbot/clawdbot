@@ -455,6 +455,7 @@ Notes:
 - Uses core `messages.tts` configuration and provider selection.
 - Returns PCM audio buffer + sample rate. Plugins must resample/encode for providers.
 - `listVoices` is optional per provider. Use it for vendor-owned voice pickers or setup flows.
+- Core passes a resolved request deadline to provider `listVoices` hooks; provider-specific timeout settings may override it.
 - Voice listings can include richer metadata such as locale, gender, and personality tags for provider-aware pickers.
 - OpenAI and ElevenLabs support telephony today. Microsoft does not.
 

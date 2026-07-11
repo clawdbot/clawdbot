@@ -5,6 +5,7 @@ import { withServer } from "openclaw/plugin-sdk/test-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RequestClient } from "./internal/discord.js";
 import { DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS } from "./monitor/timeouts.js";
+import type { DiscordRetryRunner } from "./retry.js";
 import type { VoiceMessageMetadata } from "./voice-message.js";
 
 const GUARDED_FETCH_TEST_TIMEOUT_MS = 250;
@@ -348,6 +349,8 @@ describe("sendDiscordVoiceMessage", () => {
     expect(post).toHaveBeenCalledWith("/channels/channel-1/messages", {
       body: {
         flags: 8192,
+        nonce: expect.stringMatching(/^[0-9a-f]{24}$/),
+        enforce_nonce: true,
         attachments: [
           {
             id: "0",
@@ -359,6 +362,62 @@ describe("sendDiscordVoiceMessage", () => {
         ],
       },
     });
+  });
+
+  it("reuses the voice-message nonce across an ambiguous create retry", async () => {
+    const post = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("bad gateway"), { status: 502 }))
+      .mockResolvedValueOnce({ id: "msg-1", channel_id: "channel-1" });
+    const rest = createRest(post);
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      const method = input instanceof Request ? input.method : (init?.method ?? "GET");
+      if (method === "POST" && url.endsWith("/channels/channel-1/attachments")) {
+        return new Response(
+          JSON.stringify({
+            attachments: [
+              {
+                id: 0,
+                upload_url: "https://cdn.test/upload",
+                upload_filename: "uploaded.ogg",
+              },
+            ],
+          }),
+          { status: 200 },
+        );
+      }
+      if (method === "PUT" && url === "https://cdn.test/upload") {
+        return new Response(null, { status: 200 });
+      }
+      throw new Error(`unexpected fetch ${method} ${url}`);
+    });
+    const request = vi.fn(async <T>(fn: () => Promise<T>, label?: string): Promise<T> => {
+      if (label === "voice-message") {
+        await fn().catch(() => undefined);
+      }
+      return await fn();
+    }) as unknown as DiscordRetryRunner;
+
+    await expect(
+      sendDiscordVoiceMessage(
+        rest,
+        "channel-1",
+        Buffer.from("ogg"),
+        metadata,
+        undefined,
+        request,
+        false,
+        "bot-token",
+      ),
+    ).resolves.toEqual({ id: "msg-1", channel_id: "channel-1" });
+
+    expect(post).toHaveBeenCalledTimes(2);
+    const firstBody = (post.mock.calls[0]?.[1] as { body?: { nonce?: unknown } } | undefined)?.body;
+    const secondBody = (post.mock.calls[1]?.[1] as { body?: { nonce?: unknown } } | undefined)
+      ?.body;
+    expect(firstBody?.nonce).toMatch(/^[0-9a-f]{24}$/);
+    expect(secondBody?.nonce).toBe(firstBody?.nonce);
   });
 
   it("throws typed CDN upload failures", async () => {

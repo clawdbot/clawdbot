@@ -252,7 +252,8 @@ describe("buildAzureSpeechProvider", () => {
   it("lists voices through config or explicit request auth", async () => {
     const provider = buildAzureSpeechProvider();
     const voices = await provider.listVoices?.({
-      providerConfig: { apiKey: "key", region: "eastus" },
+      providerConfig: { apiKey: "key", region: "eastus", timeoutMs: 45_000 },
+      timeoutMs: 30_000,
     });
 
     expect(voices).toEqual([{ id: "en-US-JennyNeural", name: "Jenny" }]);
@@ -261,7 +262,7 @@ describe("buildAzureSpeechProvider", () => {
       baseUrl: "https://eastus.tts.speech.microsoft.com",
       endpoint: undefined,
       region: "eastus",
-      timeoutMs: undefined,
+      timeoutMs: 45_000,
     });
   });
 });

@@ -386,6 +386,22 @@ describe("scripts/restart-mac.sh", () => {
     expect(script).toContain("target-only restart deferred");
   });
 
+  it("escalates only exact managed app processes when graceful shutdown stalls", () => {
+    const script = readFileSync(restartScriptPath, "utf8");
+    const managedKillBlock = script.slice(
+      script.indexOf("kill_managed_openclaw()"),
+      script.indexOf("stop_launch_agent()"),
+    );
+    const broadKillBlock = script.slice(
+      script.indexOf("kill_all_openclaw()"),
+      script.indexOf("known_openclaw_executables()"),
+    );
+
+    expect(managedKillBlock).toContain('kill -KILL "${pid}"');
+    expect(managedKillBlock).toContain("managed_openclaw_process_pids");
+    expect(broadKillBlock).not.toContain("kill -KILL");
+  });
+
   it("treats the canonical installed app as managed but temp bundles as foreign", () => {
     const result = runForeignProcessClassifier(
       [

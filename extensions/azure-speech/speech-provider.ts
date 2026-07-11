@@ -259,7 +259,7 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
         baseUrl: req.baseUrl ?? config?.baseUrl,
         endpoint: config?.endpoint,
         region: config?.region ?? readAzureSpeechEnvRegion(),
-        timeoutMs: config?.timeoutMs,
+        timeoutMs: config?.timeoutMs ?? req.timeoutMs,
       });
     },
     isConfigured: ({ providerConfig }) => {

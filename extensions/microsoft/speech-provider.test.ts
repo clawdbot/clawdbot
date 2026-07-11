@@ -11,6 +11,19 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { installDebugProxyTestResetHooks } from "../test-support/debug-proxy-env-test-helpers.js";
 
+const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
+  return {
+    ...actual,
+    fetchWithSsrFGuard: (...args: Parameters<typeof actual.fetchWithSsrFGuard>) => {
+      fetchWithSsrFGuardMock(...args);
+      return actual.fetchWithSsrFGuard(...args);
+    },
+  };
+});
+
 vi.mock("node-edge-tts", () => ({
   EdgeTTS: class {
     async ttsPromise(): Promise<void> {}
@@ -83,6 +96,9 @@ describe("listMicrosoftVoices", () => {
         personalities: ["Friendly", "Positive"],
       },
     ]);
+    expect(fetchWithSsrFGuardMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ timeoutMs: 30_000 }),
+    );
   });
 
   it("throws on Microsoft voice list failures", async () => {
@@ -93,6 +109,22 @@ describe("listMicrosoftVoices", () => {
       ) as unknown as typeof globalThis.fetch;
 
     await expect(listMicrosoftVoices()).rejects.toThrow("Microsoft voices API error (503)");
+  });
+
+  it("prefers the configured provider request timeout", async () => {
+    globalThis.fetch = vi
+      .fn()
+      .mockResolvedValue(new Response("[]", { status: 200 })) as unknown as typeof globalThis.fetch;
+    const listVoices = buildMicrosoftSpeechProvider().listVoices;
+    if (!listVoices) {
+      throw new Error("expected Microsoft voice listing support");
+    }
+
+    await listVoices({ providerConfig: { timeoutMs: 2_345 }, timeoutMs: 1_234 });
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ timeoutMs: 2_345 }),
+    );
   });
 
   it("records voice discovery exchanges in debug proxy capture mode", async () => {

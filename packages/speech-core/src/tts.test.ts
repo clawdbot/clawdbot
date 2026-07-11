@@ -9,6 +9,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type {
+  SpeechListVoicesRequest,
   SpeechProviderPlugin,
   SpeechProviderPrepareSynthesisContext,
   SpeechSynthesisRequest,
@@ -113,6 +114,7 @@ const {
   buildTtsSystemPromptHint,
   getTtsPersona,
   getTtsProvider,
+  listSpeechVoices,
   maybeApplyTtsToPayload,
   resolveTtsConfig,
   setSummarizationEnabled,
@@ -420,6 +422,31 @@ describe("speech-core native voice-note routing", () => {
     expect(result.success).toBe(true);
     const request = requireFirstSynthesisRequest("provider default timeout synthesis request");
     expect(request.timeoutMs).toBe(600_000);
+  });
+
+  it("resolves the configured timeout for voice listing", async () => {
+    const listVoicesMock = vi.fn(async (_request: SpeechListVoicesRequest) => []);
+    installSpeechProviders([
+      createMockSpeechProvider("mock", {
+        defaultTimeoutMs: 60_000,
+        listVoices: listVoicesMock,
+      }),
+    ]);
+
+    await listSpeechVoices({
+      provider: "mock",
+      cfg: {
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "mock",
+            timeoutMs: 45_000,
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(listVoicesMock).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 45_000 }));
   });
 
   it("caps oversized provider default TTS timeouts before synthesis", async () => {

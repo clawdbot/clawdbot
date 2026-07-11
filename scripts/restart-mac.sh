@@ -253,6 +253,15 @@ kill_managed_openclaw() {
     done <<< "${pids}"
     sleep 0.3
   done
+  # The app can keep handling SIGTERM while shutting down. Escalate only for
+  # the two exact executables target-only mode has already classified as safe.
+  local remaining_pids=""
+  remaining_pids="$(managed_openclaw_process_pids)"
+  while IFS= read -r pid; do
+    [[ -n "${pid}" ]] || continue
+    kill -KILL "${pid}" 2>/dev/null || true
+  done <<< "${remaining_pids}"
+  sleep 0.3
   [[ -z "$(managed_openclaw_process_pids)" ]]
 }
 

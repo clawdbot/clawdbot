@@ -356,6 +356,7 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext) {
 async function listElevenLabsVoices(params: {
   apiKey: string;
   baseUrl?: string;
+  timeoutMs?: number;
 }): Promise<SpeechVoiceOption[]> {
   const normalizedBaseUrl = normalizeElevenLabsBaseUrl(params.baseUrl);
   const { response, release } = await fetchWithSsrFGuard({
@@ -365,6 +366,7 @@ async function listElevenLabsVoices(params: {
         "xi-api-key": params.apiKey,
       },
     },
+    timeoutMs: params.timeoutMs,
     policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(normalizedBaseUrl),
     auditContext: "elevenlabs.voices",
   });
@@ -538,6 +540,7 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
       return listElevenLabsVoices({
         apiKey,
         baseUrl: req.baseUrl ?? config?.baseUrl,
+        timeoutMs: req.timeoutMs,
       });
     },
     isConfigured: ({ providerConfig }) =>

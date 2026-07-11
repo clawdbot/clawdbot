@@ -171,6 +171,7 @@ export function buildInworldSpeechProvider(): SpeechProviderPlugin {
       return listInworldVoices({
         apiKey,
         baseUrl: req.baseUrl ?? config?.baseUrl,
+        timeoutMs: req.timeoutMs,
       });
     },
     isConfigured: ({ providerConfig }) =>

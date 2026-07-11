@@ -1924,11 +1924,16 @@ export async function listSpeechVoices(params: {
   if (!resolvedProvider.listVoices) {
     throw new Error(`speech provider ${provider} does not support voice listing`);
   }
+  const timeoutMs = resolveSpeechProviderTimeoutMs({
+    config,
+    provider: resolvedProvider,
+  });
   return await resolvedProvider.listVoices({
     cfg,
     providerConfig: getResolvedSpeechProviderConfig(config, resolvedProvider.id, cfg),
     apiKey: params.apiKey,
     baseUrl: params.baseUrl,
+    timeoutMs,
   });
 }
 

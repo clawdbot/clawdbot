@@ -72,6 +72,19 @@ describe("buildInworldSpeechProvider", () => {
     expect(provider.models).toContain("inworld-tts-1.5-mini");
   });
 
+  it("forwards the core-resolved voice-list timeout", async () => {
+    const provider = buildInworldSpeechProvider();
+
+    await provider.listVoices?.({
+      providerConfig: { apiKey: "test-key" },
+      timeoutMs: 30_000,
+    });
+
+    expect(listInworldVoicesMock).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKey: "test-key", timeoutMs: 30_000 }),
+    );
+  });
+
   it("normalizes provider-owned speech config from raw provider config", () => {
     const provider = buildInworldSpeechProvider();
     const resolved = provider.resolveConfig?.({

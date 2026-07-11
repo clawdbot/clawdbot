@@ -1,7 +1,11 @@
 // Discord tests cover retry plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { RateLimitError } from "./internal/discord.js";
-import { createDiscordRetryRunner, isRetryableDiscordTransientError } from "./retry.js";
+import {
+  createDiscordRetryRunner,
+  isRetryableDiscordPreConnectError,
+  isRetryableDiscordTransientError,
+} from "./retry.js";
 
 const ZERO_DELAY_RETRY = { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 };
 
@@ -50,6 +54,81 @@ describe("isRetryableDiscordTransientError", () => {
     ["plain string", "fetch failed"],
   ])("does not retry %s", (_name, err) => {
     expect(isRetryableDiscordTransientError(err)).toBe(false);
+  });
+});
+
+describe("isRetryableDiscordPreConnectError", () => {
+  it.each([
+    ["rate limit", createRateLimitError()],
+    ["429 status", Object.assign(new Error("rate limited"), { status: 429 })],
+    ["ECONNREFUSED", Object.assign(new Error("connect refused"), { code: "ECONNREFUSED" })],
+  ])("retries %s", (_name, err) => {
+    expect(isRetryableDiscordPreConnectError(err)).toBe(true);
+  });
+
+  it("does not retry 502", () => {
+    expect(
+      isRetryableDiscordPreConnectError(Object.assign(new Error("bad gateway"), { status: 502 })),
+    ).toBe(false);
+  });
+});
+
+describe("createDiscordRetryRunner create safety", () => {
+  it("retries post-connect-ambiguous errors for nonce-protected creates", async () => {
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("aborted"), { name: "AbortError" }))
+      .mockResolvedValue("ok");
+    const runner = createDiscordRetryRunner({ retry: ZERO_DELAY_RETRY });
+
+    await expect(runner(fn, "text", { safety: "nonce-protected-create" })).resolves.toBe("ok");
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries pre-connect errors for nonce-protected creates", async () => {
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("connect refused"), { code: "ECONNREFUSED" }))
+      .mockResolvedValue("ok");
+    const runner = createDiscordRetryRunner({ retry: ZERO_DELAY_RETRY });
+
+    await expect(runner(fn, "text", { safety: "nonce-protected-create" })).resolves.toBe("ok");
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries a 502 for nonce-protected creates", async () => {
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("bad gateway"), { status: 502 }))
+      .mockResolvedValue("ok");
+    const runner = createDiscordRetryRunner({ retry: ZERO_DELAY_RETRY });
+
+    await expect(runner(fn, "text", { safety: "nonce-protected-create" })).resolves.toBe("ok");
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry a 502 when the endpoint lacks nonce enforcement", async () => {
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("bad gateway"), { status: 502 }))
+      .mockResolvedValue("ok");
+    const runner = createDiscordRetryRunner({ retry: ZERO_DELAY_RETRY });
+
+    await expect(runner(fn, "forum-thread", { safety: "non-idempotent-create" })).rejects.toThrow(
+      "bad gateway",
+    );
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps retrying the broad transient set for default idempotent calls", async () => {
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("aborted"), { name: "AbortError" }))
+      .mockResolvedValue("ok");
+    const runner = createDiscordRetryRunner({ retry: ZERO_DELAY_RETRY });
+
+    await expect(runner(fn, "react")).resolves.toBe("ok");
+    expect(fn).toHaveBeenCalledTimes(2);
   });
 });
 

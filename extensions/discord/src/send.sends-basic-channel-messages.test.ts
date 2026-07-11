@@ -269,7 +269,13 @@ describe("sendMessageDiscord", () => {
       } as never,
     });
 
-    expect(requireRestBody(postMock)).toEqual({ content: "https://example.com" });
+    const body = requireRestBody(postMock);
+    expect(body).toMatchObject({
+      content: "https://example.com",
+      enforce_nonce: true,
+    });
+    expect(body.nonce).toMatch(/^[0-9a-f]{24}$/);
+    expect(body.flags).toBeUndefined();
   });
 
   it("uses account-level suppressEmbeds overrides", async () => {
