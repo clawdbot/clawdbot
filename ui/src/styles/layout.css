@@ -1735,18 +1735,43 @@ openclaw-session-menu[popover] {
   flex: 1 1 auto;
 }
 
-/* Dev-checkout branch badge: only rendered when the gateway runs from a git
-   checkout off main, so operators notice non-release gateway code at a glance. */
+/* Dev-checkout branch strip: only rendered when the gateway runs from a git
+   checkout off main. Sits on its own row above the icon bar so the full branch
+   name stays readable without crowding the footer controls. */
 .sidebar-footer-branch {
-  flex: 0 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
   min-width: 0;
-  margin-left: 6px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  margin: 0 10px 2px;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
   font-size: 11px;
   font-family: var(--font-mono);
   color: var(--danger);
+}
+
+.sidebar-footer-branch__icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.sidebar-footer-branch__icon svg {
+  width: 12px;
+  height: 12px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sidebar-footer-branch__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Footer icons mix in-app anchors, buttons, and one external docs link: the

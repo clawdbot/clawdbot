@@ -1941,6 +1941,14 @@ class AppSidebar extends OpenClawLightDomContentsElement {
               .soundsEnabled=${this.lobsterPetSounds}
               .gatewayVersion=${this.gatewayVersion}
             ></openclaw-lobster-pet>
+            ${this.devGitBranch
+              ? html`<div class="sidebar-footer-branch" title=${this.devGitBranch}>
+                  <span class="sidebar-footer-branch__icon" aria-hidden="true"
+                    >${icons.gitBranch}</span
+                  >
+                  <span class="sidebar-footer-branch__name">${this.devGitBranch}</span>
+                </div>`
+              : nothing}
             <div class="sidebar-footer-bar">
               <openclaw-tooltip .content=${gatewayStatusTooltip}>
                 <span
@@ -1952,11 +1960,6 @@ class AppSidebar extends OpenClawLightDomContentsElement {
                   aria-label=${gatewayStatus}
                 ></span>
               </openclaw-tooltip>
-              ${this.devGitBranch
-                ? html`<span class="sidebar-footer-branch" title=${this.devGitBranch}
-                    >${this.devGitBranch}</span
-                  >`
-                : nothing}
               <span class="sidebar-footer-bar__spacer"></span>
               <openclaw-tooltip .content=${settingsTooltip}>
                 <a
