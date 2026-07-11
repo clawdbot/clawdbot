@@ -23,6 +23,10 @@ AUTO_DETECT_SIGNING=1
 GATEWAY_WAIT_SECONDS="${OPENCLAW_GATEWAY_WAIT_SECONDS:-0}"
 LAUNCHAGENT_DISABLE_MARKER="${HOME}/.openclaw/disable-launchagent"
 ATTACH_ONLY=1
+TARGET_ONLY=0
+TARGET_APP_BUNDLE="${ROOT_DIR}/dist/OpenClaw.app"
+TARGET_EXECUTABLE="${TARGET_APP_BUNDLE}/${APP_EXECUTABLE_RELATIVE_PATH}"
+INSTALLED_EXECUTABLE="/Applications/OpenClaw.app/${APP_EXECUTABLE_RELATIVE_PATH}"
 
 log()  { printf '%s\n' "$*"; }
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
@@ -104,13 +108,15 @@ for arg in "$@"; do
     --sign) SIGN=1; AUTO_DETECT_SIGNING=0 ;;
     --attach-only) ATTACH_ONLY=1 ;;
     --no-attach-only) ATTACH_ONLY=0 ;;
+    --target-only) TARGET_ONLY=1 ;;
     --help|-h)
-      log "Usage: $(basename "$0") [--wait] [--no-sign] [--sign] [--attach-only|--no-attach-only]"
+      log "Usage: $(basename "$0") [--wait] [--no-sign] [--sign] [--attach-only|--no-attach-only] [--target-only]"
       log "  --wait    Wait for other restart to complete instead of exiting"
       log "  --no-sign Force no code signing (fastest for development)"
       log "  --sign    Force code signing (will fail if no signing key available)"
       log "  --attach-only    Launch app with --attach-only (skip launchd install)"
       log "  --no-attach-only Launch app without attach-only override"
+      log "  --target-only    Restart only this checkout's dist app; fail if another OpenClaw app is active"
       log ""
       log "Env:"
       log "  OPENCLAW_GATEWAY_WAIT_SECONDS=0  Wait time before gateway port check (unsigned only)"
@@ -132,6 +138,12 @@ done
 
 if [[ "$NO_SIGN" -eq 1 && "$SIGN" -eq 1 ]]; then
   fail "Cannot use --sign and --no-sign together"
+fi
+if [[ "$TARGET_ONLY" -eq 1 && "$ATTACH_ONLY" -ne 1 ]]; then
+  fail "--target-only requires --attach-only"
+fi
+if [[ "$TARGET_ONLY" -eq 1 && -n "$APP_BUNDLE" ]]; then
+  fail "--target-only does not accept OPENCLAW_APP_BUNDLE"
 fi
 canonicalize_app_bundle
 
@@ -194,15 +206,75 @@ process_pids_matching() {
       done
 }
 
+foreign_openclaw_process_pids() {
+  ps axww -o pid=,command= 2>/dev/null \
+    | while read -r pid command_line; do
+        [[ "${pid}" =~ ^[0-9]+$ ]] || continue
+        [[ "${pid}" != "$$" ]] || continue
+        local executable="${command_line%% *}"
+        [[ "${executable}" == "${TARGET_EXECUTABLE}" ]] && continue
+        [[ "${executable}" == "${INSTALLED_EXECUTABLE}" ]] && continue
+        if [[ "${executable}" == *"/OpenClaw.app/${APP_EXECUTABLE_RELATIVE_PATH}" \
+          || "${executable}" == *"/apps/macos/.build/debug/OpenClaw" \
+          || "${executable}" == *"/apps/macos/.build-local/debug/OpenClaw" \
+          || "${executable}" == *"/apps/macos/.build/release/OpenClaw" ]]; then
+          printf '%s\n' "${pid}"
+        fi
+      done
+}
+
+process_pids_for_executable() {
+  local executable="$1"
+  ps axww -o pid=,command= 2>/dev/null \
+    | while read -r pid command_line; do
+        [[ "${pid}" =~ ^[0-9]+$ ]] || continue
+        [[ "${pid}" != "$$" ]] || continue
+        [[ "${command_line}" == "${executable}" || "${command_line}" == "${executable} "* ]] || continue
+        printf '%s\n' "${pid}"
+      done
+}
+
+managed_openclaw_process_pids() {
+  {
+    process_pids_for_executable "${TARGET_EXECUTABLE}"
+    process_pids_for_executable "${INSTALLED_EXECUTABLE}"
+  } | sort -u
+}
+
+kill_managed_openclaw() {
+  for _ in {1..10}; do
+    local pids=""
+    pids="$(managed_openclaw_process_pids)"
+    if [[ -z "${pids}" ]]; then
+      return 0
+    fi
+    while IFS= read -r pid; do
+      kill "${pid}" 2>/dev/null || true
+    done <<< "${pids}"
+    sleep 0.3
+  done
+  [[ -z "$(managed_openclaw_process_pids)" ]]
+}
+
 stop_launch_agent() {
   launchctl bootout gui/"$UID"/ai.openclaw.mac 2>/dev/null || true
 }
 
-# 1) Stop launchd supervision, then kill all running instances.
-stop_launch_agent
-log "==> Killing existing OpenClaw instances"
-if ! kill_all_openclaw; then
-  fail "OpenClaw instances did not exit after cleanup attempts"
+# 1) Stop only the process set selected by the requested mode.
+if [[ "$TARGET_ONLY" -eq 1 ]]; then
+  if [[ -n "$(foreign_openclaw_process_pids)" ]]; then
+    fail "Another OpenClaw app or test process is active; target-only restart deferred"
+  fi
+  log "==> Killing managed installed and exact target OpenClaw instances"
+  if ! kill_managed_openclaw; then
+    fail "Managed OpenClaw instances did not exit after cleanup attempts"
+  fi
+else
+  stop_launch_agent
+  log "==> Killing existing OpenClaw instances"
+  if ! kill_all_openclaw; then
+    fail "OpenClaw instances did not exit after cleanup attempts"
+  fi
 fi
 
 # Bundle Gateway-hosted plugin assets.

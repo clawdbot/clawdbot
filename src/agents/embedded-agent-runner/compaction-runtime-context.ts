@@ -35,6 +35,7 @@ type EmbeddedCompactionRuntimeContext = {
   currentMessageId?: string | number;
   authProfileId?: string;
   agentHarnessId?: string;
+  modelSelectionLocked?: boolean;
   workspaceDir: string;
   cwd?: string;
   agentDir: string;
@@ -65,6 +66,7 @@ export function resolveEmbeddedCompactionTarget(params: {
   modelId?: string | null;
   authProfileId?: string | null;
   harnessRuntime?: string | null;
+  modelSelectionLocked?: boolean;
   defaultProvider?: string;
   defaultModel?: string;
 }): {
@@ -77,7 +79,11 @@ export function resolveEmbeddedCompactionTarget(params: {
 } {
   const provider = params.provider?.trim() || params.defaultProvider;
   const model = params.modelId?.trim() || params.defaultModel;
-  const override = params.config?.agents?.defaults?.compaction?.model?.trim();
+  // A locked session's creating model owns every transcript read, including
+  // summaries. Compaction-specific model overrides would cross that boundary.
+  const override = params.modelSelectionLocked
+    ? undefined
+    : params.config?.agents?.defaults?.compaction?.model?.trim();
   const resolveTargetProviders = (
     targetProvider: string | undefined,
     authProfileId: string | undefined,
@@ -89,6 +95,7 @@ export function resolveEmbeddedCompactionTarget(params: {
       config: params.config,
       provider: targetProvider,
       harnessRuntime: params.harnessRuntime,
+      modelSelectionLocked: params.modelSelectionLocked,
     });
     const harnessRuntime = useCodexHarnessRuntime ? params.harnessRuntime : "openclaw";
     const runtimeProvider = resolveSelectedOpenAIRuntimeProvider({
@@ -230,9 +237,15 @@ function shouldUseCodexRuntimeProviderForCompaction(params: {
   config?: OpenClawConfig;
   provider: string;
   harnessRuntime?: string | null;
+  modelSelectionLocked?: boolean;
 }): boolean {
   if (normalizeOptionalAgentRuntimeId(params.harnessRuntime) !== "codex") {
     return false;
+  }
+  // A persisted lock makes the selected native harness authoritative. Local
+  // provider config must not reroute compaction away from that owner.
+  if (params.modelSelectionLocked === true) {
+    return true;
   }
   if (!openAIProviderUsesCodexRuntimeByDefault(params)) {
     return false;
@@ -261,6 +274,7 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
   provider?: string | null;
   modelId?: string | null;
   harnessRuntime?: string | null;
+  modelSelectionLocked?: boolean;
   modelFallbacksOverride?: string[];
   thinkLevel?: ThinkLevel;
   reasoningLevel?: ReasoningLevel;
@@ -276,6 +290,7 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
     modelId: params.modelId,
     authProfileId: params.authProfileId,
     harnessRuntime: params.harnessRuntime,
+    modelSelectionLocked: params.modelSelectionLocked,
   });
   const agentHarnessId = params.harnessRuntime?.trim() || undefined;
   const processScopeKey = params.sessionKey?.trim();
@@ -296,6 +311,7 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
     currentMessageId: params.currentMessageId ?? undefined,
     authProfileId: resolved.authProfileId,
     agentHarnessId,
+    modelSelectionLocked: params.modelSelectionLocked,
     workspaceDir: params.workspaceDir,
     cwd: params.cwd ?? undefined,
     agentDir: params.agentDir,

@@ -92,6 +92,94 @@ describe("Codex app-server startup binding", () => {
     expect(savedBinding?.threadId).toBe("thread-existing");
   });
 
+  it("never rotates a provisional supervision source binding", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const agentDir = path.join(tempDir, "agent");
+    await writeExistingBinding(sessionFile, workspaceDir, {
+      connectionScope: "supervision",
+      supervisionSourceThreadId: "thread-existing",
+      preserveNativeModel: true,
+      conversationSourceTransferComplete: true,
+      pendingSupervisionBranch: {
+        sourceThreadId: "thread-existing",
+        lastTurnId: "turn-terminal",
+      },
+    });
+    await writeSessionRecord(sessionFile, { totalTokens: 999_999 });
+    const rolloutDir = path.join(agentDir, "codex-home", "sessions");
+    await fs.mkdir(rolloutDir, { recursive: true });
+    await fs.writeFile(
+      path.join(rolloutDir, "rollout-thread-existing.jsonl"),
+      "x".repeat(2_000_000),
+    );
+
+    const binding = await rotateOversizedCodexAppServerStartupBinding({
+      binding: await readCodexAppServerBinding(sessionFile),
+      sessionFile,
+      agentDir,
+      config: {
+        agents: {
+          defaults: {
+            compaction: {
+              truncateAfterCompaction: true,
+              maxActiveTranscriptBytes: "1k",
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(binding).toMatchObject({
+      threadId: "thread-existing",
+      pendingSupervisionBranch: {
+        sourceThreadId: "thread-existing",
+        lastTurnId: "turn-terminal",
+      },
+    });
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-existing",
+      pendingSupervisionBranch: { sourceThreadId: "thread-existing" },
+    });
+  });
+
+  it("never rotates a materialized supervised native thread", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const agentDir = path.join(tempDir, "agent");
+    await writeExistingBinding(sessionFile, workspaceDir, {
+      connectionScope: "supervision",
+      supervisionSourceThreadId: "thread-source",
+      preserveNativeModel: true,
+      conversationSourceTransferComplete: true,
+    });
+    await writeSessionRecord(sessionFile, { totalTokens: 999_999 });
+
+    const binding = await rotateOversizedCodexAppServerStartupBinding({
+      binding: await readCodexAppServerBinding(sessionFile),
+      sessionFile,
+      agentDir,
+      projectedTurnTokens: 999_999,
+      config: {
+        agents: {
+          defaults: {
+            compaction: { truncateAfterCompaction: true, maxActiveTranscriptBytes: "1b" },
+          },
+        },
+      } as never,
+    });
+
+    expect(binding).toMatchObject({
+      threadId: "thread-existing",
+      connectionScope: "supervision",
+      supervisionSourceThreadId: "thread-source",
+    });
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-existing",
+      connectionScope: "supervision",
+    });
+  });
+
   it("reuses the session record cache while sessions.json is unchanged", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");

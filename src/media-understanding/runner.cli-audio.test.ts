@@ -175,6 +175,28 @@ describe("media-understanding CLI audio entry", () => {
     expect(result?.text).toBe("file transcript");
   });
 
+  it("records the backend observed during a whisper.cpp model run", async () => {
+    runExecMock.mockImplementationOnce(async (_command, args: string[]) => {
+      await fs.writeFile(`${args[2]}.txt`, "observed transcript\n");
+      return {
+        stdout: "",
+        stderr: "whisper_backend_init_gpu: using MTL0 backend",
+      };
+    });
+
+    const result = await runAudioEntry({
+      command: "whisper-cli",
+      args: ["-otxt", "-of", "{{OutputBase}}", "{{MediaPath}}"],
+    });
+
+    expect(result).toMatchObject({
+      provider: "whisper-cli",
+      model: "whisper-cli",
+      observedBackend: "metal",
+      text: "observed transcript",
+    });
+  });
+
   it("reads parakeet txt output selected through its upstream environment", async () => {
     const testCase: TranscriptFileCase = {
       name: "parakeet environment output",

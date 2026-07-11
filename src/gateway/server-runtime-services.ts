@@ -7,6 +7,8 @@ import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-r
 import type { PluginMetadataRegistryView } from "../plugins/plugin-metadata-snapshot.types.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { isGatewayModelPricingEnabled } from "./model-pricing-config.js";
+import type { GatewayCronReconciliation } from "./server-cron-reconciled.js";
+import type { GatewayCronState } from "./server-cron.js";
 import type { startGatewayMaintenanceTimers } from "./server-maintenance.js";
 import {
   createNoopHeartbeatRunner,
@@ -25,15 +27,24 @@ export type GatewayMaintenanceHandles = NonNullable<
   Awaited<ReturnType<typeof startGatewayMaintenanceTimers>>
 >;
 
-/** Starts cron without making gateway startup wait for cron initialization. */
+/** Starts cron without making the surrounding startup or reload transaction wait. */
 export function startGatewayCronWithLogging(params: {
-  cron: { start: () => Promise<void> };
+  cronState: GatewayCronState;
+  cronReconciliation: GatewayCronReconciliation;
+  reason: "startup" | "reload";
+  config: OpenClawConfig;
   afterStart?: () => Promise<void>;
   logCron: { error: (message: string) => void };
 }): void {
+  const reconciliation = params.cronReconciliation.arm({
+    reason: params.reason,
+    config: params.config,
+    cronState: params.cronState,
+  });
   void runWithGatewayIndependentRootWorkAdmission(async () => {
-    await params.cron.start();
+    await params.cronState.cron.start();
     await params.afterStart?.();
+    await reconciliation.complete();
   }).catch((err: unknown) => params.logCron.error(`failed to start: ${String(err)}`));
 }
 
@@ -59,7 +70,9 @@ export async function runGatewayPostReadyMaintenance(params: {
   applyMaintenance: (maintenance: GatewayMaintenanceHandles) => void;
   shouldStartCron: () => boolean;
   markCronStartHandled: () => void;
-  cron: { start: () => Promise<void> };
+  cronState: GatewayCronState;
+  cronReconciliation: GatewayCronReconciliation;
+  cronConfig: OpenClawConfig;
   logCron: { error: (message: string) => void };
   log: GatewayPostReadyLogger;
   recordPostReadyMemory: () => void;
@@ -75,7 +88,10 @@ export async function runGatewayPostReadyMaintenance(params: {
   if (params.shouldStartCron()) {
     params.markCronStartHandled();
     startGatewayCronWithLogging({
-      cron: params.cron,
+      cronState: params.cronState,
+      cronReconciliation: params.cronReconciliation,
+      reason: "startup",
+      config: params.cronConfig,
       logCron: params.logCron,
     });
   }
@@ -91,7 +107,9 @@ export function scheduleGatewayPostReadyMaintenance(params: {
   applyMaintenance: (maintenance: GatewayMaintenanceHandles) => void;
   shouldStartCron: () => boolean;
   markCronStartHandled: () => void;
-  cron: { start: () => Promise<void> };
+  cronState: GatewayCronState;
+  cronReconciliation: GatewayCronReconciliation;
+  cronConfig: OpenClawConfig;
   logCron: { error: (message: string) => void };
   log: GatewayPostReadyLogger;
   recordPostReadyMemory: () => void;
@@ -125,7 +143,9 @@ export function scheduleGatewayPostReadyMaintenance(params: {
         },
         shouldStartCron: () => !params.isClosing() && params.shouldStartCron(),
         markCronStartHandled: params.markCronStartHandled,
-        cron: params.cron,
+        cronState: params.cronState,
+        cronReconciliation: params.cronReconciliation,
+        cronConfig: params.cronConfig,
         logCron: params.logCron,
         log: params.log,
         recordPostReadyMemory: () => {
@@ -300,7 +320,8 @@ export function activateGatewayScheduledServices(params: {
   cfgAtStart: OpenClawConfig;
   deps: import("../cli/deps.types.js").CliDeps;
   sessionDeliveryRecoveryMaxEnqueuedAt: number;
-  cron: { start: () => Promise<void> };
+  cronState: GatewayCronState;
+  cronReconciliation: GatewayCronReconciliation;
   startCron?: boolean;
   logCron: { error: (message: string) => void };
   log: GatewayRuntimeServiceLogger;
@@ -317,7 +338,10 @@ export function activateGatewayScheduledServices(params: {
   });
   if (params.startCron !== false) {
     startGatewayCronWithLogging({
-      cron: params.cron,
+      cronState: params.cronState,
+      cronReconciliation: params.cronReconciliation,
+      reason: "startup",
+      config: params.cfgAtStart,
       logCron: params.logCron,
     });
   }

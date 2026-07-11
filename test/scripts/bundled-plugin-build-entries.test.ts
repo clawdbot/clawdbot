@@ -72,14 +72,12 @@ describe("bundled plugin build entries", () => {
     expect(pickEntries(entries, Object.keys(expectedEntries))).toStrictEqual(expectedEntries);
   });
 
-  it("keeps Codex Supervisor CLI metadata in bundled build and pack entries", () => {
+  it("keeps Codex CLI metadata in bundled build and standalone pack entries", () => {
     const entries = listBundledPluginBuildEntries();
-    const artifacts = listBundledPluginPackArtifacts();
+    const artifacts = listBundledPluginPackArtifacts({ includeRootPackageExcludedDirs: true });
 
-    expect(entries["extensions/codex-supervisor/cli-metadata"]).toBe(
-      "extensions/codex-supervisor/cli-metadata.ts",
-    );
-    expect(artifacts).toContain("dist/extensions/codex-supervisor/cli-metadata.js");
+    expect(entries["extensions/codex/cli-metadata"]).toBe("extensions/codex/cli-metadata.ts");
+    expect(artifacts).toContain("dist/extensions/codex/cli-metadata.js");
   });
 
   it("filters bundled plugin build entries for bounded script lanes", () => {

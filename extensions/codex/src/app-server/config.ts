@@ -37,7 +37,7 @@ const CODEX_APP_SERVER_HOME_DIRNAME = "codex-home";
 const CODEX_CONFIG_TOML_FILENAME = "config.toml";
 const PLAIN_DECIMAL_NUMBER_RE = /^[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))$/;
 
-type CodexAppServerTransportMode = "stdio" | "websocket";
+export type CodexAppServerTransportMode = "stdio" | "websocket" | "unix";
 export type CodexAppServerHomeScope = "agent" | "user";
 type CodexAppServerPolicyMode = "yolo" | "guardian";
 export type CodexAppServerConnectionClass = "local-loopback" | "remote";
@@ -112,6 +112,30 @@ export type CodexPluginsConfig = {
   plugins?: Record<string, CodexPluginEntryConfig>;
 };
 
+export type CodexSupervisionEndpoint =
+  | {
+      id?: string;
+      label?: string;
+      transport?: "stdio-proxy";
+      command?: string;
+      args?: string[];
+      cwd?: string;
+    }
+  | {
+      id?: string;
+      label?: string;
+      transport: "websocket";
+      url: string;
+      authTokenEnv?: string;
+    };
+
+export type CodexSupervisionConfig = {
+  enabled?: boolean;
+  endpoints?: CodexSupervisionEndpoint[];
+  allowRawTranscripts?: boolean;
+  allowWriteControls?: boolean;
+};
+
 export type CodexAppServerExperimentalConfig = {
   sandboxExecServer?: boolean;
 };
@@ -169,6 +193,8 @@ export type CodexAppServerStartOptions = {
   commandSource?: CodexAppServerCommandSource;
   managedFallbackCommandPaths?: string[];
   args: string[];
+  /** Process working directory for shipped Supervisor stdio endpoint compatibility. */
+  cwd?: string;
   url?: string;
   authToken?: string;
   headers: Record<string, string>;
@@ -212,6 +238,7 @@ export type CodexPluginConfig = {
   };
   computerUse?: CodexComputerUseConfig;
   codexPlugins?: CodexPluginsConfig;
+  supervision?: CodexSupervisionConfig;
   appServer?: {
     mode?: CodexAppServerPolicyMode;
     transport?: CodexAppServerTransportMode;
@@ -298,12 +325,36 @@ export const CODEX_PLUGIN_ENTRY_CONFIG_KEYS = [
   "allow_destructive_actions",
 ] as const;
 
+export const CODEX_SUPERVISION_CONFIG_KEYS = [
+  "enabled",
+  "endpoints",
+  "allowRawTranscripts",
+  "allowWriteControls",
+] as const;
+
+export const CODEX_SUPERVISION_STDIO_ENDPOINT_CONFIG_KEYS = [
+  "id",
+  "label",
+  "transport",
+  "command",
+  "args",
+  "cwd",
+] as const;
+
+export const CODEX_SUPERVISION_WEBSOCKET_ENDPOINT_CONFIG_KEYS = [
+  "id",
+  "label",
+  "transport",
+  "url",
+  "authTokenEnv",
+] as const;
+
 const DEFAULT_CODEX_COMPUTER_USE_PLUGIN_NAME = "computer-use";
 const DEFAULT_CODEX_COMPUTER_USE_MCP_SERVER_NAME = "computer-use";
 const DEFAULT_CODEX_COMPUTER_USE_MARKETPLACE_DISCOVERY_TIMEOUT_MS = 60_000;
 const DEFAULT_CODEX_APP_SERVER_NETWORK_PROXY_PROFILE_PREFIX = "openclaw-network";
 
-const codexAppServerTransportSchema = z.enum(["stdio", "websocket"]);
+const codexAppServerTransportSchema = z.enum(["stdio", "websocket", "unix"]);
 const codexAppServerHomeScopeSchema = z.enum(["agent", "user"]);
 const SecretInputSchema = buildSecretInputSchema();
 const codexAppServerPolicyModeSchema = z.enum(["yolo", "guardian"]);
@@ -374,6 +425,37 @@ const codexPluginsConfigSchema = z
   })
   .strict();
 
+const codexSupervisionEndpointSchema = z.union([
+  z
+    .object({
+      id: z.string().optional(),
+      label: z.string().optional(),
+      transport: z.literal("stdio-proxy").optional(),
+      command: z.string().optional(),
+      args: z.array(z.string()).optional(),
+      cwd: z.string().optional(),
+    })
+    .strict(),
+  z
+    .object({
+      id: z.string().optional(),
+      label: z.string().optional(),
+      transport: z.literal("websocket"),
+      url: z.string(),
+      authTokenEnv: z.string().optional(),
+    })
+    .strict(),
+]);
+
+const codexSupervisionConfigSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    endpoints: z.array(codexSupervisionEndpointSchema).optional(),
+    allowRawTranscripts: z.boolean().optional(),
+    allowWriteControls: z.boolean().optional(),
+  })
+  .strict();
+
 const codexPluginConfigSchema = z
   .object({
     codexDynamicToolsLoading: codexDynamicToolsLoadingSchema.optional(),
@@ -399,6 +481,7 @@ const codexPluginConfigSchema = z
       .strict()
       .optional(),
     codexPlugins: z.unknown().optional(),
+    supervision: codexSupervisionConfigSchema.optional(),
     appServer: z
       .object({
         mode: codexAppServerPolicyModeSchema.optional(),
@@ -536,9 +619,10 @@ export function resolveCodexAppServerRuntimeOptions(
   } = {},
 ): CodexAppServerRuntimeOptions {
   const env = params.env ?? process.env;
-  const config = readCodexPluginConfig(params.pluginConfig).appServer ?? {};
+  const pluginConfig = readCodexPluginConfig(params.pluginConfig);
+  const config = pluginConfig.appServer ?? {};
   const transport = resolveTransport(config.transport);
-  const homeScope: CodexAppServerHomeScope = config.homeScope === "user" ? "user" : "agent";
+  const homeScope: CodexAppServerHomeScope = config.homeScope ?? "agent";
   const configCommand = readNonEmptyString(config.command);
   const envCommand = readNonEmptyString(env.OPENCLAW_CODEX_APP_SERVER_BIN);
   const command = configCommand ?? envCommand ?? "codex";
@@ -557,7 +641,7 @@ export function resolveCodexAppServerRuntimeOptions(
     value: config.authToken,
     path: "plugins.entries.codex.config.appServer.authToken",
   });
-  const url = readNonEmptyString(config.url);
+  const url = readNonEmptyString(config.url) ?? (transport === "unix" ? "unix://" : undefined);
   const connectionClass = inferCodexAppServerConnectionClass({ transport, url });
   const remoteAppsSubstrate: CodexAppServerRemoteAppsSubstrate = "preconfigured";
   const remoteWorkspaceRoot = normalizeRemoteWorkspaceRoot(config.remoteWorkspaceRoot);
@@ -656,11 +740,22 @@ export function resolveCodexAppServerRuntimeOptions(
   }
   if (transport === "websocket" && homeScope === "user") {
     throw new Error(
-      "plugins.entries.codex.config.appServer.homeScope=user requires appServer.transport=stdio",
+      "plugins.entries.codex.config.appServer.homeScope=user requires appServer.transport=stdio or unix",
     );
   }
-  assertCodexAppServerConnectionClassConfig({
-    connectionClass,
+  if (transport === "unix" && homeScope !== "user") {
+    throw new Error(
+      "plugins.entries.codex.config.appServer.transport=unix requires appServer.homeScope=user",
+    );
+  }
+  if (transport === "unix" && !url?.startsWith("unix://")) {
+    throw new Error(
+      "plugins.entries.codex.config.appServer.url must use unix:// when appServer.transport is unix",
+    );
+  }
+  assertCodexAppServerConnectionSecurity({
+    transport,
+    url,
     authToken,
     headers,
   });
@@ -900,6 +995,7 @@ export function codexAppServerStartOptionsKey(
     commandSource: options.commandSource ?? null,
     managedFallbackCommandPaths: [...(options.managedFallbackCommandPaths ?? [])],
     args: options.args,
+    cwd: options.cwd ?? null,
     url: options.url ?? null,
     authToken: hashSecretForKey(options.authToken, "authToken"),
     headers: Object.entries(options.headers)
@@ -932,6 +1028,23 @@ export function codexSandboxPolicyForTurn(
     excludeTmpdirEnvVar: false,
     excludeSlashTmp: false,
   };
+}
+
+/** Resolves the passive supervision control connection without changing harness defaults. */
+export function resolveCodexSupervisionAppServerRuntimeOptions(
+  params: NonNullable<Parameters<typeof resolveCodexAppServerRuntimeOptions>[0]> = {},
+): CodexAppServerRuntimeOptions {
+  const pluginConfig = readCodexPluginConfig(params.pluginConfig);
+  const appServer = pluginConfig.appServer ?? {};
+  const transport = resolveTransport(appServer.transport);
+  const homeScope = appServer.homeScope ?? (transport === "websocket" ? "agent" : "user");
+  return resolveCodexAppServerRuntimeOptions({
+    ...params,
+    pluginConfig: {
+      ...pluginConfig,
+      appServer: { ...appServer, homeScope },
+    },
+  });
 }
 
 function resolveCodexAppServerNetworkProxy(
@@ -1066,7 +1179,7 @@ export function withMcpElicitationsApprovalPolicy(
 }
 
 function resolveTransport(value: unknown): CodexAppServerTransportMode {
-  return value === "websocket" ? "websocket" : "stdio";
+  return value === "websocket" || value === "unix" ? value : "stdio";
 }
 
 function normalizeRemoteWorkspaceRoot(value: string | undefined): string | undefined {
@@ -1099,6 +1212,20 @@ function assertCodexAppServerConnectionClassConfig(params: {
       "remote Codex app-server WebSocket URLs require appServer.authToken or an Authorization header",
     );
   }
+}
+
+/** Applies the canonical remote-auth boundary to any Codex AppServer transport. */
+export function assertCodexAppServerConnectionSecurity(params: {
+  transport: CodexAppServerTransportMode;
+  url?: string;
+  authToken?: string;
+  headers: Record<string, string>;
+}): void {
+  assertCodexAppServerConnectionClassConfig({
+    connectionClass: inferCodexAppServerConnectionClass(params),
+    authToken: params.authToken,
+    headers: params.headers,
+  });
 }
 
 function isLoopbackWebSocketUrl(value: string): boolean {

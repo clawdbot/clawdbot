@@ -4,7 +4,11 @@
  */
 
 import crypto from "node:crypto";
-import { applyModelOverrideToSessionEntry } from "openclaw/plugin-sdk/model-session-runtime";
+import {
+  applyModelOverrideToSessionEntry,
+  ModelSelectionLockedError,
+  resolvePersistedSessionRuntimeId,
+} from "openclaw/plugin-sdk/model-session-runtime";
 import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
@@ -286,6 +290,9 @@ export async function generateVoiceResponse(
         const { provider, model } = resolveVoiceResponseModel({ voiceConfig, agentRuntime });
 
         let sessionEntry = existingSessionEntry;
+        if (sessionEntry?.modelSelectionLocked === true && voiceConfig.responseModel) {
+          throw new ModelSelectionLockedError();
+        }
         if (!sessionEntry?.sessionId || voiceConfig.responseModel) {
           sessionEntry =
             (await agentRuntime.session.patchSessionEntry({
@@ -323,6 +330,8 @@ export async function generateVoiceResponse(
           };
         }
         const sessionId = sessionEntry.sessionId;
+        const modelSelectionLocked = sessionEntry.modelSelectionLocked === true;
+        const persistedRuntimeId = resolvePersistedSessionRuntimeId(sessionEntry);
 
         // Resolve thinking level
         const thinkLevel = agentRuntime.resolveThinkingDefault({ cfg, provider, model });
@@ -373,6 +382,13 @@ export async function generateVoiceResponse(
           prompt: userMessage,
           provider,
           model,
+          modelSelectionLocked,
+          ...(persistedRuntimeId
+            ? {
+                agentHarnessId: persistedRuntimeId,
+                agentHarnessRuntimeOverride: persistedRuntimeId,
+              }
+            : {}),
           thinkLevel,
           verboseLevel: "off",
           timeoutMs,
@@ -442,6 +458,9 @@ export async function generateVoiceResponse(
       },
     );
   } catch (err) {
+    if (err instanceof ModelSelectionLockedError) {
+      return { text: null, deliveredEarly: false, error: err.message };
+    }
     console.error(`[voice-call] Response generation failed:`, err);
     return { text: null, deliveredEarly: false, error: String(err) };
   }

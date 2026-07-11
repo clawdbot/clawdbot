@@ -1,12 +1,19 @@
 {
   "id": "codex",
   "name": "Codex",
-  "description": "OpenClaw Codex app-server harness and model provider plugin with a Codex-managed GPT catalog.",
+  "description": "OpenClaw Codex app-server harness, model provider, and native session supervision plugin.",
   "providers": ["codex"],
   "contracts": {
     "mediaUnderstandingProviders": ["codex"],
     "migrationProviders": ["codex"],
-    "tools": ["codex_threads"],
+    "tools": [
+      "codex_threads",
+      "codex_endpoint_probe",
+      "codex_sessions_list",
+      "codex_session_read",
+      "codex_session_send",
+      "codex_session_interrupt"
+    ],
     "webSearchProviders": ["codex"]
   },
   "mediaUnderstandingProviderMetadata": {
@@ -22,7 +29,9 @@
   "nonSecretAuthMarkers": ["codex-app-server"],
   "activation": {
     "onStartup": false,
-    "onAgentHarnesses": ["codex"]
+    "onAgentHarnesses": ["codex"],
+    "onCommands": ["codex"],
+    "onConfigPaths": ["plugins.entries.codex.config.supervision.enabled"]
   },
   "commandAliases": [
     {
@@ -133,6 +142,46 @@
           }
         }
       },
+      "supervision": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean", "default": false },
+          "endpoints": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": { "type": "string" },
+                    "label": { "type": "string" },
+                    "transport": { "const": "stdio-proxy" },
+                    "command": { "type": "string" },
+                    "args": { "type": "array", "items": { "type": "string" } },
+                    "cwd": { "type": "string" }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["transport", "url"],
+                  "properties": {
+                    "id": { "type": "string" },
+                    "label": { "type": "string" },
+                    "transport": { "const": "websocket" },
+                    "url": { "type": "string" },
+                    "authTokenEnv": { "type": "string" }
+                  }
+                }
+              ]
+            }
+          },
+          "allowRawTranscripts": { "type": "boolean", "default": false },
+          "allowWriteControls": { "type": "boolean", "default": false }
+        }
+      },
       "appServer": {
         "type": "object",
         "additionalProperties": false,
@@ -143,7 +192,7 @@
           },
           "transport": {
             "type": "string",
-            "enum": ["stdio", "websocket"],
+            "enum": ["stdio", "websocket", "unix"],
             "default": "stdio"
           },
           "homeScope": {
@@ -366,6 +415,30 @@
       "help": "Explicit migration-authored plugin entries. The wildcard key * is not supported.",
       "advanced": true
     },
+    "supervision": {
+      "label": "Codex Supervision",
+      "help": "Expose non-archived Codex Desktop and CLI sessions through a separate supervision connection without changing the ordinary Codex harness.",
+      "advanced": true
+    },
+    "supervision.enabled": {
+      "label": "Enable Codex Supervision",
+      "help": "List non-archived native sessions through managed user-home stdio by default; explicit App Server connection settings are honored."
+    },
+    "supervision.endpoints": {
+      "label": "Legacy Supervisor Endpoints",
+      "help": "Advanced compatibility endpoints for migrated Codex Supervisor agent tools.",
+      "advanced": true
+    },
+    "supervision.allowRawTranscripts": {
+      "label": "Allow Raw Transcript Tools",
+      "help": "Allow supervision agent tools, including turn-inclusive codex_threads reads, to expose full transcripts and transcript previews.",
+      "advanced": true
+    },
+    "supervision.allowWriteControls": {
+      "label": "Allow Write Control Tools",
+      "help": "Allow supervision agent tools to control turns and let codex_threads fork, rename, archive, or unarchive native threads.",
+      "advanced": true
+    },
     "appServer": {
       "label": "App Server",
       "help": "Runtime controls for connecting to Codex app-server.",
@@ -378,7 +451,7 @@
     },
     "appServer.transport": {
       "label": "Transport",
-      "help": "Use stdio to spawn Codex locally, or websocket to connect to an already-running app-server.",
+      "help": "Use stdio to spawn Codex locally, unix for the shared local control socket, or websocket for a remote app-server.",
       "advanced": true
     },
     "appServer.homeScope": {

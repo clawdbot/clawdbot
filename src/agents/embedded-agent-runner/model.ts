@@ -118,7 +118,8 @@ const SKIP_AGENT_DISCOVERY_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
   ...TARGET_PROVIDER_RUNTIME_HOOKS,
 };
 
-function createEmptyAgentDiscoveryStores(): {
+/** Creates isolated model/auth stores for harnesses that own model discovery themselves. */
+export function createEmptyAgentDiscoveryStores(): {
   authStorage: AuthStorage;
   modelRegistry: ModelRegistry;
 } {

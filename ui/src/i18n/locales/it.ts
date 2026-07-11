@@ -212,6 +212,11 @@ export const it: TranslationMap = {
     gateway: "Gateway · locale",
     folder: "Cartella",
     folderPlaceholder: "Area di lavoro dell'agente",
+    browse: "Sfoglia cartelle",
+    browserUp: "Cartella superiore",
+    browserUse: "Usa questa cartella",
+    browserEmpty: "Nessuna sottocartella",
+    browserLoadFailed: "Impossibile elencare quella cartella.",
     worktree: "Worktree",
     worktreeUnavailable: "L'area di lavoro dell'agente non è un checkout git",
     baseBranch: "Branch di base",
@@ -947,8 +952,8 @@ export const it: TranslationMap = {
   codexSessions: {
     eyebrow: "Flotta Codex",
     title: "Sessioni su tutti i tuoi computer",
-    subtitle:
-      "Una vista di sola lettura delle sessioni Codex su questo Gateway e su ogni computer connesso che le condivide.",
+    interactiveSubtitle:
+      "Avvia un ramo Chat la cui selezione del modello rimane sotto il controllo di Codex App Server, archivia le sessioni locali idonee con conferma e visualizza le sessioni dei computer associati.",
     summaryLabel: "Riepilogo delle sessioni Codex",
     summary: {
       sessions: "sessioni",
@@ -957,11 +962,6 @@ export const it: TranslationMap = {
     },
     searchLabel: "Cerca sessioni Codex",
     searchPlaceholder: "Cerca nei titoli delle sessioni",
-    scopeLabel: "Filtro di archiviazione delle sessioni",
-    scope: {
-      active: "Attive",
-      archived: "Archiviate",
-    },
     refresh: "Aggiorna",
     disconnected: "Riconnettiti al Gateway per aggiornare le sessioni Codex.",
     partial: "Host non disponibili: {count}. Gli altri host restano disponibili.",
@@ -970,11 +970,33 @@ export const it: TranslationMap = {
     loadingMore: "Caricamento…",
     untitled: "Sessione Codex senza titolo",
     threadId: "Thread",
+    actions: {
+      continue: "Continua",
+      continueAsBranch: "Continua come ramo",
+      openChat: "Apri Chat",
+      continuing: "Continuazione…",
+      archive: "Archivia",
+      continueLabel: "Continua {title}",
+      continueAsBranchLabel: "Continua {title} come ramo",
+      openChatLabel: "Apri Chat per {title}",
+      continueAsBranchHint:
+        "Crea una Chat dalla cronologia visibile persistente. Al tuo primo messaggio, Codex App Server seleziona il modello e il provider per il nuovo thread harness. La selezione successiva rimane controllata da Codex; OpenClaw non sostituisce mai un altro runtime, modello o fallback. L'origine rimane invariata e il lavoro in corso potrebbe essere assente.",
+      archiveLabel: "Archivia {title}",
+      archiveConfirmation:
+        "Archiviare {title} e tutti i discendenti generati? Conferma che nessun altro client Codex o runner OpenClaw li stia utilizzando. L'archiviazione mentre un altro runner è attivo potrebbe interromperne il lavoro.",
+      active: "Le sessioni attive non possono avviare un ramo né essere archiviate.",
+      archiveActivityUnknownHint:
+        "L'attività è sconosciuta perché lo stato è locale al processo. Archivia solo dopo aver confermato che nessun altro client Codex o runner sta utilizzando questa sessione.",
+      statusUnavailable: "Questa sessione Codex non può essere gestita nel suo stato attuale.",
+      hostOffline: "Riconnetti questo computer prima di gestirne le sessioni Codex.",
+      gatewayOffline: "Riconnettiti al gateway prima di gestire le sessioni Codex.",
+      remoteReadOnly: "Le sessioni del computer associato sono per ora di sola visualizzazione.",
+    },
     status: {
       active: "Attiva",
       idle: "Inattiva",
       archived: "Archiviata",
-      notLoaded: "Memorizzata",
+      storedActivityUnknown: "Salvata / attività sconosciuta",
       systemError: "Errore di sistema",
       unknown: "Sconosciuto",
     },
@@ -988,11 +1010,10 @@ export const it: TranslationMap = {
     },
     empty: {
       title: "Nessun host Codex trovato",
-      subtitle:
-        "Abilita la condivisione delle sessioni Codex sul Gateway o su un computer associato, quindi aggiorna questa vista.",
+      supervisionSubtitle:
+        "Abilita la supervisione Codex sul gateway o su un computer abbinato, quindi aggiorna questa vista.",
       search: "Nessuna sessione su questo host corrisponde alla ricerca.",
-      active: "Nessuna sessione attiva su questo host.",
-      archived: "Nessuna sessione archiviata su questo host.",
+      nonArchived: "Nessuna sessione non archiviata su questo host.",
     },
   },
   logbook: {
@@ -2115,6 +2136,11 @@ export const it: TranslationMap = {
       clearSessionSearch: "Cancella ricerca sessioni",
       loadMoreSessions: "Carica altre sessioni",
       model: "Chat model",
+      modelSection: "Modello",
+      modelLocked: "Bloccato",
+      modelLockedLabel: "Selezione del modello controllata per questa sessione",
+      lockedSessionModel: "Modello della sessione",
+      nativeCodexModel: "Modello controllato da Codex",
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {
@@ -2179,6 +2205,26 @@ export const it: TranslationMap = {
       finished: "Completate ({count})",
       stopTask: "Interrompi {title}",
       viewTranscript: "Visualizza trascrizione",
+    },
+    sessionDiff: {
+      title: "Modifiche",
+      show: "Mostra le modifiche della sessione",
+      refresh: "Aggiorna modifiche",
+      loading: "Caricamento modifiche…",
+      empty: "Nessuna modifica nel checkout di questa sessione.",
+      notGit: "L'area di lavoro di questa sessione non è un checkout git.",
+      unknownSession: "Nessuna area di lavoro è associata a questa sessione.",
+      disconnected: "Gateway è disconnesso.",
+      unmodifiedLines: "{count} righe non modificate",
+      binaryFile: "File binario",
+      untracked: "non tracciato",
+      tooLarge: "Diff troppo grande da visualizzare.",
+      truncatedFile: "Diff troncato.",
+      truncatedResult: "Alcune modifiche sono state omesse perché il diff è molto grande.",
+      statusAdded: "Aggiunto",
+      statusDeleted: "Eliminato",
+      statusRenamed: "Rinominato",
+      statusModified: "Modificato",
     },
     workspaceFiles: {
       label: "Workspace sessione",

@@ -323,6 +323,7 @@ describe("plugin runtime command execution", () => {
         expect(runtime.agent.runEmbeddedPiAgent).toBe(runtime.agent.runEmbeddedAgent);
         expectFunctionKeys(runtime.agent.session as Record<string, unknown>, [
           "loadSessionStore",
+          "createSessionEntry",
           "getSessionEntry",
           "listSessionEntries",
           "patchSessionEntry",

@@ -61,7 +61,13 @@ import {
   isAcpSessionKey,
   normalizeMainKey,
 } from "../../routing/session-key.js";
+import { resolveAgentHarnessSessionContextError } from "../../sessions/agent-harness-session-key.js";
 import { isInterSessionInputProvenance } from "../../sessions/input-provenance.js";
+import {
+  isModelSelectionLocked,
+  MODEL_SELECTION_LOCKED_RESET_MESSAGE,
+  ModelSelectionLockedError,
+} from "../../sessions/model-overrides.js";
 import {
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
   interruptSessionWorkAdmissions,
@@ -254,6 +260,7 @@ function resolveSessionConversationBindingContext(
 function resolveBoundConversationSessionKey(params: {
   cfg: OpenClawConfig;
   ctx: MsgContext;
+  touch?: boolean;
   bindingContext?: {
     channel: string;
     accountId: string;
@@ -279,12 +286,15 @@ function resolveBoundConversationSessionKey(params: {
   if (!binding?.targetSessionKey) {
     return undefined;
   }
-  getSessionBindingService().touch(binding.bindingId);
+  if (params.touch !== false) {
+    getSessionBindingService().touch(binding.bindingId);
+  }
   return binding.targetSessionKey;
 }
 
 function resolveInitSessionStateAttemptContext(
-  params: InitSessionStateParams,
+  params: Pick<InitSessionStateParams, "cfg" | "ctx">,
+  options?: { touchConversationBinding?: boolean },
 ): InitSessionStateAttemptContext {
   const { cfg, ctx } = params;
   // Automated system events must not reset sessions or retarget conversation bindings.
@@ -302,6 +312,7 @@ function resolveInitSessionStateAttemptContext(
       cfg,
       ctx,
       bindingContext: conversationBindingContext,
+      touch: options?.touchConversationBinding,
     });
   const sessionCtxForState =
     targetSessionKey && targetSessionKey !== ctx.SessionKey
@@ -318,6 +329,43 @@ function resolveInitSessionStateAttemptContext(
     isSystemEvent,
     sessionCtxForState,
     storePath: resolveStorePath(cfg.session?.store, { agentId }),
+  };
+}
+
+export type ReplySessionPreprocessingState = {
+  sessionEntry?: SessionEntry;
+  sessionKey: string;
+  storePath: string;
+};
+
+/** Resolves durable ownership before utility preprocessing can invoke another model. */
+export function resolveReplySessionPreprocessingState(
+  params: Pick<InitSessionStateParams, "cfg" | "ctx">,
+): ReplySessionPreprocessingState {
+  const attemptContext = resolveInitSessionStateAttemptContext(params, {
+    touchConversationBinding: false,
+  });
+  const sessionKey = canonicalizeMainSessionAlias({
+    cfg: params.cfg,
+    agentId: attemptContext.agentId,
+    sessionKey: resolveSessionKey(
+      params.cfg.session?.scope ?? "per-sender",
+      attemptContext.sessionCtxForState,
+      normalizeMainKey(params.cfg.session?.mainKey),
+    ),
+  });
+  const sessionEntry = loadReplySessionInitializationSnapshot({
+    storePath: attemptContext.storePath,
+    sessionKey,
+  }).currentEntry;
+  const contextError = resolveAgentHarnessSessionContextError(sessionKey, sessionEntry);
+  if (contextError) {
+    throw new Error(contextError);
+  }
+  return {
+    sessionEntry,
+    sessionKey,
+    storePath: attemptContext.storePath,
   };
 }
 
@@ -555,6 +603,11 @@ async function initSessionStateAttemptLocked(
   if (archivedSessionError) {
     throw new Error(archivedSessionError);
   }
+  // Locked model selection is coupled to the current native session id. Reject before
+  // lifecycle cleanup so a reset cannot detach the durable harness binding.
+  if (resetTriggered && isModelSelectionLocked(entry)) {
+    throw new ModelSelectionLockedError(MODEL_SELECTION_LOCKED_RESET_MESSAGE);
+  }
   const now = Date.now();
   const isThread = resolveThreadFlag({
     sessionKey,
@@ -589,7 +642,10 @@ async function initSessionStateAttemptLocked(
   // resume signal is allowed to suppress configured idle/daily rollover.
   const reconnectResumeRequested =
     params.resumeRequestedSession === true && requestedCurrentSession;
-  const skipImplicitExpiry = hasProviderOwnedSession(entry) && resetPolicy.configured !== true;
+  // Implicit expiry must preserve the same identity for model-locked native sessions too.
+  const lockedModelSelection = isModelSelectionLocked(entry);
+  const skipImplicitExpiry =
+    lockedModelSelection || (hasProviderOwnedSession(entry) && resetPolicy.configured !== true);
   const lifecycleTimestamps = resolveSessionLifecycleTimestamps({
     entry,
     agentId,
@@ -638,6 +694,7 @@ async function initSessionStateAttemptLocked(
     (entryFreshness?.fresh ?? false) &&
     isRecoverableTerminalSessionStatus(entry?.status);
   const freshEntry =
+    (lockedModelSelection && canReuseExistingEntry) ||
     (isSystemEvent && canReuseExistingEntry) ||
     (((reconnectResumeRequested && canReuseExistingEntry) ||
       recoverTerminalVisibleEntry ||

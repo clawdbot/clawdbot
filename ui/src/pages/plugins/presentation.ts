@@ -32,7 +32,6 @@ const PLUGIN_ART_SLUGS: ReadonlySet<string> = new Set([
   "clickclack",
   "cloudflare-ai-gateway",
   "codex",
-  "codex-supervisor",
   "cohere",
   "comfy",
   "context7",

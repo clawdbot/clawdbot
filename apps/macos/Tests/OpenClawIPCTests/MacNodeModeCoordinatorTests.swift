@@ -108,7 +108,9 @@ struct MacNodeModeCoordinatorTests {
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: timeout)
         while clock.now < deadline {
-            if await condition() { return }
+            if await condition() {
+                return
+            }
             await Task.yield()
         }
         Issue.record("timed out waiting for \(description)")
@@ -328,7 +330,7 @@ struct MacNodeModeCoordinatorTests {
                 onDisconnected: { _ in },
                 onInvoke: { request in BridgeInvokeResponse(id: request.id, ok: true) })
         }
-        try await self.waitUntil("successor captured first invalidation") {
+        try await waitUntil("successor captured first invalidation") {
             await drainSnapshot.hasCaptured()
         }
         coordinator.enqueueRouteInvalidationForTesting()
@@ -446,7 +448,21 @@ struct MacNodeModeCoordinatorTests {
         #expect(commands.contains(OpenClawBrowserCommand.proxy.rawValue))
     }
 
-    @Test func `codex supervisor config advertises native thread catalog`() {
+    @Test func `local mode omits native Codex thread catalog`() {
+        let caps = MacNodeModeCoordinator.resolvedCaps(
+            browserControlEnabled: false,
+            cameraEnabled: false,
+            computerControlEnabled: false,
+            locationMode: .off,
+            connectionMode: .local,
+            codexThreadCatalogEnabled: true)
+        let commands = MacNodeModeCoordinator.resolvedCommands(caps: caps)
+
+        #expect(!caps.contains(MacNodeCodexThreadCatalogContract.capability))
+        #expect(!commands.contains(MacNodeCodexThreadCatalogContract.listCommand))
+    }
+
+    @Test func `remote mode advertises native Codex thread catalog`() {
         let caps = MacNodeModeCoordinator.resolvedCaps(
             browserControlEnabled: false,
             cameraEnabled: false,
@@ -458,53 +474,257 @@ struct MacNodeModeCoordinatorTests {
 
         #expect(caps.contains(MacNodeCodexThreadCatalogContract.capability))
         #expect(commands.contains(MacNodeCodexThreadCatalogContract.listCommand))
+        #expect(MacNodeModeCoordinator.routeSnapshotAllowsCodexCatalogInvoke(
+            command: MacNodeCodexThreadCatalogContract.listCommand,
+            catalogAdvertised: true))
+        #expect(!MacNodeModeCoordinator.routeSnapshotAllowsCodexCatalogInvoke(
+            command: MacNodeCodexThreadCatalogContract.listCommand,
+            catalogAdvertised: false))
+        #expect(MacNodeModeCoordinator.routeSnapshotAllowsCodexCatalogInvoke(
+            command: OpenClawSystemCommand.notify.rawValue,
+            catalogAdvertised: false))
     }
 
-    @Test func `codex supervisor plugin activation respects global policy`() {
+    @Test func `Codex supervision activation respects the plugin flag and global policy`() {
         let enabled: [String: Any] = [
             "plugins": [
-                "entries": ["codex-supervisor": ["enabled": true]],
+                "entries": [
+                    "codex": [
+                        "enabled": true,
+                        "config": ["supervision": ["enabled": true]],
+                    ],
+                ],
             ],
         ]
-        #expect(OpenClawConfigFile.explicitlyEnabledPlugin("codex-supervisor", root: enabled))
+        #expect(OpenClawConfigFile.explicitlyEnabledPluginConfigFlag(
+            "codex",
+            path: ["supervision", "enabled"],
+            root: enabled))
+        #expect(MacNodeCodexThreadCatalog.shouldAdvertise(root: enabled))
+
+        let enabledByConfigPath: [String: Any] = [
+            "plugins": [
+                "entries": [
+                    "codex": [
+                        "config": ["supervision": ["enabled": true]],
+                    ],
+                ],
+            ],
+        ]
+        #expect(OpenClawConfigFile.configuredBundledPluginAllowed(
+            "codex",
+            root: enabledByConfigPath))
+        #expect(MacNodeCodexThreadCatalog.shouldAdvertise(root: enabledByConfigPath))
+
+        let numericPluginEnable: [String: Any] = [
+            "plugins": [
+                "entries": [
+                    "codex": [
+                        "enabled": NSNumber(value: 1),
+                        "config": ["supervision": ["enabled": true]],
+                    ],
+                ],
+            ],
+        ]
+        #expect(!OpenClawConfigFile.explicitlyEnabledPluginConfigFlag(
+            "codex",
+            path: ["supervision", "enabled"],
+            root: numericPluginEnable))
+
+        let numericNestedEnable: [String: Any] = [
+            "plugins": [
+                "entries": [
+                    "codex": [
+                        "enabled": true,
+                        "config": ["supervision": ["enabled": NSNumber(value: 1)]],
+                    ],
+                ],
+            ],
+        ]
+        #expect(!OpenClawConfigFile.explicitlyEnabledPluginConfigFlag(
+            "codex",
+            path: ["supervision", "enabled"],
+            root: numericNestedEnable))
+
+        let numericGlobalEnable: [String: Any] = [
+            "plugins": [
+                "enabled": NSNumber(value: 1),
+                "entries": [
+                    "codex": [
+                        "enabled": true,
+                        "config": ["supervision": ["enabled": true]],
+                    ],
+                ],
+            ],
+        ]
+        #expect(!OpenClawConfigFile.explicitlyEnabledPluginConfigFlag(
+            "codex",
+            path: ["supervision", "enabled"],
+            root: numericGlobalEnable))
+
+        for transport in ["websocket", "unix"] {
+            let unsupported: [String: Any] = [
+                "plugins": [
+                    "entries": [
+                        "codex": [
+                            "enabled": true,
+                            "config": [
+                                "supervision": ["enabled": true],
+                                "appServer": ["transport": transport],
+                            ],
+                        ],
+                    ],
+                ],
+            ]
+            #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: unsupported))
+        }
+
+        let agentHome: [String: Any] = [
+            "plugins": [
+                "entries": [
+                    "codex": [
+                        "enabled": true,
+                        "config": [
+                            "supervision": ["enabled": true],
+                            "appServer": ["transport": "stdio", "homeScope": "agent"],
+                        ],
+                    ],
+                ],
+            ],
+        ]
+        #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: agentHome))
+
+        let supervisionDisabled: [String: Any] = [
+            "plugins": [
+                "entries": [
+                    "codex": [
+                        "enabled": true,
+                        "config": ["supervision": ["enabled": false]],
+                    ],
+                ],
+            ],
+        ]
+        #expect(!OpenClawConfigFile.explicitlyEnabledPluginConfigFlag(
+            "codex",
+            path: ["supervision", "enabled"],
+            root: supervisionDisabled))
+
+        let pluginDisabled: [String: Any] = [
+            "plugins": [
+                "entries": [
+                    "codex": [
+                        "enabled": false,
+                        "config": ["supervision": ["enabled": true]],
+                    ],
+                ],
+            ],
+        ]
+        #expect(!OpenClawConfigFile.configuredBundledPluginAllowed(
+            "codex",
+            root: pluginDisabled))
+        #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: pluginDisabled))
 
         let denied: [String: Any] = [
             "plugins": [
-                "deny": ["codex-supervisor"],
-                "entries": ["codex-supervisor": ["enabled": true]],
+                "deny": ["codex"],
+                "entries": [
+                    "codex": [
+                        "enabled": true,
+                        "config": ["supervision": ["enabled": true]],
+                    ],
+                ],
             ],
         ]
-        #expect(!OpenClawConfigFile.explicitlyEnabledPlugin("codex-supervisor", root: denied))
+        #expect(!OpenClawConfigFile.explicitlyEnabledPluginConfigFlag(
+            "codex",
+            path: ["supervision", "enabled"],
+            root: denied))
 
         let omittedByAllowlist: [String: Any] = [
             "plugins": [
                 "allow": ["other-plugin"],
-                "entries": ["codex-supervisor": ["enabled": true]],
+                "entries": [
+                    "codex": [
+                        "enabled": true,
+                        "config": ["supervision": ["enabled": true]],
+                    ],
+                ],
             ],
         ]
-        #expect(!OpenClawConfigFile.explicitlyEnabledPlugin(
-            "codex-supervisor",
+        #expect(!OpenClawConfigFile.configuredBundledPluginAllowed(
+            "codex",
             root: omittedByAllowlist))
+        #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: omittedByAllowlist))
 
         let paddedIds: [String: Any] = [
             "plugins": [
-                "allow": [" codex-supervisor "],
-                "entries": [" codex-supervisor ": ["enabled": true]],
+                "allow": [" codex "],
+                "entries": [
+                    " codex ": [
+                        "enabled": true,
+                        "config": ["supervision": ["enabled": true]],
+                    ],
+                ],
             ],
         ]
-        #expect(OpenClawConfigFile.explicitlyEnabledPlugin(
-            "codex-supervisor",
+        #expect(OpenClawConfigFile.explicitlyEnabledPluginConfigFlag(
+            "codex",
+            path: ["supervision", "enabled"],
             root: paddedIds))
 
         let paddedDeny: [String: Any] = [
             "plugins": [
-                "deny": [" codex-supervisor "],
-                "entries": ["codex-supervisor": ["enabled": true]],
+                "deny": [" codex "],
+                "entries": [
+                    "codex": [
+                        "enabled": true,
+                        "config": ["supervision": ["enabled": true]],
+                    ],
+                ],
             ],
         ]
-        #expect(!OpenClawConfigFile.explicitlyEnabledPlugin(
-            "codex-supervisor",
+        #expect(!OpenClawConfigFile.explicitlyEnabledPluginConfigFlag(
+            "codex",
+            path: ["supervision", "enabled"],
             root: paddedDeny))
+
+        let mixedCaseDeny: [String: Any] = [
+            "plugins": [
+                "deny": [" CoDeX "],
+                "entries": [
+                    "CODEX": [
+                        "enabled": true,
+                        "config": ["supervision": ["enabled": true]],
+                    ],
+                ],
+            ],
+        ]
+        #expect(!OpenClawConfigFile.explicitlyEnabledPluginConfigFlag(
+            "codex",
+            path: ["supervision", "enabled"],
+            root: mixedCaseDeny))
+        #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: mixedCaseDeny))
+
+        let ambiguousEntryAliases: [String: Any] = [
+            "plugins": [
+                "entries": [
+                    "CODEX": [
+                        "enabled": true,
+                        "config": ["supervision": ["enabled": true]],
+                    ],
+                    "codex": [
+                        "enabled": false,
+                        "config": ["supervision": ["enabled": false]],
+                    ],
+                ],
+            ],
+        ]
+        #expect(OpenClawConfigFile.pluginEntry("codex", root: ambiguousEntryAliases) == nil)
+        #expect(!OpenClawConfigFile.explicitlyEnabledPluginConfigFlag(
+            "codex",
+            path: ["supervision", "enabled"],
+            root: ambiguousEntryAliases))
+        #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: ambiguousEntryAliases))
     }
 
     @Test func `computer control cap gates the computer.act command`() {

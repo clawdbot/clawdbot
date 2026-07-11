@@ -10,6 +10,7 @@ import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { modelKey, parseModelRef, resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { createModelVisibilityPolicy } from "../agents/model-visibility-policy.js";
 import { getRuntimeConfig } from "../config/io.js";
+import { resolveSessionEntryAccessTarget } from "../config/sessions/session-accessor.js";
 import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
 import {
   buildAgentMainSessionKey,
@@ -19,9 +20,14 @@ import {
   isValidAgentId,
   normalizeAgentId,
 } from "../routing/session-key.js";
+import {
+  isAgentHarnessSessionKey,
+  isAgentHarnessSessionStoreEntryProtected,
+} from "../sessions/agent-harness-session-key.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { getHeader } from "./http-auth-utils.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
+import { canonicalizeSessionKeyForAgent } from "./session-store-key.js";
 
 export {
   authorizeOpenAiCompatibleHttpModelOverride,
@@ -201,7 +207,7 @@ function resolveSessionKey(params: {
 }): string {
   const explicit = getHeader(params.req, "x-openclaw-session-key")?.trim();
   if (explicit) {
-    if (isReservedSessionKeyOverride(explicit)) {
+    if (isReservedSessionKeyOverride(explicit, params.agentId)) {
       throw new GatewaySessionKeyOverrideError();
     }
     return explicit;
@@ -212,12 +218,25 @@ function resolveSessionKey(params: {
   return buildAgentMainSessionKey({ agentId: params.agentId, mainKey });
 }
 
-function isReservedSessionKeyOverride(sessionKey: string): boolean {
+function isReservedSessionKeyOverride(sessionKey: string, agentId: string): boolean {
   const lowered = normalizeLowercaseStringOrEmpty(sessionKey);
+  const harnessLookupKey = sessionKey.startsWith("agent:")
+    ? sessionKey
+    : canonicalizeSessionKeyForAgent(agentId, sessionKey);
+  const harnessEntry = isAgentHarnessSessionKey(sessionKey)
+    ? resolveSessionEntryAccessTarget({
+        cfg: getRuntimeConfig(),
+        sessionKey: harnessLookupKey,
+      }).entry
+    : undefined;
+  const harnessKeyReserved =
+    isAgentHarnessSessionKey(sessionKey) &&
+    (!harnessEntry || isAgentHarnessSessionStoreEntryProtected(sessionKey, harnessEntry));
   return (
     lowered.startsWith("subagent:") ||
     lowered.startsWith("cron:") ||
     lowered.startsWith("acp:") ||
+    harnessKeyReserved ||
     isSubagentSessionKey(sessionKey) ||
     isCronSessionKey(sessionKey) ||
     isAcpSessionKey(sessionKey)

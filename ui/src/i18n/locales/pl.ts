@@ -211,6 +211,11 @@ export const pl: TranslationMap = {
     gateway: "Gateway · lokalnie",
     folder: "Folder",
     folderPlaceholder: "Obszar roboczy agenta",
+    browse: "Przeglądaj foldery",
+    browserUp: "Folder nadrzędny",
+    browserUse: "Użyj tego folderu",
+    browserEmpty: "Brak podfolderów",
+    browserLoadFailed: "Nie udało się wyświetlić zawartości tego folderu.",
     worktree: "Worktree",
     worktreeUnavailable: "Obszar roboczy agenta nie jest checkoutem git",
     baseBranch: "Gałąź bazowa",
@@ -942,8 +947,8 @@ export const pl: TranslationMap = {
   codexSessions: {
     eyebrow: "Flota Codex",
     title: "Sesje na Twoich komputerach",
-    subtitle:
-      "Widok tylko do odczytu sesji Codex na tym Gateway i każdym połączonym komputerze, który je udostępnia.",
+    interactiveSubtitle:
+      "Rozpocznij gałąź Chat, której wybór modelu pozostaje pod kontrolą Codex App Server, archiwizuj kwalifikujące się sesje lokalne po potwierdzeniu i wyświetlaj sesje ze sparowanymi komputerami.",
     summaryLabel: "Podsumowanie sesji Codex",
     summary: {
       sessions: "sesje",
@@ -952,11 +957,6 @@ export const pl: TranslationMap = {
     },
     searchLabel: "Wyszukaj sesje Codex",
     searchPlaceholder: "Wyszukaj tytuły sesji",
-    scopeLabel: "Filtr archiwum sesji",
-    scope: {
-      active: "Aktywne",
-      archived: "Zarchiwizowane",
-    },
     refresh: "Odśwież",
     disconnected: "Połącz się ponownie z Gateway, aby odświeżyć sesje Codex.",
     partial: "Niedostępne hosty: {count}. Pozostałe hosty są nadal dostępne.",
@@ -965,11 +965,33 @@ export const pl: TranslationMap = {
     loadingMore: "Wczytywanie…",
     untitled: "Sesja Codex bez tytułu",
     threadId: "Wątek",
+    actions: {
+      continue: "Kontynuuj",
+      continueAsBranch: "Kontynuuj jako gałąź",
+      openChat: "Otwórz Chat",
+      continuing: "Kontynuowanie…",
+      archive: "Archiwizuj",
+      continueLabel: "Kontynuuj {title}",
+      continueAsBranchLabel: "Kontynuuj {title} jako gałąź",
+      openChatLabel: "Otwórz Chat dla {title}",
+      continueAsBranchHint:
+        "Utwórz Chat na podstawie utrwalonej widocznej historii. Przy pierwszej wiadomości Codex App Server wybiera model i dostawcę dla nowego wątku harness. Późniejszy wybór pozostaje kontrolowany przez Codex; OpenClaw nigdy nie zastępuje go innym środowiskiem uruchomieniowym, modelem ani mechanizmem awaryjnym. Źródło pozostaje nienaruszone, a prace w toku mogą być nieobecne.",
+      archiveLabel: "Archiwizuj {title}",
+      archiveConfirmation:
+        "Zarchiwizować {title} i wszystkie utworzone z niego elementy podrzędne? Potwierdź, że żaden inny klient Codex ani runner OpenClaw ich nie używa. Archiwizacja, gdy aktywny jest inny runner, może przerwać jego pracę.",
+      active: "Aktywne sesje nie mogą rozpocząć gałęzi ani zostać zarchiwizowane.",
+      archiveActivityUnknownHint:
+        "Aktywność jest nieznana, ponieważ status jest lokalny dla procesu. Zarchiwizuj dopiero po potwierdzeniu, że żaden inny klient Codex ani runner nie używa tej sesji.",
+      statusUnavailable: "Tą sesją Codex nie można zarządzać w jej bieżącym stanie.",
+      hostOffline: "Połącz ponownie ten komputer, zanim zaczniesz zarządzać jego sesjami Codex.",
+      gatewayOffline: "Połącz ponownie z gateway, zanim zaczniesz zarządzać sesjami Codex.",
+      remoteReadOnly: "Sesje sparowanego komputera są na razie tylko do odczytu.",
+    },
     status: {
       active: "Aktywna",
       idle: "Bezczynna",
       archived: "Zarchiwizowana",
-      notLoaded: "Zapisana",
+      storedActivityUnknown: "Zapisana / aktywność nieznana",
       systemError: "Błąd systemu",
       unknown: "Nieznany",
     },
@@ -983,11 +1005,10 @@ export const pl: TranslationMap = {
     },
     empty: {
       title: "Nie znaleziono hostów Codex",
-      subtitle:
-        "Włącz udostępnianie sesji Codex na Gateway lub sparowanym komputerze, a następnie odśwież ten widok.",
+      supervisionSubtitle:
+        "Włącz nadzór Codex w gateway lub na sparowanym komputerze, a następnie odśwież ten widok.",
       search: "Żadna sesja na tym hoście nie pasuje do wyszukiwania.",
-      active: "Brak aktywnych sesji na tym hoście.",
-      archived: "Brak zarchiwizowanych sesji na tym hoście.",
+      nonArchived: "Brak niezarchiwizowanych sesji na tym hoście.",
     },
   },
   logbook: {
@@ -2105,6 +2126,11 @@ export const pl: TranslationMap = {
       clearSessionSearch: "Wyczyść wyszukiwanie sesji",
       loadMoreSessions: "Wczytaj więcej sesji",
       model: "Chat model",
+      modelSection: "Model",
+      modelLocked: "Zablokowany",
+      modelLockedLabel: "Wybór modelu kontrolowany dla tej sesji",
+      lockedSessionModel: "Model sesji",
+      nativeCodexModel: "Model kontrolowany przez Codex",
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {
@@ -2169,6 +2195,26 @@ export const pl: TranslationMap = {
       finished: "Ukończone ({count})",
       stopTask: "Zatrzymaj {title}",
       viewTranscript: "Wyświetl transkrypcję",
+    },
+    sessionDiff: {
+      title: "Zmiany",
+      show: "Pokaż zmiany sesji",
+      refresh: "Odśwież zmiany",
+      loading: "Ładowanie zmian…",
+      empty: "Brak zmian w checkout tej sesji.",
+      notGit: "Obszar roboczy tej sesji nie jest checkout git.",
+      unknownSession: "Z tą sesją nie jest powiązany żaden obszar roboczy.",
+      disconnected: "Gateway jest rozłączony.",
+      unmodifiedLines: "{count} niezmienionych wierszy",
+      binaryFile: "Plik binarny",
+      untracked: "nieśledzony",
+      tooLarge: "Diff jest zbyt duży, aby go wyświetlić.",
+      truncatedFile: "Diff został skrócony.",
+      truncatedResult: "Niektóre zmiany zostały pominięte, ponieważ diff jest bardzo duży.",
+      statusAdded: "Dodano",
+      statusDeleted: "Usunięto",
+      statusRenamed: "Zmieniono nazwę",
+      statusModified: "Zmodyfikowano",
     },
     workspaceFiles: {
       label: "Obszar roboczy sesji",

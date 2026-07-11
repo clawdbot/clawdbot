@@ -208,6 +208,11 @@ export const en: TranslationMap = {
     gateway: "Gateway · local",
     folder: "Folder",
     folderPlaceholder: "Agent workspace",
+    browse: "Browse folders",
+    browserUp: "Parent folder",
+    browserUse: "Use this folder",
+    browserEmpty: "No subfolders",
+    browserLoadFailed: "Couldn't list that folder.",
     worktree: "Worktree",
     worktreeUnavailable: "Agent workspace is not a git checkout",
     baseBranch: "Base branch",
@@ -931,8 +936,8 @@ export const en: TranslationMap = {
   codexSessions: {
     eyebrow: "Codex fleet",
     title: "Sessions across your computers",
-    subtitle:
-      "A read-only view of Codex sessions on this gateway and every connected computer that shares them.",
+    interactiveSubtitle:
+      "Start a Chat branch whose model selection stays under Codex App Server control, archive eligible local sessions with confirmation, and view paired-computer sessions.",
     summaryLabel: "Codex session summary",
     summary: {
       sessions: "sessions",
@@ -941,11 +946,6 @@ export const en: TranslationMap = {
     },
     searchLabel: "Search Codex sessions",
     searchPlaceholder: "Search session titles",
-    scopeLabel: "Session archive filter",
-    scope: {
-      active: "Active",
-      archived: "Archived",
-    },
     refresh: "Refresh",
     disconnected: "Reconnect to the gateway to refresh Codex sessions.",
     partial: "Unavailable hosts: {count}. Other hosts remain available.",
@@ -954,11 +954,33 @@ export const en: TranslationMap = {
     loadingMore: "Loading…",
     untitled: "Untitled Codex session",
     threadId: "Thread",
+    actions: {
+      continue: "Continue",
+      continueAsBranch: "Continue as branch",
+      openChat: "Open Chat",
+      continuing: "Continuing…",
+      archive: "Archive",
+      continueLabel: "Continue {title}",
+      continueAsBranchLabel: "Continue {title} as a branch",
+      openChatLabel: "Open Chat for {title}",
+      continueAsBranchHint:
+        "Create a Chat from persisted visible history. On your first message, Codex App Server selects the model and provider for the new harness thread. Later selection remains Codex-controlled; OpenClaw never substitutes another runtime, model, or fallback. The source remains untouched, and in-flight work may be absent.",
+      archiveLabel: "Archive {title}",
+      archiveConfirmation:
+        "Archive {title} and any spawned descendants? Confirm that no other Codex client or OpenClaw runner is using them. Archiving while another runner is active may interrupt its work.",
+      active: "Active sessions cannot start a branch or be archived.",
+      archiveActivityUnknownHint:
+        "Activity is unknown because status is process-local. Archive only after confirming that no other Codex client or runner is using this session.",
+      statusUnavailable: "This Codex session cannot be managed in its current state.",
+      hostOffline: "Reconnect this computer before managing its Codex sessions.",
+      gatewayOffline: "Reconnect to the gateway before managing Codex sessions.",
+      remoteReadOnly: "Paired-computer sessions are view-only for now.",
+    },
     status: {
       active: "Active",
       idle: "Idle",
       archived: "Archived",
-      notLoaded: "Stored",
+      storedActivityUnknown: "Stored / activity unknown",
       systemError: "System error",
       unknown: "Unknown",
     },
@@ -972,11 +994,10 @@ export const en: TranslationMap = {
     },
     empty: {
       title: "No Codex hosts found",
-      subtitle:
-        "Enable Codex session sharing on the gateway or a paired computer, then refresh this view.",
+      supervisionSubtitle:
+        "Enable Codex supervision on the gateway or a paired computer, then refresh this view.",
       search: "No sessions on this host match your search.",
-      active: "No active sessions on this host.",
-      archived: "No archived sessions on this host.",
+      nonArchived: "No non-archived sessions on this host.",
     },
   },
   logbook: {
@@ -2079,6 +2100,11 @@ export const en: TranslationMap = {
       clearSessionSearch: "Clear session search",
       loadMoreSessions: "Load more sessions",
       model: "Chat model",
+      modelSection: "Model",
+      modelLocked: "Locked",
+      modelLockedLabel: "Model selection controlled for this session",
+      lockedSessionModel: "Session model",
+      nativeCodexModel: "Codex-controlled model",
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {
@@ -2143,6 +2169,26 @@ export const en: TranslationMap = {
       finished: "Finished ({count})",
       stopTask: "Stop {title}",
       viewTranscript: "View transcript",
+    },
+    sessionDiff: {
+      title: "Changes",
+      show: "Show session changes",
+      refresh: "Refresh changes",
+      loading: "Loading changes…",
+      empty: "No changes in this session's checkout.",
+      notGit: "This session's workspace is not a git checkout.",
+      unknownSession: "No workspace is associated with this session.",
+      disconnected: "Gateway is disconnected.",
+      unmodifiedLines: "{count} unmodified lines",
+      binaryFile: "Binary file",
+      untracked: "untracked",
+      tooLarge: "Diff too large to display.",
+      truncatedFile: "Diff truncated.",
+      truncatedResult: "Some changes were omitted because the diff is very large.",
+      statusAdded: "Added",
+      statusDeleted: "Deleted",
+      statusRenamed: "Renamed",
+      statusModified: "Modified",
     },
     workspaceFiles: {
       label: "Session workspace",

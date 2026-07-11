@@ -147,6 +147,10 @@ const loadExecApprovalsHandlers = lazyHandlerModule(
   () => import("./server-methods/exec-approvals.js"),
   (module) => module.execApprovalsHandlers,
 );
+const loadFsHandlers = lazyHandlerModule(
+  () => import("./server-methods/fs.js"),
+  (module) => module.fsHandlers,
+);
 const loadHealthHandlers = lazyHandlerModule(
   () => import("./server-methods/health.js"),
   (module) => module.healthHandlers,
@@ -206,6 +210,10 @@ const loadSendHandlers = lazyHandlerModule(
 const loadSessionsFilesHandlers = lazyHandlerModule(
   () => import("./server-methods/sessions-files.js"),
   (module) => module.sessionsFilesHandlers,
+);
+const loadSessionsDiffHandlers = lazyHandlerModule(
+  () => import("./server-methods/sessions-diff.js"),
+  (module) => module.sessionsDiffHandlers,
 );
 const loadSessionsHandlers = lazyHandlerModule(
   () => import("./server-methods/sessions.js"),
@@ -457,6 +465,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "exec.approvals.node.set",
     ],
     loadHandlers: loadExecApprovalsHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["fs.listDir"],
+    loadHandlers: loadFsHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["web.login.start", "web.login.wait"],
@@ -730,6 +742,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: ["sessions.files.list", "sessions.files.get"],
     loadHandlers: loadSessionsFilesHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["sessions.diff"],
+    loadHandlers: loadSessionsDiffHandlers,
   }),
 };
 

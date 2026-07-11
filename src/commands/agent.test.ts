@@ -28,6 +28,8 @@ import {
 import type { PluginProviderRegistration } from "../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";
+import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import { interruptSessionWorkAdmissions } from "../sessions/session-lifecycle-admission.js";
 import {
   createDirectOutboundTestAdapter,
@@ -464,6 +466,73 @@ describe("agentCommand", () => {
         runtime,
       ),
     ).rejects.toThrow("allowModelOverride must be explicitly set for ingress agent runs.");
+  });
+
+  it("rejects a missing harness-owned session before local CLI dispatch", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+
+      await expect(
+        agentCommand(
+          {
+            message: "do not squat",
+            sessionKey: "agent:main:harness:codex:supervision:missing-local",
+          },
+          runtime,
+        ),
+      ).rejects.toThrow(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
+
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rejects a missing harness-owned session through embedded ingress", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+
+      await expect(
+        agentCommandFromIngress(
+          {
+            message: "do not squat",
+            sessionKey: "agent:main:harness:codex:supervision:missing-ingress",
+            allowModelOverride: false,
+          },
+          runtime,
+        ),
+      ).rejects.toThrow(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
+
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("continues an existing locked harness-owned session", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const sessionKey = "agent:main:harness:openclaw:supervision:existing";
+      mockConfig(home, store);
+      writeSessionStoreSeed(store, {
+        [sessionKey]: {
+          sessionId: "existing-harness-session",
+          updatedAt: Date.now(),
+          agentHarnessId: "openclaw",
+          modelSelectionLocked: true,
+        },
+      });
+
+      await agentCommandFromIngress(
+        {
+          message: "continue safely",
+          sessionKey,
+          allowModelOverride: false,
+        },
+        runtime,
+      );
+
+      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+      expect(getLastEmbeddedCall()?.sessionId).toBe("existing-harness-session");
+    });
   });
 
   it("reuses a Discord voice session after one stale-session rollover", async () => {
@@ -1223,6 +1292,51 @@ describe("agentCommand", () => {
     });
   });
 
+  it("does not probe or fall back from a locked stored model", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions-locked-model.json");
+      const sessionKey = "agent:main:subagent:locked-model";
+      writeSessionStoreSeed(store, {
+        [sessionKey]: {
+          sessionId: "session-locked-model",
+          updatedAt: Date.now(),
+          providerOverride: "anthropic",
+          modelOverride: "claude-opus-4-6",
+          modelOverrideSource: "auto",
+          modelOverrideFallbackOriginProvider: "openai",
+          modelOverrideFallbackOriginModel: "gpt-4.1-mini",
+          modelSelectionLocked: true,
+        },
+      });
+
+      mockConfig(home, store, {
+        model: {
+          primary: "openai/gpt-4.1-mini",
+          fallbacks: ["openai/gpt-5.4"],
+        },
+        models: {
+          "anthropic/claude-opus-4-6": {},
+          "openai/gpt-4.1-mini": {},
+          "openai/gpt-5.4": {},
+        },
+      });
+      mockModelCatalogOnce([
+        { id: "claude-opus-4-6", name: "Opus", provider: "anthropic" },
+        { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
+        { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
+      ]);
+      vi.mocked(runEmbeddedAgent).mockRejectedValueOnce(
+        Object.assign(new Error("rate limited"), { status: 429 }),
+      );
+
+      await expect(runAgentWithSessionKey(sessionKey)).rejects.toThrow("rate limited");
+      const attempts = vi
+        .mocked(runEmbeddedAgent)
+        .mock.calls.map((call) => ({ provider: call[0]?.provider, model: call[0]?.model }));
+      expect(attempts).toEqual([{ provider: "anthropic", model: "claude-opus-4-6" }]);
+    });
+  });
+
   it("clears legacy auto session model overrides without origin metadata", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions-legacy-auto-override.json");
@@ -1276,6 +1390,67 @@ describe("agentCommand", () => {
       expect(entry?.providerOverride).toBeUndefined();
       expect(entry?.modelOverride).toBeUndefined();
       expect(entry?.modelOverrideSource).toBeUndefined();
+    });
+  });
+
+  it("does not repair locked legacy auto session model overrides", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions-locked-legacy-auto-override.json");
+      writeSessionStoreSeed(store, {
+        "agent:main:subagent:locked-legacy-auto": {
+          sessionId: "session-locked-legacy-auto",
+          updatedAt: Date.now(),
+          providerOverride: "anthropic",
+          modelOverride: "claude-opus-4-6",
+          modelOverrideSource: "auto",
+          modelSelectionLocked: true,
+        },
+      });
+
+      mockConfig(home, store, {
+        model: {
+          primary: "openai/gpt-4.1-mini",
+          fallbacks: ["openai/gpt-5.4"],
+        },
+        models: {
+          "anthropic/claude-opus-4-6": {},
+          "openai/gpt-4.1-mini": {},
+          "openai/gpt-5.4": {},
+        },
+      });
+
+      mockModelCatalogOnce([
+        { id: "claude-opus-4-6", name: "Opus", provider: "anthropic" },
+        { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
+        { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
+      ]);
+
+      await expect(
+        agentCommand(
+          {
+            message: "hi",
+            sessionKey: "agent:main:subagent:locked-legacy-auto",
+          },
+          runtime,
+        ),
+      ).rejects.toMatchObject({
+        name: "ModelSelectionLockedError",
+        message: MODEL_SELECTION_LOCKED_MESSAGE,
+      });
+
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+      const persisted = readSessionStore<{
+        providerOverride?: string;
+        modelOverride?: string;
+        modelOverrideSource?: string;
+        modelSelectionLocked?: boolean;
+      }>(store)["agent:main:subagent:locked-legacy-auto"];
+      expect(persisted).toMatchObject({
+        providerOverride: "anthropic",
+        modelOverride: "claude-opus-4-6",
+        modelOverrideSource: "auto",
+        modelSelectionLocked: true,
+      });
     });
   });
 
@@ -1381,6 +1556,93 @@ describe("agentCommand", () => {
       expect(entry?.fallbackNoticeSelectedModel).toBeUndefined();
       expect(entry?.fallbackNoticeActiveModel).toBeUndefined();
       expect(entry?.fallbackNoticeReason).toBeUndefined();
+    });
+  });
+
+  it("rejects a locked disallowed stored override without clearing it", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions-locked-disallowed-override.json");
+      const sessionKey = "agent:main:subagent:locked-disallowed";
+      writeSessionStoreSeed(store, {
+        [sessionKey]: {
+          sessionId: "session-locked-disallowed",
+          updatedAt: Date.now(),
+          providerOverride: "anthropic",
+          modelOverride: "claude-opus-4-6",
+          modelOverrideSource: "user",
+          modelSelectionLocked: true,
+        },
+      });
+
+      mockConfig(home, store, {
+        model: { primary: "openai/gpt-4.1-mini" },
+        models: {
+          "openai/gpt-4.1-mini": {},
+        },
+      });
+      mockModelCatalogOnce([
+        { id: "claude-opus-4-6", name: "Opus", provider: "anthropic" },
+        { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
+      ]);
+
+      await expect(runAgentWithSessionKey(sessionKey)).rejects.toMatchObject({
+        name: "ModelSelectionLockedError",
+        message: MODEL_SELECTION_LOCKED_MESSAGE,
+      });
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+      expect(
+        readSessionStore<{
+          providerOverride?: string;
+          modelOverride?: string;
+          modelOverrideSource?: string;
+          modelSelectionLocked?: boolean;
+        }>(store)[sessionKey],
+      ).toMatchObject({
+        providerOverride: "anthropic",
+        modelOverride: "claude-opus-4-6",
+        modelOverrideSource: "user",
+        modelSelectionLocked: true,
+      });
+    });
+  });
+
+  it("rejects one-off model overrides for locked sessions", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions-locked-one-off-override.json");
+      const sessionKey = "agent:main:subagent:locked-one-off";
+      writeSessionStoreSeed(store, {
+        [sessionKey]: {
+          sessionId: "session-locked-one-off",
+          updatedAt: Date.now(),
+          providerOverride: "anthropic",
+          modelOverride: "claude-opus-4-6",
+          modelOverrideSource: "user",
+          modelSelectionLocked: true,
+        },
+      });
+      mockConfig(home, store, {
+        model: { primary: "anthropic/claude-opus-4-6" },
+        models: {
+          "anthropic/claude-opus-4-6": {},
+          "openai/gpt-4.1-mini": {},
+        },
+      });
+
+      await expect(
+        agentCommand(
+          {
+            message: "hi",
+            sessionKey,
+            model: "openai/gpt-4.1-mini",
+            allowModelOverride: true,
+          },
+          runtime,
+        ),
+      ).rejects.toMatchObject({
+        name: "ModelSelectionLockedError",
+        message: MODEL_SELECTION_LOCKED_MESSAGE,
+      });
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
     });
   });
 

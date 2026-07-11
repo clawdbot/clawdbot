@@ -693,6 +693,13 @@ describe("gateway session utils", () => {
       thinkingLevel: "ultra",
       agentHarnessId: "openclaw",
     } as SessionEntry);
+    const lockedCodex = row({
+      sessionId: "locked-codex",
+      thinkingLevel: "ultra",
+      agentHarnessId: "codex",
+      agentRuntimeOverride: "openclaw",
+      modelSelectionLocked: true,
+    } as SessionEntry);
 
     expect(defaults.agentRuntime?.id).toBe("codex");
     expect(codex.thinkingLevel).toBe("ultra");
@@ -702,6 +709,9 @@ describe("gateway session utils", () => {
     expect(legacyObservedOpenClaw.thinkingLevel).toBe("ultra");
     expect(legacyObservedOpenClaw.agentRuntime?.id).toBe("codex");
     expect(legacyObservedOpenClaw.thinkingLevels?.map((level) => level.id)).not.toContain("ultra");
+    expect(lockedCodex.thinkingLevel).toBe("ultra");
+    expect(lockedCodex.agentRuntime).toEqual({ id: "codex", source: "session" });
+    expect(lockedCodex.thinkingLevels?.map((level) => level.id)).not.toContain("ultra");
   });
 
   test.each(["xhigh", "max"] as const)(

@@ -4,11 +4,17 @@
  */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
-import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
+import {
+  normalizePluginsConfig,
+  resolveEffectiveEnableState,
+  resolveLivePluginConfigObject,
+} from "openclaw/plugin-sdk/plugin-config-runtime";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { registerCodexCliMetadata } from "./cli-metadata.js";
 import { createCodexAppServerAgentHarness } from "./harness.js";
 import { buildCodexMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { buildCodexProvider } from "./provider.js";
+import { readCodexPluginConfig } from "./src/app-server/config.js";
 import {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
   CODEX_APP_SERVER_BINDING_NAMESPACE,
@@ -30,6 +36,16 @@ import {
   resumeCodexCliSessionOnNode,
   resolveCodexCliSessionForBindingOnNode,
 } from "./src/node-cli-sessions.js";
+import {
+  createCodexSessionCatalogControl,
+  createCodexSessionCatalogNodeHostCommands,
+  createCodexSessionCatalogNodeInvokePolicies,
+  registerCodexSessionCatalogGateway,
+} from "./src/session-catalog.js";
+import {
+  CODEX_SUPERVISION_COMPAT_TOOL_NAMES,
+  createCodexSupervisionTools,
+} from "./src/supervision-tools.js";
 import { createCodexWebSearchProvider } from "./src/web-search-provider.js";
 
 const ENDED_SESSION_REASONS: ReadonlySet<string> = new Set([
@@ -43,18 +59,36 @@ const ENDED_SESSION_REASONS: ReadonlySet<string> = new Set([
 export default definePluginEntry({
   id: "codex",
   name: "Codex",
-  description: "Codex app-server harness and Codex-managed GPT model catalog.",
+  description:
+    "Codex app-server harness, Codex-managed GPT catalog, and native session supervision.",
   register(api) {
     const resolveCurrentConfig = () =>
       api.runtime.config?.current ? (api.runtime.config.current() as OpenClawConfig) : undefined;
-    const resolveCurrentPluginConfig = () =>
-      // Codex plugin config can change at runtime; resolve from live config for
-      // harness attempts and binding claims instead of keeping startup values.
-      resolveLivePluginConfigObject(
-        resolveCurrentConfig,
+    const resolvePluginConfig = (resolveConfig: () => OpenClawConfig | undefined) => {
+      const liveConfig = resolveConfig();
+      // Codex plugin config can change at runtime. A missing live entry is an
+      // explicit removal, while an unavailable runtime snapshot uses startup config.
+      if (!liveConfig) {
+        return api.pluginConfig;
+      }
+      const livePluginConfig = resolveLivePluginConfigObject(
+        () => liveConfig,
         "codex",
         api.pluginConfig as Record<string, unknown>,
-      ) ?? api.pluginConfig;
+      );
+      const enabled = resolveEffectiveEnableState({
+        id: "codex",
+        origin: "bundled",
+        config: normalizePluginsConfig(liveConfig.plugins),
+        rootConfig: liveConfig,
+        enabledByDefault: readCodexPluginConfig(livePluginConfig).supervision?.enabled === true,
+      }).enabled;
+      if (!enabled) {
+        return undefined;
+      }
+      return livePluginConfig;
+    };
+    const resolveCurrentPluginConfig = () => resolvePluginConfig(resolveCurrentConfig);
     const bindingStore = createLazyCodexAppServerBindingStore(
       api.runtime.state.openSyncKeyedStore<StoredCodexAppServerBinding>({
         namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
@@ -62,6 +96,43 @@ export default definePluginEntry({
         overflowPolicy: "reject-new",
       }),
     );
+    registerCodexCliMetadata(api);
+    if (readCodexPluginConfig(resolveCurrentPluginConfig()).supervision?.enabled === true) {
+      const sessionCatalogControl = createCodexSessionCatalogControl({
+        getPluginConfig: resolveCurrentPluginConfig,
+        getRuntimeConfig: resolveCurrentConfig,
+      });
+      registerCodexSessionCatalogGateway({
+        api,
+        bindingStore,
+        control: sessionCatalogControl,
+        getRuntimeConfig: resolveCurrentConfig,
+      });
+      for (const command of createCodexSessionCatalogNodeHostCommands(sessionCatalogControl)) {
+        api.registerNodeHostCommand(command);
+      }
+      for (const policy of createCodexSessionCatalogNodeInvokePolicies()) {
+        api.registerNodeInvokePolicy(policy);
+      }
+      api.registerTool(
+        (context) => {
+          if (context.senderIsOwner !== true) {
+            return [];
+          }
+          const resolveToolRuntimeConfig = () =>
+            context.getRuntimeConfig?.() ??
+            context.runtimeConfig ??
+            context.config ??
+            resolveCurrentConfig();
+          return createCodexSupervisionTools({
+            getPluginConfig: () => resolvePluginConfig(resolveToolRuntimeConfig),
+            getRuntimeConfig: resolveToolRuntimeConfig,
+            senderIsOwner: context.senderIsOwner,
+          });
+        },
+        { names: [...CODEX_SUPERVISION_COMPAT_TOOL_NAMES] },
+      );
+    }
     api.registerAgentHarness(
       createCodexAppServerAgentHarness({
         bindingStore,

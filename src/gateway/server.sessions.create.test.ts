@@ -11,6 +11,7 @@ import {
   listRegistryWorktrees,
 } from "../agents/worktrees/registry.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
+import { loadSessionStore } from "../config/sessions/store.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   agentCommand,
@@ -1193,6 +1194,127 @@ test("sessions.create forks the parent transcript into the new session", async (
     sessionFile: forkedSessionFile,
     forkedFromParent: true,
   });
+  testState.sessionConfig = undefined;
+});
+
+test("public session mutations reserve agent harness-owned session keys", async () => {
+  const { storePath } = await createSessionStoreDir();
+
+  for (const key of [
+    "harness:codex:supervision:native-thread",
+    "agent:main:harness:codex:supervision:native-thread",
+  ]) {
+    for (const [method, params] of [
+      ["sessions.create", { agentId: "main", key }],
+      ["sessions.patch", { agentId: "main", key, label: "Public overwrite" }],
+      ["sessions.reset", { agentId: "main", key }],
+    ] as const) {
+      const rejected = await directSessionReq(method, params);
+      expect(rejected.ok).toBe(false);
+      expect(rejected.error).toMatchObject({
+        code: "INVALID_REQUEST",
+        message: "Session key namespace is reserved for agent harness-owned sessions.",
+      });
+    }
+  }
+
+  const ordinary = await directSessionReq<{ key: string }>("sessions.create", {
+    agentId: "main",
+    key: "ordinary-session",
+  });
+  expect(ordinary.ok).toBe(true);
+  expect(ordinary.payload?.key).toBe("agent:main:ordinary-session");
+
+  const stored = loadSessionStore(storePath, { skipCache: true });
+  expect(stored["agent:main:harness:codex:supervision:native-thread"]).toBeUndefined();
+  expect(stored["agent:main:ordinary-session"]).toBeDefined();
+});
+
+test("sessions.create preserves a pre-existing unlocked harness-prefixed session", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const key = "agent:main:harness:legacy-notes";
+  await writeSessionStore({
+    entries: {
+      [key]: sessionStoreEntry("legacy-session", { label: "Legacy notes" }),
+    },
+  });
+
+  const created = await directSessionReq<{
+    key: string;
+    sessionId: string;
+  }>("sessions.create", {
+    agentId: "main",
+    key,
+    label: "Updated notes",
+  });
+
+  expect(created.ok).toBe(true);
+  expect(created.payload).toMatchObject({ key, sessionId: "legacy-session" });
+  expect(loadSessionStore(storePath, { skipCache: true })[key]).toMatchObject({
+    sessionId: "legacy-session",
+    label: "Updated notes",
+  });
+});
+
+test("sessions.create rejects a pre-existing locked harness session", async () => {
+  await createSessionStoreDir();
+  const key = "agent:main:harness:codex:supervision:native-thread";
+  await writeSessionStore({
+    entries: {
+      [key]: sessionStoreEntry("locked-session", {
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+      }),
+    },
+  });
+
+  const created = await directSessionReq("sessions.create", {
+    agentId: "main",
+    key,
+  });
+
+  expect(created.ok).toBe(false);
+  expect(created.error).toMatchObject({
+    code: "INVALID_REQUEST",
+    message: "Session key namespace is reserved for agent harness-owned sessions.",
+  });
+});
+
+test("sessions.create rejects children of model-selection-locked sessions", async () => {
+  const { dir } = await createSessionStoreDir();
+  testState.sessionConfig = { dmScope: "main", scope: "per-sender" };
+  const parent = await createCheckpointFixture(dir);
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry(parent.sessionId, {
+        sessionFile: parent.sessionFile,
+        modelSelectionLocked: true,
+      }),
+    },
+  });
+
+  const linkedChild = await directSessionReq("sessions.create", {
+    agentId: "main",
+    parentSessionKey: "main",
+  });
+  const forkedChild = await directSessionReq("sessions.create", {
+    agentId: "main",
+    parentSessionKey: "main",
+    fork: true,
+  });
+  const resetParent = await directSessionReq("sessions.create", {
+    agentId: "main",
+    parentSessionKey: "main",
+    emitCommandHooks: true,
+  });
+
+  for (const created of [linkedChild, forkedChild, resetParent]) {
+    expect(created.ok).toBe(false);
+    expect(created.error).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: "Model-selection-locked sessions cannot create child sessions from parent context.",
+    });
+  }
   testState.sessionConfig = undefined;
 });
 

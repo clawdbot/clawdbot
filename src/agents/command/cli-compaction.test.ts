@@ -356,6 +356,7 @@ describe("runCliTurnCompactionLifecycle", () => {
       totalTokens: 950,
       totalTokensFresh: true,
       agentHarnessId: "codex",
+      modelSelectionLocked: true,
       authProfileOverride: "github-copilot:work",
       authProfileOverrideSource: "auto",
     };
@@ -446,12 +447,15 @@ describe("runCliTurnCompactionLifecycle", () => {
       currentTokenCount: 950,
       contextEngine,
       agentHarnessId: "codex",
+      modelSelectionLocked: true,
       authProfileId: "github-copilot:work",
       trigger: "budget",
       force: true,
     });
     expect(compactAgentHarnessSessionCalls[0]?.[0].contextEngineRuntimeContext).toMatchObject({
       authProfileId: "github-copilot:work",
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
     });
     expect(compactCalls).toHaveLength(0);
     expect(recordCliCompactionInStore).toHaveBeenCalledTimes(1);
@@ -595,6 +599,25 @@ describe("runCliTurnCompactionLifecycle", () => {
 
     expect(compactAgentHarnessSession).not.toHaveBeenCalled();
     expect(compactCalls).toHaveLength(1);
+
+    const lockedEntry: SessionEntry = { ...sessionEntry, modelSelectionLocked: true };
+    await expect(
+      runCliTurnCompactionLifecycle({
+        cfg: {} as OpenClawConfig,
+        sessionId,
+        sessionKey,
+        sessionEntry: lockedEntry,
+        sessionStore: { [sessionKey]: lockedEntry },
+        storePath,
+        sessionAgentId: "main",
+        workspaceDir: tmpDir,
+        agentDir: tmpDir,
+        provider: "openclaw",
+        model: "sonnet-4.6",
+      }),
+    ).rejects.toThrow("CLI compaction cannot replace a model-locked native harness runtime");
+    expect(compactAgentHarnessSession).not.toHaveBeenCalled();
+    expect(compactCalls).toHaveLength(1);
   });
 
   it("surfaces nonrecoverable native harness CLI compaction failures", async () => {
@@ -690,7 +713,7 @@ describe("runCliTurnCompactionLifecycle", () => {
 
     const compactCalls: Array<Parameters<ContextEngine["compact"]>[0]> = [];
     const maintenance = vi.fn(async () => ({ changed: false, bytesFreed: 0, rewrittenEntries: 0 }));
-    const compactAgentHarnessSession = vi.fn(async () => ({
+    const compactAgentHarnessSession = vi.fn(async (_params: Record<string, unknown>) => ({
       ok: true,
       compacted: false,
       reason: "codex app-server owns automatic compaction",
@@ -755,6 +778,39 @@ describe("runCliTurnCompactionLifecycle", () => {
       }),
     );
     expect(result?.compactionCount).toBe(1);
+
+    const lockedEntry: SessionEntry = { ...sessionEntry, modelSelectionLocked: true };
+    sessionStore[sessionKey] = lockedEntry;
+    const lockedResult = await runCliTurnCompactionLifecycle({
+      cfg: {} as OpenClawConfig,
+      sessionId,
+      sessionKey,
+      sessionEntry: lockedEntry,
+      sessionStore,
+      storePath,
+      sessionAgentId: "main",
+      workspaceDir: tmpDir,
+      agentDir: tmpDir,
+      provider: "codex",
+      model: "gpt-5.5",
+    });
+
+    expect(compactAgentHarnessSession).toHaveBeenCalledTimes(2);
+    expect(compactCalls).toHaveLength(1);
+    expect(maintenance).toHaveBeenCalledTimes(1);
+    expect(recordCliCompactionInStore).toHaveBeenCalledTimes(1);
+    const lockedNativeCall = compactAgentHarnessSession.mock.calls[1]?.[0];
+    expect(lockedNativeCall).toMatchObject({
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+      contextEngineRuntimeContext: expect.objectContaining({
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+        provider: "codex",
+        model: "gpt-5.5",
+      }),
+    });
+    expect(lockedResult).toBe(lockedEntry);
   });
 
   it("does not fall back when native harness compaction returns no result", async () => {

@@ -1,5 +1,6 @@
 /** Runs plugin cleanup callbacks and clears host-side plugin session/runtime state. */
 import fs from "node:fs";
+import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { getRuntimeConfig } from "../config/config.js";
 import {
   cleanupPluginHostSessionStore,
@@ -79,6 +80,7 @@ async function clearPluginOwnedSessionStores(params: {
   sessionEntrySlotKeys?: ReadonlySet<string>;
   storePaths?: readonly string[];
   resolveStorePaths?: ResolveCleanupSessionStorePaths;
+  preserveLockedHarnessIds?: ReadonlySet<string>;
   shouldCleanup?: () => boolean;
 }): Promise<number> {
   if (!params.pluginId && !params.sessionKey) {
@@ -96,6 +98,7 @@ async function clearPluginOwnedSessionStores(params: {
       pluginId: params.pluginId,
       sessionKey: params.sessionKey,
       sessionEntrySlotKeys: params.sessionEntrySlotKeys,
+      preserveLockedHarnessIds: params.preserveLockedHarnessIds,
       shouldCleanup: params.shouldCleanup,
     });
   }
@@ -153,6 +156,23 @@ function collectSessionEntrySlotKeys(
   return slotKeys;
 }
 
+function collectAgentHarnessIds(
+  registry: PluginRegistry | null | undefined,
+  pluginId?: string,
+): Set<string> {
+  const harnessIds = new Set<string>();
+  for (const registration of registry?.agentHarnesses ?? []) {
+    if (!shouldCleanPlugin(registration.pluginId, pluginId)) {
+      continue;
+    }
+    const harnessId = normalizeOptionalAgentRuntimeId(registration.harness.id);
+    if (harnessId) {
+      harnessIds.add(harnessId);
+    }
+  }
+  return harnessIds;
+}
+
 /** Runs persistent and in-memory cleanup for a plugin, session, or host lifecycle event. */
 /** Runs cleanup callbacks for one plugin and returns failures instead of throwing. */
 export async function runPluginHostCleanup(params: {
@@ -176,10 +196,12 @@ export async function runPluginHostCleanup(params: {
     return { cleanupCount: 0, failures };
   }
   const registry = params.registry;
-  const sessionEntrySlotKeys = collectSessionEntrySlotKeys(
-    registry ?? getActivePluginRegistry(),
-    params.pluginId,
-  );
+  const cleanupRegistry = registry ?? getActivePluginRegistry();
+  const sessionEntrySlotKeys = collectSessionEntrySlotKeys(cleanupRegistry, params.pluginId);
+  const preserveLockedHarnessIds =
+    params.reason === "disable"
+      ? collectAgentHarnessIds(cleanupRegistry, params.pluginId)
+      : undefined;
   const restartPromotedSessionEntrySlotKeys =
     params.restartPromotedSessionEntrySlotKeys ?? sessionEntrySlotKeys;
   let persistentCleanupCount = 0;
@@ -203,6 +225,7 @@ export async function runPluginHostCleanup(params: {
               sessionEntrySlotKeys,
               storePaths: params.sessionStorePaths,
               resolveStorePaths: params.resolveSessionStorePaths,
+              preserveLockedHarnessIds,
               shouldCleanup,
             });
     } catch (error) {

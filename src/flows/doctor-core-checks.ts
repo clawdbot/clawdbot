@@ -77,6 +77,7 @@ export type CoreHealthCheckDeps = {
   readonly collectProviderCatalogProjectionFindings: (
     ctx: HealthCheckContext,
   ) => Promise<readonly HealthFinding[]>;
+  readonly collectLocalAudioAccelerationFindings: () => Promise<readonly HealthFinding[]>;
   readonly collectGatewayHealthFindings: (
     ctx: HealthCheckContext,
   ) => Promise<readonly HealthFinding[]>;
@@ -127,6 +128,13 @@ async function collectProviderCatalogProjectionFindingsWithRuntime(
   return runtime.collectProviderCatalogProjectionFindings(ctx.cfg);
 }
 
+async function collectLocalAudioAccelerationFindingsWithRuntime(): Promise<
+  readonly HealthFinding[]
+> {
+  const runtime = await loadDoctorCoreChecksRuntimeModule();
+  return runtime.collectLocalAudioAccelerationFindings();
+}
+
 async function collectGatewayHealthFindingsWithRuntime(
   ctx: HealthCheckContext,
 ): Promise<readonly HealthFinding[]> {
@@ -147,6 +155,7 @@ const defaultCoreHealthCheckDeps: CoreHealthCheckDeps = {
   collectWorkspaceSuggestionNotes: collectWorkspaceSuggestionNotesWithRuntime,
   collectRuntimeToolSchemaFindings: collectRuntimeToolSchemaFindingsWithRuntime,
   collectProviderCatalogProjectionFindings: collectProviderCatalogProjectionFindingsWithRuntime,
+  collectLocalAudioAccelerationFindings: collectLocalAudioAccelerationFindingsWithRuntime,
   collectGatewayHealthFindings: collectGatewayHealthFindingsWithRuntime,
   collectGatewayDaemonFindings: collectGatewayDaemonFindingsWithRuntime,
 };
@@ -1137,6 +1146,15 @@ function createConvertedWorkflowChecks(
     hooksModelCheck,
     bootstrapSizeCheck,
     createProviderCatalogProjectionCheck(deps),
+    {
+      id: "core/doctor/local-audio-acceleration",
+      kind: "core",
+      description: "Local STT auto-selection and acceleration evidence are visible.",
+      source: "doctor",
+      async detect() {
+        return await deps.collectLocalAudioAccelerationFindings();
+      },
+    },
     createRuntimeToolSchemaCheck(deps),
     createWorkspaceSuggestionsCheck(deps),
     skillWorkshopToolPolicyCheck,

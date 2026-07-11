@@ -283,6 +283,79 @@ describe("PluginPage", () => {
     }
   });
 
+  it("navigates a continued Codex thread into the canonical Chat route", async () => {
+    const hello: GatewayHelloOk = {
+      type: "hello-ok",
+      protocol: 3,
+      auth: { role: "operator", scopes: ["operator.write"] },
+      controlUiTabs: [{ pluginId: "codex", id: "sessions", label: "Codex Sessions" }],
+    };
+    const request = vi.fn(async (method: string) => {
+      if (method === "codex.sessions.list") {
+        return {
+          hosts: [
+            {
+              hostId: "gateway:local",
+              label: "Gateway",
+              kind: "gateway",
+              connected: true,
+              sessions: [
+                {
+                  threadId: "thread-release",
+                  name: "Finish release",
+                  status: "idle",
+                  archived: false,
+                },
+              ],
+            },
+          ],
+        };
+      }
+      if (method === "codex.sessions.continue") {
+        return { sessionKey: "agent:main:codex-release" };
+      }
+      throw new Error(`Unexpected Gateway method: ${method}`);
+    });
+    const navigate = vi.fn();
+    const snapshot: ApplicationGatewaySnapshot = {
+      client: { request } as unknown as GatewayBrowserClient,
+      connected: true,
+      reconnecting: false,
+      hello,
+      assistantAgentId: null,
+      sessionKey: "main",
+      lastError: null,
+      lastErrorCode: null,
+    };
+    const page = new PluginPage();
+    page.pluginId = "codex";
+    page.tabId = "sessions";
+    (page as unknown as { context: ApplicationContext<RouteId> }).context = {
+      gateway: { snapshot, subscribe: () => () => undefined },
+      navigate,
+    } as unknown as ApplicationContext<RouteId>;
+
+    document.body.append(page);
+    try {
+      await vi.waitFor(() => expect(page.querySelector(".codex-session__continue")).not.toBeNull());
+      (page.querySelector(".codex-session__continue") as HTMLButtonElement).click();
+
+      await vi.waitFor(() =>
+        expect(request).toHaveBeenCalledWith("codex.sessions.continue", {
+          hostId: "gateway:local",
+          threadId: "thread-release",
+        }),
+      );
+      await vi.waitFor(() =>
+        expect(navigate).toHaveBeenCalledWith("chat", {
+          search: "?session=agent%3Amain%3Acodex-release",
+        }),
+      );
+    } finally {
+      page.remove();
+    }
+  });
+
   it("does not install an earlier bundled view after switching away and back", async () => {
     const firstCodexLoad = deferred<TestBundledView>();
     const currentCodexLoad = deferred<TestBundledView>();
@@ -292,7 +365,7 @@ describe("PluginPage", () => {
       protocol: 3,
       auth: { role: "operator", scopes: ["operator.write"] },
       controlUiTabs: [
-        { pluginId: "codex-supervisor", id: "sessions", label: "Codex Sessions" },
+        { pluginId: "codex", id: "sessions", label: "Codex Sessions" },
         { pluginId: "logbook", id: "logbook", label: "Logbook" },
       ],
     };
@@ -308,10 +381,10 @@ describe("PluginPage", () => {
     };
     const page = document.createElement(deferredPluginPageTag) as DeferredPluginPage;
     page.loads = new Map([
-      ["codex-supervisor/sessions", [firstCodexLoad.promise, currentCodexLoad.promise]],
+      ["codex/sessions", [firstCodexLoad.promise, currentCodexLoad.promise]],
       ["logbook/logbook", [logbookLoad.promise]],
     ]);
-    page.pluginId = "codex-supervisor";
+    page.pluginId = "codex";
     page.tabId = "sessions";
     (page as unknown as { context: ApplicationContext<RouteId> }).context = {
       gateway: { snapshot, subscribe: () => () => undefined },
@@ -323,7 +396,7 @@ describe("PluginPage", () => {
       page.pluginId = "logbook";
       page.tabId = "logbook";
       await page.updateComplete;
-      page.pluginId = "codex-supervisor";
+      page.pluginId = "codex";
       page.tabId = "sessions";
       await page.updateComplete;
 

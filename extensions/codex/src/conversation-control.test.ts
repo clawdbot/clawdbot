@@ -3,15 +3,20 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { clearRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
+import { MODEL_SELECTION_LOCKED_MESSAGE } from "openclaw/plugin-sdk/model-session-runtime";
 import { upsertAuthProfile } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  buildCodexSupervisionTestConnectionFingerprint,
   readCodexAppServerBinding,
   resetCodexTestBindingStore,
   testCodexAppServerBindingStore,
   writeCodexAppServerBinding,
 } from "./app-server/session-binding.test-helpers.js";
 import {
+  steerCodexConversationTurn,
+  stopCodexConversationTurn,
+  trackCodexConversationActiveTurn,
   setCodexConversationFastMode as setCodexConversationFastModeImpl,
   setCodexConversationModel as setCodexConversationModelImpl,
   setCodexConversationPermissions as setCodexConversationPermissionsImpl,
@@ -104,6 +109,131 @@ describe("codex conversation controls", () => {
     expect(binding?.serviceTier).toBe("priority");
     expect(binding?.approvalPolicy).toBe("on-request");
     expect(binding?.sandbox).toBe("workspace-write");
+  });
+
+  it("routes supervised stop and steer requests through the native user-home connection", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const target = controlTarget(sessionFile);
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-supervised",
+      connectionScope: "supervision",
+      supervisionSourceThreadId: "thread-supervised",
+      appServerRuntimeFingerprint: buildCodexSupervisionTestConnectionFingerprint(),
+      cwd: tempDir,
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      preserveNativeModel: true,
+      conversationSourceTransferComplete: true,
+    });
+    const request = vi.fn(async () => ({}));
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
+    const stopTracking = trackCodexConversationActiveTurn({
+      identity: target.identity,
+      threadId: "thread-supervised",
+      turnId: "turn-1",
+    });
+
+    try {
+      await stopCodexConversationTurn({
+        ...target,
+        pluginConfig: { supervision: { enabled: true } },
+      });
+      await steerCodexConversationTurn({
+        ...target,
+        message: "focus tests",
+        pluginConfig: { supervision: { enabled: true } },
+      });
+    } finally {
+      stopTracking();
+    }
+
+    for (const [options] of sharedClientMocks.getSharedCodexAppServerClient.mock.calls) {
+      expect(options).toMatchObject({
+        authProfileId: null,
+        startOptions: { homeScope: "user" },
+      });
+    }
+    expect(request).toHaveBeenNthCalledWith(
+      1,
+      "turn/interrupt",
+      { threadId: "thread-supervised", turnId: "turn-1" },
+      { timeoutMs: 60_000 },
+    );
+    expect(request).toHaveBeenNthCalledWith(
+      2,
+      "turn/steer",
+      {
+        threadId: "thread-supervised",
+        expectedTurnId: "turn-1",
+        input: [{ type: "text", text: "focus tests", text_elements: [] }],
+      },
+      { timeoutMs: 60_000 },
+    );
+  });
+
+  it("refuses to stop or steer when the active turn no longer matches the private binding", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const target = controlTarget(sessionFile);
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "replacement-thread",
+      cwd: tempDir,
+    });
+    const stopTracking = trackCodexConversationActiveTurn({
+      identity: target.identity,
+      threadId: "stale-active-thread",
+      turnId: "turn-1",
+    });
+
+    try {
+      await expect(stopCodexConversationTurn(target)).resolves.toEqual({
+        stopped: false,
+        message: "The active Codex run no longer matches this session binding.",
+      });
+      await expect(
+        steerCodexConversationTurn({ ...target, message: "do not send" }),
+      ).resolves.toEqual({
+        steered: false,
+        message: "The active Codex run no longer matches this session binding.",
+      });
+      await testCodexAppServerBindingStore.mutate(target.identity, { kind: "clear" });
+      await expect(stopCodexConversationTurn(target)).resolves.toEqual({
+        stopped: false,
+        message: "The active Codex run no longer matches this session binding.",
+      });
+      await expect(
+        steerCodexConversationTurn({ ...target, message: "still do not send" }),
+      ).resolves.toEqual({
+        steered: false,
+        message: "The active Codex run no longer matches this session binding.",
+      });
+    } finally {
+      stopTracking();
+    }
+
+    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
+  });
+
+  it("rejects direct model changes for private supervised bindings", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-supervised",
+      connectionScope: "supervision",
+      supervisionSourceThreadId: "thread-supervised",
+      cwd: tempDir,
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      preserveNativeModel: true,
+      conversationSourceTransferComplete: true,
+    });
+
+    await expect(
+      setCodexConversationModel({
+        sessionFile,
+        model: "gpt-5.4",
+        pluginConfig: { supervision: { enabled: true } },
+      }),
+    ).rejects.toThrow(MODEL_SELECTION_LOCKED_MESSAGE);
+    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
 
   it("does not persist public OpenAI provider after model changes on native auth bindings", async () => {

@@ -18,6 +18,7 @@ import type { AgentRuntimePolicyConfig } from "../../../config/types.agents-shar
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { detectWindowsSpawnCommandInlineArgs } from "../../../plugin-sdk/windows-spawn.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
+import { isValidAgentHarnessSessionStoreEntry } from "../../../sessions/agent-harness-session-key.js";
 
 type CodexRouteHit = {
   path: string;
@@ -2969,7 +2970,7 @@ export function repairCodexSessionStoreRoutes(params: {
   const now = params.now ?? Date.now();
   const sessionKeys: string[] = [];
   for (const [sessionKey, entry] of Object.entries(params.store)) {
-    if (!entry) {
+    if (!entry || isValidAgentHarnessSessionStoreEntry(sessionKey, entry)) {
       continue;
     }
     const changedRuntimeModelRoute = rewriteSessionModelPair({
@@ -3002,7 +3003,7 @@ export function repairCodexSessionStoreRoutes(params: {
 
 function scanCodexSessionStoreRoutes(store: Record<string, SessionEntry>): string[] {
   return Object.entries(store).flatMap(([sessionKey, entry]) => {
-    if (!entry) {
+    if (!entry || isValidAgentHarnessSessionStoreEntry(sessionKey, entry)) {
       return [];
     }
     const hasLegacyRoute =

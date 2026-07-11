@@ -420,6 +420,12 @@ export async function switchChatModel(
   if (!host.client || !host.connected) {
     return false;
   }
+  const activeRow = host.sessionsResult?.sessions.find((row) =>
+    areUiSessionKeysEquivalent(row.key, targetSessionKey),
+  );
+  if (activeRow?.modelSelectionLocked === true) {
+    return false;
+  }
   const currentOverride = resolveChatModelOverrideValue({
     chatModelCatalog: host.chatModelCatalog,
     modelOverrides: host.sessions.state.modelOverrides,

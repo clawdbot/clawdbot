@@ -115,6 +115,19 @@ export default definePluginEntry({
 `authBootstrap` is intentionally absent from this generic example. Add
 `authBootstrap: "harness"` only when the harness meets the contract above.
 
+### Delegated execution
+
+A harness owner may set `delegatedExecutionPluginIds` to the ids of trusted
+plugins that need to execute an existing model-locked session, such as a voice
+transport continuing a Codex-backed conversation. This is static owner consent,
+not a core allowlist. Keep it narrow.
+
+Delegates receive only work admission and embedded execution. OpenClaw requires
+the exact stored session key, store path, and session id; `modelSelectionLocked:
+true`; and matching `agentHarnessId` and `agentHarnessRuntimeOverride` values.
+The run is then scoped through the harness owner. Session creation, patching,
+reset, deletion, archive, and Gateway mutation remain owner-only.
+
 ## Selection policy
 
 OpenClaw chooses a harness after provider/model resolution:

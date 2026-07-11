@@ -167,12 +167,14 @@ function selectAgentHarnessDecision(params: {
   agentHarnessRuntimeOverride?: string;
 }): AgentHarnessSelectionDecision {
   const resolvedPolicy = resolveConfiguredAgentHarnessPolicy(params);
+  const pinnedHarnessId = normalizeOptionalAgentRuntimeId(params.agentHarnessId);
   const runtimeOverride = normalizeOptionalAgentRuntimeId(params.agentHarnessRuntimeOverride);
+  const selectedRuntimeOverride = pinnedHarnessId ?? runtimeOverride;
   const policy =
-    runtimeOverride && !isDefaultAgentRuntimeId(runtimeOverride)
+    selectedRuntimeOverride && !isDefaultAgentRuntimeId(selectedRuntimeOverride)
       ? ({
           ...resolvedPolicy,
-          runtime: runtimeOverride,
+          runtime: selectedRuntimeOverride,
           runtimeSource: "model",
         } as AgentHarnessPolicy)
       : resolvedPolicy;
@@ -192,6 +194,17 @@ function selectAgentHarnessDecision(params: {
   if (runtime !== "auto") {
     const forced = pluginHarnesses.find((entry) => entry.id === runtime);
     if (forced) {
+      // A persisted harness owns the existing transcript. Provider/model fields are only
+      // routing metadata for native sessions and may change with channel or heartbeat config.
+      // Keep the pinned harness authoritative; if it is unavailable, fail closed below.
+      if (pinnedHarnessId === runtime) {
+        return buildSelectionDecision({
+          harness: forced,
+          policy,
+          selectedReason: "forced_plugin",
+          candidates: listHarnessCandidates(pluginHarnesses),
+        });
+      }
       const supportContext = buildAgentHarnessSupportContext({
         provider: params.provider,
         modelId: params.modelId,

@@ -46,12 +46,20 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import {
+  isAgentHarnessSessionKeyOwnedBy,
+  resolveMissingAgentHarnessSessionError,
+} from "../sessions/agent-harness-session-key.js";
+import {
   applyTraceOverride,
   applyVerboseOverride,
   parseTraceOverride,
   parseVerboseOverride,
 } from "../sessions/level-overrides.js";
-import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
+import {
+  applyModelOverrideToSessionEntry,
+  isModelSelectionLocked,
+  MODEL_SELECTION_LOCKED_MESSAGE,
+} from "../sessions/model-overrides.js";
 import { normalizeSendPolicy } from "../sessions/send-policy.js";
 import { parseSessionLabel, SESSION_LABEL_MAX_LENGTH } from "../sessions/session-label.js";
 
@@ -146,8 +154,22 @@ export async function projectSessionsPatchEntry(params: {
   agentId?: string;
   patch: SessionsPatchParams;
   loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
+  /** Exact harness owner authorized to project its new reserved session row. */
+  authorizedAgentHarnessId?: string;
 }): Promise<{ ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }> {
   const { cfg, storeKey, patch } = params;
+  const authorizedHarnessCreation =
+    params.existingEntry === undefined &&
+    isAgentHarnessSessionKeyOwnedBy(storeKey, params.authorizedAgentHarnessId);
+  const harnessSessionError = authorizedHarnessCreation
+    ? undefined
+    : resolveMissingAgentHarnessSessionError(storeKey, params.existingEntry);
+  if (harnessSessionError) {
+    return invalid(harnessSessionError);
+  }
+  if ("model" in patch && isModelSelectionLocked(params.existingEntry)) {
+    return invalid(MODEL_SELECTION_LOCKED_MESSAGE);
+  }
   const now = Date.now();
   const parsedAgent = parseAgentSessionKey(storeKey);
   const sessionAgentId = normalizeAgentId(
@@ -726,6 +748,8 @@ export async function applySessionsPatchToStore(params: {
   agentId?: string;
   patch: SessionsPatchParams;
   loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
+  /** Exact harness owner authorized to project its new reserved session row. */
+  authorizedAgentHarnessId?: string;
 }): Promise<{ ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }> {
   const projected = await projectSessionsPatchEntry({
     cfg: params.cfg,
@@ -735,6 +759,7 @@ export async function applySessionsPatchToStore(params: {
     agentId: params.agentId,
     patch: params.patch,
     loadGatewayModelCatalog: params.loadGatewayModelCatalog,
+    authorizedAgentHarnessId: params.authorizedAgentHarnessId,
   });
   if (projected.ok) {
     params.store[params.storeKey] = projected.entry;

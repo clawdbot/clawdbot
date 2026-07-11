@@ -110,7 +110,10 @@ actor TalkMLXSpeechSynthesizer {
                 throw SynthesizeError.canceled
             } catch {
                 self.logger.error(
-                    "talk mlx helper transport failed attempt=\(attempt + 1, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                    """
+                    talk mlx helper transport failed attempt=\(attempt + 1, privacy: .public): \
+                    \(error.localizedDescription, privacy: .public)
+                    """)
                 await self.discardTransport()
                 if self.fallbackRequiredID == id {
                     self.finishRequest(id: id)
@@ -394,7 +397,9 @@ private actor ProcessMLXTTSTransport: MLXTTSTransport {
         let output = outputPipe.fileHandleForReading
         let (stream, continuation) = AsyncStream<Data>.makeStream()
         output.readabilityHandler = { handle in
-            let data = handle.availableData
+            // Throwing read wrapper; availableData can raise ObjC exceptions on
+            // closed/invalid handles and abort the process (FileHandle+SafeRead).
+            let data = handle.readSafely(upToCount: 64 * 1024)
             if data.isEmpty {
                 handle.readabilityHandler = nil
                 continuation.finish()

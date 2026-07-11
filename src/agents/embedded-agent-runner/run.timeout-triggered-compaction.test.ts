@@ -54,6 +54,9 @@ type CompactRuntimeContext = {
   currentMessageId?: string;
   senderId?: string;
   authProfileId?: string;
+  provider?: string;
+  model?: string;
+  modelSelectionLocked?: boolean;
 };
 
 type CompactParams = {
@@ -242,6 +245,8 @@ describe("timeout-triggered compaction", () => {
 
     await runEmbeddedAgent({
       ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
       messageChannel: "slack",
       messageProvider: "slack",
       agentAccountId: "acct-1",
@@ -249,6 +254,11 @@ describe("timeout-triggered compaction", () => {
       currentThreadTs: "thread-1",
       currentMessageId: "message-1",
       senderId: "sender-1",
+      agentHarnessId: "openclaw",
+      modelSelectionLocked: true,
+      config: {
+        agents: { defaults: { compaction: { model: "anthropic/claude-opus-4-6" } } },
+      },
     });
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
@@ -260,6 +270,9 @@ describe("timeout-triggered compaction", () => {
     expect(compactParams.runtimeContext?.currentThreadTs).toBe("thread-1");
     expect(compactParams.runtimeContext?.currentMessageId).toBe("message-1");
     expect(compactParams.runtimeContext?.senderId).toBe("sender-1");
+    expect(compactParams.runtimeContext?.modelSelectionLocked).toBe(true);
+    expect(compactParams.runtimeContext?.provider).toBe("openai");
+    expect(compactParams.runtimeContext?.model).toBe("gpt-5.5");
   });
 
   it("falls through to normal handling when timeout compaction fails", async () => {

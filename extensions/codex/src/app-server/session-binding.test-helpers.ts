@@ -1,6 +1,8 @@
 /** In-memory binding store helpers for Codex app-server tests. */
 export * from "./session-binding.js";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
+import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import {
   bindingStoreKey,
   createCodexAppServerBindingStore,
@@ -44,6 +46,18 @@ export function createCodexTestBindingStateStore(): PluginStateSyncKeyedStore<St
 
 export function createCodexTestBindingStore(): CodexAppServerBindingStore {
   return createCodexAppServerBindingStore(createCodexTestBindingStateStore());
+}
+
+export function buildCodexSupervisionTestConnectionFingerprint(
+  pluginConfig: unknown = { supervision: { enabled: true } },
+): string {
+  return buildCodexAppServerConnectionFingerprint(
+    resolveCodexSupervisionAppServerRuntimeOptions({
+      pluginConfig,
+      env: {},
+      requirementsToml: null,
+    }),
+  );
 }
 
 const sharedStateStore = createCodexTestBindingStateStore();

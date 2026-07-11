@@ -45,7 +45,9 @@ import type {
 } from "./service-types.js";
 
 const LAUNCH_AGENT_DIR_MODE = 0o755;
-const LAUNCH_AGENT_PLIST_MODE = 0o600;
+// launchd rejects user LaunchAgent plists without group/other read access on
+// current macOS. Secrets stay in the separate 0600 environment file.
+const LAUNCH_AGENT_PLIST_MODE = 0o644;
 const LAUNCH_AGENT_PRIVATE_DIR_MODE = 0o700;
 const LAUNCH_AGENT_ENV_FILE_MODE = 0o600;
 const LAUNCH_AGENT_ENV_WRAPPER_MODE = 0o700;
@@ -658,6 +660,10 @@ async function bootstrapLaunchAgentOrThrow(params: {
   throw new Error(`launchctl bootstrap failed: ${detail}`);
 }
 
+async function ensureLaunchAgentPlistReadable(plistPath: string): Promise<void> {
+  await fs.chmod(plistPath, LAUNCH_AGENT_PLIST_MODE).catch(() => undefined);
+}
+
 async function ensureSecureDirectory(
   targetPath: string,
   dirMode = LAUNCH_AGENT_DIR_MODE,
@@ -785,12 +791,18 @@ function isLaunchctlAlreadyLoaded(res: { stdout: string; stderr: string; code: n
 
 export async function repairLaunchAgentBootstrap(args: {
   env?: Record<string, string | undefined>;
+  warn?: (message: string) => void;
 }): Promise<LaunchAgentBootstrapRepairResult> {
   const env = args.env ?? (process.env as Record<string, string | undefined>);
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env });
   const plistPath = resolveLaunchAgentPlistPath(env);
   const serviceTarget = `${domain}/${label}`;
+  // Rewrite first so legacy inline environment secrets move into the private
+  // env file before the plist becomes world-readable for launchd.
+  const warn =
+    args.warn ?? ((message: string) => process.stderr.write(`${formatLine("Warning", message)}\n`));
+  await rewriteLaunchAgentPlistForRestart({ env, label, plistPath, warn });
   await execLaunchctl(["enable", serviceTarget]);
   const boot = await execLaunchctl(["bootstrap", domain, plistPath]);
   let repairStatus: "repaired" | "already-loaded" = "repaired";
@@ -1116,7 +1128,7 @@ async function writeLaunchAgentPlist({
     environment: prepared.inlineEnvironment,
   });
   await fs.writeFile(plistPath, plist, { encoding: "utf8", mode: LAUNCH_AGENT_PLIST_MODE });
-  await fs.chmod(plistPath, LAUNCH_AGENT_PLIST_MODE).catch(() => undefined);
+  await ensureLaunchAgentPlistReadable(plistPath);
   return { plistPath, stdoutPath };
 }
 
@@ -1217,10 +1229,11 @@ async function rewriteLaunchAgentPlistForRestart({
   });
   const previousPlist = await fs.readFile(plistPath, "utf8").catch(() => "");
   if (previousPlist === plist) {
+    await ensureLaunchAgentPlistReadable(plistPath);
     return false;
   }
   await fs.writeFile(plistPath, plist, { encoding: "utf8", mode: LAUNCH_AGENT_PLIST_MODE });
-  await fs.chmod(plistPath, LAUNCH_AGENT_PLIST_MODE).catch(() => undefined);
+  await ensureLaunchAgentPlistReadable(plistPath);
   return true;
 }
 

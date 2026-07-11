@@ -58,6 +58,9 @@ export type WorktreesGcResult = SchemaType<"WorktreesGcResult">;
 export type WorktreeBranch = SchemaType<"WorktreeBranch">;
 export type WorktreesBranchesParams = SchemaType<"WorktreesBranchesParams">;
 export type WorktreesBranchesResult = SchemaType<"WorktreesBranchesResult">;
+export type FsDirEntry = SchemaType<"FsDirEntry">;
+export type FsListDirParams = SchemaType<"FsListDirParams">;
+export type FsListDirResult = SchemaType<"FsListDirResult">;
 
 /** Agent activity, identity, send, poll, wait, and wake protocol payloads. */
 export type AgentEvent = SchemaType<"AgentEvent">;
@@ -242,6 +245,10 @@ export type SessionsFilesListParams = SchemaType<"SessionsFilesListParams">;
 export type SessionsFilesListResult = SchemaType<"SessionsFilesListResult">;
 export type SessionsFilesGetParams = SchemaType<"SessionsFilesGetParams">;
 export type SessionsFilesGetResult = SchemaType<"SessionsFilesGetResult">;
+export type SessionDiffFileStatus = SchemaType<"SessionDiffFileStatus">;
+export type SessionDiffFile = SchemaType<"SessionDiffFile">;
+export type SessionsDiffParams = SchemaType<"SessionsDiffParams">;
+export type SessionsDiffResult = SchemaType<"SessionsDiffResult">;
 export type ArtifactSummary = SchemaType<"ArtifactSummary">;
 export type ArtifactsListParams = SchemaType<"ArtifactsListParams">;
 export type ArtifactsListResult = SchemaType<"ArtifactsListResult">;

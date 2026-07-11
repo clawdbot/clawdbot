@@ -12,7 +12,11 @@ import {
 } from "./app-inventory-cache.js";
 import { resolveCodexAppServerHomeDir } from "./auth-bridge.js";
 import type { CodexAppServerRuntimeIdentity } from "./client.js";
-import type { CodexAppServerRuntimeOptions, CodexAppServerStartOptions } from "./config.js";
+import {
+  resolveCodexAppServerUserHomeDir,
+  type CodexAppServerRuntimeOptions,
+  type CodexAppServerStartOptions,
+} from "./config.js";
 
 const require = createRequire(import.meta.url);
 const CODEX_PLUGIN_VERSION = readPluginPackageVersion({ require });
@@ -62,6 +66,44 @@ export function buildCodexAppServerRuntimeFingerprint(params: {
     appServerVersion: params.appServerVersion ?? params.runtimeIdentity?.serverVersion ?? null,
     runtimeIdentity: params.runtimeIdentity ?? null,
   });
+}
+
+/** Fingerprints the configured connection that owns a supervised source thread. */
+export function buildCodexAppServerConnectionFingerprint(
+  appServer: Pick<
+    CodexAppServerRuntimeOptions,
+    "start" | "connectionClass" | "remoteWorkspaceRoot"
+  >,
+  agentDir?: string,
+): string {
+  return JSON.stringify({
+    endpoint: resolveCodexPluginAppCacheEndpoint(appServer),
+    connectionClass: appServer.connectionClass,
+    remoteWorkspaceRoot: appServer.remoteWorkspaceRoot ?? null,
+    homeScope: appServer.start.homeScope ?? null,
+    codexHome: resolveCodexAppServerConnectionHome(appServer.start, agentDir),
+    cwd: appServer.start.cwd ?? null,
+  });
+}
+
+function resolveCodexAppServerConnectionHome(
+  start: CodexAppServerStartOptions,
+  agentDir?: string,
+): string | null {
+  const configured = start.env?.CODEX_HOME?.trim();
+  if (configured) {
+    return configured;
+  }
+  if (start.transport === "unix" && (!start.url || start.url === "unix://")) {
+    return resolveCodexAppServerUserHomeDir(start.env ?? process.env);
+  }
+  if (start.transport !== "stdio") {
+    return null;
+  }
+  if (start.homeScope === "user") {
+    return resolveCodexAppServerUserHomeDir(process.env);
+  }
+  return agentDir ? resolveCodexAppServerHomeDir(agentDir) : null;
 }
 
 /** Serializes app-server endpoint identity, including credential fingerprints. */

@@ -114,6 +114,9 @@ export function createStdioTransport(options: CodexAppServerStartOptions): Codex
     execPath: process.execPath,
   });
   return spawn(invocation.command, invocation.args, {
+    // Preserve the shipped Supervisor endpoint contract: relative commands and
+    // config discovery may depend on the endpoint's process working directory.
+    ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
     env,
     detached: resolveCodexAppServerDetachedMode(env),
     shell: invocation.shell,

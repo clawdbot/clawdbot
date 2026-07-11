@@ -6052,4 +6052,45 @@ describe("createTelegramBot", () => {
       ),
     ).toBe(false);
   });
+
+  it("shows a permanent rejection when model selection is locked", async () => {
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = getOnHandler("callback_query");
+    const patchSessionEntrySpy = vi
+      .spyOn(sessionStoreRuntime, "patchSessionEntry")
+      .mockImplementationOnce(async (params) => {
+        const entry = {
+          sessionId: "locked-session",
+          updatedAt: Date.now(),
+          modelSelectionLocked: true,
+        };
+        await params.update(entry, { existingEntry: entry });
+        return entry;
+      });
+    const ctx = {
+      callbackQuery: {
+        id: "cbq-model-select-locked-1",
+        data: "mdl_sel_openai/gpt-5.4",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 25,
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    };
+
+    try {
+      await expect(callbackHandler(ctx)).resolves.toBeUndefined();
+    } finally {
+      patchSessionEntrySpy.mockRestore();
+    }
+
+    expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
+    expect(editMessageTextSpy.mock.calls.at(-1)?.[2]).toBe(
+      "❌ Model selection is locked for this session.",
+    );
+  });
 });

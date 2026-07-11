@@ -1,11 +1,13 @@
 import { randomInt } from "node:crypto";
+// Inference backend detection shared by onboarding bootstrap and Crestodian setup.
+import os from "node:os";
+import path from "node:path";
 import { resolveAgentConfig, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import {
   readClaudeCliCredentialsCached,
   readCodexCliCredentialsCached,
   readGeminiCliCredentialsCached,
 } from "../agents/cli-credentials.js";
-// Inference backend detection shared by onboarding bootstrap and Crestodian setup.
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -60,6 +62,12 @@ export type DetectInferenceBackendsOptions = {
   deps?: DetectInferenceBackendsDeps;
 };
 
+export type DetectNativeCodexAppServerOptions = {
+  env?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+  probeLocalCommand?: typeof probeLocalCommand;
+};
+
 function detectCliCredentialState(params: {
   probe: LocalCommandProbe;
   hasStoredCredentials: boolean;
@@ -106,6 +114,43 @@ function randomizeClaudeCodexTie(
   ];
 }
 
+// ChatGPT.app is the current desktop owner; keep Codex stable/beta as fallbacks.
+const CODEX_MACOS_APP_NAMES = ["ChatGPT.app", "Codex.app", "Codex Beta.app"] as const;
+
+async function probeCodexCommand(params: {
+  probe: typeof probeLocalCommand;
+  env: NodeJS.ProcessEnv;
+  platform: NodeJS.Platform;
+}): Promise<LocalCommandProbe> {
+  const pathProbe = await params.probe("codex");
+  if (pathProbe.found || params.platform !== "darwin") {
+    return pathProbe;
+  }
+  const home = params.env.HOME?.trim() || os.homedir();
+  const appExecutables = new Set(
+    CODEX_MACOS_APP_NAMES.flatMap((appName) => [
+      path.join("/Applications", appName, "Contents", "Resources", "codex"),
+      path.join(home, "Applications", appName, "Contents", "Resources", "codex"),
+    ]),
+  );
+  for (const executable of appExecutables) {
+    const appProbe = await params.probe(executable);
+    if (appProbe.found) {
+      return appProbe;
+    }
+  }
+  return pathProbe;
+}
+/** Detects a native Codex App Server without coupling it to inference selection. */
+export async function detectNativeCodexAppServer(
+  options: DetectNativeCodexAppServerOptions = {},
+): Promise<LocalCommandProbe> {
+  return await probeCodexCommand({
+    probe: options.probeLocalCommand ?? probeLocalCommand,
+    env: options.env ?? process.env,
+    platform: options.platform ?? process.platform,
+  });
+}
 /**
  * Detect usable inference backends in ladder order. Returns candidates only
  * for backends that exist on this machine; the first entry is the bootstrap
@@ -172,7 +217,7 @@ export async function detectInferenceBackends(
 
   const [claudeProbe, codexProbe, geminiProbe] = await Promise.all([
     probe("claude"),
-    probe("codex"),
+    detectNativeCodexAppServer({ probeLocalCommand: probe, env, platform }),
     probe("gemini"),
   ]);
   const cliCandidates: InferenceBackendCandidate[] = [];

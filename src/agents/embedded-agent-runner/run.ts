@@ -16,7 +16,7 @@ import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { getRuntimeConfigSnapshot } from "../../config/config.js";
 import { resolveStorePath } from "../../config/sessions.js";
-import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import {
@@ -46,6 +46,7 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveProviderAuthProfileId } from "../../plugins/provider-runtime.js";
 import { enqueueCommandInLane, getCommandLaneSnapshot } from "../../process/command-queue.js";
 import type { CommandQueueEnqueueOptions } from "../../process/command-queue.types.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { createAgentHarnessTaskRuntimeScope } from "../../tasks/agent-harness-task-runtime-scope.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
@@ -172,7 +173,7 @@ import {
 import { resolveEmbeddedRunFailureSignal } from "./failure-signal.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
-import { resolveModelAsync } from "./model.js";
+import { createEmptyAgentDiscoveryStores, resolveModelAsync } from "./model.js";
 import {
   createPostCompactionLoopGuard,
   PostCompactionLoopPersistedError,
@@ -214,10 +215,10 @@ import {
   resolveOverloadFailoverBackoffMs,
   resolveOverloadProfileRotationLimit,
   resolveRateLimitProfileRotationLimit,
+  resolveEmbeddedAttemptBasePrompt,
   resolveNextSameModelRateLimitRetryCount,
   resolveSameModelRateLimitRetryDelayMs,
   type RuntimeAuthState,
-  scrubAnthropicRefusalMagic,
 } from "./run/helpers.js";
 import {
   MAX_CONSECUTIVE_IDLE_TIMEOUTS_BEFORE_OUTPUT,
@@ -244,8 +245,11 @@ import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
 import {
   buildBeforeModelResolveAttachments,
-  resolveEffectiveRuntimeModel,
+  createNativeModelOwnedRuntimeModel,
+  resolveEmbeddedRuntimeModelPolicy,
+  resolveAgentHarnessRunAdmissionError,
   resolveHookModelSelection,
+  resolveNativeModelOwnedHarnessId,
 } from "./run/setup.js";
 import { mergeAttemptToolMediaPayloads } from "./run/tool-media-payloads.js";
 import type { EmbeddedRunFastModeParam } from "./run/types.js";
@@ -572,6 +576,33 @@ function backfillSessionKey(params: {
   }
 }
 
+function assertAgentHarnessRunAdmission(params: RunEmbeddedAgentParams): void {
+  const sessionKey = normalizeOptionalString(params.sessionKey);
+  if (!sessionKey) {
+    return;
+  }
+  const admissionAgentId = params.agentId ?? resolveAgentIdFromSessionKey(sessionKey);
+  const storePath =
+    normalizeOptionalString(params.sessionTarget?.storePath) ??
+    resolveStorePath(params.config?.session?.store, { agentId: admissionAgentId });
+  const durableEntry = loadSessionEntry({
+    ...(admissionAgentId ? { agentId: admissionAgentId } : {}),
+    readConsistency: "latest",
+    sessionKey,
+    storePath,
+  });
+  const admissionError = resolveAgentHarnessRunAdmissionError({
+    agentHarnessId: params.agentHarnessId,
+    entry: durableEntry,
+    modelSelectionLocked: params.modelSelectionLocked,
+    sessionId: params.sessionId,
+    sessionKey,
+  });
+  if (admissionError) {
+    throw new Error(admissionError);
+  }
+}
+
 function buildHandledReplyPayloads(reply?: ReplyPayload) {
   const normalized = reply ?? { text: SILENT_REPLY_TOKEN };
   return [
@@ -666,6 +697,7 @@ async function runEmbeddedAgentInternal(
     sessionKey: paramsBase.sessionKey,
     agentId: paramsBase.agentId,
   });
+  assertAgentHarnessRunAdmission({ ...paramsBase, sessionKey: effectiveSessionKey });
   const runSessionTarget = await resolveAgentRunSessionTarget({
     ...paramsBase,
     sessionKey: effectiveSessionKey,
@@ -774,6 +806,9 @@ async function runEmbeddedAgentInternal(
         lifecycleGeneration = currentLifecycleGeneration;
         params = { ...params, lifecycleGeneration };
       }
+      // Queue waits can outlive the durable harness binding that admitted a run.
+      // Recheck only after lifecycle admission, before any run context or hook can execute.
+      assertAgentHarnessRunAdmission(params);
       claimAgentRunContext(params.runId, {
         ...existingContext,
         sessionKey: params.sessionKey ?? existingContext?.sessionKey,
@@ -1091,6 +1126,7 @@ async function runEmbeddedAgentInternal(
         config: params.config,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
+        agentHarnessId: params.agentHarnessId,
         agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
         workspaceDir: resolvedWorkspace,
       });
@@ -1104,52 +1140,33 @@ async function runEmbeddedAgentInternal(
         agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
       });
       const pluginHarnessOwnsTransport = agentHarness.id !== "openclaw";
-      const modelConfigProvider = provider;
-      const selectedRuntimeProvider = resolveSelectedOpenAIRuntimeProvider({
-        provider,
-        harnessRuntime: agentHarness.id,
-        agentHarnessId: agentHarness.id,
-        authProfileProvider: params.authProfileId?.split(":", 1)[0],
-        authProfileId: params.authProfileId,
-        config: params.config,
-        workspaceDir: resolvedWorkspace,
+      const nativeModelOwnedHarnessId = resolveNativeModelOwnedHarnessId({
+        agentHarnessId: params.agentHarnessId,
+        modelSelectionLocked: params.modelSelectionLocked,
+        selectedHarnessId: agentHarness.id,
       });
-      const modelResolutionProviders =
-        selectedRuntimeProvider !== provider ? [selectedRuntimeProvider, provider] : [provider];
+      const nativeModelOwned = nativeModelOwnedHarnessId !== undefined;
+      const modelConfigProvider = provider;
       let resolvedModelProvider = provider;
       let firstModelResolution: Awaited<ReturnType<typeof resolveModelAsync>> | undefined;
       let modelResolution: Awaited<ReturnType<typeof resolveModelAsync>> | undefined;
-      for (const candidateProvider of modelResolutionProviders) {
-        const candidateResolution = await resolveModelAsync(
-          candidateProvider,
-          modelId,
-          agentDir,
-          params.config,
-          {
-            // Plugin dynamic model hooks can resolve explicit model refs without
-            // first generating OpenClaw models.json. This keeps one-shot model runs from
-            // blocking on unrelated provider discovery.
-            skipAgentDiscovery: true,
-            allowBundledStaticCatalogFallback: pluginHarnessOwnsTransport,
-            preferBundledStaticCatalogTransport: pluginHarnessOwnsTransport,
-            workspaceDir: resolvedWorkspace,
-            authProfileId: params.authProfileId,
-          },
-        );
-        firstModelResolution ??= candidateResolution;
-        if (candidateResolution.model) {
-          resolvedModelProvider = candidateProvider;
-          modelResolution = candidateResolution;
-          break;
-        }
-      }
-      if (!modelResolution && pluginHarnessOwnsTransport) {
-        modelResolution ??= firstModelResolution;
-      }
-      if (!modelResolution) {
-        await ensureOpenClawModelsJson(params.config, agentDir, {
+      if (nativeModelOwned) {
+        modelResolution = {
+          model: createNativeModelOwnedRuntimeModel({ provider, modelId }),
+          ...createEmptyAgentDiscoveryStores(),
+        };
+      } else {
+        const selectedRuntimeProvider = resolveSelectedOpenAIRuntimeProvider({
+          provider,
+          harnessRuntime: agentHarness.id,
+          agentHarnessId: agentHarness.id,
+          authProfileProvider: params.authProfileId?.split(":", 1)[0],
+          authProfileId: params.authProfileId,
+          config: params.config,
           workspaceDir: resolvedWorkspace,
         });
+        const modelResolutionProviders =
+          selectedRuntimeProvider !== provider ? [selectedRuntimeProvider, provider] : [provider];
         for (const candidateProvider of modelResolutionProviders) {
           const candidateResolution = await resolveModelAsync(
             candidateProvider,
@@ -1157,12 +1174,14 @@ async function runEmbeddedAgentInternal(
             agentDir,
             params.config,
             {
+              // Plugin dynamic model hooks can resolve explicit model refs without
+              // first generating OpenClaw models.json. This keeps one-shot model runs from
+              // blocking on unrelated provider discovery.
+              skipAgentDiscovery: true,
+              allowBundledStaticCatalogFallback: pluginHarnessOwnsTransport,
+              preferBundledStaticCatalogTransport: pluginHarnessOwnsTransport,
               workspaceDir: resolvedWorkspace,
               authProfileId: params.authProfileId,
-              // Enable bundled static catalog fallback so plugin-provided
-              // models that are not discoverable via agent model discovery
-              // can still be resolved from the static catalog.
-              allowBundledStaticCatalogFallback: true,
             },
           );
           firstModelResolution ??= candidateResolution;
@@ -1172,8 +1191,38 @@ async function runEmbeddedAgentInternal(
             break;
           }
         }
+        if (!modelResolution && pluginHarnessOwnsTransport) {
+          modelResolution ??= firstModelResolution;
+        }
+        if (!modelResolution) {
+          await ensureOpenClawModelsJson(params.config, agentDir, {
+            workspaceDir: resolvedWorkspace,
+          });
+          for (const candidateProvider of modelResolutionProviders) {
+            const candidateResolution = await resolveModelAsync(
+              candidateProvider,
+              modelId,
+              agentDir,
+              params.config,
+              {
+                workspaceDir: resolvedWorkspace,
+                authProfileId: params.authProfileId,
+                // Enable bundled static catalog fallback so plugin-provided
+                // models that are not discoverable via agent model discovery
+                // can still be resolved from the static catalog.
+                allowBundledStaticCatalogFallback: true,
+              },
+            );
+            firstModelResolution ??= candidateResolution;
+            if (candidateResolution.model) {
+              resolvedModelProvider = candidateProvider;
+              modelResolution = candidateResolution;
+              break;
+            }
+          }
+        }
+        modelResolution ??= firstModelResolution;
       }
-      modelResolution ??= firstModelResolution;
       if (!modelResolution) {
         throw new FailoverError(`Unknown model: ${provider}/${modelId}`, {
           reason: "model_not_found",
@@ -1196,7 +1245,7 @@ async function runEmbeddedAgentInternal(
       }
       let runtimeModel = model;
 
-      const resolvedRuntimeModel = resolveEffectiveRuntimeModel({
+      const resolvedRuntimeModel = resolveEmbeddedRuntimeModelPolicy({
         cfg: params.config,
         provider,
         contextConfigProvider: resolveContextConfigProviderForRuntime({
@@ -1206,8 +1255,12 @@ async function runEmbeddedAgentInternal(
         }),
         modelId,
         runtimeModel,
+        nativeModelOwned,
       });
-      const ctxInfo = resolvedRuntimeModel.ctxInfo;
+      const contextTokenBudget = resolvedRuntimeModel.contextTokenBudget;
+      const contextWindowInfo = resolvedRuntimeModel.contextWindowInfo;
+      const outerContextTokenMeta =
+        contextTokenBudget === undefined ? {} : { contextTokens: contextTokenBudget };
       let effectiveModel = resolvedRuntimeModel.effectiveModel;
       startupStages.mark("model-resolution");
       notifyExecutionPhase("model_resolution", { provider, model: modelId });
@@ -2032,7 +2085,7 @@ async function runEmbeddedAgentInternal(
                 sessionFile: activeSessionFile,
                 provider,
                 model: model.id,
-                contextTokens: ctxInfo.tokens,
+                ...outerContextTokenMeta,
                 usageAccumulator,
                 lastRunPromptUsage,
                 lastTurnTotal,
@@ -2052,7 +2105,11 @@ async function runEmbeddedAgentInternal(
 
           const basePrompt =
             nextAttemptPromptOverride ??
-            (provider === "anthropic" ? scrubAnthropicRefusalMagic(params.prompt) : params.prompt);
+            resolveEmbeddedAttemptBasePrompt({
+              nativeModelOwned,
+              provider,
+              prompt: params.prompt,
+            });
           nextAttemptPromptOverride = null;
           const promptAdditions = [
             reasoningOnlyRetryInstruction,
@@ -2225,9 +2282,13 @@ async function runEmbeddedAgentInternal(
             agentDir,
             config: params.config,
             allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
-            contextEngine,
-            contextTokenBudget: ctxInfo.tokens,
-            contextWindowInfo: ctxInfo,
+            ...(nativeModelOwned
+              ? {}
+              : {
+                  contextEngine,
+                  contextTokenBudget,
+                  contextWindowInfo,
+                }),
             skillsSnapshot: params.skillsSnapshot,
             prompt,
             transcriptPrompt: params.transcriptPrompt,
@@ -2249,6 +2310,7 @@ async function runEmbeddedAgentInternal(
             // bootstrap but drift back to OpenClaw when the attempt is created.
             agentHarnessId: agentHarness.id,
             agentHarnessRuntimeOverride: agentHarness.id,
+            modelSelectionLocked: params.modelSelectionLocked,
             ...(params.sessionKey
               ? {
                   agentHarnessTaskRuntimeScope: createAgentHarnessTaskRuntimeScope({
@@ -2485,7 +2547,7 @@ async function runEmbeddedAgentInternal(
                 sessionFile: activeSessionFile,
                 provider,
                 model: model.id,
-                contextTokens: ctxInfo.tokens,
+                ...outerContextTokenMeta,
                 usageAccumulator,
                 lastRunPromptUsage,
                 lastTurnTotal,
@@ -2556,7 +2618,7 @@ async function runEmbeddedAgentInternal(
             !attempt.lastToolError &&
             (attempt.toolMetas?.length ?? 0) === 0 &&
             (attempt.assistantTexts?.length ?? 0) === 0;
-          if (preflightRecovery?.handled) {
+          if (!nativeModelOwned && preflightRecovery?.handled) {
             const retryingFromTranscript = preflightRecovery.source === "mid-turn";
             log.info(
               `[context-overflow-precheck] early recovery route=${preflightRecovery.route} ` +
@@ -2592,6 +2654,8 @@ async function runEmbeddedAgentInternal(
             throw new LiveSessionModelSwitchError(requestedSelection);
           }
           if (
+            !nativeModelOwned &&
+            contextTokenBudget !== undefined &&
             timedOut &&
             !timedOutDuringCompaction &&
             !timedOutDuringToolExecution &&
@@ -2604,8 +2668,8 @@ async function runEmbeddedAgentInternal(
               lastCallUsage: lastRunPromptUsage,
             });
             const tokenUsedRatio =
-              lastTurnPromptTokens != null && ctxInfo.tokens > 0
-                ? lastTurnPromptTokens / ctxInfo.tokens
+              lastTurnPromptTokens != null && contextTokenBudget > 0
+                ? lastTurnPromptTokens / contextTokenBudget
                 : 0;
             if (timeoutCompactionAttempts >= MAX_TIMEOUT_COMPACTION_ATTEMPTS) {
               log.warn(
@@ -2660,6 +2724,7 @@ async function runEmbeddedAgentInternal(
                     provider,
                     modelId,
                     harnessRuntime: agentHarness.id,
+                    modelSelectionLocked: params.modelSelectionLocked,
                     modelFallbacksOverride: params.modelFallbacksOverride,
                     thinkLevel,
                     reasoningLevel: params.reasoningLevel,
@@ -2701,12 +2766,12 @@ async function runEmbeddedAgentInternal(
                     sessionId: activeSessionId,
                     sessionKey: params.sessionKey,
                     sessionFile: activeSessionFile,
-                    tokenBudget: ctxInfo.tokens,
+                    tokenBudget: contextTokenBudget,
                     force: true,
                     compactionTarget: "budget",
                     runtimeContext: timeoutCompactionRuntimeContext,
                     runtimeSettings: buildEmbeddedContextEngineRuntimeSettings({
-                      tokenBudget: ctxInfo.tokens,
+                      tokenBudget: contextTokenBudget,
                     }),
                   },
                   resolveCompactionTimeoutMs(params.config),
@@ -2781,7 +2846,7 @@ async function runEmbeddedAgentInternal(
               })()
             : null;
 
-          if (contextOverflowError) {
+          if (contextOverflowError && !nativeModelOwned && contextTokenBudget !== undefined) {
             const overflowDiagId = createCompactionDiagId();
             const errorText = contextOverflowError.text;
             const msgCount = attempt.messagesSnapshot?.length ?? 0;
@@ -2795,10 +2860,10 @@ async function runEmbeddedAgentInternal(
             const overflowTokenCountForCompaction =
               observedOverflowTokens ??
               preflightEstimatedPromptTokens ??
-              (ctxInfo.tokens > 0
+              (contextTokenBudget > 0
                 ? // Confirmed overflow with an unparseable provider message still carries a
                   // minimally over-budget count for compaction engines and diagnostics.
-                  ctxInfo.tokens + 1
+                  contextTokenBudget + 1
                 : undefined);
             log.warn(
               `[context-overflow-diag] sessionKey=${params.sessionKey ?? params.sessionId} ` +
@@ -2889,6 +2954,7 @@ async function runEmbeddedAgentInternal(
                     provider,
                     modelId,
                     harnessRuntime: agentHarness.id,
+                    modelSelectionLocked: params.modelSelectionLocked,
                     thinkLevel,
                     reasoningLevel: params.reasoningLevel,
                     bashElevated: params.bashElevated,
@@ -2928,7 +2994,7 @@ async function runEmbeddedAgentInternal(
                 // surfaces as a thrown error handled by the catch below.
                 const overflowCompactionRuntimeSettings = buildEmbeddedContextEngineRuntimeSettings(
                   {
-                    tokenBudget: ctxInfo.tokens,
+                    tokenBudget: contextTokenBudget,
                     degradedReason: "context_overflow",
                   },
                 );
@@ -2938,7 +3004,7 @@ async function runEmbeddedAgentInternal(
                     sessionId: activeSessionId,
                     sessionKey: params.sessionKey,
                     sessionFile: activeSessionFile,
-                    tokenBudget: ctxInfo.tokens,
+                    tokenBudget: contextTokenBudget,
                     ...(overflowTokenCountForCompaction !== undefined
                       ? { currentTokenCount: overflowTokenCountForCompaction }
                       : {}),
@@ -3008,9 +3074,9 @@ async function runEmbeddedAgentInternal(
                 if (preflightRecovery?.route === "compact_then_truncate") {
                   const truncResult = await truncateOversizedToolResultsInSession({
                     sessionFile: activeSessionFile,
-                    contextWindowTokens: ctxInfo.tokens,
+                    contextWindowTokens: contextTokenBudget,
                     maxCharsOverride: resolveLiveToolResultMaxChars({
-                      contextWindowTokens: ctxInfo.tokens,
+                      contextWindowTokens: contextTokenBudget,
                       cfg: params.config,
                       agentId: sessionAgentId,
                     }),
@@ -3054,7 +3120,7 @@ async function runEmbeddedAgentInternal(
               );
             }
             if (!toolResultTruncationAttempted) {
-              const contextWindowTokens = ctxInfo.tokens;
+              const contextWindowTokens = contextTokenBudget;
               const toolResultMaxChars = resolveLiveToolResultMaxChars({
                 contextWindowTokens,
                 cfg: params.config,
@@ -3135,7 +3201,7 @@ async function runEmbeddedAgentInternal(
                   sessionFile: activeSessionFile,
                   provider,
                   model: model.id,
-                  contextTokens: ctxInfo.tokens,
+                  ...outerContextTokenMeta,
                   usageAccumulator,
                   lastRunPromptUsage,
                   lastAssistant: attemptAssistant,
@@ -3168,7 +3234,7 @@ async function runEmbeddedAgentInternal(
                   sessionFile: activeSessionFile,
                   provider,
                   model: model.id,
-                  contextTokens: ctxInfo.tokens,
+                  ...outerContextTokenMeta,
                   usageAccumulator,
                   lastRunPromptUsage,
                   lastAssistant: attemptAssistant,
@@ -3284,7 +3350,7 @@ async function runEmbeddedAgentInternal(
                     sessionFile: activeSessionFile,
                     provider,
                     model: model.id,
-                    contextTokens: ctxInfo.tokens,
+                    ...outerContextTokenMeta,
                     usageAccumulator,
                     lastRunPromptUsage,
                     lastAssistant: attemptAssistant,
@@ -3325,7 +3391,7 @@ async function runEmbeddedAgentInternal(
                     sessionFile: activeSessionFile,
                     provider,
                     model: model.id,
-                    contextTokens: ctxInfo.tokens,
+                    ...outerContextTokenMeta,
                     usageAccumulator,
                     lastRunPromptUsage,
                     lastAssistant: attemptAssistant,
@@ -3760,7 +3826,7 @@ async function runEmbeddedAgentInternal(
             sessionFile: sessionFileUsed,
             provider: reportedModelRef.provider,
             model: reportedModelRef.model,
-            contextTokens: ctxInfo.tokens,
+            ...outerContextTokenMeta,
             agentHarnessId: attempt.agentHarnessId,
             usage: usageMeta.usage,
             lastCallUsage: usageMeta.lastCallUsage,

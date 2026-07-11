@@ -370,6 +370,7 @@ test("sessions.list keeps bulk rows lightweight and uses persisted model fields"
         updatedAt: Date.now() - 1_000,
         modelProvider: "anthropic",
         model: "test-model-without-catalog-context",
+        modelSelectionLocked: true,
         parentSessionKey: "agent:main:main",
         totalTokens: 0,
         totalTokensFresh: false,
@@ -393,6 +394,7 @@ test("sessions.list keeps bulk rows lightweight and uses persisted model fields"
       estimatedCostUsd?: number;
       modelProvider?: string;
       model?: string;
+      modelSelectionLocked?: boolean;
     }>;
   }>(ws, "sessions.list", {});
 
@@ -409,6 +411,7 @@ test("sessions.list keeps bulk rows lightweight and uses persisted model fields"
   expect(child?.estimatedCostUsd).toBeUndefined();
   expect(child?.modelProvider).toBe("anthropic");
   expect(child?.model).toBe("test-model-without-catalog-context");
+  expect(child?.modelSelectionLocked).toBe(true);
 
   ws.close();
 });

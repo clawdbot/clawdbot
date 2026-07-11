@@ -1,4 +1,7 @@
 // WebSocket client helpers for gateway network E2E scenarios.
+import assert from "node:assert/strict";
+import { readFile, writeFile } from "node:fs/promises";
+import { request as httpRequest } from "node:http";
 import { pathToFileURL } from "node:url";
 import { WebSocket } from "ws";
 import { sleep as delay } from "../../../lib/sleep.mjs";
@@ -36,6 +39,258 @@ function hasGatewayHealthSummaryPayload(response) {
     Array.isArray(payload.channelOrder) &&
     isRecord(payload.sessions)
   );
+}
+
+function httpUrl(url, pathname = "/") {
+  const target = new URL(url);
+  target.protocol = target.protocol === "wss:" ? "https:" : "http:";
+  target.pathname = pathname;
+  target.search = "";
+  target.hash = "";
+  return target.toString();
+}
+
+async function readJson(response, label) {
+  let body;
+  try {
+    body = await response.json();
+  } catch {
+    throw new Error(`${label} returned non-JSON HTTP ${response.status}`);
+  }
+  return { status: response.status, body };
+}
+
+async function adminRpc({ token, url }, method, params = {}) {
+  const response = await fetch(httpUrl(url, "/api/v1/admin/rpc"), {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ id: `e2e-${method}`, method, params }),
+  });
+  return await readJson(response, `Admin RPC ${method}`);
+}
+
+async function readProbe(url, pathname) {
+  const response = await fetch(httpUrl(url, pathname));
+  return await readJson(response, pathname);
+}
+
+async function requestUpgradeRejection(url, timeoutMs) {
+  const target = new URL(httpUrl(url));
+  return await new Promise((resolve, reject) => {
+    const request = httpRequest(
+      {
+        hostname: target.hostname,
+        port: target.port,
+        path: target.pathname,
+        headers: {
+          Connection: "Upgrade",
+          Upgrade: "websocket",
+          "Sec-WebSocket-Key": Buffer.from("gateway-net-e2e!").toString("base64"),
+          "Sec-WebSocket-Version": "13",
+        },
+      },
+      (response) => {
+        const chunks = [];
+        response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+        response.on("end", () => {
+          resolve({
+            status: response.statusCode,
+            body: Buffer.concat(chunks).toString("utf8"),
+          });
+        });
+      },
+    );
+    request.on("upgrade", (response, socket) => {
+      socket.destroy();
+      reject(new Error(`expected rejected websocket upgrade, received ${response.statusCode}`));
+    });
+    request.on("error", reject);
+    request.setTimeout(timeoutMs, () => {
+      request.destroy(new Error("websocket upgrade rejection timeout"));
+    });
+    request.end();
+  });
+}
+
+function emitPhase(phase, startedAt) {
+  console.log(
+    JSON.stringify({
+      event: "gateway-network-phase",
+      phase,
+      durationMs: Date.now() - startedAt,
+      ok: true,
+    }),
+  );
+}
+
+export function assertReadySuspensionResponse(response, now = Date.now()) {
+  assert.equal(response?.status, 200, "suspension prepare must return HTTP 200");
+  assert.equal(response.body?.ok, true, "suspension prepare must succeed");
+  const payload = response.body.payload;
+  assert.equal(payload?.status, "ready", "suspension prepare must report ready");
+  assert.equal(typeof payload.suspensionId, "string", "suspension prepare must return an id");
+  assert(payload.suspensionId.length > 0, "suspension prepare must return an id");
+  assert(payload.expiresAtMs > now, "suspension lease must expire in the future");
+  assert.equal(payload.activeCount, 0, "suspension prepare must report no active work");
+  assert.deepEqual(payload.blockers, [], "suspension prepare must report no blockers");
+  return payload;
+}
+
+export function assertGatewaySuspendingError(response) {
+  assert.equal(response?.ok, false, "normal RPC must fail during suspension");
+  assert.equal(response.error?.code, "UNAVAILABLE", "normal RPC must be unavailable");
+  assert.equal(response.error?.retryable, true, "suspension error must be retryable");
+  assert.equal(
+    response.error?.details?.reason,
+    "gateway-suspending",
+    "normal RPC must identify gateway suspension",
+  );
+  assert.equal(
+    response.error?.details?.phase,
+    "prepared",
+    "normal RPC must identify the prepared phase",
+  );
+}
+
+export function assertSuspendedProbes(health, readiness) {
+  assert.equal(health.status, 200, "/healthz must remain live during suspension");
+  assert.equal(health.body?.status, "live", "/healthz must report live");
+  assert.equal(health.body?.ok, true, "/healthz must report live");
+  assert.equal(readiness.status, 503, "/readyz must fail during suspension");
+  assert.equal(readiness.body?.ready, false, "/readyz must report not ready");
+  assert.equal(
+    readiness.body?.failing?.includes("gateway-draining"),
+    true,
+    "/readyz must identify gateway-draining",
+  );
+}
+
+function assertHealthyProbes(health, readiness) {
+  assert.equal(health.status, 200, "/healthz must be live");
+  assert.equal(health.body?.status, "live", "/healthz must be live");
+  assert.equal(readiness.status, 200, "/readyz must recover");
+  assert.equal(readiness.body?.ready, true, "/readyz must recover");
+}
+
+function assertRpcSuccess(response, message) {
+  assert(response?.ok === true, message);
+  return response.payload;
+}
+
+function assertAdminSuccess(response, message) {
+  assert.equal(response?.status, 200, `${message}: expected HTTP 200`);
+  return assertRpcSuccess(response.body, message);
+}
+
+async function runGatewaySuspensionPreRestartClient({
+  statePath,
+  token,
+  url,
+  timeoutMs = readGatewayNetworkClientConnectTimeoutMs(),
+}) {
+  const startedAt = Date.now();
+  const rpc = (method, params) => adminRpc({ token, url }, method, params);
+  const firstLease = assertReadySuspensionResponse(
+    await rpc("gateway.suspend.prepare", { requestId: "gateway-network-live-contract" }),
+  );
+
+  assertSuspendedProbes(await readProbe(url, "/healthz"), await readProbe(url, "/readyz"));
+
+  const blockedAdminHealth = await rpc("health");
+  assert.equal(blockedAdminHealth.status, 503, "Admin health must return HTTP 503");
+  assertGatewaySuspendingError(blockedAdminHealth.body);
+
+  const upgrade = await requestUpgradeRejection(url, timeoutMs);
+  assert.equal(upgrade.status, 503, "new websocket upgrade must return HTTP 503");
+  assert.equal(
+    upgrade.body,
+    "Gateway websocket admission closed",
+    "new websocket upgrade must return the canonical admission body",
+  );
+
+  const wrongResume = await rpc("gateway.suspend.resume", {
+    suspensionId: `${firstLease.suspensionId}-wrong`,
+  });
+  assert.equal(wrongResume.status, 400, "wrong suspension id must return HTTP 400");
+  assert.equal(
+    wrongResume.body?.error?.code,
+    "INVALID_REQUEST",
+    "wrong suspension id must return INVALID_REQUEST",
+  );
+  const statusAfterMismatch = assertAdminSuccess(
+    await rpc("gateway.suspend.status", { suspensionId: firstLease.suspensionId }),
+    "status after wrong resume",
+  );
+  assert.equal(statusAfterMismatch?.status, "ready", "wrong resume must preserve the lease");
+
+  const resumed = assertAdminSuccess(
+    await rpc("gateway.suspend.resume", { suspensionId: firstLease.suspensionId }),
+    "resume first lease",
+  );
+  assert.deepEqual(
+    { status: resumed?.status, resumed: resumed?.resumed },
+    { status: "running", resumed: true },
+    "first resume must release the lease",
+  );
+  const repeatedResume = assertAdminSuccess(
+    await rpc("gateway.suspend.resume", { suspensionId: firstLease.suspensionId }),
+    "repeat first resume",
+  );
+  assert.equal(repeatedResume?.resumed, false, "repeat resume must be idempotent");
+
+  assertHealthyProbes(await readProbe(url, "/healthz"), await readProbe(url, "/readyz"));
+
+  const requestId = "gateway-network-restart-contract";
+  const secondLease = assertReadySuspensionResponse(
+    await rpc("gateway.suspend.prepare", { requestId }),
+  );
+  await writeFile(
+    statePath,
+    JSON.stringify({
+      requestId,
+      suspensionId: secondLease.suspensionId,
+      expiresAtMs: secondLease.expiresAtMs,
+    }),
+  );
+  emitPhase("pre-restart", startedAt);
+}
+
+async function runGatewaySuspensionPostRestartClient({ statePath, token, url }) {
+  const startedAt = Date.now();
+  const state = JSON.parse(await readFile(statePath, "utf8"));
+  assert(Date.now() < state.expiresAtMs, "restart proof exceeded the original lease");
+  const rpc = (method, params) => adminRpc({ token, url }, method, params);
+
+  const oldStatus = assertAdminSuccess(
+    await rpc("gateway.suspend.status", { suspensionId: state.suspensionId }),
+    "old lease status after restart",
+  );
+  assert(oldStatus?.status === "running", "old lease must not survive process restart");
+  const oldResume = assertAdminSuccess(
+    await rpc("gateway.suspend.resume", { suspensionId: state.suspensionId }),
+    "old lease resume after restart",
+  );
+  assert(oldResume?.resumed === false, "old lease resume must be idempotently inactive");
+
+  assertHealthyProbes(await readProbe(url, "/healthz"), await readProbe(url, "/readyz"));
+  assertAdminSuccess(await rpc("health"), "Admin health after restart");
+
+  const replacement = assertReadySuspensionResponse(
+    await rpc("gateway.suspend.prepare", { requestId: state.requestId }),
+  );
+  assert(
+    replacement.suspensionId !== state.suspensionId,
+    "reused request id must create a fresh suspension lease after restart",
+  );
+  const replacementResume = assertAdminSuccess(
+    await rpc("gateway.suspend.resume", { suspensionId: replacement.suspensionId }),
+    "replacement lease resume",
+  );
+  assert(replacementResume?.resumed === true, "replacement lease must resume");
+  emitPhase("post-restart", startedAt);
 }
 
 export function responseError(method, response) {
@@ -148,5 +403,20 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   if (!url || !token) {
     throw new Error("missing GW_URL/GW_TOKEN");
   }
-  await runGatewayNetworkClient({ token, url });
+  const mode = process.env.GW_MODE ?? "network";
+  if (mode === "network") {
+    await runGatewayNetworkClient({ token, url });
+  } else {
+    const statePath = process.env.GW_STATE_PATH;
+    if (!statePath) {
+      throw new Error("missing GW_STATE_PATH");
+    }
+    if (mode === "suspension-pre-restart") {
+      await runGatewaySuspensionPreRestartClient({ statePath, token, url });
+    } else if (mode === "suspension-post-restart") {
+      await runGatewaySuspensionPostRestartClient({ statePath, token, url });
+    } else {
+      throw new Error(`unknown GW_MODE: ${mode}`);
+    }
+  }
 }

@@ -345,6 +345,48 @@ describe("Feishu doctor state repair", () => {
     ).toBe(true);
   });
 
+  it("preserves locked harness sessions while repairing ordinary Feishu sessions", async () => {
+    const lockedTranscriptPath = writeTranscript("sess-codex-locked", [
+      sessionHeader("sess-codex-locked"),
+      userMessage(""),
+      userMessage(""),
+      userMessage(""),
+    ]);
+    const ordinaryTranscriptPath = writeTranscript("sess-feishu-bad", [
+      sessionHeader("sess-feishu-bad"),
+      userMessage(""),
+      userMessage(""),
+      userMessage(""),
+    ]);
+    const targetStorePath = writeStore({
+      "agent:main:ordinary-codex-locked": {
+        sessionId: "sess-codex-locked",
+        sessionFile: "sess-codex-locked.jsonl",
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+        route: { channel: "feishu", target: { to: "ou_user", chatType: "direct" } },
+      },
+      "agent:main:feishu:direct:ou_user": {
+        sessionId: "sess-feishu-bad",
+        sessionFile: "sess-feishu-bad.jsonl",
+      },
+    });
+
+    const result = await runFeishuDoctorSequence({
+      cfg: feishuConfig(),
+      env: process.env,
+      shouldRepair: true,
+    });
+
+    expect(result.warningNotes).toEqual([]);
+    expect(result.changeNotes.join("\n")).toContain("Removed 1 Feishu-scoped session entry");
+    const store = loadSessionStore(targetStorePath, { skipCache: true });
+    expect(store["agent:main:ordinary-codex-locked"]).toBeDefined();
+    expect(store["agent:main:feishu:direct:ou_user"]).toBeUndefined();
+    expect(fs.existsSync(lockedTranscriptPath)).toBe(true);
+    expect(fs.existsSync(ordinaryTranscriptPath)).toBe(false);
+  });
+
   it("archives unhealthy default-scope sessions when metadata identifies Feishu", async () => {
     const transcriptPath = writeTranscript("sess-default-feishu-bad", [
       sessionHeader("sess-default-feishu-bad"),

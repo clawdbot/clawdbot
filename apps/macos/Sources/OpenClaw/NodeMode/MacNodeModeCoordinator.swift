@@ -52,6 +52,7 @@ final class MacNodeModeCoordinator: NSObject {
     private struct ConnectionAttempt {
         let endpointGeneration: UInt64
         let routeAuthorityGeneration: UInt64
+        let codexThreadCatalogAdvertised: Bool
         let config: GatewayConnection.Config
         let options: GatewayConnectOptions
         let sessionBox: WebSocketSessionBox?
@@ -335,6 +336,13 @@ final class MacNodeModeCoordinator: NSObject {
             !isPaused
     }
 
+    nonisolated static func routeSnapshotAllowsCodexCatalogInvoke(
+        command: String,
+        catalogAdvertised: Bool) -> Bool
+    {
+        command != MacNodeCodexThreadCatalogContract.listCommand || catalogAdvertised
+    }
+
     nonisolated static func stalePostConnectRequiresDisconnect(
         capturedRouteAuthorityGeneration: UInt64,
         currentRouteAuthorityGeneration: UInt64,
@@ -394,8 +402,7 @@ final class MacNodeModeCoordinator: NSObject {
 
             let cameraEnabled = defaults.object(forKey: cameraEnabledKey) as? Bool ?? false
             let browserControlEnabled = OpenClawConfigFile.browserControlEnabled()
-            let codexThreadCatalogEnabled = OpenClawConfigFile.explicitlyEnabledPlugin(
-                MacNodeCodexThreadCatalogContract.pluginId)
+            let codexThreadCatalogEnabled = MacNodeCodexThreadCatalog.shouldAdvertise()
 
             var attemptedURL: URL?
             do {
@@ -505,6 +512,8 @@ final class MacNodeModeCoordinator: NSObject {
         return ConnectionAttempt(
             endpointGeneration: endpointGeneration,
             routeAuthorityGeneration: routeAuthorityGeneration,
+            codexThreadCatalogAdvertised: commands.contains(
+                MacNodeCodexThreadCatalogContract.listCommand),
             config: config,
             options: options,
             sessionBox: sessionBox)
@@ -559,6 +568,20 @@ final class MacNodeModeCoordinator: NSObject {
                         error: OpenClawNodeError(
                             code: .unavailable,
                             message: "UNAVAILABLE: node route changed before dispatch"))
+                }
+                // The connect options are this route's capability lease. A later
+                // config enable must not broaden an already-admitted connection;
+                // MacNodeRuntime separately rechecks current config to fail closed.
+                guard Self.routeSnapshotAllowsCodexCatalogInvoke(
+                    command: req.command,
+                    catalogAdvertised: attempt.codexThreadCatalogAdvertised)
+                else {
+                    return BridgeInvokeResponse(
+                        id: req.id,
+                        ok: false,
+                        error: OpenClawNodeError(
+                            code: .unavailable,
+                            message: "UNAVAILABLE: Codex session catalog was not advertised for this route"))
                 }
                 return await self.runtime.handleInvoke(req)
             },
@@ -678,7 +701,9 @@ final class MacNodeModeCoordinator: NSObject {
             caps.append(OpenClawCapability.computer.rawValue)
         }
         if locationMode != .off { caps.append(OpenClawCapability.location.rawValue) }
-        if codexThreadCatalogEnabled {
+        // A local Gateway already catalogs this user's Codex home. Advertise the
+        // node-owned catalog only when this Mac supplies it to a remote Gateway.
+        if codexThreadCatalogEnabled, connectionMode == .remote {
             caps.append(MacNodeCodexThreadCatalogContract.capability)
         }
         return caps

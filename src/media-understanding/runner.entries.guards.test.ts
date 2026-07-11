@@ -1,7 +1,11 @@
 // Runner entry guard tests cover malformed decision data formatting without
 // depending on provider execution.
 import { describe, expect, it } from "vitest";
-import { formatDecisionSummary, formatMissingProviderHint } from "./runner.entries.js";
+import {
+  buildModelDecision,
+  formatDecisionSummary,
+  formatMissingProviderHint,
+} from "./runner.entries.js";
 import type { MediaUnderstandingDecision } from "./types.js";
 
 describe("media-understanding formatDecisionSummary guards", () => {
@@ -44,6 +48,42 @@ describe("media-understanding formatDecisionSummary guards", () => {
       } as unknown as MediaUnderstandingDecision),
     ).toBe("audio: failed (0/1)");
   });
+});
+
+describe("media-understanding CLI backend decisions", () => {
+  it.each([
+    {
+      command: "sherpa-onnx-offline",
+      args: ["--provider=cuda", "{{MediaPath}}"],
+      requestedBackend: "cuda",
+    },
+    {
+      command: "sherpa-onnx-offline",
+      args: ["{{MediaPath}}"],
+      requestedBackend: "cpu",
+    },
+    {
+      command: "whisper-cli",
+      args: ["--no-gpu", "{{MediaPath}}"],
+      requestedBackend: "cpu",
+    },
+    {
+      command: "whisper-cli",
+      args: ["--device", "GPU0", "{{MediaPath}}"],
+      requestedBackend: "device:GPU0",
+    },
+  ])(
+    "reports $command backend request as $requestedBackend",
+    ({ command, args, requestedBackend }) => {
+      expect(
+        buildModelDecision({
+          entry: { type: "cli", command, args },
+          entryType: "cli",
+          outcome: "success",
+        }),
+      ).toMatchObject({ provider: command, model: command, requestedBackend });
+    },
+  );
 });
 
 describe("media-understanding formatMissingProviderHint", () => {

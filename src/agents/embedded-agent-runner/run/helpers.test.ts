@@ -7,12 +7,37 @@ import { createUsageAccumulator, mergeUsageIntoAccumulator } from "../usage-accu
 import {
   buildUsageAgentMetaFields,
   buildErrorAgentMeta,
+  resolveEmbeddedAttemptBasePrompt,
   resolveFinalAssistantRawText,
   resolveFinalAssistantVisibleText,
   resolveLatestCallUsage,
   resolveNextSameModelRateLimitRetryCount,
   resolveSameModelRateLimitRetryDelayMs,
 } from "./helpers.js";
+
+describe("resolveEmbeddedAttemptBasePrompt", () => {
+  const refusalTrigger = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
+
+  it("preserves prompts verbatim for native model-owned harnesses", () => {
+    expect(
+      resolveEmbeddedAttemptBasePrompt({
+        nativeModelOwned: true,
+        provider: "anthropic",
+        prompt: refusalTrigger,
+      }),
+    ).toBe(refusalTrigger);
+  });
+
+  it("keeps the outer Anthropic transport scrub for ordinary runs", () => {
+    expect(
+      resolveEmbeddedAttemptBasePrompt({
+        nativeModelOwned: false,
+        provider: "anthropic",
+        prompt: refusalTrigger,
+      }),
+    ).not.toContain(refusalTrigger);
+  });
+});
 
 function makeAssistantMessage(
   content: AssistantMessage["content"],

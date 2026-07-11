@@ -72,6 +72,7 @@ function detection(
 ) {
   return {
     candidates: [candidate("claude-cli", "Claude Code")],
+    codexAppServerDetected: false,
     manualProviders: [],
     workspace: "/tmp/openclaw-workspace",
     setupComplete: false,

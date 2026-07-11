@@ -1,7 +1,12 @@
 // Gateway Network Client tests cover gateway network client script behavior.
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
-import { runGatewayNetworkClient } from "../../scripts/e2e/lib/gateway-network/client.mjs";
+import {
+  assertGatewaySuspendingError,
+  assertReadySuspensionResponse,
+  assertSuspendedProbes,
+  runGatewayNetworkClient,
+} from "../../scripts/e2e/lib/gateway-network/client.mjs";
 import { readGatewayNetworkClientConnectTimeoutMs } from "../../scripts/e2e/lib/gateway-network/limits.mjs";
 import { onceFrame } from "../../scripts/e2e/lib/gateway-network/ws-frames.mjs";
 
@@ -244,5 +249,58 @@ describe("gateway network WebSocket open guard", () => {
 
     expect(harness.sentMethods).toEqual(["connect", "health"]);
     expect(harness.closeCount).toBe(1);
+  });
+
+  it("accepts only an idle future suspension lease", () => {
+    const payload = {
+      status: "ready",
+      suspensionId: "lease-1",
+      expiresAtMs: 2_000,
+      activeCount: 0,
+      blockers: [],
+    };
+    const response = (overrides = {}) => ({
+      status: 200,
+      body: { ok: true, payload: { ...payload, ...overrides } },
+    });
+
+    expect(assertReadySuspensionResponse(response(), 1_000)).toEqual(payload);
+    expect(() => assertReadySuspensionResponse(response({ expiresAtMs: 999 }), 1_000)).toThrow(
+      "expire in the future",
+    );
+    expect(() => assertReadySuspensionResponse(response({ activeCount: 1 }), 1_000)).toThrow(
+      "no active work",
+    );
+  });
+
+  it("requires canonical prepared-suspension RPC and probe evidence", () => {
+    const suspendedError = {
+      ok: false,
+      error: {
+        code: "UNAVAILABLE",
+        retryable: true,
+        details: { reason: "gateway-suspending", phase: "prepared" },
+      },
+    };
+    const health = { status: 200, body: { ok: true, status: "live" } };
+    const readiness = { status: 503, body: { ready: false, failing: ["gateway-draining"] } };
+
+    expect(() => assertGatewaySuspendingError(suspendedError)).not.toThrow();
+    expect(() => assertSuspendedProbes(health, readiness)).not.toThrow();
+    expect(() =>
+      assertGatewaySuspendingError({
+        ...suspendedError,
+        error: {
+          ...suspendedError.error,
+          details: { reason: "gateway-restarting", phase: "prepared" },
+        },
+      }),
+    ).toThrow("identify gateway suspension");
+    expect(() =>
+      assertSuspendedProbes(health, {
+        status: 503,
+        body: { ready: false, failing: ["channels"] },
+      }),
+    ).toThrow("identify gateway-draining");
   });
 });

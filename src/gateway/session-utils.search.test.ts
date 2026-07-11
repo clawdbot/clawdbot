@@ -703,10 +703,26 @@ describe("listSessionsFromStore search", () => {
     });
   });
 
-  test("chat history session metadata keeps model-derived contextTokens without transcript usage", () => {
+  test("chat history session metadata keeps model context and projects a catalog-pinned harness", () => {
     withAnthropicTranscriptFixture({
       prefix: "openclaw-session-info-context-",
       run: ({ storePath, now }) => {
+        const entry: SessionEntry = {
+          sessionId: MAIN_SESSION_ID,
+          updatedAt: now,
+          modelProvider: "local-test",
+          model: "test-model",
+          agentHarnessId: "codex",
+          modelSelectionLocked: true,
+          pluginExtensions: {
+            codex: {
+              supervision: {
+                sourceThreadId: "019f-codex-thread",
+                modelLocked: true,
+              },
+            },
+          },
+        };
         const row = buildGatewaySessionInfo({
           cfg: {
             models: {
@@ -719,20 +735,16 @@ describe("listSessionsFromStore search", () => {
           } as unknown as OpenClawConfig,
           storePath,
           key: MAIN_SESSION_KEY,
-          store: {
-            [MAIN_SESSION_KEY]: {
-              sessionId: MAIN_SESSION_ID,
-              updatedAt: now,
-              modelProvider: "local-test",
-              model: "test-model",
-            } as SessionEntry,
-          },
+          entry,
+          store: { [MAIN_SESSION_KEY]: entry },
         });
 
         expect(row.totalTokens).toBeUndefined();
         expect(row.totalTokensFresh).toBe(false);
         expect(row.estimatedCostUsd).toBeUndefined();
         expect(row.contextTokens).toBe(123_456);
+        expect(row.modelSelectionLocked).toBe(true);
+        expect(row.agentRuntime).toEqual({ id: "codex", source: "session" });
       },
     });
   });

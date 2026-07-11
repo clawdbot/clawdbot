@@ -317,12 +317,12 @@ describe("resolveBuildAllSteps", () => {
       "plugins:assets:build",
       "tsdown",
       "check-cli-bootstrap-imports",
+      "plugins:assets:copy",
       "runtime-postbuild",
       "build-stamp",
       "runtime-postbuild-stamp",
       "write-plugin-sdk-entry-dts",
       "check-plugin-sdk-exports",
-      "plugins:assets:copy",
       "copy-hook-metadata",
       "copy-export-html-templates",
       "ui:build",
@@ -403,6 +403,7 @@ describe("resolveBuildAllSteps", () => {
       "plugins:assets:build",
       "tsdown",
       "check-cli-bootstrap-imports",
+      "plugins:assets:copy",
       "runtime-postbuild",
       "build-stamp",
       "runtime-postbuild-stamp",
@@ -459,6 +460,19 @@ describe("resolveBuildAllSteps", () => {
     ).toMatchObject({
       OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "1",
     });
+  });
+
+  it("copies generated plugin assets before runtime postbuild snapshots static outputs", () => {
+    for (const profile of ["full", "ciArtifacts", "qaRuntime"]) {
+      const labels = resolveBuildAllSteps(profile).map((step) => step.label);
+      expect(labels.indexOf("plugins:assets:copy")).toBeGreaterThan(labels.indexOf("tsdown"));
+      expect(labels.indexOf("runtime-postbuild")).toBeGreaterThan(
+        labels.indexOf("plugins:assets:copy"),
+      );
+      expect(labels.indexOf("runtime-postbuild-stamp")).toBeGreaterThan(
+        labels.indexOf("runtime-postbuild"),
+      );
+    }
   });
 
   it("writes the runtime postbuild stamp after the build stamp", () => {

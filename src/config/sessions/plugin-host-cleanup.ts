@@ -1,5 +1,6 @@
 /** File-backed implementation for plugin host-owned session-state cleanup. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalAgentRuntimeId } from "../../agents/agent-runtime-id.js";
 import { normalizeSessionEntrySlotKey } from "../../plugins/session-entry-slot-keys.js";
 import { updateSessionStore } from "./store.js";
 import type { SessionEntry } from "./types.js";
@@ -18,6 +19,8 @@ export type PluginHostSessionCleanupStoreParams = {
   sessionEntrySlotKeys?: ReadonlySet<string>;
   /** Per-store file-backed transaction boundary. */
   storePath: string;
+  /** Harness ids whose locked durable sessions survive plugin disable cleanup. */
+  preserveLockedHarnessIds?: ReadonlySet<string>;
   /** Cancels the cleanup before persistence when host lifecycle state changes. */
   shouldCleanup?: () => boolean;
 };
@@ -209,6 +212,17 @@ function hasCleanupTarget(
   return hasPluginOwnedSessionState(entry, params.pluginId, params.sessionEntrySlotKeys);
 }
 
+function isLockedHarnessSessionOwnedByPlugin(
+  entry: SessionEntry,
+  preserveLockedHarnessIds: ReadonlySet<string> | undefined,
+): boolean {
+  if (entry.modelSelectionLocked !== true || !preserveLockedHarnessIds?.size) {
+    return false;
+  }
+  const harnessId = normalizeOptionalAgentRuntimeId(entry.agentHarnessId);
+  return harnessId !== undefined && preserveLockedHarnessIds.has(harnessId);
+}
+
 function clearCleanupTarget(
   entry: SessionEntry,
   params: PluginHostSessionCleanupStoreParams,
@@ -239,6 +253,12 @@ export async function cleanupPluginHostSessionStore(
       let clearedInStore = 0;
       const now = Date.now();
       for (const [entryKey, entry] of Object.entries(store)) {
+        // Disabling an owning harness stops execution; it does not release its
+        // durable conversation. Keep the plugin marker so re-enable can recover
+        // the same binding instead of leaving a locked, undiscoverable session.
+        if (isLockedHarnessSessionOwnedByPlugin(entry, params.preserveLockedHarnessIds)) {
+          continue;
+        }
         if (
           !matchesCleanupSession(entryKey, entry, params.sessionKey) ||
           !hasCleanupTarget(entry, params)

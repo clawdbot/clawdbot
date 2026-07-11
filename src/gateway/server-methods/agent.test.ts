@@ -1194,6 +1194,156 @@ describe("gateway agent handler", () => {
     expect(mocks.agentCommand).not.toHaveBeenCalled();
   });
 
+  it("rejects agent RPC creation in an agent harness-owned namespace", async () => {
+    const sessionKey = "agent:main:harness:codex:supervision:native-thread";
+    const runId = "agent-harness-reserved";
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: undefined,
+      canonicalKey: sessionKey,
+    });
+    mocks.agentCommand.mockClear();
+    const context = makeContext();
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "claim reserved session",
+        agentId: "main",
+        sessionKey,
+        idempotencyKey: runId,
+      },
+      { context, respond, reqId: runId, flushDispatch: false },
+    );
+
+    expectRespondError(respond, {
+      code: ErrorCodes.INVALID_REQUEST,
+      message: "Session key namespace is reserved for agent harness-owned sessions.",
+    });
+    expect(context.dedupe.has(`agent:${runId}`)).toBe(false);
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+  });
+
+  it.each(["agent:main:harness:codex:supervision:native-thread", "agent:main:ordinary-locked"])(
+    "rejects agent RPC session-id rotation for locked session %s",
+    async (sessionKey) => {
+      const runId = "agent-harness-session-id-rotation";
+      mocks.loadSessionEntry.mockReturnValue({
+        cfg: {},
+        storePath: "/tmp/sessions.json",
+        entry: {
+          agentHarnessId: "codex",
+          modelSelectionLocked: true,
+          sessionId: "native-session",
+        },
+        canonicalKey: sessionKey,
+      });
+      mocks.agentCommand.mockClear();
+      const updateSessionStoreCallsBefore = mocks.updateSessionStore.mock.calls.length;
+      const context = makeContext();
+      const respond = vi.fn();
+
+      await invokeAgent(
+        {
+          message: "replace native transcript identity",
+          agentId: "main",
+          sessionKey,
+          sessionId: "replacement-session",
+          idempotencyKey: runId,
+        },
+        { context, respond, reqId: runId, flushDispatch: false },
+      );
+
+      expectRespondError(respond, {
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "Agent harness-owned session identity is locked and cannot be replaced or shared.",
+      });
+      expect(context.dedupe.has(`agent:${runId}`)).toBe(false);
+      expect(mocks.updateSessionStore).toHaveBeenCalledTimes(updateSessionStoreCallsBefore);
+      expect(mocks.agentCommand).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects one-shot model runs against harness-owned sessions", async () => {
+    const sessionKey = "agent:main:harness:codex:supervision:native-thread";
+    const runId = "agent-harness-model-run";
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: {
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+        sessionId: "native-session",
+      },
+      canonicalKey: sessionKey,
+    });
+    mocks.agentCommand.mockClear();
+    const context = makeContext();
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "run through another model",
+        agentId: "main",
+        sessionKey,
+        modelRun: true,
+        idempotencyKey: runId,
+      },
+      { context, respond, reqId: runId, flushDispatch: false },
+    );
+
+    expectRespondError(respond, {
+      code: ErrorCodes.INVALID_REQUEST,
+      message: "Agent harness-owned sessions cannot be used for one-shot model runs.",
+    });
+    expect(context.dedupe.has(`agent:${runId}`)).toBe(false);
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+  });
+
+  it("allows raw model runs against grandfathered unlocked harness-prefixed sessions", async () => {
+    const sessionKey = "agent:main:harness:notes";
+    const runId = "legacy-harness-model-run";
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: {
+        agentHarnessId: "codex",
+        modelSelectionLocked: false,
+        sessionId: "legacy-session",
+        updatedAt: Date.now(),
+      },
+      canonicalKey: sessionKey,
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "pong" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "Reply exactly: pong",
+        agentId: "main",
+        sessionKey,
+        modelRun: true,
+        promptMode: "none",
+        idempotencyKey: runId,
+      },
+      {
+        reqId: runId,
+        client: operatorWriteCliClient(),
+      },
+    );
+
+    expectRecordFields(await waitForAgentCommandCall(), {
+      modelRun: true,
+      promptMode: "none",
+      sessionEffects: "internal",
+      sessionId: "legacy-session",
+      sessionKey,
+    });
+  });
+
   it("uses single-entry persistence for ordinary gateway admission touches", async () => {
     mockMainSessionEntry({});
     let capturedOptions:
@@ -4352,6 +4502,29 @@ describe("gateway agent handler", () => {
     expect(callArgs.senderIsOwner).toBe(senderIsOwner);
   });
 
+  it("rejects promptMode none without the stateless model-run contract", async () => {
+    primeMainAgentRun({ cfg: mocks.loadConfigReturn });
+    mocks.agentCommand.mockClear();
+
+    const respond = await invokeAgent(
+      {
+        message: "unsafe raw run",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        promptMode: "none",
+        idempotencyKey: "test-raw-run-with-visible-session-effects",
+      },
+      { reqId: "raw-run-with-visible-session-effects", flushDispatch: false },
+    );
+
+    expectRespondError(respond, {
+      code: ErrorCodes.INVALID_REQUEST,
+      message:
+        'promptMode="none" requires modelRun=true so the run cannot mutate a durable session.',
+    });
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+  });
+
   it("keeps CLI model runs out of durable and visible gateway state", async () => {
     const sessionId = "model-run-123e4567-e89b-12d3-a456-426614174000";
     const sessionKey = `agent:main:explicit:${sessionId}`;
@@ -6102,6 +6275,70 @@ describe("gateway agent handler", () => {
         "claude-cli": { sessionId: "claude-cli-conversation-123" },
       });
       expect(mocks.emitGatewaySessionEndPluginHook).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a model-locked session across configured gateway expiry", async () => {
+    const now = Date.parse("2026-04-25T12:00:00.000Z");
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    try {
+      mocks.resolveExplicitAgentSessionKey.mockReturnValue("agent:main:main");
+      mockMainSessionEntry(
+        {
+          sessionId: "model-locked-session-id",
+          updatedAt: now,
+          sessionStartedAt: now - 25 * 60 * 60_000,
+          lastInteractionAt: now - 25 * 60 * 60_000,
+          agentHarnessId: "codex",
+          modelSelectionLocked: true,
+        },
+        {
+          session: {
+            reset: {
+              mode: "daily",
+              atHour: 4,
+            },
+          },
+        },
+      );
+      const loaded = mocks.loadSessionEntry();
+      let capturedEntry: Record<string, unknown> | undefined;
+      mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+        const store: Record<string, unknown> = {
+          [loaded.canonicalKey]: structuredClone(loaded.entry),
+        };
+        const result = await updater(store);
+        capturedEntry = result as Record<string, unknown>;
+        return result;
+      });
+      mocks.agentCommand.mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: { durationMs: 100 },
+      });
+
+      await invokeAgent(
+        {
+          message: "model-locked daily boundary",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          idempotencyKey: "model-locked-daily-boundary",
+        },
+        { reqId: "model-locked-daily-boundary" },
+      );
+
+      const call = await waitForAgentCommandCall<{
+        sessionId?: string;
+        sessionKey?: string;
+      }>();
+      expect(call.sessionKey).toBe("agent:main:main");
+      expect(call.sessionId).toBe("model-locked-session-id");
+      expect(capturedEntry?.sessionStartedAt).toBe(now - 25 * 60 * 60_000);
+      expect(capturedEntry?.modelSelectionLocked).toBe(true);
+      expect(mocks.emitGatewaySessionEndPluginHook).not.toHaveBeenCalled();
+      expect(mocks.emitGatewaySessionStartPluginHook).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }

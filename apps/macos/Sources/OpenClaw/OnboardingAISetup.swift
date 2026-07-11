@@ -77,6 +77,7 @@ final class OnboardingAISetupModel {
     private(set) var connectedModelRef: String?
     private(set) var connectedLatencyMs: Int?
     private(set) var connectedSetupLines: [String] = []
+    private(set) var codexAppServerDetected = false
     private(set) var detectError: Failure?
     /// Set once every detected candidate failed; opens the manual key form.
     private(set) var exhaustedAutoCandidates = false
@@ -124,6 +125,7 @@ final class OnboardingAISetupModel {
         }
 
         let candidates: [DetectedCandidate]
+        let codexAppServerDetected: Bool?
         let manualProviders: [ManualProvider]?
         let workspace: String
         let configuredModel: String?
@@ -171,6 +173,7 @@ final class OnboardingAISetupModel {
         self.connectedModelRef = nil
         self.connectedLatencyMs = nil
         self.connectedSetupLines = []
+        self.codexAppServerDetected = false
         self.detectError = nil
         self.exhaustedAutoCandidates = false
         self.lastDetectedActivationState = nil
@@ -201,6 +204,7 @@ final class OnboardingAISetupModel {
             let result = try JSONDecoder().decode(DetectResult.self, from: data)
             self.lastDetectedActivationState = result.persistedActivationState
             let manualProviders = result.manualProviders ?? []
+            self.codexAppServerDetected = result.codexAppServerDetected ?? false
             self.candidates = result.candidates.map { detected in
                 Candidate(
                     kind: detected.kind,
@@ -247,16 +251,24 @@ final class OnboardingAISetupModel {
             : "The Gateway setup request failed. Show details to inspect or copy the error."
     }
 
-    static func activationRequestTimeoutMs(for kind: String) -> Double {
+    static func activationRequestTimeoutMs(
+        for kind: String,
+        provisionsCodexSupervision: Bool = false) -> Double
+    {
         // Codex can spend 305s installing its runtime plugin before the 90s live probe.
         // Keep a bounded client deadline with room for registry refresh and finalization.
-        kind == "codex-cli" ? 480_000 : 150_000
+        kind == "codex-cli" || provisionsCodexSupervision ? 480_000 : 150_000
     }
 
-    static func activationOutcomeDeadlineMs(for kind: String) -> Double {
+    static func activationOutcomeDeadlineMs(
+        for kind: String,
+        provisionsCodexSupervision: Bool = false) -> Double
+    {
         // A request timeout removes only the client waiter. Keep a short final window
         // to observe config that the still-running Gateway operation just persisted.
-        self.activationRequestTimeoutMs(for: kind) + 30000
+        self.activationRequestTimeoutMs(
+            for: kind,
+            provisionsCodexSupervision: provisionsCodexSupervision) + 30000
     }
 
     static func activationTransitionWasPersisted(
@@ -326,8 +338,12 @@ final class OnboardingAISetupModel {
         let token = self.attemptToken
         let persistedStateBeforeActivation = self.lastDetectedActivationState
         let clock = ContinuousClock()
-        let requestTimeoutMs = Self.activationRequestTimeoutMs(for: kind)
-        let outcomeDeadlineMs = Self.activationOutcomeDeadlineMs(for: kind)
+        let requestTimeoutMs = Self.activationRequestTimeoutMs(
+            for: kind,
+            provisionsCodexSupervision: self.codexAppServerDetected)
+        let outcomeDeadlineMs = Self.activationOutcomeDeadlineMs(
+            for: kind,
+            provisionsCodexSupervision: self.codexAppServerDetected)
         let reconciliationDeadline = clock.now.advanced(by: .milliseconds(Int64(outcomeDeadlineMs)))
         self.selectedKind = kind
         self.phase = .testing
@@ -500,7 +516,9 @@ final class OnboardingAISetupModel {
                         "authChoice": AnyCodable(provider.id),
                         "apiKey": AnyCodable(key),
                     ],
-                    timeoutMs: 150_000,
+                    timeoutMs: Self.activationRequestTimeoutMs(
+                        for: "api-key",
+                        provisionsCodexSupervision: self.codexAppServerDetected),
                     ifCurrentServerLease: serverLease)
                 guard token == self.attemptToken else { return }
                 let result = try JSONDecoder().decode(ActivateResult.self, from: data)

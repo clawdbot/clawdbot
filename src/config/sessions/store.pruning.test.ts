@@ -93,6 +93,21 @@ describe("pruneStaleEntries", () => {
     expect(store).toHaveProperty("agent:main:telegram:group:-100123");
     expect(store).toHaveProperty("agent:main:discord:channel:ops");
   });
+
+  it("preserves model-locked harness sessions even when stale", () => {
+    const now = Date.now();
+    const lockedKey = "agent:main:harness-owned:locked";
+    const store = makeStore([
+      [lockedKey, { ...makeEntry(now - 31 * DAY_MS), modelSelectionLocked: true }],
+      ["old", makeEntry(now - 31 * DAY_MS)],
+    ]);
+
+    const pruned = pruneStaleEntries(store, 30 * DAY_MS);
+
+    expect(pruned).toBe(1);
+    expect(store).toHaveProperty(lockedKey);
+    expect(store.old).toBeUndefined();
+  });
 });
 
 describe("resolveQuotaSuspensionEntryMaintenance", () => {
@@ -507,6 +522,16 @@ describe("pruneStaleModelRunEntries", () => {
     expect(store).toHaveProperty(staleModelRun);
   });
 
+  it("preserves model-locked harness sessions from model-run pruning", () => {
+    const staleModelRun = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174000";
+    const store = makeStore([
+      [staleModelRun, { ...makeEntry(Date.now() - 10 * DAY_MS), modelSelectionLocked: true }],
+    ]);
+
+    expect(pruneStaleModelRunEntries(store, DAY_MS)).toBe(0);
+    expect(store).toHaveProperty(staleModelRun);
+  });
+
   it("matches only explicit model-run uuid session keys", () => {
     expect(
       isGatewayModelRunSessionKey(
@@ -615,6 +640,23 @@ describe("capEntryCount", () => {
     expect(store).toHaveProperty("newest");
     expect(store).toHaveProperty("recent");
     expect(store.oldest).toBeUndefined();
+    expect(store.old).toBeUndefined();
+  });
+
+  it("preserves model-locked harness sessions when capping", () => {
+    const now = Date.now();
+    const lockedKey = "agent:main:harness-owned:locked";
+    const store = makeStore([
+      [lockedKey, { ...makeEntry(now - 10 * DAY_MS), modelSelectionLocked: true }],
+      ["recent", makeEntry(now)],
+      ["old", makeEntry(now - DAY_MS)],
+    ]);
+
+    const evicted = capEntryCount(store, 2);
+
+    expect(evicted).toBe(1);
+    expect(store).toHaveProperty(lockedKey);
+    expect(store).toHaveProperty("recent");
     expect(store.old).toBeUndefined();
   });
 

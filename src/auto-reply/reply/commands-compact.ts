@@ -13,6 +13,7 @@ import {
   OPENAI_PROVIDER_ID,
   resolveContextConfigProviderForRuntime,
 } from "../../agents/openai-routing.js";
+import { resolvePersistedSessionRuntimeId } from "../../agents/session-runtime-compat.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -273,7 +274,10 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     authProfileId: targetSessionEntry.authProfileOverride,
     contextTokenBudget,
     agentHarnessId:
-      targetSessionEntry.sessionId === sessionId ? targetSessionEntry.agentHarnessId : undefined,
+      targetSessionEntry.modelSelectionLocked === true
+        ? resolvePersistedSessionRuntimeId(targetSessionEntry)
+        : targetSessionEntry.agentHarnessId,
+    modelSelectionLocked: targetSessionEntry.modelSelectionLocked === true,
     thinkLevel: params.resolvedThinkLevel ?? (await params.resolveDefaultThinkingLevel()),
     bashElevated: {
       enabled: false,

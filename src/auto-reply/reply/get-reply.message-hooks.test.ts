@@ -2,6 +2,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { logVerbose } from "../../globals.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
+import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../../sessions/agent-harness-session-key.js";
 import type { MsgContext } from "../templating.js";
 import { withFastReplyConfig } from "./get-reply-fast-path.js";
 import {
@@ -23,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   resolveReplyDirectives: vi.fn(),
   handleInlineActions: vi.fn(),
   initSessionState: vi.fn(),
+  resolveReplySessionPreprocessingState: vi.fn(),
 }));
 
 vi.mock("../../globals.js", () => ({
@@ -102,6 +104,7 @@ async function resetMessageHookTestState() {
   mocks.resolveReplyDirectives.mockReset();
   mocks.handleInlineActions.mockReset();
   mocks.initSessionState.mockReset();
+  mocks.resolveReplySessionPreprocessingState.mockReset();
   vi.mocked(resolveDefaultModelMock).mockReset();
   vi.mocked(runPreparedReplyMock).mockReset();
   vi.mocked(stageSandboxMediaMock).mockReset();
@@ -146,6 +149,11 @@ async function resetMessageHookTestState() {
   });
   vi.mocked(runPreparedReplyMock).mockResolvedValue({ text: "ok" });
   vi.mocked(stageSandboxMediaMock).mockResolvedValue({ staged: new Map() });
+  mocks.resolveReplySessionPreprocessingState.mockReturnValue({
+    sessionEntry: undefined,
+    sessionKey: "agent:main:telegram:-100123",
+    storePath: "/tmp/sessions.json",
+  });
   mocks.initSessionState.mockResolvedValue(
     createGetReplySessionState({
       sessionKey: "agent:main:telegram:-100123",
@@ -195,6 +203,175 @@ describe("getReplyFromConfig message hooks", () => {
     expect(preprocessed[3].isGroup).toBe(true);
     expect(preprocessed[3].groupId).toBe("telegram:-100123");
     expect(triggerCount).toBe(2);
+  });
+
+  it("prepares durable session state before media understanding", async () => {
+    const order: string[] = [];
+    mocks.resolveReplySessionPreprocessingState.mockImplementationOnce(() => {
+      order.push("preflight");
+      return {
+        sessionEntry: undefined,
+        sessionKey: "agent:main:telegram:-100123",
+        storePath: "/tmp/sessions.json",
+      };
+    });
+    mocks.initSessionState.mockImplementationOnce(async (...args: unknown[]) => {
+      order.push("session");
+      const { ctx } = args[0] as { ctx: MsgContext };
+      expect(ctx.BodyForAgent).toBe("[Audio]\nTranscript:\nresolved after admission");
+      return createGetReplySessionState({
+        sessionCtx: { ...ctx, BodyStripped: ctx.BodyForAgent },
+        sessionKey: "agent:main:telegram:-100123",
+        sessionScope: "per-chat",
+        isGroup: true,
+      });
+    });
+    mocks.applyMediaUnderstanding.mockImplementationOnce(async (...args: unknown[]) => {
+      order.push("media");
+      const { ctx } = args[0] as { ctx: MsgContext };
+      ctx.Body = "[Audio]\nTranscript:\nresolved after admission";
+      ctx.BodyForAgent = ctx.Body;
+      ctx.Transcript = "resolved after admission";
+      return undefined;
+    });
+
+    await getReplyFromConfig(buildCtx(), undefined, withFastReplyConfig({}));
+
+    expect(order).toEqual(["preflight", "media", "session"]);
+    expect(mocks.resolveReplyDirectives.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        sessionCtx: expect.objectContaining({
+          BodyForAgent: "[Audio]\nTranscript:\nresolved after admission",
+          BodyStripped: "[Audio]\nTranscript:\nresolved after admission",
+          Transcript: "resolved after admission",
+        }),
+      }),
+    );
+  });
+
+  it("skips utility media understanding for a model-locked harness session", async () => {
+    const sessionKey = "agent:main:harness:codex:supervision:locked-media";
+    const sessionEntry = {
+      sessionId: "locked-session",
+      updatedAt: 1,
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+    };
+    mocks.resolveReplySessionPreprocessingState.mockReturnValueOnce({
+      sessionEntry,
+      sessionKey,
+      storePath: "/tmp/sessions.json",
+    });
+    mocks.initSessionState.mockResolvedValueOnce(
+      createGetReplySessionState({
+        sessionCtx: {
+          BodyForAgent: "<media:audio>",
+          SessionKey: sessionKey,
+        },
+        sessionEntry,
+        sessionKey,
+      }),
+    );
+
+    await getReplyFromConfig(
+      buildCtx({ SessionKey: sessionKey }),
+      undefined,
+      withFastReplyConfig({}),
+    );
+
+    expect(mocks.resolveReplySessionPreprocessingState).toHaveBeenCalledOnce();
+    expect(mocks.initSessionState).toHaveBeenCalledOnce();
+    expect(mocks.applyMediaUnderstanding).not.toHaveBeenCalled();
+    expect(mocks.resolveReplyDirectives.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        sessionEntry: expect.objectContaining({
+          agentHarnessId: "codex",
+          modelSelectionLocked: true,
+        }),
+        sessionCtx: expect.objectContaining({
+          BodyForAgent: "<media:audio>",
+          SessionKey: sessionKey,
+        }),
+      }),
+    );
+  });
+
+  it("skips utility link understanding for a model-locked harness session", async () => {
+    const sessionKey = "agent:main:harness:codex:supervision:locked-link";
+    const body = "read https://example.test/page";
+    const sessionEntry = {
+      sessionId: "locked-link-session",
+      updatedAt: 1,
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+    };
+    mocks.resolveReplySessionPreprocessingState.mockReturnValueOnce({
+      sessionEntry,
+      sessionKey,
+      storePath: "/tmp/sessions.json",
+    });
+    mocks.initSessionState.mockResolvedValueOnce(
+      createGetReplySessionState({
+        sessionCtx: { BodyForAgent: body, SessionKey: sessionKey },
+        sessionEntry,
+        sessionKey,
+      }),
+    );
+
+    await getReplyFromConfig(
+      buildCtx({
+        Body: body,
+        BodyForAgent: body,
+        RawBody: body,
+        CommandBody: body,
+        BodyForCommands: body,
+        SessionKey: sessionKey,
+        MediaPath: undefined,
+        MediaUrl: undefined,
+        MediaPaths: undefined,
+        MediaUrls: undefined,
+        MediaTypes: undefined,
+        MediaType: undefined,
+      }),
+      undefined,
+      withFastReplyConfig({}),
+    );
+
+    expect(mocks.resolveReplySessionPreprocessingState).toHaveBeenCalledOnce();
+    expect(mocks.applyLinkUnderstanding).not.toHaveBeenCalled();
+    expect(mocks.initSessionState).toHaveBeenCalledOnce();
+  });
+
+  it("fails closed before link understanding when the reserved session is missing", async () => {
+    const sessionKey = "agent:main:harness:codex:supervision:missing-link";
+    const body = "read https://example.test/page";
+    mocks.resolveReplySessionPreprocessingState.mockImplementationOnce(() => {
+      throw new Error(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
+    });
+
+    await expect(
+      getReplyFromConfig(
+        buildCtx({
+          Body: body,
+          BodyForAgent: body,
+          RawBody: body,
+          CommandBody: body,
+          BodyForCommands: body,
+          SessionKey: sessionKey,
+          MediaPath: undefined,
+          MediaUrl: undefined,
+          MediaPaths: undefined,
+          MediaUrls: undefined,
+          MediaTypes: undefined,
+          MediaType: undefined,
+        }),
+        undefined,
+        withFastReplyConfig({}),
+      ),
+    ).rejects.toThrow(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
+
+    expect(mocks.applyLinkUnderstanding).not.toHaveBeenCalled();
+    expect(mocks.initSessionState).not.toHaveBeenCalled();
   });
 
   it("enriches staged text-only images before reply without switching the reply model", async () => {

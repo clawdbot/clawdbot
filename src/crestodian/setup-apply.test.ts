@@ -285,6 +285,25 @@ describe("applyCrestodianSetup transaction boundaries", () => {
     expect(result.configPath).toBe("/tmp/openclaw.json");
   });
 
+  it("finalizes setup against the source config held by the commit lock", async () => {
+    const sourceConfig = {
+      plugins: { entries: { codex: { config: { supervision: { enabled: false } } } } },
+    } satisfies OpenClawConfig;
+    mocks.state.commitSnapshot = {
+      ...snapshot("probe", mocks.state.commitConfig),
+      sourceConfig,
+    };
+    const finalizeConfig = vi.fn((config: OpenClawConfig, source: OpenClawConfig) => ({
+      ...config,
+      plugins: source.plugins,
+    }));
+
+    await applyCrestodianSetup(baseParams({ expectedConfigHash: "probe", finalizeConfig }));
+
+    expect(finalizeConfig).toHaveBeenCalledWith(expect.any(Object), sourceConfig);
+    expect(mocks.state.persistedConfig?.plugins).toEqual(sourceConfig.plugins);
+  });
+
   it("returns visible post-commit workspace, approval, registry, and service failures", async () => {
     mocks.ensureWorkspace.mockRejectedValueOnce(new Error("workspace exploded"));
     mocks.updateExecApprovals.mockRejectedValueOnce(new Error("approval exploded"));

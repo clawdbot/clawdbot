@@ -578,6 +578,76 @@ describe("Integration: saveSessionStore with pruning", () => {
     await expectPathExists(userOnlyPresentTranscript);
   });
 
+  it("sessions cleanup fix-missing preserves locked header-only harness sessions", async () => {
+    applyEnforcedMaintenanceConfig(mockLoadConfig);
+
+    const now = Date.now();
+    const lockedKey = "agent:main:harness-owned:locked";
+    const lockedTranscript = path.join(testDir, "locked-header-only.jsonl");
+    const removableTranscript = path.join(testDir, "removable-header-only.jsonl");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          [lockedKey]: {
+            sessionId: "locked-header-only",
+            updatedAt: now,
+            agentHarnessId: "fixture-harness",
+            modelSelectionLocked: true,
+          },
+          "removable-header-only": {
+            sessionId: "removable-header-only",
+            updatedAt: now,
+          },
+        } satisfies Record<string, SessionEntry>,
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    await fs.writeFile(
+      lockedTranscript,
+      '{"type":"session","id":"locked-header-only","cwd":"/tmp"}\n',
+      "utf-8",
+    );
+    await fs.writeFile(
+      removableTranscript,
+      '{"type":"session","id":"removable-header-only","cwd":"/tmp"}\n',
+      "utf-8",
+    );
+
+    const dryRun = await runSessionsCleanup({
+      cfg: {},
+      opts: { store: storePath, dryRun: true, enforce: true, fixMissing: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    const preview = dryRun.previewResults[0];
+    expect(preview?.summary.missing).toBe(1);
+    expect(preview?.summary.beforeCount).toBe(2);
+    expect(preview?.summary.afterCount).toBe(1);
+    expect(preview?.missingKeys.has(lockedKey)).toBe(false);
+    expect(preview?.missingKeys.has("removable-header-only")).toBe(true);
+    expect(loadSessionStore(storePath, { skipCache: true })).toHaveProperty(lockedKey);
+
+    const applied = await runSessionsCleanup({
+      cfg: {},
+      opts: { store: storePath, enforce: true, fixMissing: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    expect(applied.appliedSummaries[0]?.missing).toBe(1);
+    expect(applied.appliedSummaries[0]?.afterCount).toBe(1);
+    const persisted = loadSessionStore(storePath, { skipCache: true });
+    expect(persisted[lockedKey]).toMatchObject({
+      sessionId: "locked-header-only",
+      agentHarnessId: "fixture-harness",
+      modelSelectionLocked: true,
+    });
+    expect(persisted["removable-header-only"]).toBeUndefined();
+    await expectPathExists(lockedTranscript);
+  });
+
   it("sessions cleanup repairs stale generated sessionFile metadata before pruning", async () => {
     applyEnforcedMaintenanceConfig(mockLoadConfig);
 

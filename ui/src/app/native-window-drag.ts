@@ -47,3 +47,21 @@ export function beginNativeWindowDrag(event: MouseEvent): void {
   // page still starts a text selection underneath the moving window.
   event.preventDefault();
 }
+
+/**
+ * mousedown handler for scroll containers whose top padding doubles as
+ * titlebar chrome (the chat thread's titlebar band): presses on the bare
+ * container background inside that padding start a native window drag.
+ * Content scrolled under the band hits its own elements, not the container,
+ * so selection and clicks there keep default behavior.
+ */
+export function beginNativeWindowDragFromTopInset(event: MouseEvent): void {
+  if (event.target !== event.currentTarget || !(event.currentTarget instanceof HTMLElement)) {
+    return;
+  }
+  const inset = Number.parseFloat(getComputedStyle(event.currentTarget).paddingTop);
+  if (!Number.isFinite(inset) || event.offsetY > inset) {
+    return;
+  }
+  beginNativeWindowDrag(event);
+}

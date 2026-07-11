@@ -101,6 +101,29 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
     );
   });
 
+  it("loads a session-pinned Codex harness for an unrelated outer provider", async () => {
+    await ensureSelectedAgentHarnessPlugin({
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+      agentHarnessId: "codex",
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(mocks.resolveManifestActivationPlan).toHaveBeenCalledWith({
+      trigger: { kind: "agentHarness", runtime: "codex" },
+      config: undefined,
+      workspaceDir: "/tmp/workspace",
+      requireExplicitManifestOwnerTrust: true,
+    });
+    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: "all",
+        workspaceDir: "/tmp/workspace",
+        onlyPluginIds: expect.arrayContaining(["codex"]),
+      }),
+    );
+  });
+
   it("loads Codex and the provider owner for the implicit official OpenAI runtime before selection", async () => {
     await ensureSelectedAgentHarnessPlugin({
       provider: "openai",

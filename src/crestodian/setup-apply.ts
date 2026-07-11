@@ -30,6 +30,8 @@ export type CrestodianSetupApplyParams = {
   expectedConfigHash?: string | null;
   /** Provider-auth config produced in the isolated manual-key flow. */
   configPatch?: unknown;
+  /** Success-gated final normalization against the config held by the write lock. */
+  finalizeConfig?: (config: OpenClawConfig, sourceConfig: OpenClawConfig) => OpenClawConfig;
   /** Plugin whose enablement belongs to the successful setup transaction. */
   enablePluginId?: string;
   /** Refresh an installed plugin after its success-gated enablement commits. */
@@ -173,6 +175,7 @@ export async function applyCrestodianSetup(
     expectedModelRef,
     expectedConfigHash,
     configPatch,
+    finalizeConfig,
     enablePluginId,
     refreshPluginRegistry,
     assertCommitPreconditions,
@@ -307,8 +310,9 @@ export async function applyCrestodianSetup(
       // ordered after setup, exactly like a credential change after return.
       // Never hold the synchronous SQLite transaction across async config I/O.
       assertCommitPreconditions?.();
+      const merged = mergeWizardConfigOntoLatest(currentConfig, baseConfig, nextConfig);
       return {
-        nextConfig: mergeWizardConfigOntoLatest(currentConfig, baseConfig, nextConfig),
+        nextConfig: finalizeConfig ? finalizeConfig(merged, context.snapshot.sourceConfig) : merged,
       };
     },
   });

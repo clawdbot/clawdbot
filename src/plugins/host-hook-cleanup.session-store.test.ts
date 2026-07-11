@@ -175,4 +175,123 @@ describe("plugin host cleanup session stores", () => {
     expect(secondStore["agent:b:other"]?.pluginExtensions).toBeUndefined();
     expect(secondStore["agent:b:other"]?.updatedAt).toBeGreaterThan(beforeUpdatedAt);
   });
+
+  it("preserves locked sessions for every harness owned by a disabled plugin", async () => {
+    stateDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-cleanup-locked-harness-"),
+    );
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    const storePath = path.join(stateDir, "sessions.json");
+    const updatedAt = 100;
+    const registry = createEmptyPluginRegistry();
+    for (const harnessId of ["fixture-harness-a", "fixture-harness-b"]) {
+      registry.agentHarnesses.push({
+        pluginId: "fixture-plugin",
+        source: "test",
+        harness: {
+          id: harnessId,
+          label: harnessId,
+          supports: () => ({ supported: true }),
+          runAttempt: async () => {
+            throw new Error("unused test harness");
+          },
+        },
+      });
+    }
+    registry.agentHarnesses.push({
+      pluginId: "other-plugin",
+      source: "test",
+      harness: {
+        id: "other-harness",
+        label: "other-harness",
+        supports: () => ({ supported: true }),
+        runAttempt: async () => {
+          throw new Error("unused test harness");
+        },
+      },
+    });
+    await saveSessionStore(
+      storePath,
+      {
+        "agent:main:harness-a:locked": {
+          sessionId: "locked-session-a",
+          updatedAt,
+          agentHarnessId: "fixture-harness-a",
+          modelSelectionLocked: true,
+          pluginExtensions: {
+            "fixture-plugin": {
+              supervision: {
+                sourceThreadId: "native-thread-a",
+                modelLocked: true,
+              },
+            },
+          },
+        } satisfies SessionEntry,
+        "agent:main:harness-b:locked": {
+          sessionId: "locked-session-b",
+          updatedAt,
+          agentHarnessId: "fixture-harness-b",
+          modelSelectionLocked: true,
+          pluginExtensions: {
+            "fixture-plugin": {
+              supervision: {
+                sourceThreadId: "native-thread-b",
+                modelLocked: true,
+              },
+            },
+          },
+        } satisfies SessionEntry,
+        "agent:main:other-harness:locked": {
+          sessionId: "other-locked-session",
+          updatedAt,
+          agentHarnessId: "other-harness",
+          modelSelectionLocked: true,
+          pluginExtensions: {
+            "fixture-plugin": { transient: true },
+          },
+        } satisfies SessionEntry,
+        "agent:main:ordinary": {
+          sessionId: "ordinary-session",
+          updatedAt,
+          pluginExtensions: {
+            "fixture-plugin": { transient: true },
+          },
+        } satisfies SessionEntry,
+      },
+      { skipMaintenance: true },
+    );
+
+    const result = await runPluginHostCleanup({
+      cfg: { session: { store: storePath } },
+      registry,
+      pluginId: "fixture-plugin",
+      reason: "disable",
+      sessionStorePaths: [storePath],
+    });
+
+    expect(result).toEqual({ cleanupCount: 2, failures: [] });
+    const store = loadSessionStore(storePath, { skipCache: true });
+    expect(store["agent:main:harness-a:locked"]).toMatchObject({
+      updatedAt,
+      agentHarnessId: "fixture-harness-a",
+      modelSelectionLocked: true,
+      pluginExtensions: {
+        "fixture-plugin": {
+          supervision: { sourceThreadId: "native-thread-a", modelLocked: true },
+        },
+      },
+    });
+    expect(store["agent:main:harness-b:locked"]).toMatchObject({
+      updatedAt,
+      agentHarnessId: "fixture-harness-b",
+      modelSelectionLocked: true,
+      pluginExtensions: {
+        "fixture-plugin": {
+          supervision: { sourceThreadId: "native-thread-b", modelLocked: true },
+        },
+      },
+    });
+    expect(store["agent:main:other-harness:locked"]?.pluginExtensions).toBeUndefined();
+    expect(store["agent:main:ordinary"]?.pluginExtensions).toBeUndefined();
+  });
 });

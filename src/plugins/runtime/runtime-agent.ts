@@ -1,4 +1,5 @@
 // Runtime agent helpers resolve agent-scoped directories and config for plugin execution.
+import { isDeepStrictEqual } from "node:util";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { resolveAgentIdentity } from "../../agents/identity.js";
@@ -17,10 +18,12 @@ import { getRuntimeConfig } from "../../config/config.js";
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
 import { resolveSessionFilePath, resolveStorePath } from "../../config/sessions/paths.js";
 import {
+  deleteSessionEntryLifecycle,
   listSessionEntries as listAccessorSessionEntries,
   loadSessionEntry,
   patchSessionEntry as patchAccessorSessionEntry,
   replaceSessionEntry,
+  rollbackAgentHarnessSessionEntryLifecycle,
   type SessionAccessScope,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
@@ -32,7 +35,11 @@ import {
   type ResolvedSessionMaintenanceConfigInput,
 } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import {
+  beginSessionWorkAdmission,
+  isSessionWorkAdmissionActive,
+  runExclusiveSessionLifecycleMutation,
+} from "../../sessions/session-lifecycle-admission.js";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { defineCachedValue } from "./runtime-cache.js";
 import type { PluginRuntime } from "./types.js";
@@ -164,6 +171,211 @@ async function upsertSessionEntry(params: RuntimeUpsertSessionEntryParams): Prom
   await replaceSessionEntry(toSessionAccessScope(params), params.entry);
 }
 
+async function createSessionEntry(
+  params: Parameters<PluginRuntime["agent"]["session"]["createSessionEntry"]>[0],
+): Promise<Awaited<ReturnType<PluginRuntime["agent"]["session"]["createSessionEntry"]>>> {
+  // Session creation stays behind the canonical Gateway lifecycle boundary while
+  // keeping that heavier runtime out of plugin discovery and cold startup.
+  const [{ createGatewaySession }, { resolveGatewaySessionStoreTarget }] = await Promise.all([
+    import("../../gateway/session-create-service.js"),
+    import("../../gateway/session-utils.js"),
+  ]);
+  type CreatedContext = Parameters<
+    NonNullable<Parameters<typeof createGatewaySession>[0]["afterCreate"]>
+  >[0];
+  const target = resolveGatewaySessionStoreTarget({
+    cfg: params.cfg,
+    key: params.key,
+    ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
+  });
+  const identities = new Set([target.canonicalKey, ...target.storeKeys]);
+  return await runExclusiveSessionLifecycleMutation({
+    scope: target.storePath,
+    identities,
+    prepare: async () => {
+      // Activate the mutation fence before checking admission state. New work
+      // then queues, while pre-existing work makes creation fail without interruption.
+      if (isSessionWorkAdmissionActive(target.storePath, identities)) {
+        throw new Error(`Session "${target.canonicalKey}" is still active; retry creation later.`);
+      }
+    },
+    run: async () => {
+      const afterCreate = params.afterCreate;
+      let callbackContext: CreatedContext | undefined;
+      let finalEntryPatch: { pluginExtensions: SessionEntry["pluginExtensions"] } | undefined;
+      let rollbackExpectedEntry: SessionEntry | undefined;
+      const runAfterCreate = async (context: CreatedContext): Promise<void> => {
+        callbackContext = context;
+        rollbackExpectedEntry = structuredClone(context.entry);
+        if (!afterCreate) {
+          return;
+        }
+        const finalPatch = await afterCreate({
+          key: context.key,
+          agentId: context.agentId,
+          sessionId: context.entry.sessionId,
+          entry: structuredClone(context.entry),
+        });
+        if (finalPatch === undefined) {
+          return;
+        }
+        const patchKeys = Object.keys(finalPatch);
+        if (patchKeys.length !== 1 || patchKeys[0] !== "pluginExtensions") {
+          throw new Error("session creation final patch may only contain pluginExtensions");
+        }
+        finalEntryPatch = {
+          pluginExtensions: structuredClone(finalPatch.pluginExtensions),
+        };
+      };
+      try {
+        const matchingEntry =
+          params.recoverMatchingInitialEntry === true
+            ? getSessionEntry({
+                sessionKey: target.canonicalKey,
+                storePath: target.storePath,
+                readConsistency: "latest",
+              })
+            : undefined;
+        let recovered = false;
+        let created: { key: string; agentId: string; entry: SessionEntry };
+        if (matchingEntry) {
+          const expectedSpawnedCwd = params.spawnedCwd?.trim() || undefined;
+          const initialEntryMatches =
+            matchingEntry.initializationPending === true &&
+            matchingEntry.agentHarnessId === params.initialEntry.agentHarnessId &&
+            matchingEntry.modelSelectionLocked === params.initialEntry.modelSelectionLocked &&
+            matchingEntry.spawnedCwd === expectedSpawnedCwd &&
+            isDeepStrictEqual(matchingEntry.pluginExtensions, params.initialEntry.pluginExtensions);
+          if (!initialEntryMatches) {
+            throw new Error(
+              `Session "${target.canonicalKey}" does not match its trusted recovery state.`,
+            );
+          }
+          if (!afterCreate) {
+            throw new Error("session creation recovery requires an initializer");
+          }
+          recovered = true;
+          created = {
+            key: target.canonicalKey,
+            agentId: target.agentId,
+            entry: matchingEntry,
+          };
+          await runAfterCreate({
+            ...created,
+            storePath: target.storePath,
+          });
+        } else {
+          const result = await createGatewaySession({
+            cfg: params.cfg,
+            key: params.key,
+            ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
+            ...(params.label !== undefined ? { label: params.label } : {}),
+            ...(params.spawnedCwd !== undefined ? { spawnedCwd: params.spawnedCwd } : {}),
+            initialEntry: afterCreate
+              ? { ...params.initialEntry, initializationPending: true }
+              : params.initialEntry,
+            authorizedAgentHarnessId: params.initialEntry.agentHarnessId,
+            commandSource: "plugin-runtime",
+            ...(afterCreate ? { afterCreate: runAfterCreate } : {}),
+          });
+          if (!result.ok) {
+            throw new Error(result.error.message);
+          }
+          created = result;
+        }
+        if (recovered && !finalEntryPatch) {
+          throw new Error("session creation recovery requires a final patch");
+        }
+        let finalEntry = created.entry;
+        if (afterCreate) {
+          const patch: Partial<SessionEntry> = {
+            ...finalEntryPatch,
+            initializationPending: undefined,
+          };
+          const expectedEntry = rollbackExpectedEntry;
+          if (!callbackContext || !expectedEntry) {
+            throw new Error("session creation final patch is missing its created entry");
+          }
+          const createdContext = callbackContext;
+          const finalized = await patchAccessorSessionEntry(
+            {
+              sessionKey: createdContext.key,
+              storePath: createdContext.storePath,
+            },
+            (currentEntry) => {
+              if (JSON.stringify(currentEntry) !== JSON.stringify(expectedEntry)) {
+                throw new Error(
+                  `created session ${createdContext.key} changed before finalization`,
+                );
+              }
+              return patch;
+            },
+            {
+              preserveActivity: true,
+              requireWriteSuccess: true,
+            },
+          );
+          if (!finalized) {
+            throw new Error(
+              `created session ${createdContext.key} disappeared before finalization`,
+            );
+          }
+          finalEntry = finalized;
+          // Any failure after persistence must compare rollback against the
+          // finalized snapshot, not the now-stale initializing entry.
+          rollbackExpectedEntry = structuredClone(finalized);
+        }
+        return {
+          key: created.key,
+          agentId: created.agentId,
+          sessionId: finalEntry.sessionId,
+          entry: finalEntry,
+        };
+      } catch (error) {
+        if (!callbackContext) {
+          throw error;
+        }
+        try {
+          // Delete only the untouched row created for this callback. A concurrent
+          // claimant changes the snapshot and must survive failed initialization.
+          const expectedEntry = rollbackExpectedEntry ?? callbackContext.entry;
+          const rollbackParams = {
+            agentId: callbackContext.agentId,
+            archiveTranscript: true,
+            expectedEntry,
+            expectedSessionId: callbackContext.entry.sessionId,
+            expectedUpdatedAt: expectedEntry.updatedAt,
+            storePath: callbackContext.storePath,
+            target: {
+              canonicalKey: callbackContext.key,
+              storeKeys: [callbackContext.key],
+            },
+          };
+          // Locked rows require the narrow harness rollback capability. Unlocked
+          // initializers stay on the ordinary guarded lifecycle deletion path.
+          const rolledBack =
+            expectedEntry.modelSelectionLocked === true
+              ? await rollbackAgentHarnessSessionEntryLifecycle(rollbackParams)
+              : await deleteSessionEntryLifecycle(rollbackParams);
+          if (!rolledBack.deleted) {
+            throw new Error(`created session ${callbackContext.key} changed before rollback`, {
+              cause: error,
+            });
+          }
+        } catch (rollbackError) {
+          const aggregateError = new AggregateError(
+            [error, rollbackError],
+            `Session initialization failed and guarded rollback did not complete for ${callbackContext.key}.`,
+            { cause: rollbackError },
+          );
+          throw aggregateError;
+        }
+        throw error;
+      }
+    },
+  });
+}
+
 async function runWithSessionWorkAdmission<T>(
   params: { storePath: string; sessionKey: string; signal?: AbortSignal },
   run: (signal: AbortSignal) => Promise<T>,
@@ -262,6 +474,7 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
   );
   defineCachedValue(agentRuntime, "session", () => ({
     resolveStorePath,
+    createSessionEntry,
     getSessionEntry,
     listSessionEntries,
     patchSessionEntry,

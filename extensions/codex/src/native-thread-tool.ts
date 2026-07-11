@@ -8,15 +8,29 @@ import {
   type AnyAgentTool,
   type PluginRuntime,
 } from "openclaw/plugin-sdk/core";
+import {
+  isModelSelectionLocked,
+  ModelSelectionLockedError,
+} from "openclaw/plugin-sdk/model-session-runtime";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { Type } from "typebox";
+import { resolveCodexBindingAppServerConnection } from "./app-server/binding-connection.js";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
-import { readCodexPluginConfig } from "./app-server/config.js";
-import { CODEX_INTERACTIVE_THREAD_SOURCE_KINDS, isJsonObject } from "./app-server/protocol.js";
 import {
+  readCodexPluginConfig,
+  resolveCodexSupervisionAppServerRuntimeOptions,
+} from "./app-server/config.js";
+import {
+  CODEX_INTERACTIVE_THREAD_SOURCE_KINDS,
+  isJsonObject,
+  type JsonValue,
+} from "./app-server/protocol.js";
+import {
+  assertCodexBindingMayBeReplaced,
   sessionBindingIdentity,
   type CodexAppServerBindingStore,
 } from "./app-server/session-binding.js";
+import { assertCodexArchiveDescendantsUnowned } from "./app-server/thread-archive-guard.js";
 import { codexControlRequest, type CodexControlRequestOptions } from "./command-rpc.js";
 
 const ListParamsSchema = Type.Object(
@@ -117,7 +131,7 @@ function readLimit(value: unknown): number | undefined {
 function resolveToolSession(
   context: OpenClawPluginToolContext,
   runtime: PluginRuntime,
-): { sessionId: string; sessionFile: string } | undefined {
+): { sessionId: string; sessionFile: string; modelSelectionLocked: boolean } | undefined {
   const sessionKey = context.sessionKey?.trim();
   if (!sessionKey) {
     return undefined;
@@ -140,6 +154,7 @@ function resolveToolSession(
       agentId: context.agentId,
       sessionsDir: path.dirname(storePath),
     }),
+    modelSelectionLocked: isModelSelectionLocked(entry),
   };
 }
 
@@ -154,50 +169,140 @@ function readThreadStatusType(value: unknown): string | undefined {
   return typeof value.thread.status.type === "string" ? value.thread.status.type : undefined;
 }
 
-/** Builds the native Codex thread tool only for owner runs in shared-user-home mode. */
+function assertThreadMayBeArchived(value: unknown, expectedThreadId: string): void {
+  if (!isJsonObject(value) || !isJsonObject(value.thread)) {
+    throw new Error("Codex app-server returned an invalid thread/read response");
+  }
+  if (value.thread.id !== expectedThreadId) {
+    throw new Error("Codex app-server returned a different thread than requested");
+  }
+  const status = readThreadStatusType(value);
+  if (status === "active") {
+    throw new Error("cannot archive an active Codex thread; wait for its turn to finish");
+  }
+  if (status !== "idle" && status !== "notLoaded") {
+    throw new Error("cannot verify that the Codex thread is idle; refusing to archive");
+  }
+}
+
+function assertThreadMayBeForked(value: unknown, expectedThreadId: string): void {
+  if (!isJsonObject(value) || !isJsonObject(value.thread)) {
+    throw new Error("Codex app-server returned an invalid thread/read response");
+  }
+  if (value.thread.id !== expectedThreadId) {
+    throw new Error("Codex app-server returned a different thread than requested");
+  }
+  const status = readThreadStatusType(value);
+  if (status !== "idle" && status !== "notLoaded") {
+    throw new Error("cannot fork a Codex thread unless it is idle or not loaded");
+  }
+}
+
+function redactNativeThreadTranscriptFields(value: JsonValue): JsonValue {
+  if (!isJsonObject(value)) {
+    return value;
+  }
+  const redacted = { ...value };
+  delete redacted.preview;
+  delete redacted.turns;
+  return redacted;
+}
+
+function redactNativeThreadResponse(value: unknown): unknown {
+  if (!isJsonObject(value)) {
+    return value;
+  }
+  const redacted = { ...value };
+  if (Array.isArray(redacted.data)) {
+    redacted.data = redacted.data.map(redactNativeThreadTranscriptFields);
+  }
+  if (isJsonObject(redacted.thread)) {
+    redacted.thread = redactNativeThreadTranscriptFields(redacted.thread);
+  }
+  return redacted;
+}
+
+/** Builds the native Codex thread tool only for owner runs with native-home access. */
 export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAgentTool | null {
   if (options.context.senderIsOwner !== true) {
     return null;
   }
-  if (readCodexPluginConfig(options.getPluginConfig()).appServer?.homeScope !== "user") {
+  const configured = readCodexPluginConfig(options.getPluginConfig());
+  if (configured.appServer?.homeScope !== "user" && configured.supervision?.enabled !== true) {
     return null;
   }
   const request = options.request ?? codexControlRequest;
-  const requestOptions = (): CodexControlRequestOptions => ({
+  const runtimeConfig = () =>
+    options.context.getRuntimeConfig?.() ?? options.context.runtimeConfig ?? options.context.config;
+  const baseRequestOptions = (): CodexControlRequestOptions => ({
     agentDir: options.context.agentDir,
-    config:
-      options.context.getRuntimeConfig?.() ??
-      options.context.runtimeConfig ??
-      options.context.config,
+    config: runtimeConfig(),
     sessionId: options.context.sessionId,
     sessionKey: options.context.sessionKey,
   });
   const currentSession = () => resolveToolSession(options.context, options.runtime);
-  const currentIdentity = (sessionId: string) => {
-    return sessionBindingIdentity({
+  const currentIdentity = (sessionId: string) =>
+    sessionBindingIdentity({
       sessionId,
       sessionKey: options.context.sessionKey,
       agentId: options.context.agentId,
-      config: requestOptions().config,
+      config: runtimeConfig(),
     });
-  };
   const currentBinding = async (session: ReturnType<typeof currentSession>) =>
     session ? await options.bindingStore.read(currentIdentity(session.sessionId)) : undefined;
+  const requestOptions = async (pluginConfig: unknown): Promise<CodexControlRequestOptions> => {
+    const plugin = readCodexPluginConfig(pluginConfig);
+    const session = currentSession();
+    const binding = await currentBinding(session);
+    if (binding?.connectionScope === "supervision") {
+      const connection = resolveCodexBindingAppServerConnection({ binding, pluginConfig });
+      return {
+        ...baseRequestOptions(),
+        startOptions: connection.appServer.start,
+        authProfileId: connection.clientAuthProfileId,
+      };
+    }
+    if (plugin.appServer?.homeScope === "user") {
+      const connection = resolveCodexBindingAppServerConnection({ binding, pluginConfig });
+      return {
+        ...baseRequestOptions(),
+        startOptions: connection.appServer.start,
+        authProfileId: null,
+      };
+    }
+    if (plugin.supervision?.enabled !== true) {
+      throw new Error("Codex native thread access is disabled for this run.");
+    }
+    return {
+      ...baseRequestOptions(),
+      startOptions: resolveCodexSupervisionAppServerRuntimeOptions({ pluginConfig }).start,
+      authProfileId: null,
+    };
+  };
 
   return {
     name: "codex_threads",
     label: "Codex Threads",
     description:
-      "List, read, fork, rename, archive, or restore native Codex threads. Fork to continue a thread safely across Codex clients; do not resume the same thread from two clients.",
+      "List and inspect native Codex threads. When supervision is enabled, raw transcript reads and every mutation require their matching supervision policy option.",
     parameters: CodexThreadsParamsSchema,
     async execute(_toolCallId, rawParams) {
       const params = asRecord(rawParams);
       const action = readStringParam(params, "action", { required: true, label: "action" });
       const pluginConfig = options.getPluginConfig();
+      const plugin = readCodexPluginConfig(pluginConfig);
+      const supervision = plugin.supervision;
+      const mayReadRawTranscripts =
+        supervision?.enabled !== true || supervision.allowRawTranscripts === true;
 
       if (action === "list") {
         const cursor = readStringParam(params, "cursor");
         const searchTerm = readStringParam(params, "search");
+        if (searchTerm && !mayReadRawTranscripts) {
+          throw new Error(
+            "Codex native thread search is disabled while raw transcript access is disabled.",
+          );
+        }
         const response = await request(
           pluginConfig,
           CODEX_CONTROL_METHODS.listThreads,
@@ -211,20 +316,33 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
             ...(cursor ? { cursor } : {}),
             ...(searchTerm ? { searchTerm } : {}),
           },
-          requestOptions(),
+          await requestOptions(pluginConfig),
         );
-        return jsonResult(response);
+        return jsonResult(mayReadRawTranscripts ? response : redactNativeThreadResponse(response));
       }
 
       const threadId = readThreadId(params);
       if (action === "read") {
+        const includeTurns = readBoolean(params.include_turns);
+        if (includeTurns && !mayReadRawTranscripts) {
+          throw new Error(
+            "Codex raw transcript reads are disabled for this codex plugin supervision config.",
+          );
+        }
         const response = await request(
           pluginConfig,
           CODEX_CONTROL_METHODS.readThread,
-          { threadId, includeTurns: readBoolean(params.include_turns) },
-          requestOptions(),
+          { threadId, includeTurns },
+          await requestOptions(pluginConfig),
         );
-        return jsonResult(response);
+        return jsonResult(mayReadRawTranscripts ? response : redactNativeThreadResponse(response));
+      }
+      const isMutation =
+        action === "fork" || action === "rename" || action === "archive" || action === "unarchive";
+      if (isMutation && supervision?.enabled === true && supervision.allowWriteControls !== true) {
+        throw new Error(
+          "Codex native thread mutations are disabled for this codex plugin supervision config.",
+        );
       }
       if (action === "rename") {
         const name = readStringParam(params, "name", { required: true, label: "name" });
@@ -232,7 +350,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
           pluginConfig,
           CODEX_CONTROL_METHODS.renameThread,
           { threadId, name },
-          requestOptions(),
+          await requestOptions(pluginConfig),
         );
         return jsonResult({ action, threadId, name });
       }
@@ -241,9 +359,9 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
           pluginConfig,
           CODEX_CONTROL_METHODS.unarchiveThread,
           { threadId },
-          requestOptions(),
+          await requestOptions(pluginConfig),
         );
-        return jsonResult(response);
+        return jsonResult(mayReadRawTranscripts ? response : redactNativeThreadResponse(response));
       }
 
       const session = currentSession();
@@ -252,29 +370,67 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
         if (params.confirm !== true) {
           throw new Error("confirm=true is required to archive a native Codex thread");
         }
-        if (binding?.threadId === threadId) {
+        if (!session) {
+          throw new Error("cannot safely archive a native Codex thread without a session identity");
+        }
+        const identity = currentIdentity(session.sessionId);
+        await options.bindingStore.withThreadArchiveFence(async () => {
+          const archivedBinding = await currentBinding(session);
+          if (archivedBinding?.threadId === threadId) {
+            // Clearing the binding detaches the harness-owned Codex thread. The session lock keeps
+            // both that thread and App Server-selected model routing fixed.
+            if (session.modelSelectionLocked) {
+              throw new ModelSelectionLockedError();
+            }
+            assertCodexBindingMayBeReplaced(archivedBinding, "archiving its bound native thread");
+          }
+          // App Server status is process-local, and archive is a separate RPC. This read blocks
+          // known active/invalid state; `confirm` owns the remaining cross-client race.
           const current = await request(
             pluginConfig,
             CODEX_CONTROL_METHODS.readThread,
             { threadId, includeTurns: false },
-            requestOptions(),
+            await requestOptions(pluginConfig),
           );
-          if (readThreadStatusType(current) === "active") {
-            throw new Error("cannot archive the Codex thread active in this OpenClaw session");
+          assertThreadMayBeArchived(current, threadId);
+          if (await options.bindingStore.hasOtherThreadOwner(threadId, identity)) {
+            throw new Error(
+              "cannot archive a native Codex thread owned by another OpenClaw session",
+            );
           }
-        }
-        await request(
-          pluginConfig,
-          CODEX_CONTROL_METHODS.archiveThread,
-          { threadId },
-          requestOptions(),
-        );
-        if (session && binding?.threadId === threadId) {
-          await options.bindingStore.mutate(currentIdentity(session.sessionId), {
-            kind: "clear",
+          await assertCodexArchiveDescendantsUnowned({
+            bindingStore: options.bindingStore,
             threadId,
+            listPage: async (listParams) =>
+              await request(
+                pluginConfig,
+                CODEX_CONTROL_METHODS.listThreads,
+                listParams,
+                await requestOptions(pluginConfig),
+              ),
+            assertDescendantIdle: async (descendantThreadId) => {
+              const descendant = await request(
+                pluginConfig,
+                CODEX_CONTROL_METHODS.readThread,
+                { threadId: descendantThreadId, includeTurns: false },
+                await requestOptions(pluginConfig),
+              );
+              assertThreadMayBeArchived(descendant, descendantThreadId);
+            },
           });
-        }
+          await request(
+            pluginConfig,
+            CODEX_CONTROL_METHODS.archiveThread,
+            { threadId },
+            await requestOptions(pluginConfig),
+          );
+          if (archivedBinding?.threadId === threadId) {
+            await options.bindingStore.mutate(identity, {
+              kind: "clear",
+              threadId,
+            });
+          }
+        });
         return jsonResult({ action, threadId });
       }
       if (action !== "fork") {
@@ -285,22 +441,32 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
       if (attach && !session) {
         throw new Error("cannot attach a Codex fork without an active OpenClaw session");
       }
-      if (attach && binding?.threadId === threadId) {
+      if (attach && session?.modelSelectionLocked) {
+        throw new ModelSelectionLockedError();
+      }
+      const usesSupervisionConnection =
+        binding?.connectionScope === "supervision" ||
+        (plugin.appServer?.homeScope !== "user" && supervision?.enabled === true);
+      if (attach && usesSupervisionConnection) {
+        throw new Error("Supervised Codex forks must stay detached; set attach=false.");
+      }
+      if (attach) {
+        assertCodexBindingMayBeReplaced(binding, "attaching a different native fork");
+        // Codex can snapshot an active source as interrupted. Attached forks require a known-safe
+        // local status and the exact source identity before App Server may create that snapshot.
         const current = await request(
           pluginConfig,
           CODEX_CONTROL_METHODS.readThread,
           { threadId, includeTurns: false },
-          requestOptions(),
+          await requestOptions(pluginConfig),
         );
-        if (readThreadStatusType(current) === "active") {
-          throw new Error("cannot replace the Codex thread active in this OpenClaw turn");
-        }
+        assertThreadMayBeForked(current, threadId);
       }
       const response = await request(
         pluginConfig,
         CODEX_CONTROL_METHODS.forkThread,
-        { threadId, threadSource: "user" },
-        requestOptions(),
+        { threadId, threadSource: "user", excludeTurns: true },
+        await requestOptions(pluginConfig),
       );
       if (!isJsonObject(response) || !isJsonObject(response.thread)) {
         throw new Error("Codex app-server returned an invalid thread/fork response");
@@ -331,12 +497,13 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
           throw new Error("Codex session binding changed before the fork could be attached");
         }
       }
-      return jsonResult({
+      const result = {
         action,
         sourceThreadId: threadId,
         thread: response.thread,
         attached: attach,
-      });
+      };
+      return jsonResult(mayReadRawTranscripts ? result : redactNativeThreadResponse(result));
     },
   };
 }

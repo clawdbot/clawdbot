@@ -214,6 +214,11 @@ export const fr: TranslationMap = {
     gateway: "Gateway · local",
     folder: "Dossier",
     folderPlaceholder: "Espace de travail de l’agent",
+    browse: "Parcourir les dossiers",
+    browserUp: "Dossier parent",
+    browserUse: "Utiliser ce dossier",
+    browserEmpty: "Aucun sous-dossier",
+    browserLoadFailed: "Impossible de répertorier ce dossier.",
     worktree: "Worktree",
     worktreeUnavailable: "L’espace de travail de l’agent n’est pas un checkout git",
     baseBranch: "Branche de base",
@@ -953,8 +958,8 @@ export const fr: TranslationMap = {
   codexSessions: {
     eyebrow: "Parc Codex",
     title: "Sessions sur tous vos ordinateurs",
-    subtitle:
-      "Vue en lecture seule des sessions Codex sur ce Gateway et chaque ordinateur connecté qui les partage.",
+    interactiveSubtitle:
+      "Démarrez une branche de Chat dont la sélection du modèle reste sous le contrôle de Codex App Server, archivez les sessions locales éligibles avec confirmation et consultez les sessions d’ordinateurs appairés.",
     summaryLabel: "Résumé des sessions Codex",
     summary: {
       sessions: "sessions",
@@ -963,11 +968,6 @@ export const fr: TranslationMap = {
     },
     searchLabel: "Rechercher des sessions Codex",
     searchPlaceholder: "Rechercher dans les titres de session",
-    scopeLabel: "Filtre d’archivage des sessions",
-    scope: {
-      active: "Actives",
-      archived: "Archivées",
-    },
     refresh: "Actualiser",
     disconnected: "Reconnectez-vous au Gateway pour actualiser les sessions Codex.",
     partial: "Hôtes indisponibles : {count}. Les autres hôtes restent disponibles.",
@@ -976,11 +976,33 @@ export const fr: TranslationMap = {
     loadingMore: "Chargement…",
     untitled: "Session Codex sans titre",
     threadId: "Fil",
+    actions: {
+      continue: "Continuer",
+      continueAsBranch: "Continuer en tant que branche",
+      openChat: "Ouvrir Chat",
+      continuing: "Continuation…",
+      archive: "Archiver",
+      continueLabel: "Continuer {title}",
+      continueAsBranchLabel: "Continuer {title} en tant que branche",
+      openChatLabel: "Ouvrir Chat pour {title}",
+      continueAsBranchHint:
+        "Créez un Chat à partir de l’historique visible persistant. Lors de votre premier message, Codex App Server sélectionne le modèle et le fournisseur pour le nouveau fil de harness. La sélection ultérieure reste contrôlée par Codex ; OpenClaw ne substitue jamais un autre runtime, modèle ou fallback. La source reste inchangée, et le travail en cours peut être absent.",
+      archiveLabel: "Archiver {title}",
+      archiveConfirmation:
+        "Archiver {title} et tous les descendants générés ? Confirmez qu’aucun autre client Codex ni runner OpenClaw ne les utilise. L’archivage pendant qu’un autre runner est actif peut interrompre son travail.",
+      active: "Les sessions actives ne peuvent pas démarrer une branche ni être archivées.",
+      archiveActivityUnknownHint:
+        "L’activité est inconnue, car le statut est local au processus. Archivez uniquement après avoir confirmé qu’aucun autre client Codex ni runner n’utilise cette session.",
+      statusUnavailable: "Cette session Codex ne peut pas être gérée dans son état actuel.",
+      hostOffline: "Reconnectez cet ordinateur avant de gérer ses sessions Codex.",
+      gatewayOffline: "Reconnectez-vous au gateway avant de gérer les sessions Codex.",
+      remoteReadOnly: "Les sessions d’ordinateurs jumelés sont en lecture seule pour le moment.",
+    },
     status: {
       active: "Actives",
       idle: "Inactive",
       archived: "Archivée",
-      notLoaded: "Stockée",
+      storedActivityUnknown: "Stockée / activité inconnue",
       systemError: "Erreur système",
       unknown: "Inconnu",
     },
@@ -994,11 +1016,10 @@ export const fr: TranslationMap = {
     },
     empty: {
       title: "Aucun hôte Codex trouvé",
-      subtitle:
-        "Activez le partage des sessions Codex sur le Gateway ou un ordinateur jumelé, puis actualisez cette vue.",
+      supervisionSubtitle:
+        "Activez la supervision Codex sur le gateway ou un ordinateur jumelé, puis actualisez cette vue.",
       search: "Aucune session de cet hôte ne correspond à votre recherche.",
-      active: "Aucune session active sur cet hôte.",
-      archived: "Aucune session archivée sur cet hôte.",
+      nonArchived: "Aucune session non archivée sur cet hôte.",
     },
   },
   logbook: {
@@ -2128,6 +2149,11 @@ export const fr: TranslationMap = {
       clearSessionSearch: "Effacer la recherche de sessions",
       loadMoreSessions: "Charger plus de sessions",
       model: "Chat model",
+      modelSection: "Modèle",
+      modelLocked: "Verrouillé",
+      modelLockedLabel: "Sélection du modèle contrôlée pour cette session",
+      lockedSessionModel: "Modèle de session",
+      nativeCodexModel: "Modèle contrôlé par Codex",
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {
@@ -2192,6 +2218,26 @@ export const fr: TranslationMap = {
       finished: "Terminées ({count})",
       stopTask: "Arrêter {title}",
       viewTranscript: "Afficher la transcription",
+    },
+    sessionDiff: {
+      title: "Modifications",
+      show: "Afficher les modifications de la session",
+      refresh: "Actualiser les modifications",
+      loading: "Chargement des modifications…",
+      empty: "Aucune modification dans le checkout de cette session.",
+      notGit: "L’espace de travail de cette session n’est pas un checkout git.",
+      unknownSession: "Aucun espace de travail n’est associé à cette session.",
+      disconnected: "Gateway est déconnecté.",
+      unmodifiedLines: "{count} lignes non modifiées",
+      binaryFile: "Fichier binaire",
+      untracked: "non suivi",
+      tooLarge: "Diff trop volumineux pour être affiché.",
+      truncatedFile: "Diff tronqué.",
+      truncatedResult: "Certaines modifications ont été omises car le diff est très volumineux.",
+      statusAdded: "Ajouté",
+      statusDeleted: "Supprimé",
+      statusRenamed: "Renommé",
+      statusModified: "Modifié",
     },
     workspaceFiles: {
       label: "Espace de travail de session",

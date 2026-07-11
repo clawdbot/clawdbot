@@ -319,7 +319,7 @@ export function resolveApplicationStartupSettings(
   };
 }
 
-function isViteDevPage(): boolean {
+export function isViteDevPage(): boolean {
   if (typeof document === "undefined") {
     return false;
   }

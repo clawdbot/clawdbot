@@ -56,6 +56,7 @@ export function createCodexAppServerAgentHarness(options: {
   const harness: CodexAppServerAgentHarness = {
     id: options?.id ?? "codex",
     label: options?.label ?? "Codex agent harness",
+    delegatedExecutionPluginIds: ["voice-call"],
     contextEngineHostCapabilities: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES,
     deliveryDefaults: {
       sourceVisibleReplies: "message_tool",

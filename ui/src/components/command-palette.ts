@@ -39,6 +39,13 @@ export type CommandPaletteTargetDetail = {
 function getPaletteBaseItems(): PaletteItem[] {
   return [
     {
+      id: "nav-new-session",
+      label: t("newSession.title"),
+      icon: "plus",
+      category: "navigation",
+      action: "nav:new-session",
+    },
+    {
       id: "nav-overview",
       label: t("overview.palette.items.overview"),
       icon: "barChart",

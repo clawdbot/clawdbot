@@ -7,7 +7,6 @@ import { isMarkdownBlockArtText } from "../../../components/markdown.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
-import type { DiffLine, DiffStat } from "../../../lib/chat/tool-call-diff.ts";
 import { resolveToolCallView, type ToolCallView } from "../../../lib/chat/tool-call-view.ts";
 import {
   formatDistinctCollapsedToolSummaryText,
@@ -25,6 +24,7 @@ import {
   type EmbedSandboxMode,
 } from "../../../lib/chat/tool-display.ts";
 import { getToolCallTitle } from "../tool-titles.ts";
+import { renderDiffBlock, renderDiffStatChips } from "./chat-diff-render.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 
 type FullMessageRequest = NonNullable<SidebarContent["fullMessageRequest"]>;
@@ -403,16 +403,6 @@ function firstCommandLine(command: string): string {
   return truncateUtf16Safe(line, 120);
 }
 
-export function renderDiffStatChips(stat: DiffStat) {
-  if (stat.added === 0 && stat.removed === 0) {
-    return nothing;
-  }
-  return html`<span class="chat-diffstat">
-    ${stat.added > 0 ? html`<span class="chat-diffstat__add">+${stat.added}</span>` : nothing}
-    ${stat.removed > 0 ? html`<span class="chat-diffstat__del">-${stat.removed}</span>` : nothing}
-  </span>`;
-}
-
 function renderToolRowContent(card: ToolCard, view: ToolCallView, outcome: ToolCardOutcome) {
   if (view.kind === "command" && view.command) {
     const commandPreview = firstCommandLine(view.command);
@@ -463,48 +453,6 @@ function renderToolRowContent(card: ToolCard, view: ToolCallView, outcome: ToolC
     ${displayName
       ? html`<span class="chat-tool-msg-summary__names">${displayName}</span>`
       : nothing}
-  `;
-}
-
-export function renderDiffBlock(
-  lines: readonly DiffLine[],
-  outcome: ToolCardOutcome = "succeeded",
-) {
-  const hasLineNumbers = lines.some((line) => line.lineNo !== undefined);
-  return html`
-    <div
-      class="chat-diff"
-      role="figure"
-      aria-label=${t(
-        outcome === "succeeded" ? "chat.toolCards.fileChanges" : "chat.toolCards.attemptedChanges",
-      )}
-    >
-      ${lines.map((line) => {
-        if (line.kind === "skip") {
-          return html`<div class="chat-diff__row chat-diff__row--skip">
-            ${hasLineNumbers ? html`<span class="chat-diff__gutter"></span>` : nothing}
-            <span class="chat-diff__sign"></span>
-            <span class="chat-diff__text">⋯</span>
-          </div>`;
-        }
-        const kindClass =
-          line.kind === "add"
-            ? "chat-diff__row--add"
-            : line.kind === "del"
-              ? "chat-diff__row--del"
-              : line.kind === "file"
-                ? "chat-diff__row--file"
-                : "";
-        const sign = line.kind === "add" ? "+" : line.kind === "del" ? "-" : "";
-        return html`<div class="chat-diff__row ${kindClass}">
-          ${hasLineNumbers
-            ? html`<span class="chat-diff__gutter">${line.lineNo ?? ""}</span>`
-            : nothing}
-          <span class="chat-diff__sign">${sign}</span>
-          <span class="chat-diff__text">${line.text || " "}</span>
-        </div>`;
-      })}
-    </div>
   `;
 }
 

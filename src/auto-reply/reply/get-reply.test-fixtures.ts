@@ -146,6 +146,7 @@ export function createGetReplyContinueDirectivesResult(params: {
 export function registerGetReplyRuntimeOverrides(handles: {
   resolveReplyDirectives: (...args: unknown[]) => unknown;
   initSessionState: (...args: unknown[]) => unknown;
+  resolveReplySessionPreprocessingState?: (...args: unknown[]) => unknown;
   handleInlineActions?: (...args: unknown[]) => unknown;
 }): void {
   vi.doMock("./get-reply-directives.js", () => ({
@@ -157,6 +158,12 @@ export function registerGetReplyRuntimeOverrides(handles: {
   }));
   vi.doMock("./session.js", () => ({
     initSessionState: (...args: unknown[]) => handles.initSessionState(...args),
+    resolveReplySessionPreprocessingState: (...args: unknown[]) =>
+      handles.resolveReplySessionPreprocessingState?.(...args) ?? {
+        sessionEntry: undefined,
+        sessionKey: "agent:main:telegram:123",
+        storePath: "/tmp/sessions.json",
+      },
   }));
 }
 

@@ -4,23 +4,15 @@
  * config-mutation, and runtime-config-snapshot.
  */
 
-import { loadSessionStore as loadSessionStoreImpl } from "../config/sessions/store-load.js";
 export {
   getSessionEntry,
   listSessionEntries,
+  loadSessionStore,
   patchSessionEntry,
   readSessionUpdatedAt,
   updateSessionStoreEntry,
   upsertSessionEntry,
 } from "./session-store-runtime.js";
-
-/**
- * @deprecated Use getSessionEntry/listSessionEntries for reads and
- * patchSessionEntry/upsertSessionEntry for writes. This whole-store helper is
- * kept only during the transition before SQLite migration. Callers must
- * migrate away from reading sessions.json directly.
- */
-export const loadSessionStore = loadSessionStoreImpl;
 
 export { resolveDefaultAgentId } from "../agents/agent-scope.js";
 export {

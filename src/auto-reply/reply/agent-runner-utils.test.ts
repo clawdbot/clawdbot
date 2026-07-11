@@ -107,6 +107,15 @@ describe("agent-runner-utils", () => {
     expect(resolved.fallbacksOverride).toEqual(["fallback-model"]);
   });
 
+  it("disables model fallback options for a model-locked run", () => {
+    const run = makeRun({ modelSelectionLocked: true });
+
+    const resolved = resolveModelFallbackOptions(run);
+
+    expect(hoisted.resolveEffectiveModelFallbacksMock).not.toHaveBeenCalled();
+    expect(resolved.fallbacksOverride).toEqual([]);
+  });
+
   it("passes through missing agentId for helper-based fallback resolution", () => {
     hoisted.resolveEffectiveModelFallbacksMock.mockReturnValue(["fallback-model"]);
     const run = makeRun({ agentId: undefined });
@@ -230,6 +239,26 @@ describe("agent-runner-utils", () => {
       hasAutoFallbackProvenance: true,
     });
     expect(resolved.modelFallbacksOverride).toEqual(["fallback-model"]);
+  });
+
+  it("disables embedded model fallbacks for a model-locked run", () => {
+    const run = makeRun({ modelSelectionLocked: true });
+    const authProfile = resolveProviderScopedAuthProfile({
+      provider: "openai",
+      primaryProvider: "openai",
+    });
+
+    const resolved = buildEmbeddedRunBaseParams({
+      run,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      runId: "run-1",
+      authProfile,
+    });
+
+    expect(hoisted.resolveEffectiveModelFallbacksMock).not.toHaveBeenCalled();
+    expect(resolved.modelFallbacksOverride).toEqual([]);
+    expect(resolved.modelSelectionLocked).toBe(true);
   });
 
   it("does not force final-tag enforcement for minimax providers", () => {

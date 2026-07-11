@@ -269,6 +269,8 @@ export type SessionEntry = {
   heartbeatTaskState?: Record<string, number>;
   /** Plugin-owned session state, grouped by plugin id then extension namespace. */
   pluginExtensions?: Record<string, Record<string, SessionPluginJsonValue>>;
+  /** Trusted session initialization is incomplete; all work admission stays blocked. */
+  initializationPending?: true;
   /** Top-level SessionEntry mirror slots owned by plugin session extensions. */
   pluginExtensionSlotKeys?: Record<string, Record<string, string>>;
   /** Durable one-shot prompt additions drained before the next agent turn. */
@@ -460,6 +462,11 @@ export type SessionEntry = {
   cacheWrite?: number;
   modelProvider?: string;
   model?: string;
+  /**
+   * Prevents OpenClaw model changes and automatic maintenance eviction until
+   * the owning harness explicitly retires the session.
+   */
+  modelSelectionLocked?: boolean;
   /**
    * Embedded agent harness selected for this session id.
    * Prevents config/env changes from moving an existing transcript between

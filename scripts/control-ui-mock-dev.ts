@@ -182,6 +182,69 @@ function usageCostTotals(totalTokens: number, totalCost = 0) {
 
 // Model Providers settings fixtures: auth state plus live plan/quota/billing
 // snapshots so the /settings/model-providers page renders fully in the mock.
+function buildSessionDiffMock() {
+  const appPatch = [
+    "diff --git a/src/app.ts b/src/app.ts",
+    "index 1111111..2222222 100644",
+    "--- a/src/app.ts",
+    "+++ b/src/app.ts",
+    "@@ -12,4 +12,5 @@ export function bootstrap() {",
+    "   const config = readSettings();",
+    "-  const client = createClient(config);",
+    "+  const client = createClient(config, { retries: 3 });",
+    '+  client.on("error", reportError);',
+    "   return client;",
+    "@@ -181,3 +182,3 @@ export function shutdown() {",
+    "   flushQueues();",
+    '-  logger.info("bye");',
+    '+  logger.info("shutdown complete");',
+    "",
+  ].join("\n");
+  const readmePatch = [
+    "diff --git a/README.md b/README.md",
+    "new file mode 100644",
+    "--- /dev/null",
+    "+++ b/README.md",
+    "@@ -0,0 +1,3 @@",
+    "+# Demo",
+    "+",
+    "+Mock harness session diff fixture.",
+    "",
+  ].join("\n");
+  return {
+    sessionKey: "main",
+    root: "/tmp/openclaw-mock-checkout",
+    branch: "feature/session-diff-panel",
+    baseRef: "main",
+    files: [
+      {
+        path: "src/app.ts",
+        status: "modified",
+        additions: 3,
+        deletions: 2,
+        patch: appPatch,
+      },
+      {
+        path: "README.md",
+        status: "added",
+        additions: 3,
+        deletions: 0,
+        untracked: true,
+        patch: readmePatch,
+      },
+      {
+        path: "assets/logo.png",
+        status: "modified",
+        additions: 0,
+        deletions: 0,
+        binary: true,
+      },
+    ],
+    additions: 6,
+    deletions: 2,
+  };
+}
+
 function buildModelProviderMocks(baseTime: number) {
   const hour = 60 * 60 * 1000;
   const expiry = (remainingMs: number, label: string) => ({
@@ -747,8 +810,10 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
     assistantAgentId: "openclaw-mock",
     assistantName: "OpenClaw mock",
     defaultAgentId: "openclaw-mock",
+    featureMethods: ["chat.metadata", "chat.startup", "sessions.diff"],
     historyMessages: buildScrollableChatHistory(baseTime),
     methodResponses: {
+      "sessions.diff": buildSessionDiffMock(),
       "usage.cost": profileUsage.cost,
       "sessions.usage": profileUsage.sessions,
       "models.authStatus": modelProviders.authStatus,

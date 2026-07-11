@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { beginNativeWindowDrag } from "./native-window-drag.ts";
+import { beginNativeWindowDrag, beginNativeWindowDragFromTopInset } from "./native-window-drag.ts";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -87,6 +87,60 @@ describe("native window drag", () => {
 
     const event = mouseDown(header);
 
+    expect(event.defaultPrevented).toBe(false);
+  });
+});
+
+describe("native window drag from top inset", () => {
+  function buildThread() {
+    const thread = document.createElement("div");
+    thread.style.paddingTop = "44px";
+    const inner = document.createElement("div");
+    thread.append(inner);
+    thread.addEventListener("mousedown", beginNativeWindowDragFromTopInset);
+    document.body.append(thread);
+    return { thread, inner };
+  }
+
+  function mouseDownAtOffset(target: Element, offsetY: number) {
+    const event = new MouseEvent("mousedown", {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      button: 0,
+    });
+    Object.defineProperty(event, "offsetY", { value: offsetY });
+    target.dispatchEvent(event);
+    return event;
+  }
+
+  it("drags from bare container background inside the top padding", () => {
+    const postMessage = installBridge();
+    const { thread } = buildThread();
+
+    const event = mouseDownAtOffset(thread, 20);
+
+    expect(postMessage).toHaveBeenCalledWith({ type: "window-drag" });
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("ignores presses below the padding band", () => {
+    const postMessage = installBridge();
+    const { thread } = buildThread();
+
+    const event = mouseDownAtOffset(thread, 60);
+
+    expect(postMessage).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("ignores presses that land on content instead of the container", () => {
+    const postMessage = installBridge();
+    const { inner } = buildThread();
+
+    const event = mouseDownAtOffset(inner, 20);
+
+    expect(postMessage).not.toHaveBeenCalled();
     expect(event.defaultPrevented).toBe(false);
   });
 });

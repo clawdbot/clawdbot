@@ -7,6 +7,7 @@ import {
   CODEX_APP_SERVER_DEFAULT_MODEL_REF,
   OPENAI_API_DEFAULT_MODEL_REF,
   detectInferenceBackends,
+  detectNativeCodexAppServer,
 } from "./onboard-inference.js";
 
 function probeDeps(found: Record<string, boolean>) {
@@ -170,6 +171,76 @@ describe("detectInferenceBackends", () => {
     expect(candidates[0]?.kind).toBe("claude-cli");
     expect(candidates[0]?.credentials).toBeUndefined();
     expect(candidates[0]?.detail).toBe("installed");
+  });
+
+  it("detects a native Codex App Server independently of inference ranking", async () => {
+    const command = "/Applications/ChatGPT.app/Contents/Resources/codex";
+
+    await expect(
+      detectNativeCodexAppServer({
+        env: { HOME: "/Users/tester" },
+        platform: "darwin",
+        probeLocalCommand: probeDeps({ [command]: true }),
+      }),
+    ).resolves.toEqual({ command, found: true });
+  });
+
+  it.each([
+    ["system ChatGPT", "/Applications/ChatGPT.app/Contents/Resources/codex", "/Users/tester"],
+    [
+      "user ChatGPT",
+      "/Users/tester/Applications/ChatGPT.app/Contents/Resources/codex",
+      "/Users/tester",
+    ],
+    ["system", "/Applications/Codex.app/Contents/Resources/codex", "/Users/tester"],
+    ["user", "/Users/tester/Applications/Codex.app/Contents/Resources/codex", "/Users/tester"],
+    ["system beta", "/Applications/Codex Beta.app/Contents/Resources/codex", "/Users/tester"],
+    [
+      "user beta",
+      "/Users/tester/Applications/Codex Beta.app/Contents/Resources/codex",
+      "/Users/tester",
+    ],
+  ])("finds the Codex CLI bundled in the %s macOS app directory", async (_scope, appCli, home) => {
+    const candidates = await detectInferenceBackends({
+      env: { HOME: home },
+      platform: "darwin",
+      deps: {
+        probeLocalCommand: probeDeps({ [appCli]: true }),
+        readClaudeCliCredentials: () => null,
+        readCodexCliCredentials: () => null,
+      },
+    });
+
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]).toMatchObject({
+      kind: "codex-cli",
+      detail: "installed",
+    });
+  });
+
+  it("prefers a user ChatGPT app before a system legacy Codex app", async () => {
+    const probed: string[] = [];
+    const chatGPTCli = "/Users/tester/Applications/ChatGPT.app/Contents/Resources/codex";
+    const legacyCodexCli = "/Applications/Codex.app/Contents/Resources/codex";
+    const candidates = await detectInferenceBackends({
+      env: { HOME: "/Users/tester" },
+      platform: "darwin",
+      deps: {
+        probeLocalCommand: async (command) => {
+          probed.push(command);
+          return {
+            command,
+            found: command === chatGPTCli || command === legacyCodexCli,
+          };
+        },
+        readClaudeCliCredentials: () => null,
+        readCodexCliCredentials: () => null,
+      },
+    });
+
+    expect(candidates).toMatchObject([{ kind: "codex-cli", detail: "installed" }]);
+    expect(probed).toContain(chatGPTCli);
+    expect(probed).not.toContain(legacyCodexCli);
   });
 
   it("ignores blank env keys", async () => {

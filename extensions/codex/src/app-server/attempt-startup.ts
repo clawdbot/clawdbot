@@ -104,7 +104,7 @@ export async function startCodexAttemptThread(params: {
   appServer: CodexAppServerRuntimeOptions;
   pluginConfig: CodexPluginConfig;
   computerUseConfig: CodexComputerUseConfig;
-  startupAuthProfileId: string | undefined;
+  startupAuthProfileId: string | null | undefined;
   startupAuthAccountCacheKey: string | undefined;
   startupEnvApiKeyCacheKey: string | undefined;
   agentDir: string;
@@ -132,6 +132,7 @@ export async function startCodexAttemptThread(params: {
   spawnedBy: EmbeddedRunAttemptParams["spawnedBy"];
 }): Promise<StartCodexAttemptThreadResult> {
   let pluginAppServer = params.appServer;
+  const startupRuntimeAuthProfileId = params.startupAuthProfileId ?? undefined;
   let releaseSharedClientLease: (() => void) | undefined;
   let startupClientForAbandonedRequestCleanup: CodexAppServerClient | undefined;
   let releaseStartupResourcesOnTimeout: (() => Promise<void>) | undefined;
@@ -170,8 +171,7 @@ export async function startCodexAttemptThread(params: {
           : undefined;
         const computerUseMcpElicitationDelegationRequired = params.computerUseConfig.enabled;
         const mcpElicitationDelegationRequired =
-          resolvedPluginPolicy?.enabled === true ||
-          computerUseMcpElicitationDelegationRequired;
+          resolvedPluginPolicy?.enabled === true || computerUseMcpElicitationDelegationRequired;
         const enabledPluginConfigKeys = resolvedPluginPolicy
           ? resolvedPluginPolicy.pluginPolicies
               .filter((plugin) => plugin.enabled)
@@ -227,7 +227,7 @@ export async function startCodexAttemptThread(params: {
             }
             ensureCodexAppServerClientRuntime(activeStartupClient, {
               agentDir: params.agentDir,
-              authProfileId: params.startupAuthProfileId,
+              authProfileId: startupRuntimeAuthProfileId,
               config: params.config,
             });
             const turnRouter = getCodexAppServerTurnRouter(activeStartupClient);
@@ -241,7 +241,7 @@ export async function startCodexAttemptThread(params: {
             const pluginAppCacheKey = buildCodexPluginAppCacheKey({
               appServer: params.appServer,
               agentDir: params.agentDir,
-              authProfileId: params.startupAuthProfileId,
+              authProfileId: startupRuntimeAuthProfileId,
               accountId: params.startupAuthAccountCacheKey,
               envApiKeyFingerprint: params.startupEnvApiKeyCacheKey,
               appServerVersion: activeStartupClient.getServerVersion(),
@@ -268,7 +268,7 @@ export async function startCodexAttemptThread(params: {
                 resolvedPluginPolicy,
                 enabledPluginConfigKeys,
                 pluginAppCacheKey,
-                startupAuthProfileId: params.startupAuthProfileId,
+                startupAuthProfileId: startupRuntimeAuthProfileId,
                 appServer: params.appServer,
               }),
             );

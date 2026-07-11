@@ -159,7 +159,16 @@ The first existing explicit model always wins, so setup preserves an existing
 
 If none are available, setup still writes the workspace and Gateway configuration, then asks whether to configure a model provider. Accepting opens the normal onboarding provider/auth and default-model steps. Declining leaves Crestodian in deterministic mode; exact setup and repair commands still work, but the normal agent cannot answer until a provider and default model are configured. Run `configure model provider` later to reopen the provider flow.
 
-The macOS app drives the same ladder through the `crestodian.setup.detect` and `crestodian.setup.activate` gateway methods: detect lists every reusable backend it finds, activate live-tests one candidate (a real "reply with OK" completion) and only persists the model, workspace, and gateway defaults after the test passes. A failing candidate never persists a broken model or setup state; Codex may still record a managed plugin installation before its live test. The app automatically walks down the ladder and finally offers a manual key/token step populated from the Gateway's active text-inference provider plugins. The selected provider owns its starter model and config, and the credential is verified the same way before it is saved.
+The macOS app drives the same ladder through the `crestodian.setup.detect` and `crestodian.setup.activate` gateway methods: detect lists every reusable backend it finds, activate live-tests one candidate (a real "reply with OK" completion), and only selects the model, workspace, Gateway defaults, and supervision after the test passes. A failed candidate does not select those defaults; an opportunistic managed Codex plugin install can remain recorded even when a later live probe fails. The app automatically walks down the ladder and finally offers a manual key/token step populated from the Gateway's active text-inference provider plugins. The selected provider owns its starter model and config, and the credential is verified the same way before it is saved.
+
+When setup detects a native Codex installation, successful backend activation
+also attempts to install and enable the official `codex` plugin and its
+supervision capability, even when another inference backend wins the ladder.
+Native, non-archived Codex sessions become visible in both apps when that
+opportunistic plugin activation succeeds. App Server availability is checked
+when supervision first connects. An explicit Codex plugin disable or policy
+block prevents opportunistic activation, and an existing
+`plugins.entries.codex.config.supervision.enabled: false` remains an opt-out.
 
 ## AI conversation
 

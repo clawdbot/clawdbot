@@ -19,6 +19,10 @@ describe("Codex agent harness supports()", () => {
     });
   });
 
+  it("delegates locked-session execution only to the voice-call plugin", () => {
+    expect(harness.delegatedExecutionPluginIds).toEqual(["voice-call"]);
+  });
+
   it("supports openai as the primary OpenClaw routing id", () => {
     expect(harness.supports({ provider: "openai", requestedRuntime: "codex" })).toEqual({
       supported: true,

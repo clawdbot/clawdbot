@@ -212,6 +212,11 @@ export const ru: TranslationMap = {
     gateway: "Gateway · локально",
     folder: "Папка",
     folderPlaceholder: "Рабочая область агента",
+    browse: "Обзор папок",
+    browserUp: "Родительская папка",
+    browserUse: "Использовать эту папку",
+    browserEmpty: "Нет подпапок",
+    browserLoadFailed: "Не удалось получить список этой папки.",
     worktree: "Рабочее дерево",
     worktreeUnavailable: "Рабочая область агента не является git checkout",
     baseBranch: "Базовая ветка",
@@ -941,8 +946,8 @@ export const ru: TranslationMap = {
   codexSessions: {
     eyebrow: "Парк Codex",
     title: "Сеансы на всех ваших компьютерах",
-    subtitle:
-      "Сеансы Codex на этом Gateway и всех подключённых компьютерах с общим доступом. Только для чтения.",
+    interactiveSubtitle:
+      "Запустите ветку Chat, выбор модели для которой остается под управлением Codex App Server, архивируйте подходящие локальные сеансы с подтверждением и просматривайте сеансы сопряженных компьютеров.",
     summaryLabel: "Сводка сеансов Codex",
     summary: {
       sessions: "сеансы",
@@ -951,11 +956,6 @@ export const ru: TranslationMap = {
     },
     searchLabel: "Поиск сеансов Codex",
     searchPlaceholder: "Поиск по названиям сеансов",
-    scopeLabel: "Фильтр архива сеансов",
-    scope: {
-      active: "Активно",
-      archived: "В архиве",
-    },
     refresh: "Обновить",
     disconnected: "Повторно подключитесь к Gateway, чтобы обновить сеансы Codex.",
     partial: "Недоступные хосты: {count}. Остальные хосты по-прежнему доступны.",
@@ -964,11 +964,33 @@ export const ru: TranslationMap = {
     loadingMore: "Загрузка…",
     untitled: "Сеанс Codex без названия",
     threadId: "Ветка",
+    actions: {
+      continue: "Продолжить",
+      continueAsBranch: "Продолжить как ветку",
+      openChat: "Открыть Chat",
+      continuing: "Продолжение…",
+      archive: "Архивировать",
+      continueLabel: "Продолжить {title}",
+      continueAsBranchLabel: "Продолжить {title} как ветку",
+      openChatLabel: "Открыть Chat для {title}",
+      continueAsBranchHint:
+        "Создать Chat из сохраненной видимой истории. При первом сообщении Codex App Server выбирает модель и провайдера для нового потока harness. Дальнейший выбор остается под управлением Codex; OpenClaw никогда не подставляет другую среду выполнения, модель или резервный вариант. Источник остается нетронутым, а выполняемая работа может отсутствовать.",
+      archiveLabel: "Архивировать {title}",
+      archiveConfirmation:
+        "Архивировать {title} и все порожденные дочерние сеансы? Подтвердите, что их не использует другой клиент Codex или runner OpenClaw. Архивация при активном другом runner может прервать его работу.",
+      active: "Для активных сеансов нельзя запускать ветку или архивировать их.",
+      archiveActivityUnknownHint:
+        "Активность неизвестна, потому что статус локален для процесса. Архивируйте только после подтверждения, что этот сеанс не использует другой клиент Codex или runner.",
+      statusUnavailable: "Этим сеансом Codex нельзя управлять в его текущем состоянии.",
+      hostOffline: "Повторно подключите этот компьютер, прежде чем управлять его сеансами Codex.",
+      gatewayOffline: "Повторно подключитесь к gateway, прежде чем управлять сеансами Codex.",
+      remoteReadOnly: "Сеансы сопряженного компьютера пока доступны только для просмотра.",
+    },
     status: {
       active: "Активно",
       idle: "Бездействует",
       archived: "В архиве",
-      notLoaded: "Сохранён",
+      storedActivityUnknown: "Сохранено / активность неизвестна",
       systemError: "Системная ошибка",
       unknown: "Неизвестно",
     },
@@ -982,11 +1004,10 @@ export const ru: TranslationMap = {
     },
     empty: {
       title: "Хосты Codex не найдены",
-      subtitle:
-        "Включите общий доступ к сеансам Codex на Gateway или сопряжённом компьютере, затем обновите эту страницу.",
+      supervisionSubtitle:
+        "Включите надзор Codex на Gateway или сопряжённом компьютере, затем обновите это представление.",
       search: "Ни один сеанс на этом хосте не соответствует поиску.",
-      active: "На этом хосте нет активных сеансов.",
-      archived: "На этом хосте нет архивных сеансов.",
+      nonArchived: "На этом хосте нет неархивированных сеансов.",
     },
   },
   logbook: {
@@ -2109,6 +2130,11 @@ export const ru: TranslationMap = {
       clearSessionSearch: "Очистить поиск сеансов",
       loadMoreSessions: "Загрузить еще сеансы",
       model: "Модель чата",
+      modelSection: "Модель",
+      modelLocked: "Заблокировано",
+      modelLockedLabel: "Выбор модели управляется для этого сеанса",
+      lockedSessionModel: "Модель сеанса",
+      nativeCodexModel: "Модель, управляемая Codex",
       thinkingLevel: "Уровень мышления чата",
     },
     toolCards: {
@@ -2173,6 +2199,26 @@ export const ru: TranslationMap = {
       finished: "Завершены ({count})",
       stopTask: "Остановить {title}",
       viewTranscript: "Просмотреть расшифровку",
+    },
+    sessionDiff: {
+      title: "Изменения",
+      show: "Показать изменения сеанса",
+      refresh: "Обновить изменения",
+      loading: "Загрузка изменений…",
+      empty: "В рабочей копии этого сеанса нет изменений.",
+      notGit: "Рабочая область этого сеанса не является рабочей копией git.",
+      unknownSession: "С этим сеансом не связана рабочая область.",
+      disconnected: "Gateway отключен.",
+      unmodifiedLines: "{count} неизмененных строк",
+      binaryFile: "Бинарный файл",
+      untracked: "неотслеживаемый",
+      tooLarge: "Diff слишком большой для отображения.",
+      truncatedFile: "Diff усечен.",
+      truncatedResult: "Некоторые изменения были опущены, так как diff очень большой.",
+      statusAdded: "Добавлено",
+      statusDeleted: "Удалено",
+      statusRenamed: "Переименовано",
+      statusModified: "Изменено",
     },
     workspaceFiles: {
       label: "Рабочая область сеанса",

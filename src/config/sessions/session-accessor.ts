@@ -61,6 +61,7 @@ import {
   recordSessionMetaFromInbound as recordFileSessionMetaFromInbound,
   resolveSessionStoreEntry,
   resetSessionEntryLifecycle as resetFileSessionEntryLifecycle,
+  rollbackAgentHarnessSessionEntryLifecycle as rollbackFileAgentHarnessSessionEntryLifecycle,
   updateLastRoute as updateFileSessionLastRoute,
   updateSessionStore,
   updateSessionStoreEntry as updateFileSessionStoreEntry,
@@ -541,6 +542,7 @@ export type SessionCompactionCheckpointMutationResult =
       entry: SessionEntry;
     }
   | { status: "missing-session" }
+  | { status: "model-selection-locked" }
   | { status: "missing-checkpoint" }
   | { status: "missing-boundary" }
   | { status: "failed" };
@@ -650,8 +652,15 @@ export type SessionEntryCreateWithTranscriptPrepareResult<TError = string> =
   | { ok: true; entry: SessionEntry }
   | { ok: false; error: TError };
 
+export type SessionEntryCreateWithTranscriptOptions = {
+  /** Protect the newly created row from maintenance during its initial save. */
+  activeSessionKey?: string;
+  /** Throw unless the initial session row is durably persisted. */
+  requireWriteSuccess?: boolean;
+};
+
 type CreatedSessionTranscriptResult =
-  | { ok: true; sessionFile: string }
+  | { ok: true; created: boolean; sessionFile: string }
   | { ok: false; error: string; phase: "transcript" };
 
 export type SessionPatchProjectionContext = SessionEntryPatchProjectionContext;
@@ -1158,41 +1167,71 @@ export async function createSessionEntryWithTranscript<TError = string>(
   ) =>
     | Promise<SessionEntryCreateWithTranscriptPrepareResult<TError>>
     | SessionEntryCreateWithTranscriptPrepareResult<TError>,
+  options: SessionEntryCreateWithTranscriptOptions = {},
 ): Promise<SessionEntryCreateWithTranscriptResult<TError>> {
   const storePath = resolveSessionStorePathForScope(scope);
-  return await updateSessionStore(storePath, async (store) => {
-    const resolved = resolveSessionStoreEntry({ store, sessionKey: scope.sessionKey });
-    const created = await createEntry({
-      existingEntry: resolved.existing ? { ...resolved.existing } : undefined,
-      sessionEntries: cloneSessionEntries(store),
-    });
-    if (!created.ok) {
-      return { ok: false, error: created.error, phase: "entry" };
-    }
-
-    const ensured = ensureCreatedSessionTranscript({
-      agentId: scope.agentId,
-      entry: created.entry,
+  let createdTranscriptFile: string | undefined;
+  try {
+    return await updateSessionStore(
       storePath,
-    });
-    if (!ensured.ok) {
-      delete store[resolved.normalizedKey];
-      return ensured;
-    }
+      async (store) => {
+        const resolved = resolveSessionStoreEntry({ store, sessionKey: scope.sessionKey });
+        const created = await createEntry({
+          existingEntry: resolved.existing ? { ...resolved.existing } : undefined,
+          sessionEntries: cloneSessionEntries(store),
+        });
+        if (!created.ok) {
+          return { ok: false, error: created.error, phase: "entry" };
+        }
 
-    const entry =
-      created.entry.sessionFile === ensured.sessionFile
-        ? created.entry
-        : {
-            ...created.entry,
-            sessionFile: ensured.sessionFile,
-          };
-    store[resolved.normalizedKey] = entry;
-    for (const legacyKey of resolved.legacyKeys) {
-      delete store[legacyKey];
+        const ensured = ensureCreatedSessionTranscript({
+          agentId: scope.agentId,
+          entry: created.entry,
+          storePath,
+        });
+        if (!ensured.ok) {
+          delete store[resolved.normalizedKey];
+          return ensured;
+        }
+        if (ensured.created) {
+          createdTranscriptFile = ensured.sessionFile;
+        }
+
+        const entry =
+          created.entry.sessionFile === ensured.sessionFile
+            ? created.entry
+            : {
+                ...created.entry,
+                sessionFile: ensured.sessionFile,
+              };
+        store[resolved.normalizedKey] = entry;
+        for (const legacyKey of resolved.legacyKeys) {
+          delete store[legacyKey];
+        }
+        return { ok: true, entry, sessionFile: ensured.sessionFile };
+      },
+      {
+        activeSessionKey: options.activeSessionKey,
+        requireWriteSuccess: options.requireWriteSuccess,
+        // Entry rejection is side-effect free; transcript failure deletes the target row
+        // and must persist that rollback instead of restoring the writer snapshot.
+        skipSaveWhenResult: (result) => !result.ok && result.phase === "entry",
+      },
+    );
+  } catch (error) {
+    if (!createdTranscriptFile) {
+      throw error;
     }
-    return { ok: true, entry, sessionFile: ensured.sessionFile };
-  });
+    try {
+      fs.rmSync(createdTranscriptFile, { force: true });
+    } catch (cleanupError) {
+      throw new Error(
+        `Session entry persistence failed (${formatErrorMessage(error)}) and transcript cleanup did not complete: ${createdTranscriptFile}`,
+        { cause: cleanupError },
+      );
+    }
+    throw error;
+  }
 }
 
 function cloneSessionEntries(store: Record<string, SessionEntry>): Record<string, SessionEntry> {
@@ -1356,7 +1395,8 @@ function ensureCreatedSessionTranscript(params: {
         sessionsDir: path.dirname(path.resolve(params.storePath)),
       },
     );
-    if (!fs.existsSync(sessionFile)) {
+    const created = !fs.existsSync(sessionFile);
+    if (created) {
       fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
       fs.writeFileSync(
         sessionFile,
@@ -1367,7 +1407,7 @@ function ensureCreatedSessionTranscript(params: {
         },
       );
     }
-    return { ok: true, sessionFile };
+    return { ok: true, created, sessionFile };
   } catch (err) {
     return {
       ok: false,
@@ -1573,13 +1613,9 @@ function resolveEntryFromStoreKeys(params: {
   store: Record<string, SessionEntry>;
   keys: readonly string[];
 }): SessionEntry | undefined {
-  for (const key of params.keys) {
-    const entry = params.store[key];
-    if (entry) {
-      return entry;
-    }
-  }
-  return undefined;
+  // Alias migration can leave multiple logical rows. Fork policy must inspect
+  // the freshest row or a stale canonical entry can shadow a newer lock.
+  return resolveFreshestTargetEntry(params.store, params.keys)?.entry;
 }
 
 function persistForkedSessionEntry(params: {
@@ -1920,6 +1956,11 @@ async function applySessionCompactionCheckpointMutation(
       if (!currentEntry?.sessionId) {
         return { status: "missing-session" };
       }
+      // A native harness owns the locked transcript identity. Rotating or
+      // cloning it here would strand that binding on the old session id.
+      if (currentEntry.modelSelectionLocked === true) {
+        return { status: "model-selection-locked" };
+      }
       const checkpoint = findSessionCompactionCheckpoint({
         entry: currentEntry,
         checkpointId: params.checkpointId,
@@ -2123,6 +2164,13 @@ export async function deleteSessionEntryLifecycle(
   params: DeleteSessionEntryLifecycleParams,
 ): Promise<DeleteSessionEntryLifecycleResult> {
   return await deleteFileSessionEntryLifecycle(params);
+}
+
+/** Internal exact-row rollback for failed trusted agent-harness initialization. */
+export async function rollbackAgentHarnessSessionEntryLifecycle(
+  params: DeleteSessionEntryLifecycleParams & { expectedEntry: SessionEntry },
+): Promise<DeleteSessionEntryLifecycleResult> {
+  return await rollbackFileAgentHarnessSessionEntryLifecycle(params);
 }
 
 /** Applies exact entry lifecycle mutations and artifact cleanup at the storage boundary. */

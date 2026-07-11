@@ -3,6 +3,7 @@
  * checks, shared-client leasing, and isolated-client shutdown handling.
  */
 import type { resolveCodexAppServerAuthProfileIdForAgent } from "./auth-bridge.js";
+import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import type {
   CodexAppServerRequestMethod,
@@ -17,6 +18,38 @@ import {
   releaseLeasedSharedCodexAppServerClient,
 } from "./shared-client.js";
 import { withTimeout } from "./timeout.js";
+
+type CodexAppServerClientRequestParams = {
+  client: CodexAppServerClient;
+  method: string;
+  requestParams?: unknown;
+  timeoutMs?: number;
+  config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
+  sessionKey?: string;
+  sessionId?: string;
+};
+
+/** Sends one guarded request over a client lease owned by the caller. */
+export async function requestCodexAppServerClientJson<T = JsonValue | undefined>(
+  params: CodexAppServerClientRequestParams,
+): Promise<T> {
+  const sandboxBlock = resolveCodexAppServerDirectSandboxBypassBlock({
+    method: params.method,
+    requestParams: params.requestParams,
+    config: params.config,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+  });
+  if (sandboxBlock) {
+    throw new Error(sandboxBlock);
+  }
+  const timeoutMs = params.timeoutMs ?? 60_000;
+  return await withTimeout(
+    params.client.request<T>(params.method, params.requestParams, { timeoutMs }),
+    timeoutMs,
+    `codex app-server ${params.method} timed out`,
+  );
+}
 
 /** Sends a typed Codex app-server request and returns the method-specific response shape. */
 export async function requestCodexAppServerJson<M extends CodexAppServerRequestMethod>(params: {

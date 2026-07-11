@@ -777,6 +777,111 @@ describe("createFollowupRunner reply-lane admission", () => {
     expect(call.clientCaps).toEqual(["tool-events", "inline-widgets"]);
   });
 
+  it("adopts a matching admission-time model lock for queued execution", async () => {
+    const storePath = "/tmp/openclaw-followup-admission-model-lock.json";
+    const queuedEntry: SessionEntry = {
+      sessionId: "catalog-adopted-session",
+      updatedAt: 1,
+    };
+    const admittedEntry: SessionEntry = {
+      ...queuedEntry,
+      updatedAt: 2,
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+    };
+    registerFollowupTestSessionStore(storePath, { main: admittedEntry });
+    runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: {
+            fallbacks: ["openai/gpt-5.4-mini"],
+          },
+        },
+      },
+    };
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry: queuedEntry,
+      sessionStore: { main: queuedEntry },
+      sessionKey: "main",
+      storePath,
+      defaultModel: "anthropic/claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          config: runtimeConfig,
+          sessionId: queuedEntry.sessionId,
+          sessionKey: "main",
+          provider: "anthropic",
+          model: "claude",
+        },
+      }),
+    );
+
+    const preflightCall = requireLastMockCallArg(
+      runPreflightCompactionIfNeededMock,
+      "preflight compaction",
+    );
+    const preflightRun = requireRecord(preflightCall.followupRun, "preflight follow-up run");
+    expect(requireRecord(preflightRun.run, "preflight run").modelSelectionLocked).toBe(true);
+    const fallbackCall = requireLastMockCallArg(runWithModelFallbackMock, "model fallback");
+    expect(fallbackCall.fallbacksOverride).toEqual([]);
+    expect(requireLastMockCallArg(runEmbeddedAgentMock, "run embedded agent")).toMatchObject({
+      modelSelectionLocked: true,
+      agentHarnessId: "codex",
+      agentHarnessRuntimeOverride: "codex",
+    });
+  });
+
+  it("keeps the queued model lock when the admission entry belongs to another session", async () => {
+    const replacementEntry: SessionEntry = {
+      sessionId: "replacement-session",
+      updatedAt: 2,
+    };
+    runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: {
+            fallbacks: ["openai/gpt-5.4-mini"],
+          },
+        },
+      },
+    };
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry: replacementEntry,
+      sessionStore: { main: replacementEntry },
+      sessionKey: "main",
+      defaultModel: "anthropic/claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          config: runtimeConfig,
+          sessionId: "queued-session",
+          sessionKey: "main",
+          provider: "anthropic",
+          model: "claude",
+          modelSelectionLocked: true,
+        },
+      }),
+    );
+
+    const fallbackCall = requireLastMockCallArg(runWithModelFallbackMock, "model fallback");
+    expect(fallbackCall.fallbacksOverride).toEqual([]);
+    expect(requireLastMockCallArg(runEmbeddedAgentMock, "run embedded agent")).toMatchObject({
+      sessionId: "queued-session",
+      modelSelectionLocked: true,
+    });
+  });
+
   it("awaits queued-owner admission before model execution", async () => {
     const events: string[] = [];
     let releaseAdmission!: () => void;
@@ -1543,6 +1648,67 @@ describe("createFollowupRunner auto fallback primary probes", () => {
 });
 
 describe("createFollowupRunner runtime config", () => {
+  it("keeps a locked Codex harness pinned when a CLI backend shares its id", async () => {
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            codex: { command: "codex" },
+            "claude-cli": { command: "claude" },
+          },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+    const sessionEntry: SessionEntry = {
+      sessionId: "catalog-adopted-session",
+      updatedAt: Date.now(),
+      agentHarnessId: "codex",
+      agentRuntimeOverride: "claude-cli",
+      modelSelectionLocked: true,
+      pluginExtensions: {
+        codex: {
+          supervision: {
+            sourceThreadId: "019f-codex-thread",
+            modelLocked: true,
+          },
+        },
+      },
+    };
+    runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          config: runtimeConfig,
+          sessionId: sessionEntry.sessionId,
+          sessionKey: "main",
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+        },
+      }),
+    );
+
+    expect(runCliAgentMock).not.toHaveBeenCalled();
+    expect(requireLastMockCallArg(runEmbeddedAgentMock, "run embedded agent")).toMatchObject({
+      provider: "anthropic",
+      model: "claude-opus-4-7",
+      agentHarnessId: "codex",
+      agentHarnessRuntimeOverride: "codex",
+    });
+  });
+
   it("routes queued followups through CLI runtime dispatch when the model selects a CLI backend", async () => {
     const runtimeConfig: OpenClawConfig = {
       agents: {

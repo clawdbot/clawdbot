@@ -1154,6 +1154,40 @@ function isEnabledForAgent(
   return config.agents.includes(agentId);
 }
 
+function isAgentHarnessSessionKey(sessionKey: string): boolean {
+  const normalized = sessionKey.trim().toLowerCase();
+  const rest = parseAgentSessionKey(normalized)?.rest ?? normalized;
+  return rest.startsWith("harness:");
+}
+
+function shouldSkipActiveMemoryForHarnessSession(params: {
+  api: OpenClawPluginApi;
+  agentId?: string;
+  sessionKey?: string;
+}): boolean {
+  const sessionKey = params.sessionKey?.trim();
+  if (!sessionKey) {
+    return false;
+  }
+  try {
+    const entry = params.api.runtime.agent.session.getSessionEntry({
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      sessionKey,
+      readConsistency: "latest",
+    });
+    // A missing reserved key must not synthesize work, while unlocked rows are
+    // grandfathered user sessions from before the namespace was introduced.
+    return (
+      entry?.modelSelectionLocked === true ||
+      (entry === undefined && isAgentHarnessSessionKey(sessionKey))
+    );
+  } catch {
+    // Recall is optional. If durable ownership cannot be checked, do not risk
+    // crossing a harness/model boundary with an independently selected model.
+    return true;
+  }
+}
+
 function isEligibleInteractiveSession(ctx: {
   trigger?: string;
   sessionKey?: string;
@@ -3635,6 +3669,15 @@ export default definePluginEntry({
                 : undefined);
             const effectiveAgentId =
               resolvedAgentId || resolveStatusUpdateAgentId({ sessionKey: resolvedSessionKey });
+            if (
+              shouldSkipActiveMemoryForHarnessSession({
+                api,
+                agentId: effectiveAgentId,
+                sessionKey: resolvedSessionKey,
+              })
+            ) {
+              return undefined;
+            }
             const sessionDisabled = await isSessionActiveMemoryDisabled({
               api,
               sessionKey: resolvedSessionKey,

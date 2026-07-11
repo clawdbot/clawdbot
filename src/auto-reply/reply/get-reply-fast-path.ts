@@ -12,6 +12,11 @@ import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { loadSessionStore, resolveSessionStoreEntry } from "../../config/sessions/store.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  isModelSelectionLocked,
+  MODEL_SELECTION_LOCKED_RESET_MESSAGE,
+  ModelSelectionLockedError,
+} from "../../sessions/model-overrides.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import { normalizeCommandBody } from "../commands-registry.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
@@ -218,6 +223,9 @@ export function initFastReplySessionState(params: {
   const softReset = parseSoftResetCommand(normalizedResetBody);
   const resetMatch = normalizedResetBody.match(/^\/(new|reset)(?:\s|$)/i);
   const resetTriggered = Boolean(resetMatch) && !softReset.matched;
+  if (resetTriggered && isModelSelectionLocked(existingEntry)) {
+    throw new ModelSelectionLockedError(MODEL_SELECTION_LOCKED_RESET_MESSAGE);
+  }
   const previousSessionEntry = resetTriggered && existingEntry ? { ...existingEntry } : undefined;
   const sessionId =
     !resetTriggered && existingEntry ? existingEntry.sessionId : crypto.randomUUID();

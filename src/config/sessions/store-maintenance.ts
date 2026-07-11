@@ -285,7 +285,7 @@ export function pruneStaleModelRunEntries(
   const cutoffMs = Date.now() - overrideMaxAgeMs;
   let pruned = 0;
   for (const [key, entry] of Object.entries(store)) {
-    if (opts.preserveKeys?.has(key) === true) {
+    if (shouldPreserveMaintenanceEntry({ key, entry, preserveKeys: opts.preserveKeys })) {
       continue;
     }
     if (!isGatewayModelRunSessionKey(key)) {
@@ -408,7 +408,12 @@ export function shouldPreserveMaintenanceEntry(params: {
   entry: SessionEntry | undefined;
   preserveKeys?: ReadonlySet<string>;
 }): boolean {
+  // A model lock is durable harness ownership, not merely a UI restriction.
+  // Evicting the row can strand its native runtime binding and later recreate
+  // the same conversation under an incompatible model, so pressure may exceed
+  // configured retention limits while the lock remains.
   return (
+    params.entry?.modelSelectionLocked === true ||
     params.preserveKeys?.has(params.key) === true ||
     isProtectedSessionMaintenanceEntry(params.key, params.entry)
   );
@@ -429,7 +434,7 @@ export function getActiveSessionMaintenanceWarning(params: {
   if (!activeEntry) {
     return null;
   }
-  if (isProtectedSessionMaintenanceEntry(activeSessionKey, activeEntry)) {
+  if (shouldPreserveMaintenanceEntry({ key: activeSessionKey, entry: activeEntry })) {
     return null;
   }
   const now = params.nowMs ?? Date.now();
@@ -475,7 +480,8 @@ function wouldCapActiveSession(params: {
 
   const protectedCount = params.keys.filter(
     (key) =>
-      key !== params.activeSessionKey && isProtectedSessionMaintenanceEntry(key, params.store[key]),
+      key !== params.activeSessionKey &&
+      shouldPreserveMaintenanceEntry({ key, entry: params.store[key] }),
   ).length;
   const maxRemovableEntries = Math.max(0, params.maxEntries - protectedCount);
   // If protected entries fill the cap, the active unprotected session would be the one removed.
@@ -491,7 +497,7 @@ function wouldCapActiveSession(params: {
       seenActive = true;
       continue;
     }
-    if (isProtectedSessionMaintenanceEntry(key, params.store[key])) {
+    if (shouldPreserveMaintenanceEntry({ key, entry: params.store[key] })) {
       continue;
     }
     const entryUpdatedAt = getEntryUpdatedAt(params.store[key]);

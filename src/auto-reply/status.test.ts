@@ -1743,6 +1743,37 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Media: image ok (openai/gpt-5.4) · audio skipped (maxBytes)");
   });
 
+  it("distinguishes observed local STT backends from requested backends", () => {
+    const text = buildStatusMessage({
+      agent: { model: "anthropic/claude-opus-4-6" },
+      sessionEntry: { sessionId: "media-local-stt", updatedAt: 0 },
+      sessionKey: "agent:main:main",
+      queue: { mode: "none" },
+      mediaDecisions: [
+        {
+          capability: "audio",
+          outcome: "success",
+          attachments: [
+            {
+              attachmentIndex: 0,
+              attempts: [],
+              chosen: {
+                type: "cli",
+                provider: "whisper-cli",
+                model: "whisper-cli",
+                requestedBackend: "device:0",
+                observedBackend: "metal",
+                outcome: "success",
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(normalizeTestText(text)).toContain("Media: audio ok (whisper-cli observed=metal)");
+  });
+
   it("includes failed media understanding decisions with the surfaced reason", () => {
     const text = buildStatusMessage({
       agent: { model: "anthropic/claude-opus-4-6" },

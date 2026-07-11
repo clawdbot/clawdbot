@@ -2,7 +2,7 @@
  * Tests HTTP request context extraction for gateway auth and routing.
  */
 import type { IncomingMessage } from "node:http";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   authorizeOpenAiCompatibleHttpModelOverride,
   GatewaySessionKeyOverrideError,
@@ -13,12 +13,26 @@ import {
   resolveTrustedHttpOperatorScopes,
 } from "./http-utils.js";
 
+const sessionEntries = vi.hoisted(() => new Map<string, Record<string, unknown>>());
+
+vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/sessions/session-accessor.js")>();
+  return {
+    ...actual,
+    resolveSessionEntryAccessTarget: (params: { sessionKey: string }) => ({
+      entry: sessionEntries.get(params.sessionKey),
+    }),
+  };
+});
+
 function createReq(headers: Record<string, string> = {}): IncomingMessage {
   return { headers } as IncomingMessage;
 }
 
 const tokenAuth = { mode: "token" as const };
 const noneAuth = { mode: "none" as const };
+
+beforeEach(() => sessionEntries.clear());
 
 describe("resolveGatewayRequestContext", () => {
   it("uses normalized x-openclaw-message-channel when enabled", () => {
@@ -72,10 +86,44 @@ describe("resolveGatewayRequestContext", () => {
     "subagent:worker",
     "cron:daily",
     "acp:run-1",
+    "harness:codex:supervision:native-thread",
     "agent:main:subagent:worker",
     "agent:main:cron:daily",
     "agent:main:acp:run-1",
+    "agent:main:harness:codex:supervision:native-thread",
   ])("rejects reserved internal session-key override %s", (sessionKey) => {
+    expect(() =>
+      resolveGatewayRequestContext({
+        req: createReq({ "x-openclaw-session-key": sessionKey }),
+        model: "openclaw",
+        sessionPrefix: "openai",
+        defaultMessageChannel: "webchat",
+      }),
+    ).toThrow(GatewaySessionKeyOverrideError);
+  });
+
+  it("preserves an existing unlocked legacy harness-prefixed override", () => {
+    const sessionKey = "agent:main:harness:legacy-notes";
+    sessionEntries.set(sessionKey, { sessionId: "legacy-session", modelSelectionLocked: false });
+
+    const result = resolveGatewayRequestContext({
+      req: createReq({ "x-openclaw-session-key": sessionKey }),
+      model: "openclaw",
+      sessionPrefix: "openai",
+      defaultMessageChannel: "webchat",
+    });
+
+    expect(result.sessionKey).toBe(sessionKey);
+  });
+
+  it("rejects an existing locked harness-prefixed override", () => {
+    const sessionKey = "agent:main:harness:codex:supervision:native-thread";
+    sessionEntries.set(sessionKey, {
+      sessionId: "locked-session",
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+    });
+
     expect(() =>
       resolveGatewayRequestContext({
         req: createReq({ "x-openclaw-session-key": sessionKey }),

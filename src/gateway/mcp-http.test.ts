@@ -152,6 +152,7 @@ const resolveGatewayScopedToolsMock = vi.hoisted(() =>
 );
 
 const logWarnMock = vi.hoisted(() => vi.fn<(message: string) => void>());
+const sessionEntries = vi.hoisted(() => new Map<string, Record<string, unknown>>());
 
 vi.mock("../config/io.js", () => ({
   getRuntimeConfig: () => ({ session: { mainKey: "main" } }),
@@ -168,6 +169,16 @@ vi.mock("../logger.js", async () => {
 vi.mock("../config/sessions.js", () => ({
   resolveMainSessionKey: () => "agent:main:main",
 }));
+
+vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/sessions/session-accessor.js")>();
+  return {
+    ...actual,
+    resolveSessionEntryAccessTarget: (params: { sessionKey: string }) => ({
+      entry: sessionEntries.get(params.sessionKey),
+    }),
+  };
+});
 
 vi.mock("../agents/agent-tools.before-tool-call.js", () => ({
   runBeforeToolCallHook: (...args: Parameters<typeof runBeforeToolCallHookMock>) =>
@@ -660,6 +671,7 @@ beforeEach(() => {
   clearMcpToolSchemaWarningsForTest();
   logWarnMock.mockClear();
   clearMcpLoopbackToolCallCapturesForTest();
+  sessionEntries.clear();
   resolveGatewayScopedToolsMock.mockClear();
   runBeforeToolCallHookMock.mockClear();
   runBeforeToolCallHookMock.mockImplementation(
@@ -851,6 +863,59 @@ describe("buildMcpToolSchema", () => {
 });
 
 describe("mcp loopback server", () => {
+  it("rejects reserved harness contexts before tool resolution", async () => {
+    const { runtime } = await startLoopbackServerForTest();
+    const response = await sendLoopbackToolsList({
+      token: runtime.ownerToken,
+      headers: {
+        "x-session-key": "agent:main:harness:codex:supervision:native-thread",
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      error: { code: -32600, message: expect.stringContaining("reserved") },
+    });
+    expect(resolveGatewayScopedToolsMock).not.toHaveBeenCalled();
+  });
+
+  it("allows an existing unlocked legacy harness-prefixed context", async () => {
+    const { runtime } = await startLoopbackServerForTest();
+    const sessionKey = "agent:main:harness:legacy-notes";
+    sessionEntries.set(sessionKey, { sessionId: "legacy-session", modelSelectionLocked: false });
+
+    const response = await sendLoopbackToolsList({
+      token: runtime.ownerToken,
+      headers: { "x-session-key": sessionKey },
+    });
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).result).toBeDefined();
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey }),
+    );
+  });
+
+  it("rejects an existing locked harness context", async () => {
+    const { runtime } = await startLoopbackServerForTest();
+    const sessionKey = "agent:main:harness:codex:supervision:native-thread";
+    sessionEntries.set(sessionKey, {
+      sessionId: "locked-session",
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+    });
+
+    const response = await sendLoopbackToolsList({
+      token: runtime.ownerToken,
+      headers: { "x-session-key": sessionKey },
+    });
+
+    expect(await response.json()).toMatchObject({
+      error: { code: -32600, message: expect.stringContaining("reserved") },
+    });
+    expect(resolveGatewayScopedToolsMock).not.toHaveBeenCalled();
+  });
+
   it("passes session, account, message channel, and inbound event headers into shared tool resolution", async () => {
     const port = await getFreePortBlockWithPermissionFallback({
       offsets: [0],

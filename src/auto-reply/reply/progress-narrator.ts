@@ -361,10 +361,12 @@ export function attachProgressNarratorToReplyOptions(params: {
   agentId: string;
   userMessage?: string;
   opts?: GetReplyOptions;
+  /** Model-locked native sessions must never invoke the utility model. */
+  disabled?: boolean;
 }): GetReplyOptions | undefined {
   const opts = params.opts;
   const onNarrationUpdate = opts?.onNarrationUpdate;
-  if (!opts || !onNarrationUpdate) {
+  if (!opts || !onNarrationUpdate || params.disabled === true) {
     return opts;
   }
   // Explicit config or a provider-declared default both enable narration;

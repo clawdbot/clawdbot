@@ -19,14 +19,16 @@ export function resolveModelFallbackOptions(
   configOverride: FollowupRun["run"]["config"] = run.config,
 ) {
   const config = configOverride;
-  const fallbacksOverride = resolveEffectiveModelFallbacks({
-    cfg: config,
-    agentId: run.agentId,
-    sessionKey: run.sessionKey,
-    hasSessionModelOverride: run.hasSessionModelOverride === true,
-    modelOverrideSource: run.modelOverrideSource,
-    hasAutoFallbackProvenance: run.hasAutoFallbackProvenance === true,
-  });
+  const fallbacksOverride = run.modelSelectionLocked
+    ? []
+    : resolveEffectiveModelFallbacks({
+        cfg: config,
+        agentId: run.agentId,
+        sessionKey: run.sessionKey,
+        hasSessionModelOverride: run.hasSessionModelOverride === true,
+        modelOverrideSource: run.modelOverrideSource,
+        hasAutoFallbackProvenance: run.hasAutoFallbackProvenance === true,
+      });
   return {
     cfg: config,
     provider: run.provider,
@@ -69,14 +71,16 @@ export function buildEmbeddedRunBaseParams(params: {
   isReasoningTagProvider?: ReasoningTagProviderResolver;
 }) {
   const config = params.run.config;
-  const modelFallbacksOverride = resolveEffectiveModelFallbacks({
-    cfg: config,
-    agentId: params.run.agentId,
-    sessionKey: params.run.sessionKey,
-    hasSessionModelOverride: params.run.hasSessionModelOverride === true,
-    modelOverrideSource: params.run.modelOverrideSource,
-    hasAutoFallbackProvenance: params.run.hasAutoFallbackProvenance === true,
-  });
+  const modelFallbacksOverride = params.run.modelSelectionLocked
+    ? []
+    : resolveEffectiveModelFallbacks({
+        cfg: config,
+        agentId: params.run.agentId,
+        sessionKey: params.run.sessionKey,
+        hasSessionModelOverride: params.run.hasSessionModelOverride === true,
+        modelOverrideSource: params.run.modelOverrideSource,
+        hasAutoFallbackProvenance: params.run.hasAutoFallbackProvenance === true,
+      });
   const enforceFinalTag = resolveEnforceFinalTagWithResolver(
     params.run,
     params.provider,
@@ -105,6 +109,7 @@ export function buildEmbeddedRunBaseParams(params: {
     taskSuggestionDeliveryMode: params.run.taskSuggestionDeliveryMode,
     provider: params.provider,
     model: params.model,
+    modelSelectionLocked: params.run.modelSelectionLocked,
     modelFallbacksOverride,
     ...params.authProfile,
     thinkLevel: params.run.thinkLevel,

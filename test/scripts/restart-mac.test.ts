@@ -152,10 +152,11 @@ function runRestartArgParser(...args: string[]) {
       "SIGN=0",
       "AUTO_DETECT_SIGNING=1",
       "ATTACH_ONLY=1",
+      "TARGET_ONLY=0",
       'log() { printf "%s\\n" "$*"; }',
       'fail() { printf "ERROR: %s\\n" "$*" >&2; exit 1; }',
       parserBlock,
-      'printf "wait=%s no_sign=%s sign=%s attach_only=%s\\n" "$WAIT_FOR_LOCK" "$NO_SIGN" "$SIGN" "$ATTACH_ONLY"',
+      'printf "wait=%s no_sign=%s sign=%s attach_only=%s target_only=%s\\n" "$WAIT_FOR_LOCK" "$NO_SIGN" "$SIGN" "$ATTACH_ONLY" "$TARGET_ONLY"',
     ].join("\n"),
   );
   chmodSync(harnessPath, 0o755);
@@ -193,6 +194,39 @@ function runRestartLockHarness(lockDir: string) {
   return spawnSync("bash", [harnessPath], { encoding: "utf8" });
 }
 
+function runForeignProcessClassifier(fakePs: string) {
+  const root = mkdtempSync(join(tmpdir(), "openclaw-restart-mac-test-"));
+  tempRoots.push(root);
+  const binDir = join(root, "bin");
+  mkdirSync(binDir);
+  const psPath = join(binDir, "ps");
+  writeFileSync(psPath, fakePs);
+  chmodSync(psPath, 0o755);
+
+  const script = readFileSync(restartScriptPath, "utf8");
+  const functions = script.slice(
+    script.indexOf("process_pids_matching()"),
+    script.indexOf("stop_launch_agent()"),
+  );
+  const harnessPath = join(root, "foreign-process-harness.sh");
+  writeFileSync(
+    harnessPath,
+    [
+      "#!/usr/bin/env bash",
+      functions,
+      'APP_EXECUTABLE_RELATIVE_PATH="Contents/MacOS/OpenClaw"',
+      'TARGET_EXECUTABLE="/Users/steipete/openclaw/dist/OpenClaw.app/Contents/MacOS/OpenClaw"',
+      'INSTALLED_EXECUTABLE="/Applications/OpenClaw.app/Contents/MacOS/OpenClaw"',
+      "foreign_openclaw_process_pids",
+    ].join("\n"),
+  );
+  chmodSync(harnessPath, 0o755);
+  return spawnSync("bash", [harnessPath], {
+    encoding: "utf8",
+    env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ""}` },
+  });
+}
+
 afterEach(() => {
   for (const root of tempRoots.splice(0)) {
     rmSync(root, { force: true, recursive: true });
@@ -209,10 +243,10 @@ describe("scripts/restart-mac.sh", () => {
   });
 
   it("parses restart mode flags before side effects", () => {
-    const result = runRestartArgParser("--wait", "--no-sign", "--no-attach-only");
+    const result = runRestartArgParser("--wait", "--no-sign", "--target-only");
 
     expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe("wait=1 no_sign=1 sign=0 attach_only=0");
+    expect(result.stdout.trim()).toBe("wait=1 no_sign=1 sign=0 attach_only=1 target_only=1");
     expect(result.stderr).toBe("");
   });
 
@@ -267,7 +301,9 @@ describe("scripts/restart-mac.sh", () => {
     const result = runRestartLockHarness(lockDir);
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain(`Another restart is running (pid ${process.pid}); re-run with --wait.`);
+    expect(result.stdout).toContain(
+      `Another restart is running (pid ${process.pid}); re-run with --wait.`,
+    );
     expect(result.stderr).toBe("");
     expect(existsSync(lockDir)).toBe(true);
     expect(readFileSync(join(lockDir, "pid"), "utf8")).toBe(String(process.pid));
@@ -326,12 +362,44 @@ describe("scripts/restart-mac.sh", () => {
 
   it("stops launchd supervision before killing app processes", () => {
     const script = readFileSync(restartScriptPath, "utf8");
-    const stopIndex = script.indexOf("stop_launch_agent\nlog");
+    const stopIndex = script.indexOf("stop_launch_agent\n  log");
     const killIndex = script.indexOf("if ! kill_all_openclaw");
 
     expect(stopIndex).toBeGreaterThan(-1);
     expect(killIndex).toBeGreaterThan(-1);
     expect(stopIndex).toBeLessThan(killIndex);
+  });
+
+  it("target-only mode refuses foreign app processes without broad cleanup", () => {
+    const script = readFileSync(restartScriptPath, "utf8");
+    const targetBlock = script.slice(
+      script.indexOf('if [[ "$TARGET_ONLY" -eq 1 ]]; then', script.indexOf("# 1)")),
+      script.indexOf("else", script.indexOf("# 1)")),
+    );
+
+    expect(targetBlock).toContain("foreign_openclaw_process_pids");
+    expect(targetBlock).toContain("kill_managed_openclaw");
+    expect(targetBlock).not.toContain("stop_launch_agent");
+    expect(targetBlock).not.toContain("kill_all_openclaw");
+    expect(script).toContain('[[ "${executable}" == "${TARGET_EXECUTABLE}" ]] && continue');
+    expect(script).toContain('process_pids_for_executable "${TARGET_EXECUTABLE}"');
+    expect(script).toContain("target-only restart deferred");
+  });
+
+  it("treats the canonical installed app as managed but temp bundles as foreign", () => {
+    const result = runForeignProcessClassifier(
+      [
+        "#!/usr/bin/env bash",
+        "printf '%s\\n' '  101 /Applications/OpenClaw.app/Contents/MacOS/OpenClaw --attach-only'",
+        "printf '%s\\n' '  102 /Users/steipete/openclaw/dist/OpenClaw.app/Contents/MacOS/OpenClaw --attach-only'",
+        "printf '%s\\n' '  103 /tmp/agent/OpenClaw.app/Contents/MacOS/OpenClaw --attach-only'",
+        "printf '%s\\n' '  104 /bin/sh test.sh /Applications/OpenClaw.app/Contents/MacOS/OpenClaw'",
+      ].join("\n"),
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe("103");
+    expect(result.stderr).toBe("");
   });
 
   it("verifies the launched app through the chosen bundle executable", () => {

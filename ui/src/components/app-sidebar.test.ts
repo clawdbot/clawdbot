@@ -32,6 +32,7 @@ if (!customElements.get(PROVIDER_ELEMENT_NAME)) {
 }
 
 type SidebarLifecycleState = HTMLElement & {
+  connected: boolean;
   sessionRowsByAgent: Record<string, SessionsListResult["sessions"]>;
   sessionCreatedOrder: Map<string, number>;
   sessionsAgentId: string | null;
@@ -42,6 +43,11 @@ type SidebarLifecycleState = HTMLElement & {
 
 type LobsterPetElement = HTMLElement & {
   runOutcome: "ok" | "error" | "aborted";
+};
+
+type TestSessionMenu = HTMLElement & {
+  forkDisabled: boolean;
+  readonly updateComplete: Promise<boolean>;
 };
 
 function createGatewayHarness(client: GatewayBrowserClient) {
@@ -233,6 +239,38 @@ describe("AppSidebar lobster outcome wiring", () => {
 });
 
 describe("AppSidebar session source lifecycle", () => {
+  it("disables Fork session for model-selection-locked rows", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const sessions = createSessionsHarness("main", ["agent:main:locked"]);
+    const lockedState = createSessionState("main", ["agent:main:locked"]);
+    const lockedRow = lockedState.result?.sessions[0];
+    if (!lockedRow) {
+      throw new Error("Expected locked session row");
+    }
+    lockedRow.modelSelectionLocked = true;
+    sessions.publishList({ result: lockedState.result, agentId: lockedState.agentId });
+    const { sidebar } = await mountSidebar(gateway, sessions.sessions);
+    sidebar.connected = true;
+    await sidebar.updateComplete;
+
+    const menuButton = sidebar.querySelector<HTMLButtonElement>(
+      '[data-session-key="agent:main:locked"] [data-session-menu="true"]',
+    );
+    if (!menuButton) {
+      throw new Error("Expected sidebar session menu button");
+    }
+    menuButton.click();
+    await sidebar.updateComplete;
+
+    const menu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
+    if (!menu) {
+      throw new Error("Expected sidebar session menu");
+    }
+    await menu.updateComplete;
+    expect(menu.forkDisabled).toBe(true);
+    expect(menu.querySelector<HTMLButtonElement>('[data-shortcut="f"]')?.disabled).toBe(true);
+  });
+
   it("resets cached rows and creation order when the sessions source changes", async () => {
     const client = {} as GatewayBrowserClient;
     const gateway = createGateway(client);

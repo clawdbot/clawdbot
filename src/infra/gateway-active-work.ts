@@ -1,4 +1,5 @@
 // Collects process activity shared by restart and host-suspension decisions.
+import { getActiveBackgroundExecSessionCount } from "../agents/bash-process-registry.js";
 import { getActiveEmbeddedRunCount } from "../agents/embedded-agent-runner/run-state.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import { getActiveCronJobCount } from "../cron/active-jobs.js";
@@ -19,6 +20,7 @@ export type GatewayActiveWorkCounts = {
   queueSize: number;
   pendingReplies: number;
   embeddedRuns: number;
+  backgroundExecSessions: number;
   cronRuns: number;
   activeTasks: number;
   rootRequests: number;
@@ -37,6 +39,7 @@ export type GatewayActiveWorkBlocker = {
     | "queue"
     | "reply"
     | "embedded-run"
+    | "background-exec"
     | "cron-run"
     | "task"
     | "root-request"
@@ -61,6 +64,7 @@ export type GatewayActiveWorkInspectors = {
   getQueueSize: () => number;
   getPendingReplies: () => number;
   getEmbeddedRuns: () => number;
+  getBackgroundExecSessions: () => number;
   getCronRuns: () => number;
   getActiveTasks: () => number;
   getTaskBlockers: () => ActiveTaskRestartBlocker[];
@@ -77,6 +81,7 @@ const defaultInspectors: GatewayActiveWorkInspectors = {
   getQueueSize: getTotalQueueSize,
   getPendingReplies: getTotalPendingReplies,
   getEmbeddedRuns: getActiveEmbeddedRunCount,
+  getBackgroundExecSessions: getActiveBackgroundExecSessionCount,
   getCronRuns: () => Math.max(getActiveCronJobCount(), getSuspensionVisibleCronTaskRunCount()),
   getActiveTasks: () => getInspectableActiveTaskRestartBlockers().length,
   getTaskBlockers: getInspectableActiveTaskRestartBlockers,
@@ -101,6 +106,7 @@ export function createGatewayActiveWorkSnapshot(
     queueSize: normalizeCount(resolved.getQueueSize()),
     pendingReplies: normalizeCount(resolved.getPendingReplies()),
     embeddedRuns: normalizeCount(resolved.getEmbeddedRuns()),
+    backgroundExecSessions: normalizeCount(resolved.getBackgroundExecSessions()),
     cronRuns: normalizeCount(resolved.getCronRuns()),
     activeTasks: normalizeCount(resolved.getActiveTasks()),
     rootRequests: normalizeCount(resolved.getRootRequests()),
@@ -130,6 +136,11 @@ export function createGatewayActiveWorkSnapshot(
     `${counts.pendingReplies} pending reply delivery operation(s)`,
   );
   add(counts.embeddedRuns, "embedded-run", `${counts.embeddedRuns} active embedded run(s)`);
+  add(
+    counts.backgroundExecSessions,
+    "background-exec",
+    `${counts.backgroundExecSessions} active background exec session(s)`,
+  );
   add(counts.cronRuns, "cron-run", `${counts.cronRuns} active cron run(s)`);
   add(counts.rootRequests, "root-request", `${counts.rootRequests} active gateway request(s)`);
   add(

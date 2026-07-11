@@ -211,6 +211,11 @@ export const es: TranslationMap = {
     gateway: "Gateway · local",
     folder: "Carpeta",
     folderPlaceholder: "Espacio de trabajo del agente",
+    browse: "Explorar carpetas",
+    browserUp: "Carpeta superior",
+    browserUse: "Usar esta carpeta",
+    browserEmpty: "No hay subcarpetas",
+    browserLoadFailed: "No se pudo listar esa carpeta.",
     worktree: "Worktree",
     worktreeUnavailable: "El espacio de trabajo del agente no es un checkout de git",
     baseBranch: "Rama base",
@@ -940,8 +945,8 @@ export const es: TranslationMap = {
   codexSessions: {
     eyebrow: "Flota de Codex",
     title: "Sesiones en todos tus equipos",
-    subtitle:
-      "Una vista de solo lectura de las sesiones de Codex en este Gateway y en todos los equipos conectados que las comparten.",
+    interactiveSubtitle:
+      "Inicia una rama de Chat cuya selección de modelo permanece bajo el control de Codex App Server, archiva sesiones locales elegibles con confirmación y consulta sesiones de computadoras emparejadas.",
     summaryLabel: "Resumen de sesiones de Codex",
     summary: {
       sessions: "sesiones",
@@ -950,11 +955,6 @@ export const es: TranslationMap = {
     },
     searchLabel: "Buscar sesiones de Codex",
     searchPlaceholder: "Buscar títulos de sesiones",
-    scopeLabel: "Filtro de archivado de sesiones",
-    scope: {
-      active: "Activas",
-      archived: "Archivadas",
-    },
     refresh: "Actualizar",
     disconnected: "Vuelve a conectarte al Gateway para actualizar las sesiones de Codex.",
     partial: "Hosts no disponibles: {count}. Los demás hosts siguen disponibles.",
@@ -963,11 +963,33 @@ export const es: TranslationMap = {
     loadingMore: "Cargando…",
     untitled: "Sesión de Codex sin título",
     threadId: "Hilo",
+    actions: {
+      continue: "Continuar",
+      continueAsBranch: "Continuar como rama",
+      openChat: "Abrir Chat",
+      continuing: "Continuando…",
+      archive: "Archivar",
+      continueLabel: "Continuar {title}",
+      continueAsBranchLabel: "Continuar {title} como rama",
+      openChatLabel: "Abrir Chat para {title}",
+      continueAsBranchHint:
+        "Crea un Chat a partir del historial visible persistido. En tu primer mensaje, Codex App Server selecciona el modelo y el proveedor para el nuevo hilo del harness. La selección posterior permanece controlada por Codex; OpenClaw nunca sustituye otro runtime, modelo ni fallback. La fuente permanece intacta y el trabajo en curso puede estar ausente.",
+      archiveLabel: "Archivar {title}",
+      archiveConfirmation:
+        "¿Archivar {title} y cualquier descendiente generado? Confirma que ningún otro cliente de Codex ni runner de OpenClaw los esté usando. Archivar mientras otro runner está activo puede interrumpir su trabajo.",
+      active: "Las sesiones activas no pueden iniciar una rama ni archivarse.",
+      archiveActivityUnknownHint:
+        "La actividad es desconocida porque el estado es local al proceso. Archiva solo después de confirmar que ningún otro cliente de Codex ni runner esté usando esta sesión.",
+      statusUnavailable: "Esta sesión de Codex no se puede gestionar en su estado actual.",
+      hostOffline: "Vuelve a conectar esta computadora antes de gestionar sus sesiones de Codex.",
+      gatewayOffline: "Vuelve a conectarte al gateway antes de gestionar las sesiones de Codex.",
+      remoteReadOnly: "Las sesiones de computadoras emparejadas son de solo lectura por ahora.",
+    },
     status: {
       active: "Activa",
       idle: "Inactiva",
       archived: "Archivada",
-      notLoaded: "Almacenada",
+      storedActivityUnknown: "Almacenada / actividad desconocida",
       systemError: "Error del sistema",
       unknown: "Desconocido",
     },
@@ -981,11 +1003,10 @@ export const es: TranslationMap = {
     },
     empty: {
       title: "No se encontraron hosts de Codex",
-      subtitle:
-        "Activa el uso compartido de sesiones de Codex en el Gateway o en un equipo emparejado y actualiza esta vista.",
+      supervisionSubtitle:
+        "Activa la supervisión de Codex en el gateway o en un ordenador emparejado y, a continuación, actualiza esta vista.",
       search: "Ninguna sesión de este host coincide con tu búsqueda.",
-      active: "No hay sesiones activas en este host.",
-      archived: "No hay sesiones archivadas en este host.",
+      nonArchived: "No hay sesiones no archivadas en este host.",
     },
   },
   logbook: {
@@ -2110,6 +2131,11 @@ export const es: TranslationMap = {
       clearSessionSearch: "Borrar búsqueda de sesiones",
       loadMoreSessions: "Cargar más sesiones",
       model: "Chat model",
+      modelSection: "Modelo",
+      modelLocked: "Bloqueado",
+      modelLockedLabel: "Selección de modelo controlada para esta sesión",
+      lockedSessionModel: "Modelo de sesión",
+      nativeCodexModel: "Modelo controlado por Codex",
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {
@@ -2174,6 +2200,26 @@ export const es: TranslationMap = {
       finished: "Finalizadas ({count})",
       stopTask: "Detener {title}",
       viewTranscript: "Ver transcripción",
+    },
+    sessionDiff: {
+      title: "Cambios",
+      show: "Mostrar cambios de la sesión",
+      refresh: "Actualizar cambios",
+      loading: "Cargando cambios…",
+      empty: "No hay cambios en el checkout de esta sesión.",
+      notGit: "El espacio de trabajo de esta sesión no es un checkout de git.",
+      unknownSession: "No hay ningún espacio de trabajo asociado con esta sesión.",
+      disconnected: "Gateway está desconectado.",
+      unmodifiedLines: "{count} líneas sin modificar",
+      binaryFile: "Archivo binario",
+      untracked: "sin seguimiento",
+      tooLarge: "El diff es demasiado grande para mostrarlo.",
+      truncatedFile: "Diff truncado.",
+      truncatedResult: "Se omitieron algunos cambios porque el diff es muy grande.",
+      statusAdded: "Añadido",
+      statusDeleted: "Eliminado",
+      statusRenamed: "Renombrado",
+      statusModified: "Modificado",
     },
     workspaceFiles: {
       label: "Espacio de trabajo de la sesión",

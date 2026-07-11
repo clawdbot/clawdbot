@@ -7,6 +7,10 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  isModelSelectionLocked,
+  ModelSelectionLockedError,
+} from "../../sessions/model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 
 /**
@@ -16,6 +20,17 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
  */
 const DEFAULT_PARENT_FORK_MAX_TOKENS = 100_000;
 const sessionForkRuntimeLoader = createLazyImportLoader(() => import("./session-fork.runtime.js"));
+
+export const MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE =
+  "Model-selection-locked sessions cannot create child sessions from parent context.";
+
+function assertParentSessionForkAllowed(parentEntry: SessionEntry): void {
+  // A locked harness owns both the model and transcript lineage. Copying that
+  // context into an ordinary child would let the child continue it elsewhere.
+  if (isModelSelectionLocked(parentEntry)) {
+    throw new ModelSelectionLockedError(MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE);
+  }
+}
 
 export type ParentForkDecision = SessionParentForkDecision;
 
@@ -107,6 +122,7 @@ function resolveParentForkStorePath(params: {
 export async function resolveParentForkDecision(
   params: ParentForkDecisionParams,
 ): Promise<ParentForkDecision> {
+  assertParentSessionForkAllowed(params.parentEntry);
   const maxTokens = DEFAULT_PARENT_FORK_MAX_TOKENS;
   const parentTokens = await resolveParentForkTokenCount({
     parentEntry: params.parentEntry,
@@ -131,6 +147,8 @@ export async function resolveParentForkDecision(
 export async function forkSessionFromParent(
   params: ForkSessionFromParentParams,
 ): Promise<{ sessionId: string; sessionFile: string } | null> {
+  // Keep direct callers fail-closed even if they skipped the normal decision step.
+  assertParentSessionForkAllowed(params.parentEntry);
   const storePath = resolveParentForkStorePath(params);
   const fork = await forkSessionFromParentTranscript({
     agentId: params.agentId,

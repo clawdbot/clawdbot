@@ -36,7 +36,10 @@ import {
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
-import { applyModelOverrideToSessionEntry } from "openclaw/plugin-sdk/model-session-runtime";
+import {
+  applyModelOverrideToSessionEntry,
+  ModelSelectionLockedError,
+} from "openclaw/plugin-sdk/model-session-runtime";
 import { formatModelsAvailableHeader } from "openclaw/plugin-sdk/models-provider-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
@@ -3463,6 +3466,14 @@ export const registerTelegramHandlers = ({
                 },
               });
             } catch (err) {
+              if (err instanceof ModelSelectionLockedError) {
+                try {
+                  await editMessageWithButtons(`❌ ${err.message}`, []);
+                } catch (editErr) {
+                  throw new TelegramRetryableCallbackError(editErr);
+                }
+                return;
+              }
               throw new TelegramRetryableCallbackError(err);
             }
 

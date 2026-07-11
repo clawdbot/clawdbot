@@ -3,6 +3,7 @@ import type { RouteLocation } from "@openclaw/uirouter";
 
 const APP_ROUTE_DEFINITIONS = {
   chat: { path: "/chat" },
+  "new-session": { path: "/new" },
   overview: { path: "/overview" },
   activity: { path: "/activity" },
   agents: { path: "/agents" },

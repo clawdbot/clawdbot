@@ -284,6 +284,21 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
       "Doctor preserves the shipped upgrade path only; runtime compatibility should stay behind explicit bundledDiscovery config.",
   }),
   deprecatedCompatRecord({
+    code: "doctor-codex-supervisor-plugin-config",
+    owner: "plugin",
+    introduced: "2026-05-29",
+    deprecated: "2026-07-09",
+    warningStarts: "2026-07-09",
+    removeAfter: "2026-10-09",
+    source: "plugins.entries.codex-supervisor and codex-supervisor plugin policy references",
+    migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.providers.ts",
+    replacement: "plugins.entries.codex.config.supervision",
+    docsPath: "/plugins/codex-supervision",
+    tests: ["src/commands/doctor/shared/legacy-config-migrate.test.ts"],
+    notes:
+      "The core bootstrap migration must remain available when the external Codex plugin is not installed yet.",
+  }),
+  deprecatedCompatRecord({
     code: "doctor-web-search-plugin-config",
     owner: "provider",
     introduced: "2026-04-26",

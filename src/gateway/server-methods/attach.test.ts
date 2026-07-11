@@ -4,6 +4,19 @@ import { closeMcpLoopbackServer } from "../mcp-http.js";
 import { attachHandlers } from "./attach.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
+const loadSessionEntryMock = vi.hoisted(() =>
+  vi.fn((_sessionKey: string) => ({ entry: undefined as Record<string, unknown> | undefined })),
+);
+
+vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/sessions/session-accessor.js")>();
+  return {
+    ...actual,
+    resolveSessionEntryAccessTarget: (params: { sessionKey: string }) =>
+      loadSessionEntryMock(params.sessionKey),
+  };
+});
+
 const grantOpts = (sessionKey: string, respond: ReturnType<typeof vi.fn>) =>
   ({
     params: { sessionKey },
@@ -12,7 +25,11 @@ const grantOpts = (sessionKey: string, respond: ReturnType<typeof vi.fn>) =>
   }) as unknown as GatewayRequestHandlerOptions;
 
 describe("attach gateway methods", () => {
-  beforeEach(() => resetAttachGrantsForTest());
+  beforeEach(() => {
+    resetAttachGrantsForTest();
+    loadSessionEntryMock.mockReset();
+    loadSessionEntryMock.mockReturnValue({ entry: undefined });
+  });
   afterEach(async () => {
     resetAttachGrantsForTest();
     // attach.grant lazily starts the loopback singleton; close it so it doesn't leak across files.
@@ -38,6 +55,55 @@ describe("attach gateway methods", () => {
     expect(body.env.OPENCLAW_MCP_TOKEN).toBe(body.token);
     expect(Object.keys(body.env)).toEqual(["OPENCLAW_MCP_TOKEN"]);
     expect(resolveAttachGrant(body.token)?.sessionKey).toBe("agent:main:attach-method");
+  });
+
+  it("rejects attach grants for reserved harness sessions", async () => {
+    const respond = vi.fn();
+    await attachHandlers["attach.grant"](
+      grantOpts("agent:main:harness:codex:supervision:native-thread", respond),
+    );
+
+    const [ok, , error] = respond.mock.calls[0];
+    expect(ok).toBe(false);
+    expect(error).toMatchObject({ code: "INVALID_REQUEST" });
+    expect((error as { message: string }).message).toContain("reserved");
+  });
+
+  it("allows an existing unlocked legacy harness-prefixed session", async () => {
+    loadSessionEntryMock.mockReturnValue({
+      entry: { sessionId: "legacy-session", modelSelectionLocked: false },
+    });
+    const respond = vi.fn();
+    const sessionKey = "agent:main:harness:legacy-notes";
+
+    await attachHandlers["attach.grant"](grantOpts(sessionKey, respond));
+
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+    const response = respond.mock.calls[0]?.[1] as { token: string } | undefined;
+    expect(response).toBeDefined();
+    const token = response?.token ?? "";
+    expect(resolveAttachGrant(token)?.sessionKey).toBe(sessionKey);
+  });
+
+  it("rejects attach grants for existing locked harness sessions", async () => {
+    loadSessionEntryMock.mockReturnValue({
+      entry: {
+        sessionId: "locked-session",
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+      },
+    });
+    const respond = vi.fn();
+
+    await attachHandlers["attach.grant"](
+      grantOpts("agent:main:harness:codex:supervision:native-thread", respond),
+    );
+
+    expect(respond.mock.calls[0]?.[0]).toBe(false);
+    expect(respond.mock.calls[0]?.[2]).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("reserved"),
+    });
   });
 
   it("returns an attach MCP config whose env placeholders are all supplied", async () => {

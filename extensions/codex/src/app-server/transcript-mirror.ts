@@ -1,4 +1,5 @@
 // Codex plugin module implements transcript mirror behavior.
+import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import {
   embeddedAgentLog,
@@ -8,6 +9,7 @@ import {
   type EmbeddedRunAttemptParams,
   type EmbeddedRunAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AssistantMessage, Usage } from "openclaw/plugin-sdk/llm";
 import {
   publishSessionTranscriptUpdateByIdentity,
   withSessionTranscriptWriteLock,
@@ -15,6 +17,7 @@ import {
   type SessionTranscriptWriteLockParams,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { CodexThread, JsonValue } from "./protocol.js";
 
 type MirroredAgentMessage = Extract<AgentMessage, { role: "user" | "assistant" | "toolResult" }>;
 type MirroredUserMessage = Extract<AgentMessage, { role: "user" }>;
@@ -27,6 +30,285 @@ export type CodexAppServerTranscriptMirrorResult = {
 const MIRROR_IDENTITY_META_KEY = "mirrorIdentity" as const;
 const MIRROR_ORIGIN_META_KEY = "mirrorOrigin" as const;
 const CODEX_APP_SERVER_MIRROR_ORIGIN = "codex-app-server" as const;
+const CODEX_HISTORY_IMPORT_MAX_MESSAGES = 200;
+const CODEX_HISTORY_IMPORT_MAX_BYTES = 512 * 1024;
+const CODEX_HISTORY_IMPORT_MAX_MESSAGE_BYTES = 64 * 1024;
+const CODEX_HISTORY_TRUNCATION_SUFFIX = "\n\n[Message truncated during Codex history import.]";
+const CODEX_HISTORY_ASSISTANT_API = "openai-chatgpt-responses" as const;
+const CODEX_HISTORY_ASSISTANT_PROVIDER = "openai";
+const CODEX_HISTORY_ASSISTANT_MODEL = "native-history";
+const CODEX_HISTORY_ZERO_USAGE: Usage = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 0,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+};
+
+export type CodexThreadHistoryImportResult = {
+  importedMessages: number;
+  omittedMessages: number;
+};
+
+export type BoundedCodexThreadHistoryProjection = CodexThreadHistoryImportResult & {
+  responseItems: JsonValue[];
+  transcriptMessages: AgentMessage[];
+};
+
+type ProjectedCodexHistoryMessage = {
+  message: AgentMessage;
+  responseItem: JsonValue;
+  textBytes: number;
+};
+
+function isUtf8ContinuationByte(byte: number | undefined): boolean {
+  return byte !== undefined && (byte & 0xc0) === 0x80;
+}
+
+function truncateUtf8Prefix(value: string, maxBytes: number): string {
+  const bytes = Buffer.from(value);
+  if (bytes.byteLength <= maxBytes) {
+    return value;
+  }
+  let end = Math.max(0, maxBytes);
+  while (end > 0 && isUtf8ContinuationByte(bytes[end])) {
+    end -= 1;
+  }
+  return bytes.subarray(0, end).toString("utf8");
+}
+
+function normalizeImportedHistoryText(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const text = value.trim();
+  if (!text) {
+    return undefined;
+  }
+  if (Buffer.byteLength(text, "utf8") <= CODEX_HISTORY_IMPORT_MAX_MESSAGE_BYTES) {
+    return text;
+  }
+  const suffixBytes = Buffer.byteLength(CODEX_HISTORY_TRUNCATION_SUFFIX, "utf8");
+  const contentLimitBytes = Math.max(0, CODEX_HISTORY_IMPORT_MAX_MESSAGE_BYTES - suffixBytes);
+  return `${truncateUtf8Prefix(text, contentLimitBytes)}${CODEX_HISTORY_TRUNCATION_SUFFIX}`;
+}
+
+function projectCodexUserItemText(item: Record<string, unknown>): string | undefined {
+  if (!Array.isArray(item.content)) {
+    return undefined;
+  }
+  const parts: string[] = [];
+  for (const value of item.content) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      continue;
+    }
+    const input = value as Record<string, unknown>;
+    if (input.type === "text") {
+      const text = normalizeImportedHistoryText(input.text);
+      if (text) {
+        parts.push(text);
+      }
+      continue;
+    }
+    if (input.type === "image" || input.type === "localImage") {
+      parts.push("[Image attachment]");
+      continue;
+    }
+    if (input.type === "skill" || input.type === "mention") {
+      const name = normalizeOptionalString(input.name);
+      if (name) {
+        parts.push(`${input.type === "skill" ? "$" : "@"}${name}`);
+      }
+    }
+  }
+  return normalizeImportedHistoryText(parts.join("\n"));
+}
+
+function selectTurnsThroughBoundary(
+  thread: CodexThread,
+  throughTurnId: string | null,
+): NonNullable<CodexThread["turns"]> {
+  if (throughTurnId === null) {
+    return [];
+  }
+  const turns = thread.turns ?? [];
+  const boundaryIndex = turns.findIndex((turn) => turn.id === throughTurnId);
+  if (boundaryIndex < 0) {
+    throw new Error(`Codex history boundary turn not found: ${throughTurnId}`);
+  }
+  const boundary = turns[boundaryIndex];
+  if (
+    boundary?.status !== "completed" &&
+    boundary?.status !== "interrupted" &&
+    boundary?.status !== "failed"
+  ) {
+    throw new Error(`Codex history boundary turn is not terminal: ${throughTurnId}`);
+  }
+  return turns.slice(0, boundaryIndex + 1);
+}
+
+function projectCodexThreadHistory(params: {
+  thread: CodexThread;
+  throughTurnId: string | null;
+  importedAt: number;
+  modelProvider?: string;
+}): ProjectedCodexHistoryMessage[] {
+  const projected: ProjectedCodexHistoryMessage[] = [];
+  const threadTimestamp =
+    typeof params.thread.createdAt === "number" && Number.isFinite(params.thread.createdAt)
+      ? params.thread.createdAt * 1000
+      : params.importedAt;
+  let itemOffset = 0;
+  for (const turn of selectTurnsThroughBoundary(params.thread, params.throughTurnId)) {
+    for (const value of turn.items) {
+      const item = value as unknown as Record<string, unknown>;
+      const itemId = normalizeOptionalString(item.id);
+      const identity = `${turn.id}:${itemId ?? itemOffset}`;
+      const timestampSeconds =
+        item.type === "agentMessage"
+          ? (turn.completedAt ?? turn.startedAt)
+          : (turn.startedAt ?? turn.completedAt);
+      const timestamp =
+        typeof timestampSeconds === "number" && Number.isFinite(timestampSeconds)
+          ? timestampSeconds * 1000 + itemOffset
+          : threadTimestamp + itemOffset;
+      const text =
+        item.type === "userMessage"
+          ? projectCodexUserItemText(item)
+          : item.type === "agentMessage"
+            ? normalizeImportedHistoryText(item.text)
+            : undefined;
+      const role =
+        item.type === "userMessage"
+          ? ("user" as const)
+          : item.type === "agentMessage"
+            ? ("assistant" as const)
+            : undefined;
+      itemOffset += 1;
+      if (!text || !role) {
+        continue;
+      }
+      const message =
+        role === "assistant"
+          ? attachCodexMirrorIdentity(
+              {
+                role,
+                content: [{ type: "text", text }],
+                api: CODEX_HISTORY_ASSISTANT_API,
+                provider:
+                  normalizeOptionalString(params.modelProvider) ??
+                  normalizeOptionalString(params.thread.modelProvider) ??
+                  CODEX_HISTORY_ASSISTANT_PROVIDER,
+                model: CODEX_HISTORY_ASSISTANT_MODEL,
+                usage: CODEX_HISTORY_ZERO_USAGE,
+                stopReason: "stop",
+                timestamp,
+              } satisfies AssistantMessage,
+              identity,
+            )
+          : attachCodexMirrorIdentity({ role, content: text, timestamp } as AgentMessage, identity);
+      const phase =
+        item.phase === "commentary" || item.phase === "final_answer" ? item.phase : undefined;
+      projected.push({
+        message,
+        responseItem: {
+          type: "message",
+          role,
+          content: [
+            {
+              type: role === "assistant" ? "output_text" : "input_text",
+              text,
+            },
+          ],
+          ...(role === "assistant" && phase ? { phase } : {}),
+        },
+        textBytes: Buffer.byteLength(text, "utf8"),
+      });
+    }
+  }
+  return projected;
+}
+
+function selectBoundedCodexHistoryTail(
+  projected: ProjectedCodexHistoryMessage[],
+): ProjectedCodexHistoryMessage[] {
+  const selected: ProjectedCodexHistoryMessage[] = [];
+  let selectedBytes = 0;
+  for (let index = projected.length - 1; index >= 0; index -= 1) {
+    const candidate = projected[index];
+    if (!candidate) {
+      continue;
+    }
+    if (
+      selected.length >= CODEX_HISTORY_IMPORT_MAX_MESSAGES ||
+      selectedBytes + candidate.textBytes > CODEX_HISTORY_IMPORT_MAX_BYTES
+    ) {
+      break;
+    }
+    selected.push(candidate);
+    selectedBytes += candidate.textBytes;
+  }
+  return selected.toReversed();
+}
+
+/** Projects one terminal Codex history prefix into transcript and Responses API items. */
+export function projectBoundedCodexThreadHistory(params: {
+  thread: CodexThread;
+  throughTurnId: string | null;
+  importedAt: number;
+  modelProvider?: string | null;
+}): BoundedCodexThreadHistoryProjection {
+  const projected = projectCodexThreadHistory({
+    thread: params.thread,
+    throughTurnId: params.throughTurnId,
+    importedAt: params.importedAt,
+    ...(params.modelProvider ? { modelProvider: params.modelProvider } : {}),
+  });
+  const selected = selectBoundedCodexHistoryTail(projected);
+  return {
+    importedMessages: selected.length,
+    omittedMessages: projected.length - selected.length,
+    responseItems: selected.map(({ responseItem }) => responseItem),
+    transcriptMessages: selected.map(({ message }) => message),
+  };
+}
+
+/** Imports a bounded, user-visible Codex history tail into a new OpenClaw transcript. */
+export async function importCodexThreadHistoryToTranscript(params: {
+  thread: CodexThread;
+  throughTurnId: string | null;
+  sessionFile: string;
+  sessionId: string;
+  sessionKey: string;
+  agentId?: string;
+  cwd?: string;
+  modelProvider?: string | null;
+  config?: SessionTranscriptWriteLockParams["config"];
+}): Promise<CodexThreadHistoryImportResult> {
+  const projection = projectBoundedCodexThreadHistory({
+    thread: params.thread,
+    throughTurnId: params.throughTurnId,
+    importedAt: Date.now(),
+    ...(params.modelProvider ? { modelProvider: params.modelProvider } : {}),
+  });
+  if (projection.transcriptMessages.length > 0) {
+    await mirrorCodexAppServerTranscript({
+      sessionFile: params.sessionFile,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      ...(params.cwd ? { cwd: params.cwd } : {}),
+      ...(params.config ? { config: params.config } : {}),
+      messages: projection.transcriptMessages,
+      idempotencyScope: `codex-app-server:${params.thread.id}:history`,
+    });
+  }
+  return {
+    importedMessages: projection.importedMessages,
+    omittedMessages: projection.omittedMessages,
+  };
+}
 
 function attachCodexMirrorOrigin(message: AgentMessage): AgentMessage {
   const record = message as unknown as Record<string, unknown>;

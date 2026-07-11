@@ -44,6 +44,36 @@ describe("gateway suspension protocol", () => {
     ).toBe(true);
   });
 
+  it("keeps background exec blockers count-only", () => {
+    const result = {
+      status: "busy",
+      reason: "active-work",
+      retryAfterMs: 20_000,
+      activeCount: 1,
+      blockers: [
+        {
+          kind: "background-exec",
+          count: 1,
+          message: "1 active background exec session(s)",
+        },
+      ],
+    };
+
+    expect(validateGatewaySuspendPrepareResult(result)).toBe(true);
+    expect(
+      validateGatewaySuspendPrepareResult({
+        ...result,
+        blockers: [{ ...result.blockers[0], sessionIds: ["private-session-id"] }],
+      }),
+    ).toBe(false);
+    expect(
+      validateGatewaySuspendPrepareResult({
+        ...result,
+        blockers: [{ ...result.blockers[0], command: "private command" }],
+      }),
+    ).toBe(false);
+  });
+
   it("validates status and resume results", () => {
     expect(validateGatewaySuspendStatusResult({ status: "running" })).toBe(true);
     expect(validateGatewaySuspendStatusResult({ status: "ready", expiresAtMs: 123 })).toBe(true);

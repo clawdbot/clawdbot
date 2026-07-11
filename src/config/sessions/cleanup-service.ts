@@ -33,6 +33,7 @@ import {
   capEntryCount,
   pruneStaleModelRunEntries,
   pruneStaleEntries,
+  shouldPreserveMaintenanceEntry,
   shouldRunModelRunPrune,
   type ResolvedSessionMaintenanceConfig,
 } from "./store-maintenance.js";
@@ -317,6 +318,12 @@ function pruneMissingTranscriptEntries(params: {
   let removed = 0;
   let repaired = 0;
   for (const [key, entry] of Object.entries(params.store)) {
+    // `--fix-missing` is explicit repair for ordinary rows, but it cannot
+    // release a harness ownership lock. Header-only supervised transcripts are
+    // valid while their first native turn is still pending.
+    if (entry?.modelSelectionLocked === true && shouldPreserveMaintenanceEntry({ key, entry })) {
+      continue;
+    }
     if (!entry?.sessionId) {
       if (parseAgentSessionKey(key)) {
         // Agent-scoped keys without session ids are valid routing entries; keep them.

@@ -1684,30 +1684,55 @@ function canStartConfiguredRootPlugin(params: {
   manifest: PluginManifestRecord | undefined;
   config: OpenClawConfig;
   pluginsConfig: ReturnType<typeof normalizePluginsConfigWithRegistry>;
-  activationSourcePlugins: ReturnType<typeof normalizePluginsConfigWithRegistry>;
+  activationSource: {
+    plugins: ReturnType<typeof normalizePluginsConfigWithRegistry>;
+    rootConfig?: OpenClawConfig;
+  };
+  platform?: NodeJS.Platform;
 }): boolean {
-  if (params.plugin.origin !== "bundled") {
+  if (
+    !hasConfiguredActivationPath({
+      manifest: params.manifest,
+      config: params.activationSource.rootConfig ?? params.config,
+    })
+  ) {
     return false;
   }
-  if (!hasConfiguredActivationPath({ manifest: params.manifest, config: params.config })) {
-    return false;
-  }
-  if (!params.pluginsConfig.enabled || !params.activationSourcePlugins.enabled) {
+  if (!params.pluginsConfig.enabled || !params.activationSource.plugins.enabled) {
     return false;
   }
   if (
     params.pluginsConfig.deny.includes(params.plugin.pluginId) ||
-    params.activationSourcePlugins.deny.includes(params.plugin.pluginId)
+    params.activationSource.plugins.deny.includes(params.plugin.pluginId)
   ) {
     return false;
   }
   if (
     params.pluginsConfig.entries[params.plugin.pluginId]?.enabled === false ||
-    params.activationSourcePlugins.entries[params.plugin.pluginId]?.enabled === false
+    params.activationSource.plugins.entries[params.plugin.pluginId]?.enabled === false
   ) {
     return false;
   }
-  return true;
+  if (params.plugin.origin === "bundled") {
+    return true;
+  }
+  if (
+    params.activationSource.plugins.allow.length > 0 &&
+    !params.activationSource.plugins.allow.includes(params.plugin.pluginId)
+  ) {
+    return false;
+  }
+  const activationState = resolveEffectivePluginActivationState({
+    id: params.plugin.pluginId,
+    origin: params.plugin.origin,
+    config: params.pluginsConfig,
+    rootConfig: params.config,
+    enabledByDefault: isPluginEnabledByDefaultForPlatform(params.plugin, params.platform),
+    activationSource: params.activationSource,
+  });
+  // External manifests may name broad config paths. Requiring authored
+  // enablement prevents an installed plugin from activating on ambient config.
+  return activationState.enabled && activationState.explicitlyEnabled;
 }
 
 function hasExplicitHookPolicyConfig(
@@ -2095,9 +2120,10 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
       canStartConfiguredRootPlugin({
         plugin,
         manifest,
-        config: activationSourceConfig,
+        config: params.config,
         pluginsConfig,
-        activationSourcePlugins,
+        activationSource,
+        platform: params.platform,
       })
     ) {
       pluginIds.push(plugin.pluginId);

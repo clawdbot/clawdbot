@@ -4,6 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import {
+  forkSessionEntryFromParent,
+  forkSessionFromParent,
+  MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE,
+  resolveParentForkDecision,
+} from "./session-fork.js";
 import { resolveParentForkTokenCountRuntime } from "./session-fork.runtime.js";
 
 const roots: string[] = [];
@@ -16,6 +22,65 @@ async function makeRoot(prefix: string): Promise<string> {
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
+});
+
+describe("parent fork policy", () => {
+  it("rejects model-selection-locked parent context", async () => {
+    const parentEntry: SessionEntry = {
+      sessionId: "locked-parent",
+      modelSelectionLocked: true,
+      updatedAt: 1,
+    };
+    await expect(
+      resolveParentForkDecision({
+        parentEntry,
+        storePath: "/tmp/unused-sessions.json",
+      }),
+    ).rejects.toThrow(MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE);
+    await expect(
+      forkSessionFromParent({
+        agentId: "main",
+        parentEntry,
+        parentSessionKey: "agent:main:main",
+        sessionKey: "agent:main:subagent:child",
+        storePath: "/tmp/unused-sessions.json",
+      }),
+    ).rejects.toThrow(MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE);
+  });
+
+  it("rejects a newer locked parent alias shadowed by a stale canonical row", async () => {
+    const root = await makeRoot("openclaw-parent-fork-locked-alias-");
+    const storePath = path.join(root, "sessions.json");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        "agent:main:main": {
+          sessionId: "stale-canonical-parent",
+          updatedAt: 1,
+        },
+        main: {
+          sessionId: "fresh-locked-parent",
+          modelSelectionLocked: true,
+          updatedAt: 2,
+        },
+      }),
+      "utf-8",
+    );
+
+    await expect(
+      forkSessionEntryFromParent({
+        agentId: "main",
+        fallbackEntry: { sessionId: "", updatedAt: 3 },
+        parentSessionKey: "agent:main:main",
+        parentStoreKeys: ["agent:main:main", "main"],
+        sessionKey: "agent:main:subagent:child",
+        storePath,
+      }),
+    ).rejects.toThrow(MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE);
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, unknown>;
+    expect(stored["agent:main:subagent:child"]).toBeUndefined();
+  });
 });
 
 describe("resolveParentForkTokenCountRuntime", () => {

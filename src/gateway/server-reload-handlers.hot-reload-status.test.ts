@@ -64,6 +64,10 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
       logChannels: { info: vi.fn(), error: vi.fn() },
       logCron: { error: vi.fn() },
       logReload: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      cronReconciliation: {
+        arm: () => ({ complete: async () => {} }),
+        invalidate: vi.fn(),
+      },
       channelManager: {} as never,
       activateRuntimeSecrets: vi.fn(async (config: OpenClawConfig) => ({
         sourceConfig: config,

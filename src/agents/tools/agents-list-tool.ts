@@ -28,7 +28,15 @@ type AgentListEntry = {
   model?: string;
   agentRuntime?: {
     id: string;
-    source: "env" | "agent" | "defaults" | "model" | "provider" | "implicit" | "session-key";
+    source:
+      | "env"
+      | "agent"
+      | "defaults"
+      | "model"
+      | "provider"
+      | "implicit"
+      | "session"
+      | "session-key";
   };
 };
 

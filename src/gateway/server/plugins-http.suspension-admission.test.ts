@@ -57,6 +57,7 @@ function createRootOnlyInspectors(): GatewayActiveWorkInspectors {
     getQueueSize: () => 0,
     getPendingReplies: () => 0,
     getEmbeddedRuns: () => 0,
+    getBackgroundExecSessions: () => 0,
     getCronRuns: () => 0,
     getActiveTasks: () => 0,
     getTaskBlockers: () => [],

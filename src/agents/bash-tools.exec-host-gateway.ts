@@ -39,6 +39,10 @@ import {
   type ExecAutoReviewInput,
 } from "../infra/exec-auto-review.js";
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
+import {
+  GatewayDrainingError,
+  runWithGatewayIndependentRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { isNativeApprovalChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import { markBackgrounded, tail } from "./bash-process-registry.js";
 import {
@@ -1120,40 +1124,75 @@ export async function processGatewayAllowlist(
         return;
       }
 
+      let admitted:
+        | { status: "started"; run: Awaited<ReturnType<typeof runExecProcess>> }
+        | { status: "approval-state-write-failed" }
+        | { status: "spawn-failed" };
       try {
-        await commitExecutionAuthorization({
-          source: approvalDecision.authorizationSource,
-          resolvedPath: resolvedPath ?? undefined,
-          ...(approvalDecision.allowAlwaysDecision
-            ? { allowAlwaysDecision: approvalDecision.allowAlwaysDecision }
-            : {}),
+        admitted = await runWithGatewayIndependentRootWorkAdmission(async () => {
+          try {
+            await commitExecutionAuthorization({
+              source: approvalDecision.authorizationSource,
+              resolvedPath: resolvedPath ?? undefined,
+              ...(approvalDecision.allowAlwaysDecision
+                ? { allowAlwaysDecision: approvalDecision.allowAlwaysDecision }
+                : {}),
+            });
+          } catch {
+            return { status: "approval-state-write-failed" as const };
+          }
+
+          let run: Awaited<ReturnType<typeof runExecProcess>>;
+          try {
+            run = await runExecProcess({
+              command: params.command,
+              execCommand: approvalDecision.execCommandOverride,
+              workdir: params.workdir,
+              env: params.env,
+              pathPrepend: params.pathPrepend,
+              sandbox: undefined,
+              containerWorkdir: null,
+              usePty: params.pty,
+              warnings: params.warnings,
+              maxOutput: params.maxOutput,
+              pendingMaxOutput: params.pendingMaxOutput,
+              notifyOnExit: false,
+              notifyOnExitEmptySuccess: false,
+              scopeKey: params.scopeKey,
+              sessionKey: params.notifySessionKey ?? params.sessionKey,
+              timeoutSec: effectiveTimeout,
+            });
+          } catch {
+            return { status: "spawn-failed" as const };
+          }
+
+          // Keep the admitted root until the registry owns the live process.
+          // Suspension must observe one side of this handoff at every instant.
+          markBackgrounded(run.session);
+          return { status: "started" as const, run };
         });
-      } catch {
+      } catch (error) {
+        if (
+          error instanceof GatewayDrainingError ||
+          (error instanceof Error && error.message === "gateway is draining for restart")
+        ) {
+          await sendExecApprovalFollowupResult(
+            followupTarget,
+            `Exec denied (gateway id=${approvalId}, gateway-draining): ${params.command}`,
+          );
+          return;
+        }
+        // Detached approval work must always settle through a follow-up. Treat
+        // any unexpected admission failure as a spawn failure, never an
+        // unhandled rejection from this fire-and-forget chain.
+        admitted = { status: "spawn-failed" };
+      }
+
+      if (admitted.status === "approval-state-write-failed") {
         await denyApprovalStateWriteFailure();
         return;
       }
-
-      let run: Awaited<ReturnType<typeof runExecProcess>> | null;
-      try {
-        run = await runExecProcess({
-          command: params.command,
-          execCommand: approvalDecision.execCommandOverride,
-          workdir: params.workdir,
-          env: params.env,
-          pathPrepend: params.pathPrepend,
-          sandbox: undefined,
-          containerWorkdir: null,
-          usePty: params.pty,
-          warnings: params.warnings,
-          maxOutput: params.maxOutput,
-          pendingMaxOutput: params.pendingMaxOutput,
-          notifyOnExit: false,
-          notifyOnExitEmptySuccess: false,
-          scopeKey: params.scopeKey,
-          sessionKey: params.notifySessionKey ?? params.sessionKey,
-          timeoutSec: effectiveTimeout,
-        });
-      } catch {
+      if (admitted.status === "spawn-failed") {
         await sendExecApprovalFollowupResult(
           followupTarget,
           `Exec denied (gateway id=${approvalId}, spawn-failed): ${params.command}`,
@@ -1161,7 +1200,7 @@ export async function processGatewayAllowlist(
         return;
       }
 
-      markBackgrounded(run.session);
+      const { run } = admitted;
 
       const outcome = await run.promise;
       const dynamicFollowupText = await resolveGatewayExecApprovalFollowupText({

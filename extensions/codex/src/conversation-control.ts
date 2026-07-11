@@ -1,4 +1,6 @@
 // Codex plugin module implements conversation control behavior.
+import { ModelSelectionLockedError } from "openclaw/plugin-sdk/model-session-runtime";
+import { resolveCodexBindingAppServerConnection } from "./app-server/binding-connection.js";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import {
   isCodexFastServiceTier,
@@ -75,13 +77,24 @@ export async function stopCodexConversationTurn(params: {
   if (!active) {
     return { stopped: false, message: "No active Codex run to stop." };
   }
-  const runtime = resolveCodexAppServerRuntimeOptions({ pluginConfig: params.pluginConfig });
   const lookup = buildBindingLookup(params);
   const binding = await params.bindingStore.read(params.identity);
+  if (binding?.threadId !== active.threadId) {
+    return {
+      stopped: false,
+      message: "The active Codex run no longer matches this session binding.",
+    };
+  }
+  const connection = resolveCodexBindingAppServerConnection({
+    binding,
+    authProfileId: binding?.authProfileId,
+    pluginConfig: params.pluginConfig,
+  });
+  const runtime = connection.appServer;
   const client = await getLeasedSharedCodexAppServerClient({
     startOptions: runtime.start,
     timeoutMs: runtime.requestTimeoutMs,
-    authProfileId: binding?.authProfileId,
+    authProfileId: connection.clientAuthProfileId,
     ...lookup,
   });
   try {
@@ -115,13 +128,24 @@ export async function steerCodexConversationTurn(params: {
   if (!active) {
     return { steered: false, message: "No active Codex run to steer." };
   }
-  const runtime = resolveCodexAppServerRuntimeOptions({ pluginConfig: params.pluginConfig });
   const lookup = buildBindingLookup(params);
   const binding = await params.bindingStore.read(params.identity);
+  if (binding?.threadId !== active.threadId) {
+    return {
+      steered: false,
+      message: "The active Codex run no longer matches this session binding.",
+    };
+  }
+  const connection = resolveCodexBindingAppServerConnection({
+    binding,
+    authProfileId: binding?.authProfileId,
+    pluginConfig: params.pluginConfig,
+  });
+  const runtime = connection.appServer;
   const client = await getLeasedSharedCodexAppServerClient({
     startOptions: runtime.start,
     timeoutMs: runtime.requestTimeoutMs,
-    authProfileId: binding?.authProfileId,
+    authProfileId: connection.clientAuthProfileId,
     ...lookup,
   });
   try {
@@ -154,6 +178,9 @@ export async function setCodexConversationModel(params: {
   }
   const lookup = buildBindingLookup(params);
   const binding = await requireThreadBinding(params.bindingStore, params.identity);
+  if (binding.connectionScope === "supervision") {
+    throw new ModelSelectionLockedError();
+  }
   const reviewerPolicyContext = resolveCodexModelBackedReviewerPolicyContext({
     provider: "codex",
     model,

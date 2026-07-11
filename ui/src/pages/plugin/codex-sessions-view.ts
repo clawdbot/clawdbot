@@ -1,15 +1,17 @@
-// Control UI view for read-only Codex sessions federated through the Gateway.
+// Control UI view for continuing and archiving Codex sessions through the Gateway.
 import { html, nothing, type TemplateResult } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { formatDateTimeMs, formatRelativeTimestamp } from "../../lib/format.ts";
 import {
+  archiveCodexSession,
   configureCodexSessionsPolling,
+  continueCodexSession,
+  getCodexSessionPendingAction,
   getCodexSessionsState,
   loadCodexSessions,
   loadMoreCodexSessions,
-  setCodexSessionsArchived,
   setCodexSessionsSearch,
   type CodexSessionHostPayload,
   type CodexSessionPayload,
@@ -21,6 +23,7 @@ type CodexSessionsProps = {
   client: GatewayBrowserClient | null;
   connected: boolean;
   onRequestUpdate?: () => void;
+  onContinueSession?: (sessionKey: string) => void;
 };
 
 function timestampMs(value: number | null | undefined): number | undefined {
@@ -47,7 +50,7 @@ function displayStatus(session: CodexSessionPayload): string {
     case "idle":
       return t("codexSessions.status.idle");
     case "notLoaded":
-      return t("codexSessions.status.notLoaded");
+      return t("codexSessions.status.storedActivityUnknown");
     case "systemError":
       return t("codexSessions.status.systemError");
     default:
@@ -101,9 +104,113 @@ function renderThreadMeta(session: CodexSessionPayload): TemplateResult {
   `;
 }
 
-function renderSession(session: CodexSessionPayload): TemplateResult {
+function hostActionUnavailableReason(
+  host: CodexSessionHostPayload,
+  interactionsEnabled: boolean,
+): string | undefined {
+  if (!interactionsEnabled) {
+    return t("codexSessions.actions.gatewayOffline");
+  }
+  if (!host.connected) {
+    return t("codexSessions.actions.hostOffline");
+  }
+  if (host.kind !== "gateway") {
+    return t("codexSessions.actions.remoteReadOnly");
+  }
+  return undefined;
+}
+
+function continueUnavailableReason(
+  host: CodexSessionHostPayload,
+  session: CodexSessionPayload,
+  interactionsEnabled: boolean,
+  opensExistingChat: boolean,
+): string | undefined {
+  const hostReason = hostActionUnavailableReason(host, interactionsEnabled);
+  if (hostReason) {
+    return hostReason;
+  }
+  if (opensExistingChat) {
+    return undefined;
+  }
+  if (session.status === "active") {
+    return t("codexSessions.actions.active");
+  }
+  if (session.status !== "idle" && session.status !== "notLoaded") {
+    return t("codexSessions.actions.statusUnavailable");
+  }
+  return undefined;
+}
+
+function confirmCodexArchive(title: string): boolean {
+  return (
+    typeof globalThis.confirm === "function" &&
+    globalThis.confirm(t("codexSessions.actions.archiveConfirmation", { title }))
+  );
+}
+
+function archiveUnavailableReason(
+  host: CodexSessionHostPayload,
+  session: CodexSessionPayload,
+  interactionsEnabled: boolean,
+): string | undefined {
+  const hostReason = hostActionUnavailableReason(host, interactionsEnabled);
+  if (hostReason) {
+    return hostReason;
+  }
+  if (session.status === "active") {
+    return t("codexSessions.actions.active");
+  }
+  if (session.status !== "idle" && session.status !== "notLoaded") {
+    return t("codexSessions.actions.statusUnavailable");
+  }
+  return undefined;
+}
+
+function renderSession(
+  state: CodexSessionsUiState,
+  client: GatewayBrowserClient | null,
+  host: CodexSessionHostPayload,
+  interactionsEnabled: boolean,
+  onContinueSession: ((sessionKey: string) => void) | undefined,
+  session: CodexSessionPayload,
+): TemplateResult {
+  const title = displayTitle(session);
+  const pendingAction = getCodexSessionPendingAction(state, host.hostId, session.threadId);
+  const openClawSessionKey = session.openClawSessionKey?.trim();
+  const opensExistingChat = Boolean(openClawSessionKey);
+  const continueAsBranch =
+    !opensExistingChat && (session.status === "idle" || session.status === "notLoaded");
+  const continueLabel = opensExistingChat
+    ? t("codexSessions.actions.openChatLabel", { title })
+    : continueAsBranch
+      ? t("codexSessions.actions.continueAsBranchLabel", { title })
+      : t("codexSessions.actions.continueLabel", { title });
+  const continueReason = continueUnavailableReason(
+    host,
+    session,
+    interactionsEnabled,
+    opensExistingChat,
+  );
+  const archiveReason = archiveUnavailableReason(host, session, interactionsEnabled);
+  const continueTitle =
+    continueReason ??
+    (continueAsBranch ? t("codexSessions.actions.continueAsBranchHint") : continueLabel);
+  const archiveTitle =
+    archiveReason ??
+    (session.status === "notLoaded"
+      ? t("codexSessions.actions.archiveActivityUnknownHint")
+      : t("codexSessions.actions.archiveLabel", { title }));
+  const continueDisabled = Boolean(continueReason || pendingAction);
+  const archiveDisabled = Boolean(archiveReason || pendingAction);
+  const remoteViewOnly = host.kind !== "gateway";
   return html`
-    <article class="codex-session" data-thread-id=${session.threadId}>
+    <article
+      class="codex-session"
+      data-thread-id=${session.threadId}
+      aria-label=${title}
+      aria-busy=${String(Boolean(pendingAction))}
+    >
       <div class="codex-session__glyph" aria-hidden="true">${icons.terminal}</div>
       <div class="codex-session__body">
         <div class="codex-session__heading">
@@ -117,9 +224,66 @@ function renderSession(session: CodexSessionPayload): TemplateResult {
         <div class="codex-session__identity" title=${session.threadId}>
           ${t("codexSessions.threadId")} <span>${session.threadId}</span>
         </div>
+        ${remoteViewOnly
+          ? html`<div class="codex-session__view-only">
+              ${icons.eye}<span>${t("codexSessions.actions.remoteReadOnly")}</span>
+            </div>`
+          : nothing}
+      </div>
+      <div class="codex-session__actions">
+        <button
+          class="btn btn--small codex-session__continue"
+          type="button"
+          aria-label=${continueLabel}
+          title=${continueTitle}
+          ?disabled=${continueDisabled}
+          @click=${() => {
+            void continueCodexSession(
+              state,
+              client,
+              host.hostId,
+              session.threadId,
+              onContinueSession ?? (() => undefined),
+            );
+          }}
+        >
+          ${icons.play}<span>
+            ${pendingAction === "continue"
+              ? t("codexSessions.actions.continuing")
+              : opensExistingChat
+                ? t("codexSessions.actions.openChat")
+                : continueAsBranch
+                  ? t("codexSessions.actions.continueAsBranch")
+                  : t("codexSessions.actions.continue")}
+          </span>
+        </button>
+        <button
+          class="btn btn--small codex-session__archive"
+          type="button"
+          aria-label=${t("codexSessions.actions.archiveLabel", { title })}
+          title=${archiveTitle}
+          ?disabled=${archiveDisabled}
+          @click=${() => {
+            if (!confirmCodexArchive(title)) {
+              return;
+            }
+            void archiveCodexSession(state, client, host.hostId, session.threadId, true);
+          }}
+        >
+          ${icons.archive}<span>${t("codexSessions.actions.archive")}</span>
+        </button>
       </div>
     </article>
   `;
+}
+
+function visibleSessionsForHost(
+  state: CodexSessionsUiState,
+  host: CodexSessionHostPayload,
+): CodexSessionPayload[] {
+  return host.sessions.filter(
+    (session) => getCodexSessionPendingAction(state, host.hostId, session.threadId) !== "archive",
+  );
 }
 
 function renderHost(
@@ -127,8 +291,10 @@ function renderHost(
   client: GatewayBrowserClient | null,
   host: CodexSessionHostPayload,
   interactionsEnabled: boolean,
+  onContinueSession: ((sessionKey: string) => void) | undefined,
 ): TemplateResult {
   const loadingMore = state.loadingMoreHostIds.has(host.hostId);
+  const visibleSessions = visibleSessionsForHost(state, host);
   const statusLabel = host.connected
     ? t("codexSessions.host.connected")
     : t("codexSessions.host.offline");
@@ -152,7 +318,7 @@ function renderHost(
             <span class="codex-host__status-dot" aria-hidden="true"></span>
             ${statusLabel}
             <span aria-hidden="true">·</span>
-            ${t("codexSessions.host.sessionCount", { count: String(host.sessions.length) })}
+            ${t("codexSessions.host.sessionCount", { count: String(visibleSessions.length) })}
           </div>
         </div>
         ${host.nodeId || host.endpointId
@@ -172,15 +338,17 @@ function renderHost(
             </div>
           `
         : nothing}
-      ${host.sessions.length > 0
-        ? html`<div class="codex-host__sessions">${host.sessions.map(renderSession)}</div>`
+      ${visibleSessions.length > 0
+        ? html`<div class="codex-host__sessions">
+            ${visibleSessions.map((session) =>
+              renderSession(state, client, host, interactionsEnabled, onContinueSession, session),
+            )}
+          </div>`
         : !host.error
           ? html`<div class="codex-host__empty">
               ${state.search.trim()
                 ? t("codexSessions.empty.search")
-                : state.archived
-                  ? t("codexSessions.empty.archived")
-                  : t("codexSessions.empty.active")}
+                : t("codexSessions.empty.nonArchived")}
             </div>`
           : nothing}
       ${host.nextCursor
@@ -188,6 +356,7 @@ function renderHost(
             <button
               class="btn btn--small"
               type="button"
+              aria-label=${`${t("codexSessions.loadMore")} — ${host.label}`}
               ?disabled=${loadingMore || !interactionsEnabled || !host.connected}
               @click=${() => void loadMoreCodexSessions(state, client, host.hostId)}
             >
@@ -209,14 +378,17 @@ export function renderCodexSessions(props: CodexSessionsProps) {
 
   const hostErrors = state.hosts.filter((host) => host.error).length;
   const onlineHosts = state.hosts.filter((host) => host.connected).length;
-  const sessionCount = state.hosts.reduce((count, host) => count + host.sessions.length, 0);
+  const sessionCount = state.hosts.reduce(
+    (count, host) => count + visibleSessionsForHost(state, host).length,
+    0,
+  );
   return html`
     <section class="codex-sessions">
       <header class="codex-sessions__hero">
         <div>
           <div class="codex-sessions__eyebrow">${t("codexSessions.eyebrow")}</div>
           <h1 class="codex-sessions__title">${t("codexSessions.title")}</h1>
-          <p class="codex-sessions__subtitle">${t("codexSessions.subtitle")}</p>
+          <p class="codex-sessions__subtitle">${t("codexSessions.interactiveSubtitle")}</p>
         </div>
         <div class="codex-sessions__summary" aria-label=${t("codexSessions.summaryLabel")}>
           <div>
@@ -248,26 +420,6 @@ export function renderCodexSessions(props: CodexSessionsProps) {
               )}
           />
         </label>
-        <div class="codex-sessions__scope" role="group" aria-label=${t("codexSessions.scopeLabel")}>
-          <button
-            class=${state.archived ? "" : "codex-sessions__scope--active"}
-            type="button"
-            aria-pressed=${String(!state.archived)}
-            ?disabled=${!props.connected}
-            @click=${() => setCodexSessionsArchived(state, props.client, false)}
-          >
-            ${t("codexSessions.scope.active")}
-          </button>
-          <button
-            class=${state.archived ? "codex-sessions__scope--active" : ""}
-            type="button"
-            aria-pressed=${String(state.archived)}
-            ?disabled=${!props.connected}
-            @click=${() => setCodexSessionsArchived(state, props.client, true)}
-          >
-            ${icons.archive}${t("codexSessions.scope.archived")}
-          </button>
-        </div>
         <button
           class="btn btn--small codex-sessions__refresh"
           type="button"
@@ -283,6 +435,9 @@ export function renderCodexSessions(props: CodexSessionsProps) {
         ? html`<div class="callout danger" role="alert">${t("codexSessions.disconnected")}</div>`
         : nothing}
       ${state.error ? html`<div class="callout danger" role="alert">${state.error}</div>` : nothing}
+      ${state.actionError
+        ? html`<div class="callout danger" role="alert">${state.actionError}</div>`
+        : nothing}
       ${hostErrors > 0
         ? html`<div class="codex-sessions__partial" role="status">
             ${icons.alertTriangle}${t("codexSessions.partial", {
@@ -301,9 +456,11 @@ export function renderCodexSessions(props: CodexSessionsProps) {
             ? html`<div class="codex-sessions__empty">
                 <div class="codex-sessions__empty-icon" aria-hidden="true">${icons.terminal}</div>
                 <h2>${t("codexSessions.empty.title")}</h2>
-                <p>${t("codexSessions.empty.subtitle")}</p>
+                <p>${t("codexSessions.empty.supervisionSubtitle")}</p>
               </div>`
-            : state.hosts.map((host) => renderHost(state, props.client, host, props.connected))}
+            : state.hosts.map((host) =>
+                renderHost(state, props.client, host, props.connected, props.onContinueSession),
+              )}
       </div>
     </section>
   `;

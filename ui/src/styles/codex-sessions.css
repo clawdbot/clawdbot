@@ -1,5 +1,5 @@
 /* ===========================================
-   Codex Sessions Tab - federated read-only session catalog
+   Codex Sessions Tab - federated interactive session catalog
    =========================================== */
 
 .codex-sessions {
@@ -160,50 +160,6 @@
 
 .codex-sessions__search input::placeholder {
   color: var(--muted);
-}
-
-.codex-sessions__scope {
-  display: flex;
-  align-items: center;
-  height: 36px;
-  padding: 3px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--card);
-}
-
-.codex-sessions__scope button {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 28px;
-  padding: 0 10px;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: var(--control-ui-text-sm);
-}
-
-.codex-sessions__scope button:hover:not(:disabled) {
-  color: var(--text);
-}
-
-.codex-sessions__scope button:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
-}
-
-.codex-sessions__scope button.codex-sessions__scope--active {
-  background: var(--panel-hover);
-  color: var(--text-strong);
-  box-shadow: var(--shadow-sm);
-}
-
-.codex-sessions__scope svg {
-  width: 13px;
-  height: 13px;
 }
 
 .codex-sessions__refresh {
@@ -378,7 +334,8 @@
 
 .codex-session {
   display: grid;
-  grid-template-columns: 32px minmax(0, 1fr);
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  align-items: center;
   gap: 11px;
   padding: 13px 15px;
   border-top: 1px solid var(--border);
@@ -531,6 +488,54 @@
   user-select: all;
 }
 
+.codex-session__view-only {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  margin-top: 7px;
+  padding: 3px 7px;
+  border: 1px solid color-mix(in oklab, var(--border) 80%, var(--accent));
+  border-radius: 999px;
+  color: var(--muted);
+  background: color-mix(in oklab, var(--panel-strong) 72%, transparent);
+  font-size: 10px;
+  line-height: 1.3;
+}
+
+.codex-session__view-only svg {
+  width: 11px;
+  height: 11px;
+  flex: 0 0 auto;
+}
+
+.codex-session__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.codex-session__actions .btn {
+  gap: 5px;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.codex-session__actions svg {
+  width: 13px;
+  height: 13px;
+}
+
+.codex-session__continue:not(:disabled) {
+  border-color: color-mix(in oklab, var(--accent) 34%, var(--border));
+  color: var(--text-strong);
+}
+
+.codex-session__archive:not(:disabled) {
+  color: var(--muted);
+}
+
 .codex-host__footer {
   display: flex;
   justify-content: center;
@@ -632,15 +637,6 @@
     flex-basis: 100%;
   }
 
-  .codex-sessions__scope {
-    flex: 1;
-  }
-
-  .codex-sessions__scope button {
-    flex: 1;
-    justify-content: center;
-  }
-
   .codex-host__id {
     display: none;
   }
@@ -682,6 +678,10 @@
 
   .codex-session__tag:not(.codex-session__tag--branch) {
     display: none;
+  }
+
+  .codex-session__actions {
+    justify-content: flex-start;
   }
 }
 

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import { isToolWrappedWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
+import { CORE_TOOL_FACTORY_DESCRIPTORS } from "./core-tool-factory-descriptors.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { shouldIncludeUpdatePlanToolForOpenClawTools } from "./openclaw-tools.registration.js";
 import { createUpdatePlanTool } from "./tools/update-plan-tool.js";
@@ -62,6 +63,26 @@ function openAiGpt5Params(
 describe("openclaw-tools update_plan gating", () => {
   afterEach(() => {
     setEmbeddedMode(false);
+  });
+
+  it("keeps concrete OpenClaw tool names in the factory descriptor catalog", () => {
+    const describedNames = new Set<string>(
+      CORE_TOOL_FACTORY_DESCRIPTORS.filter((descriptor) => descriptor.family === "openclaw").map(
+        (descriptor) => descriptor.name,
+      ),
+    );
+    const emittedNames = createFastToolNames({
+      agentSessionKey: "agent:main:main",
+      config: {
+        tools: { allow: ["update_plan"] },
+        transcripts: { enabled: true },
+      } as OpenClawConfig,
+      cwd: "/repo",
+      enableHeartbeatTool: true,
+      taskSuggestionDeliveryMode: "gateway",
+    });
+
+    expect(emittedNames.filter((name) => !describedNames.has(name))).toEqual([]);
   });
 
   it("keeps update_plan disabled by default", () => {

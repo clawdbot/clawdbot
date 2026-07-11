@@ -39,6 +39,26 @@ import {
   expectSessionQueueCleanup,
 } from "./test/server-sessions.test-helpers.js";
 
+const sessionLifecycleMutationObserver = vi.hoisted(() => ({
+  onEnter: undefined as
+    | ((params: { prepare?: () => Promise<void>; scope: string }) => void)
+    | undefined,
+}));
+
+vi.mock("../sessions/session-lifecycle-admission.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../sessions/session-lifecycle-admission.js")>();
+  return {
+    ...actual,
+    runExclusiveSessionLifecycleMutation: async (
+      params: Parameters<typeof actual.runExclusiveSessionLifecycleMutation>[0],
+    ) => {
+      sessionLifecycleMutationObserver.onEnter?.(params);
+      return await actual.runExclusiveSessionLifecycleMutation(params);
+    },
+  };
+});
+
 const { createSessionStoreDir, createSelectedGlobalSessionStore, openClient } =
   setupGatewaySessionsTestHarness();
 
@@ -342,6 +362,57 @@ test("sessions.compaction.* lists checkpoints and branches or restores from comp
   ws.close();
 });
 
+test("sessions.compaction.branch rejects model-selection-locked session identities", async () => {
+  const { dir, storePath } = await createSessionStoreDir();
+  const fixture = await createCheckpointFixture(dir, { legacyPreCompactionSnapshot: false });
+  const checkpointEntry = compactionCheckpointEntry(fixture, {
+    checkpointId: "checkpoint-locked-branch",
+    sessionKey: "agent:main:main",
+    createdAt: Date.now(),
+    reason: "manual",
+    summary: "locked checkpoint",
+  });
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry(fixture.sessionId, {
+        sessionFile: fixture.sessionFile,
+        compactionCheckpoints: [checkpointEntry],
+        modelSelectionLocked: true,
+      }),
+    },
+  });
+  const filesBefore = (await fs.readdir(dir)).toSorted();
+  const { ws } = await openClient();
+
+  try {
+    await expect(
+      rpcReq(ws, "sessions.compaction.branch", {
+        key: "main",
+        checkpointId: "checkpoint-locked-branch",
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "Checkpoint branch and restore are unavailable while model selection is locked.",
+      },
+    });
+    const nextStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      { modelSelectionLocked?: boolean; sessionId?: string }
+    >;
+    expect(nextStore).toEqual({
+      "agent:main:main": expect.objectContaining({
+        modelSelectionLocked: true,
+        sessionId: fixture.sessionId,
+      }),
+    });
+    expect((await fs.readdir(dir)).toSorted()).toEqual(filesBefore);
+  } finally {
+    ws.close();
+  }
+});
+
 test("sessions.compaction.* scopes selected global checkpoints to the requested agent", async () => {
   const { mainStorePath, workStorePath } = await createSelectedGlobalSessionStore();
   const workDir = path.dirname(workStorePath);
@@ -575,6 +646,8 @@ test("sessions.compact records terminal Codex native compaction", async () => {
     entries: {
       main: sessionStoreEntry("sess-codex", {
         agentHarnessId: "codex",
+        agentRuntimeOverride: "openclaw",
+        modelSelectionLocked: true,
         compactionCount: 2,
         totalTokens: 54_321,
         totalTokensFresh: true,
@@ -626,6 +699,12 @@ test("sessions.compact records terminal Codex native compaction", async () => {
     sessionKey: "agent:main:main",
     completed: true,
   });
+  expect(embeddedRunMock.compactEmbeddedAgentSession).toHaveBeenCalledWith(
+    expect.objectContaining({
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+    }),
+  );
 
   const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
     string,
@@ -1108,6 +1187,88 @@ test("sessions.compaction.restore leaves replacement-session work untouched when
   } finally {
     releaseBlocker.resolve();
     replacementAdmission.release();
+    await blocker;
+    ws.close();
+  }
+});
+
+test("sessions.compaction.restore rechecks the model-selection lock inside the lifecycle fence", async () => {
+  const { dir, storePath } = await createSessionStoreDir();
+  const fixture = await createCheckpointFixture(dir, { legacyPreCompactionSnapshot: false });
+  const checkpointEntry = compactionCheckpointEntry(fixture, {
+    checkpointId: "checkpoint-lock-race",
+    sessionKey: "agent:main:main",
+    createdAt: Date.now(),
+    reason: "manual",
+    summary: "checkpoint summary",
+  });
+  const unlockedEntry = sessionStoreEntry(fixture.sessionId, {
+    sessionFile: fixture.sessionFile,
+    compactionCheckpoints: [checkpointEntry],
+  });
+  await writeSessionStore({ entries: { main: unlockedEntry } });
+  const blockerStarted = createDeferred<void>();
+  const releaseBlocker = createDeferred<void>();
+  const blocker = runExclusiveSessionLifecycleMutation({
+    scope: storePath,
+    identities: ["main", "agent:main:main", fixture.sessionId],
+    run: async () => {
+      blockerStarted.resolve();
+      await releaseBlocker.promise;
+    },
+  });
+  await blockerStarted.promise;
+
+  const { ws } = await openClient();
+  const restoreReachedLifecycleFence = createDeferred<void>();
+  sessionLifecycleMutationObserver.onEnter = (params) => {
+    // The handler has completed its initial store read, while the blocker still
+    // keeps lifecycle prepare from observing the replacement row.
+    if (params.scope === storePath && params.prepare) {
+      restoreReachedLifecycleFence.resolve();
+    }
+  };
+
+  try {
+    let restoreSettled = false;
+    const restore = rpcReq(ws, "sessions.compaction.restore", {
+      key: "main",
+      checkpointId: "checkpoint-lock-race",
+    }).finally(() => {
+      restoreSettled = true;
+    });
+    await restoreReachedLifecycleFence.promise;
+    expect(restoreSettled).toBe(false);
+    await writeSessionStore({
+      entries: {
+        main: {
+          ...unlockedEntry,
+          modelSelectionLocked: true,
+          updatedAt: Date.now(),
+        },
+      },
+    });
+
+    releaseBlocker.resolve();
+    await blocker;
+    await expect(restore).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "Checkpoint branch and restore are unavailable while model selection is locked.",
+      },
+    });
+    const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      { modelSelectionLocked?: boolean; sessionId?: string }
+    >;
+    expect(store["agent:main:main"]).toMatchObject({
+      modelSelectionLocked: true,
+      sessionId: fixture.sessionId,
+    });
+  } finally {
+    sessionLifecycleMutationObserver.onEnter = undefined;
+    releaseBlocker.resolve();
     await blocker;
     ws.close();
   }

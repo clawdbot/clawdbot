@@ -1046,6 +1046,33 @@ describe("launchctl list detection", () => {
 });
 
 describe("launchd bootstrap repair", () => {
+  it("migrates inline secrets before making an existing plist readable", async () => {
+    const env = createDefaultLaunchdEnv();
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    const wrapperPath = "/Users/test/.openclaw/service-env/ai.openclaw.gateway-env-wrapper.sh";
+    const warn = vi.fn();
+    const secret = "legacy-secret";
+    state.files.set(wrapperPath, "custom wrapper");
+    state.files.set(
+      plistPath,
+      createTestLaunchAgentPlist({
+        label: "ai.openclaw.gateway",
+        programArguments: defaultProgramArguments,
+        environment: { OPENAI_API_KEY: secret },
+      }),
+    );
+    state.fileModes.set(plistPath, 0o600);
+
+    await repairLaunchAgentBootstrap({ env, warn });
+
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("custom behavior"));
+    expect(state.files.get(plistPath)).not.toContain(secret);
+    expect(state.fileModes.get(plistPath)).toBe(0o644);
+    expect(state.files.get("/Users/test/.openclaw/service-env/ai.openclaw.gateway.env")).toContain(
+      secret,
+    );
+  });
+
   it("enables and bootstraps the resolved label without kickstarting the fresh agent", async () => {
     const env = createDefaultLaunchdEnv();
     const repair = await repairLaunchAgentBootstrap({ env });
@@ -1486,7 +1513,7 @@ describe("launchd install", () => {
     expect(state.dirModes.get(env.HOME!)).toBe(0o755);
     expect(state.dirModes.get("/Users/test/Library")).toBe(0o755);
     expect(state.dirModes.get("/Users/test/Library/LaunchAgents")).toBe(0o755);
-    expect(state.fileModes.get(plistPath)).toBe(0o600);
+    expect(state.fileModes.get(plistPath)).toBe(0o644);
   });
 
   it("stops LaunchAgent via bootout by default, preserving KeepAlive for future crashes", async () => {

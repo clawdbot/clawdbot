@@ -352,6 +352,23 @@ describe("OpenResponses HTTP API (e2e)", () => {
       );
       expect(agentCommand).toHaveBeenCalledTimes(0);
 
+      const resHarnessSessionOverride = await postResponses(
+        port,
+        { model: "openclaw", input: "hi" },
+        {
+          "x-openclaw-session-key": "agent:main:harness:codex:supervision:spoofed-native-thread",
+        },
+      );
+      expect(resHarnessSessionOverride.status).toBe(400);
+      const harnessSessionJson = (await resHarnessSessionOverride.json()) as {
+        error?: { type?: string; message?: string };
+      };
+      expect(harnessSessionJson.error?.type).toBe("invalid_request_error");
+      expect(harnessSessionJson.error?.message).toBe(
+        "`x-openclaw-session-key` cannot use reserved internal session namespaces.",
+      );
+      expect(agentCommand).toHaveBeenCalledTimes(0);
+
       mockAgentOnce([{ text: "hello" }]);
       const resModel = await postResponses(port, { model: "openclaw/beta", input: "hi" });
       expect(resModel.status).toBe(200);

@@ -1,10 +1,15 @@
 // Codex tests cover plugin app cache key plugin behavior.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  buildCodexAppServerConnectionFingerprint,
   buildCodexAppServerRuntimeFingerprint,
   buildCodexPluginAppCacheKey,
   resolveCodexPluginAppCacheEndpoint,
 } from "./plugin-app-cache-key.js";
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 describe("resolveCodexPluginAppCacheEndpoint", () => {
   it("keys plugin app inventory by websocket credentials without exposing them", () => {
@@ -115,5 +120,24 @@ describe("resolveCodexPluginAppCacheEndpoint", () => {
     expect(first).not.toEqual(second);
     expect(first).not.toContain("secret-token");
     expect(second).not.toContain("secret-token");
+  });
+
+  it("fingerprints the effective user Codex home for supervised connections", () => {
+    const appServer = {
+      start: {
+        transport: "stdio" as const,
+        homeScope: "user" as const,
+        command: "codex",
+        args: ["app-server"],
+        headers: {},
+      },
+      connectionClass: "local-loopback" as const,
+    };
+    vi.stubEnv("CODEX_HOME", "/tmp/codex-home-one");
+    const first = buildCodexAppServerConnectionFingerprint(appServer);
+    vi.stubEnv("CODEX_HOME", "/tmp/codex-home-two");
+    const second = buildCodexAppServerConnectionFingerprint(appServer);
+
+    expect(first).not.toEqual(second);
   });
 });

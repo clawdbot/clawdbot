@@ -9,9 +9,15 @@ import {
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveToolLoopDetectionConfig } from "../agents/tool-loop-detection-config.js";
 import { getRuntimeConfig } from "../config/io.js";
+import { resolveSessionEntryAccessTarget } from "../config/sessions/session-accessor.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logDebug, logWarn } from "../logger.js";
+import {
+  AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
+  isAgentHarnessSessionKey,
+  isAgentHarnessSessionStoreEntryProtected,
+} from "../sessions/agent-harness-session-key.js";
 import {
   resolveMcpLoopbackClientGrant,
   revokeMcpLoopbackClientGrantsForRuntime,
@@ -243,6 +249,28 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
                   }),
                 )
             : undefined;
+        const harnessEntry = isAgentHarnessSessionKey(requestContext.sessionKey)
+          ? resolveSessionEntryAccessTarget({ cfg, sessionKey: requestContext.sessionKey }).entry
+          : undefined;
+        if (
+          isAgentHarnessSessionKey(requestContext.sessionKey) &&
+          (!harnessEntry ||
+            isAgentHarnessSessionStoreEntryProtected(requestContext.sessionKey, harnessEntry))
+        ) {
+          const errors = messages.map((message) =>
+            jsonRpcError(
+              readJsonRpcRequestId(message),
+              -32600,
+              AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
+            ),
+          );
+          const payload = Array.isArray(parsed)
+            ? JSON.stringify(errors)
+            : JSON.stringify(errors[0]);
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(payload);
+          return;
+        }
         const yieldContext = resolveMcpLoopbackYieldContext(cliRequestCaptureHandle);
         const scopedTools = toolCache.resolve({
           cfg,

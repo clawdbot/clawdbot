@@ -60,8 +60,7 @@ actor MacNodeRuntime {
         },
         refreshCanvasSurfaceUrl: @escaping @Sendable () async -> String? = { nil },
         codexThreadCatalogEnabled: @escaping @Sendable () -> Bool = {
-            OpenClawConfigFile.explicitlyEnabledPlugin(
-                MacNodeCodexThreadCatalogContract.pluginId)
+            MacNodeCodexThreadCatalog.shouldAdvertise()
         },
         codexThreadListRequest: @escaping @Sendable (String?) async throws -> String = { paramsJSON in
             try await MacNodeCodexThreadCatalog.list(paramsJSON: paramsJSON)

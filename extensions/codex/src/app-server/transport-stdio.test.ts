@@ -2,13 +2,18 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerStartOptions } from "./config.js";
 import {
+  createStdioTransport,
   resolveCodexAppServerDetachedMode,
   resolveCodexAppServerSpawnEnv,
   resolveCodexAppServerSpawnInvocation,
 } from "./transport-stdio.js";
+
+const spawnMock = vi.hoisted(() => vi.fn(() => ({ pid: 1234 })));
+
+vi.mock("node:child_process", () => ({ spawn: spawnMock }));
 
 const tempDirs: string[] = [];
 
@@ -22,6 +27,10 @@ afterEach(async () => {
   for (const dir of tempDirs.splice(0)) {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+beforeEach(() => {
+  spawnMock.mockClear();
 });
 
 function startOptions(command: string): CodexAppServerStartOptions {
@@ -104,6 +113,21 @@ describe("resolveCodexAppServerSpawnInvocation", () => {
         },
       ),
     ).toThrow("Windows spawn command must be an executable path only");
+  });
+});
+
+describe("createStdioTransport", () => {
+  it("spawns a compatibility endpoint in its configured working directory", () => {
+    createStdioTransport({
+      ...startOptions("codex"),
+      cwd: "/srv/codex-project",
+    });
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      "codex",
+      ["app-server", "--listen", "stdio://"],
+      expect.objectContaining({ cwd: "/srv/codex-project" }),
+    );
   });
 });
 

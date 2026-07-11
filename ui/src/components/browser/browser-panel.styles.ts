@@ -255,7 +255,7 @@ export const browserPanelStyles = css`
     border-radius: 8px;
     border: 1px solid var(--border, #262b34);
     background: var(--bg, #0e1015);
-    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+    box-shadow: var(--shadow-md, 0 4px 16px rgba(0, 0, 0, 0.3));
     font-size: 12px;
     pointer-events: none;
   }

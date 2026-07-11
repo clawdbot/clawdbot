@@ -3798,6 +3798,48 @@ describe("collectCodexRouteWarnings", () => {
     expect(store.other.agentHarnessId).toBe("codex");
   });
 
+  it("skips valid locked agent-harness rows while repairing ordinary legacy routes", () => {
+    const supervisedKey = "agent:main:harness:codex:supervision:abc123";
+    const ordinaryLockedKey = "agent:main:ordinary-locked";
+    const lockedEntry: SessionEntry = {
+      sessionId: "s-supervised",
+      updatedAt: 1,
+      modelSelectionLocked: true,
+      agentHarnessId: "codex",
+      agentRuntimeOverride: "codex",
+      modelProvider: "openai-codex",
+      model: "gpt-5.5",
+      providerOverride: "openai-codex",
+      modelOverride: "openai-codex/gpt-5.4",
+      fallbackNoticeSelectedModel: "openai-codex/gpt-5.5",
+    };
+    const store: Record<string, SessionEntry> = {
+      [supervisedKey]: lockedEntry,
+      [ordinaryLockedKey]: { ...lockedEntry, sessionId: "s-ordinary-locked" },
+      ordinary: {
+        sessionId: "s-ordinary",
+        updatedAt: 2,
+        modelProvider: "openai-codex",
+        model: "gpt-5.5",
+        agentHarnessId: "codex",
+      },
+    };
+    const supervised = structuredClone(store[supervisedKey]);
+    const ordinaryLocked = structuredClone(store[ordinaryLockedKey]);
+
+    const result = repairCodexSessionStoreRoutes({ store, now: 123 });
+
+    expect(result).toEqual({ changed: true, sessionKeys: ["ordinary"] });
+    expect(store[supervisedKey]).toEqual(supervised);
+    expect(store[ordinaryLockedKey]).toEqual(ordinaryLocked);
+    expect(store.ordinary).toMatchObject({
+      updatedAt: 123,
+      modelProvider: "openai",
+      model: "gpt-5.5",
+    });
+    expect(store.ordinary.agentHarnessId).toBeUndefined();
+  });
+
   it("preserves explicit OpenClaw runtime pins while repairing legacy session routes", () => {
     const store: Record<string, SessionEntry> = {
       main: {

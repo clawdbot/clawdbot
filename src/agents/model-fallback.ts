@@ -577,10 +577,14 @@ async function resolveModelFallbackCandidateHarnessAuthPrecheck(
   if (!params.cfg) {
     return result(false);
   }
-  if (isCliProvider(params.provider, params.cfg)) {
+  const agentRuntimeOverride = normalizeOptionalAgentRuntimeId(agentHarnessRuntimeOverride);
+  const explicitAgentRuntime =
+    agentRuntimeOverride && !isDefaultAgentRuntimeId(agentRuntimeOverride)
+      ? agentRuntimeOverride
+      : undefined;
+  if (!explicitAgentRuntime && isCliProvider(params.provider, params.cfg)) {
     return result(true);
   }
-  const agentRuntimeOverride = normalizeOptionalAgentRuntimeId(agentHarnessRuntimeOverride);
   const harnessPolicy = resolveAgentHarnessPolicy({
     provider: params.provider,
     modelId: params.model,
@@ -588,19 +592,8 @@ async function resolveModelFallbackCandidateHarnessAuthPrecheck(
     agentId: params.agentId,
     sessionKey: params.sessionKey,
   });
-  const agentRuntime =
-    agentRuntimeOverride && !isDefaultAgentRuntimeId(agentRuntimeOverride)
-      ? agentRuntimeOverride
-      : harnessPolicy.runtime;
-  const agentRuntimeSource =
-    agentRuntimeOverride && !isDefaultAgentRuntimeId(agentRuntimeOverride)
-      ? "model"
-      : harnessPolicy.runtimeSource;
-  if (isCliAgentRuntime(agentRuntime, params.cfg)) {
-    // CLI runtimes own their transport/auth, so stale OpenClaw provider
-    // profile state must not block the candidate before the CLI starts.
-    return result(true);
-  }
+  const agentRuntime = explicitAgentRuntime ?? harnessPolicy.runtime;
+  const agentRuntimeSource = explicitAgentRuntime ? "model" : harnessPolicy.runtimeSource;
   if (agentRuntime === "openclaw") {
     return result(false);
   }
@@ -612,12 +605,17 @@ async function resolveModelFallbackCandidateHarnessAuthPrecheck(
     model: params.model,
     agentHarnessRuntimeOverride,
   });
-  if (!getRegisteredAgentHarness(agentRuntime)) {
-    throw new MissingAgentHarnessError(agentRuntime);
+  if (getRegisteredAgentHarness(agentRuntime)) {
+    // A prepared harness owns its transport/auth even when a CLI backend happens
+    // to reuse the same id. Runtime identity must be resolved before auth preflight.
+    return result(true);
   }
-  // Explicit non-Codex plugin harnesses own transport/auth; stale OpenClaw
-  // provider cooldowns must not block the harness before it starts.
-  return result(agentRuntime !== "codex");
+  if (isCliAgentRuntime(agentRuntime, params.cfg)) {
+    // CLI runtimes own their transport/auth, so stale OpenClaw provider
+    // profile state must not block the candidate before the CLI starts.
+    return result(true);
+  }
+  throw new MissingAgentHarnessError(agentRuntime);
 }
 
 function resolveCandidateAttemptError(

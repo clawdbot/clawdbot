@@ -6,6 +6,7 @@ import type { RouteId } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveEmbedSandbox } from "../../lib/chat/tool-display.ts";
+import { searchForSession } from "../../lib/sessions/navigation.ts";
 import { OpenClawLightDomContentsElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { pluginTabKey } from "./route.ts";
@@ -21,13 +22,14 @@ type BundledPluginTabView = {
     client: GatewayBrowserClient | null;
     connected: boolean;
     onRequestUpdate?: () => void;
+    onContinueSession?: (sessionKey: string) => void;
   }) => unknown;
   stop: (host: object) => void;
 };
 
 // Keyed by pluginId/tabId: tab ids are only unique within their plugin.
 const BUNDLED_TAB_VIEWS: Record<string, () => Promise<BundledPluginTabView>> = {
-  "codex-supervisor/sessions": async () => {
+  "codex/sessions": async () => {
     const [view, controller] = await Promise.all([
       import("./codex-sessions-view.ts"),
       import("./codex-sessions-controller.ts"),
@@ -158,6 +160,8 @@ export class PluginPage extends OpenClawLightDomContentsElement {
         client: snapshot.client,
         connected: snapshot.connected,
         onRequestUpdate: () => this.requestUpdate(),
+        onContinueSession: (sessionKey) =>
+          context.navigate("chat", { search: searchForSession(sessionKey) }),
       });
     }
     if (info?.path) {

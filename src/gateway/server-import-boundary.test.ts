@@ -75,6 +75,9 @@ describe("gateway startup import boundaries", () => {
     expect(serverImpl.slice(markHelperStart, markHelperEnd)).toContain(
       "clearPostReadyMaintenanceTimer();",
     );
+    expect(serverImpl.slice(markHelperStart, markHelperEnd)).toContain(
+      "cronReconciliation.invalidate();",
+    );
     expect(postReadyStart).toBeGreaterThan(-1);
     expect(postReadyBlock).toContain("isClosing: () => closePreludeStarted");
     expect(postReadyBlock).toContain("if (closePreludeStarted)");

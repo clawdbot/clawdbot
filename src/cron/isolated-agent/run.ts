@@ -38,6 +38,11 @@ import { createDiagnosticMessageLifecycle } from "../../logging/message-lifecycl
 import { isCommandLaneTaskTimeoutError } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import {
+  AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE,
+  AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
+  isAgentHarnessSessionKey,
+} from "../../sessions/agent-harness-session-key.js";
+import {
   beginSessionWorkAdmission,
   type SessionWorkAdmissionLease,
 } from "../../sessions/session-lifecycle-admission.js";
@@ -622,6 +627,28 @@ async function prepareCronRunContext(params: {
     mainKey: input.cfg.session?.mainKey,
     cfg: input.cfg,
   });
+  const cronSession = resolveCronSession({
+    cfg: input.cfg,
+    sessionKey: agentSessionKey,
+    agentId,
+    nowMs: Date.now(),
+    forceNew: input.job.sessionTarget === "isolated",
+  });
+  const reservedKey = isAgentHarnessSessionKey(agentSessionKey);
+  if (cronSession.initialSessionEntry?.modelSelectionLocked === true) {
+    // The generic detached executor cannot preserve a harness-owned runtime
+    // lock. Reject before model selection can route the row through that path.
+    throw new Error(
+      reservedKey
+        ? AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE
+        : AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE,
+    );
+  }
+  if (reservedKey && !cronSession.initialSessionEntry) {
+    // `harness:*` was historically a valid public key. Existing unlocked rows
+    // stay ordinary, while missing keys remain reserved for trusted creation.
+    throw new Error(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
+  }
   const payloadHookExternalContentSource =
     input.job.payload.kind === "agentTurn" ? input.job.payload.externalContentSource : undefined;
   const hookExternalContentSource =
@@ -645,13 +672,6 @@ async function prepareCronRunContext(params: {
 
   const isGmailHook = hookExternalContentSource === "gmail";
   const now = Date.now();
-  const cronSession = resolveCronSession({
-    cfg: input.cfg,
-    sessionKey: agentSessionKey,
-    agentId,
-    nowMs: now,
-    forceNew: input.job.sessionTarget === "isolated",
-  });
   const runSessionId = cronSession.sessionEntry.sessionId;
   const currentRunSessionId = () => cronSession.sessionEntry.sessionId ?? runSessionId;
   if (!cronSession.sessionEntry.sessionFile?.trim()) {

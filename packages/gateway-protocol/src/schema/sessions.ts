@@ -156,6 +156,59 @@ export const SessionsFilesGetResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Change status for one file in a session checkout diff. */
+export const SessionDiffFileStatusSchema = Type.Union([
+  Type.Literal("added"),
+  Type.Literal("modified"),
+  Type.Literal("deleted"),
+  Type.Literal("renamed"),
+]);
+
+/** One changed file in a session checkout diff. */
+export const SessionDiffFileSchema = Type.Object(
+  {
+    path: NonEmptyString,
+    oldPath: Type.Optional(NonEmptyString),
+    status: SessionDiffFileStatusSchema,
+    additions: Type.Integer({ minimum: 0 }),
+    deletions: Type.Integer({ minimum: 0 }),
+    binary: Type.Optional(Type.Boolean()),
+    untracked: Type.Optional(Type.Boolean()),
+    /** Per-file unified patch text; absent for binary or oversized files. */
+    patch: Type.Optional(Type.String()),
+    truncated: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
+/** Reads the git diff of a session checkout against its base branch. */
+export const SessionsDiffParamsSchema = Type.Object(
+  {
+    sessionKey: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
+/** Branch + working-tree diff for one session checkout. */
+export const SessionsDiffResultSchema = Type.Object(
+  {
+    sessionKey: NonEmptyString,
+    root: Type.Optional(NonEmptyString),
+    branch: Type.Optional(NonEmptyString),
+    /** Display label of the diff base: the default branch name or "HEAD". */
+    baseRef: Type.Optional(NonEmptyString),
+    files: Type.Array(SessionDiffFileSchema),
+    additions: Type.Integer({ minimum: 0 }),
+    deletions: Type.Integer({ minimum: 0 }),
+    truncated: Type.Optional(Type.Boolean()),
+    unavailableReason: Type.Optional(
+      Type.Union([Type.Literal("unknown_session"), Type.Literal("not_git")]),
+    ),
+  },
+  { additionalProperties: false },
+);
+
 /** Lists sessions with optional scope, activity, label, and preview filters. */
 export const SessionsListParamsSchema = Type.Object(
   {

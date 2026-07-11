@@ -20,6 +20,7 @@ import type {
   TextContent,
 } from "../llm/types.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.js";
+import { isModelSelectionLocked } from "../sessions/model-overrides.js";
 import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
 import { resolveExternalCliAuthOverlayScopeFromSelection } from "./auth-profiles/external-cli-auth-selection.js";
@@ -61,6 +62,7 @@ import {
   unwrapSecretSentinelsForProviderEgress,
 } from "./provider-secret-egress.js";
 import { registerProviderStreamForModel } from "./provider-stream.js";
+import { resolveSessionRuntimeOverrideForProvider } from "./session-runtime-compat.js";
 import { stripToolResultDetails } from "./session-transcript-repair.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 import { sanitizeImageBlocks } from "./tool-images.js";
@@ -491,7 +493,18 @@ export async function runBtwSideQuestion(
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, sessionAgentId);
   const preparedHarnesses = new Map<string, AgentHarness>();
   const prepareHarness = async (provider: string, modelId: string): Promise<AgentHarness> => {
-    const key = `${provider}/${modelId}`;
+    const agentHarnessId = isModelSelectionLocked(params.sessionEntry)
+      ? params.sessionEntry.agentHarnessId
+      : undefined;
+    const agentHarnessRuntimeOverride = agentHarnessId
+      ? undefined
+      : resolveSessionRuntimeOverrideForProvider({
+          provider,
+          entry: params.sessionEntry,
+          cfg: params.cfg,
+        });
+    const selectedHarnessId = agentHarnessId ?? agentHarnessRuntimeOverride ?? "configured";
+    const key = `${provider}/${modelId}/${selectedHarnessId}`;
     const cached = preparedHarnesses.get(key);
     if (cached) {
       return cached;
@@ -503,6 +516,8 @@ export async function runBtwSideQuestion(
       agentId: sessionAgentId,
       sessionKey: params.sessionKey,
       workspaceDir,
+      ...(agentHarnessId ? { agentHarnessId } : {}),
+      ...(agentHarnessRuntimeOverride ? { agentHarnessRuntimeOverride } : {}),
     });
     const harness = selectAgentHarness({
       provider,
@@ -510,6 +525,8 @@ export async function runBtwSideQuestion(
       config: params.cfg,
       agentId: sessionAgentId,
       sessionKey: params.sessionKey,
+      ...(agentHarnessId ? { agentHarnessId } : {}),
+      ...(agentHarnessRuntimeOverride ? { agentHarnessRuntimeOverride } : {}),
     });
     preparedHarnesses.set(key, harness);
     return harness;

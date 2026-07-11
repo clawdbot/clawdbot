@@ -66,6 +66,9 @@ struct OnboardingAISetupTests {
     @Test func `codex activation covers install probe and finalization`() {
         #expect(OnboardingAISetupModel.activationRequestTimeoutMs(for: "codex-cli") == 480_000)
         #expect(OnboardingAISetupModel.activationRequestTimeoutMs(for: "claude-cli") == 150_000)
+        #expect(OnboardingAISetupModel.activationRequestTimeoutMs(
+            for: "api-key",
+            provisionsCodexSupervision: true) == 480_000)
         #expect(OnboardingAISetupModel.activationRequestTimeoutMs(for: "codex-cli") >= (305 + 90) * 1000)
         #expect(OnboardingAISetupModel.activationOutcomeDeadlineMs(for: "codex-cli") == 510_000)
     }

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
+import { MODEL_SELECTION_LOCKED_MESSAGE } from "../../sessions/model-overrides.js";
 
 vi.hoisted(() => {
   vi.resetModules();
@@ -1709,6 +1710,27 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     );
 
     expect(sessionEntry.agentRuntimeOverride).toBe("codex");
+  });
+
+  it("rejects model and runtime changes for model-locked sessions", async () => {
+    const sessionEntry = createSessionEntry({
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-6",
+      agentHarnessId: "codex",
+      agentRuntimeOverride: "codex",
+      modelSelectionLocked: true,
+    });
+    const initialSessionEntry = { ...sessionEntry };
+
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/model openai/gpt-4o --runtime openclaw"),
+        sessionEntry,
+      }),
+    );
+
+    expect(result?.text).toBe(MODEL_SELECTION_LOCKED_MESSAGE);
+    expect(sessionEntry).toEqual(initialSessionEntry);
   });
 
   it("persists /model only on the targeted session entry", async () => {

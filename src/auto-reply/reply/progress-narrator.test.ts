@@ -236,6 +236,17 @@ describe("attachProgressNarratorToReplyOptions", () => {
     );
   });
 
+  it("returns options unchanged for model-locked native sessions", () => {
+    const opts: GetReplyOptions = { onNarrationUpdate: vi.fn(), onToolStart: vi.fn() };
+    expect(
+      attachProgressNarratorToReplyOptions({
+        cfg: utilityCfg,
+        agentId: "main",
+        opts,
+        disabled: true,
+      }),
+    ).toBe(opts);
+  });
   it("tees tool events while preserving the channel callback results", async () => {
     const onToolStart = vi.fn(async () => {});
     const onItemEvent = vi.fn(() => false as const);

@@ -1974,6 +1974,245 @@ describe("legacy migrate x_search auth", () => {
   });
 });
 
+describe("legacy Codex Supervisor config migrate", () => {
+  it("normalizes padded legacy plugin ids during migration", () => {
+    const res = migrateLegacyConfigForTest({
+      plugins: {
+        allow: [" CODEX-SUPERVISOR ", "codex"],
+        deny: [" codex-supervisor "],
+        entries: {
+          " CODEX ": {
+            config: { appServer: { transport: "stdio" } },
+          },
+          " CODEX-SUPERVISOR ": {
+            enabled: true,
+            config: { allowWriteControls: true },
+          },
+        },
+      },
+    });
+
+    expect(res.config?.plugins?.allow).toEqual(["codex"]);
+    expect(res.config?.plugins?.deny).toEqual([]);
+    expect(res.config?.plugins?.entries).not.toHaveProperty(" CODEX-SUPERVISOR ");
+    expect(res.config?.plugins?.entries).not.toHaveProperty("codex");
+    expect(res.config?.plugins?.entries?.[" CODEX "]).toEqual({
+      config: {
+        appServer: { transport: "stdio" },
+        supervision: {
+          enabled: false,
+          allowWriteControls: true,
+        },
+      },
+    });
+  });
+
+  it("moves active Supervisor config into Codex supervision and rewrites the allowlist", () => {
+    const raw = {
+      plugins: {
+        allow: ["telegram", "codex-supervisor", "codex"],
+        entries: {
+          "codex-supervisor": {
+            enabled: true,
+            config: {
+              endpoints: [
+                {
+                  id: "local",
+                  transport: "stdio-proxy",
+                  command: "codex",
+                },
+              ],
+              allowRawTranscripts: true,
+              allowWriteControls: true,
+            },
+            hooks: { enabled: true },
+          },
+        },
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toContain("plugins");
+
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.plugins?.allow).toEqual(["telegram", "codex"]);
+    expect(res.config?.plugins?.entries?.codex).toEqual({
+      enabled: true,
+      config: {
+        supervision: {
+          enabled: true,
+          endpoints: [
+            {
+              id: "local",
+              transport: "stdio-proxy",
+              command: "codex",
+            },
+          ],
+          allowRawTranscripts: true,
+          allowWriteControls: true,
+        },
+      },
+    });
+    expect(res.config?.plugins?.entries?.["codex-supervisor"]).toBeUndefined();
+    expect(res.changes).toContain(
+      "Moved plugins.entries.codex-supervisor to plugins.entries.codex.config.supervision.",
+    );
+    expect(res.changes).toContain("Rewrote plugins.allow codex-supervisor references to codex.");
+
+    const rerun = migrateLegacyConfigForTest(res.config);
+    expect(rerun).toEqual({ config: null, changes: [] });
+  });
+
+  it.each([
+    { canonicalEnabled: undefined, legacyEnabled: true, expected: true },
+    { canonicalEnabled: undefined, legacyEnabled: false, expected: undefined },
+    { canonicalEnabled: true, legacyEnabled: false, expected: true },
+    { canonicalEnabled: false, legacyEnabled: true, expected: false },
+  ])(
+    "only activates missing canonical Codex state for enabled supervision ($canonicalEnabled, $legacyEnabled)",
+    ({ canonicalEnabled, legacyEnabled, expected }) => {
+      const codexEntry: Record<string, unknown> = { config: {} };
+      if (canonicalEnabled !== undefined) {
+        codexEntry.enabled = canonicalEnabled;
+      }
+      const res = migrateLegacyConfigForTest({
+        plugins: {
+          entries: {
+            codex: codexEntry,
+            "codex-supervisor": { enabled: legacyEnabled },
+          },
+        },
+      });
+
+      expect(res.config?.plugins?.entries?.codex?.enabled).toBe(expected);
+    },
+  );
+
+  it("does not disable an existing implicit Codex harness when old supervision was disabled", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+        },
+      },
+      plugins: {
+        entries: {
+          codex: {
+            config: {
+              appServer: { transport: "stdio" },
+            },
+          },
+          "codex-supervisor": {
+            enabled: false,
+          },
+        },
+      },
+    });
+
+    expect(res.config?.agents?.defaults?.model).toBe("openai/gpt-5.5");
+    expect(res.config?.plugins?.entries?.codex).toEqual({
+      config: {
+        appServer: { transport: "stdio" },
+        supervision: { enabled: false },
+      },
+    });
+  });
+
+  it("preserves canonical Codex values while filling missing supervision fields", () => {
+    const res = migrateLegacyConfigForTest({
+      plugins: {
+        deny: ["codex-supervisor", "telegram"],
+        entries: {
+          codex: {
+            enabled: false,
+            config: {
+              appServer: { transport: "stdio" },
+              supervision: {
+                enabled: true,
+                endpoints: [{ id: "canonical", transport: "stdio-proxy" }],
+                allowWriteControls: false,
+              },
+            },
+          },
+          "codex-supervisor": {
+            enabled: true,
+            config: {
+              endpoints: [{ id: "legacy", transport: "stdio-proxy" }],
+              allowRawTranscripts: true,
+              allowWriteControls: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.config?.plugins?.deny).toEqual(["telegram"]);
+    expect(res.config?.plugins?.entries?.codex).toEqual({
+      enabled: false,
+      config: {
+        appServer: { transport: "stdio" },
+        supervision: {
+          enabled: true,
+          endpoints: [{ id: "canonical", transport: "stdio-proxy" }],
+          allowRawTranscripts: true,
+          allowWriteControls: false,
+        },
+      },
+    });
+    expect(res.changes).toContain("Removed plugins.deny codex-supervisor references.");
+  });
+
+  it("keeps migrated supervision dormant when the old plugin was denied", () => {
+    const res = migrateLegacyConfigForTest({
+      plugins: {
+        deny: ["codex-supervisor"],
+        entries: {
+          "codex-supervisor": {
+            enabled: true,
+            config: { allowWriteControls: true },
+          },
+        },
+      },
+    });
+
+    expect(res.config?.plugins?.deny).toEqual([]);
+    expect(res.config?.plugins?.entries?.codex).toEqual({
+      config: {
+        supervision: {
+          enabled: false,
+          allowWriteControls: true,
+        },
+      },
+    });
+  });
+
+  it("removes malformed legacy entries without creating Codex config", () => {
+    const res = migrateLegacyConfigForTest({
+      plugins: {
+        entries: {
+          "codex-supervisor": "invalid",
+        },
+      },
+    });
+
+    expect(res.config?.plugins?.entries).toEqual({});
+    expect(res.changes).toContain("Removed invalid plugins.entries.codex-supervisor config.");
+  });
+
+  it("repairs policy-only references without creating a Codex entry", () => {
+    const res = migrateLegacyConfigForTest({
+      plugins: {
+        allow: ["codex-supervisor", "codex"],
+        deny: ["codex-supervisor"],
+      },
+    });
+
+    expect(res.config?.plugins?.allow).toEqual(["codex"]);
+    expect(res.config?.plugins?.deny).toEqual([]);
+    expect(res.config?.plugins?.entries).toBeUndefined();
+  });
+});
+
 describe("legacy bundled provider discovery migrate", () => {
   it("rewrites legacy OpenAI Codex plugin policy ids", () => {
     const res = migrateLegacyConfigForTest({

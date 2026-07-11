@@ -16,6 +16,7 @@ import { registerMemoryCapability } from "openclaw/plugin-sdk/memory-core-host-r
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
 import { registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
@@ -29,7 +30,11 @@ import {
 } from "./attempt-context.js";
 import { resolveCodexAppServerEnvApiKeyCacheKey } from "./auth-bridge.js";
 import { CodexAppServerRpcError } from "./client.js";
-import { readCodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./config.js";
+import {
+  readCodexPluginConfig,
+  resolveCodexAppServerRuntimeOptions,
+  resolveCodexSupervisionAppServerRuntimeOptions,
+} from "./config.js";
 import { CODEX_TURN_START_TEXT_INPUT_MAX_CHARS } from "./context-engine-projection.js";
 import {
   CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
@@ -40,7 +45,10 @@ import {
   CodexAppServerEventProjector,
   type CodexAppServerToolTelemetry,
 } from "./event-projector.js";
-import { buildCodexPluginAppCacheKey } from "./plugin-app-cache-key.js";
+import {
+  buildCodexAppServerConnectionFingerprint,
+  buildCodexPluginAppCacheKey,
+} from "./plugin-app-cache-key.js";
 import { buildCodexPluginThreadConfig } from "./plugin-thread-config.js";
 import {
   flattenCodexDynamicToolFunctions,
@@ -151,6 +159,14 @@ async function writeExistingBinding(
   workspaceDir: string,
   overrides: Partial<Parameters<typeof writeCodexAppServerBinding>[1]> = {},
 ) {
+  const supervisionFingerprint =
+    overrides.connectionScope === "supervision" && !overrides.appServerRuntimeFingerprint
+      ? buildCodexAppServerConnectionFingerprint(
+          resolveCodexSupervisionAppServerRuntimeOptions({
+            pluginConfig: { supervision: { enabled: true } },
+          }),
+        )
+      : undefined;
   await writeCodexAppServerBinding(sessionFile, {
     threadId: "thread-existing",
     cwd: workspaceDir,
@@ -158,6 +174,7 @@ async function writeExistingBinding(
     modelProvider: "openai",
     historyCoveredThrough: new Date().toISOString(),
     webSearchThreadConfigFingerprint: DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT,
+    ...(supervisionFingerprint ? { appServerRuntimeFingerprint: supervisionFingerprint } : {}),
     ...overrides,
   });
 }
@@ -5933,6 +5950,114 @@ describe("runCodexAppServerAttempt", () => {
     const turnRequest = requests.find((request) => request.method === "turn/start");
     const turnRequestParams = turnRequest?.params as Record<string, unknown> | undefined;
     expect(turnRequestParams?.approvalsReviewer).toBe("user");
+  });
+
+  it("uses a supervised native model for review policy despite an outer Anthropic default", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeExistingBinding(sessionFile, workspaceDir, {
+      connectionScope: "supervision",
+      supervisionSourceThreadId: "thread-existing",
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      preserveNativeModel: true,
+      conversationSourceTransferComplete: true,
+    });
+    const nativeResponse = threadStartResult("thread-existing");
+    nativeResponse.model = "gpt-5.5";
+    nativeResponse.modelProvider = "openai";
+    nativeResponse.thread.modelProvider = "openai";
+    const harness = createAppServerHarness(async (method) => {
+      if (method === "thread/read") {
+        return { thread: nativeResponse.thread };
+      }
+      if (method === "thread/resume") {
+        return nativeResponse;
+      }
+      if (method === "turn/start") {
+        return turnStartResult();
+      }
+      return {};
+    });
+    const clientFactory = vi.fn(async () => harness.client);
+    const params = {
+      ...createParams(sessionFile, workspaceDir),
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+      model: createCodexTestModel("anthropic"),
+      config: { tools: { exec: { mode: "auto" } } },
+    } as EmbeddedRunAttemptParams;
+
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: {
+        appServer: { mode: "guardian" },
+        supervision: { enabled: true },
+      },
+      clientFactory,
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+    await run;
+
+    expect(clientFactory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authProfileId: null,
+        startOptions: expect.objectContaining({ homeScope: "user" }),
+      }),
+    );
+    const resumeRequest = harness.requests.find((request) => request.method === "thread/resume");
+    const resumeParams = resumeRequest?.params as Record<string, unknown> | undefined;
+    expect(resumeParams).not.toHaveProperty("model");
+    expect(resumeParams).not.toHaveProperty("modelProvider");
+    expect(resumeParams?.approvalsReviewer).toBe("auto_review");
+    const turnRequest = harness.requests.find((request) => request.method === "turn/start");
+    const turnParams = turnRequest?.params as Record<string, unknown> | undefined;
+    expect(turnParams).not.toHaveProperty("model");
+    expect(turnParams).not.toHaveProperty("modelProvider");
+    expect(turnParams?.approvalsReviewer).toBe("auto_review");
+  });
+
+  it("fails before client startup when a successor generation hides a private supervision binding", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const sessionKey = "agent:main:supervised-stale-generation";
+    registerCodexTestSessionIdentity(sessionFile, "session-previous", sessionKey);
+    await writeExistingBinding(sessionFile, workspaceDir, {
+      connectionScope: "supervision",
+      supervisionSourceThreadId: "thread-source",
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      preserveNativeModel: true,
+      conversationSourceTransferComplete: true,
+    });
+    const storePath = path.join(tempDir, "sessions.json");
+    await saveSessionStore(storePath, {
+      [sessionKey]: {
+        sessionId: "session-current",
+        updatedAt: Date.now(),
+      },
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.sessionId = "session-current";
+    params.sessionKey = sessionKey;
+    params.config = { session: { store: storePath } };
+    const clientFactory = vi.fn(async () => {
+      throw new Error("client must not start");
+    });
+
+    await expect(
+      runCodexAppServerAttempt(params, {
+        pluginConfig: { supervision: { enabled: true } },
+        clientFactory,
+      }),
+    ).rejects.toThrow("Codex session generation is no longer current");
+    expect(clientFactory).not.toHaveBeenCalled();
+
+    registerCodexTestSessionIdentity(sessionFile, "session-previous", sessionKey);
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-existing",
+      connectionScope: "supervision",
+    });
   });
 
   it("does not inherit a bound local provider for explicit native OpenAI resumed runs", async () => {

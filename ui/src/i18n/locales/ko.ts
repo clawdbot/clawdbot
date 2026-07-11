@@ -209,6 +209,11 @@ export const ko: TranslationMap = {
     gateway: "Gateway · 로컬",
     folder: "폴더",
     folderPlaceholder: "Agent workspace",
+    browse: "폴더 찾아보기",
+    browserUp: "상위 폴더",
+    browserUse: "이 폴더 사용",
+    browserEmpty: "하위 폴더 없음",
+    browserLoadFailed: "해당 폴더 목록을 표시할 수 없습니다.",
     worktree: "Worktree",
     worktreeUnavailable: "Agent workspace가 git checkout이 아닙니다",
     baseBranch: "기준 브랜치",
@@ -935,8 +940,8 @@ export const ko: TranslationMap = {
   codexSessions: {
     eyebrow: "Codex 호스트",
     title: "내 모든 컴퓨터의 세션",
-    subtitle:
-      "이 Gateway와 세션 공유를 활성화한 모든 연결된 컴퓨터의 Codex 세션을 읽기 전용으로 표시합니다.",
+    interactiveSubtitle:
+      "모델 선택이 Codex App Server 제어하에 유지되는 Chat 브랜치를 시작하고, 확인 후 보관 대상 로컬 세션을 보관하며, 페어링된 컴퓨터 세션을 봅니다.",
     summaryLabel: "Codex 세션 요약",
     summary: {
       sessions: "세션",
@@ -945,11 +950,6 @@ export const ko: TranslationMap = {
     },
     searchLabel: "Codex 세션 검색",
     searchPlaceholder: "세션 제목 검색",
-    scopeLabel: "세션 보관 상태 필터",
-    scope: {
-      active: "활성",
-      archived: "보관됨",
-    },
     refresh: "새로고침",
     disconnected: "Codex 세션을 새로고침하려면 Gateway에 다시 연결하세요.",
     partial: "사용할 수 없는 호스트: {count}개. 다른 호스트는 계속 사용할 수 있습니다.",
@@ -958,11 +958,33 @@ export const ko: TranslationMap = {
     loadingMore: "불러오는 중…",
     untitled: "제목 없는 Codex 세션",
     threadId: "스레드",
+    actions: {
+      continue: "계속",
+      continueAsBranch: "브랜치로 계속",
+      openChat: "Chat 열기",
+      continuing: "계속하는 중…",
+      archive: "보관",
+      continueLabel: "{title} 계속",
+      continueAsBranchLabel: "{title}을(를) 브랜치로 계속",
+      openChatLabel: "{title}의 Chat 열기",
+      continueAsBranchHint:
+        "지속 저장된 표시 기록에서 Chat을 만듭니다. 첫 메시지에서 Codex App Server가 새 하네스 스레드의 모델과 공급자를 선택합니다. 이후 선택은 Codex 제어하에 유지되며, OpenClaw는 다른 런타임, 모델 또는 폴백으로 대체하지 않습니다. 소스는 그대로 유지되며, 진행 중인 작업은 없을 수 있습니다.",
+      archiveLabel: "{title} 보관",
+      archiveConfirmation:
+        "{title} 및 생성된 모든 하위 항목을 보관하시겠습니까? 다른 Codex 클라이언트 또는 OpenClaw 러너가 이를 사용하고 있지 않은지 확인하세요. 다른 러너가 활성 상태일 때 보관하면 해당 작업이 중단될 수 있습니다.",
+      active: "활성 세션은 브랜치를 시작하거나 보관할 수 없습니다.",
+      archiveActivityUnknownHint:
+        "상태가 프로세스 로컬이므로 활동 여부를 알 수 없습니다. 다른 Codex 클라이언트 또는 러너가 이 세션을 사용하고 있지 않은지 확인한 후에만 보관하세요.",
+      statusUnavailable: "현재 상태에서는 이 Codex 세션을 관리할 수 없습니다.",
+      hostOffline: "Codex 세션을 관리하기 전에 이 컴퓨터를 다시 연결하세요.",
+      gatewayOffline: "Codex 세션을 관리하기 전에 gateway에 다시 연결하세요.",
+      remoteReadOnly: "페어링된 컴퓨터 세션은 현재 보기 전용입니다.",
+    },
     status: {
       active: "활성",
       idle: "유휴",
       archived: "보관됨",
-      notLoaded: "저장됨",
+      storedActivityUnknown: "저장됨 / 활동 상태 알 수 없음",
       systemError: "시스템 오류",
       unknown: "알 수 없음",
     },
@@ -976,11 +998,10 @@ export const ko: TranslationMap = {
     },
     empty: {
       title: "Codex 호스트가 없습니다",
-      subtitle:
-        "Gateway나 페어링된 컴퓨터에서 Codex 세션 공유를 활성화한 후 이 화면을 새로고침하세요.",
+      supervisionSubtitle:
+        "Gateway 또는 페어링된 컴퓨터에서 Codex supervision을 활성화한 다음 이 보기를 새로 고치세요.",
       search: "이 호스트에 검색어와 일치하는 세션이 없습니다.",
-      active: "이 호스트에 활성 세션이 없습니다.",
-      archived: "이 호스트에 보관된 세션이 없습니다.",
+      nonArchived: "이 호스트에 보관 처리되지 않은 세션이 없습니다.",
     },
   },
   logbook: {
@@ -2086,6 +2107,11 @@ export const ko: TranslationMap = {
       clearSessionSearch: "세션 검색 지우기",
       loadMoreSessions: "세션 더 불러오기",
       model: "Chat model",
+      modelSection: "모델",
+      modelLocked: "잠김",
+      modelLockedLabel: "이 세션의 모델 선택이 제어됨",
+      lockedSessionModel: "세션 모델",
+      nativeCodexModel: "Codex 제어 모델",
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {
@@ -2150,6 +2176,26 @@ export const ko: TranslationMap = {
       finished: "완료됨({count})",
       stopTask: "{title} 중지",
       viewTranscript: "트랜스크립트 보기",
+    },
+    sessionDiff: {
+      title: "변경 사항",
+      show: "세션 변경 사항 표시",
+      refresh: "변경 사항 새로고침",
+      loading: "변경 사항을 불러오는 중…",
+      empty: "이 세션의 checkout에 변경 사항이 없습니다.",
+      notGit: "이 세션의 작업 영역은 git checkout이 아닙니다.",
+      unknownSession: "이 세션에 연결된 작업 영역이 없습니다.",
+      disconnected: "Gateway 연결이 끊어졌습니다.",
+      unmodifiedLines: "수정되지 않은 줄 {count}개",
+      binaryFile: "바이너리 파일",
+      untracked: "추적되지 않음",
+      tooLarge: "Diff가 너무 커서 표시할 수 없습니다.",
+      truncatedFile: "Diff가 잘렸습니다.",
+      truncatedResult: "Diff가 매우 커서 일부 변경 사항이 생략되었습니다.",
+      statusAdded: "추가됨",
+      statusDeleted: "삭제됨",
+      statusRenamed: "이름 변경됨",
+      statusModified: "수정됨",
     },
     workspaceFiles: {
       label: "세션 작업 공간",

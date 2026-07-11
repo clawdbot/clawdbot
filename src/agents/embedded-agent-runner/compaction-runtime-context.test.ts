@@ -221,6 +221,24 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     });
   });
 
+  it("ignores compaction model overrides for model-locked sessions", () => {
+    expect(
+      resolveEmbeddedCompactionTarget({
+        config: {
+          agents: { defaults: { compaction: { model: "anthropic/claude-opus-4-6" } } },
+        } as unknown as OpenClawConfig,
+        provider: "openai",
+        modelId: "gpt-5.5",
+        authProfileId: "openai:default",
+        modelSelectionLocked: true,
+      }),
+    ).toEqual({
+      provider: "openai",
+      model: "gpt-5.5",
+      authProfileId: "openai:default",
+    });
+  });
+
   it("keeps configured OpenAI provider with legacy Codex auth profiles (#86373)", () => {
     const result = resolveEmbeddedCompactionTarget({
       provider: "openai",
@@ -280,12 +298,18 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     const result = buildEmbeddedCompactionRuntimeContext({
       workspaceDir: "/tmp/workspace",
       agentDir: "/tmp/agent",
-      config: {} as unknown as OpenClawConfig,
+      config: {
+        agents: { defaults: { compaction: { model: "anthropic/claude-opus-4-6" } } },
+      } as unknown as OpenClawConfig,
       provider: "openai",
       modelId: "gpt-5.5",
       harnessRuntime: "codex",
+      modelSelectionLocked: true,
     });
     expect(result.agentHarnessId).toBe("codex");
+    expect(result.modelSelectionLocked).toBe(true);
+    expect(result.provider).toBe("openai");
+    expect(result.model).toBe("gpt-5.5");
     expect(result.runtimeProvider).toBeUndefined();
   });
 
@@ -335,6 +359,32 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.nativeHarnessCompaction).toBeUndefined();
     expect(result.model).toBe("gpt-5.5");
     expect(result.authProfileId).toBeUndefined();
+  });
+
+  it("keeps a locked Codex harness authoritative over a custom OpenAI base URL", () => {
+    const result = resolveEmbeddedCompactionTarget({
+      config: {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://example.test/v1",
+              models: [{ id: "gpt-5.5" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      provider: "openai",
+      modelId: "gpt-5.5",
+      harnessRuntime: "codex",
+      modelSelectionLocked: true,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+    });
+    expect(result.provider).toBe("openai");
+    expect(result.runtimeProvider).toBeUndefined();
+    expect(result.contextProvider).toBeUndefined();
+    expect(result.nativeHarnessCompaction).toBe(true);
+    expect(result.model).toBe("gpt-5.5");
   });
 
   it("keeps model-only compaction overrides with legacy Codex auth on OpenAI", () => {

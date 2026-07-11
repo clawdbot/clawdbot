@@ -444,12 +444,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/codex/**"
-"extensions: codex-supervisor":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/codex-supervisor/**"
-          - "docs/plugins/reference/codex-supervisor.md"
-          - "docs/specs/claw-supervisor.md"
+          - "docs/plugins/codex-harness.md"
+          - "docs/plugins/codex-harness-reference.md"
+          - "docs/plugins/codex-harness-runtime.md"
+          - "docs/plugins/codex-supervision.md"
+          - "docs/specs/codex-supervision.md"
 "extensions: copilot":
   - changed-files:
       - any-glob-to-any-file:

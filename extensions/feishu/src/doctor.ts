@@ -9,6 +9,7 @@ import type {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import {
+  isValidAgentHarnessSessionStoreEntry,
   loadSessionStore,
   resolveSessionFilePath,
   resolveStorePath,
@@ -559,6 +560,11 @@ function inspectFeishuDoctorState(params: {
     for (const [key, entry] of Object.entries(store).toSorted(([left], [right]) =>
       left.localeCompare(right),
     )) {
+      // Harness ownership supersedes channel-derived route metadata. Feishu
+      // doctor must not diagnose or clean up another runtime's locked row.
+      if (isRecord(entry) && isValidAgentHarnessSessionStoreEntry(key, entry)) {
+        continue;
+      }
       if (!isFeishuSessionEntry(key, entry)) {
         continue;
       }
@@ -738,12 +744,19 @@ async function repairFeishuDoctorState(params: {
         (store) => {
           const removed: typeof group.entries = [];
           for (const key of keys) {
-            if (Object.hasOwn(store, key)) {
-              delete store[key];
-              const entry = group.entries.find((candidate) => candidate.key === key);
-              if (entry) {
-                removed.push(entry);
-              }
+            const currentEntry = store[key];
+            // Recheck under the store update lock because a harness can claim
+            // a previously flagged row after inspection but before repair.
+            if (
+              !Object.hasOwn(store, key) ||
+              (currentEntry && isValidAgentHarnessSessionStoreEntry(key, currentEntry))
+            ) {
+              continue;
+            }
+            delete store[key];
+            const entry = group.entries.find((candidate) => candidate.key === key);
+            if (entry) {
+              removed.push(entry);
             }
           }
           return removed;

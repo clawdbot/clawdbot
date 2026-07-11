@@ -78,6 +78,17 @@ function shouldFallbackAfterHarnessCompaction(
   return isRecoverableNativeHarnessBindingFailure(result);
 }
 
+function lockedCompactionRuntimeFailure(runtime?: string): EmbeddedAgentCompactResult {
+  return {
+    ok: false,
+    compacted: false,
+    reason: runtime
+      ? `Model selection is locked to native agent harness "${runtime}", but native compaction is unavailable.`
+      : "Model selection is locked but the persisted agent harness is unavailable.",
+    failure: { reason: "model_selection_locked" },
+  };
+}
+
 const DEFERRED_CONTEXT_ENGINE_COMPACTION_SCHEDULE_FAILURE_REASON =
   "failed to schedule background context-engine maintenance";
 const MANUAL_COMPACTION_ACTIVE_RUN_REASON =
@@ -290,6 +301,7 @@ async function compactEmbeddedAgentSessionImpl(
     provider: params.provider,
     modelId: params.model,
     authProfileId: params.authProfileId,
+    modelSelectionLocked: params.modelSelectionLocked,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
@@ -306,15 +318,32 @@ async function compactEmbeddedAgentSessionImpl(
     !isDefaultAgentRuntimeId(configuredHarnessPolicy.runtime)
       ? configuredHarnessPolicy.runtime
       : undefined;
-  // The persisted harness id is the runtime contract for this session; config
-  // changes can supply a runtime only when the session has no concrete pin.
-  const selectedHarnessRuntime = params.agentHarnessId ?? configuredHarnessRuntime;
+  const lockedHarnessRuntime =
+    params.modelSelectionLocked === true
+      ? normalizeOptionalAgentRuntimeId(params.agentHarnessId)
+      : undefined;
+  if (
+    params.modelSelectionLocked === true &&
+    (!lockedHarnessRuntime || lockedHarnessRuntime === "auto")
+  ) {
+    await contextEngine.dispose?.();
+    return lockedCompactionRuntimeFailure();
+  }
+  // A model lock makes the persisted harness authoritative. Config may select
+  // a runtime only for unlocked sessions that have no concrete pin.
+  const selectedHarnessRuntime =
+    params.modelSelectionLocked === true
+      ? lockedHarnessRuntime
+      : (params.agentHarnessId ?? configuredHarnessRuntime);
+  const lockedNativeHarness =
+    params.modelSelectionLocked === true && selectedHarnessRuntime !== "openclaw";
   const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({
     config: params.config,
     provider: params.provider,
     modelId: params.model,
     authProfileId: params.authProfileId,
     harnessRuntime: selectedHarnessRuntime,
+    modelSelectionLocked: params.modelSelectionLocked,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
@@ -379,7 +408,7 @@ async function compactEmbeddedAgentSessionImpl(
   });
   const contextEngineOwnsCompaction = contextEngine.info.ownsCompaction === true;
   const harnessResult =
-    attemptNativeHarnessCompaction && !contextEngineOwnsCompaction
+    attemptNativeHarnessCompaction && (!contextEngineOwnsCompaction || lockedNativeHarness)
       ? await maybeCompactAgentHarnessSession({
           ...params,
           contextEngine,
@@ -387,6 +416,10 @@ async function compactEmbeddedAgentSessionImpl(
           contextEngineRuntimeContext,
         })
       : undefined;
+  if (lockedNativeHarness) {
+    await contextEngine.dispose?.();
+    return harnessResult ?? lockedCompactionRuntimeFailure(selectedHarnessRuntime);
+  }
   if (harnessResult) {
     if (!shouldFallbackAfterHarnessCompaction(harnessResult)) {
       await contextEngine.dispose?.();
@@ -749,6 +782,7 @@ function buildCompactionContextEngineRuntimeContext(params: {
       provider: params.params.provider,
       modelId: params.params.model,
       harnessRuntime: params.harnessRuntime,
+      modelSelectionLocked: params.params.modelSelectionLocked,
       modelFallbacksOverride: params.params.modelFallbacksOverride,
       thinkLevel: params.params.thinkLevel,
       reasoningLevel: params.params.reasoningLevel,

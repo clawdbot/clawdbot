@@ -1951,7 +1951,9 @@ async function runAgentTurnWithFallbackInternal(
     }
     return effectiveRun;
   };
-  let liveModelSwitchRuntimeEntry: Pick<SessionEntry, "agentRuntimeOverride"> | undefined;
+  let liveModelSwitchRuntimeEntry:
+    | Pick<SessionEntry, "agentHarnessId" | "agentRuntimeOverride" | "modelSelectionLocked">
+    | undefined;
   const applyLiveModelSwitchToRun = (
     run: FollowupRun["run"],
     err: LiveSessionModelSwitchError,
@@ -1997,7 +1999,11 @@ async function runAgentTurnWithFallbackInternal(
         params.followupRun.run.messageProvider ??
         params.sessionCtx.Surface ??
         params.sessionCtx.Provider,
-      trigger: resolveReplyHookTrigger(params.opts),
+      trigger: resolveReplyHookTrigger(
+        params.isHeartbeat === true && params.opts?.isHeartbeat !== true
+          ? { ...params.opts, isHeartbeat: true }
+          : params.opts,
+      ),
     });
   }
   let replyMediaContext: ReplyMediaContext;
@@ -2485,9 +2491,13 @@ async function runAgentTurnWithFallbackInternal(
       const bootstrapContextRunKind: BootstrapContextRunKind =
         resolveHeartbeatRunScope(params.opts) === "commitment-only"
           ? "commitment-only"
-          : params.opts?.isHeartbeat
+          : params.isHeartbeat || params.opts?.isHeartbeat
             ? "heartbeat"
             : "default";
+      const replyHookOptions =
+        params.isHeartbeat === true && params.opts?.isHeartbeat !== true
+          ? { ...params.opts, isHeartbeat: true }
+          : params.opts;
       // Profiler-only milestone: it separates fallback setup from the actual
       // model run without adding extra live logs/snapshots to normal turns.
       agentTurnTiming.logMilestoneIfSlow({
@@ -2618,38 +2628,52 @@ async function runAgentTurnWithFallbackInternal(
                 `failed to persist fallback candidate selection (non-fatal): ${String(error)}`,
               );
             }
-            const { sessionRuntimeOverride, cliExecutionProvider } = agentTurnTiming.measureSync(
-              "fallback_resolve_runtime",
-              () => {
+            const { sessionRuntimeOverride, cliExecutionProvider, useCliExecution } =
+              agentTurnTiming.measureSync("fallback_resolve_runtime", () => {
+                const activeSessionEntry =
+                  liveModelSwitchRuntimeEntry ?? params.getActiveSessionEntry();
                 const resolvedSessionRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
                   provider,
-                  entry: liveModelSwitchRuntimeEntry ?? params.getActiveSessionEntry(),
+                  entry: activeSessionEntry,
                   cfg: runtimeConfig,
                 });
+                // A locked harness owns the transcript. A configured CLI backend with the
+                // same id must not steal dispatch from that persisted harness.
+                const locksPersistedHarness =
+                  activeSessionEntry?.modelSelectionLocked === true &&
+                  normalizeLowercaseStringOrEmpty(activeSessionEntry.agentHarnessId) ===
+                    resolvedSessionRuntimeOverride;
                 const resolvedSelectedAuthProfile = resolveRunAuthProfile(candidateRun, provider, {
                   config: runtimeConfig,
                 });
-                const resolvedCliExecutionProvider =
-                  (resolvedSessionRuntimeOverride &&
+                const pinnedCliRuntime =
+                  !locksPersistedHarness &&
+                  resolvedSessionRuntimeOverride &&
                   isCliProvider(resolvedSessionRuntimeOverride, runtimeConfig)
                     ? resolvedSessionRuntimeOverride
-                    : undefined) ??
-                  resolveCliRuntimeExecutionProvider({
-                    provider,
-                    cfg: runtimeConfig,
-                    agentId: params.followupRun.run.agentId,
-                    modelId: model,
-                    authProfileId: resolvedSelectedAuthProfile.authProfileId,
-                  }) ??
-                  provider;
+                    : undefined;
+                const resolvedCliExecutionProvider =
+                  pinnedCliRuntime ??
+                  (resolvedSessionRuntimeOverride
+                    ? provider
+                    : (resolveCliRuntimeExecutionProvider({
+                        provider,
+                        cfg: runtimeConfig,
+                        agentId: params.followupRun.run.agentId,
+                        modelId: model,
+                        authProfileId: resolvedSelectedAuthProfile.authProfileId,
+                      }) ?? provider));
                 return {
                   sessionRuntimeOverride: resolvedSessionRuntimeOverride,
                   cliExecutionProvider: resolvedCliExecutionProvider,
+                  useCliExecution:
+                    pinnedCliRuntime !== undefined ||
+                    (!resolvedSessionRuntimeOverride &&
+                      isCliProvider(resolvedCliExecutionProvider, runtimeConfig)),
                 };
-              },
-            );
+              });
 
-            if (isCliProvider(cliExecutionProvider, runtimeConfig)) {
+            if (useCliExecution) {
               const cliSessionBinding = getCliSessionBinding(
                 params.getActiveSessionEntry(),
                 cliExecutionProvider,
@@ -2801,7 +2825,7 @@ async function runAgentTurnWithFallbackInternal(
                       params.followupRun.run.runtimePolicySessionKey ??
                       params.runtimePolicySessionKey,
                     agentId: params.followupRun.run.agentId,
-                    trigger: resolveReplyHookTrigger(params.opts),
+                    trigger: resolveReplyHookTrigger(replyHookOptions),
                     sessionFile: params.followupRun.run.sessionFile,
                     workspaceDir: params.followupRun.run.workspaceDir,
                     cwd: params.followupRun.run.cwd,
@@ -3003,9 +3027,9 @@ async function runAgentTurnWithFallbackInternal(
                     messageActionTurnCapability,
                     lifecycleGeneration,
                     allowGatewaySubagentBinding: true,
-                    trigger: resolveReplyHookTrigger(params.opts),
+                    trigger: resolveReplyHookTrigger(replyHookOptions),
                     fireReason: resolveReplyRunFireReason({
-                      opts: params.opts,
+                      opts: replyHookOptions,
                       drainsContinuationDelegateQueue:
                         effectiveRun.drainsContinuationDelegateQueue === true,
                     }),

@@ -456,6 +456,33 @@ describe("codex conversation binding", () => {
     expect(data.agentDir).toBe(agentDir);
   });
 
+  it("rejects direct conversation start over a private supervised binding", async () => {
+    const sessionFile = path.join(tempDir, "supervised-session.jsonl");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-supervised",
+      connectionScope: "supervision",
+      supervisionSourceThreadId: "thread-source",
+      cwd: tempDir,
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      preserveNativeModel: true,
+      conversationSourceTransferComplete: true,
+    });
+
+    await expect(
+      startCodexConversationThread({
+        sessionFile,
+        workspaceDir: tempDir,
+        model: "gpt-5.4",
+      }),
+    ).rejects.toThrow("Refusing to replace supervised Codex thread");
+    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-supervised",
+      connectionScope: "supervision",
+    });
+  });
+
   it("rejects binding when configured exec auto mode may need unrouted human approvals", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const requests: Array<{ method: string; params: Record<string, unknown> }> = [];

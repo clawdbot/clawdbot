@@ -105,6 +105,11 @@ type AgentHarnessRunCapability = {
   label: string;
   pluginId?: string;
   /**
+   * Plugin ids this harness owner permits to execute its locked sessions.
+   * Delegates receive work admission and execution only; session mutation stays owner-only.
+   */
+  delegatedExecutionPluginIds?: readonly string[];
+  /**
    * Context-engine host capabilities provided by this harness during agent
    * runs. Harnesses that omit this are unsupported for engines that declare
    * host requirements.

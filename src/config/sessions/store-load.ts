@@ -5,6 +5,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { isPluginJsonValue, type PluginJsonValue } from "../../plugins/host-hook-json.js";
 import { normalizeSessionEntrySlotKey } from "../../plugins/session-entry-slot-keys.js";
+import { resolveAgentHarnessSessionStoreError } from "../../sessions/agent-harness-session-key.js";
 import {
   normalizeDeliveryChannelRoute,
   normalizeDeliveryContext,
@@ -351,17 +352,29 @@ export function stripPersistedSkillsCache(entry: SessionEntry): SessionEntry {
 export function normalizeSessionStore(store: Record<string, SessionEntry>): boolean {
   let changed = false;
   for (const [key, entry] of Object.entries(store)) {
+    const modelSelectionLocked = isRecord(entry) && entry.modelSelectionLocked === true;
     const shaped = normalizePersistedSessionEntryShape(entry);
     if (!shaped) {
+      if (modelSelectionLocked) {
+        // Never normalize a protected row into absence. Writers must see the
+        // corruption and fail closed instead of persisting an implicit unlock.
+        throw new Error(`Invalid model-selection-locked session entry: ${key}`);
+      }
       delete store[key];
       changed = true;
       continue;
+    }
+    const normalizedRuntimeFields = normalizeSessionRuntimeModelFields(shaped);
+    if (modelSelectionLocked && normalizedRuntimeFields !== shaped) {
+      // The persisted provider/model pair is part of the harness-owned runtime
+      // identity. Do not repair it before validating the durable lock.
+      throw new Error(`Invalid model-selection-locked session entry: ${key}`);
     }
     const normalized = stripPersistedSkillsCache(
       normalizePluginExtensionSlotKeys(
         normalizePluginExtensions(
           normalizePendingFinalDeliveryFields(
-            normalizeSessionEntryDelivery(normalizeSessionRuntimeModelFields(shaped)),
+            normalizeSessionEntryDelivery(modelSelectionLocked ? shaped : normalizedRuntimeFields),
           ),
         ),
       ),
@@ -371,6 +384,10 @@ export function normalizeSessionStore(store: Record<string, SessionEntry>): bool
       store[key] = normalized;
       changed = true;
     }
+  }
+  const harnessStoreError = resolveAgentHarnessSessionStoreError(store);
+  if (harnessStoreError) {
+    throw new Error(harnessStoreError);
   }
   return changed;
 }

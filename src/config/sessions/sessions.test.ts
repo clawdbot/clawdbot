@@ -8,7 +8,7 @@ import * as jsonFiles from "../../infra/json-files.js";
 import { createSuiteTempRootTracker, withTempDirSync } from "../../test-helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config.js";
 import type { SessionConfig } from "../types.base.js";
-import { resolveSessionLifecycleTimestamps } from "./lifecycle.js";
+import { resolveSessionLifecycleTimestamps, resolveSessionWorkStartError } from "./lifecycle.js";
 import {
   resolveExplicitSessionFilePath,
   resolveSessionFilePath,
@@ -348,6 +348,22 @@ describe("session lifecycle timestamps", () => {
     } finally {
       await fsPromises.rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("session work admission", () => {
+  it("fails closed while trusted session initialization is pending", () => {
+    expect(
+      resolveSessionWorkStartError("agent:main:pending", {
+        sessionId: "pending-session",
+        initializationPending: true,
+      }),
+    ).toContain("still initializing");
+    expect(
+      resolveSessionWorkStartError("agent:main:pending", {
+        sessionId: "pending-session",
+      }),
+    ).toBeUndefined();
   });
 });
 

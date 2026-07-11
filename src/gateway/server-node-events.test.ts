@@ -10,6 +10,8 @@ import type { loadSessionEntry as loadSessionEntryType } from "./session-utils.j
 const buildSessionLookup = (
   sessionKey: string,
   entry: {
+    agentHarnessId?: string;
+    modelSelectionLocked?: boolean;
     sessionId?: string;
     model?: string;
     modelProvider?: string;
@@ -27,6 +29,8 @@ const buildSessionLookup = (
   storePath: "/tmp/sessions.json",
   store: {} as ReturnType<typeof loadSessionEntryType>["store"],
   entry: {
+    agentHarnessId: entry.agentHarnessId,
+    modelSelectionLocked: entry.modelSelectionLocked,
     sessionId: entry.sessionId ?? `sid-${sessionKey}`,
     updatedAt: entry.updatedAt ?? Date.now(),
     model: entry.model,
@@ -792,8 +796,11 @@ describe("node exec events", () => {
 
 describe("voice transcript events", () => {
   beforeEach(() => {
+    resetNodeEventDeduplicationForTests();
     agentCommandMock.mockClear();
     canonicalizeSessionEntryAliasesMock.mockClear();
+    loadSessionEntryMock.mockClear();
+    loadSessionEntryMock.mockImplementation((sessionKey: string) => buildSessionLookup(sessionKey));
     agentCommandMock.mockResolvedValue({ status: "ok" } as never);
     canonicalizeSessionEntryAliasesMock.mockImplementation(async ({ target, update }) => {
       const entry = update ? await update(undefined) : undefined;
@@ -824,6 +831,71 @@ describe("voice transcript events", () => {
     expect(addChatRun).toHaveBeenCalledTimes(1);
     expect(canonicalizeSessionEntryAliasesMock).toHaveBeenCalledTimes(1);
   });
+
+  it("rejects a missing harness-owned session before touching the store", async () => {
+    const sessionKey = "agent:main:harness:codex:supervision:missing-voice";
+    loadSessionEntryMock.mockReturnValueOnce({
+      ...buildSessionLookup(sessionKey),
+      entry: undefined,
+    });
+    const addChatRun = vi.fn();
+    const ctx = buildCtx();
+    ctx.addChatRun = addChatRun;
+
+    await handleNodeEvent(ctx, "node-harness-voice-missing", {
+      event: "voice.transcript",
+      payloadJSON: JSON.stringify({ text: "do not create this", sessionKey }),
+    });
+    await Promise.resolve();
+
+    expect(canonicalizeSessionEntryAliasesMock).not.toHaveBeenCalled();
+    expect(addChatRun).not.toHaveBeenCalled();
+    expect(agentCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("dispatches voice transcripts to an existing harness-owned session", async () => {
+    const sessionKey = "agent:main:harness:codex:supervision:existing-voice";
+    loadSessionEntryMock.mockReturnValueOnce(
+      buildSessionLookup(sessionKey, {
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+      }),
+    );
+
+    await handleNodeEvent(buildCtx(), "node-harness-voice-existing", {
+      event: "voice.transcript",
+      payloadJSON: JSON.stringify({ text: "continue supervised work", sessionKey }),
+    });
+    await Promise.resolve();
+
+    expect(canonicalizeSessionEntryAliasesMock).toHaveBeenCalledTimes(1);
+    expect(agentCommandMock).toHaveBeenCalledTimes(1);
+    expectFields(mockCallArg(agentCommandMock), { sessionKey });
+  });
+
+  it.each([
+    ["wrong owner", { agentHarnessId: "other", modelSelectionLocked: true }],
+    ["missing session id", { agentHarnessId: "codex", modelSelectionLocked: true, sessionId: "" }],
+  ] as const)(
+    "rejects a harness-owned voice session with %s before side effects",
+    async (_label, entry) => {
+      const sessionKey = `agent:main:harness:codex:supervision:invalid-voice-${_label.replaceAll(" ", "-")}`;
+      loadSessionEntryMock.mockReturnValueOnce(buildSessionLookup(sessionKey, entry));
+      const addChatRun = vi.fn();
+      const ctx = buildCtx();
+      ctx.addChatRun = addChatRun;
+
+      await handleNodeEvent(ctx, "node-harness-voice-invalid", {
+        event: "voice.transcript",
+        payloadJSON: JSON.stringify({ text: "do not dispatch this", sessionKey }),
+      });
+      await Promise.resolve();
+
+      expect(canonicalizeSessionEntryAliasesMock).not.toHaveBeenCalled();
+      expect(addChatRun).not.toHaveBeenCalled();
+      expect(agentCommandMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not dedupe identical text when source event IDs differ", async () => {
     const ctx = buildCtx();
@@ -1077,6 +1149,40 @@ describe("notifications changed events", () => {
     });
   });
 
+  it("rejects missing reserved notification contexts before enqueue", async () => {
+    const sessionKey = "agent:main:harness:codex:supervision:missing-notification";
+    loadSessionEntryMock.mockReturnValueOnce({
+      ...buildSessionLookup(sessionKey),
+      entry: undefined,
+    });
+
+    await handleNodeEvent(buildCtx(), "node-harness-missing", {
+      event: "notifications.changed",
+      payloadJSON: JSON.stringify({ change: "posted", key: "notif", sessionKey }),
+    });
+
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves valid durable harness notification contexts", async () => {
+    const sessionKey = "agent:main:harness:codex:supervision:existing-notification";
+    loadSessionEntryMock.mockReturnValueOnce(
+      buildSessionLookup(sessionKey, {
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+      }),
+    );
+
+    await handleNodeEvent(buildCtx(), "node-harness-existing", {
+      event: "notifications.changed",
+      payloadJSON: JSON.stringify({ change: "posted", key: "notif", sessionKey }),
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledOnce();
+    expect(requestHeartbeatMock).toHaveBeenCalledWith(expect.objectContaining({ sessionKey }));
+  });
+
   it("ignores notifications.changed payloads missing required fields", async () => {
     const ctx = buildCtx();
     await handleNodeEvent(ctx, "node-n3", {
@@ -1158,6 +1264,10 @@ describe("agent request events", () => {
   beforeEach(() => {
     agentCommandMock.mockClear();
     parseMessageWithAttachmentsMock.mockReset();
+    runtimeMocks.resolveSessionAgentId.mockClear();
+    runtimeMocks.resolveSessionModelRef.mockClear();
+    runtimeMocks.resolveGatewayModelSupportsImages.mockClear();
+    persistInboundImagesForTranscriptMock.mockClear();
     canonicalizeSessionEntryAliasesMock.mockClear();
     loadSessionEntryMock.mockClear();
     normalizeChannelIdVi.mockClear();
@@ -1175,6 +1285,69 @@ describe("agent request events", () => {
     });
     loadSessionEntryMock.mockImplementation((sessionKey: string) => buildSessionLookup(sessionKey));
   });
+
+  it("rejects a missing harness-owned session before touching the store", async () => {
+    const sessionKey = "agent:main:harness:codex:supervision:missing-request";
+    loadSessionEntryMock.mockReturnValueOnce({
+      ...buildSessionLookup(sessionKey),
+      entry: undefined,
+    });
+
+    await handleNodeEvent(buildCtx(), "node-harness-request-missing", {
+      event: "agent.request",
+      payloadJSON: JSON.stringify({ message: "do not create this", sessionKey }),
+    });
+
+    expect(canonicalizeSessionEntryAliasesMock).not.toHaveBeenCalled();
+    expect(agentCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("dispatches agent requests to an existing harness-owned session", async () => {
+    const sessionKey = "agent:main:harness:codex:supervision:existing-request";
+    loadSessionEntryMock.mockReturnValueOnce(
+      buildSessionLookup(sessionKey, {
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+      }),
+    );
+
+    await handleNodeEvent(buildCtx(), "node-harness-request-existing", {
+      event: "agent.request",
+      payloadJSON: JSON.stringify({ message: "continue supervised work", sessionKey }),
+    });
+
+    expect(canonicalizeSessionEntryAliasesMock).toHaveBeenCalledTimes(1);
+    expect(agentCommandMock).toHaveBeenCalledTimes(1);
+    expectFields(mockCallArg(agentCommandMock), { sessionKey });
+  });
+
+  it.each([
+    ["wrong owner", { agentHarnessId: "other", modelSelectionLocked: true }],
+    ["missing session id", { agentHarnessId: "codex", modelSelectionLocked: true, sessionId: "" }],
+  ] as const)(
+    "rejects a harness-owned agent request with %s before side effects",
+    async (_label, entry) => {
+      const sessionKey = `agent:main:harness:codex:supervision:invalid-request-${_label.replaceAll(" ", "-")}`;
+      loadSessionEntryMock.mockReturnValueOnce(buildSessionLookup(sessionKey, entry));
+
+      await handleNodeEvent(buildCtx(), "node-harness-request-invalid", {
+        event: "agent.request",
+        payloadJSON: JSON.stringify({
+          message: "do not dispatch this",
+          sessionKey,
+          attachments: [{ type: "image", mimeType: "image/png", content: "aGVsbG8=" }],
+        }),
+      });
+
+      expect(runtimeMocks.resolveSessionAgentId).not.toHaveBeenCalled();
+      expect(runtimeMocks.resolveSessionModelRef).not.toHaveBeenCalled();
+      expect(runtimeMocks.resolveGatewayModelSupportsImages).not.toHaveBeenCalled();
+      expect(parseMessageWithAttachmentsMock).not.toHaveBeenCalled();
+      expect(canonicalizeSessionEntryAliasesMock).not.toHaveBeenCalled();
+      expect(persistInboundImagesForTranscriptMock).not.toHaveBeenCalled();
+      expect(agentCommandMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("disables delivery when route is unresolved instead of falling back globally", async () => {
     const warn = vi.fn();

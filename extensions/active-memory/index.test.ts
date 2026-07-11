@@ -878,6 +878,45 @@ describe("active-memory plugin", () => {
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      label: "a reserved Codex harness key",
+      sessionKey: "agent:main:harness:codex:supervision:thread-1",
+      entry: { sessionId: "codex-1", updatedAt: 1 },
+    },
+    {
+      label: "a model-locked session",
+      sessionKey: "agent:main:locked-codex-session",
+      entry: {
+        sessionId: "codex-2",
+        updatedAt: 1,
+        modelSelectionLocked: true,
+        agentHarnessId: "codex",
+      },
+    },
+  ])(
+    "skips recall before state or model side effects for $label",
+    async ({ sessionKey, entry }) => {
+      hoisted.sessionStore[sessionKey] = entry;
+      const openKeyedStore = vi.spyOn(api.runtime.state, "openKeyedStore");
+
+      const result = await hooks.before_prompt_build(
+        { prompt: "continue this native Codex task", messages: [] },
+        {
+          agentId: "main",
+          trigger: "user",
+          sessionKey,
+          messageProvider: "webchat",
+        },
+      );
+
+      expect(result).toBeUndefined();
+      expect(openKeyedStore).not.toHaveBeenCalled();
+      expect(hoisted.updateSessionStore).not.toHaveBeenCalled();
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    },
+  );
+
   it("does not rewrite session state for skipped turns with no active-memory entry to clear", async () => {
     const result = await hooks.before_prompt_build(
       { prompt: "what wings should i order?", messages: [] },

@@ -215,6 +215,11 @@ export const ja_JP: TranslationMap = {
     gateway: "Gateway · ローカル",
     folder: "フォルダ",
     folderPlaceholder: "エージェントワークスペース",
+    browse: "フォルダを参照",
+    browserUp: "親フォルダー",
+    browserUse: "このフォルダを使用",
+    browserEmpty: "サブフォルダはありません",
+    browserLoadFailed: "そのフォルダを一覧表示できませんでした。",
     worktree: "ワークツリー",
     worktreeUnavailable: "エージェントワークスペースは git checkout ではありません",
     baseBranch: "ベースブランチ",
@@ -942,8 +947,8 @@ export const ja_JP: TranslationMap = {
   codexSessions: {
     eyebrow: "Codex フリート",
     title: "すべてのコンピューター上のセッション",
-    subtitle:
-      "この Gateway と、接続済みでセッション共有を有効にしているすべてのコンピューター上の Codex セッションを読み取り専用で表示します。",
+    interactiveSubtitle:
+      "モデル選択が Codex App Server の制御下にある Chat ブランチを開始し、対象となるローカルセッションを確認のうえアーカイブし、ペアリングされたコンピューターのセッションを表示します。",
     summaryLabel: "Codex セッションの概要",
     summary: {
       sessions: "セッション",
@@ -952,11 +957,6 @@ export const ja_JP: TranslationMap = {
     },
     searchLabel: "Codex セッションを検索",
     searchPlaceholder: "セッションタイトルを検索",
-    scopeLabel: "セッションのアーカイブフィルター",
-    scope: {
-      active: "アクティブ",
-      archived: "アーカイブ済み",
-    },
     refresh: "更新",
     disconnected: "Codex セッションを更新するには、Gateway に再接続してください。",
     partial: "利用できないホストが {count} 台あります。他のホストは引き続き利用できます。",
@@ -965,11 +965,33 @@ export const ja_JP: TranslationMap = {
     loadingMore: "読み込み中…",
     untitled: "無題の Codex セッション",
     threadId: "スレッド",
+    actions: {
+      continue: "続行",
+      continueAsBranch: "ブランチとして続行",
+      openChat: "Chat を開く",
+      continuing: "続行中…",
+      archive: "アーカイブ",
+      continueLabel: "{title} を続行",
+      continueAsBranchLabel: "{title} をブランチとして続行",
+      openChatLabel: "{title} の Chat を開く",
+      continueAsBranchHint:
+        "永続化された表示中の履歴から Chat を作成します。最初のメッセージで、Codex App Server が新しいハーネススレッドのモデルとプロバイダーを選択します。その後の選択も Codex の制御下に留まり、OpenClaw が別のランタイム、モデル、またはフォールバックに置き換えることはありません。ソースは変更されず、進行中の作業は含まれない場合があります。",
+      archiveLabel: "{title} をアーカイブ",
+      archiveConfirmation:
+        "{title} と、そこから生成されたすべての子孫をアーカイブしますか？他の Codex クライアントまたは OpenClaw ランナーがそれらを使用していないことを確認してください。別のランナーがアクティブな状態でアーカイブすると、その作業が中断される場合があります。",
+      active: "アクティブなセッションでは、ブランチを開始したりアーカイブしたりできません。",
+      archiveActivityUnknownHint:
+        "ステータスはプロセスローカルであるため、アクティビティは不明です。他の Codex クライアントまたはランナーがこのセッションを使用していないことを確認してからアーカイブしてください。",
+      statusUnavailable: "この Codex セッションは現在の状態では管理できません。",
+      hostOffline: "Codex セッションを管理する前に、このコンピューターに再接続してください。",
+      gatewayOffline: "Codex セッションを管理する前に、gateway に再接続してください。",
+      remoteReadOnly: "ペアリング済みコンピューターのセッションは、現時点では表示専用です。",
+    },
     status: {
       active: "アクティブ",
       idle: "アイドル",
       archived: "アーカイブ済み",
-      notLoaded: "保存済み",
+      storedActivityUnknown: "保存済み / アクティビティ不明",
       systemError: "システムエラー",
       unknown: "不明",
     },
@@ -983,11 +1005,10 @@ export const ja_JP: TranslationMap = {
     },
     empty: {
       title: "Codex ホストが見つかりません",
-      subtitle:
-        "Gateway またはペアリング済みのコンピューターで Codex セッション共有を有効にしてから、このビューを更新してください。",
+      supervisionSubtitle:
+        "gateway またはペアリング済みのコンピューターで Codex supervision を有効にしてから、このビューを更新してください。",
       search: "このホストに検索条件と一致するセッションはありません。",
-      active: "このホストにアクティブなセッションはありません。",
-      archived: "このホストにアーカイブ済みのセッションはありません。",
+      nonArchived: "このホストにはアーカイブされていないセッションがありません。",
     },
   },
   logbook: {
@@ -2101,6 +2122,11 @@ export const ja_JP: TranslationMap = {
       clearSessionSearch: "セッション検索をクリア",
       loadMoreSessions: "さらにセッションを読み込む",
       model: "Chat model",
+      modelSection: "モデル",
+      modelLocked: "ロック済み",
+      modelLockedLabel: "このセッションではモデル選択が制御されています",
+      lockedSessionModel: "セッションモデル",
+      nativeCodexModel: "Codex 制御のモデル",
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {
@@ -2165,6 +2191,26 @@ export const ja_JP: TranslationMap = {
       finished: "完了（{count}）",
       stopTask: "{title}を停止",
       viewTranscript: "トランスクリプトを表示",
+    },
+    sessionDiff: {
+      title: "変更",
+      show: "セッションの変更を表示",
+      refresh: "変更を更新",
+      loading: "変更を読み込み中…",
+      empty: "このセッションのチェックアウトには変更がありません。",
+      notGit: "このセッションのワークスペースは git チェックアウトではありません。",
+      unknownSession: "このセッションに関連付けられたワークスペースはありません。",
+      disconnected: "Gateway が切断されています。",
+      unmodifiedLines: "未変更の行 {count} 件",
+      binaryFile: "バイナリファイル",
+      untracked: "未追跡",
+      tooLarge: "差分が大きすぎて表示できません。",
+      truncatedFile: "差分が切り詰められました。",
+      truncatedResult: "差分が非常に大きいため、一部の変更は省略されました。",
+      statusAdded: "追加済み",
+      statusDeleted: "削除済み",
+      statusRenamed: "名前変更済み",
+      statusModified: "変更済み",
     },
     workspaceFiles: {
       label: "セッションワークスペース",

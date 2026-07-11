@@ -23,7 +23,6 @@ import {
   type CommandPaletteTargetDetail,
 } from "../components/command-palette.ts";
 import { icons } from "../components/icons.ts";
-import "../components/new-session-dialog.ts";
 import { renderSettingsSidebar } from "../components/settings-sidebar.ts";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { t } from "../i18n/index.ts";
@@ -377,7 +376,6 @@ class OpenClawShell extends OpenClawLightDomElement {
   @property({ attribute: false }) onboarding = false;
 
   @state() private navDrawerOpen = false;
-  @state() private newSessionDraft: { agentId: string } | null = null;
   @state() private activeSessionKey = "";
   @state() private settingsSearchQuery = "";
   @state() private routeState: ShellRouteState = {};
@@ -748,6 +746,14 @@ class OpenClawShell extends OpenClawLightDomElement {
       : ROUTE_IDS_WITHOUT_WORKBOARD;
   }
 
+  /** Sidebar draft-row hint while the new-session page is open, keyed off its ?agent param. */
+  private draftSessionAgentId(): string {
+    if (this.routeState.routeId !== "new-session") {
+      return "";
+    }
+    return new URLSearchParams(this.routeState.location?.search ?? "").get("agent")?.trim() ?? "";
+  }
+
   private ensureAgentsList(
     snapshot: { client: GatewayBrowserClient | null; connected: boolean },
     agents = this.context?.agents,
@@ -842,18 +848,6 @@ class OpenClawShell extends OpenClawLightDomElement {
         }}
         .onSlashCommand=${this.handleCommandPaletteSlashCommand}
       ></openclaw-command-palette>
-      <openclaw-new-session-dialog
-        .open=${this.newSessionDraft !== null}
-        .initialAgentId=${this.newSessionDraft?.agentId ?? ""}
-        .onClose=${() => {
-          this.newSessionDraft = null;
-        }}
-        .onCreated=${(sessionKey: string) => {
-          this.newSessionDraft = null;
-          context.gateway.setSessionKey(sessionKey);
-          this.navigate("chat", { search: searchForSession(sessionKey) });
-        }}
-      ></openclaw-new-session-dialog>
       <div
         class="shell ${activeRoute === "chat" ? "shell--chat" : ""} ${navCollapsed
           ? "shell--nav-collapsed"
@@ -932,9 +926,11 @@ class OpenClawShell extends OpenClawLightDomElement {
                 .onOpenPalette=${this.openPalette}
                 .onToggleSidebar=${() => this.toggleNavigationSurface()}
                 .onOpenNewSession=${(agentId: string) => {
-                  this.newSessionDraft = { agentId };
+                  this.navigate("new-session", {
+                    search: agentId ? `?agent=${encodeURIComponent(agentId)}` : "",
+                  });
                 }}
-                .draftSessionAgentId=${this.newSessionDraft?.agentId ?? ""}
+                .draftSessionAgentId=${this.draftSessionAgentId()}
                 .onToggleMore=${() =>
                   context.navigation.update({
                     sidebarMoreExpanded: !context.navigation.snapshot.sidebarMoreExpanded,

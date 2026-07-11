@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 // and WebSocket surfaces, config reload hooks, and graceful restart/shutdown.
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { getActiveBackgroundExecSessionCount } from "../agents/bash-process-registry.js";
 import {
   getActiveEmbeddedRunCount,
   resolveActiveEmbeddedRunSessionId,
@@ -57,6 +58,7 @@ import {
   pinActivePluginSessionExtensionRegistry,
 } from "../plugins/runtime.js";
 import { getTotalQueueSize, isGatewayDraining } from "../process/command-queue.js";
+import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   clearSecretsRuntimeSnapshot,
@@ -99,6 +101,7 @@ import { resolveGatewayPluginConfig } from "./runtime-plugin-config.js";
 import type { ChannelAutostartSuppression } from "./server-channels.js";
 import { resolveGatewayControlUiRootState } from "./server-control-ui-root.js";
 import { createLazyGatewayCronState } from "./server-cron-lazy.js";
+import { createGatewayCronReconciliation } from "./server-cron-reconciled.js";
 import { applyGatewayLaneConcurrency } from "./server-lanes.js";
 import { createGatewayServerLiveState, type GatewayServerLiveState } from "./server-live-state.js";
 import { GATEWAY_EVENTS } from "./server-methods-list.js";
@@ -651,6 +654,8 @@ export async function startGatewayServer(
       getTotalPendingReplies() +
       getActiveEmbeddedRunCount() +
       getActiveCronJobCount() +
+      getActiveBackgroundExecSessionCount() +
+      getActiveGatewayRootWorkCount() +
       getActiveTaskCount(),
   );
   // Unconditional startup migration: seed gateway.controlUi.allowedOrigins for existing
@@ -1032,6 +1037,21 @@ export async function startGatewayServer(
   };
 
   let closePreludeStarted = false;
+  const cronReconciliation = createGatewayCronReconciliation({
+    port,
+    workspaceDir: defaultWorkspaceDir,
+    isClosing: () => closePreludeStarted,
+    runHook: async (event, ctx) => {
+      try {
+        const hookRunner = (await import("../plugins/hook-runner-global.js")).getGlobalHookRunner();
+        if (hookRunner?.hasHooks("cron_reconciled")) {
+          await hookRunner.runCronReconciled(event, ctx);
+        }
+      } catch (err) {
+        logCron.error(`cron_reconciled hook failed: ${String(err)}`);
+      }
+    },
+  });
   let postReadyMaintenanceTimer: ReturnType<typeof setTimeout> | null = null;
   const clearPostReadyMaintenanceTimer = () => {
     if (!postReadyMaintenanceTimer) {
@@ -1042,6 +1062,7 @@ export async function startGatewayServer(
   };
   const markClosePreludeStarted = () => {
     closePreludeStarted = true;
+    cronReconciliation.invalidate();
     clearPostReadyMaintenanceTimer();
   };
   const runClosePrelude = async () => {
@@ -1671,7 +1692,8 @@ export async function startGatewayServer(
           cfgAtStart,
           deps,
           sessionDeliveryRecoveryMaxEnqueuedAt,
-          cron: runtimeState.cronState.cron,
+          cronState: runtimeState.cronState,
+          cronReconciliation,
           startCron: false,
           logCron,
           log,
@@ -1829,6 +1851,7 @@ export async function startGatewayServer(
       logChannels,
       logCron,
       logReload,
+      cronReconciliation,
       onCronRestart: () => {
         gatewayCronStartHandled = true;
       },
@@ -1885,7 +1908,9 @@ export async function startGatewayServer(
         markCronStartHandled: () => {
           gatewayCronStartHandled = true;
         },
-        cron: runtimeState.cronState.cron,
+        cronState: runtimeState.cronState,
+        cronReconciliation,
+        cronConfig: cfgAtStart,
         logCron,
         log,
         recordPostReadyMemory: () => {

@@ -588,6 +588,37 @@ describe("session accessor file-backed seam", () => {
     expect(loadSessionStore(storePath, { skipCache: true })[scope.sessionKey]).toBeUndefined();
   });
 
+  it("does not save the session store when entry preparation is rejected", async () => {
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+    await upsertSessionEntry(scope, {
+      sessionId: "pending-session",
+      updatedAt: 10,
+      initializationPending: true,
+    });
+    const fixedTime = new Date("2020-01-01T00:00:00.000Z");
+    fs.utimesSync(storePath, fixedTime, fixedTime);
+
+    const rejected = await createSessionEntryWithTranscript(scope, () => ({
+      ok: false,
+      error: "still initializing",
+    }));
+
+    expect(rejected).toEqual({
+      ok: false,
+      error: "still initializing",
+      phase: "entry",
+    });
+    expect(fs.statSync(storePath).mtimeMs).toBe(fixedTime.getTime());
+    expect(loadSessionEntry({ ...scope, readConsistency: "latest" })).toMatchObject({
+      sessionId: "pending-session",
+      initializationPending: true,
+    });
+  });
+
   it("commits reply session initialization with a guarded snapshot", async () => {
     const sessionKey = "agent:main:main";
     const previousTranscript = path.join(tempDir, "previous.jsonl");

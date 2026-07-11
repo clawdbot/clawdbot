@@ -10,12 +10,16 @@ import {
   CODEX_COMPUTER_USE_CONFIG_KEYS,
   CODEX_PLUGIN_ENTRY_CONFIG_KEYS,
   CODEX_PLUGINS_CONFIG_KEYS,
+  CODEX_SUPERVISION_CONFIG_KEYS,
+  CODEX_SUPERVISION_STDIO_ENDPOINT_CONFIG_KEYS,
+  CODEX_SUPERVISION_WEBSOCKET_ENDPOINT_CONFIG_KEYS,
   canUseCodexModelBackedApprovalsReviewerForModel,
   codexAppServerStartOptionsKey,
   fingerprintCodexAppServerNetworkProxyConfigPatch,
   readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
   resolveCodexAppServerUserHomeDir,
+  resolveCodexSupervisionAppServerRuntimeOptions,
   resolveCodexComputerUseConfig,
   resolveCodexModelBackedReviewerPolicyContext,
   resolveOpenClawExecModeForCodexAppServer,
@@ -542,6 +546,102 @@ describe("Codex app-server config", () => {
     });
   });
 
+  it("does not change ordinary harness connection defaults when supervision is enabled", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: { supervision: { enabled: true } },
+    });
+
+    expectFields(runtime.start, "runtime start", {
+      transport: "stdio",
+      homeScope: "agent",
+    });
+    expect(runtime.start).not.toHaveProperty("url");
+  });
+
+  it("uses shared user-home defaults only for supervision control connections", () => {
+    const runtime = resolveCodexSupervisionAppServerRuntimeOptions({
+      pluginConfig: { supervision: { enabled: true } },
+      env: {},
+      requirementsToml: null,
+    });
+
+    expectFields(runtime.start, "runtime start", {
+      transport: "stdio",
+      homeScope: "user",
+    });
+    expect(runtime.start).not.toHaveProperty("url");
+  });
+
+  it("honors explicit app-server settings for supervision control connections", () => {
+    const runtime = resolveCodexSupervisionAppServerRuntimeOptions({
+      pluginConfig: {
+        supervision: { enabled: true },
+        appServer: {
+          transport: "websocket",
+          url: "ws://127.0.0.1:39175",
+        },
+      },
+      env: {},
+      requirementsToml: null,
+    });
+
+    expectFields(runtime.start, "runtime start", {
+      transport: "websocket",
+      homeScope: "agent",
+      url: "ws://127.0.0.1:39175",
+    });
+  });
+
+  it("honors explicit app-server connection settings when supervision is enabled", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {
+        supervision: { enabled: true },
+        appServer: {
+          transport: "websocket",
+          homeScope: "agent",
+          url: "ws://127.0.0.1:39175",
+        },
+      },
+    });
+
+    expectFields(runtime.start, "runtime start", {
+      transport: "websocket",
+      homeScope: "agent",
+      url: "ws://127.0.0.1:39175",
+    });
+  });
+
+  it("rejects Unix app-server connections outside the shared user home", () => {
+    expect(() =>
+      resolveRuntimeForTest({
+        pluginConfig: {
+          appServer: {
+            transport: "unix",
+            homeScope: "agent",
+          },
+        },
+      }),
+    ).toThrow(
+      "plugins.entries.codex.config.appServer.transport=unix requires appServer.homeScope=user",
+    );
+  });
+
+  it("rejects non-Unix URLs for Unix app-server connections", () => {
+    expect(() =>
+      resolveRuntimeForTest({
+        pluginConfig: {
+          appServer: {
+            transport: "unix",
+            homeScope: "user",
+            url: "ws://127.0.0.1:39175",
+          },
+        },
+      }),
+    ).toThrow(
+      "plugins.entries.codex.config.appServer.url must use unix:// when appServer.transport is unix",
+    );
+  });
+
   it("resolves opt-in user-home coexistence only for local stdio", () => {
     const runtime = resolveRuntimeForTest({
       pluginConfig: { appServer: { homeScope: "user" } },
@@ -559,7 +659,7 @@ describe("Codex app-server config", () => {
         },
       }),
     ).toThrow(
-      "plugins.entries.codex.config.appServer.homeScope=user requires appServer.transport=stdio",
+      "plugins.entries.codex.config.appServer.homeScope=user requires appServer.transport=stdio or unix",
     );
   });
 
@@ -2639,6 +2739,19 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     );
   });
 
+  it("derives distinct shared-client keys for distinct process working directories", () => {
+    const startOptions = {
+      transport: "stdio" as const,
+      command: "codex",
+      args: ["app-server"],
+      headers: {},
+    };
+
+    expect(codexAppServerStartOptionsKey({ ...startOptions, cwd: "/tmp/project-a" })).not.toEqual(
+      codexAppServerStartOptionsKey({ ...startOptions, cwd: "/tmp/project-b" }),
+    );
+  });
+
   it("keeps runtime config keys aligned with manifest schema and UI hints", async () => {
     const manifest = JSON.parse(
       await fs.readFile(new URL("../../openclaw.plugin.json", import.meta.url), "utf8"),
@@ -2650,6 +2763,9 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
           codexPlugins: {
             properties: Record<string, unknown>;
             additionalProperties: boolean;
+          };
+          supervision: {
+            properties: Record<string, unknown>;
           };
         };
       };
@@ -2695,6 +2811,25 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     ).additionalProperties.properties;
     expect(Object.keys(pluginEntryProperties).toSorted()).toEqual(
       [...CODEX_PLUGIN_ENTRY_CONFIG_KEYS].toSorted(),
+    );
+    const supervisionProperties = manifest.configSchema.properties.supervision.properties;
+    expect(Object.keys(supervisionProperties).toSorted()).toEqual(
+      [...CODEX_SUPERVISION_CONFIG_KEYS].toSorted(),
+    );
+    for (const key of CODEX_SUPERVISION_CONFIG_KEYS) {
+      expectUiHintLabel(manifest, `supervision.${key}`);
+    }
+    const supervisionEndpointVariants = (
+      supervisionProperties.endpoints as {
+        items: { oneOf: Array<{ properties: Record<string, unknown> }> };
+      }
+    ).items.oneOf;
+    expect(supervisionEndpointVariants).toHaveLength(2);
+    expect(Object.keys(supervisionEndpointVariants[0]?.properties ?? {}).toSorted()).toEqual(
+      [...CODEX_SUPERVISION_STDIO_ENDPOINT_CONFIG_KEYS].toSorted(),
+    );
+    expect(Object.keys(supervisionEndpointVariants[1]?.properties ?? {}).toSorted()).toEqual(
+      [...CODEX_SUPERVISION_WEBSOCKET_ENDPOINT_CONFIG_KEYS].toSorted(),
     );
   });
 

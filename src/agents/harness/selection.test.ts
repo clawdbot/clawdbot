@@ -392,6 +392,32 @@ describe("runAgentHarnessAttempt", () => {
     expect(agentRunAttempt).not.toHaveBeenCalled();
   });
 
+  it("keeps a session-pinned Codex harness across outer provider overrides", async () => {
+    registerSuccessfulCodexHarness();
+
+    const result = await runAgentHarnessAttempt({
+      ...createAttemptParams(),
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+      agentHarnessId: "codex",
+    });
+
+    expect(result.sessionIdUsed).toBe("codex");
+    expect(agentRunAttempt).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when a session-pinned Codex harness is unavailable", async () => {
+    await expect(
+      runAgentHarnessAttempt({
+        ...createAttemptParams(),
+        provider: "anthropic",
+        modelId: "claude-opus-4-6",
+        agentHarnessId: "codex",
+      }),
+    ).rejects.toThrow('Requested agent harness "codex" is not registered');
+    expect(agentRunAttempt).not.toHaveBeenCalled();
+  });
+
   it.each(["openai", "openai"])(
     "does not override forced Codex harness support rejection for %s",
     (provider) => {
@@ -711,7 +737,7 @@ describe("selectAgentHarness", () => {
     expect(unsupportedSupports).toHaveBeenCalledTimes(1);
   });
 
-  it("ignores session-level OpenClaw pins when selecting a harness", () => {
+  it("honors session-level OpenClaw pins when selecting a harness", () => {
     const supports = vi.fn(() => ({ supported: true as const, priority: 100 }));
     registerAgentHarness({
       id: "codex",
@@ -726,8 +752,8 @@ describe("selectAgentHarness", () => {
       agentHarnessId: "openclaw",
     });
 
-    expect(harness.id).toBe("codex");
-    expect(supports).toHaveBeenCalledTimes(1);
+    expect(harness.id).toBe("openclaw");
+    expect(supports).not.toHaveBeenCalled();
   });
 
   it("passes manifest provider owners into plugin support checks", () => {
@@ -965,7 +991,7 @@ describe("selectAgentHarness", () => {
     expect(agentRunAttempt).not.toHaveBeenCalled();
   });
 
-  it("ignores existing session OpenClaw pins when provider policy forces a plugin harness", () => {
+  it("keeps an existing session OpenClaw pin when provider policy forces a plugin harness", () => {
     registerFailingCodexHarness();
 
     expect(
@@ -975,7 +1001,7 @@ describe("selectAgentHarness", () => {
         agentHarnessId: "openclaw",
         config: providerRuntimeConfig("codex", "codex"),
       }).id,
-    ).toBe("codex");
+    ).toBe("openclaw");
   });
 
   it("ignores env-forced OpenClaw for OpenAI default runtime selection", () => {
@@ -1019,8 +1045,22 @@ describe("selectAgentHarness", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("ignores stale plugin pins during compaction when the provider no longer matches", async () => {
-    registerFailingCodexHarness();
+  it("keeps pinned plugin compaction when the outer provider no longer matches", async () => {
+    const compact = vi.fn<NonNullable<AgentHarness["compact"]>>(async () => ({
+      ok: true,
+      compacted: false,
+    }));
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Codex",
+        supports: (ctx) =>
+          ctx.provider === "openai" ? { supported: true, priority: 100 } : { supported: false },
+        runAttempt: vi.fn(async () => createAttemptResult("codex")),
+        compact,
+      },
+      { ownerPluginId: "codex" },
+    );
 
     await expect(
       maybeCompactAgentHarnessSession({
@@ -1032,7 +1072,22 @@ describe("selectAgentHarness", () => {
         model: "llama3.3",
         agentHarnessId: "codex",
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ ok: true, compacted: false });
+    expect(compact).toHaveBeenCalledOnce();
+  });
+
+  it("fails closed when a pinned compaction harness is unavailable", async () => {
+    await expect(
+      maybeCompactAgentHarnessSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+        agentHarnessId: "codex",
+      }),
+    ).rejects.toThrow('Requested agent harness "codex" is not registered');
   });
 
   it("honors selected plugin harness pins during compaction preflight", async () => {

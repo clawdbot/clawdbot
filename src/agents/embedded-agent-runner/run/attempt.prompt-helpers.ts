@@ -593,6 +593,7 @@ type AfterTurnRuntimeContextAttempt = Pick<
   | "provider"
   | "modelId"
   | "agentHarnessId"
+  | "modelSelectionLocked"
   | "thinkLevel"
   | "reasoningLevel"
   | "bashElevated"
@@ -634,6 +635,7 @@ export function buildAfterTurnRuntimeContext(params: {
       provider: params.attempt.provider,
       modelId: params.attempt.modelId,
       harnessRuntime: params.attempt.agentHarnessId,
+      modelSelectionLocked: params.attempt.modelSelectionLocked,
       thinkLevel: params.attempt.thinkLevel,
       reasoningLevel: params.attempt.reasoningLevel,
       bashElevated: params.attempt.bashElevated,

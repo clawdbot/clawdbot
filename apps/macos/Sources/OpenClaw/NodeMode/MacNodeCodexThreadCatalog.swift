@@ -3,7 +3,7 @@ import Darwin
 import Foundation
 
 enum MacNodeCodexThreadCatalogContract {
-    static let pluginId = "codex-supervisor"
+    static let pluginId = "codex"
     static let capability = "codex-app-server-threads"
     static let listCommand = "codex.appServer.threads.list.v1"
 }
@@ -13,11 +13,16 @@ enum MacNodeCodexThreadCatalog {
         var executable: String
         var arguments: [String]
         var cwd: URL?
+        var clearEnv: [String] = []
     }
 
     enum CatalogError: LocalizedError, Equatable {
         case invalidParams(String)
+        case catalogDisabled
+        case invalidAppServerConfiguration
         case codexUnavailable
+        case unsupportedAppServerTransport
+        case unsupportedAppServerHomeScope
         case appServerUnavailable
         case responseTooLarge
         case timedOut
@@ -26,8 +31,16 @@ enum MacNodeCodexThreadCatalog {
             switch self {
             case let .invalidParams(message):
                 "INVALID_REQUEST: \(message)"
+            case .catalogDisabled:
+                "UNAVAILABLE: Codex session catalog is disabled"
+            case .invalidAppServerConfiguration:
+                "UNAVAILABLE: Codex app-server configuration is invalid"
             case .codexUnavailable:
                 "UNAVAILABLE: Codex CLI not found"
+            case .unsupportedAppServerTransport:
+                "UNAVAILABLE: paired macOS Codex catalog supports appServer.transport stdio only"
+            case .unsupportedAppServerHomeScope:
+                "UNAVAILABLE: paired macOS Codex catalog requires appServer.homeScope user"
             case .appServerUnavailable:
                 "UNAVAILABLE: Codex app-server thread list failed"
             case .responseTooLarge:
@@ -48,15 +61,21 @@ enum MacNodeCodexThreadCatalog {
     private struct ListParams {
         var cursor: String?
         var limit = 50
-        var archived = false
         var searchTerm: String?
         var cwd: String?
     }
 
-    private struct ConfiguredStdioEndpoint {
+    private struct ConfiguredAppServer {
+        var transport: String?
+        var homeScope: String?
         var command: String?
         var args: [String]?
-        var cwd: String?
+        var clearEnv: [String]
+    }
+
+    private struct ConfiguredPlugin {
+        var supervisionEnabled: Bool
+        var appServer: ConfiguredAppServer?
     }
 
     private enum StringOverflow {
@@ -65,7 +84,53 @@ enum MacNodeCodexThreadCatalog {
     }
 
     private static let defaultArguments = ["app-server", "--listen", "stdio://"]
+    private static let commandEnvironmentKey = "OPENCLAW_CODEX_APP_SERVER_BIN"
+    private static let argumentsEnvironmentKey = "OPENCLAW_CODEX_APP_SERVER_ARGS"
+    private static let pluginConfigKeys = Set([
+        "codexDynamicToolsLoading",
+        "codexDynamicToolsExclude",
+        "discovery",
+        "computerUse",
+        "codexPlugins",
+        "supervision",
+        "appServer",
+    ])
+    private static let appServerConfigKeys = Set([
+        "mode",
+        "transport",
+        "homeScope",
+        "command",
+        "args",
+        "url",
+        "authToken",
+        "headers",
+        "clearEnv",
+        "remoteWorkspaceRoot",
+        "codeModeOnly",
+        "requestTimeoutMs",
+        "turnCompletionIdleTimeoutMs",
+        "postToolRawAssistantCompletionIdleTimeoutMs",
+        "approvalPolicy",
+        "sandbox",
+        "approvalsReviewer",
+        "serviceTier",
+        "networkProxy",
+        "defaultWorkspaceDir",
+        "experimental",
+    ])
+    static let defaultMacOSChatGPTAppExecutable =
+        "/Applications/ChatGPT.app/Contents/Resources/codex"
+    static let defaultUserMacOSChatGPTAppExecutable = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Applications/ChatGPT.app/Contents/Resources/codex")
+        .path
     static let defaultMacOSAppExecutable = "/Applications/Codex.app/Contents/Resources/codex"
+    static let defaultUserMacOSAppExecutable = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Applications/Codex.app/Contents/Resources/codex")
+        .path
+    static let defaultMacOSBetaAppExecutable = "/Applications/Codex Beta.app/Contents/Resources/codex"
+    static let defaultUserMacOSBetaAppExecutable = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Applications/Codex Beta.app/Contents/Resources/codex")
+        .path
     private static let maxSessionIdLength = 256
     private static let maxSessionNameLength = 500
     private static let maxCwdLength = 4096
@@ -74,6 +139,7 @@ enum MacNodeCodexThreadCatalog {
     private static let maxActiveFlags = 16
     private static let maxActiveFlagLength = 128
     private static let maxCursorLength = 4096
+    private static let maxSearchPageCalls = 4
 
     private struct WireResponse: Encodable {
         var sessions: [WireSession]
@@ -99,9 +165,41 @@ enum MacNodeCodexThreadCatalog {
     }
 
     static func list(paramsJSON: String?) async throws -> String {
+        try await self.list(paramsJSON: paramsJSON) {
+            OpenClawConfigFile.loadDict()
+        }
+    }
+
+    static func list(
+        paramsJSON: String?,
+        loadRoot: () -> [String: Any]) async throws -> String
+    {
         let params = try self.decodeParams(paramsJSON)
-        let invocation = try self.resolveInvocation()
+        // Keep authorization and spawn selection on one config snapshot. A second read could
+        // otherwise approve one command and launch another after a concurrent config rewrite.
+        let root = loadRoot()
+        guard self.shouldAdvertise(root: root) else {
+            throw CatalogError.catalogDisabled
+        }
+        let invocation = try self.resolveInvocation(root: root)
         return try await self.list(params: params, invocation: invocation)
+    }
+
+    static func shouldAdvertise(root: [String: Any]? = nil) -> Bool {
+        let root = root ?? OpenClawConfigFile.loadDict()
+        guard OpenClawConfigFile.configuredBundledPluginAllowed(
+            MacNodeCodexThreadCatalogContract.pluginId,
+            root: root)
+        else { return false }
+        let plugin: ConfiguredPlugin?
+        do {
+            plugin = try self.configuredPlugin(root: root)
+        } catch {
+            return false
+        }
+        guard plugin?.supervisionEnabled == true else { return false }
+        return self.supportsConfiguredTransport(plugin?.appServer) &&
+            self.supportsConfiguredHomeScope(plugin?.appServer)
     }
 
     static func list(
@@ -109,6 +207,7 @@ enum MacNodeCodexThreadCatalog {
         executable: String,
         arguments: [String]? = nil,
         cwd: URL? = nil,
+        clearEnv: [String] = [],
         timeoutSeconds: Double = 12,
         maxLineBytes: Int = 5 * 1024 * 1024) async throws -> String
     {
@@ -118,7 +217,8 @@ enum MacNodeCodexThreadCatalog {
             invocation: ResolvedInvocation(
                 executable: executable,
                 arguments: arguments ?? self.defaultArguments,
-                cwd: cwd),
+                cwd: cwd,
+                clearEnv: clearEnv),
             timeoutSeconds: timeoutSeconds,
             maxLineBytes: maxLineBytes)
     }
@@ -129,74 +229,598 @@ enum MacNodeCodexThreadCatalog {
         timeoutSeconds: Double = 12,
         maxLineBytes: Int = 5 * 1024 * 1024) async throws -> String
     {
-        let session = try CodexAppServerThreadListSession(
-            invocation: invocation,
-            listParams: self.appServerParams(params),
-            timeoutSeconds: timeoutSeconds,
-            maxLineBytes: maxLineBytes)
-        let output = try await session.run()
-        return try self.normalize(
-            listResultData: output.listResultData,
-            archived: params.archived,
-            searchTerm: params.searchTerm)
-    }
+        guard params.searchTerm != nil else {
+            let session = try CodexAppServerThreadListSession(
+                invocation: invocation,
+                listParams: self.appServerParams(params),
+                timeoutSeconds: timeoutSeconds,
+                maxLineBytes: maxLineBytes)
+            let output = try await session.run()
+            return try self.normalize(listResultData: output.listResultData)
+        }
 
+        // Native search also inspects transcript-derived previews. Scan a bounded
+        // number of unsearched pages and filter normalized titles locally instead.
+        let deadline = Date().addingTimeInterval(max(0.01, timeoutSeconds))
+        var sessions: [WireSession] = []
+        var cursor = params.cursor
+        var seenCursors = Set(cursor.map { [$0] } ?? [])
+        var backwardsCursor: String?
+        var nextCursor: String?
+
+        for pageIndex in 0..<self.maxSearchPageCalls {
+            let remainingLimit = params.limit - sessions.count
+            guard remainingLimit > 0 else { break }
+            let remainingTimeout = deadline.timeIntervalSinceNow
+            guard remainingTimeout > 0 else { throw CatalogError.timedOut }
+
+            var pageParams = params
+            pageParams.cursor = cursor
+            pageParams.limit = remainingLimit
+            let session = try CodexAppServerThreadListSession(
+                invocation: invocation,
+                listParams: self.appServerParams(pageParams),
+                timeoutSeconds: remainingTimeout,
+                maxLineBytes: maxLineBytes)
+            let output = try await session.run()
+            let page = try self.normalizedResponse(
+                listResultData: output.listResultData,
+                searchTerm: params.searchTerm)
+            if pageIndex == 0 {
+                backwardsCursor = page.backwardsCursor
+            }
+            sessions.append(contentsOf: page.sessions)
+
+            guard let candidateCursor = page.nextCursor else {
+                nextCursor = nil
+                break
+            }
+            guard !seenCursors.contains(candidateCursor) else {
+                // A repeated opaque cursor cannot make forward progress. Stop the
+                // page chain instead of handing callers a permanent load-more loop.
+                nextCursor = nil
+                break
+            }
+            nextCursor = candidateCursor
+            if sessions.count >= params.limit || pageIndex + 1 == self.maxSearchPageCalls {
+                break
+            }
+            seenCursors.insert(candidateCursor)
+            cursor = candidateCursor
+        }
+
+        return try self.encodeResponse(WireResponse(
+            sessions: sessions,
+            nextCursor: nextCursor,
+            backwardsCursor: backwardsCursor))
+    }
+}
+
+extension MacNodeCodexThreadCatalog {
     static func resolveInvocation(
         root: [String: Any]? = nil,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
         searchPaths: [String]? = nil,
         currentDirectoryURL: URL = URL(
             fileURLWithPath: FileManager.default.currentDirectoryPath,
             isDirectory: true),
-        defaultMacOSAppExecutable: String = MacNodeCodexThreadCatalog.defaultMacOSAppExecutable) throws
+        defaultMacOSChatGPTAppExecutable: String = MacNodeCodexThreadCatalog
+            .defaultMacOSChatGPTAppExecutable,
+        defaultUserMacOSChatGPTAppExecutable: String = MacNodeCodexThreadCatalog
+            .defaultUserMacOSChatGPTAppExecutable,
+        defaultMacOSAppExecutable: String = MacNodeCodexThreadCatalog.defaultMacOSAppExecutable,
+        defaultUserMacOSAppExecutable: String = MacNodeCodexThreadCatalog.defaultUserMacOSAppExecutable,
+        defaultMacOSBetaAppExecutable: String = MacNodeCodexThreadCatalog.defaultMacOSBetaAppExecutable,
+        defaultUserMacOSBetaAppExecutable: String = MacNodeCodexThreadCatalog.defaultUserMacOSBetaAppExecutable) throws
         -> ResolvedInvocation
     {
         let root = root ?? OpenClawConfigFile.loadDict()
-        let endpoint = self.configuredStdioEndpoint(root: root)
-        let cwd = endpoint?.cwd.map {
-            self.resolvePath($0, relativeTo: currentDirectoryURL, isDirectory: true)
+        let appServer = try self.configuredPlugin(root: root)?.appServer
+        guard self.supportsConfiguredTransport(appServer) else {
+            throw CatalogError.unsupportedAppServerTransport
         }
-        let configuredCommand = endpoint?.command
-        let rawCommand = configuredCommand ?? "codex"
+        guard self.supportsConfiguredHomeScope(appServer) else {
+            throw CatalogError.unsupportedAppServerHomeScope
+        }
+        let configuredCommand = self.nonEmptyString(appServer?.command)
+        let environmentCommand = self.nonEmptyString(environment[self.commandEnvironmentKey])
+        let customCommand = configuredCommand ?? environmentCommand
+        let rawCommand = customCommand ?? "codex"
         let command = rawCommand.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !command.isEmpty else { throw CatalogError.codexUnavailable }
 
         let executable: String?
-        if configuredCommand == nil,
-           FileManager.default.isExecutableFile(atPath: defaultMacOSAppExecutable)
-        {
-            executable = defaultMacOSAppExecutable
+        var installedAppExecutable: String?
+        if customCommand == nil {
+            installedAppExecutable = [
+                defaultMacOSChatGPTAppExecutable,
+                defaultUserMacOSChatGPTAppExecutable,
+                defaultMacOSAppExecutable,
+                defaultUserMacOSAppExecutable,
+                defaultMacOSBetaAppExecutable,
+                defaultUserMacOSBetaAppExecutable,
+            ]
+                .first { FileManager.default.isExecutableFile(atPath: $0) }
+        }
+        if let installedAppExecutable {
+            executable = installedAppExecutable
         } else if command.contains("/") || command.hasPrefix("~") {
-            let url = self.resolvePath(command, relativeTo: cwd ?? currentDirectoryURL)
+            let url = self.resolvePath(command, relativeTo: currentDirectoryURL)
             executable = FileManager.default.isExecutableFile(atPath: url.path) ? url.path : nil
         } else {
             executable = CommandResolver.findExecutable(named: command, searchPaths: searchPaths)
         }
         guard let executable else { throw CatalogError.codexUnavailable }
+        let configuredArguments = appServer?.args ?? environment[self.argumentsEnvironmentKey].map {
+            self.splitShellWords($0)
+        }
+        let arguments = if let configuredArguments, !configuredArguments.isEmpty {
+            configuredArguments
+        } else {
+            self.defaultArguments
+        }
         return ResolvedInvocation(
             executable: executable,
-            arguments: endpoint?.args ?? self.defaultArguments,
-            cwd: cwd)
+            arguments: arguments,
+            cwd: nil,
+            clearEnv: appServer?.clearEnv ?? [])
     }
 
-    private static func configuredStdioEndpoint(root: [String: Any]) -> ConfiguredStdioEndpoint? {
+    private static func supportsConfiguredTransport(_ appServer: ConfiguredAppServer?) -> Bool {
+        appServer?.transport == nil || appServer?.transport == "stdio"
+    }
+
+    private static func supportsConfiguredHomeScope(_ appServer: ConfiguredAppServer?) -> Bool {
+        appServer?.homeScope == nil || appServer?.homeScope == "user"
+    }
+
+    private static func configuredPlugin(root: [String: Any]) throws -> ConfiguredPlugin? {
         guard let entry = OpenClawConfigFile.pluginEntry(
             MacNodeCodexThreadCatalogContract.pluginId,
-            root: root),
-            let config = entry["config"] as? [String: Any],
-            let endpoints = config["endpoints"] as? [Any]
+            root: root)
         else { return nil }
-
-        for value in endpoints {
-            guard let endpoint = value as? [String: Any] else { continue }
-            let transport = endpoint["transport"] as? String
-            guard transport == nil || transport == "stdio-proxy" else { continue }
-            let args = (endpoint["args"] as? [Any])?.compactMap { $0 as? String }
-            return ConfiguredStdioEndpoint(
-                command: endpoint["command"] as? String,
-                args: args?.isEmpty == false ? args : nil,
-                cwd: endpoint["cwd"] as? String)
+        guard let rawConfig = entry["config"] else {
+            return ConfiguredPlugin(supervisionEnabled: false, appServer: nil)
         }
-        return nil
+        guard let config = rawConfig as? [String: Any] else {
+            throw CatalogError.invalidAppServerConfiguration
+        }
+        try self.validateKeys(config, allowed: self.pluginConfigKeys)
+        try self.validateEnum(
+            config,
+            key: "codexDynamicToolsLoading",
+            allowed: ["searchable", "direct"])
+        try self.validateStringArray(config, key: "codexDynamicToolsExclude")
+        try self.validateDiscoveryConfig(config["discovery"])
+        try self.validateComputerUseConfig(config["computerUse"])
+        // `codexPlugins` is intentionally parsed independently by readCodexPluginConfig.
+        // Its validity does not decide whether supervision remains enabled.
+        let supervisionEnabled = try self.validateSupervisionConfig(config["supervision"])
+        let appServer = try self.validateAppServerConfig(config["appServer"])
+        return ConfiguredPlugin(
+            supervisionEnabled: supervisionEnabled,
+            appServer: appServer)
+    }
+
+    private static func validateAppServerConfig(_ rawValue: Any?) throws -> ConfiguredAppServer? {
+        guard let rawValue else { return nil }
+        guard let appServer = rawValue as? [String: Any] else {
+            throw CatalogError.invalidAppServerConfiguration
+        }
+        try self.validateKeys(appServer, allowed: self.appServerConfigKeys)
+        try self.validateEnum(appServer, key: "mode", allowed: ["yolo", "guardian"])
+        try self.validateEnum(appServer, key: "transport", allowed: ["stdio", "websocket", "unix"])
+        try self.validateEnum(appServer, key: "homeScope", allowed: ["agent", "user"])
+        try self.validateString(appServer, key: "command")
+        try self.validateString(appServer, key: "url")
+        try self.validateSecretInput(appServer["authToken"])
+        try self.validateHeaders(appServer["headers"])
+        try self.validateStringArray(appServer, key: "clearEnv")
+        try self.validateNonEmptyString(appServer, key: "remoteWorkspaceRoot")
+        try self.validateBoolean(appServer, key: "codeModeOnly")
+        try self.validatePositiveNumber(appServer, key: "requestTimeoutMs")
+        try self.validatePositiveNumber(appServer, key: "turnCompletionIdleTimeoutMs")
+        try self.validatePositiveNumber(
+            appServer,
+            key: "postToolRawAssistantCompletionIdleTimeoutMs")
+        try self.validateEnum(
+            appServer,
+            key: "approvalPolicy",
+            allowed: ["never", "on-request", "on-failure", "untrusted"])
+        try self.validateEnum(
+            appServer,
+            key: "sandbox",
+            allowed: ["read-only", "workspace-write", "danger-full-access"])
+        try self.validateEnum(
+            appServer,
+            key: "approvalsReviewer",
+            allowed: ["user", "auto_review", "guardian_subagent"])
+        try self.validateStringOrNull(appServer, key: "serviceTier")
+        try self.validateNetworkProxyConfig(appServer["networkProxy"])
+        try self.validateString(appServer, key: "defaultWorkspaceDir")
+        try self.validateExperimentalConfig(appServer["experimental"])
+
+        let transport = try self.optionalConfiguredString(appServer, key: "transport")
+        let homeScope = try self.optionalConfiguredString(appServer, key: "homeScope")
+        let command = try self.optionalConfiguredString(appServer, key: "command")
+        let args = try self.configuredArguments(appServer, key: "args")
+        let clearEnv = try self.configuredStringList(appServer, key: "clearEnv")
+
+        return ConfiguredAppServer(
+            transport: transport,
+            homeScope: homeScope,
+            command: self.nonEmptyString(command),
+            args: args,
+            clearEnv: clearEnv)
+    }
+
+    private static func optionalConfiguredString(
+        _ object: [String: Any],
+        key: String) throws -> String?
+    {
+        guard let value = object[key] else { return nil }
+        guard let value = value as? String else {
+            throw CatalogError.invalidAppServerConfiguration
+        }
+        return value
+    }
+
+    private static func configuredArguments(
+        _ object: [String: Any],
+        key: String) throws -> [String]?
+    {
+        guard let value = object[key] else { return nil }
+        let args: [String]
+        if let values = value as? [Any] {
+            guard values.allSatisfy({ $0 is String }) else {
+                throw CatalogError.invalidAppServerConfiguration
+            }
+            args = values.compactMap(self.nonEmptyString)
+        } else if let value = value as? String {
+            args = self.splitShellWords(value)
+        } else {
+            throw CatalogError.invalidAppServerConfiguration
+        }
+        return args
+    }
+
+    private static func configuredStringList(
+        _ object: [String: Any],
+        key: String) throws -> [String]
+    {
+        guard let value = object[key] else { return [] }
+        guard let values = value as? [Any], values.allSatisfy({ $0 is String }) else {
+            throw CatalogError.invalidAppServerConfiguration
+        }
+        return values.compactMap(self.nonEmptyString)
+    }
+
+    private static func validateDiscoveryConfig(_ rawValue: Any?) throws {
+        guard let rawValue else { return }
+        guard let config = rawValue as? [String: Any] else {
+            throw CatalogError.invalidAppServerConfiguration
+        }
+        try self.validateKeys(config, allowed: ["enabled", "timeoutMs"])
+        try self.validateBoolean(config, key: "enabled")
+        try self.validatePositiveNumber(config, key: "timeoutMs")
+    }
+
+    private static func validateComputerUseConfig(_ rawValue: Any?) throws {
+        guard let rawValue else { return }
+        guard let config = rawValue as? [String: Any] else {
+            throw CatalogError.invalidAppServerConfiguration
+        }
+        try self.validateKeys(config, allowed: [
+            "enabled",
+            "autoInstall",
+            "marketplaceDiscoveryTimeoutMs",
+            "marketplaceSource",
+            "marketplacePath",
+            "marketplaceName",
+            "pluginName",
+            "mcpServerName",
+        ])
+        try self.validateBoolean(config, key: "enabled")
+        try self.validateBoolean(config, key: "autoInstall")
+        try self.validatePositiveNumber(config, key: "marketplaceDiscoveryTimeoutMs")
+        for key in [
+            "marketplaceSource",
+            "marketplacePath",
+            "marketplaceName",
+            "pluginName",
+            "mcpServerName",
+        ] {
+            try self.validateString(config, key: key)
+        }
+    }
+
+    private static func validateSupervisionConfig(_ rawValue: Any?) throws -> Bool {
+        guard let rawValue else { return false }
+        guard let config = rawValue as? [String: Any] else {
+            throw CatalogError.invalidAppServerConfiguration
+        }
+        try self.validateKeys(config, allowed: [
+            "enabled",
+            "endpoints",
+            "allowRawTranscripts",
+            "allowWriteControls",
+        ])
+        try self.validateBoolean(config, key: "enabled")
+        try self.validateBoolean(config, key: "allowRawTranscripts")
+        try self.validateBoolean(config, key: "allowWriteControls")
+        if let rawEndpoints = config["endpoints"] {
+            guard let endpoints = rawEndpoints as? [Any] else {
+                throw CatalogError.invalidAppServerConfiguration
+            }
+            for endpoint in endpoints {
+                try self.validateSupervisionEndpoint(endpoint)
+            }
+        }
+        return self.literalBoolean(config["enabled"]) == true
+    }
+
+    private static func validateSupervisionEndpoint(_ rawValue: Any) throws {
+        guard let endpoint = rawValue as? [String: Any] else {
+            throw CatalogError.invalidAppServerConfiguration
+        }
+        let transport = endpoint["transport"] as? String
+        if transport == nil || transport == "stdio-proxy" {
+            try self.validateKeys(
+                endpoint,
+                allowed: ["id", "label", "transport", "command", "args", "cwd"])
+            for key in ["id", "label", "command", "cwd"] {
+                try self.validateString(endpoint, key: key)
+            }
+            try self.validateEnum(endpoint, key: "transport", allowed: ["stdio-proxy"])
+            try self.validateStringArray(endpoint, key: "args")
+            return
+        }
+        guard transport == "websocket" else {
+            throw CatalogError.invalidAppServerConfiguration
+        }
+        try self.validateKeys(
+            endpoint,
+            allowed: ["id", "label", "transport", "url", "authTokenEnv"])
+        for key in ["id", "label", "authTokenEnv"] {
+            try self.validateString(endpoint, key: key)
+        }
+        guard endpoint["url"] is String else {
+            throw CatalogError.invalidAppServerConfiguration
+        }
+    }
+
+    private static func validateNetworkProxyConfig(_ rawValue: Any?) throws {
+        guard let rawValue else { return }
+        guard let config = rawValue as? [String: Any] else {
+            throw CatalogError.invalidAppServerConfiguration
+        }
+        try self.validateKeys(config, allowed: [
+            "enabled",
+            "profileName",
+            "baseProfile",
+            "mode",
+            "domains",
+            "unixSockets",
+            "proxyUrl",
+            "socksUrl",
+            "enableSocks5",
+            "enableSocks5Udp",
+            "allowUpstreamProxy",
+            "allowLocalBinding",
+            "dangerouslyAllowNonLoopbackProxy",
+            "dangerouslyAllowAllUnixSockets",
+        ])
+        for key in [
+            "enabled",
+            "enableSocks5",
+            "enableSocks5Udp",
+            "allowUpstreamProxy",
+            "allowLocalBinding",
+            "dangerouslyAllowNonLoopbackProxy",
+            "dangerouslyAllowAllUnixSockets",
+        ] {
+            try self.validateBoolean(config, key: key)
+        }
+        for key in ["profileName", "proxyUrl", "socksUrl"] {
+            try self.validateNonEmptyString(config, key: key)
+        }
+        try self.validateEnum(config, key: "baseProfile", allowed: ["read-only", "workspace"])
+        try self.validateEnum(config, key: "mode", allowed: ["limited", "full"])
+        try self.validateStringRecord(
+            config,
+            key: "domains",
+            allowedValues: ["allow", "deny"])
+        try self.validateStringRecord(
+            config,
+            key: "unixSockets",
+            allowedValues: ["allow", "none"])
+    }
+
+    private static func validateExperimentalConfig(_ rawValue: Any?) throws {
+        guard let rawValue else { return }
+        guard let config = rawValue as? [String: Any] else {
+            throw CatalogError.invalidAppServerConfiguration
+        }
+        try self.validateKeys(config, allowed: ["sandboxExecServer"])
+        try self.validateBoolean(config, key: "sandboxExecServer")
+    }
+
+    private static func validateHeaders(_ rawValue: Any?) throws {
+        guard let rawValue else { return }
+        guard let headers = rawValue as? [String: Any] else {
+            throw CatalogError.invalidAppServerConfiguration
+        }
+        for value in headers.values {
+            try self.validateSecretInput(value)
+        }
+    }
+
+    private static func validateSecretInput(_ rawValue: Any?) throws {
+        guard let rawValue else { return }
+        if rawValue is String {
+            return
+        }
+        guard let secret = rawValue as? [String: Any] else {
+            throw CatalogError.invalidAppServerConfiguration
+        }
+        try self.validateKeys(secret, allowed: ["source", "provider", "id"])
+        guard secret.keys.count == 3,
+              let source = secret["source"] as? String,
+              let provider = secret["provider"] as? String,
+              let id = secret["id"] as? String,
+              self.matches(provider, pattern: "^[a-z][a-z0-9_-]{0,63}$")
+        else {
+            throw CatalogError.invalidAppServerConfiguration
+        }
+        let validId = switch source {
+        case "env":
+            self.matches(id, pattern: "^[A-Z][A-Z0-9_]{0,127}$")
+        case "file":
+            self.validFileSecretId(id)
+        case "exec":
+            self.matches(id, pattern: "^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,255}$") &&
+                !id.split(separator: "/", omittingEmptySubsequences: false)
+                .contains(where: { $0 == "." || $0 == ".." })
+        default:
+            false
+        }
+        guard validId else { throw CatalogError.invalidAppServerConfiguration }
+    }
+
+    private static func validFileSecretId(_ value: String) -> Bool {
+        if value == "value" {
+            return true
+        }
+        guard value.hasPrefix("/") else { return false }
+        return value.dropFirst().split(separator: "/", omittingEmptySubsequences: false)
+            .allSatisfy { segment in
+                segment.range(of: "~(?:[^01]|$)", options: .regularExpression) == nil
+            }
+    }
+
+    private static func validateKeys(
+        _ object: [String: Any],
+        allowed: Set<String>) throws
+    {
+        guard object.keys.allSatisfy(allowed.contains) else {
+            throw CatalogError.invalidAppServerConfiguration
+        }
+    }
+
+    private static func validateBoolean(_ object: [String: Any], key: String) throws {
+        guard let value = object[key] else { return }
+        guard self.literalBoolean(value) != nil else {
+            throw CatalogError.invalidAppServerConfiguration
+        }
+    }
+
+    private static func validateString(_ object: [String: Any], key: String) throws {
+        guard let value = object[key] else { return }
+        guard value is String else { throw CatalogError.invalidAppServerConfiguration }
+    }
+
+    private static func validateNonEmptyString(_ object: [String: Any], key: String) throws {
+        guard let value = object[key] else { return }
+        guard let value = value as? String,
+              !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            throw CatalogError.invalidAppServerConfiguration
+        }
+    }
+
+    private static func validateStringOrNull(_ object: [String: Any], key: String) throws {
+        guard let value = object[key] else { return }
+        guard value is String || value is NSNull else {
+            throw CatalogError.invalidAppServerConfiguration
+        }
+    }
+
+    private static func validateEnum(
+        _ object: [String: Any],
+        key: String,
+        allowed: Set<String>) throws
+    {
+        guard let value = object[key] else { return }
+        guard let value = value as? String, allowed.contains(value) else {
+            throw CatalogError.invalidAppServerConfiguration
+        }
+    }
+
+    private static func validatePositiveNumber(_ object: [String: Any], key: String) throws {
+        guard let value = object[key] else { return }
+        guard let number = value as? NSNumber,
+              CFGetTypeID(number) != CFBooleanGetTypeID(),
+              number.doubleValue.isFinite,
+              number.doubleValue > 0
+        else {
+            throw CatalogError.invalidAppServerConfiguration
+        }
+    }
+
+    private static func validateStringArray(_ object: [String: Any], key: String) throws {
+        guard let value = object[key] else { return }
+        guard let values = value as? [Any], values.allSatisfy({ $0 is String }) else {
+            throw CatalogError.invalidAppServerConfiguration
+        }
+    }
+
+    private static func validateStringRecord(
+        _ object: [String: Any],
+        key: String,
+        allowedValues: Set<String>) throws
+    {
+        guard let value = object[key] else { return }
+        guard let values = value as? [String: Any],
+              values.values.allSatisfy({ value in
+                  guard let value = value as? String else { return false }
+                  return allowedValues.contains(value)
+              })
+        else {
+            throw CatalogError.invalidAppServerConfiguration
+        }
+    }
+
+    private static func literalBoolean(_ value: Any?) -> Bool? {
+        guard let number = value as? NSNumber,
+              CFGetTypeID(number) == CFBooleanGetTypeID()
+        else { return nil }
+        return number.boolValue
+    }
+
+    private static func matches(_ value: String, pattern: String) -> Bool {
+        value.range(of: pattern, options: .regularExpression) != nil
+    }
+
+    /// Match the TypeScript app-server config parser exactly: quotes only group
+    /// words and backslashes are ordinary characters. The result never uses a shell.
+    private static func splitShellWords(_ value: String) -> [String] {
+        var words: [String] = []
+        var current = ""
+        var activeQuote: Character?
+        for character in value {
+            if let expectedQuote = activeQuote {
+                if character == expectedQuote {
+                    activeQuote = nil
+                } else {
+                    current.append(character)
+                }
+                continue
+            }
+            if character == "\"" || character == "'" {
+                activeQuote = character
+            } else if character.isWhitespace {
+                if !current.isEmpty {
+                    words.append(current)
+                    current = ""
+                }
+            } else {
+                current.append(character)
+            }
+        }
+        if !current.isEmpty {
+            words.append(current)
+        }
+        return words
     }
 
     private static func resolvePath(
@@ -228,7 +852,7 @@ enum MacNodeCodexThreadCatalog {
         guard let raw = raw as? [String: Any] else {
             throw CatalogError.invalidParams("parameters must be an object")
         }
-        let allowed = Set(["cursor", "limit", "archived", "searchTerm", "cwd"])
+        let allowed = Set(["cursor", "limit", "searchTerm", "cwd"])
         if let unknown = raw.keys.first(where: { !allowed.contains($0) }) {
             throw CatalogError.invalidParams("unknown Codex session catalog parameter: \(unknown)")
         }
@@ -249,14 +873,6 @@ enum MacNodeCodexThreadCatalog {
                 throw CatalogError.invalidParams("limit must be an integer from 1 to 100")
             }
             params.limit = number.intValue
-        }
-        if let value = raw["archived"] {
-            guard CFGetTypeID(value as CFTypeRef) == CFBooleanGetTypeID(),
-                  let archived = value as? Bool
-            else {
-                throw CatalogError.invalidParams("archived must be a boolean")
-            }
-            params.archived = archived
         }
         return params
     }
@@ -286,7 +902,7 @@ enum MacNodeCodexThreadCatalog {
             // An empty provider list means all providers. Omitting sourceKinds keeps
             // Codex's stable interactive-session default.
             "modelProviders": [String](),
-            "archived": params.archived,
+            "archived": false,
             "useStateDbOnly": false,
         ]
         if let cursor = params.cursor {
@@ -302,8 +918,16 @@ enum MacNodeCodexThreadCatalog {
 
     static func normalize(
         listResultData: Data,
-        archived: Bool,
         searchTerm: String? = nil) throws -> String
+    {
+        try self.encodeResponse(self.normalizedResponse(
+            listResultData: listResultData,
+            searchTerm: searchTerm))
+    }
+
+    private static func normalizedResponse(
+        listResultData: Data,
+        searchTerm: String? = nil) throws -> WireResponse
     {
         guard let result = try JSONSerialization.jsonObject(with: listResultData) as? [String: Any],
               let rawThreads = result["data"] as? [Any]
@@ -333,7 +957,7 @@ enum MacNodeCodexThreadCatalog {
                 maxLength: self.maxSessionNameLength,
                 overflow: .truncate)
             if let searchTerm,
-               name?.range(of: searchTerm, options: [.literal]) == nil
+               name?.range(of: searchTerm, options: [.caseInsensitive, .literal]) == nil
             {
                 return nil
             }
@@ -362,13 +986,16 @@ enum MacNodeCodexThreadCatalog {
                     gitInfo?["branch"],
                     maxLength: self.maxMetadataLength,
                     overflow: .truncate),
-                archived: archived)
+                archived: false)
         }
 
-        let response = WireResponse(
+        return WireResponse(
             sessions: sessions,
             nextCursor: self.boundedCursor(result["nextCursor"]),
             backwardsCursor: self.boundedCursor(result["backwardsCursor"]))
+    }
+
+    private static func encodeResponse(_ response: WireResponse) throws -> String {
         let data = try JSONEncoder().encode(response)
         guard let json = String(data: data, encoding: .utf8) else {
             throw CatalogError.appServerUnavailable
@@ -482,6 +1109,9 @@ private final class CodexAppServerThreadListSession: @unchecked Sendable {
         self.process.currentDirectoryURL = invocation.cwd
         var environment = ProcessInfo.processInfo.environment
         environment["PATH"] = CommandResolver.preferredPaths().joined(separator: ":")
+        for key in invocation.clearEnv {
+            environment.removeValue(forKey: key)
+        }
         self.process.environment = environment
         self.process.standardInput = self.stdinPipe
         self.process.standardOutput = self.stdoutPipe
@@ -522,13 +1152,8 @@ private final class CodexAppServerThreadListSession: @unchecked Sendable {
         Self.setNonBlocking(self.stderrPipe.fileHandleForReading)
         self.stdoutPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             guard let session = self else { return }
-            let chunk = Self.readAvailable(from: handle, maxBytes: session.maxLineBytes)
-            if chunk.reachedEOF {
-                handle.readabilityHandler = nil
-            }
-            guard !chunk.data.isEmpty else { return }
             session.queue.async { [session] in
-                session.consumeStdout(chunk.data)
+                session.drainStdout(from: handle)
             }
         }
         // Drain stderr so the child cannot block. App Server stderr is deliberately
@@ -541,6 +1166,9 @@ private final class CodexAppServerThreadListSession: @unchecked Sendable {
         self.process.terminationHandler = { [weak self] _ in
             guard let session = self else { return }
             session.queue.async { [session] in
+                // A short-lived App Server can exit before its readability callback
+                // is admitted. Drain its final frame before projecting termination.
+                session.drainStdout(from: session.stdoutPipe.fileHandleForReading)
                 guard !session.finished else { return }
                 session.finish(.failure(MacNodeCodexThreadCatalog.CatalogError.appServerUnavailable))
             }
@@ -561,6 +1189,16 @@ private final class CodexAppServerThreadListSession: @unchecked Sendable {
         } catch {
             self.finish(.failure(MacNodeCodexThreadCatalog.CatalogError.appServerUnavailable))
         }
+    }
+
+    private func drainStdout(from handle: FileHandle) {
+        guard !self.finished else { return }
+        let chunk = Self.readAvailable(from: handle, maxBytes: self.maxLineBytes)
+        if chunk.reachedEOF {
+            handle.readabilityHandler = nil
+        }
+        guard !chunk.data.isEmpty else { return }
+        self.consumeStdout(chunk.data)
     }
 
     private func consumeStdout(_ data: Data) {

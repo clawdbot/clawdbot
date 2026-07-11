@@ -118,7 +118,14 @@ export async function maybeCompactAgentHarnessSession(
   params: CompactEmbeddedAgentSessionParams,
   options: InternalAgentHarnessCompactionOptions = {},
 ): Promise<EmbeddedAgentCompactResult | undefined> {
-  if (params.provider && isCliRuntimeProvider(params.provider, { config: params.config })) {
+  const selectedRuntime = normalizeOptionalAgentRuntimeId(params.agentHarnessId);
+  const pinnedHarnessId =
+    selectedRuntime && !isDefaultAgentRuntimeId(selectedRuntime) ? selectedRuntime : undefined;
+  if (
+    !pinnedHarnessId &&
+    params.provider &&
+    isCliRuntimeProvider(params.provider, { config: params.config })
+  ) {
     return undefined;
   }
   const runtimePolicySessionKey = params.sandboxSessionKey ?? params.sessionKey;
@@ -133,33 +140,23 @@ export async function maybeCompactAgentHarnessSession(
     agentId: runtimePolicyAgentId,
     sessionKey: runtimePolicySessionKey,
   }).runtime;
-  if (isCliRuntimeAliasForProvider({ runtime, provider: params.provider, cfg: params.config })) {
+  if (
+    isCliRuntimeAliasForProvider({
+      runtime: pinnedHarnessId ?? runtime,
+      provider: params.provider,
+      cfg: params.config,
+    })
+  ) {
     return undefined;
   }
-  const selectedRuntime = normalizeOptionalAgentRuntimeId(params.agentHarnessId);
-  const agentHarnessRuntimeOverride =
-    selectedRuntime && !isDefaultAgentRuntimeId(selectedRuntime) ? selectedRuntime : undefined;
-  let harness: AgentHarness;
-  try {
-    harness = selectAgentHarness({
-      provider: params.provider ?? "",
-      modelId: params.model,
-      config: params.config,
-      agentId: runtimePolicyAgentId,
-      sessionKey: runtimePolicySessionKey,
-      agentHarnessRuntimeOverride,
-    });
-  } catch (err) {
-    if (agentHarnessRuntimeOverride) {
-      const message = formatErrorMessage(err);
-      if (message.includes("does not support")) {
-        // Explicit runtime overrides can name a harness that cannot serve this model. Falling back
-        // to native compaction preserves existing OpenClaw behavior instead of failing rotation.
-        return undefined;
-      }
-    }
-    throw err;
-  }
+  const harness = selectAgentHarness({
+    provider: params.provider ?? "",
+    modelId: params.model,
+    config: params.config,
+    agentId: runtimePolicyAgentId,
+    sessionKey: runtimePolicySessionKey,
+    agentHarnessId: pinnedHarnessId,
+  });
   const internalHarness = harness as InternalAgentHarness;
   const shouldCompactAfterContextEngine =
     options.nativeCompactionRequest === "after_context_engine";

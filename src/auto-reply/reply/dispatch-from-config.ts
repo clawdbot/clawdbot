@@ -722,6 +722,8 @@ const resolveHarnessSourceVisibleRepliesDefault = (params: {
         config: params.cfg,
         agentId: params.sessionAgentId,
         sessionKey: params.sessionKey,
+        agentHarnessId:
+          params.entry?.modelSelectionLocked === true ? params.entry.agentHarnessId : undefined,
         agentHarnessRuntimeOverride,
       });
       return harness.deliveryDefaults?.sourceVisibleReplies;

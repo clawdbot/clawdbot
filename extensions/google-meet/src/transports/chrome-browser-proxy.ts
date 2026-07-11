@@ -50,6 +50,22 @@ export function isSameMeetUrlForReuse(a: string | undefined, b: string | undefin
   return Boolean(normalizedA && normalizedB && normalizedA === normalizedB);
 }
 
+export function isEnglishMeetTab(url: string | undefined): boolean {
+  if (!url) {
+    return false;
+  }
+  try {
+    const parsed = new URL(url);
+    return (
+      parsed.protocol === "https:" &&
+      parsed.hostname.toLowerCase() === "meet.google.com" &&
+      parsed.searchParams.get("hl")?.toLowerCase() === "en"
+    );
+  } catch {
+    return false;
+  }
+}
+
 type GoogleMeetNodeInfo = {
   caps?: string[];
   commands?: string[];

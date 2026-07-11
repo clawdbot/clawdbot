@@ -9,6 +9,29 @@ export type ModelOverrideSelection = {
   isDefault?: boolean;
 };
 
+export const MODEL_SELECTION_LOCKED_MESSAGE = "Model selection is locked for this session.";
+export const MODEL_SELECTION_LOCKED_RESET_MESSAGE =
+  "This session cannot be reset while model selection is locked.";
+
+/** Raised when a caller attempts to mutate a locked session model selection. */
+export class ModelSelectionLockedError extends Error {
+  constructor(message = MODEL_SELECTION_LOCKED_MESSAGE) {
+    super(message);
+    this.name = "ModelSelectionLockedError";
+  }
+}
+
+export function isModelSelectionLocked(entry: SessionEntry | undefined): boolean {
+  return entry?.modelSelectionLocked === true;
+}
+
+/** Enforces the durable model-selection lock before any session model fields change. */
+export function assertModelSelectionUnlocked(entry: SessionEntry): void {
+  if (isModelSelectionLocked(entry)) {
+    throw new ModelSelectionLockedError();
+  }
+}
+
 function clearFallbackOrigin(entry: SessionEntry): boolean {
   let updated = false;
   if (entry.modelOverrideFallbackOriginProvider !== undefined) {
@@ -33,6 +56,7 @@ export function applyModelOverrideToSessionEntry(params: {
   markLiveSwitchPending?: boolean;
 }): { updated: boolean } {
   const { entry, selection, profileOverride } = params;
+  assertModelSelectionUnlocked(entry);
   const profileOverrideSource = params.profileOverrideSource ?? "user";
   const selectionSource = params.selectionSource ?? "user";
   let updated = false;

@@ -1,3 +1,4 @@
+import CoreFoundation
 import CryptoKit
 import Foundation
 import OpenClawProtocol
@@ -206,30 +207,47 @@ enum OpenClawConfigFile {
         let browser = root["browser"] as? [String: Any]
         return browser?["enabled"] as? Bool ?? defaultValue
     }
+}
 
+extension OpenClawConfigFile {
     private static func normalizedPluginConfigId(_ value: Any?) -> String? {
         guard let value = value as? String else { return nil }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+        return trimmed.isEmpty ? nil : trimmed.lowercased()
+    }
+
+    private static func literalBoolean(_ value: Any?) -> Bool? {
+        guard let number = value as? NSNumber,
+              CFGetTypeID(number) == CFBooleanGetTypeID()
+        else { return nil }
+        return number.boolValue
     }
 
     static func pluginEntry(_ pluginId: String, root: [String: Any]? = nil) -> [String: Any]? {
         let root = root ?? self.loadDict()
+        guard let pluginId = normalizedPluginConfigId(pluginId) else { return nil }
         guard let plugins = root["plugins"] as? [String: Any],
               let entries = plugins["entries"] as? [String: Any]
         else { return nil }
-        return entries.first(where: { key, _ in
+        let matches = entries.filter { key, _ in
             self.normalizedPluginConfigId(key) == pluginId
-        })?.value as? [String: Any]
+        }
+        // Core merges normalized aliases in source order. JSON dictionaries do not
+        // expose a portable source-order contract here, so ambiguous aliases fail closed.
+        guard matches.count == 1 else { return nil }
+        return matches.first?.value as? [String: Any]
     }
 
     static func explicitlyEnabledPlugin(_ pluginId: String, root: [String: Any]? = nil) -> Bool {
         let root = root ?? self.loadDict()
+        guard let pluginId = normalizedPluginConfigId(pluginId) else { return false }
         guard let plugins = root["plugins"] as? [String: Any],
-              plugins["enabled"] as? Bool != false,
-              let entry = self.pluginEntry(pluginId, root: root),
-              entry["enabled"] as? Bool == true
+              let entry = pluginEntry(pluginId, root: root),
+              literalBoolean(entry["enabled"]) == true
         else { return false }
+        if let enabled = plugins["enabled"], literalBoolean(enabled) != true {
+            return false
+        }
 
         let deny = (plugins["deny"] as? [Any] ?? []).compactMap(self.normalizedPluginConfigId)
         if deny.contains(pluginId) { return false }
@@ -237,6 +255,52 @@ enum OpenClawConfigFile {
         let allow = (plugins["allow"] as? [Any] ?? []).compactMap(self.normalizedPluginConfigId)
         if !allow.isEmpty, !allow.contains(pluginId) { return false }
         return true
+    }
+
+    /// Mirrors configured-root activation for bundled plugins: a declared config path may
+    /// activate the plugin unless global policy, an entry opt-out, or deny disables it.
+    static func configuredBundledPluginAllowed(
+        _ pluginId: String,
+        root: [String: Any]? = nil) -> Bool
+    {
+        let root = root ?? self.loadDict()
+        guard let pluginId = normalizedPluginConfigId(pluginId),
+              let plugins = root["plugins"] as? [String: Any],
+              let entry = pluginEntry(pluginId, root: root)
+        else { return false }
+        if let enabled = plugins["enabled"], literalBoolean(enabled) != true {
+            return false
+        }
+        if let enabled = entry["enabled"], literalBoolean(enabled) != true {
+            return false
+        }
+
+        let deny = (plugins["deny"] as? [Any] ?? []).compactMap(self.normalizedPluginConfigId)
+        if deny.contains(pluginId) { return false }
+
+        let allow = (plugins["allow"] as? [Any] ?? []).compactMap(self.normalizedPluginConfigId)
+        return allow.isEmpty || allow.contains(pluginId)
+    }
+
+    static func explicitlyEnabledPluginConfigFlag(
+        _ pluginId: String,
+        path: [String],
+        root: [String: Any]? = nil) -> Bool
+    {
+        let root = root ?? self.loadDict()
+        guard self.explicitlyEnabledPlugin(pluginId, root: root),
+              let entry = pluginEntry(pluginId, root: root),
+              let config = entry["config"]
+        else { return false }
+
+        var value = config
+        for key in path {
+            guard let object = value as? [String: Any], let next = object[key] else {
+                return false
+            }
+            value = next
+        }
+        return self.literalBoolean(value) == true
     }
 
     static func setBrowserControlEnabled(_ enabled: Bool) {
@@ -287,7 +351,7 @@ enum OpenClawConfigFile {
     }
 
     static func remoteGatewayPort() -> Int? {
-        guard let url = self.remoteGatewayUrl(),
+        guard let url = remoteGatewayUrl(),
               let port = url.port,
               port > 0
         else { return nil }
@@ -296,7 +360,7 @@ enum OpenClawConfigFile {
 
     static func remoteGatewayPort(matchingHost sshHost: String) -> Int? {
         guard let normalizedSshHost = canonicalHostForComparison(sshHost),
-              let url = self.remoteGatewayUrl(),
+              let url = remoteGatewayUrl(),
               let port = url.port,
               port > 0,
               let urlHost = url.host,
@@ -462,7 +526,7 @@ enum OpenClawConfigFile {
         allowGatewayAuthMutation: Bool) -> Bool
     {
         guard !allowGatewayAuthMutation,
-              let previousAuth = self.gatewayAuth(previousRoot)
+              let previousAuth = gatewayAuth(previousRoot)
         else {
             return false
         }
@@ -552,7 +616,7 @@ enum OpenClawConfigFile {
     }
 
     private static func posixMode(_ value: Any?) -> Int? {
-        guard let mode = self.fileAttributeInt(value) else { return nil }
+        guard let mode = fileAttributeInt(value) else { return nil }
         return mode & 0o777
     }
 
@@ -615,7 +679,7 @@ enum OpenClawConfigFile {
         if (lastKnownGood["gatewayMode"] as? String) != nil, self.gatewayMode(root) == nil {
             reasons.append("gateway-mode-missing-vs-last-good")
         }
-        if let root, (lastKnownGood["gatewayMode"] as? String) != nil, self.isUpdateChannelOnlyRoot(root) {
+        if let root, (lastKnownGood["gatewayMode"] as? String) != nil, isUpdateChannelOnlyRoot(root) {
             reasons.append("update-channel-only-root")
         }
         return reasons

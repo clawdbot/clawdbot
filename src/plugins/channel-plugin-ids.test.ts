@@ -396,6 +396,18 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         cliBackends: [],
       },
       {
+        id: "external-config-startup",
+        channels: [],
+        activation: {
+          onStartup: false,
+          onConfigPaths: ["plugins.entries.external-config-startup.config.autoStart"],
+        },
+        origin: "global",
+        enabledByDefault: undefined,
+        providers: [],
+        cliBackends: [],
+      },
+      {
         id: "external-hook-capability",
         channels: [],
         activation: {
@@ -1554,6 +1566,120 @@ describe("resolveGatewayStartupPluginIds", () => {
         },
       } as OpenClawConfig,
       expected: ["browser", "demo-config-startup"],
+    });
+  });
+
+  it("loads startup-lazy external plugins from config only when explicitly enabled", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        channels: {},
+        plugins: {
+          slots: { memory: "none" },
+          entries: {
+            "external-config-startup": {
+              enabled: true,
+              config: { autoStart: { enabled: true } },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      expected: ["browser", "external-config-startup"],
+    });
+
+    expectStartupPluginIdsCase({
+      config: {
+        channels: {},
+        plugins: {
+          slots: { memory: "none" },
+          entries: {
+            "external-config-startup": {
+              config: { autoStart: { enabled: true } },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      expected: ["browser"],
+    });
+  });
+
+  it("keeps startup-lazy external plugins behind config and activation policy", () => {
+    const externalEntry = {
+      enabled: true,
+      config: { autoStart: { enabled: true } },
+    };
+    const cases: Array<{ plugins: OpenClawConfig["plugins"]; expected: readonly string[] }> = [
+      {
+        plugins: {
+          slots: { memory: "none" },
+          entries: {
+            "external-config-startup": {
+              enabled: true,
+              config: { autoStart: { enabled: false } },
+            },
+          },
+        },
+        expected: ["browser"],
+      },
+      {
+        plugins: {
+          slots: { memory: "none" },
+          deny: ["external-config-startup"],
+          entries: { "external-config-startup": externalEntry },
+        },
+        expected: ["browser"],
+      },
+      {
+        plugins: {
+          slots: { memory: "none" },
+          allow: ["browser"],
+          entries: { "external-config-startup": externalEntry },
+        },
+        expected: ["browser"],
+      },
+      {
+        plugins: {
+          enabled: false,
+          slots: { memory: "none" },
+          entries: { "external-config-startup": externalEntry },
+        },
+        expected: [],
+      },
+    ];
+
+    for (const testCase of cases) {
+      expectStartupPluginIdsCase({
+        config: { channels: {}, plugins: testCase.plugins } as OpenClawConfig,
+        expected: testCase.expected,
+      });
+    }
+  });
+
+  it("does not let effective config broaden authored external config-path activation", () => {
+    const activationSourceConfig = {
+      channels: {},
+      plugins: {
+        allow: ["browser"],
+        slots: { memory: "none" },
+        entries: {
+          "external-config-startup": {
+            enabled: true,
+            config: { autoStart: { enabled: true } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const runtimeConfig = {
+      ...activationSourceConfig,
+      plugins: {
+        ...activationSourceConfig.plugins,
+        allow: ["browser", "external-config-startup"],
+      },
+    } as OpenClawConfig;
+
+    expectStartupPluginIdsCase({
+      config: runtimeConfig,
+      activationSourceConfig,
+      expected: ["browser"],
     });
   });
 

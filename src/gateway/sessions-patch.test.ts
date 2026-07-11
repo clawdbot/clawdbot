@@ -6,6 +6,8 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";
+import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import { applySessionsPatchToStore } from "./sessions-patch.js";
 
 const acpSessionMetaMocks = vi.hoisted(() => ({
@@ -223,6 +225,48 @@ describe("gateway sessions patch", () => {
     acpSessionMetaMocks.readAcpSessionMetaForEntry.mockReset();
     resetProviderAuthAliasMapCacheForTest();
     resetPluginRuntimeStateForTest();
+  });
+
+  test("rejects creating a missing agent harness session through patch", async () => {
+    const key = "agent:main:harness:codex:supervision:missing";
+    const store: Record<string, SessionEntry> = {};
+
+    expectPatchError(
+      await runPatch({
+        store,
+        storeKey: key,
+        patch: { key, label: "squat" },
+      }),
+      AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
+    );
+    expect(store[key]).toBeUndefined();
+  });
+
+  test("allows patching an existing agent harness session", async () => {
+    const key = "agent:main:harness:codex:supervision:existing";
+    const store: Record<string, SessionEntry> = {
+      [key]: {
+        sessionId: "harness-session",
+        updatedAt: 1,
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+      },
+    };
+
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        storeKey: key,
+        patch: { key, label: "kept" },
+      }),
+    );
+    expect(entry.label).toBe("kept");
+    expect(store[key]).toMatchObject({
+      sessionId: "harness-session",
+      label: "kept",
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+    });
   });
 
   test("archives and restores sessions without retaining a pin", async () => {
@@ -608,6 +652,43 @@ describe("gateway sessions patch", () => {
         authProfileOverrideCompactionCount: 3,
       }),
     );
+  });
+
+  test.each([
+    { name: "change", model: ANTHROPIC_SONNET_MODEL },
+    { name: "reset", model: null },
+  ])("rejects locked model $name patches before catalog loading", async ({ model }) => {
+    const store = mainStoreEntry({
+      sessionId: "sess-model-locked",
+      providerOverride: "openai",
+      modelOverride: OPENAI_GPT_ID,
+      modelSelectionLocked: true,
+    });
+    const before = { ...store[MAIN_SESSION_KEY] };
+    const loadGatewayModelCatalog = vi.fn(loadCatalog(ANTHROPIC_SONNET_MODEL));
+
+    const result = await runPatch({
+      store,
+      cfg: createAllowlistedAnthropicModelCfg(),
+      patch: { key: MAIN_SESSION_KEY, model },
+      loadGatewayModelCatalog,
+    });
+
+    expectPatchError(result, MODEL_SELECTION_LOCKED_MESSAGE);
+    expect(loadGatewayModelCatalog).not.toHaveBeenCalled();
+    expect(store[MAIN_SESSION_KEY]).toEqual(before);
+  });
+
+  test("allows non-model metadata patches for model-locked sessions", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({ modelSelectionLocked: true }),
+        patch: { key: MAIN_SESSION_KEY, label: "Remote Codex task" },
+      }),
+    );
+
+    expect(entry.modelSelectionLocked).toBe(true);
+    expect(entry.label).toBe("Remote Codex task");
   });
 
   test("marks explicit model patches as pending live model switches", async () => {

@@ -212,6 +212,11 @@ export const nl: TranslationMap = {
     gateway: "Gateway · lokaal",
     folder: "Map",
     folderPlaceholder: "Agent-werkruimte",
+    browse: "Door mappen bladeren",
+    browserUp: "Bovenliggende map",
+    browserUse: "Deze map gebruiken",
+    browserEmpty: "Geen submappen",
+    browserLoadFailed: "Kan die map niet weergeven.",
     worktree: "Worktree",
     worktreeUnavailable: "Agent-werkruimte is geen git checkout",
     baseBranch: "Basisbranch",
@@ -941,8 +946,8 @@ export const nl: TranslationMap = {
   codexSessions: {
     eyebrow: "Codex-vloot",
     title: "Sessies op al je computers",
-    subtitle:
-      "Een alleen-lezen weergave van Codex-sessies op deze Gateway en elke verbonden computer die ze deelt.",
+    interactiveSubtitle:
+      "Start een Chat-branch waarvan de modelselectie onder controle van Codex App Server blijft, archiveer geschikte lokale sessies met bevestiging en bekijk sessies van gekoppelde computers.",
     summaryLabel: "Overzicht van Codex-sessies",
     summary: {
       sessions: "sessies",
@@ -951,11 +956,6 @@ export const nl: TranslationMap = {
     },
     searchLabel: "Codex-sessies zoeken",
     searchPlaceholder: "Sessietitels zoeken",
-    scopeLabel: "Archieffilter voor sessies",
-    scope: {
-      active: "Actief",
-      archived: "Gearchiveerd",
-    },
     refresh: "Vernieuwen",
     disconnected: "Maak opnieuw verbinding met de Gateway om Codex-sessies te vernieuwen.",
     partial: "Onbeschikbare hosts: {count}. Andere hosts blijven beschikbaar.",
@@ -964,11 +964,33 @@ export const nl: TranslationMap = {
     loadingMore: "Laden…",
     untitled: "Codex-sessie zonder titel",
     threadId: "Thread",
+    actions: {
+      continue: "Doorgaan",
+      continueAsBranch: "Doorgaan als branch",
+      openChat: "Chat openen",
+      continuing: "Bezig met doorgaan…",
+      archive: "Archiveren",
+      continueLabel: "Doorgaan met {title}",
+      continueAsBranchLabel: "Doorgaan met {title} als branch",
+      openChatLabel: "Chat openen voor {title}",
+      continueAsBranchHint:
+        "Maak een Chat aan vanuit blijvende zichtbare geschiedenis. Bij je eerste bericht selecteert Codex App Server het model en de provider voor de nieuwe harness-thread. Latere selectie blijft door Codex beheerd; OpenClaw vervangt nooit door een andere runtime, een ander model of een fallback. De bron blijft onaangetast en werk dat nog wordt uitgevoerd kan ontbreken.",
+      archiveLabel: "{title} archiveren",
+      archiveConfirmation:
+        "{title} en eventuele voortgekomen onderliggende sessies archiveren? Bevestig dat geen andere Codex-client of OpenClaw-runner deze gebruikt. Archiveren terwijl een andere runner actief is, kan diens werk onderbreken.",
+      active: "Actieve sessies kunnen geen branch starten en kunnen niet worden gearchiveerd.",
+      archiveActivityUnknownHint:
+        "Activiteit is onbekend omdat de status proceslokaal is. Archiveer alleen nadat je hebt bevestigd dat geen andere Codex-client of runner deze sessie gebruikt.",
+      statusUnavailable: "Deze Codex-sessie kan in de huidige status niet worden beheerd.",
+      hostOffline: "Verbind deze computer opnieuw voordat je de Codex-sessies ervan beheert.",
+      gatewayOffline: "Maak opnieuw verbinding met de gateway voordat je Codex-sessies beheert.",
+      remoteReadOnly: "Sessies van gekoppelde computers zijn voorlopig alleen-lezen.",
+    },
     status: {
       active: "Actief",
       idle: "Inactief",
       archived: "Gearchiveerd",
-      notLoaded: "Opgeslagen",
+      storedActivityUnknown: "Opgeslagen / activiteit onbekend",
       systemError: "Systeemfout",
       unknown: "Onbekend",
     },
@@ -982,11 +1004,10 @@ export const nl: TranslationMap = {
     },
     empty: {
       title: "Geen Codex-hosts gevonden",
-      subtitle:
-        "Schakel het delen van Codex-sessies in op de Gateway of een gekoppelde computer en vernieuw daarna deze weergave.",
+      supervisionSubtitle:
+        "Schakel Codex-toezicht in op de gateway of een gekoppelde computer en vernieuw daarna deze weergave.",
       search: "Geen sessies op deze host komen overeen met je zoekopdracht.",
-      active: "Geen actieve sessies op deze host.",
-      archived: "Geen gearchiveerde sessies op deze host.",
+      nonArchived: "Geen niet-gearchiveerde sessies op deze host.",
     },
   },
   logbook: {
@@ -2104,6 +2125,11 @@ export const nl: TranslationMap = {
       clearSessionSearch: "Sessiezoekopdracht wissen",
       loadMoreSessions: "Meer sessies laden",
       model: "Chat model",
+      modelSection: "Model",
+      modelLocked: "Vergrendeld",
+      modelLockedLabel: "Modelselectie wordt voor deze sessie beheerd",
+      lockedSessionModel: "Sessiemodel",
+      nativeCodexModel: "Door Codex beheerd model",
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {
@@ -2168,6 +2194,26 @@ export const nl: TranslationMap = {
       finished: "Voltooid ({count})",
       stopTask: "{title} stoppen",
       viewTranscript: "Transcript bekijken",
+    },
+    sessionDiff: {
+      title: "Wijzigingen",
+      show: "Sessiewijzigingen weergeven",
+      refresh: "Wijzigingen vernieuwen",
+      loading: "Wijzigingen laden…",
+      empty: "Geen wijzigingen in de checkout van deze sessie.",
+      notGit: "De werkruimte van deze sessie is geen git-checkout.",
+      unknownSession: "Er is geen werkruimte gekoppeld aan deze sessie.",
+      disconnected: "Gateway is niet verbonden.",
+      unmodifiedLines: "{count} ongewijzigde regels",
+      binaryFile: "Binair bestand",
+      untracked: "niet gevolgd",
+      tooLarge: "Diff te groot om weer te geven.",
+      truncatedFile: "Diff afgekapt.",
+      truncatedResult: "Sommige wijzigingen zijn weggelaten omdat de diff erg groot is.",
+      statusAdded: "Toegevoegd",
+      statusDeleted: "Verwijderd",
+      statusRenamed: "Hernoemd",
+      statusModified: "Gewijzigd",
     },
     workspaceFiles: {
       label: "Sessiewerkruimte",

@@ -77,6 +77,7 @@ function expectObject(value: unknown) {
 type SessionDeleteRequest = {
   key: string;
   agentId?: string;
+  archivedOnly?: boolean;
   deleteTranscript?: boolean;
   emitLifecycleHooks?: boolean;
   expectedSessionId?: string;
@@ -231,6 +232,48 @@ test("sessions.delete rejects main and aborts active runs", async () => {
     targetSessionKey: "agent:main:discord:group:dev",
     reason: "session-delete",
   });
+});
+
+test("sessions.delete preserves locked archived sessions and deletes ordinary archived sessions", async () => {
+  const { dir, storePath } = await createSessionStoreDir();
+  const lockedKey = "agent:main:harness:codex:supervision:native-thread";
+  const ordinaryKey = "agent:main:ordinary-archived";
+  const lockedSessionId = "sess-locked-archived";
+  const ordinarySessionId = "sess-ordinary-archived";
+  await writeSingleLineSession(dir, lockedSessionId, "locked");
+  await writeSingleLineSession(dir, ordinarySessionId, "ordinary");
+  await writeSessionStore({
+    entries: {
+      [lockedKey]: sessionStoreEntry(lockedSessionId, {
+        agentHarnessId: "codex",
+        archivedAt: Date.now(),
+        modelSelectionLocked: true,
+      }),
+      [ordinaryKey]: sessionStoreEntry(ordinarySessionId, { archivedAt: Date.now() }),
+    },
+  });
+  const lockedEntryBefore = structuredClone(
+    loadSessionStore(storePath, { skipCache: true })[lockedKey],
+  );
+  const lockedTranscriptPath = path.join(dir, `${lockedSessionId}.jsonl`);
+  const lockedTranscriptBefore = await fs.readFile(lockedTranscriptPath, "utf8");
+
+  const rejected = await directSessionReq("sessions.delete", {
+    key: lockedKey,
+    archivedOnly: true,
+  });
+  expect(rejected.ok).toBe(false);
+  expect(rejected.error).toMatchObject({
+    code: "INVALID_REQUEST",
+    message: "This session cannot be deleted while model selection is locked.",
+  });
+  expect(loadSessionStore(storePath, { skipCache: true })[lockedKey]).toEqual(lockedEntryBefore);
+  expect(await fs.readFile(lockedTranscriptPath, "utf8")).toBe(lockedTranscriptBefore);
+
+  await expectSessionDeleteSucceeds({ key: ordinaryKey, archivedOnly: true });
+  const storedAfterOrdinaryDelete = loadSessionStore(storePath, { skipCache: true });
+  expect(storedAfterOrdinaryDelete[ordinaryKey]).toBeUndefined();
+  expect(storedAfterOrdinaryDelete[lockedKey]).toEqual(lockedEntryBefore);
 });
 
 test("sessions.delete interrupts work admitted before runtime registration", async () => {

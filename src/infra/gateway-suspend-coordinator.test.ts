@@ -1,12 +1,22 @@
 // Covers atomic refuse-only suspension preparation, renewal, and release.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  addSession,
+  deleteSession,
+  getActiveBackgroundExecSessionCount,
+  markBackgrounded,
+  markExited,
+  resetProcessRegistryForTests,
+} from "../agents/bash-process-registry.js";
+import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
+import {
   isGatewayWorkAdmissionClosed,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import type { GatewayActiveWorkInspectors } from "./gateway-active-work.js";
 import {
+  GATEWAY_SUSPEND_RETRY_AFTER_MS,
   GATEWAY_SUSPEND_TTL_MS,
   getGatewaySuspendStatus,
   prepareGatewaySuspend,
@@ -21,6 +31,7 @@ function inspectors(
     getQueueSize: () => 0,
     getPendingReplies: () => 0,
     getEmbeddedRuns: () => 0,
+    getBackgroundExecSessions: () => 0,
     getCronRuns: () => 0,
     getActiveTasks: () => 0,
     getTaskBlockers: () => [],
@@ -36,11 +47,13 @@ function inspectors(
 }
 
 beforeEach(() => {
+  resetProcessRegistryForTests();
   resetGatewaySuspendCoordinatorForTest();
   resetGatewayWorkAdmission();
 });
 
 afterEach(() => {
+  resetProcessRegistryForTests();
   resetGatewaySuspendCoordinatorForTest();
   resetGatewayWorkAdmission();
 });
@@ -83,6 +96,50 @@ describe("gateway suspend coordinator", () => {
     expect(result.status).toBe("busy");
     expect(events).toEqual(["pause", "inspect", "resume"]);
     expect(isGatewayWorkAdmissionClosed()).toBe(false);
+  });
+
+  it("stays busy after a background session is hidden until its process exits", () => {
+    const session = createProcessSessionFixture({
+      id: "private-background-session",
+      command: "private command",
+    });
+    addSession(session);
+    markBackgrounded(session);
+    deleteSession(session.id);
+
+    const inspect = inspectors({
+      getBackgroundExecSessions: getActiveBackgroundExecSessionCount,
+    });
+    const busy = prepareGatewaySuspend({
+      requestId: "request-background-exec",
+      pauseScheduling: vi.fn(),
+      resumeScheduling: vi.fn(),
+      inspect,
+    });
+
+    expect(busy).toEqual({
+      status: "busy",
+      reason: "active-work",
+      retryAfterMs: GATEWAY_SUSPEND_RETRY_AFTER_MS,
+      activeCount: 1,
+      blockers: [
+        {
+          kind: "background-exec",
+          count: 1,
+          message: "1 active background exec session(s)",
+        },
+      ],
+    });
+
+    markExited(session, 0, null, "completed");
+    expect(
+      prepareGatewaySuspend({
+        requestId: "request-background-exec",
+        pauseScheduling: vi.fn(),
+        resumeScheduling: vi.fn(),
+        inspect,
+      }),
+    ).toMatchObject({ status: "ready", activeCount: 0, blockers: [] });
   });
 
   it("keeps admission closed until a failed busy rollback resumes scheduling", () => {

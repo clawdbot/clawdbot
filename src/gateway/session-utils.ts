@@ -1630,10 +1630,15 @@ function resolveGatewaySessionThinkingProjectionInternal(
     entry: params.entry,
     cfg: params.cfg,
   });
+  const persistedAgentRuntimeSource: "session" | "session-key" =
+    params.entry?.modelSelectionLocked === true ? "session" : "session-key";
   const agentRuntime =
     acpMeta || !persistedAgentRuntime
       ? configuredAgentRuntime
-      : { id: persistedAgentRuntime, source: "session-key" as const };
+      : {
+          id: persistedAgentRuntime,
+          source: persistedAgentRuntimeSource,
+        };
   const thinkingRuntime = acpMeta
     ? concretizeAgentRuntime(acpMeta.backend ?? agentRuntime.id)
     : resolveEffectiveAgentRuntime({
@@ -2239,6 +2244,7 @@ export function buildGatewaySessionRow(params: {
     ),
     modelProvider: rowModelProvider,
     model: rowModel,
+    modelSelectionLocked: entry?.modelSelectionLocked,
     agentRuntime: thinkingProjection.agentRuntime,
     contextTokens,
     contextBudgetStatus: entry?.contextBudgetStatus,

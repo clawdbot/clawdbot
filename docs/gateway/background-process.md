@@ -81,6 +81,8 @@ Actions:
 Notes:
 
 - Only backgrounded sessions are listed/persisted — in memory only, not on disk. Sessions are lost on process restart.
+- A live background session blocks cooperative host suspension and safe Gateway restart until the process owner confirms its actual exit.
+- `process remove` can hide a running session immediately after requesting termination; suspension and restart remain blocked until exit confirmation.
 - Session logs are only saved to chat history if you run `process poll`/`log` and the tool result is recorded.
 - `process` is scoped per agent; it only sees sessions started by that agent.
 - Use `poll`/`log` for status, logs, or completion confirmation when automatic completion wake is unavailable.

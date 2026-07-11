@@ -392,6 +392,7 @@ export async function sessionsCommand(
         const agentRuntime = resolveModelAgentRuntimeMetadata({
           cfg,
           agentId,
+          sessionEntry: entry,
           provider: modelRef.provider,
           model: modelRef.model,
           sessionKey: acpSessionKey,

@@ -1089,12 +1089,15 @@ jobs:
 
           sudo tee "$preload" >/dev/null <<'PRELOAD'
           import process from "node:process";
+          import { isMainThread } from "node:worker_threads";
 
-          if (process.env.OPENCLAW_QA_SUT_PREENTRY_STOP !== "1") {
-            throw new Error("trusted Telegram SUT preload was not armed");
+          if (isMainThread) {
+            if (process.env.OPENCLAW_QA_SUT_PREENTRY_STOP !== "1") {
+              throw new Error("trusted Telegram SUT preload was not armed");
+            }
+            delete process.env.OPENCLAW_QA_SUT_PREENTRY_STOP;
+            process.kill(process.pid, "SIGSTOP");
           }
-          delete process.env.OPENCLAW_QA_SUT_PREENTRY_STOP;
-          process.kill(process.pid, "SIGSTOP");
           PRELOAD
           sudo chown root:root "$preload"
           sudo chmod 0555 "$preload"

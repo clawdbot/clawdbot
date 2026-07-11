@@ -133,4 +133,40 @@ describe("sessionsCommand model resolution", () => {
     expect(session?.modelProvider).toBe("anthropic");
     expect(session?.model).toBe("claude-opus-4-7");
   });
+
+  it("reports the owning Codex harness for locked sessions despite a stale OpenClaw override", async () => {
+    setMockSessionsConfig(() => ({
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+          models: {
+            "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } },
+          },
+          contextTokens: 200_000,
+        },
+      },
+    }));
+    const store = writeStore(
+      {
+        "agent:main:main": {
+          sessionId: "locked-codex-session",
+          updatedAt: Date.now() - 60_000,
+          modelProvider: "openai",
+          model: "gpt-5.5",
+          agentHarnessId: "codex",
+          agentRuntimeOverride: "openclaw",
+          modelSelectionLocked: true,
+        },
+      },
+      "sessions-locked-codex-runtime",
+    );
+
+    const payload = await runSessionsJson<SessionsJsonPayload>(sessionsCommand, store);
+    const session = payload.sessions?.find((row) => row.key === "agent:main:main");
+
+    expect(session?.agentRuntime).toEqual({
+      id: "codex",
+      source: "session",
+    });
+  });
 });

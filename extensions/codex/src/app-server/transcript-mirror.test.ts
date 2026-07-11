@@ -1,4 +1,5 @@
 // Codex tests cover transcript mirror plugin behavior.
+import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -15,11 +16,15 @@ import {
   makeAgentUserMessage,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { CodexThread } from "./protocol.js";
+import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
 import {
   attachCodexMirrorIdentity,
   buildCodexUserPromptMessage,
+  importCodexThreadHistoryToTranscript,
   mirrorCodexAppServerTranscript,
   mirrorTranscriptBestEffort,
+  projectBoundedCodexThreadHistory,
 } from "./transcript-mirror.js";
 
 const publishSessionTranscriptUpdateByIdentityMock = vi.hoisted(() => vi.fn());
@@ -42,6 +47,13 @@ function expectedFingerprint(message: MirroredAgentMessage): string {
   return createHash("sha256").update(payload).digest("hex").slice(0, 16);
 }
 
+function messageContent(message: AgentMessage | undefined) {
+  if (!message || !("content" in message)) {
+    throw new Error("expected transcript message content");
+  }
+  return message.content;
+}
+
 const tempDirs: string[] = [];
 
 afterEach(async () => {
@@ -56,6 +68,20 @@ async function createTempSessionFile() {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-transcript-"));
   tempDirs.push(dir);
   return path.join(dir, "session.jsonl");
+}
+
+async function initializeSessionTranscript(sessionFile: string, sessionId: string): Promise<void> {
+  await fs.writeFile(
+    sessionFile,
+    `${JSON.stringify({
+      type: "session",
+      version: 3,
+      id: sessionId,
+      timestamp: new Date().toISOString(),
+      cwd: process.cwd(),
+    })}\n`,
+    "utf8",
+  );
 }
 
 async function makeRoot(prefix: string): Promise<string> {
@@ -104,6 +130,443 @@ function parseJsonLines<T>(raw: string): T[] {
   }
   return records;
 }
+
+describe("importCodexThreadHistoryToTranscript", () => {
+  it("imports only bounded user-visible conversation items with stable identities", async () => {
+    const sessionFile = await createTempSessionFile();
+    await initializeSessionTranscript(sessionFile, "session-history");
+    const thread = {
+      id: "thread-history",
+      cwd: "/workspace/project",
+      turns: [
+        {
+          id: "turn-1",
+          status: "completed",
+          startedAt: 1_700_000_000,
+          completedAt: 1_700_000_001,
+          items: [
+            {
+              id: "user-1",
+              type: "userMessage",
+              content: [
+                { type: "text", text: "Review this image" },
+                { type: "image", url: "data:image/png;base64,private" },
+              ],
+            },
+            {
+              id: "reasoning-1",
+              type: "reasoning",
+              summary: ["private reasoning"],
+              content: ["private chain of thought"],
+            },
+            {
+              id: "command-1",
+              type: "commandExecution",
+              command: "print-secret",
+              aggregatedOutput: "private tool output",
+            },
+            {
+              id: "assistant-1",
+              type: "agentMessage",
+              text: "The visible answer",
+              phase: "final_answer",
+            },
+          ],
+        },
+      ],
+    } as unknown as CodexThread;
+
+    const rawProjection = projectBoundedCodexThreadHistory({
+      thread,
+      throughTurnId: "turn-1",
+      importedAt: 1_800_000_000_000,
+    });
+    expect(rawProjection.responseItems).toEqual([
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "Review this image\n[Image attachment]" }],
+      },
+      {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "The visible answer" }],
+        phase: "final_answer",
+      },
+    ]);
+    expect(JSON.stringify(rawProjection.responseItems)).not.toContain("private");
+    expect(JSON.stringify(rawProjection.responseItems)).not.toContain("data:image");
+
+    await expect(
+      importCodexThreadHistoryToTranscript({
+        thread,
+        throughTurnId: "turn-1",
+        sessionFile,
+        sessionId: "session-history",
+        sessionKey: "agent:main:dashboard:history",
+      }),
+    ).resolves.toEqual({ importedMessages: 2, omittedMessages: 0 });
+
+    const raw = await fs.readFile(sessionFile, "utf8");
+    const messages = parseJsonLines<{ message?: AgentMessage; type?: string }>(raw)
+      .filter((event) => event.type === "message")
+      .map((event) => event.message);
+    expect(messages).toMatchObject([
+      {
+        role: "user",
+        content: "Review this image\n[Image attachment]",
+        timestamp: 1_700_000_000_000,
+        idempotencyKey: "codex-app-server:thread-history:history:turn-1:user-1",
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "The visible answer" }],
+        api: "openai-chatgpt-responses",
+        provider: "openai",
+        model: "native-history",
+        stopReason: "stop",
+        timestamp: 1_700_000_001_003,
+        idempotencyKey: "codex-app-server:thread-history:history:turn-1:assistant-1",
+      },
+    ]);
+    expect(raw).not.toContain("private reasoning");
+    expect(raw).not.toContain("private chain of thought");
+    expect(raw).not.toContain("private tool output");
+    expect(raw).not.toContain("data:image");
+    await expect(
+      readCodexMirroredSessionHistoryMessages({
+        sessionFile,
+        sessionId: "session-history",
+        sessionKey: "agent:main:dashboard:history",
+      }),
+    ).resolves.toMatchObject([
+      { role: "user", content: "Review this image\n[Image attachment]" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "The visible answer" }],
+        api: "openai-chatgpt-responses",
+        provider: "openai",
+        model: "native-history",
+        stopReason: "stop",
+      },
+    ]);
+  });
+
+  it("keeps the newest 200 visible messages and deduplicates a retried import", async () => {
+    const sessionFile = await createTempSessionFile();
+    await initializeSessionTranscript(sessionFile, "session-bounded-history");
+    const thread = {
+      id: "thread-bounded-history",
+      turns: Array.from({ length: 205 }, (_, index) => ({
+        id: `turn-${index}`,
+        status: "completed",
+        startedAt: 1_700_000_000 + index,
+        completedAt: 1_700_000_000 + index,
+        items: [
+          {
+            id: `user-${index}`,
+            type: "userMessage",
+            content: [{ type: "text", text: `message-${index}` }],
+          },
+        ],
+      })),
+    } as unknown as CodexThread;
+    const importParams = {
+      thread,
+      throughTurnId: "turn-204",
+      sessionFile,
+      sessionId: "session-bounded-history",
+      sessionKey: "agent:main:dashboard:bounded-history",
+    };
+
+    await expect(importCodexThreadHistoryToTranscript(importParams)).resolves.toEqual({
+      importedMessages: 200,
+      omittedMessages: 5,
+    });
+    await expect(importCodexThreadHistoryToTranscript(importParams)).resolves.toEqual({
+      importedMessages: 200,
+      omittedMessages: 5,
+    });
+
+    const raw = await fs.readFile(sessionFile, "utf8");
+    const messages = parseJsonLines<{ message?: AgentMessage; type?: string }>(raw)
+      .filter((event) => event.type === "message")
+      .map((event) => event.message);
+    expect(messages).toHaveLength(200);
+    expect(messages[0]).toMatchObject({ content: "message-5" });
+    expect(messages.at(-1)).toMatchObject({ content: "message-204" });
+  });
+
+  it("assigns canonical assistant attribution and numeric fallback timestamps", async () => {
+    const sessionFile = await createTempSessionFile();
+    await initializeSessionTranscript(sessionFile, "session-fallback-history");
+    const thread = {
+      id: "thread-fallback-history",
+      modelProvider: "source-provider",
+      turns: [
+        {
+          id: "turn-without-time",
+          status: "completed",
+          items: [
+            {
+              id: "user-without-time",
+              type: "userMessage",
+              content: [{ type: "text", text: "Earlier prompt" }],
+            },
+            {
+              id: "assistant-without-time",
+              type: "agentMessage",
+              text: "Earlier answer",
+            },
+          ],
+        },
+      ],
+    } as unknown as CodexThread;
+
+    await importCodexThreadHistoryToTranscript({
+      thread,
+      throughTurnId: "turn-without-time",
+      sessionFile,
+      sessionId: "session-fallback-history",
+      sessionKey: "agent:main:dashboard:fallback-history",
+    });
+
+    const history = await readCodexMirroredSessionHistoryMessages({
+      sessionFile,
+      sessionId: "session-fallback-history",
+      sessionKey: "agent:main:dashboard:fallback-history",
+    });
+    expect(history).toMatchObject([
+      { role: "user", content: "Earlier prompt", timestamp: expect.any(Number) },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Earlier answer" }],
+        api: "openai-chatgpt-responses",
+        provider: "source-provider",
+        model: "native-history",
+        usage: { totalTokens: 0 },
+        stopReason: "stop",
+        timestamp: expect.any(Number),
+      },
+    ]);
+  });
+});
+
+describe("projectBoundedCodexThreadHistory", () => {
+  const thread = {
+    id: "thread-prefix",
+    createdAt: 1_700_000_000,
+    turns: [
+      {
+        id: "turn-a",
+        status: "completed",
+        startedAt: 1_700_000_001,
+        completedAt: 1_700_000_002,
+        items: [
+          {
+            id: "user-a",
+            type: "userMessage",
+            content: [{ type: "text", text: "First question" }],
+          },
+          {
+            id: "assistant-a",
+            type: "agentMessage",
+            text: "First answer",
+            phase: "commentary",
+          },
+        ],
+      },
+      {
+        id: "turn-b",
+        status: "completed",
+        startedAt: 1_700_000_003,
+        completedAt: 1_700_000_004,
+        items: [
+          {
+            id: "user-b",
+            type: "userMessage",
+            content: [{ type: "text", text: "Second question" }],
+          },
+          {
+            id: "assistant-b",
+            type: "agentMessage",
+            text: "Second answer",
+            phase: "final_answer",
+          },
+        ],
+      },
+      {
+        id: "turn-active",
+        status: "inProgress",
+        items: [
+          {
+            id: "active-secret",
+            type: "agentMessage",
+            text: "Do not import the active tail",
+          },
+        ],
+      },
+      {
+        id: "turn-failed",
+        status: "failed",
+        items: [
+          {
+            id: "failed-secret",
+            type: "agentMessage",
+            text: "Do not import the failed tail",
+          },
+        ],
+      },
+    ],
+  } as unknown as CodexThread;
+
+  it("uses one inclusive completed-turn prefix for transcript and Responses API projection", () => {
+    const projection = projectBoundedCodexThreadHistory({
+      thread,
+      throughTurnId: "turn-b",
+      importedAt: 1_800_000_000_000,
+      modelProvider: "native-provider",
+    });
+
+    expect(projection).toMatchObject({ importedMessages: 4, omittedMessages: 0 });
+    expect(projection.transcriptMessages.map(messageContent)).toEqual([
+      "First question",
+      [{ type: "text", text: "First answer" }],
+      "Second question",
+      [{ type: "text", text: "Second answer" }],
+    ]);
+    expect(projection.transcriptMessages[1]).toMatchObject({
+      role: "assistant",
+      api: "openai-chatgpt-responses",
+      provider: "native-provider",
+      model: "native-history",
+    });
+    expect(projection.responseItems).toEqual([
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "First question" }],
+      },
+      {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "First answer" }],
+        phase: "commentary",
+      },
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "Second question" }],
+      },
+      {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "Second answer" }],
+        phase: "final_answer",
+      },
+    ]);
+    expect(JSON.stringify(projection)).not.toContain("active tail");
+    expect(JSON.stringify(projection)).not.toContain("failed tail");
+  });
+
+  it("accepts terminal boundaries", () => {
+    for (const status of ["completed", "interrupted", "failed"]) {
+      const terminalThread = {
+        ...thread,
+        turns: [
+          ...(thread.turns?.slice(0, 2) ?? []),
+          {
+            id: `turn-${status}`,
+            status,
+            items: [
+              {
+                id: `assistant-${status}`,
+                type: "agentMessage",
+                text: `${status} answer`,
+              },
+            ],
+          },
+        ],
+      } as unknown as CodexThread;
+      const projection = projectBoundedCodexThreadHistory({
+        thread: terminalThread,
+        throughTurnId: `turn-${status}`,
+        importedAt: 1_800_000_000_000,
+      });
+      expect(messageContent(projection.transcriptMessages.at(-1))).toEqual([
+        { type: "text", text: `${status} answer` },
+      ]);
+    }
+  });
+
+  it("enforces UTF-8 byte limits without splitting multibyte text", () => {
+    const oversizedText = `prefix-${"🙂".repeat(20_000)}-suffix`;
+    const oversizedThread = {
+      id: "thread-byte-bounds",
+      turns: Array.from({ length: 9 }, (_, index) => ({
+        id: `turn-${index}`,
+        status: "completed",
+        items: [
+          {
+            id: `user-${index}`,
+            type: "userMessage",
+            content: [{ type: "text", text: `${index}:${oversizedText}` }],
+          },
+        ],
+      })),
+    } as unknown as CodexThread;
+
+    const projection = projectBoundedCodexThreadHistory({
+      thread: oversizedThread,
+      throughTurnId: "turn-8",
+      importedAt: 1_800_000_000_000,
+    });
+    const texts = projection.transcriptMessages.map((message) => {
+      const content = messageContent(message);
+      return typeof content === "string" ? content : "";
+    });
+
+    expect(projection).toMatchObject({ importedMessages: 8, omittedMessages: 1 });
+    expect(texts[0]).toMatch(/^1:prefix-/u);
+    expect(texts.every((text) => Buffer.byteLength(text, "utf8") <= 64 * 1024)).toBe(true);
+    expect(
+      texts.reduce((bytes, text) => bytes + Buffer.byteLength(text, "utf8"), 0),
+    ).toBeLessThanOrEqual(512 * 1024);
+    expect(texts.every((text) => !text.includes("�"))).toBe(true);
+    expect(
+      texts.every((text) => text.endsWith("[Message truncated during Codex history import.]")),
+    ).toBe(true);
+  });
+
+  it("rejects a non-terminal or missing boundary and projects no history without one", () => {
+    expect(() =>
+      projectBoundedCodexThreadHistory({
+        thread,
+        throughTurnId: "turn-active",
+        importedAt: 1_800_000_000_000,
+      }),
+    ).toThrow("Codex history boundary turn is not terminal: turn-active");
+    expect(() =>
+      projectBoundedCodexThreadHistory({
+        thread,
+        throughTurnId: "turn-missing",
+        importedAt: 1_800_000_000_000,
+      }),
+    ).toThrow("Codex history boundary turn not found: turn-missing");
+    expect(
+      projectBoundedCodexThreadHistory({
+        thread,
+        throughTurnId: null,
+        importedAt: 1_800_000_000_000,
+      }),
+    ).toEqual({
+      importedMessages: 0,
+      omittedMessages: 0,
+      responseItems: [],
+      transcriptMessages: [],
+    });
+  });
+});
 
 describe("mirrorCodexAppServerTranscript", () => {
   it("mirrors user, assistant, and tool result messages into the embedded-agent transcript", async () => {

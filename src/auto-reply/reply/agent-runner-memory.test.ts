@@ -101,6 +101,8 @@ type EmbeddedAgentParams = {
   provider?: string;
   model?: string;
   thinkLevel?: string;
+  agentHarnessId?: string;
+  agentHarnessRuntimeOverride?: string;
   authProfileId?: unknown;
   authProfileIdSource?: unknown;
   prompt?: string;
@@ -116,6 +118,7 @@ type EmbeddedAgentParams = {
 
 type CompactEmbeddedAgentSessionParams = {
   agentId?: string;
+  agentHarnessId?: string;
   authProfileId?: string;
   contextTokenBudget?: number;
   sessionKey?: string;
@@ -124,6 +127,7 @@ type CompactEmbeddedAgentSessionParams = {
   cwd?: string;
   force?: boolean;
   forcePreflight?: boolean;
+  modelSelectionLocked?: boolean;
   preflightRequired?: boolean;
   preflightCompactionTrigger?: string;
   sessionFile?: string;
@@ -383,6 +387,65 @@ describe("runMemoryFlushIfNeeded", () => {
       "high",
     ]);
     expect(followupRun.run.thinkLevel).toBe("ultra");
+  });
+
+  it("keeps catalog-adopted sessions on Codex for memory flush turns", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "catalog-adopted-session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+      agentHarnessId: "codex",
+      agentRuntimeOverride: "claude-cli",
+      modelSelectionLocked: true,
+      pluginExtensions: {
+        codex: {
+          supervision: {
+            sourceThreadId: "019f-codex-thread",
+            modelLocked: true,
+          },
+        },
+      },
+    };
+
+    const result = await runMemoryFlushIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            cliBackends: {
+              "claude-cli": { command: "claude" },
+            },
+            compaction: { memoryFlush: {} },
+            models: {
+              "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } },
+            },
+          },
+        },
+      },
+      followupRun: createTestFollowupRun({
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+        sessionId: sessionEntry.sessionId,
+        sessionKey: "main",
+      }),
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(result.outcome).toBe("completed");
+    expect(requireEmbeddedAgentCall()).toMatchObject({
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      agentHarnessId: "codex",
+      agentHarnessRuntimeOverride: "codex",
+    });
   });
 
   it("counts resolved error payloads as failed memory flushes", async () => {
@@ -969,6 +1032,7 @@ describe("runMemoryFlushIfNeeded", () => {
       modelId: "gpt-5.4",
       agentId: "main",
       sessionKey: runtimePolicySessionKey,
+      agentHarnessId: "codex",
       agentHarnessRuntimeOverride: "codex",
       workspaceDir: "/workspace",
     });
@@ -1140,6 +1204,8 @@ describe("runMemoryFlushIfNeeded", () => {
       updatedAt: Date.now(),
       totalTokens: 120,
       totalTokensFresh: true,
+      agentHarnessId: "openclaw",
+      modelSelectionLocked: true,
     };
     const onCompactionNotice = vi.fn();
 
@@ -1171,6 +1237,8 @@ describe("runMemoryFlushIfNeeded", () => {
       preflightCompactionTrigger: "tokens",
       deferOwningContextEngineCompaction: false,
       contextTokenBudget: 100,
+      agentHarnessId: "openclaw",
+      modelSelectionLocked: true,
     });
     expect(incrementCompactionCountMock).not.toHaveBeenCalled();
     expect(onCompactionNotice).toHaveBeenNthCalledWith(1, "start");

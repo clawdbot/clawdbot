@@ -210,6 +210,11 @@ export const pt_BR: TranslationMap = {
     gateway: "Gateway · local",
     folder: "Pasta",
     folderPlaceholder: "Workspace do agente",
+    browse: "Procurar pastas",
+    browserUp: "Pasta superior",
+    browserUse: "Usar esta pasta",
+    browserEmpty: "Nenhuma subpasta",
+    browserLoadFailed: "Não foi possível listar essa pasta.",
     worktree: "Worktree",
     worktreeUnavailable: "O workspace do agente não é um checkout do git",
     baseBranch: "Branch base",
@@ -935,8 +940,8 @@ export const pt_BR: TranslationMap = {
   codexSessions: {
     eyebrow: "Frota do Codex",
     title: "Sessões em todos os seus computadores",
-    subtitle:
-      "Uma visualização somente leitura das sessões do Codex neste Gateway e em todos os computadores conectados que as compartilham.",
+    interactiveSubtitle:
+      "Inicie uma ramificação de Chat cuja seleção de modelo permanece sob controle do Codex App Server, arquive sessões locais elegíveis com confirmação e veja sessões de computadores pareados.",
     summaryLabel: "Resumo das sessões do Codex",
     summary: {
       sessions: "sessões",
@@ -945,11 +950,6 @@ export const pt_BR: TranslationMap = {
     },
     searchLabel: "Pesquisar sessões do Codex",
     searchPlaceholder: "Pesquisar títulos de sessões",
-    scopeLabel: "Filtro de arquivamento de sessões",
-    scope: {
-      active: "Ativas",
-      archived: "Arquivadas",
-    },
     refresh: "Atualizar",
     disconnected: "Reconecte-se ao Gateway para atualizar as sessões do Codex.",
     partial: "Hosts indisponíveis: {count}. Os demais hosts continuam disponíveis.",
@@ -958,11 +958,34 @@ export const pt_BR: TranslationMap = {
     loadingMore: "Carregando…",
     untitled: "Sessão do Codex sem título",
     threadId: "Thread",
+    actions: {
+      continue: "Continuar",
+      continueAsBranch: "Continuar como ramificação",
+      openChat: "Abrir Chat",
+      continuing: "Continuando…",
+      archive: "Arquivar",
+      continueLabel: "Continuar {title}",
+      continueAsBranchLabel: "Continuar {title} como ramificação",
+      openChatLabel: "Abrir Chat para {title}",
+      continueAsBranchHint:
+        "Crie um Chat a partir do histórico visível persistido. Na sua primeira mensagem, o Codex App Server seleciona o modelo e o provedor para a nova thread do harness. A seleção posterior permanece controlada pelo Codex; o OpenClaw nunca substitui por outro runtime, modelo ou fallback. A origem permanece intocada, e trabalhos em andamento podem estar ausentes.",
+      archiveLabel: "Arquivar {title}",
+      archiveConfirmation:
+        "Arquivar {title} e todos os descendentes gerados? Confirme que nenhum outro cliente Codex ou runner do OpenClaw está usando-os. Arquivar enquanto outro runner está ativo pode interromper o trabalho dele.",
+      active: "Sessões ativas não podem iniciar uma ramificação nem ser arquivadas.",
+      archiveActivityUnknownHint:
+        "A atividade é desconhecida porque o status é local ao processo. Arquive somente depois de confirmar que nenhum outro cliente Codex ou runner está usando esta sessão.",
+      statusUnavailable: "Esta sessão do Codex não pode ser gerenciada no estado atual.",
+      hostOffline: "Reconecte este computador antes de gerenciar suas sessões do Codex.",
+      gatewayOffline: "Reconecte-se ao gateway antes de gerenciar sessões do Codex.",
+      remoteReadOnly:
+        "Sessões de computadores pareados são somente para visualização por enquanto.",
+    },
     status: {
       active: "Ativa",
       idle: "Ociosa",
       archived: "Arquivada",
-      notLoaded: "Armazenada",
+      storedActivityUnknown: "Armazenada / atividade desconhecida",
       systemError: "Erro de sistema",
       unknown: "Desconhecido",
     },
@@ -976,11 +999,10 @@ export const pt_BR: TranslationMap = {
     },
     empty: {
       title: "Nenhum host do Codex encontrado",
-      subtitle:
-        "Ative o compartilhamento de sessões do Codex no Gateway ou em um computador pareado e atualize esta visualização.",
+      supervisionSubtitle:
+        "Ative a supervisão do Codex no gateway ou em um computador pareado e, em seguida, atualize esta visualização.",
       search: "Nenhuma sessão neste host corresponde à sua busca.",
-      active: "Nenhuma sessão ativa neste host.",
-      archived: "Nenhuma sessão arquivada neste host.",
+      nonArchived: "Nenhuma sessão não arquivada neste host.",
     },
   },
   logbook: {
@@ -2098,6 +2120,11 @@ export const pt_BR: TranslationMap = {
       clearSessionSearch: "Limpar pesquisa de sessões",
       loadMoreSessions: "Carregar mais sessões",
       model: "Chat model",
+      modelSection: "Modelo",
+      modelLocked: "Bloqueado",
+      modelLockedLabel: "Seleção de modelo controlada para esta sessão",
+      lockedSessionModel: "Modelo da sessão",
+      nativeCodexModel: "Modelo controlado pelo Codex",
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {
@@ -2162,6 +2189,26 @@ export const pt_BR: TranslationMap = {
       finished: "Concluídas ({count})",
       stopTask: "Parar {title}",
       viewTranscript: "Ver transcrição",
+    },
+    sessionDiff: {
+      title: "Alterações",
+      show: "Mostrar alterações da sessão",
+      refresh: "Atualizar alterações",
+      loading: "Carregando alterações…",
+      empty: "Nenhuma alteração no checkout desta sessão.",
+      notGit: "O workspace desta sessão não é um checkout git.",
+      unknownSession: "Nenhum workspace está associado a esta sessão.",
+      disconnected: "Gateway está desconectado.",
+      unmodifiedLines: "{count} linhas não modificadas",
+      binaryFile: "Arquivo binário",
+      untracked: "não rastreado",
+      tooLarge: "Diff grande demais para exibir.",
+      truncatedFile: "Diff truncado.",
+      truncatedResult: "Algumas alterações foram omitidas porque o diff é muito grande.",
+      statusAdded: "Adicionado",
+      statusDeleted: "Excluído",
+      statusRenamed: "Renomeado",
+      statusModified: "Modificado",
     },
     workspaceFiles: {
       label: "Espaço de trabalho da sessão",

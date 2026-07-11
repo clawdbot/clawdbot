@@ -211,6 +211,11 @@ export const uk: TranslationMap = {
     gateway: "Gateway · локально",
     folder: "Папка",
     folderPlaceholder: "Робоча область агента",
+    browse: "Переглянути папки",
+    browserUp: "Батьківська папка",
+    browserUse: "Використати цю папку",
+    browserEmpty: "Немає підпапок",
+    browserLoadFailed: "Не вдалося отримати список цієї папки.",
     worktree: "Worktree",
     worktreeUnavailable: "Робоча область агента не є git checkout",
     baseBranch: "Базова гілка",
@@ -935,8 +940,8 @@ export const uk: TranslationMap = {
   codexSessions: {
     eyebrow: "Парк Codex",
     title: "Сеанси на всіх ваших комп’ютерах",
-    subtitle:
-      "Сеанси Codex на цьому Gateway й усіх підключених комп’ютерах зі спільним доступом. Лише для читання.",
+    interactiveSubtitle:
+      "Запустіть гілку Chat, вибір моделі якої залишається під керуванням Codex App Server, архівуйте придатні локальні сесії з підтвердженням і переглядайте сесії зі спарених комп’ютерів.",
     summaryLabel: "Підсумок сеансів Codex",
     summary: {
       sessions: "сеанси",
@@ -945,11 +950,6 @@ export const uk: TranslationMap = {
     },
     searchLabel: "Пошук сеансів Codex",
     searchPlaceholder: "Пошук за назвами сеансів",
-    scopeLabel: "Фільтр архіву сеансів",
-    scope: {
-      active: "Активні",
-      archived: "Заархівовані",
-    },
     refresh: "Оновити",
     disconnected: "Повторно підключіться до Gateway, щоб оновити сеанси Codex.",
     partial: "Недоступних хостів: {count}. Решта хостів доступні.",
@@ -958,11 +958,33 @@ export const uk: TranslationMap = {
     loadingMore: "Завантаження…",
     untitled: "Сеанс Codex без назви",
     threadId: "Гілка",
+    actions: {
+      continue: "Продовжити",
+      continueAsBranch: "Продовжити як гілку",
+      openChat: "Відкрити Chat",
+      continuing: "Продовження…",
+      archive: "Архівувати",
+      continueLabel: "Продовжити {title}",
+      continueAsBranchLabel: "Продовжити {title} як гілку",
+      openChatLabel: "Відкрити Chat для {title}",
+      continueAsBranchHint:
+        "Створіть Chat зі збереженої видимої історії. Після вашого першого повідомлення Codex App Server вибере модель і провайдера для нового потоку harness. Подальший вибір залишається під керуванням Codex; OpenClaw ніколи не підставляє інше середовище виконання, модель або резервний варіант. Джерело залишається незмінним, а поточна робота може бути відсутня.",
+      archiveLabel: "Архівувати {title}",
+      archiveConfirmation:
+        "Архівувати {title} і всі породжені нащадки? Підтвердьте, що жоден інший клієнт Codex або runner OpenClaw не використовує їх. Архівування під час активності іншого runner може перервати його роботу.",
+      active: "Активні сеанси не можна запускати як гілку або архівувати.",
+      archiveActivityUnknownHint:
+        "Активність невідома, оскільки статус є локальним для процесу. Архівуйте лише після підтвердження, що жоден інший клієнт Codex або runner не використовує цю сесію.",
+      statusUnavailable: "Цим сеансом Codex не можна керувати в його поточному стані.",
+      hostOffline: "Повторно підключіть цей комп’ютер, перш ніж керувати його сеансами Codex.",
+      gatewayOffline: "Повторно підключіться до gateway, перш ніж керувати сеансами Codex.",
+      remoteReadOnly: "Сеанси спареного комп’ютера наразі доступні лише для перегляду.",
+    },
     status: {
       active: "Активний",
       idle: "Неактивний",
       archived: "Заархівований",
-      notLoaded: "Збережений",
+      storedActivityUnknown: "Збережено / активність невідома",
       systemError: "Системна помилка",
       unknown: "Невідомо",
     },
@@ -976,11 +998,10 @@ export const uk: TranslationMap = {
     },
     empty: {
       title: "Хости Codex не знайдено",
-      subtitle:
-        "Увімкніть спільний доступ до сеансів Codex на Gateway або спареному комп’ютері, а потім оновіть цю сторінку.",
+      supervisionSubtitle:
+        "Увімкніть нагляд Codex на Gateway або спареному комп’ютері, а потім оновіть це подання.",
       search: "Жоден сеанс на цьому хості не відповідає пошуку.",
-      active: "На цьому хості немає активних сеансів.",
-      archived: "На цьому хості немає архівних сеансів.",
+      nonArchived: "На цьому хості немає неархівованих сеансів.",
     },
   },
   logbook: {
@@ -2095,6 +2116,11 @@ export const uk: TranslationMap = {
       clearSessionSearch: "Очистити пошук сеансів",
       loadMoreSessions: "Завантажити більше сеансів",
       model: "Chat model",
+      modelSection: "Модель",
+      modelLocked: "Заблоковано",
+      modelLockedLabel: "Вибір моделі керується для цієї сесії",
+      lockedSessionModel: "Модель сеансу",
+      nativeCodexModel: "Модель, керована Codex",
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {
@@ -2159,6 +2185,26 @@ export const uk: TranslationMap = {
       finished: "Завершено ({count})",
       stopTask: "Зупинити {title}",
       viewTranscript: "Переглянути транскрипт",
+    },
+    sessionDiff: {
+      title: "Зміни",
+      show: "Показати зміни сеансу",
+      refresh: "Оновити зміни",
+      loading: "Завантаження змін…",
+      empty: "Немає змін у checkout цього сеансу.",
+      notGit: "Робоча область цього сеансу не є git checkout.",
+      unknownSession: "Із цим сеансом не пов’язано жодної робочої області.",
+      disconnected: "Gateway відключено.",
+      unmodifiedLines: "{count} незмінених рядків",
+      binaryFile: "Бінарний файл",
+      untracked: "не відстежується",
+      tooLarge: "Diff завеликий для відображення.",
+      truncatedFile: "Diff обрізано.",
+      truncatedResult: "Деякі зміни пропущено, оскільки diff дуже великий.",
+      statusAdded: "Додано",
+      statusDeleted: "Видалено",
+      statusRenamed: "Перейменовано",
+      statusModified: "Змінено",
     },
     workspaceFiles: {
       label: "Робоча область сесії",

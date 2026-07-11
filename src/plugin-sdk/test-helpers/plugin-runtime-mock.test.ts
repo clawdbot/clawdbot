@@ -5,6 +5,38 @@ import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime
 import { describe, expect, it, vi } from "vitest";
 
 describe("createPluginRuntimeMock", () => {
+  it("clones the initializer callback input and applies its final extension patch", async () => {
+    const runtime = createPluginRuntimeMock();
+    const pluginExtensions = { codex: { marker: "original" } };
+    const afterCreate = vi.fn(async (initialized) => {
+      initialized.entry.pluginExtensions = { codex: { marker: "callback mutation" } };
+      return { pluginExtensions: { codex: { marker: "final" } } };
+    });
+
+    const created = await runtime.agent.session.createSessionEntry({
+      cfg: {},
+      key: "agent:main:dashboard:mock-created",
+      initialEntry: {
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+        pluginExtensions,
+      },
+      afterCreate,
+    });
+    pluginExtensions.codex.marker = "input mutation";
+
+    expect(afterCreate).toHaveBeenCalledOnce();
+    expect(afterCreate.mock.calls[0]?.[0]).not.toBe(created);
+    expect(afterCreate.mock.calls[0]?.[0]).toMatchObject({
+      key: created.key,
+      agentId: created.agentId,
+      sessionId: created.sessionId,
+      entry: { initializationPending: true },
+    });
+    expect(created.entry.pluginExtensions).toEqual({ codex: { marker: "final" } });
+    expect(created.entry.initializationPending).toBeUndefined();
+  });
+
   it("keeps the inbound debouncer mock aligned with the runtime contract", () => {
     const runtime = createPluginRuntimeMock();
     const debouncer = runtime.channel.debounce.createInboundDebouncer({

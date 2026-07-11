@@ -7,6 +7,11 @@ import {
 import { persistSessionResetLifecycle } from "../../config/sessions/session-accessor.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { defaultRuntime } from "../../runtime.js";
+import {
+  isModelSelectionLocked,
+  ModelSelectionLockedError,
+  MODEL_SELECTION_LOCKED_RESET_MESSAGE,
+} from "../../sessions/model-overrides.js";
 import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
 
 type ResetSessionOptions = {
@@ -50,6 +55,9 @@ export async function resetReplyRunSession(params: {
   const prevEntry = params.activeSessionStore[params.sessionKey] ?? params.activeSessionEntry;
   if (!prevEntry) {
     return false;
+  }
+  if (isModelSelectionLocked(prevEntry)) {
+    throw new ModelSelectionLockedError(MODEL_SELECTION_LOCKED_RESET_MESSAGE);
   }
   const prevSessionId = params.options.cleanupTranscripts ? prevEntry.sessionId : undefined;
   const nextSessionId = deps.generateSecureUuid();

@@ -23,10 +23,15 @@ If you have not configured models and `tools.media.audio.enabled` is not `false`
 1. **Active reply model**, when its provider supports audio understanding.
 2. **Configured provider auth** — any `models.providers.*` entry with auth available for a provider that supports audio transcription. This is checked before local CLIs, so a configured API key always wins over a local binary on `PATH`.
    Provider priority when multiple are configured: Groq, OpenAI, xAI, Deepgram, Google, SenseAudio, ElevenLabs, Mistral.
-3. **Local CLIs** (only if no provider auth resolved), checked in this order:
-   - `sherpa-onnx-offline` (requires `SHERPA_ONNX_MODEL_DIR` with `tokens.txt`, `encoder.onnx`, `decoder.onnx`, and `joiner.onnx`)
-   - `whisper-cli` (from `whisper-cpp`; uses `WHISPER_CPP_MODEL` or a bundled tiny model)
+3. **Local CLIs** (only if no provider auth resolved). OpenClaw builds an ordered fallback list:
+   - `whisper-cli`, before CPU defaults only when an earlier model invocation in the current process observed Metal or CUDA
+   - `sherpa-onnx-offline` on its default CPU provider (requires `SHERPA_ONNX_MODEL_DIR` with `tokens.txt`, `encoder.onnx`, `decoder.onnx`, and `joiner.onnx`)
+   - `whisper-cli` when Metal/CUDA is only build-capable or the selected backend is otherwise unobserved
+   - `parakeet-mlx` on Apple Silicon (MLX-capable; device use remains unobserved)
    - `whisper` (Python CLI; downloads models automatically)
+
+Install/link provenance is capability evidence, not execution evidence. It never moves a candidate ahead of CPU sherpa by itself. OpenClaw does not load a model during setup or status checks just to probe a backend.
+Auto-detected whisper.cpp keeps its normal model-run logs enabled so OpenClaw can record the upstream `using … backend` line. Explicit CLI entries keep their configured output flags.
 
 Gemini CLI auto-detect for media understanding was replaced by a sandboxed Antigravity CLI (`agy`) fallback for image/video; audio does not use a CLI fallback beyond the local binaries above.
 
@@ -35,6 +40,15 @@ To disable auto-detection, set `tools.media.audio.enabled: false`. To customize,
 <Note>
 Binary detection is best-effort across macOS/Linux/Windows. Make sure the CLI is on `PATH` (`~` is expanded), or set an explicit CLI model with a full command path.
 </Note>
+
+Inspect the local selection without transcribing audio:
+
+```bash
+openclaw capability audio providers
+openclaw doctor --lint --only core/doctor/local-audio-acceleration --severity-min info
+```
+
+The provider inventory reports the local fallback winner separately from global provider selection, plus capable, requested, and observed backend fields. After transcription runs, `/status` reports the requested or observed backend in the media line. Explicit `tools.media.audio.models` CLI entries still bypass auto-selection; use their backend-specific flags such as sherpa `--provider=cuda` or whisper.cpp `--no-gpu`/`--device`.
 
 ## Config examples
 
@@ -161,6 +175,11 @@ Binary detection is best-effort across macOS/Linux/Windows. Make sure the CLI is
 - `tools.media.audio.echoFormat` customizes the echo text (placeholder: `{transcript}`; default `📝 "{transcript}"`).
 - CLI stdout is capped at 5MB; keep CLI output concise.
 - CLI `args` should use `{{MediaPath}}` for the local audio file path. Run `openclaw doctor --fix` to migrate deprecated `{input}` placeholders from older `audio.transcription.command` configs (retired key: `audio.transcription`, replaced by `tools.media.audio.models`).
+- `tools.media.concurrency` bounds media tasks; it is not a GPU scheduler.
+
+### Resident local STT
+
+Auto-detected local STT remains process-per-request. OpenClaw does not currently manage a resident whisper.cpp server because the standard Homebrew `whisper-cpp` package disables that server, while the upstream example has no configured bounded admission queue. A plugin-owned resident lifecycle needs a maintained packaged worker with health/startup, model residency, bounded queueing, cancellation/timeout, loopback-only no-auth operation, and no cloud fallback before it can be enabled safely.
 
 ### Proxy environment support
 

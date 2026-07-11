@@ -440,6 +440,50 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         resolveStorePath: vi.fn(
           () => "/tmp/agent-sessions.json",
         ) as unknown as PluginRuntime["agent"]["session"]["resolveStorePath"],
+        createSessionEntry: vi.fn(
+          async (
+            params: Parameters<PluginRuntime["agent"]["session"]["createSessionEntry"]>[0],
+          ) => {
+            const sessionId = "plugin-runtime-mock-session";
+            const key = params.key;
+            const initialEntry = {
+              sessionId,
+              updatedAt: Date.now(),
+              ...(params.label !== undefined ? { label: params.label } : {}),
+              ...(params.spawnedCwd !== undefined ? { spawnedCwd: params.spawnedCwd } : {}),
+              ...structuredClone(params.initialEntry),
+              ...(params.afterCreate ? { initializationPending: true as const } : {}),
+            };
+            const initialized = {
+              key,
+              agentId: params.agentId ?? "main",
+              sessionId,
+              entry: initialEntry,
+            };
+            const finalPatch = await params.afterCreate?.(structuredClone(initialized));
+            if (finalPatch !== undefined) {
+              const patchKeys = Object.keys(finalPatch);
+              if (patchKeys.length !== 1 || patchKeys[0] !== "pluginExtensions") {
+                throw new Error("session creation final patch may only contain pluginExtensions");
+              }
+            }
+            return {
+              ...initialized,
+              entry:
+                params.afterCreate === undefined
+                  ? initialEntry
+                  : {
+                      ...initialEntry,
+                      ...(finalPatch === undefined
+                        ? {}
+                        : {
+                            pluginExtensions: structuredClone(finalPatch.pluginExtensions),
+                          }),
+                      initializationPending: undefined,
+                    },
+            };
+          },
+        ) as PluginRuntime["agent"]["session"]["createSessionEntry"],
         loadSessionStore: vi.fn(
           () => ({}),
         ) as unknown as PluginRuntime["agent"]["session"]["loadSessionStore"],

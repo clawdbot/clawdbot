@@ -210,6 +210,11 @@ export const id: TranslationMap = {
     gateway: "Gateway · lokal",
     folder: "Folder",
     folderPlaceholder: "Ruang kerja agen",
+    browse: "Jelajahi folder",
+    browserUp: "Folder induk",
+    browserUse: "Gunakan folder ini",
+    browserEmpty: "Tidak ada subfolder",
+    browserLoadFailed: "Tidak dapat menampilkan folder tersebut.",
     worktree: "Worktree",
     worktreeUnavailable: "Ruang kerja agen bukan checkout git",
     baseBranch: "Branch dasar",
@@ -937,8 +942,8 @@ export const id: TranslationMap = {
   codexSessions: {
     eyebrow: "Armada Codex",
     title: "Sesi di semua komputer Anda",
-    subtitle:
-      "Tampilan hanya baca untuk sesi Codex di Gateway ini dan semua komputer terhubung yang membagikan sesi tersebut.",
+    interactiveSubtitle:
+      "Mulai cabang Chat yang pemilihan modelnya tetap di bawah kendali Codex App Server, arsipkan sesi lokal yang memenuhi syarat dengan konfirmasi, dan lihat sesi komputer yang dipasangkan.",
     summaryLabel: "Ringkasan sesi Codex",
     summary: {
       sessions: "sesi",
@@ -947,11 +952,6 @@ export const id: TranslationMap = {
     },
     searchLabel: "Cari sesi Codex",
     searchPlaceholder: "Cari judul sesi",
-    scopeLabel: "Filter arsip sesi",
-    scope: {
-      active: "Aktif",
-      archived: "Diarsipkan",
-    },
     refresh: "Muat ulang",
     disconnected: "Hubungkan kembali ke Gateway untuk memuat ulang sesi Codex.",
     partial: "{count} host tidak tersedia. Host lainnya tetap tersedia.",
@@ -960,11 +960,33 @@ export const id: TranslationMap = {
     loadingMore: "Memuat…",
     untitled: "Sesi Codex tanpa judul",
     threadId: "Thread",
+    actions: {
+      continue: "Lanjutkan",
+      continueAsBranch: "Lanjutkan sebagai cabang",
+      openChat: "Buka Chat",
+      continuing: "Melanjutkan…",
+      archive: "Arsipkan",
+      continueLabel: "Lanjutkan {title}",
+      continueAsBranchLabel: "Lanjutkan {title} sebagai cabang",
+      openChatLabel: "Buka Chat untuk {title}",
+      continueAsBranchHint:
+        "Buat Chat dari riwayat terlihat yang tersimpan. Pada pesan pertama Anda, Codex App Server memilih model dan penyedia untuk thread harness baru. Pemilihan berikutnya tetap dikendalikan Codex; OpenClaw tidak pernah mengganti dengan runtime, model, atau fallback lain. Sumber tetap tidak berubah, dan pekerjaan yang sedang berjalan mungkin tidak ada.",
+      archiveLabel: "Arsipkan {title}",
+      archiveConfirmation:
+        "Arsipkan {title} dan semua turunan yang dihasilkan? Konfirmasikan bahwa tidak ada klien Codex atau runner OpenClaw lain yang menggunakannya. Mengarsipkan saat runner lain aktif dapat mengganggu pekerjaannya.",
+      active: "Sesi aktif tidak dapat memulai cabang atau diarsipkan.",
+      archiveActivityUnknownHint:
+        "Aktivitas tidak diketahui karena status bersifat lokal pada proses. Arsipkan hanya setelah mengonfirmasi bahwa tidak ada klien Codex atau runner lain yang menggunakan sesi ini.",
+      statusUnavailable: "Sesi Codex ini tidak dapat dikelola dalam statusnya saat ini.",
+      hostOffline: "Hubungkan kembali komputer ini sebelum mengelola sesi Codex-nya.",
+      gatewayOffline: "Hubungkan kembali ke gateway sebelum mengelola sesi Codex.",
+      remoteReadOnly: "Sesi komputer yang dipasangkan saat ini hanya dapat dilihat.",
+    },
     status: {
       active: "Aktif",
       idle: "Siaga",
       archived: "Diarsipkan",
-      notLoaded: "Tersimpan",
+      storedActivityUnknown: "Tersimpan / aktivitas tidak diketahui",
       systemError: "Kesalahan sistem",
       unknown: "Tidak diketahui",
     },
@@ -978,11 +1000,10 @@ export const id: TranslationMap = {
     },
     empty: {
       title: "Tidak ditemukan host Codex",
-      subtitle:
-        "Aktifkan berbagi sesi Codex di Gateway atau komputer yang dipasangkan, lalu muat ulang tampilan ini.",
+      supervisionSubtitle:
+        "Aktifkan supervisi Codex di gateway atau komputer yang dipasangkan, lalu segarkan tampilan ini.",
       search: "Tidak ada sesi di host ini yang cocok dengan pencarian Anda.",
-      active: "Tidak ada sesi aktif di host ini.",
-      archived: "Tidak ada sesi yang diarsipkan di host ini.",
+      nonArchived: "Tidak ada sesi non-arsip di host ini.",
     },
   },
   logbook: {
@@ -2095,6 +2116,11 @@ export const id: TranslationMap = {
       clearSessionSearch: "Hapus pencarian sesi",
       loadMoreSessions: "Muat sesi lainnya",
       model: "Chat model",
+      modelSection: "Model",
+      modelLocked: "Terkunci",
+      modelLockedLabel: "Pemilihan model dikendalikan untuk sesi ini",
+      lockedSessionModel: "Model sesi",
+      nativeCodexModel: "Model yang dikontrol Codex",
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {
@@ -2159,6 +2185,26 @@ export const id: TranslationMap = {
       finished: "Selesai ({count})",
       stopTask: "Hentikan {title}",
       viewTranscript: "Lihat transkrip",
+    },
+    sessionDiff: {
+      title: "Perubahan",
+      show: "Tampilkan perubahan sesi",
+      refresh: "Segarkan perubahan",
+      loading: "Memuat perubahan…",
+      empty: "Tidak ada perubahan dalam checkout sesi ini.",
+      notGit: "Workspace sesi ini bukan checkout git.",
+      unknownSession: "Tidak ada workspace yang terkait dengan sesi ini.",
+      disconnected: "Gateway terputus.",
+      unmodifiedLines: "{count} baris tidak diubah",
+      binaryFile: "File biner",
+      untracked: "tidak dilacak",
+      tooLarge: "Diff terlalu besar untuk ditampilkan.",
+      truncatedFile: "Diff dipotong.",
+      truncatedResult: "Beberapa perubahan dihilangkan karena diff sangat besar.",
+      statusAdded: "Ditambahkan",
+      statusDeleted: "Dihapus",
+      statusRenamed: "Diganti nama",
+      statusModified: "Dimodifikasi",
     },
     workspaceFiles: {
       label: "Workspace sesi",

@@ -27,6 +27,8 @@ const hookMocks = vi.hoisted(() => ({
   ),
 }));
 
+const sessionEntries = vi.hoisted(() => new Map<string, Record<string, unknown>>());
+
 let cfg: Record<string, unknown> = {};
 let lastCreateOpenClawToolsContext: Record<string, unknown> | undefined;
 
@@ -55,6 +57,16 @@ vi.mock("../config/sessions.js", () => ({
     return `agent:${agentId}:${mainKey}`;
   },
 }));
+
+vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/sessions/session-accessor.js")>();
+  return {
+    ...actual,
+    resolveSessionEntryAccessTarget: (params: { sessionKey: string }) => ({
+      entry: sessionEntries.get(params.sessionKey),
+    }),
+  };
+});
 
 vi.mock("./auth.js", () => ({
   authorizeHttpGatewayConnect: vi.fn(async () => ({ ok: true })),
@@ -282,6 +294,7 @@ beforeEach(() => {
   cfg = {};
   lastCreateOpenClawToolsContext = undefined;
   pluginToolMetaState.clear();
+  sessionEntries.clear();
   pluginToolMetaState.set("plugin_doctor", { pluginId: "test-plugin", optional: true });
   hookMocks.resolveToolLoopDetectionConfig.mockClear();
   hookMocks.resolveToolLoopDetectionConfig.mockImplementation(() => ({ warnAt: 3 }));
@@ -464,6 +477,46 @@ const setMainAllowedTools = (params: {
 };
 
 describe("POST /tools/invoke", () => {
+  it("rejects reserved harness session contexts before tool resolution", async () => {
+    allowAgentsListForMain();
+    const res = await invokeAgentsListAuthed({
+      sessionKey: "agent:main:harness:codex:supervision:native-thread",
+    });
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({
+      ok: false,
+      error: { type: "invalid_request", message: expect.stringContaining("reserved") },
+    });
+    expect(lastCreateOpenClawToolsContext).toBeUndefined();
+  });
+
+  it("allows tools for an existing unlocked legacy harness-prefixed session", async () => {
+    allowAgentsListForMain();
+    const sessionKey = "agent:main:harness:legacy-notes";
+    sessionEntries.set(sessionKey, { sessionId: "legacy-session", modelSelectionLocked: false });
+
+    const res = await invokeAgentsListAuthed({ sessionKey });
+
+    expect(res.status).toBe(200);
+    await expectOkInvokeResponse(res);
+  });
+
+  it("rejects tools for an existing locked harness session", async () => {
+    allowAgentsListForMain();
+    const sessionKey = "agent:main:harness:codex:supervision:native-thread";
+    sessionEntries.set(sessionKey, {
+      sessionId: "locked-session",
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+    });
+
+    const res = await invokeAgentsListAuthed({ sessionKey });
+
+    expect(res.status).toBe(400);
+    expect(lastCreateOpenClawToolsContext).toBeUndefined();
+  });
+
   it("invokes a tool and returns {ok:true,result}", async () => {
     allowAgentsListForMain();
     const res = await invokeAgentsListAuthed({ sessionKey: "main" });
@@ -1059,6 +1112,37 @@ describe("POST /tools/invoke", () => {
 });
 
 describe("tools.invoke Gateway RPC", () => {
+  it("rejects reserved harness session contexts", async () => {
+    allowAgentsListForMain();
+    const call = await invokeToolsRpc({
+      name: "agents_list",
+      args: {},
+      sessionKey: "agent:main:harness:codex:supervision:native-thread",
+    });
+
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toMatchObject({
+      ok: false,
+      error: { code: "validation_error", message: expect.stringContaining("reserved") },
+    });
+    expect(lastCreateOpenClawToolsContext).toBeUndefined();
+  });
+
+  it("allows existing unlocked legacy harness-prefixed sessions", async () => {
+    allowAgentsListForMain();
+    const sessionKey = "agent:main:harness:legacy-notes";
+    sessionEntries.set(sessionKey, { sessionId: "legacy-session" });
+
+    const call = await invokeToolsRpc({
+      name: "agents_list",
+      args: {},
+      sessionKey,
+    });
+
+    expect(call?.[1]?.ok).toBe(true);
+    expect(call?.[1]?.output).toBeDefined();
+  });
+
   it("invokes a tool through the SDK-facing RPC envelope", async () => {
     allowAgentsListForMain();
 

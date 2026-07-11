@@ -226,6 +226,10 @@ function isBundledSkillRuntimePath(relativePath) {
   return relativePath === "skills" || relativePath.startsWith("skills/");
 }
 
+function isRawBrowserExtensionAssetPath(relativePath) {
+  return relativePath === "chrome-extension" || relativePath.endsWith("/chrome-extension");
+}
+
 function isPathOrNestedPath(relativePath, nestedPath) {
   return relativePath === nestedPath || relativePath.endsWith(`/${nestedPath}`);
 }
@@ -290,6 +294,12 @@ function stagePluginRuntimeOverlay(sourceDir, targetDir, relativeDir = "") {
     const relativePath = path.join(relativeDir, dirent.name).replace(/\\/g, "/");
 
     if (dirent.isDirectory()) {
+      // Unpacked browser extensions are executable static payloads, not Node
+      // modules. Preserve the staged tree byte-for-byte so Chrome can load it.
+      if (isRawBrowserExtensionAssetPath(relativePath)) {
+        copyPathFallback(sourcePath, targetPath);
+        continue;
+      }
       stagePluginRuntimeOverlay(sourcePath, targetPath, relativePath);
       continue;
     }

@@ -40,7 +40,12 @@ const state = vi.hoisted(() => ({
   ),
   resolveEffectiveModelFallbacksMock: vi.fn().mockReturnValue(undefined),
   hasLegacyAutoFallbackWithoutOriginMock: vi.fn((_entry: unknown) => false),
+  isModelSelectionLockedMock: vi.fn(
+    (entry: unknown) =>
+      (entry as { modelSelectionLocked?: boolean } | undefined)?.modelSelectionLocked === true,
+  ),
   applyModelOverrideToSessionEntryMock: vi.fn((_params: unknown) => ({ updated: false })),
+  repairProviderWrappedModelOverrideMock: vi.fn((_params: unknown) => ({ updated: false })),
   resolveAutoFallbackPrimaryProbeMock: vi.fn((_params: unknown) => undefined as unknown),
   resolveChannelModelOverrideMock: vi.fn((_params: unknown) => null as unknown),
   assertLifecycleCurrentMock: vi.fn(),
@@ -369,7 +374,16 @@ vi.mock("../sessions/level-overrides.js", () => ({
 vi.mock("../sessions/model-overrides.js", () => ({
   applyModelOverrideToSessionEntry: (params: unknown) =>
     state.applyModelOverrideToSessionEntryMock(params),
-  repairProviderWrappedModelOverride: () => ({ updated: false }),
+  isModelSelectionLocked: (entry: unknown) => state.isModelSelectionLockedMock(entry),
+  MODEL_SELECTION_LOCKED_MESSAGE: "Model selection is locked for this session.",
+  ModelSelectionLockedError: class ModelSelectionLockedError extends Error {
+    constructor() {
+      super("Model selection is locked for this session.");
+      this.name = "ModelSelectionLockedError";
+    }
+  },
+  repairProviderWrappedModelOverride: (params: unknown) =>
+    state.repairProviderWrappedModelOverrideMock(params),
 }));
 
 vi.mock("../sessions/send-policy.js", () => ({
@@ -846,6 +860,7 @@ type FallbackRunnerParams = {
   provider: string;
   model: string;
   sessionId?: string;
+  fallbacksOverride?: string[];
   resolveAgentHarnessRuntimeOverride?: (provider: string, model: string) => string | undefined;
   run: (provider: string, model: string) => Promise<unknown>;
   onFallbackStep?: (step: Record<string, unknown>) => void | Promise<void>;
@@ -988,7 +1003,12 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.resolveAgentSkillsFilterMock.mockReturnValue(undefined);
     state.loadManifestModelCatalogMock.mockReturnValue([]);
     state.hasLegacyAutoFallbackWithoutOriginMock.mockReturnValue(false);
+    state.isModelSelectionLockedMock.mockImplementation(
+      (entry: unknown) =>
+        (entry as { modelSelectionLocked?: boolean } | undefined)?.modelSelectionLocked === true,
+    );
     state.applyModelOverrideToSessionEntryMock.mockReturnValue({ updated: false });
+    state.repairProviderWrappedModelOverrideMock.mockReturnValue({ updated: false });
     state.resolveAutoFallbackPrimaryProbeMock.mockReturnValue(undefined);
     state.resolveChannelModelOverrideMock.mockImplementation((params: unknown) => {
       const input = params as {
@@ -1204,6 +1224,107 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       providerOverride: "openai",
       modelOverride: "gpt-5.4",
       agentHarnessRuntimeOverride: "codex",
+    });
+  });
+
+  it("rejects live model switches for locked sessions without retrying", async () => {
+    setupModelSwitchRetry({
+      provider: "openai",
+      model: "gpt-5.4",
+    });
+    state.sessionEntryMock = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      modelSelectionLocked: true,
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    };
+    state.isModelSelectionLockedMock.mockReturnValue(true);
+
+    await expect(runBasicAgentCommand()).rejects.toMatchObject({
+      name: "ModelSelectionLockedError",
+      message: "Model selection is locked for this session.",
+    });
+
+    expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(1);
+    expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
+    expect(state.trajectoryFlushMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("pins catalog-adopted direct runs before fallback preflight", async () => {
+    setupSingleAttemptFallback();
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          models: state.defaultRuntimeConfig.agents.defaults.models,
+          cliBackends: { codex: { command: "codex" } },
+        },
+      },
+    };
+    state.sessionEntryMock = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+      pluginExtensions: {
+        codex: {
+          supervision: {
+            sourceThreadId: "019f-codex-thread",
+            modelLocked: true,
+          },
+        },
+      },
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    };
+    state.isModelSelectionLockedMock.mockReturnValue(true);
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "claude"));
+
+    await runBasicAgentCommand();
+
+    const fallbackParams = mockCallArg(state.runWithModelFallbackMock) as FallbackRunnerParams;
+    expect(fallbackParams.resolveAgentHarnessRuntimeOverride?.("anthropic", "claude")).toBe(
+      "codex",
+    );
+    expect(fallbackParams.fallbacksOverride).toEqual([]);
+    expectRecordFields(mockCallArg(state.runAgentAttemptMock), {
+      providerOverride: "anthropic",
+      modelOverride: "claude",
+      agentHarnessRuntimeOverride: "codex",
+      sessionEntry: expect.objectContaining({
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+      }),
+    });
+  });
+
+  it("skips legacy override repair when continuing an ordinary locked harness session", async () => {
+    setupSingleAttemptFallback();
+    state.resolvedSessionKeyMock = "agent:main:plugin-owned";
+    state.hasLegacyAutoFallbackWithoutOriginMock.mockReturnValue(true);
+    state.sessionEntryMock = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+      providerOverride: "openai",
+      modelOverride: "stale-fallback-model",
+      modelOverrideSource: "auto",
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    };
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "claude"));
+
+    await runBasicAgentCommand();
+
+    expect(state.applyModelOverrideToSessionEntryMock).not.toHaveBeenCalled();
+    expect(state.repairProviderWrappedModelOverrideMock).not.toHaveBeenCalled();
+    expectRecordFields(mockCallArg(state.runAgentAttemptMock), {
+      agentHarnessRuntimeOverride: "codex",
+      sessionEntry: expect.objectContaining({
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+        providerOverride: "openai",
+        modelOverride: "stale-fallback-model",
+        modelOverrideSource: "auto",
+      }),
     });
   });
 
@@ -2886,6 +3007,90 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(state.removeInternalSessionEffectsTranscriptMock).not.toHaveBeenCalled();
   });
 
+  it("rejects session-id-resolved model runs for harness-owned sessions", async () => {
+    state.resolvedSessionKeyMock = "agent:main:harness:codex:supervision:native-thread";
+    state.sessionEntryMock = {
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+      sessionId: "session-1",
+      updatedAt: 1,
+    };
+
+    await expect(
+      agentCommand({
+        message: "probe",
+        sessionId: "session-1",
+        modelRun: true,
+        promptMode: "none",
+        sessionEffects: "internal",
+      }),
+    ).rejects.toThrow("Agent harness-owned sessions cannot be used for one-shot model runs.");
+    expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects one-shot model runs for locked harness sessions with ordinary keys", async () => {
+    state.resolvedSessionKeyMock = "agent:main:plugin-owned";
+    state.sessionEntryMock = {
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+      sessionId: "session-1",
+      updatedAt: 1,
+    };
+
+    await expect(
+      agentCommand({
+        message: "probe",
+        sessionId: "session-1",
+        modelRun: true,
+        promptMode: "none",
+        sessionEffects: "internal",
+      }),
+    ).rejects.toThrow("Agent harness-owned sessions cannot be used for one-shot model runs.");
+    expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
+  });
+
+  it("continues a grandfathered unlocked harness-prefixed session as an ordinary run", async () => {
+    setupSingleAttemptFallback();
+    state.resolvedSessionKeyMock = "agent:main:harness:notes";
+    state.sessionEntryMock = {
+      agentHarnessId: "codex",
+      modelSelectionLocked: false,
+      sessionId: "session-1",
+      sessionFile: "/tmp/legacy-session.jsonl",
+      updatedAt: 1,
+    };
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "claude"));
+
+    await runBasicAgentCommand();
+
+    expect(state.runAgentAttemptMock).toHaveBeenCalledTimes(1);
+    expectRecordFields(mockCallArg(state.runAgentAttemptMock), {
+      agentHarnessRuntimeOverride: undefined,
+      sessionEntry: expect.objectContaining({
+        agentHarnessId: "codex",
+        modelSelectionLocked: false,
+        sessionId: "session-1",
+      }),
+    });
+  });
+
+  it("rejects a locked harness row with the wrong owner before transcript or model work", async () => {
+    state.resolvedSessionKeyMock = "agent:main:harness:codex:supervision:native-thread";
+    state.sessionEntryMock = {
+      agentHarnessId: "other",
+      modelSelectionLocked: true,
+      sessionId: "session-1",
+      sessionFile: "/tmp/native-session.jsonl",
+      updatedAt: 1,
+    };
+
+    await expect(agentCommand({ message: "continue", sessionId: "session-1" })).rejects.toThrow(
+      "Session key namespace is reserved for agent harness-owned sessions.",
+    );
+    expect(state.prepareInternalSessionEffectsTranscriptMock).not.toHaveBeenCalled();
+    expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
+  });
+
   it("removes one-shot internal model-run artifacts after success", async () => {
     setupSingleAttemptFallback();
     state.prepareInternalSessionEffectsTranscriptMock.mockResolvedValueOnce(
@@ -3617,6 +3822,52 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       modelOverride: "gemini-3-pro",
       modelOverrideSource: "user",
     });
+  });
+
+  it("does not persist an automatic probe result after the session becomes locked", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+      providerOverride: "openai",
+      modelOverride: "claude",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "anthropic",
+      modelOverrideFallbackOriginModel: "claude",
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    };
+    state.sessionEntryMock = sessionEntry;
+    state.sessionStoreMock = { "agent:main:main": sessionEntry };
+    state.storePathMock = "/tmp/openclaw-session-store.json";
+    state.resolveAutoFallbackPrimaryProbeMock.mockReturnValue({
+      provider: "anthropic",
+      model: "claude",
+      fallbackProvider: "openai",
+      fallbackModel: "claude",
+    });
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+      state.persistSessionEntryMock.mockClear();
+      const result = await params.run("openai", "claude");
+      const currentEntry = (state.sessionStoreMock as Record<string, SessionEntry>)[
+        "agent:main:main"
+      ];
+      currentEntry.modelSelectionLocked = true;
+      state.isModelSelectionLockedMock.mockReturnValue(true);
+      return {
+        result,
+        provider: "openai",
+        model: "claude",
+        attempts: [],
+      };
+    });
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "claude"));
+
+    await runBasicAgentCommand();
+
+    const autoProbeWrites = state.persistSessionEntryMock.mock.calls.filter((call) => {
+      const entry = (call[0] as { entry?: SessionEntry } | undefined)?.entry;
+      return entry?.modelOverrideSource === "auto" && entry?.modelOverride === "claude";
+    });
+    expect(autoProbeWrites).toHaveLength(0);
   });
 
   it("keeps aliased session auth profiles for codex-cli runs", async () => {

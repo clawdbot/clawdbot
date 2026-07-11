@@ -106,6 +106,8 @@ type CliCompactionRuntimeContextParams = {
   senderIsOwner?: boolean;
   provider: string;
   model: string;
+  harnessRuntime?: string;
+  modelSelectionLocked?: boolean;
   thinkLevel?: Parameters<typeof buildEmbeddedCompactionRuntimeContext>[0]["thinkLevel"];
   extraSystemPrompt?: string;
   currentTokenCount: number;
@@ -236,6 +238,8 @@ function buildCliCompactionRuntimeContext(params: CliCompactionRuntimeContextPar
       senderIsOwner: params.senderIsOwner,
       provider: params.provider,
       modelId: params.model,
+      harnessRuntime: params.harnessRuntime,
+      modelSelectionLocked: params.modelSelectionLocked,
       thinkLevel: params.thinkLevel,
       extraSystemPrompt: params.extraSystemPrompt,
     }),
@@ -257,6 +261,8 @@ async function compactCliTranscript(params: {
   agentDir: string;
   provider: string;
   model: string;
+  harnessRuntime?: string;
+  modelSelectionLocked?: boolean;
   contextTokenBudget: number;
   currentTokenCount: number;
   skillsSnapshot?: SkillSnapshot;
@@ -281,6 +287,8 @@ async function compactCliTranscript(params: {
     senderIsOwner: params.senderIsOwner,
     provider: params.provider,
     model: params.model,
+    harnessRuntime: params.harnessRuntime,
+    modelSelectionLocked: params.modelSelectionLocked,
     thinkLevel: params.thinkLevel,
     extraSystemPrompt: params.extraSystemPrompt,
     currentTokenCount: params.currentTokenCount,
@@ -397,6 +405,7 @@ async function compactNativeHarnessCliTranscript(params: {
   try {
     const sessionAgentId = readAgentIdFromSessionKey(params.sessionKey);
     const nativeHarnessId = params.sessionEntry.agentHarnessId?.trim();
+    const modelSelectionLocked = params.sessionEntry.modelSelectionLocked === true;
     const authProfileId = params.sessionEntry.authProfileOverride?.trim() || undefined;
     await cliCompactionDeps.ensureSelectedAgentHarnessPlugin({
       provider: params.provider,
@@ -430,6 +439,7 @@ async function compactNativeHarnessCliTranscript(params: {
           senderIsOwner: params.senderIsOwner,
           thinkLevel: params.thinkLevel,
           extraSystemPrompt: params.extraSystemPrompt,
+          modelSelectionLocked,
           allowGatewaySubagentBinding: true,
           ...(params.contextEngine
             ? {
@@ -447,6 +457,8 @@ async function compactNativeHarnessCliTranscript(params: {
                   senderIsOwner: params.senderIsOwner,
                   provider: params.provider,
                   model: params.model,
+                  harnessRuntime: nativeHarnessId,
+                  modelSelectionLocked,
                   thinkLevel: params.thinkLevel,
                   extraSystemPrompt: params.extraSystemPrompt,
                   currentTokenCount: params.currentTokenCount,
@@ -479,6 +491,9 @@ async function compactNativeHarnessCliTranscript(params: {
       return { compacted: false };
     }
     if (isIntentionalNativeAutoCompactionSkip(result)) {
+      if (params.sessionEntry.modelSelectionLocked === true) {
+        return { compacted: false };
+      }
       return {
         compacted: false,
         fallbackToContextEngine: true,
@@ -487,7 +502,8 @@ async function compactNativeHarnessCliTranscript(params: {
     }
     const recoverableBindingFailure = isRecoverableNativeHarnessBindingFailure(result);
     const fallbackToContextEngine =
-      isUnsupportedNativeHarnessCompaction(result) || recoverableBindingFailure;
+      params.sessionEntry.modelSelectionLocked !== true &&
+      (isUnsupportedNativeHarnessCompaction(result) || recoverableBindingFailure);
     // Native harness binding failures can be repaired by clearing the stored CLI
     // session binding and falling back to the context engine for this turn.
     log.warn(
@@ -496,7 +512,8 @@ async function compactNativeHarnessCliTranscript(params: {
     return {
       compacted: false,
       fallbackToContextEngine,
-      clearCliSessionBinding: recoverableBindingFailure,
+      clearCliSessionBinding:
+        params.sessionEntry.modelSelectionLocked !== true && recoverableBindingFailure,
       failureReason: result?.reason ?? "native harness compaction did not reduce context",
     };
   }
@@ -563,6 +580,14 @@ export async function runCliTurnCompactionLifecycle(params: {
   }
 
   const resolvedBackend = cliCompactionDeps.resolveCliBackendConfig(params.provider, params.cfg);
+  const lockedHarnessRuntime = normalizeOptionalAgentRuntimeId(params.sessionEntry?.agentHarnessId);
+  if (
+    params.sessionEntry?.modelSelectionLocked === true &&
+    lockedHarnessRuntime !== OPENCLAW_AGENT_RUNTIME_ID &&
+    !isNativeHarnessCompactionSession(params.sessionEntry, params.provider)
+  ) {
+    throw new Error("CLI compaction cannot replace a model-locked native harness runtime");
+  }
   if (
     resolvedBackend?.ownsNativeCompaction &&
     !isNativeHarnessCompactionSession(params.sessionEntry, params.provider)
@@ -623,7 +648,7 @@ export async function runCliTurnCompactionLifecycle(params: {
       nativeCompactionResult = nativeOutcome.result;
       useContextEngineCompaction = false;
     } else if (nativeOutcome.fallbackToContextEngine) {
-      // Unsupported or recoverable native compaction should not abort the CLI turn.
+      // Unlocked sessions may repair or replace a stale native compaction path.
       nativeFallbackToContextEngine = true;
       nativeFallbackNeedsBindingClear = nativeOutcome.clearCliSessionBinding === true;
     } else if (nativeOutcome.failureReason) {
@@ -657,6 +682,8 @@ export async function runCliTurnCompactionLifecycle(params: {
       agentDir: params.agentDir,
       provider: params.provider,
       model: params.model,
+      harnessRuntime: params.sessionEntry?.agentHarnessId,
+      modelSelectionLocked: params.sessionEntry?.modelSelectionLocked,
       contextTokenBudget,
       currentTokenCount,
       skillsSnapshot: params.skillsSnapshot,

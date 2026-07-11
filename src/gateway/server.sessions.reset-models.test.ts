@@ -4,6 +4,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test } from "vitest";
+import { MODEL_SELECTION_LOCKED_RESET_MESSAGE } from "../sessions/model-overrides.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
@@ -191,6 +192,31 @@ async function expectMainResetModelFields(params: {
   expect(store["agent:main:main"]?.modelProvider).toBeUndefined();
   expect(store["agent:main:main"]?.model).toBeUndefined();
 }
+
+test("sessions.reset rejects a model-locked session without replacing native state", async () => {
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-model-locked", {
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+        pluginExtensions: {
+          codex: { threadId: "codex-thread-1" },
+        },
+      }),
+    },
+  });
+  const before = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, unknown>;
+
+  const reset = await directSessionReq("sessions.reset", { key: "main" });
+
+  expect(reset).toMatchObject({
+    ok: false,
+    error: { message: MODEL_SELECTION_LOCKED_RESET_MESSAGE },
+  });
+  const after = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, unknown>;
+  expect(after).toEqual(before);
+});
 
 test("sessions.reset recomputes model from defaults instead of stale runtime model", async () => {
   await createSessionStoreDir();

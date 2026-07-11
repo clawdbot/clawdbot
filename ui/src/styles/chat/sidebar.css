@@ -48,27 +48,30 @@
   grid-template-columns: minmax(0, 1fr) minmax(230px, 280px) minmax(230px, 280px);
 }
 
-/* Floating opener shown in single-pane mode while the rail is collapsed
-   (split panes host the same toggle in their header row instead). */
-.chat-workspace-open {
+/* Floating openers shown in single-pane mode while a rail is collapsed
+   (split panes host the same toggles in their header row instead). One
+   horizontal row inside the thread's titlebar band (see .chat-thread top
+   padding) so the buttons never cover the first message and the band stays
+   free as a window-drag surface in the native macOS app. */
+.chat-floating-toggles {
   position: absolute;
   top: 10px;
   right: 10px;
   z-index: 12;
-  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
-  background: color-mix(in srgb, var(--panel) 92%, transparent);
-  box-shadow: var(--shadow-sm);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  display: flex;
+  gap: 6px;
 }
 
-/* Floating background-tasks opener stacks under the workspace one so both
-   stay reachable regardless of which rail is open. */
-.chat-tasks-open {
-  position: absolute;
-  top: 48px;
-  right: 10px;
-  z-index: 12;
+.chat-workspace-open,
+.chat-tasks-open,
+.chat-diff-open {
+  /* Match the 28px pane-header/split-view openers; .btn--icon's
+     min-width/height of 36px would win otherwise. */
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 5px;
   border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
   background: color-mix(in srgb, var(--panel) 92%, transparent);
   box-shadow: var(--shadow-sm);
@@ -88,10 +91,10 @@
   }
 }
 
-/* Positioning context for the badge; the floating variant already gets one
-   from its own position: absolute, so scope this to the pane-header variant. */
-.chat-pane__actions .chat-workspace-toggle,
-.chat-pane__actions .chat-tasks-toggle {
+/* Positioning context for the badge on both the pane-header and floating
+   variants (the floating buttons are static children of the toggle row). */
+.chat-workspace-toggle,
+.chat-tasks-toggle {
   position: relative;
 }
 
@@ -1035,7 +1038,7 @@
   border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
   border-radius: var(--radius-md);
   background: var(--bg-elevated);
-  box-shadow: 0 12px 28px color-mix(in srgb, black 24%, transparent);
+  box-shadow: var(--shadow-md);
 }
 
 .sidebar-file-view__editor-item {
@@ -1734,4 +1737,142 @@
     width: 100%;
     min-width: 0;
   }
+}
+
+/* ── Session diff panel (sessions.diff sidebar content) ── */
+
+/* The floating diff opener sits in the .chat-floating-toggles row and shares
+   the .chat-workspace-open sizing/chrome rules near the top of this file. */
+
+.session-diff {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.session-diff__summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 2px;
+}
+
+.session-diff__branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-weight: 600;
+  font-size: var(--control-ui-text-sm);
+}
+
+.session-diff__branch svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: var(--muted);
+}
+
+.session-diff__branch-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+}
+
+.session-diff__refresh {
+  margin-left: auto;
+}
+
+.session-diff__file {
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.session-diff__file-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  background: color-mix(in srgb, var(--secondary) 70%, transparent);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--control-ui-text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.session-diff__chevron {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--muted);
+  transition: transform 120ms ease;
+}
+
+.session-diff__chevron svg {
+  width: 14px;
+  height: 14px;
+}
+
+.session-diff__chevron--open {
+  transform: rotate(90deg);
+}
+
+.session-diff__status {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.session-diff__status--added {
+  background: var(--ok, #22c55e);
+}
+
+.session-diff__status--deleted {
+  background: var(--destructive, #ef4444);
+}
+
+.session-diff__status--renamed {
+  background: var(--accent, #a855f7);
+}
+
+.session-diff__status--modified {
+  background: var(--warning, #eab308);
+}
+
+.session-diff__path {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--mono);
+}
+
+.session-diff__old-path {
+  color: var(--muted);
+}
+
+.session-diff__badge {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted) 18%, transparent);
+  color: var(--muted);
+  font-size: calc(var(--control-ui-text-sm) - 2px);
+}
+
+.session-diff__file .chat-diff {
+  margin-top: 0;
+  border-radius: 0;
+  max-height: none;
+}
+
+.session-diff__note {
+  padding: 2px 2px 4px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
 }

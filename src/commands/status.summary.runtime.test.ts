@@ -271,6 +271,32 @@ describe("statusSummaryRuntime.resolveSessionRuntimeLabel", () => {
       }),
     ).toBe("OpenAI Codex");
   });
+
+  it("reports the owning Codex harness for a locked session with stale OpenClaw metadata", () => {
+    expect(
+      statusSummaryRuntime.resolveSessionRuntimeLabel({
+        cfg: {
+          agents: {
+            defaults: {
+              models: {
+                "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } },
+              },
+            },
+          },
+        } as never,
+        entry: {
+          sessionId: "locked-codex-session",
+          updatedAt: 0,
+          agentHarnessId: "codex",
+          agentRuntimeOverride: "openclaw",
+          modelSelectionLocked: true,
+        },
+        provider: "openai",
+        model: "gpt-5.5",
+        sessionKey: "agent:main:main",
+      }),
+    ).toBe("OpenAI Codex");
+  });
 });
 
 describe("statusSummaryRuntime.resolveSessionModelRef", () => {

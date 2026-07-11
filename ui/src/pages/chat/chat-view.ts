@@ -30,6 +30,7 @@ import {
 } from "./components/chat-composer.ts";
 import { renderChatPullRequests } from "./components/chat-pull-requests.ts";
 import {
+  renderSessionDiffToggle,
   renderSessionWorkspaceRail,
   renderSessionWorkspaceToggle,
   type SessionWorkspaceProps,
@@ -405,11 +406,24 @@ export function renderChat(props: ChatProps) {
             `
           : nothing}
         <div class="chat-workbench__main">
-          ${props.sessionWorkspace?.collapsed && !props.paneHeaderActive
-            ? renderSessionWorkspaceToggle(props.sessionWorkspace, "floating")
-            : nothing}
-          ${props.backgroundTasks?.collapsed && !props.paneHeaderActive
-            ? renderBackgroundTasksToggle(props.backgroundTasks, "floating")
+          <!-- Floating openers share the top-right corner with the detail
+               panel's header controls; hide them while the sidebar is open. -->
+          ${!props.paneHeaderActive &&
+          !sidebarOpen &&
+          (props.sessionWorkspace?.collapsed || props.backgroundTasks?.collapsed)
+            ? html`
+                <div class="chat-floating-toggles">
+                  ${props.sessionWorkspace?.collapsed
+                    ? renderSessionDiffToggle(props.sessionWorkspace, "floating")
+                    : nothing}
+                  ${props.backgroundTasks?.collapsed
+                    ? renderBackgroundTasksToggle(props.backgroundTasks, "floating")
+                    : nothing}
+                  ${props.sessionWorkspace?.collapsed
+                    ? renderSessionWorkspaceToggle(props.sessionWorkspace, "floating")
+                    : nothing}
+                </div>
+              `
             : nothing}
           <div
             class="chat-split-container ${sidebarOpen

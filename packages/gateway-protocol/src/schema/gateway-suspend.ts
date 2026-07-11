@@ -27,6 +27,7 @@ export const GatewaySuspendBlockerSchema = Type.Object(
       Type.Literal("queue"),
       Type.Literal("reply"),
       Type.Literal("embedded-run"),
+      Type.Literal("background-exec"),
       Type.Literal("cron-run"),
       Type.Literal("task"),
       Type.Literal("root-request"),

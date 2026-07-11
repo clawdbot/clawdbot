@@ -204,6 +204,42 @@ describe("enforceSessionDiskBudget", () => {
     });
   });
 
+  it("preserves model-locked harness sessions when removing entries for disk budget", async () => {
+    await withTempDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const lockedKey = "agent:main:harness-owned:locked";
+      const removableKey = "agent:main:old-removable";
+      const now = Date.now();
+      const store: Record<string, SessionEntry> = {
+        [lockedKey]: {
+          sessionId: "locked-budget",
+          updatedAt: now - 10_000,
+          modelSelectionLocked: true,
+        },
+        [removableKey]: {
+          sessionId: "old-removable",
+          updatedAt: now,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+
+      const result = await enforceSessionDiskBudget({
+        store,
+        storePath,
+        maintenance: {
+          maxDiskBytes: 120,
+          highWaterBytes: 80,
+        },
+        warnOnly: false,
+      });
+
+      expectBudgetResult(result);
+      expect(result.removedEntries).toBe(1);
+      expect(store).toHaveProperty(lockedKey);
+      expect(store).not.toHaveProperty(removableKey);
+    });
+  });
+
   it("accounts for deduped skills prompt blobs before evicting sessions", async () => {
     await withTempDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");

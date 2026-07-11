@@ -154,6 +154,41 @@ describe("resetReplyRunSession", () => {
     expect(persisted.main.memoryFlushLastFailureError).toBeUndefined();
   });
 
+  it("rejects automatic recovery rotation for a model-locked session", async () => {
+    const storePath = path.join(rootDir, "sessions.json");
+    const sessionEntry: SessionEntry = {
+      sessionId: "locked-session",
+      updatedAt: 1,
+      sessionFile: path.join(rootDir, "locked-session.jsonl"),
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+    };
+    const sessionStore = { main: sessionEntry };
+    const followupRun = createTestFollowupRun();
+    await writeTestSessionStore(storePath, "main", sessionEntry);
+
+    await expect(
+      resetReplyRunSession({
+        options: {
+          failureLabel: "memory flush exhaustion",
+          buildLogMessage: (next) => `reset ${next}`,
+        },
+        sessionKey: "main",
+        queueKey: "main",
+        activeSessionEntry: sessionEntry,
+        activeSessionStore: sessionStore,
+        storePath,
+        followupRun,
+        onActiveSessionEntry: vi.fn(),
+        onNewSession: vi.fn(),
+      }),
+    ).rejects.toThrow("cannot be reset while model selection is locked");
+
+    expect(sessionStore.main).toEqual(sessionEntry);
+    expect(followupRun.run.sessionId).not.toBe("00000000-0000-0000-0000-000000000123");
+    expect(refreshQueuedFollowupSessionMock).not.toHaveBeenCalled();
+  });
+
   it("cleans up the old transcript when requested", async () => {
     const storePath = path.join(rootDir, "sessions.json");
     const oldTranscriptPath = path.join(rootDir, "old-session.jsonl");

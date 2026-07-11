@@ -344,6 +344,11 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
   if (!binding?.threadId) {
     return binding;
   }
+  // Native Codex owns compaction for supervised threads. Clearing this private
+  // scope marker would silently move the next turn back to the agent runtime.
+  if (binding.connectionScope === "supervision") {
+    return binding;
+  }
   const sessionRecord = await readCodexSessionRecordForSessionFile(params.sessionFile);
   const rolloutFiles = await listCodexAppServerRolloutFilesForThread(
     params.agentDir,

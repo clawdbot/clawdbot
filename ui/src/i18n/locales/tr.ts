@@ -213,6 +213,11 @@ export const tr: TranslationMap = {
     gateway: "Gateway · yerel",
     folder: "Klasör",
     folderPlaceholder: "Agent workspace",
+    browse: "Klasörlere göz at",
+    browserUp: "Üst klasör",
+    browserUse: "Bu klasörü kullan",
+    browserEmpty: "Alt klasör yok",
+    browserLoadFailed: "Bu klasör listelenemedi.",
     worktree: "Worktree",
     worktreeUnavailable: "Agent workspace bir git checkout değil",
     baseBranch: "Temel branch",
@@ -945,8 +950,8 @@ export const tr: TranslationMap = {
   codexSessions: {
     eyebrow: "Codex filosu",
     title: "Bilgisayarlarınızdaki oturumlar",
-    subtitle:
-      "Bu Gateway'deki ve oturumlarını paylaşan tüm bağlı bilgisayarlardaki Codex oturumlarının salt okunur görünümü.",
+    interactiveSubtitle:
+      "Model seçimi Codex App Server denetiminde kalan bir Chat dalı başlatın, uygun yerel oturumları onayla arşivleyin ve eşlenmiş bilgisayar oturumlarını görüntüleyin.",
     summaryLabel: "Codex oturum özeti",
     summary: {
       sessions: "oturum",
@@ -955,11 +960,6 @@ export const tr: TranslationMap = {
     },
     searchLabel: "Codex oturumlarında ara",
     searchPlaceholder: "Oturum başlıklarında ara",
-    scopeLabel: "Oturum arşivi filtresi",
-    scope: {
-      active: "Etkin",
-      archived: "Arşivlenmiş",
-    },
     refresh: "Yenile",
     disconnected: "Codex oturumlarını yenilemek için Gateway'e yeniden bağlanın.",
     partial:
@@ -969,11 +969,33 @@ export const tr: TranslationMap = {
     loadingMore: "Yükleniyor…",
     untitled: "Başlıksız Codex oturumu",
     threadId: "Konuşma",
+    actions: {
+      continue: "Devam et",
+      continueAsBranch: "Dal olarak devam et",
+      openChat: "Chat'i aç",
+      continuing: "Devam ediliyor…",
+      archive: "Arşivle",
+      continueLabel: "{title} ile devam et",
+      continueAsBranchLabel: "{title} ile dal olarak devam et",
+      openChatLabel: "{title} için Chat'i aç",
+      continueAsBranchHint:
+        "Kalıcı hale getirilmiş görünür geçmişten bir Chat oluşturun. İlk mesajınızda, Codex App Server yeni harness iş parçacığı için modeli ve sağlayıcıyı seçer. Sonraki seçimler Codex denetiminde kalır; OpenClaw hiçbir zaman başka bir çalışma zamanı, model veya yedek seçenekle değiştirme yapmaz. Kaynak dokunulmadan kalır ve devam eden çalışma eksik olabilir.",
+      archiveLabel: "{title} oturumunu arşivle",
+      archiveConfirmation:
+        "{title} ve ondan türetilen alt öğeler arşivlensin mi? Başka hiçbir Codex istemcisinin veya OpenClaw çalıştırıcısının bunları kullanmadığını onaylayın. Başka bir çalıştırıcı etkinken arşivleme yapmak çalışmasını kesintiye uğratabilir.",
+      active: "Etkin oturumlar dal başlatamaz veya arşivlenemez.",
+      archiveActivityUnknownHint:
+        "Durum sürece yerel olduğundan etkinlik bilinmiyor. Yalnızca başka hiçbir Codex istemcisinin veya çalıştırıcısının bu oturumu kullanmadığını onayladıktan sonra arşivleyin.",
+      statusUnavailable: "Bu Codex oturumu mevcut durumunda yönetilemez.",
+      hostOffline: "Codex oturumlarını yönetmeden önce bu bilgisayarı yeniden bağlayın.",
+      gatewayOffline: "Codex oturumlarını yönetmeden önce gateway'e yeniden bağlanın.",
+      remoteReadOnly: "Eşleştirilmiş bilgisayar oturumları şimdilik yalnızca görüntülenebilir.",
+    },
     status: {
       active: "Etkin",
       idle: "Boşta",
       archived: "Arşivlenmiş",
-      notLoaded: "Depolanmış",
+      storedActivityUnknown: "Saklandı / etkinlik bilinmiyor",
       systemError: "Sistem hatası",
       unknown: "Bilinmiyor",
     },
@@ -987,11 +1009,10 @@ export const tr: TranslationMap = {
     },
     empty: {
       title: "Codex ana makinesi bulunamadı",
-      subtitle:
-        "Gateway'de veya eşleştirilmiş bir bilgisayarda Codex oturum paylaşımını etkinleştirin, ardından bu görünümü yenileyin.",
+      supervisionSubtitle:
+        "Gateway’de veya eşleştirilmiş bir bilgisayarda Codex denetimini etkinleştirin, ardından bu görünümü yenileyin.",
       search: "Bu ana makinedeki hiçbir oturum aramanızla eşleşmiyor.",
-      active: "Bu ana makinede etkin oturum yok.",
-      archived: "Bu ana makinede arşivlenmiş oturum yok.",
+      nonArchived: "Bu ana makinede arşivlenmemiş oturum yok.",
     },
   },
   logbook: {
@@ -2107,6 +2128,11 @@ export const tr: TranslationMap = {
       clearSessionSearch: "Oturum aramasını temizle",
       loadMoreSessions: "Daha fazla oturum yükle",
       model: "Chat model",
+      modelSection: "Model",
+      modelLocked: "Kilitli",
+      modelLockedLabel: "Bu oturum için model seçimi denetleniyor",
+      lockedSessionModel: "Oturum modeli",
+      nativeCodexModel: "Codex kontrollü model",
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {
@@ -2171,6 +2197,26 @@ export const tr: TranslationMap = {
       finished: "Tamamlandı ({count})",
       stopTask: "{title} öğesini durdur",
       viewTranscript: "Transkripti görüntüle",
+    },
+    sessionDiff: {
+      title: "Değişiklikler",
+      show: "Oturum değişikliklerini göster",
+      refresh: "Değişiklikleri yenile",
+      loading: "Değişiklikler yükleniyor…",
+      empty: "Bu oturumun checkout'ında değişiklik yok.",
+      notGit: "Bu oturumun çalışma alanı bir git checkout'ı değil.",
+      unknownSession: "Bu oturumla ilişkilendirilmiş çalışma alanı yok.",
+      disconnected: "Gateway bağlantısı kesildi.",
+      unmodifiedLines: "{count} değiştirilmemiş satır",
+      binaryFile: "İkili dosya",
+      untracked: "izlenmeyen",
+      tooLarge: "Diff görüntülenemeyecek kadar büyük.",
+      truncatedFile: "Diff kısaltıldı.",
+      truncatedResult: "Diff çok büyük olduğu için bazı değişiklikler atlandı.",
+      statusAdded: "Eklendi",
+      statusDeleted: "Silindi",
+      statusRenamed: "Yeniden adlandırıldı",
+      statusModified: "Değiştirildi",
     },
     workspaceFiles: {
       label: "Oturum çalışma alanı",

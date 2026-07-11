@@ -5,6 +5,7 @@ import type {
   ForkSessionEntryFromParentResult,
 } from "../auto-reply/reply/session-fork.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
 import {
   setRealtimeVoiceAgentConsultDepsForTest,
@@ -23,6 +24,8 @@ function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
       archivedAt?: number;
       sessionFile?: string;
       spawnedBy?: string;
+      agentHarnessId?: string;
+      modelSelectionLocked?: boolean;
       forkedFromParent?: boolean;
       totalTokens?: number;
       deliveryContext?: {
@@ -242,6 +245,71 @@ describe("realtime voice agent consult runtime", () => {
         userLabel: "Caller",
       }),
     ).rejects.toThrow('Session "voice:archived" is archived. Restore it before starting new work.');
+    expect(runtime.ensureAgentWorkspace).not.toHaveBeenCalled();
+    expect(runtime.session.patchSessionEntry).not.toHaveBeenCalled();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
+  it("fails closed before dispatching a model for a locked Codex consult session", async () => {
+    const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime();
+    sessionStore["voice:locked"] = {
+      sessionId: "locked-session",
+      updatedAt: 1,
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+    };
+
+    await expect(
+      consultRealtimeVoiceAgent({
+        cfg: {} as never,
+        agentRuntime: runtime as never,
+        logger: { warn: vi.fn() },
+        sessionKey: "voice:locked",
+        messageProvider: "voice",
+        lane: "voice",
+        runIdPrefix: "voice-realtime-consult:locked",
+        args: { question: "Continue this session." },
+        transcript: [],
+        surface: "a live phone call",
+        userLabel: "Caller",
+        provider: "openai",
+        model: "gpt-5.4",
+      }),
+    ).rejects.toThrow(MODEL_SELECTION_LOCKED_MESSAGE);
+    expect(runtime.ensureAgentWorkspace).not.toHaveBeenCalled();
+    expect(runtime.session.patchSessionEntry).not.toHaveBeenCalled();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
+  it("fails closed before forking or dispatching from a locked requester session", async () => {
+    const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime();
+    sessionStore["agent:main:main"] = {
+      sessionId: "locked-requester",
+      updatedAt: 1,
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+    };
+    const forkSessionEntryFromParent = vi.fn();
+    setRealtimeVoiceAgentConsultDepsForTest({ forkSessionEntryFromParent });
+
+    await expect(
+      consultRealtimeVoiceAgent({
+        cfg: {} as never,
+        agentRuntime: runtime as never,
+        logger: { warn: vi.fn() },
+        sessionKey: "agent:main:subagent:google-meet:meet-locked",
+        spawnedBy: "agent:main:main",
+        contextMode: "fork",
+        messageProvider: "google-meet",
+        lane: "google-meet",
+        runIdPrefix: "google-meet:meet-locked",
+        args: { question: "Continue this session." },
+        transcript: [],
+        surface: "a private Google Meet",
+        userLabel: "Participant",
+      }),
+    ).rejects.toThrow(MODEL_SELECTION_LOCKED_MESSAGE);
+    expect(forkSessionEntryFromParent).not.toHaveBeenCalled();
     expect(runtime.ensureAgentWorkspace).not.toHaveBeenCalled();
     expect(runtime.session.patchSessionEntry).not.toHaveBeenCalled();
     expect(runEmbeddedAgent).not.toHaveBeenCalled();

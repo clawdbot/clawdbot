@@ -211,6 +211,11 @@ export const fa: TranslationMap = {
     gateway: "Gateway · محلی",
     folder: "پوشه",
     folderPlaceholder: "فضای کاری Agent",
+    browse: "مرور پوشه‌ها",
+    browserUp: "پوشه والد",
+    browserUse: "استفاده از این پوشه",
+    browserEmpty: "زیرپوشه‌ای وجود ندارد",
+    browserLoadFailed: "فهرست‌کردن آن پوشه ممکن نبود.",
     worktree: "Worktree",
     worktreeUnavailable: "فضای کاری Agent یک git checkout نیست",
     baseBranch: "شاخه پایه",
@@ -933,8 +938,8 @@ export const fa: TranslationMap = {
   codexSessions: {
     eyebrow: "ناوگان Codex",
     title: "نشست‌ها در همهٔ رایانه‌های شما",
-    subtitle:
-      "نمایی فقط‌خواندنی از نشست‌های Codex روی این Gateway و همهٔ رایانه‌های متصلی که آن‌ها را به اشتراک می‌گذارند.",
+    interactiveSubtitle:
+      "یک شاخهٔ Chat را شروع کنید که انتخاب مدل آن تحت کنترل Codex App Server باقی می‌ماند، نشست‌های محلی واجد شرایط را با تأیید بایگانی کنید، و نشست‌های رایانهٔ جفت‌شده را مشاهده کنید.",
     summaryLabel: "خلاصهٔ نشست‌های Codex",
     summary: {
       sessions: "نشست‌ها",
@@ -943,11 +948,6 @@ export const fa: TranslationMap = {
     },
     searchLabel: "جست‌وجوی نشست‌های Codex",
     searchPlaceholder: "جست‌وجوی عنوان نشست‌ها",
-    scopeLabel: "فیلتر بایگانی نشست‌ها",
-    scope: {
-      active: "فعال",
-      archived: "بایگانی‌شده",
-    },
     refresh: "تازه‌سازی",
     disconnected: "برای تازه‌سازی نشست‌های Codex دوباره به Gateway متصل شوید.",
     partial: "میزبان‌های غیرقابل‌دسترسی: {count}. سایر میزبان‌ها همچنان در دسترس‌اند.",
@@ -956,11 +956,33 @@ export const fa: TranslationMap = {
     loadingMore: "در حال بارگیری…",
     untitled: "نشست بی‌عنوانِ Codex",
     threadId: "رشته",
+    actions: {
+      continue: "ادامه",
+      continueAsBranch: "ادامه به‌عنوان شاخه",
+      openChat: "باز کردن Chat",
+      continuing: "در حال ادامه…",
+      archive: "بایگانی",
+      continueLabel: "ادامهٔ {title}",
+      continueAsBranchLabel: "ادامهٔ {title} به‌عنوان شاخه",
+      openChatLabel: "باز کردن Chat برای {title}",
+      continueAsBranchHint:
+        "از تاریخچهٔ قابل‌مشاهدهٔ ذخیره‌شده یک Chat ایجاد کنید. در نخستین پیام شما، Codex App Server مدل و ارائه‌دهنده را برای رشتهٔ harness جدید انتخاب می‌کند. انتخاب‌های بعدی همچنان تحت کنترل Codex باقی می‌ماند؛ OpenClaw هرگز runtime، مدل، یا fallback دیگری را جایگزین نمی‌کند. منبع بدون تغییر باقی می‌ماند، و ممکن است کارهای در حال انجام وجود نداشته باشند.",
+      archiveLabel: "بایگانی {title}",
+      archiveConfirmation:
+        "{title} و هر نوادهٔ ایجادشده از آن را بایگانی کنید؟ تأیید کنید که هیچ کلاینت Codex یا اجراکنندهٔ OpenClaw دیگری از آن‌ها استفاده نمی‌کند. بایگانی کردن در حالی که اجراکنندهٔ دیگری فعال است ممکن است کار آن را مختل کند.",
+      active: "نشست‌های فعال نمی‌توانند شاخه‌ای را شروع کنند یا بایگانی شوند.",
+      archiveActivityUnknownHint:
+        "وضعیت فعالیت نامشخص است، زیرا وضعیت محدود به فرایند محلی است. فقط پس از تأیید اینکه هیچ کلاینت Codex یا اجراکنندهٔ دیگری از این نشست استفاده نمی‌کند، آن را بایگانی کنید.",
+      statusUnavailable: "این نشست Codex در وضعیت فعلی خود قابل مدیریت نیست.",
+      hostOffline: "پیش از مدیریت نشست‌های Codex این رایانه، آن را دوباره متصل کنید.",
+      gatewayOffline: "پیش از مدیریت نشست‌های Codex، دوباره به gateway متصل شوید.",
+      remoteReadOnly: "نشست‌های رایانهٔ جفت‌شده فعلاً فقط قابل مشاهده هستند.",
+    },
     status: {
       active: "فعال",
       idle: "بی‌کار",
       archived: "بایگانی‌شده",
-      notLoaded: "ذخیره‌شده",
+      storedActivityUnknown: "ذخیره‌شده / فعالیت نامشخص",
       systemError: "خطای سیستم",
       unknown: "نامشخص",
     },
@@ -974,11 +996,10 @@ export const fa: TranslationMap = {
     },
     empty: {
       title: "هیچ میزبان Codex پیدا نشد",
-      subtitle:
-        "اشتراک‌گذاری نشست‌های Codex را روی Gateway یا یک رایانهٔ جفت‌شده فعال کنید، سپس این نما را تازه‌سازی کنید.",
+      supervisionSubtitle:
+        "نظارت Codex را روی gateway یا یک رایانه جفت‌شده فعال کنید، سپس این نما را بازآوری کنید.",
       search: "هیچ نشستی روی این میزبان با جست‌وجوی شما مطابقت ندارد.",
-      active: "هیچ نشست فعالی روی این میزبان وجود ندارد.",
-      archived: "هیچ نشست بایگانی‌شده‌ای روی این میزبان وجود ندارد.",
+      nonArchived: "هیچ نشست بایگانی‌نشده‌ای روی این میزبان وجود ندارد.",
     },
   },
   logbook: {
@@ -2090,6 +2111,11 @@ export const fa: TranslationMap = {
       clearSessionSearch: "پاک کردن جستجوی نشست",
       loadMoreSessions: "بارگذاری نشست‌های بیشتر",
       model: "Chat model",
+      modelSection: "مدل",
+      modelLocked: "قفل‌شده",
+      modelLockedLabel: "انتخاب مدل برای این نشست کنترل‌شده است",
+      lockedSessionModel: "مدل جلسه",
+      nativeCodexModel: "مدل کنترل‌شده توسط Codex",
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {
@@ -2154,6 +2180,26 @@ export const fa: TranslationMap = {
       finished: "پایان‌یافته ({count})",
       stopTask: "توقف {title}",
       viewTranscript: "مشاهدهٔ رونوشت",
+    },
+    sessionDiff: {
+      title: "تغییرات",
+      show: "نمایش تغییرات جلسه",
+      refresh: "به‌روزرسانی تغییرات",
+      loading: "در حال بارگذاری تغییرات…",
+      empty: "هیچ تغییری در checkout این جلسه وجود ندارد.",
+      notGit: "فضای کاری این جلسه یک git checkout نیست.",
+      unknownSession: "هیچ فضای کاری‌ای با این جلسه مرتبط نیست.",
+      disconnected: "Gateway قطع است.",
+      unmodifiedLines: "{count} خط بدون تغییر",
+      binaryFile: "فایل دودویی",
+      untracked: "ردیابی‌نشده",
+      tooLarge: "Diff بیش از حد بزرگ است و قابل نمایش نیست.",
+      truncatedFile: "Diff کوتاه شده است.",
+      truncatedResult: "برخی تغییرات حذف شدند، زیرا diff بسیار بزرگ است.",
+      statusAdded: "افزوده‌شده",
+      statusDeleted: "حذف‌شده",
+      statusRenamed: "تغییرنام‌یافته",
+      statusModified: "تغییریافته",
     },
     workspaceFiles: {
       label: "فضای کاری نشست",

@@ -133,6 +133,14 @@
       "destination": "/plugins/building-plugins#registering-agent-tools"
     },
     {
+      "source": "/plugins/reference/codex-supervisor",
+      "destination": "/plugins/codex-supervision"
+    },
+    {
+      "source": "/specs/claw-supervisor",
+      "destination": "/specs/codex-supervision"
+    },
+    {
       "source": "/gateway/admin-http-rpc",
       "destination": "/plugins/admin-http-rpc"
     },
@@ -1269,9 +1277,10 @@
                 ]
               },
               {
-                "group": "Bundled plugin guides",
+                "group": "Plugin guides",
                 "pages": [
                   "plugins/codex-harness",
+                  "plugins/codex-supervision",
                   "plugins/codex-native-plugins",
                   "plugins/codex-computer-use",
                   "plugins/logbook",

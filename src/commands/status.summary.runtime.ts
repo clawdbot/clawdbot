@@ -211,6 +211,7 @@ function resolveSessionRuntimeLabel(params: {
   const runtime = resolveModelAgentRuntimeMetadata({
     cfg: params.cfg,
     agentId: params.agentId ?? "",
+    sessionEntry: params.entry,
     provider: params.provider,
     model: params.model,
     sessionKey: acpSessionKey,

@@ -31,11 +31,9 @@ vi.mock("./doctor/shared/missing-configured-plugin-install.js", () => ({
 vi.mock("../plugins/installed-plugin-index-records.js", () => ({
   loadInstalledPluginIndexInstallRecords: mocks.loadInstalledPluginIndexInstallRecords,
 }));
-
 vi.mock("./onboarding-plugin-install.js", () => ({
   ensureOnboardingPluginInstalled: mocks.ensureOnboardingPluginInstalled,
 }));
-
 describe("Codex runtime plugin install repair", () => {
   beforeEach(() => {
     vi.clearAllMocks();

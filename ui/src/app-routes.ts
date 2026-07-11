@@ -14,6 +14,7 @@ import { page as dreamsPage } from "./pages/dreams/route.ts";
 import { page as instancesPage } from "./pages/instances/route.ts";
 import { page as logsPage } from "./pages/logs/route.ts";
 import { page as modelProvidersPage } from "./pages/model-providers/route.ts";
+import { page as newSessionPage } from "./pages/new-session/route.ts";
 import { page as nodesPage } from "./pages/nodes/route.ts";
 import { page as overviewPage } from "./pages/overview/route.ts";
 import { page as pluginPage } from "./pages/plugin/route.ts";
@@ -41,6 +42,7 @@ type AppRoute = PageDefinition<RouteId, ApplicationContext<RouteId>, AppRouteMod
 
 const APP_ROUTE_TREE = [
   chatPage,
+  newSessionPage,
   overviewPage,
   activityPage,
   agentsPage,

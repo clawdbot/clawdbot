@@ -22,5 +22,11 @@ const codexRuntimePluginInstall = createRuntimePluginModelSelectionHelpers({
     }),
 });
 
+const codexSupervisionPluginInstall = createRuntimePluginModelSelectionHelpers({
+  descriptor: CODEX_RUNTIME_PLUGIN_DESCRIPTOR,
+  shouldEnsure: () => true,
+});
+
 export const ensureCodexRuntimePluginForModelSelection = codexRuntimePluginInstall.ensure;
 export const repairCodexRuntimePluginInstallForModelSelection = codexRuntimePluginInstall.repair;
+export const ensureCodexRuntimePluginForSupervision = codexSupervisionPluginInstall.ensure;

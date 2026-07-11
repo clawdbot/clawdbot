@@ -7,9 +7,10 @@ import {
   type CompactEmbeddedAgentSessionParams,
   type EmbeddedAgentCompactResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { resolveAgentDir, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import { readCodexNotificationItem } from "./attempt-notifications.js";
+import { resolveCodexBindingAppServerConnection } from "./binding-connection.js";
 import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
-import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import {
   readCodexNotificationThreadId,
   readCodexNotificationTurnId,
@@ -504,7 +505,6 @@ async function compactCodexNativeThread(
   if (nativeExecutionBlock) {
     return { ok: false, compacted: false, reason: nativeExecutionBlock };
   }
-  const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig: options.pluginConfig });
   const bindingIdentity: CodexAppServerBindingIdentity = sessionBindingIdentity({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
@@ -520,7 +520,30 @@ async function compactCodexNativeThread(
   }
   let binding = initialBinding;
   const requestedAuthProfileId = params.authProfileId?.trim() || undefined;
+  let connection: ReturnType<typeof resolveCodexBindingAppServerConnection>;
+  try {
+    const config = params.config ?? {};
+    const agentId =
+      params.agentId ??
+      readAgentIdFromSessionKey(params.sessionKey) ??
+      resolveDefaultAgentId(config);
+    connection = resolveCodexBindingAppServerConnection({
+      binding,
+      authProfileId: requestedAuthProfileId ?? binding.authProfileId,
+      pluginConfig: options.pluginConfig,
+      config,
+      agentDir: resolveAgentDir(config, agentId),
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      compacted: false,
+      reason: formatCompactionError(error),
+    };
+  }
+  const { appServer, usesSupervisionConnection } = connection;
   if (
+    !usesSupervisionConnection &&
     requestedAuthProfileId &&
     binding.authProfileId &&
     binding.authProfileId !== requestedAuthProfileId
@@ -538,7 +561,7 @@ async function compactCodexNativeThread(
       async () => {
         const client = await clientFactory({
           startOptions: appServer.start,
-          authProfileId: requestedAuthProfileId ?? binding.authProfileId,
+          authProfileId: connection.clientAuthProfileId,
           agentDir: params.agentDir,
           config: params.config,
         });
@@ -561,6 +584,12 @@ async function compactCodexNativeThread(
               // A local thread remains runnable with its stdio process. Keep
               // the lifecycle fence held unless process exit is observed.
               throw new Error("failed to stop unconfirmed codex app-server process");
+            }
+            if (usesSupervisionConnection) {
+              // A supervised thread is native user-home state, not an
+              // OpenClaw-owned remote binding. Keep the lifecycle fence held
+              // rather than detach and permit a second writer.
+              throw new Error("cannot detach an unconfirmed supervised codex thread");
             }
             // Closing a WebSocket proves only that the connection ended, not
             // that its remote turn stopped. Detach this exact thread before

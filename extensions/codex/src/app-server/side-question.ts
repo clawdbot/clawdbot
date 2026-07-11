@@ -22,13 +22,16 @@ import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { readCodexSupportedReasoningEfforts } from "../../provider.js";
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
+import {
+  requireCodexSupervisionModelSelection,
+  resolveCodexBindingAppServerConnection,
+} from "./binding-connection.js";
 import { ensureCodexAppServerClientRuntime } from "./client-runtime.js";
 import { isCodexAppServerApprovalRequest, type CodexAppServerClient } from "./client.js";
 import {
   canUseCodexModelBackedApprovalsReviewerForModel,
   readCodexPluginConfig,
   resolveOpenClawExecPolicyForCodexAppServer,
-  resolveCodexAppServerRuntimeOptions,
   resolveCodexModelBackedReviewerPolicyContext,
   shouldAutoApproveCodexAppServerApprovals,
   type CodexAppServerRuntimeOptions,
@@ -184,39 +187,50 @@ export async function runCodexAppServerSideQuestion(
     config: params.cfg,
     agentId: sessionAgentId,
   });
-  const authProfileId = params.authProfileId ?? binding.authProfileId;
-  const modelProvider =
-    resolveCodexAppServerModelProvider({
-      provider: params.provider,
-      authProfileId,
-      agentDir: params.agentDir,
-      config: params.cfg,
-    }) ??
-    resolveCodexBindingModelProviderFallback({
-      provider: params.provider,
-      currentModel: params.model,
-      bindingModel: binding.model,
-      bindingModelProvider: binding.modelProvider,
-    });
+  const usesSupervisionConnection = binding.connectionScope === "supervision";
+  const supervisionModelSelection = usesSupervisionConnection
+    ? requireCodexSupervisionModelSelection(binding)
+    : undefined;
+  const authProfileId = usesSupervisionConnection
+    ? undefined
+    : (params.authProfileId ?? binding.authProfileId);
+  const modelProvider = supervisionModelSelection
+    ? supervisionModelSelection.modelProvider
+    : (resolveCodexAppServerModelProvider({
+        provider: params.provider,
+        authProfileId,
+        agentDir: params.agentDir,
+        config: params.cfg,
+      }) ??
+      resolveCodexBindingModelProviderFallback({
+        provider: params.provider,
+        currentModel: params.model,
+        bindingModel: binding.model,
+        bindingModelProvider: binding.modelProvider,
+      }));
   const modelSelection = resolveCodexAppServerRequestModelSelection({
-    model: params.model,
+    model: supervisionModelSelection?.model ?? params.model,
     modelProvider,
     authProfileId,
     agentDir: params.agentDir,
     config: params.cfg,
   });
   const reviewerPolicyContext = resolveCodexModelBackedReviewerPolicyContext({
-    provider: params.provider,
-    model: params.model,
+    provider: usesSupervisionConnection ? "codex" : params.provider,
+    model: supervisionModelSelection?.model ?? params.model,
     bindingModelProvider: binding.modelProvider,
     bindingModel: binding.model,
-    nativeAuthProfile: isCodexAppServerNativeAuthProfile({
-      authProfileId,
-      agentDir: params.agentDir,
-      config: params.cfg,
-    }),
+    nativeAuthProfile:
+      usesSupervisionConnection ||
+      isCodexAppServerNativeAuthProfile({
+        authProfileId,
+        agentDir: params.agentDir,
+        config: params.cfg,
+      }),
   });
-  const appServer = resolveCodexAppServerRuntimeOptions({
+  const connection = resolveCodexBindingAppServerConnection({
+    binding,
+    authProfileId,
     pluginConfig,
     execPolicy,
     modelProvider: reviewerPolicyContext.modelProvider,
@@ -224,9 +238,28 @@ export async function runCodexAppServerSideQuestion(
     config: params.cfg,
     agentDir: params.agentDir,
   });
+  const appServer = connection.appServer;
   const cwd = binding.cwd || params.workspaceDir || process.cwd();
   const runId = params.opts?.runId ?? randomUUID();
-  const sideRunParams = buildSideRunAttemptParams(params, { cwd, authProfileId, runId });
+  // A supervised side run inherits capability facts from the private binding.
+  // Outer model metadata may describe another provider or disable tools entirely.
+  const effectiveParams: AgentHarnessSideQuestionParams = supervisionModelSelection
+    ? {
+        ...params,
+        provider: supervisionModelSelection.modelProvider,
+        model: supervisionModelSelection.model,
+        runtimeModel: {
+          id: supervisionModelSelection.model,
+          name: supervisionModelSelection.model,
+          provider: supervisionModelSelection.modelProvider,
+          api: "openai-chatgpt-responses",
+          reasoning: true,
+          input: ["text", "image"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        } as NonNullable<AgentHarnessSideQuestionParams["runtimeModel"]>,
+      }
+    : params;
+  const sideRunParams = buildSideRunAttemptParams(effectiveParams, { cwd, authProfileId, runId });
   const nativeExecutionBlock = resolveCodexNativeExecutionBlock({
     config: sideRunParams.config,
     sessionKey: sideRunParams.sandboxSessionKey?.trim() || sideRunParams.sessionKey,
@@ -245,7 +278,7 @@ export async function runCodexAppServerSideQuestion(
   const client = await getLeasedSharedCodexAppServerClient({
     startOptions: appServer.start,
     timeoutMs: appServer.requestTimeoutMs,
-    authProfileId,
+    authProfileId: connection.clientAuthProfileId,
     agentDir: params.agentDir,
     config: params.cfg,
   });
@@ -351,7 +384,7 @@ export async function runCodexAppServerSideQuestion(
           })
         : "unsupported";
     const { toolBridge, webSearchPlan } = await createCodexSideToolBridge({
-      params,
+      params: effectiveParams,
       cwd,
       pluginConfig,
       sessionAgentId,
@@ -364,7 +397,7 @@ export async function runCodexAppServerSideQuestion(
     // stays installed once per client instead of once per side question.
     ensureCodexAppServerClientRuntime(client, {
       agentDir: params.agentDir,
-      authProfileId,
+      authProfileId: connection.requestAuthProfileId,
       config: params.cfg,
     });
     removeRequestHandler = client.addRequestHandler(async (request) => {
@@ -525,7 +558,6 @@ export async function runCodexAppServerSideQuestion(
           threadId: binding.threadId,
           model: modelSelection.model,
           ...(modelSelection.modelProvider ? { modelProvider: modelSelection.modelProvider } : {}),
-          personality: CODEX_NATIVE_PERSONALITY_NONE,
           cwd,
           approvalPolicy,
           approvalsReviewer: modelScopedAppServer.approvalsReviewer,
@@ -540,6 +572,15 @@ export async function runCodexAppServerSideQuestion(
       ),
     );
     childThreadId = forkResponse.thread.id;
+    if (
+      supervisionModelSelection &&
+      (forkResponse.model !== supervisionModelSelection.model ||
+        forkResponse.modelProvider !== supervisionModelSelection.modelProvider)
+    ) {
+      throw new Error(
+        "Codex supervised side thread did not preserve its native model and provider",
+      );
+    }
 
     await client.request(
       "thread/inject_items",
@@ -550,11 +591,13 @@ export async function runCodexAppServerSideQuestion(
       { timeoutMs: appServer.requestTimeoutMs, signal: params.opts?.abortSignal },
     );
 
-    const effort = resolveReasoningEffort(
-      params.resolvedThinkLevel ?? "off",
-      modelSelection.model,
-      readCodexSupportedReasoningEfforts(params.runtimeModel?.compat),
-    );
+    const effort = usesSupervisionConnection
+      ? undefined
+      : resolveReasoningEffort(
+          params.resolvedThinkLevel ?? "off",
+          modelSelection.model,
+          readCodexSupportedReasoningEfforts(params.runtimeModel?.compat),
+        );
     const turnResponse = assertCodexTurnStartResponse(
       await client.request(
         "turn/start",
@@ -563,17 +606,21 @@ export async function runCodexAppServerSideQuestion(
           input: [{ type: "text", text: params.question.trim(), text_elements: [] }],
           cwd,
           model: modelSelection.model,
-          personality: CODEX_NATIVE_PERSONALITY_NONE,
+          ...(usesSupervisionConnection ? {} : { personality: CODEX_NATIVE_PERSONALITY_NONE }),
           ...(serviceTier ? { serviceTier } : {}),
-          effort,
-          collaborationMode: {
-            mode: "default",
-            settings: {
-              model: modelSelection.model,
-              reasoning_effort: effort,
-              developer_instructions: null,
-            },
-          },
+          ...(usesSupervisionConnection
+            ? {}
+            : {
+                effort,
+                collaborationMode: {
+                  mode: "default" as const,
+                  settings: {
+                    model: modelSelection.model,
+                    reasoning_effort: effort,
+                    developer_instructions: null,
+                  },
+                },
+              }),
         },
         { timeoutMs: appServer.requestTimeoutMs, signal: params.opts?.abortSignal },
       ),

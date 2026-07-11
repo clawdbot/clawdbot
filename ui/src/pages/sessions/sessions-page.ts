@@ -983,7 +983,7 @@ class SessionsPage extends OpenClawLightDomElement {
         .y=${menu.y}
         .trigger=${this.sessionMenuTrigger}
         .disabled=${this.loading}
-        .forkDisabled=${false}
+        .forkDisabled=${row.modelSelectionLocked === true}
         .archiveAllowed=${archiveAllowed}
         .groups=${this.knownCategories()}
         .canOpenChat=${row.kind !== "global"}

@@ -210,6 +210,11 @@ export const vi: TranslationMap = {
     gateway: "Gateway · cục bộ",
     folder: "Thư mục",
     folderPlaceholder: "Không gian làm việc của agent",
+    browse: "Duyệt thư mục",
+    browserUp: "Thư mục cha",
+    browserUse: "Sử dụng thư mục này",
+    browserEmpty: "Không có thư mục con",
+    browserLoadFailed: "Không thể liệt kê thư mục đó.",
     worktree: "Worktree",
     worktreeUnavailable: "Không gian làm việc của agent không phải là git checkout",
     baseBranch: "Nhánh cơ sở",
@@ -935,8 +940,8 @@ export const vi: TranslationMap = {
   codexSessions: {
     eyebrow: "Nhóm thiết bị Codex",
     title: "Phiên trên các máy tính của bạn",
-    subtitle:
-      "Chế độ xem chỉ đọc, hiển thị các phiên Codex trên Gateway này và mọi máy tính được kết nối đã bật chia sẻ phiên.",
+    interactiveSubtitle:
+      "Bắt đầu một nhánh Chat có lựa chọn mô hình luôn nằm dưới sự kiểm soát của Codex App Server, lưu trữ các phiên cục bộ đủ điều kiện sau khi xác nhận, và xem các phiên trên máy tính đã ghép đôi.",
     summaryLabel: "Tóm tắt phiên Codex",
     summary: {
       sessions: "phiên",
@@ -945,11 +950,6 @@ export const vi: TranslationMap = {
     },
     searchLabel: "Tìm kiếm phiên Codex",
     searchPlaceholder: "Tìm theo tiêu đề phiên",
-    scopeLabel: "Lọc phiên theo trạng thái lưu trữ",
-    scope: {
-      active: "Đang hoạt động",
-      archived: "Đã lưu trữ",
-    },
     refresh: "Làm mới",
     disconnected: "Kết nối lại với Gateway để làm mới các phiên Codex.",
     partial: "{count} máy không khả dụng. Các máy khác vẫn khả dụng.",
@@ -958,11 +958,33 @@ export const vi: TranslationMap = {
     loadingMore: "Đang tải…",
     untitled: "Phiên Codex chưa có tiêu đề",
     threadId: "Mã luồng",
+    actions: {
+      continue: "Tiếp tục",
+      continueAsBranch: "Tiếp tục dưới dạng nhánh",
+      openChat: "Mở Chat",
+      continuing: "Đang tiếp tục…",
+      archive: "Lưu trữ",
+      continueLabel: "Tiếp tục {title}",
+      continueAsBranchLabel: "Tiếp tục {title} dưới dạng nhánh",
+      openChatLabel: "Mở Chat cho {title}",
+      continueAsBranchHint:
+        "Tạo một Chat từ lịch sử hiển thị đã được lưu giữ. Ở tin nhắn đầu tiên của bạn, Codex App Server sẽ chọn mô hình và nhà cung cấp cho luồng harness mới. Các lựa chọn về sau vẫn do Codex kiểm soát; OpenClaw không bao giờ thay thế bằng runtime, mô hình hoặc phương án dự phòng khác. Nguồn vẫn được giữ nguyên, và công việc đang thực hiện có thể không có.",
+      archiveLabel: "Lưu trữ {title}",
+      archiveConfirmation:
+        "Lưu trữ {title} và mọi phiên con được tạo ra? Hãy xác nhận rằng không có Codex client hoặc OpenClaw runner nào khác đang sử dụng chúng. Lưu trữ trong khi một runner khác đang hoạt động có thể làm gián đoạn công việc của runner đó.",
+      active: "Không thể bắt đầu một nhánh hoặc lưu trữ các phiên đang hoạt động.",
+      archiveActivityUnknownHint:
+        "Hoạt động không xác định vì trạng thái chỉ cục bộ theo tiến trình. Chỉ lưu trữ sau khi xác nhận rằng không có Codex client hoặc runner nào khác đang sử dụng phiên này.",
+      statusUnavailable: "Không thể quản lý phiên Codex này ở trạng thái hiện tại.",
+      hostOffline: "Kết nối lại máy tính này trước khi quản lý các phiên Codex của máy.",
+      gatewayOffline: "Kết nối lại với gateway trước khi quản lý các phiên Codex.",
+      remoteReadOnly: "Các phiên trên máy tính đã ghép nối hiện chỉ có thể xem.",
+    },
     status: {
       active: "Đang hoạt động",
       idle: "Đang chờ",
       archived: "Đã lưu trữ",
-      notLoaded: "Đã lưu",
+      storedActivityUnknown: "Đã lưu trữ / không rõ hoạt động",
       systemError: "Lỗi hệ thống",
       unknown: "Không xác định",
     },
@@ -976,11 +998,10 @@ export const vi: TranslationMap = {
     },
     empty: {
       title: "Không tìm thấy máy nào chia sẻ phiên Codex",
-      subtitle:
-        "Bật chia sẻ phiên Codex trên Gateway hoặc máy tính đã ghép nối, rồi làm mới chế độ xem này.",
+      supervisionSubtitle:
+        "Bật tính năng giám sát Codex trên gateway hoặc một máy tính đã ghép đôi, rồi làm mới chế độ xem này.",
       search: "Không có phiên nào trên máy này khớp với từ khóa tìm kiếm.",
-      active: "Không có phiên đang hoạt động trên máy này.",
-      archived: "Không có phiên đã lưu trữ trên máy này.",
+      nonArchived: "Không có phiên chưa lưu trữ nào trên máy chủ này.",
     },
   },
   logbook: {
@@ -2083,6 +2104,11 @@ export const vi: TranslationMap = {
       clearSessionSearch: "Xóa tìm kiếm phiên",
       loadMoreSessions: "Tải thêm phiên",
       model: "Chat model",
+      modelSection: "Mô hình",
+      modelLocked: "Đã khóa",
+      modelLockedLabel: "Lựa chọn mô hình được kiểm soát cho phiên này",
+      lockedSessionModel: "Mô hình phiên",
+      nativeCodexModel: "Mô hình do Codex kiểm soát",
       thinkingLevel: "Chat thinking level",
     },
     toolCards: {
@@ -2147,6 +2173,26 @@ export const vi: TranslationMap = {
       finished: "Đã hoàn tất ({count})",
       stopTask: "Dừng {title}",
       viewTranscript: "Xem bản ghi",
+    },
+    sessionDiff: {
+      title: "Thay đổi",
+      show: "Hiển thị thay đổi của phiên",
+      refresh: "Làm mới thay đổi",
+      loading: "Đang tải thay đổi…",
+      empty: "Không có thay đổi nào trong checkout của phiên này.",
+      notGit: "Workspace của phiên này không phải là một git checkout.",
+      unknownSession: "Không có workspace nào được liên kết với phiên này.",
+      disconnected: "Gateway đã ngắt kết nối.",
+      unmodifiedLines: "{count} dòng chưa sửa đổi",
+      binaryFile: "Tệp nhị phân",
+      untracked: "chưa được theo dõi",
+      tooLarge: "Diff quá lớn để hiển thị.",
+      truncatedFile: "Diff đã bị cắt bớt.",
+      truncatedResult: "Một số thay đổi đã bị bỏ qua vì diff rất lớn.",
+      statusAdded: "Đã thêm",
+      statusDeleted: "Đã xóa",
+      statusRenamed: "Đã đổi tên",
+      statusModified: "Đã sửa đổi",
     },
     workspaceFiles: {
       label: "Không gian làm việc phiên",

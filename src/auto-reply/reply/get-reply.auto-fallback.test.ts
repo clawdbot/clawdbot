@@ -135,7 +135,7 @@ function makePerModelThinkingConfig(
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function mockAutoFallbackSession() {
+function mockAutoFallbackSession(params: { modelSelectionLocked?: boolean } = {}) {
   const sessionKey = "agent:main:telegram:123";
   const sessionEntry: SessionEntry = {
     sessionId: "fallback-session",
@@ -145,6 +145,7 @@ function mockAutoFallbackSession() {
     modelOverrideSource: "auto",
     modelOverrideFallbackOriginProvider: "openai",
     modelOverrideFallbackOriginModel: "gpt-5.5",
+    modelSelectionLocked: params.modelSelectionLocked,
   };
   // Reply-turn admission re-reads the store from disk before starting work;
   // seed a real per-test store so the guard sees the same session the mocks
@@ -213,6 +214,41 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
       abortedLastRun: false,
     }));
     vi.mocked(runPreparedReplyMock).mockResolvedValue({ text: "ok" });
+  });
+
+  it("does not probe the primary model for a model-locked session", async () => {
+    const { sessionKey } = mockAutoFallbackSession({ modelSelectionLocked: true });
+    mockFallbackDirectiveResult({ sessionKey, resolvedThinkLevel: "off" });
+
+    await expect(
+      getReplyFromConfig(buildGetReplyCtx(), undefined, makeReasoningModelConfig()),
+    ).resolves.toEqual({ text: "ok" });
+
+    expect(vi.mocked(runPreparedReplyMock)).toHaveBeenCalledOnce();
+    const runParams = vi.mocked(runPreparedReplyMock).mock.calls[0]?.[0];
+    expect(runParams?.provider).toBe("anthropic");
+    expect(runParams?.model).toBe("claude-fallback");
+    expect(runParams?.autoFallbackPrimaryProbe).toBeUndefined();
+  });
+
+  it("suppresses heartbeat model overrides for a model-locked session", async () => {
+    const { sessionKey } = mockAutoFallbackSession({ modelSelectionLocked: true });
+    mockFallbackDirectiveResult({ sessionKey, resolvedThinkLevel: "off" });
+
+    await expect(
+      getReplyFromConfig(
+        buildGetReplyCtx(),
+        { isHeartbeat: true, heartbeatModelOverride: "openai/gpt-5.5" },
+        makeReasoningModelConfig(),
+      ),
+    ).resolves.toEqual({ text: "ok" });
+
+    expect(mocks.resolveReplyDirectives).toHaveBeenCalledOnce();
+    expect(mocks.resolveReplyDirectives.mock.calls[0]?.[0]).toMatchObject({
+      provider: "anthropic",
+      model: "claude-fallback",
+      hasResolvedHeartbeatModelOverride: false,
+    });
   });
 
   it("does not re-enable default reasoning for explicit thinking-off primary probes", async () => {

@@ -109,11 +109,14 @@ interface FinishedSession {
 
 const runningSessions = new Map<string, ProcessSession>();
 const finishedSessions = new Map<string, FinishedSession>();
+const activeBackgroundExecSessionIds = new Set<string>();
 
 let sweeper: NodeJS.Timeout | null = null;
 
 function isSessionIdTaken(id: string) {
-  return runningSessions.has(id) || finishedSessions.has(id);
+  return (
+    runningSessions.has(id) || finishedSessions.has(id) || activeBackgroundExecSessionIds.has(id)
+  );
 }
 
 /** Creates a unique short session id that avoids running and retained sessions. */
@@ -137,7 +140,7 @@ export function getFinishedSession(id: string) {
   return finishedSessions.get(id);
 }
 
-/** Removes a session from both running and finished registries. */
+/** Removes visible session records without changing live-process activity. */
 export function deleteSession(id: string) {
   runningSessions.delete(id);
   finishedSessions.delete(id);
@@ -194,6 +197,9 @@ export function markExited(
   exitReason?: TerminationReason,
   noOutputTimedOut?: boolean,
 ) {
+  // Visibility can be cleared before process termination. Keep suspension
+  // blocked until the process owner reports the actual terminal transition.
+  activeBackgroundExecSessionIds.delete(session.id);
   session.exited = true;
   session.exitCode = exitCode;
   session.exitSignal = exitSignal;
@@ -206,6 +212,14 @@ export function markExited(
 /** Marks a running session as reconnectable after the exec call returns. */
 export function markBackgrounded(session: ProcessSession) {
   session.backgrounded = true;
+  if (!session.exited) {
+    activeBackgroundExecSessionIds.add(session.id);
+  }
+}
+
+/** Returns the number of live background exec sessions without exposing process details. */
+export function getActiveBackgroundExecSessionCount(): number {
+  return activeBackgroundExecSessionIds.size;
 }
 
 function moveToFinished(session: ProcessSession, status: ProcessStatus) {
@@ -334,6 +348,7 @@ export function listFinishedSessions() {
 export function resetProcessRegistryForTests() {
   runningSessions.clear();
   finishedSessions.clear();
+  activeBackgroundExecSessionIds.clear();
   stopSweeper();
 }
 

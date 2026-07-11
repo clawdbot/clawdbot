@@ -49,7 +49,7 @@ export async function resolveCodexProviderWebSearchSupportForClient(params: {
 export async function resolveCodexProviderWebSearchSupport(params: {
   clientFactory: CodexAppServerClientFactory;
   appServer: CodexAppServerRuntimeOptions;
-  authProfileId: string | undefined;
+  authProfileId: string | null | undefined;
   agentDir: string;
   config: EmbeddedRunAttemptParams["config"] | undefined;
   modelProviderOverride: string | undefined;

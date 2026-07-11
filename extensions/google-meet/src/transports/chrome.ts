@@ -24,6 +24,7 @@ import {
   asBrowserTabs,
   callBrowserProxyOnNode,
   forceMeetEnglishUi,
+  isEnglishMeetTab,
   isSameMeetUrlForReuse,
   normalizeMeetUrlForReuse,
   readBrowserTab,
@@ -58,6 +59,17 @@ export const testing = {
 
 function isGoogleMeetTalkBackMode(mode: GoogleMeetMode): boolean {
   return mode === "agent" || mode === "bidi";
+}
+
+function readMeetAuthUser(url: string | undefined): string | undefined {
+  if (!url) {
+    return undefined;
+  }
+  try {
+    return new URL(url).searchParams.get("authuser") ?? undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export async function assertBlackHole2chAvailable(params: {
@@ -433,8 +445,9 @@ function meetStatusScript(params: {
     mic.click();
     notes.push("Muted Meet microphone for observe-only mode.");
   }
+  const joinElsewhere = findButton(/join here too/i);
   const join = !readOnly && ${JSON.stringify(params.autoJoin)}
-    ? findButton(/join now|ask to join|join here too/i)
+    ? findButton(/join now|ask to join/i)
     : null;
   if (join) join.click();
   const microphoneChoice = findButton(/\\buse microphone\\b/i);
@@ -590,6 +603,9 @@ function meetStatusScript(params: {
   if (!inCall && (host === "accounts.google.com" || /use your google account|to continue to google meet|choose an account|sign in to (join|continue)/i.test(pageText))) {
     manualActionReason = "google-login-required";
     manualActionMessage = "Sign in to Google in the OpenClaw browser profile, then retry the Meet join.";
+  } else if (!inCall && joinElsewhere) {
+    manualActionReason = "meet-session-conflict";
+    manualActionMessage = "Meet is already active in another tab or device. Leave that session or reuse an English-pinned tab before retrying.";
   } else if (!inCall && /asking to be let in|you.?ll join when someone lets you in|waiting to be let in|ask to join/i.test(pageText)) {
     manualActionReason = "meet-admission-required";
     manualActionMessage = "Admit the OpenClaw browser participant in Google Meet, then retry speech.";
@@ -667,6 +683,7 @@ async function openMeetWithBrowserRequest(params: {
   const timeoutMs = Math.max(1_000, params.config.chrome.joinTimeoutMs);
   let targetId: string | undefined;
   let tab: BrowserTab | undefined;
+  let openUrl = params.url;
   if (params.config.chrome.reuseExistingTab) {
     const tabs = asBrowserTabs(
       await params.callBrowser({
@@ -675,9 +692,21 @@ async function openMeetWithBrowserRequest(params: {
         timeoutMs: Math.min(timeoutMs, 5_000),
       }),
     );
-    tab = tabs.find((entry) => isSameMeetUrlForReuse(entry.url, params.url));
+    const matchingTabs = tabs.filter((entry) => isSameMeetUrlForReuse(entry.url, params.url));
+    const requestedAuthUser = readMeetAuthUser(params.url);
+    tab = matchingTabs.find(
+      (entry) =>
+        isEnglishMeetTab(entry.url) &&
+        (!requestedAuthUser || readMeetAuthUser(entry.url) === requestedAuthUser),
+    );
+    if (!tab) {
+      const requestedUrl = new URL(params.url);
+      if (!requestedUrl.searchParams.has("authuser")) {
+        openUrl = matchingTabs.find((entry) => entry.url)?.url ?? params.url;
+      }
+    }
     targetId = tab?.targetId;
-    if (targetId) {
+    if (tab && targetId) {
       await params.callBrowser({
         method: "POST",
         path: "/tabs/focus",
@@ -691,7 +720,7 @@ async function openMeetWithBrowserRequest(params: {
       await params.callBrowser({
         method: "POST",
         path: "/tabs/open",
-        body: { url: forceMeetEnglishUi(params.url) },
+        body: { url: forceMeetEnglishUi(openUrl) },
         timeoutMs,
       }),
     );
@@ -790,6 +819,18 @@ function isRecoverableMeetTab(tab: BrowserTab, url?: string): boolean {
   );
 }
 
+function findRecoverableMeetTab(tabs: BrowserTab[], url?: string): BrowserTab | undefined {
+  const candidates = tabs.filter((tab) => isRecoverableMeetTab(tab, url));
+  if (!url) {
+    return candidates[0];
+  }
+  const requestedAuthUser = readMeetAuthUser(url);
+  const accountCandidates = requestedAuthUser
+    ? candidates.filter((tab) => readMeetAuthUser(tab.url) === requestedAuthUser)
+    : candidates;
+  return accountCandidates.find((tab) => isEnglishMeetTab(tab.url)) ?? accountCandidates[0];
+}
+
 async function inspectRecoverableMeetTab(params: {
   callBrowser: BrowserRequestCaller;
   config: GoogleMeetConfig;
@@ -806,6 +847,26 @@ async function inspectRecoverableMeetTab(params: {
     body: { targetId: params.targetId },
     timeoutMs: Math.min(params.timeoutMs, 5_000),
   });
+  // Recovery must never reload an unknown meeting-code tab: it may be an active
+  // call. English-only automation can safely inspect only tabs pinned by us.
+  if (normalizeMeetUrlForReuse(params.tab.url) && !isEnglishMeetTab(params.tab.url)) {
+    const manualActionMessage =
+      "The existing Meet tab is not pinned to English. Open the meeting with ?hl=en, then retry recovery.";
+    return {
+      found: true,
+      targetId: params.targetId,
+      tab: params.tab,
+      browser: {
+        status: "browser-control" as const,
+        browserUrl: params.tab.url,
+        browserTitle: params.tab.title,
+        manualActionRequired: true,
+        manualActionReason: "meet-locale-required" as const,
+        manualActionMessage,
+      },
+      message: manualActionMessage,
+    };
+  }
   const permissionNotes = params.readOnly
     ? []
     : await grantMeetMediaPermissions({
@@ -873,7 +934,7 @@ export async function recoverCurrentMeetTab(params: {
       timeoutMs: Math.min(timeoutMs, 5_000),
     }),
   );
-  const tab = tabs.find((entry) => isRecoverableMeetTab(entry, params.url));
+  const tab = findRecoverableMeetTab(tabs, params.url);
   const targetId = tab?.targetId;
   if (!tab || !targetId) {
     return {
@@ -928,7 +989,7 @@ export async function recoverCurrentMeetTabOnNode(params: {
       timeoutMs: Math.min(timeoutMs, 5_000),
     }),
   );
-  const tab = tabs.find((entry) => isRecoverableMeetTab(entry, params.url));
+  const tab = findRecoverableMeetTab(tabs, params.url);
   const targetId = tab?.targetId;
   if (!tab || !targetId) {
     return {
