@@ -6,6 +6,7 @@ import {
   ensureBrowserControlRuntime,
   getBrowserControlState,
   stopBrowserControlRuntime,
+  withBrowserControlStart,
 } from "./browser-control-state.js";
 import { loadBrowserConfigForRuntimeRefresh } from "./browser/config-refresh-source.js";
 import { resolveBrowserConfig, resolveProfile } from "./browser/config.js";
@@ -19,8 +20,7 @@ import { isDefaultBrowserPluginEnabled } from "./plugin-enabled.js";
 const log = createSubsystemLogger("browser");
 const logService = log.child("service");
 
-/** Starts Browser control without binding the HTTP server when config enables it. */
-export async function startBrowserControlServiceFromConfig(): Promise<BrowserServerState | null> {
+async function startBrowserControlServiceUnlocked(): Promise<BrowserServerState | null> {
   const current = getBrowserControlState();
   if (current) {
     return current;
@@ -80,6 +80,11 @@ export async function startBrowserControlServiceFromConfig(): Promise<BrowserSer
     `Browser control service ready (profiles=${Object.keys(resolved.profiles).length})`,
   );
   return state;
+}
+
+/** Starts Browser control without binding the HTTP server when config enables it. */
+export async function startBrowserControlServiceFromConfig(): Promise<BrowserServerState | null> {
+  return await withBrowserControlStart(startBrowserControlServiceUnlocked);
 }
 
 /** Stops the in-process Browser control service runtime. */

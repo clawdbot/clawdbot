@@ -213,12 +213,23 @@ const MAX_RECENT_DIALOGS = 20;
 const OBSERVED_DIALOG_TIMEOUT_MS = 120_000;
 
 type PendingBrowserConnection = {
-  attempt: { cancelled: boolean };
+  attempt: { cancelled: boolean; retired?: ConnectedBrowser };
   promise: Promise<ConnectedBrowser>;
+};
+
+export type PlaywrightConnectionRetirement = {
+  readonly retired: boolean;
+  /** Capture handles created by already-admitted work before cleanup begins. */
+  refresh?: () => boolean;
+  close: () => Promise<void>;
 };
 
 const cachedByCdpUrl = new Map<string, ConnectedBrowser>();
 const connectingByCdpUrl = new Map<string, PendingBrowserConnection>();
+const retainedClosingByCdpUrl = new Map<string, Set<ConnectedBrowser>>();
+const closeConnectionPromises = new WeakMap<ConnectedBrowser, Promise<void>>();
+const closedConnections = new WeakSet<ConnectedBrowser>();
+const PLAYWRIGHT_CONNECTION_CLOSE_TIMEOUT_MS = 2_000;
 const blockedTargetsByCdpUrl = new Set<string>();
 const blockedPageRefsByCdpUrl = new Map<string, WeakSet<Page>>();
 let cdpConnectRetryDelayMsForTests: number | undefined;
@@ -599,13 +610,165 @@ function takeCachedPlaywrightBrowserConnection(cdpUrl: string): ConnectedBrowser
   return cur;
 }
 
+function retainClosingPlaywrightConnection(connection: ConnectedBrowser): void {
+  const retained = retainedClosingByCdpUrl.get(connection.cdpUrl) ?? new Set<ConnectedBrowser>();
+  retained.add(connection);
+  retainedClosingByCdpUrl.set(connection.cdpUrl, retained);
+}
+
+function releaseClosingPlaywrightConnection(connection: ConnectedBrowser): void {
+  const retained = retainedClosingByCdpUrl.get(connection.cdpUrl);
+  retained?.delete(connection);
+  if (retained?.size === 0) {
+    retainedClosingByCdpUrl.delete(connection.cdpUrl);
+  }
+}
+
+async function closeTrackedPlaywrightConnection(connection: ConnectedBrowser): Promise<void> {
+  if (closedConnections.has(connection)) {
+    return;
+  }
+  const existing = closeConnectionPromises.get(connection);
+  if (existing) {
+    return await existing;
+  }
+  retainClosingPlaywrightConnection(connection);
+  const closing = (async () => {
+    try {
+      await connection.browser.close();
+      closedConnections.add(connection);
+      releaseClosingPlaywrightConnection(connection);
+    } finally {
+      closeConnectionPromises.delete(connection);
+    }
+  })();
+  closeConnectionPromises.set(connection, closing);
+  return await closing;
+}
+
+async function withPlaywrightCloseTimeout(task: Promise<void>): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      task,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("Playwright adapter disconnect timed out.")),
+          PLAYWRIGHT_CONNECTION_CLOSE_TIMEOUT_MS,
+        );
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+/** Capture and retire only the adapter handles currently owned by one lifecycle transition. */
+export function retirePlaywrightBrowserConnectionExact(opts: {
+  cdpUrl: string;
+}): PlaywrightConnectionRetirement {
+  const normalized = normalizeCdpUrl(opts.cdpUrl);
+  clearBlockedTargetsForCdpUrl(normalized);
+  clearBlockedPageRefsForCdpUrl(normalized);
+  const connections = new Set<ConnectedBrowser>();
+  const closeAttempts = new Map<ConnectedBrowser, Promise<void>>();
+  const pendingCollections = new Set<Promise<void>>();
+  let retired = false;
+  const startClosing = () => {
+    for (const connection of connections) {
+      if (closeAttempts.has(connection)) {
+        continue;
+      }
+      const closing = closeTrackedPlaywrightConnection(connection);
+      closeAttempts.set(connection, closing);
+      void closing.catch(() => {});
+    }
+  };
+  const awaitClosing = async () => {
+    const attempts = [...closeAttempts];
+    const results = await Promise.allSettled(attempts.map(([, closing]) => closing));
+    let firstError: Error | undefined;
+    for (const [index, result] of results.entries()) {
+      if (result.status === "rejected") {
+        const [connection, closing] = attempts[index] ?? [];
+        if (connection && closeAttempts.get(connection) === closing) {
+          closeAttempts.delete(connection);
+        }
+        firstError ??= toLintErrorObject(result.reason, "Playwright adapter disconnect failed.");
+      }
+    }
+    if (firstError) {
+      throw firstError;
+    }
+  };
+  const capture = () => {
+    const pending = connectingByCdpUrl.get(normalized);
+    const cached = takeCachedPlaywrightBrowserConnection(normalized);
+    for (const connection of retainedClosingByCdpUrl.get(normalized) ?? []) {
+      connections.add(connection);
+    }
+    if (cached) {
+      connections.add(cached);
+      retainClosingPlaywrightConnection(cached);
+    }
+    if (pending) {
+      const collection = pending.promise.then(
+        (connection) => {
+          connections.add(connection);
+        },
+        () => {
+          if (pending.attempt.retired) {
+            connections.add(pending.attempt.retired);
+          }
+        },
+      );
+      pendingCollections.add(collection);
+      void collection.then(() => {
+        pendingCollections.delete(collection);
+        startClosing();
+      });
+    }
+    startClosing();
+    const captured = Boolean(pending || connections.size > 0);
+    retired ||= captured;
+    return captured;
+  };
+  capture();
+  return {
+    get retired() {
+      return retired;
+    },
+    refresh: capture,
+    close: async () => {
+      await withPlaywrightCloseTimeout(
+        (async () => {
+          startClosing();
+          await Promise.all(pendingCollections);
+          startClosing();
+          await awaitClosing();
+        })(),
+      );
+    },
+  };
+}
+
+/** Retire a scoped adapter immediately; its CDP disconnect may settle later. */
+export function retirePlaywrightBrowserConnection(opts: { cdpUrl: string }): boolean {
+  return retirePlaywrightBrowserConnectionExact(opts).retired;
+}
+
 function evictStalePlaywrightBrowserConnection(cdpUrl: string, expectedBrowser?: Browser): void {
   const current = cachedByCdpUrl.get(normalizeCdpUrl(cdpUrl));
   if (expectedBrowser && current?.browser !== expectedBrowser) {
     return;
   }
   const cur = takeCachedPlaywrightBrowserConnection(cdpUrl);
-  cur?.browser.close().catch(() => {});
+  if (cur) {
+    void closeTrackedPlaywrightConnection(cur).catch(() => {});
+  }
 }
 
 function hasBlockedTargetsForCdpUrl(cdpUrl: string): boolean {
@@ -1043,7 +1206,7 @@ async function connectBrowser(cdpUrl: string, ssrfPolicy?: SsrFPolicy): Promise<
     return await connecting.promise;
   }
 
-  const connectionAttempt = { cancelled: false };
+  const connectionAttempt: PendingBrowserConnection["attempt"] = { cancelled: false };
   const connectWithRetry = async (): Promise<ConnectedBrowser> => {
     let lastErr: unknown;
     for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -1080,7 +1243,8 @@ async function connectBrowser(cdpUrl: string, ssrfPolicy?: SsrFPolicy): Promise<
           browser = await connectEndpoint(normalized);
         }
         if (connectionAttempt.cancelled) {
-          browser.close().catch(() => {});
+          connectionAttempt.retired = { browser, cdpUrl: normalized };
+          void closeTrackedPlaywrightConnection(connectionAttempt.retired).catch(() => {});
           throw new Error("Playwright connection attempt was superseded.");
         }
         const onDisconnected = () => {
@@ -1222,7 +1386,7 @@ export async function getPageForTargetId(opts: {
     if (!isRecoverableStalePageSelectionError(err, reusedCachedBrowser)) {
       throw err;
     }
-    await closePlaywrightBrowserConnection({ cdpUrl: opts.cdpUrl });
+    retirePlaywrightBrowserConnection({ cdpUrl: opts.cdpUrl });
     return await getPageForTargetIdOnce(opts);
   }
 }
@@ -1759,29 +1923,27 @@ export async function closePlaywrightBrowserConnection(opts?: { cdpUrl?: string 
   const normalized = opts?.cdpUrl ? normalizeCdpUrl(opts.cdpUrl) : null;
 
   if (normalized) {
-    clearBlockedTargetsForCdpUrl(normalized);
-    clearBlockedPageRefsForCdpUrl(normalized);
-    const cur = takeCachedPlaywrightBrowserConnection(normalized);
-    if (!cur) {
-      return;
-    }
-    await cur.browser.close().catch(() => {});
+    await retirePlaywrightBrowserConnectionExact({ cdpUrl: normalized }).close();
     return;
   }
 
-  const connections = Array.from(cachedByCdpUrl.values());
-  for (const pending of connectingByCdpUrl.values()) {
-    pending.attempt.cancelled = true;
-  }
+  const cdpUrls = new Set([
+    ...cachedByCdpUrl.keys(),
+    ...connectingByCdpUrl.keys(),
+    ...retainedClosingByCdpUrl.keys(),
+  ]);
   clearBlockedTargetsForCdpUrl();
   clearBlockedPageRefsForCdpUrl();
-  cachedByCdpUrl.clear();
-  connectingByCdpUrl.clear();
-  for (const cur of connections) {
-    if (cur.onDisconnected && typeof cur.browser.off === "function") {
-      cur.browser.off("disconnected", cur.onDisconnected);
-    }
-    await cur.browser.close().catch(() => {});
+  const results = await Promise.allSettled(
+    [...cdpUrls].map(
+      async (cdpUrl) => await retirePlaywrightBrowserConnectionExact({ cdpUrl }).close(),
+    ),
+  );
+  const failed = results.find(
+    (result): result is PromiseRejectedResult => result.status === "rejected",
+  );
+  if (failed) {
+    throw failed.reason;
   }
 }
 
@@ -1916,7 +2078,7 @@ export async function forceDisconnectPlaywrightForTarget(opts: {
   }
 
   // Fire-and-forget: don't await because browser.close() may hang on the stuck CDP pipe.
-  cur.browser.close().catch(() => {});
+  void closeTrackedPlaywrightConnection(cur).catch(() => {});
 }
 
 async function withPlaywrightSafeReadReconnect<T>(

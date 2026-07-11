@@ -79,7 +79,6 @@ const CHROMIUM_EXE_NAMES = new Set([
   "chromium.exe",
   "vivaldi.exe",
   "opera.exe",
-  "launcher.exe",
   "yandex.exe",
   "yandexbrowser.exe",
   // mac/linux names
@@ -322,11 +321,37 @@ function detectDefaultChromiumExecutableWindows(): BrowserExecutable | null {
   if (!exists(exePath)) {
     return null;
   }
-  const exeName = normalizeLowercaseStringOrEmpty(path.win32.basename(exePath));
+  const directPath = resolveDirectWindowsBrowserExecutable(exePath);
+  if (!directPath) {
+    return null;
+  }
+  const exeName = normalizeLowercaseStringOrEmpty(path.win32.basename(directPath));
   if (!CHROMIUM_EXE_NAMES.has(exeName)) {
     return null;
   }
-  return { kind: inferKindFromExecutableName(exeName), path: exePath };
+  return { kind: inferKindFromExecutableName(exeName), path: directPath };
+}
+
+/** Resolve launchers that hand off to another process into a directly owned browser binary. */
+function resolveDirectWindowsBrowserExecutable(executablePath: string): string | null {
+  if (normalizeLowercaseStringOrEmpty(path.win32.basename(executablePath)) !== "launcher.exe") {
+    return executablePath;
+  }
+  const installDir = path.win32.dirname(executablePath);
+  try {
+    const status = JSON.parse(
+      fs.readFileSync(path.win32.join(installDir, "installation_status.json"), "utf8"),
+    ) as unknown;
+    const subfolder =
+      status && typeof status === "object" ? Reflect.get(status, "_subfolder") : null;
+    if (typeof subfolder !== "string" || !WINDOWS_VERSION_DIR_RE.test(subfolder)) {
+      return null;
+    }
+    const candidate = path.win32.join(installDir, subfolder, "opera.exe");
+    return exists(candidate) ? candidate : null;
+  } catch {
+    return null;
+  }
 }
 
 function findDesktopFilePath(desktopId: string): string | null {
@@ -454,11 +479,11 @@ function expandWindowsEnvVars(value: string): string {
 }
 
 function extractWindowsExecutablePath(command: string): string | null {
-  const quoted = command.match(/"([^"]+\\.exe)"/i);
+  const quoted = command.match(/"([^"]+\.exe)"/i);
   if (quoted?.[1]) {
     return quoted[1];
   }
-  const unquoted = command.match(/([^\\s]+\\.exe)/i);
+  const unquoted = command.match(/^\s*(\S+\.exe)(?:\s|$)/i);
   if (unquoted?.[1]) {
     return unquoted[1];
   }
@@ -852,7 +877,16 @@ export function resolveBrowserExecutableForPlatform(
     if (!exists(resolved.executablePath)) {
       throw new Error(`browser.executablePath not found: ${resolved.executablePath}`);
     }
-    return { kind: "custom", path: resolved.executablePath };
+    const directPath =
+      platform === "win32"
+        ? resolveDirectWindowsBrowserExecutable(resolved.executablePath)
+        : resolved.executablePath;
+    if (!directPath) {
+      throw new Error(
+        `browser.executablePath must point to the browser executable, not a handoff launcher: ${resolved.executablePath}`,
+      );
+    }
+    return { kind: "custom", path: directPath };
   }
 
   const detected = detectDefaultChromiumExecutable(platform);

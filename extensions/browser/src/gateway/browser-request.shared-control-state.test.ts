@@ -53,6 +53,7 @@ vi.mock("../browser/pw-ai-state.js", () => ({
 const { startBrowserControlServerFromConfig, stopBrowserControlServer } =
   await import("../server.js");
 const { stopBrowserControlService } = await import("../control-service.js");
+const { getBridgeAuthForPort } = await import("../browser/bridge-auth-registry.js");
 const { browserHandlers } = await import("./browser-request.js");
 
 function browserConfig(params: {
@@ -146,5 +147,43 @@ describe("browser.request local control state", () => {
     expect(status.executablePath).toBe("/usr/bin/google-chrome");
     expect(status.headless).toBe(true);
     expect(status.noSandbox).toBe(true);
+  });
+
+  it("retains port auth until a failed stop is retried successfully", async () => {
+    const controlPort = await getFreePort();
+    mocks.runtimeConfig = browserConfig({ gatewayPort: controlPort - 2 });
+    mocks.runtimeSourceConfig = mocks.runtimeConfig;
+    mocks.ensureBrowserControlAuth.mockResolvedValueOnce({ auth: { token: "test-token" } });
+    const state = await startBrowserControlServerFromConfig();
+    expect(state?.port).toBe(controlPort);
+    expect(getBridgeAuthForPort(controlPort)).toEqual({ token: "test-token" });
+
+    mocks.stopKnownBrowserProfiles.mockRejectedValueOnce(new Error("cleanup failed"));
+    await expect(stopBrowserControlServer()).rejects.toThrow("cleanup failed");
+    expect(getBridgeAuthForPort(controlPort)).toEqual({ token: "test-token" });
+
+    await stopBrowserControlServer();
+    expect(getBridgeAuthForPort(controlPort)).toBeUndefined();
+  });
+
+  it("clears auth when a stop queues behind cold startup", async () => {
+    const controlPort = await getFreePort();
+    mocks.runtimeConfig = browserConfig({ gatewayPort: controlPort - 2 });
+    mocks.runtimeSourceConfig = mocks.runtimeConfig;
+    let releaseAuth!: () => void;
+    const authGate = new Promise<void>((resolve) => {
+      releaseAuth = resolve;
+    });
+    mocks.ensureBrowserControlAuth.mockImplementationOnce(async () => {
+      await authGate;
+      return { auth: { token: "test-token" } };
+    });
+
+    const starting = startBrowserControlServerFromConfig();
+    const stopping = stopBrowserControlServer();
+    releaseAuth();
+    await expect(starting).resolves.toBeTruthy();
+    await expect(stopping).resolves.toBeUndefined();
+    expect(getBridgeAuthForPort(controlPort)).toBeUndefined();
   });
 });

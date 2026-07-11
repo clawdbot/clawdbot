@@ -17,11 +17,18 @@ import {
 } from "../navigation-guard.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
+import { isProfileRestartRequiredError } from "../server-context.lifecycle.js";
 import { resolveTargetIdFromTabs } from "../target-id.js";
 import { browserNavigationPolicyForProfile, resolveProfileContext } from "./agent.shared.js";
 import { readRouteNonNegativeInteger } from "./route-numeric.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
-import { asyncBrowserRoute, jsonBrowserError, jsonError, toStringOrEmpty } from "./utils.js";
+import {
+  asyncBrowserRoute,
+  jsonBrowserError,
+  jsonError,
+  runProfileRouteOperation,
+  toStringOrEmpty,
+} from "./utils.js";
 
 const DEFAULT_TAB_REACHABILITY_TIMEOUT_MS = 300;
 const TAB_REACHABILITY_RETRY_DELAY_MS = 250;
@@ -32,6 +39,9 @@ function handleTabsRouteError(
   err: unknown,
   opts?: { mapTabError?: boolean },
 ) {
+  if (isProfileRestartRequiredError(err)) {
+    throw err;
+  }
   if (opts?.mapTabError) {
     const mapped = ctx.mapTabError(err);
     if (mapped) {
@@ -41,21 +51,26 @@ function handleTabsRouteError(
   return jsonError(res, 500, String(err));
 }
 
-async function withTabsProfileRoute(params: {
+async function runTabsProfileRoute<T>(params: {
   req: BrowserRequest;
   res: BrowserResponse;
   ctx: BrowserRouteContext;
   mapTabError?: boolean;
-  run: (profileCtx: ProfileContext) => Promise<void>;
-}) {
+  run: (profileCtx: ProfileContext, signal: AbortSignal) => Promise<T>;
+}): Promise<T | undefined> {
   const profileCtx = resolveProfileContext(params.req, params.res, params.ctx);
   if (!profileCtx) {
-    return;
+    return undefined;
   }
   try {
-    await params.run(profileCtx);
+    return await runProfileRouteOperation({
+      profileCtx,
+      signal: params.req.signal,
+      run: async (signal) => await params.run(profileCtx, signal),
+    });
   } catch (err) {
     handleTabsRouteError(params.ctx, params.res, err, { mapTabError: params.mapTabError });
+    return undefined;
   }
 }
 
@@ -86,7 +101,6 @@ async function checkTabReachability(
 async function ensureBrowserRunning(
   ctx: BrowserRouteContext,
   profileCtx: ProfileContext,
-  res: BrowserResponse,
   signal?: AbortSignal,
 ) {
   let isReachable = await checkTabReachability(ctx, profileCtx, signal);
@@ -101,14 +115,8 @@ async function ensureBrowserRunning(
     isReachable = await checkTabReachability(ctx, profileCtx, signal);
   }
   if (!isReachable) {
-    jsonError(
-      res,
-      new BrowserProfileUnavailableError("browser not running").status,
-      "browser not running",
-    );
-    return false;
+    throw new BrowserProfileUnavailableError("browser not running");
   }
-  return true;
 }
 
 async function redactBlockedTabUrls(params: {
@@ -141,7 +149,7 @@ async function redactBlockedTabUrls(params: {
 
 function resolveIndexedTab(
   tabs: Awaited<ReturnType<ProfileContext["listTabs"]>>,
-  index: number | undefined,
+  index: number | null | undefined,
 ) {
   return typeof index === "number" ? tabs[index] : tabs.at(0);
 }
@@ -192,21 +200,22 @@ async function runTabTargetMutation(params: {
   res: BrowserResponse;
   ctx: BrowserRouteContext;
   targetId: string;
-  mutate: (profileCtx: ProfileContext, targetId: string) => Promise<void>;
+  mutate: (profileCtx: ProfileContext, targetId: string, signal: AbortSignal) => Promise<void>;
 }) {
-  await withTabsProfileRoute({
+  const result = await runTabsProfileRoute({
     req: params.req,
     res: params.res,
     ctx: params.ctx,
     mapTabError: true,
-    run: async (profileCtx) => {
-      if (!(await ensureBrowserRunning(params.ctx, profileCtx, params.res, params.req.signal))) {
-        return;
-      }
-      await params.mutate(profileCtx, params.targetId);
-      params.res.json({ ok: true });
+    run: async (profileCtx, signal) => {
+      await ensureBrowserRunning(params.ctx, profileCtx, signal);
+      await params.mutate(profileCtx, params.targetId, signal);
+      return { ok: true } as const;
     },
   });
+  if (result) {
+    params.res.json(result);
+  }
 }
 
 /** Register tab listing and mutation endpoints on the browser control server. */
@@ -214,22 +223,26 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
   app.get(
     "/tabs",
     asyncBrowserRoute(async (req, res) => {
-      await withTabsProfileRoute({
+      const result = await runTabsProfileRoute({
         req,
         res,
         ctx,
-        run: async (profileCtx) => {
-          const reachable = await checkTabReachability(ctx, profileCtx, req.signal);
+        run: async (profileCtx, signal) => {
+          const reachable = await checkTabReachability(ctx, profileCtx, signal);
           if (!reachable) {
-            return res.json({ running: false, tabs: [] as unknown[] });
+            return { running: false, tabs: [] as unknown[] };
           }
           const tabs = await redactBlockedTabUrls({
             tabs: await profileCtx.listTabs(),
             ssrfPolicy: ctx.state().resolved.ssrfPolicy,
           });
-          res.json({ running: true, tabs });
+          signal.throwIfAborted();
+          return { running: true, tabs };
         },
       });
+      if (result) {
+        res.json(result);
+      }
     }),
   );
 
@@ -242,21 +255,23 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
         return jsonError(res, 400, "url is required");
       }
 
-      await withTabsProfileRoute({
+      const result = await runTabsProfileRoute({
         req,
         res,
         ctx,
         mapTabError: true,
-        run: async (profileCtx) => {
+        run: async (profileCtx, signal) => {
           await assertBrowserNavigationAllowed({
             url,
             ...browserNavigationPolicyForProfile(ctx, profileCtx),
           });
-          await profileCtx.ensureBrowserAvailable();
-          const tab = await profileCtx.openTab(url, { label });
-          res.json(tab);
+          await profileCtx.ensureBrowserAvailable({ signal });
+          return await profileCtx.openTab(url, { label });
         },
       });
+      if (result) {
+        res.json(result);
+      }
     }),
   );
 
@@ -328,96 +343,99 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
     "/tabs/action",
     asyncBrowserRoute(async (req, res) => {
       const action = toStringOrEmpty((req.body as { action?: unknown })?.action);
+      if (
+        action !== "list" &&
+        action !== "new" &&
+        action !== "label" &&
+        action !== "close" &&
+        action !== "select"
+      ) {
+        return jsonError(res, 400, "unknown tab action");
+      }
+      const targetId =
+        action === "label"
+          ? parseRequiredTargetId(res, (req.body as { targetId?: unknown })?.targetId)
+          : undefined;
+      if (action === "label" && !targetId) {
+        return;
+      }
+      const label =
+        action === "label" || action === "new" ? readOptionalTabLabel(req.body) : undefined;
+      if (action === "label" && !label) {
+        return jsonError(res, 400, "label is required");
+      }
+      const index =
+        action === "close"
+          ? readTabIndex(res, req.body)
+          : action === "select"
+            ? readTabIndex(res, req.body, { required: true })
+            : undefined;
+      if ((action === "close" && index === null) || (action === "select" && index == null)) {
+        return;
+      }
 
-      await withTabsProfileRoute({
+      const result = await runTabsProfileRoute({
         req,
         res,
         ctx,
         mapTabError: true,
-        run: async (profileCtx) => {
+        run: async (profileCtx, signal) => {
           if (action === "list") {
-            const reachable = await checkTabReachability(ctx, profileCtx, req.signal);
+            const reachable = await checkTabReachability(ctx, profileCtx, signal);
             if (!reachable) {
-              return res.json({ ok: true, tabs: [] as unknown[] });
+              return { ok: true, tabs: [] as unknown[] };
             }
             const tabs = await redactBlockedTabUrls({
               tabs: await profileCtx.listTabs(),
               ssrfPolicy: ctx.state().resolved.ssrfPolicy,
             });
-            return res.json({ ok: true, tabs });
+            signal.throwIfAborted();
+            return { ok: true, tabs };
           }
 
           if (action === "new") {
-            await profileCtx.ensureBrowserAvailable();
-            const tab = await profileCtx.openTab("about:blank", {
-              label: readOptionalTabLabel(req.body),
-            });
-            return res.json({ ok: true, tab });
+            await profileCtx.ensureBrowserAvailable({ signal });
+            const tab = await profileCtx.openTab("about:blank", { label });
+            return { ok: true, tab };
           }
 
           if (action === "label") {
-            if (!(await ensureBrowserRunning(ctx, profileCtx, res, req.signal))) {
-              return;
-            }
-            const targetId = parseRequiredTargetId(
-              res,
-              (req.body as { targetId?: unknown })?.targetId,
-            );
-            if (!targetId) {
-              return;
-            }
-            const label = readOptionalTabLabel(req.body);
-            if (!label) {
-              return jsonError(res, 400, "label is required");
-            }
-            const tab = await profileCtx.labelTab(targetId, label);
-            return res.json({ ok: true, tab });
+            await ensureBrowserRunning(ctx, profileCtx, signal);
+            const tab = await profileCtx.labelTab(targetId!, label!);
+            return { ok: true, tab };
           }
 
           if (action === "close") {
-            if (!(await ensureBrowserRunning(ctx, profileCtx, res, req.signal))) {
-              return;
-            }
-            const index = readTabIndex(res, req.body);
-            if (index === null) {
-              return;
-            }
+            await ensureBrowserRunning(ctx, profileCtx, signal);
             const tabs = await profileCtx.listTabs();
             const target = resolveIndexedTab(tabs, index);
             if (!target) {
               throw new BrowserTabNotFoundError();
             }
             await profileCtx.closeTab(target.targetId, { exactTargetId: true });
-            return res.json({ ok: true, targetId: target.targetId });
+            return { ok: true, targetId: target.targetId };
           }
 
-          if (action === "select") {
-            const index = readTabIndex(res, req.body, { required: true });
-            if (index === null || index === undefined) {
-              return;
-            }
-            if (!(await ensureBrowserRunning(ctx, profileCtx, res, req.signal))) {
-              return;
-            }
-            const tabs = await profileCtx.listTabs();
-            const target = tabs[index];
-            if (!target) {
-              throw new BrowserTabNotFoundError();
-            }
-            const ssrfPolicyOpts = browserNavigationPolicyForProfile(ctx, profileCtx);
-            if (ssrfPolicyOpts.ssrfPolicy) {
-              await assertBrowserNavigationResultAllowed({
-                url: target.url,
-                ...ssrfPolicyOpts,
-              });
-            }
-            await profileCtx.focusTab(target.targetId, { exactTargetId: true });
-            return res.json({ ok: true, targetId: target.targetId });
+          await ensureBrowserRunning(ctx, profileCtx, signal);
+          const tabs = await profileCtx.listTabs();
+          const target = tabs[index!];
+          if (!target) {
+            throw new BrowserTabNotFoundError();
           }
-
-          return jsonError(res, 400, "unknown tab action");
+          const ssrfPolicyOpts = browserNavigationPolicyForProfile(ctx, profileCtx);
+          if (ssrfPolicyOpts.ssrfPolicy) {
+            await assertBrowserNavigationResultAllowed({
+              url: target.url,
+              ...ssrfPolicyOpts,
+            });
+          }
+          await profileCtx.focusTab(target.targetId, { exactTargetId: true });
+          return { ok: true, targetId: target.targetId };
         },
       });
+      if (result) {
+        res.json(result);
+      }
     }),
   );
 }

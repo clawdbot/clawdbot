@@ -20,6 +20,7 @@ export type BrowserTabTargetOptions = BrowserOperationOptions & {
 export type ProfileRuntimeState = {
   profile: ResolvedBrowserProfile;
   running: RunningChrome | null;
+  /** @deprecated Lifecycle starts are owned by the profile actor. */
   ensureBrowserAvailable?: { key: string; promise: Promise<void> } | null;
   managedLaunchFailure?: {
     consecutiveFailures: number;
@@ -34,6 +35,7 @@ export type ProfileRuntimeState = {
     nextTabNumber: number;
     byTargetId: Record<string, { tabId: string; label?: string; url?: string }>;
   };
+  /** @deprecated Lifecycle reconciliation is owned by the profile actor. */
   reconcile?: {
     previousProfile: ResolvedBrowserProfile;
     reason: string;
@@ -63,7 +65,7 @@ export type EnsureTabAvailableOptions = BrowserOperationOptions & {
 };
 
 type BrowserProfileActions = {
-  ensureBrowserAvailable: (opts?: { headless?: boolean }) => Promise<void>;
+  ensureBrowserAvailable: (opts?: { headless?: boolean; signal?: AbortSignal }) => Promise<void>;
   ensureTabAvailable: (
     targetId?: string,
     options?: EnsureTabAvailableOptions,
@@ -75,7 +77,10 @@ type BrowserProfileActions = {
     options?: { ephemeral?: boolean; signal?: AbortSignal },
   ) => Promise<boolean>;
   listTabs: (options?: BrowserOperationOptions) => Promise<BrowserTab[]>;
-  openTab: (url: string, opts?: { label?: string }) => Promise<BrowserTab>;
+  openTab: (
+    url: string,
+    opts?: { label?: string; signal?: AbortSignal; timeoutMs?: number },
+  ) => Promise<BrowserTab>;
   labelTab: (targetId: string, label: string) => Promise<BrowserTab>;
   focusTab: (targetId: string, options?: BrowserTabTargetOptions) => Promise<void>;
   closeTab: (targetId: string, options?: BrowserTabTargetOptions) => Promise<void>;

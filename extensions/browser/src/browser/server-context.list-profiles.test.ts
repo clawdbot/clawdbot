@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import "./server-context.chrome-test-harness.js";
 import * as chromeModule from "./chrome.js";
 import { createBrowserRouteContext } from "./server-context.js";
+import { beginProfileTransition } from "./server-context.lifecycle.js";
 import { makeBrowserServerState } from "./server-context.test-harness.js";
 
 afterEach(() => {
@@ -11,6 +12,47 @@ afterEach(() => {
 });
 
 describe("browser server-context listProfiles", () => {
+  it("reads running state only after an in-flight profile transition settles", async () => {
+    const state = makeBrowserServerState();
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    ctx.forProfile("openclaw");
+    const runtime = state.profiles.get("openclaw");
+    if (!runtime) {
+      throw new Error("expected profile runtime");
+    }
+    runtime.running = {
+      pid: 123,
+      exe: { kind: "chromium", path: "/usr/bin/chromium" },
+      userDataDir: "/tmp/openclaw-profile",
+      cdpPort: 18800,
+      startedAt: Date.now(),
+      proc: {} as never,
+    };
+    let releaseCleanup!: () => void;
+    const cleanupGate = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    const transition = beginProfileTransition({
+      state,
+      runtime,
+      reason: "stop requested",
+      closeSharedAdapters: false,
+      afterCleanup: async () => {
+        await cleanupGate;
+        runtime.running = null;
+      },
+    });
+    vi.mocked(chromeModule.isChromeReachable).mockResolvedValue(false);
+
+    const listing = ctx.listProfiles();
+    await Promise.resolve();
+    releaseCleanup();
+    await transition;
+    const profiles = await listing;
+
+    expect(profiles[0]?.running).toBe(false);
+  });
+
   it("bypasses SSRF gating when probing managed loopback profiles", async () => {
     const state = makeBrowserServerState({
       resolvedOverrides: {

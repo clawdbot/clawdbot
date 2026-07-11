@@ -13,6 +13,7 @@ type PwAiLoadMode = "soft" | "strict";
 
 let pwAiModuleSoft: Promise<PwAiModule | null> | null = null;
 let pwAiModuleStrict: Promise<PwAiModule | null> | null = null;
+let loadedPwAiModule: PwAiModule | null | undefined;
 
 function isModuleNotFoundError(err: unknown): boolean {
   const code = extractErrorCode(err);
@@ -31,16 +32,25 @@ function isModuleNotFoundError(err: unknown): boolean {
 
 async function loadPwAiModule(mode: PwAiLoadMode): Promise<PwAiModule | null> {
   try {
-    return await import("./pw-ai.js");
+    const loaded = await import("./pw-ai.js");
+    loadedPwAiModule = loaded;
+    return loaded;
   } catch (err) {
     if (mode === "soft") {
+      loadedPwAiModule = null;
       return null;
     }
     if (isModuleNotFoundError(err)) {
+      loadedPwAiModule = null;
       return null;
     }
     throw err;
   }
+}
+
+/** Return the already-resolved module without yielding during lifecycle invalidation. */
+export function getLoadedPwAiModule(): PwAiModule | null | undefined {
+  return loadedPwAiModule;
 }
 
 /** Load the Playwright AI helper module in soft or strict mode. */

@@ -5314,6 +5314,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: First run
   - H2: Updates
   - H2: Open dashboard links
+  - H2: Import browser logins
   - H2: Choose a Gateway mode
   - H2: What the app owns
   - H2: macOS detail pages

@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 
-const importSystemProfile = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
+const importSystemProfile = vi.hoisted(() => vi.fn(async () => ({ ok: true }) as const));
 
 vi.mock("../chrome-mcp.js", () => ({
   getChromeMcpPid: vi.fn(() => 4321),
@@ -24,10 +24,10 @@ function importHandler() {
   return handler;
 }
 
-async function callImport(body: unknown) {
+async function callImport(body: unknown, signal?: AbortSignal) {
   const handler = importHandler();
   const response = createBrowserRouteResponse();
-  await handler({ body } as never, response.res);
+  await handler({ body, signal } as never, response.res);
   return response;
 }
 
@@ -55,12 +55,25 @@ describe("POST /profiles/import domain filter validation", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(importSystemProfile).toHaveBeenCalledWith({
-      browser: "chrome",
-      systemProfile: "Default",
-      into: "imported",
-      domains: undefined,
-      makeDefault: true,
-    });
+    expect(importSystemProfile).toHaveBeenCalledWith(
+      {
+        browser: "chrome",
+        systemProfile: "Default",
+        into: "imported",
+        domains: undefined,
+        makeDefault: true,
+      },
+      { signal: undefined },
+    );
+  });
+
+  it("forwards the request abort signal into the import transaction", async () => {
+    const abort = new AbortController();
+    await callImport({ into: "imported" }, abort.signal);
+
+    expect(importSystemProfile).toHaveBeenLastCalledWith(
+      expect.objectContaining({ into: "imported" }),
+      { signal: abort.signal },
+    );
   });
 });

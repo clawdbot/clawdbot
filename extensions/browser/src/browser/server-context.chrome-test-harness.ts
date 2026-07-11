@@ -8,6 +8,16 @@ const chromeUserDataDir = { dir: "/tmp/openclaw" };
 installChromeUserDataDirHooks(chromeUserDataDir);
 
 vi.mock("./chrome.js", () => ({
+  ManagedChromeCleanupError: class ManagedChromeCleanupError extends Error {
+    readonly code = "MANAGED_CHROME_CLEANUP_FAILED";
+
+    constructor(
+      message: string,
+      readonly running: unknown,
+    ) {
+      super(message);
+    }
+  },
   diagnoseChromeCdp: vi.fn(async () => ({
     ok: false,
     code: "websocket_health_command_timeout",
@@ -20,6 +30,7 @@ vi.mock("./chrome.js", () => ({
       ? "CDP diagnostic: ready."
       : `CDP diagnostic: ${diagnostic.code}; ${diagnostic.message}.`,
   ),
+  isChromeCdpOwnedByPid: vi.fn(async () => true),
   isChromeCdpReady: vi.fn(async () => true),
   isChromeReachable: vi.fn(async () => true),
   launchOpenClawChrome: vi.fn(async () => {

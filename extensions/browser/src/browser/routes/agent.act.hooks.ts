@@ -55,7 +55,7 @@ export function registerBrowserAgentActHookRoutes(
         res,
         ctx,
         targetId,
-        run: async ({ profileCtx, cdpUrl, tab }) => {
+        run: async ({ profileCtx, cdpUrl, tab, signal }) => {
           const resolvedResult = await resolveExistingUploadPaths({ requestedPaths: paths });
           if (!resolvedResult.ok) {
             res.status(400).json({ error: resolvedResult.error });
@@ -81,7 +81,7 @@ export function registerBrowserAgentActHookRoutes(
               uid,
               filePath: resolvedPaths[0] ?? "",
               timeoutMs: timeoutMs ?? ctx.state().resolved.actionTimeoutMs,
-              signal: req.signal,
+              signal,
             });
             return res.json({ ok: true });
           }
@@ -147,7 +147,7 @@ export function registerBrowserAgentActHookRoutes(
         res,
         ctx,
         targetId,
-        run: async ({ profileCtx, cdpUrl, tab }) => {
+        run: async ({ profileCtx, cdpUrl, tab, signal }) => {
           if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
             if (dialogId) {
               return jsonError(res, 501, EXISTING_SESSION_LIMITS.hooks.dialogId);
@@ -160,7 +160,7 @@ export function registerBrowserAgentActHookRoutes(
               profile: profileCtx.profile,
               targetId: tab.targetId,
               timeoutMs: ctx.state().resolved.actionTimeoutMs,
-              signal: req.signal,
+              signal,
               // Existing-session Chrome MCP has no dialog hook primitive. Patch
               // one-shot window dialog functions in-page, then restore them.
               fn: `() => {

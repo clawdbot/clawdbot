@@ -176,11 +176,12 @@ export function registerBrowserAgentStorageRoutes(
         targetId,
         feature: "cookies",
         enforceCurrentUrlAllowed: true,
-        run: async ({ cdpUrl, tab, pw }) => {
+        run: async ({ cdpUrl, tab, pw, signal }) => {
           const result = await pw.cookiesGetViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
           });
+          signal.throwIfAborted();
           res.json({ ok: true, targetId: tab.targetId, ...result });
         },
       });
@@ -213,12 +214,13 @@ export function registerBrowserAgentStorageRoutes(
         ctx,
         targetId,
         feature: "cookies set",
-        run: async ({ cdpUrl, tab, pw }) => {
+        run: async ({ cdpUrl, tab, pw, signal }) => {
           await pw.cookiesSetViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
             cookie: parsedCookie,
           });
+          signal.throwIfAborted();
           res.json({ ok: true, targetId: tab.targetId });
         },
       });
@@ -238,11 +240,12 @@ export function registerBrowserAgentStorageRoutes(
         ctx,
         targetId,
         feature: "cookies clear",
-        run: async ({ cdpUrl, tab, pw }) => {
+        run: async ({ cdpUrl, tab, pw, signal }) => {
           await pw.cookiesClearViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
           });
+          signal.throwIfAborted();
           res.json({ ok: true, targetId: tab.targetId });
         },
       });
@@ -266,13 +269,14 @@ export function registerBrowserAgentStorageRoutes(
         targetId,
         feature: "storage get",
         enforceCurrentUrlAllowed: true,
-        run: async ({ cdpUrl, tab, pw }) => {
+        run: async ({ cdpUrl, tab, pw, signal }) => {
           const result = await pw.storageGetViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
             kind,
             key: normalizeOptionalString(key),
           });
+          signal.throwIfAborted();
           res.json({ ok: true, targetId: tab.targetId, ...result });
         },
       });
@@ -299,7 +303,7 @@ export function registerBrowserAgentStorageRoutes(
         ctx,
         targetId: mutation.parsed.targetId,
         feature: "storage set",
-        run: async ({ cdpUrl, tab, pw }) => {
+        run: async ({ cdpUrl, tab, pw, signal }) => {
           await pw.storageSetViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
@@ -307,6 +311,7 @@ export function registerBrowserAgentStorageRoutes(
             key,
             value,
           });
+          signal.throwIfAborted();
           res.json({ ok: true, targetId: tab.targetId });
         },
       });
@@ -328,12 +333,13 @@ export function registerBrowserAgentStorageRoutes(
         ctx,
         targetId: mutation.parsed.targetId,
         feature: "storage clear",
-        run: async ({ cdpUrl, tab, pw }) => {
+        run: async ({ cdpUrl, tab, pw, signal }) => {
           await pw.storageClearViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
             kind: mutation.parsed.kind,
           });
+          signal.throwIfAborted();
           res.json({ ok: true, targetId: tab.targetId });
         },
       });
@@ -357,12 +363,13 @@ export function registerBrowserAgentStorageRoutes(
         ctx,
         targetId,
         feature: "offline",
-        run: async ({ cdpUrl, tab, pw }) => {
+        run: async ({ cdpUrl, tab, pw, signal }) => {
           await pw.setOfflineViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
             offline,
           });
+          signal.throwIfAborted();
           res.json({ ok: true, targetId: tab.targetId });
         },
       });
@@ -396,12 +403,13 @@ export function registerBrowserAgentStorageRoutes(
         ctx,
         targetId,
         feature: "headers",
-        run: async ({ cdpUrl, tab, pw }) => {
+        run: async ({ cdpUrl, tab, pw, signal }) => {
           await pw.setExtraHTTPHeadersViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
             headers: parsed,
           });
+          signal.throwIfAborted();
           res.json({ ok: true, targetId: tab.targetId });
         },
       });
@@ -423,7 +431,7 @@ export function registerBrowserAgentStorageRoutes(
         ctx,
         targetId,
         feature: "http credentials",
-        run: async ({ cdpUrl, tab, pw }) => {
+        run: async ({ cdpUrl, tab, pw, signal }) => {
           await pw.setHttpCredentialsViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
@@ -431,6 +439,7 @@ export function registerBrowserAgentStorageRoutes(
             password,
             clear,
           });
+          signal.throwIfAborted();
           res.json({ ok: true, targetId: tab.targetId });
         },
       });
@@ -455,12 +464,13 @@ export function registerBrowserAgentStorageRoutes(
         ctx,
         targetId,
         feature: "geolocation",
-        run: async ({ cdpUrl, tab, pw }) => {
+        run: async ({ cdpUrl, tab, pw, signal }) => {
           await pw.setGeolocationViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
             ...geolocation,
           });
+          signal.throwIfAborted();
           res.json({ ok: true, targetId: tab.targetId });
         },
       });
@@ -489,12 +499,13 @@ export function registerBrowserAgentStorageRoutes(
         ctx,
         targetId,
         feature: "media emulation",
-        run: async ({ cdpUrl, tab, pw }) => {
+        run: async ({ cdpUrl, tab, pw, signal }) => {
           await pw.emulateMediaViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
             colorScheme,
           });
+          signal.throwIfAborted();
           res.json({ ok: true, targetId: tab.targetId });
         },
       });
@@ -517,12 +528,13 @@ export function registerBrowserAgentStorageRoutes(
         ctx,
         targetId,
         feature: "timezone",
-        run: async ({ cdpUrl, tab, pw }) => {
+        run: async ({ cdpUrl, tab, pw, signal }) => {
           await pw.setTimezoneViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
             timezoneId,
           });
+          signal.throwIfAborted();
           res.json({ ok: true, targetId: tab.targetId });
         },
       });
@@ -545,12 +557,13 @@ export function registerBrowserAgentStorageRoutes(
         ctx,
         targetId,
         feature: "locale",
-        run: async ({ cdpUrl, tab, pw }) => {
+        run: async ({ cdpUrl, tab, pw, signal }) => {
           await pw.setLocaleViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
             locale,
           });
+          signal.throwIfAborted();
           res.json({ ok: true, targetId: tab.targetId });
         },
       });
@@ -573,12 +586,13 @@ export function registerBrowserAgentStorageRoutes(
         ctx,
         targetId,
         feature: "device emulation",
-        run: async ({ cdpUrl, tab, pw }) => {
+        run: async ({ cdpUrl, tab, pw, signal }) => {
           await pw.setDeviceViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
             name,
           });
+          signal.throwIfAborted();
           res.json({ ok: true, targetId: tab.targetId });
         },
       });

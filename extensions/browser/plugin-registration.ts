@@ -184,7 +184,7 @@ function createLazyBrowserPluginService(): OpenClawPluginService {
     stop: async (ctx) => {
       if (!service) {
         const { stopBrowserControlService } = await import("./src/control-service.js");
-        await stopBrowserControlService().catch(() => {});
+        await stopBrowserControlService();
         return;
       }
       await service.stop?.(ctx);

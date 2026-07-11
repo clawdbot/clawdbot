@@ -1,4 +1,5 @@
 // Browser tests cover chrome plugin behavior.
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import { createServer } from "node:http";
@@ -24,9 +25,11 @@ import {
   formatChromeCdpDiagnostic,
   buildOpenClawChromeLaunchArgs,
   getChromeWebSocketUrl,
+  isChromeCdpOwnedByPid,
   isProfileDecorated,
   isChromeCdpReady,
   isChromeReachable,
+  ManagedChromeCleanupError,
   resolveBrowserExecutableForPlatform,
   stopOpenClawChrome,
 } from "./chrome.js";
@@ -135,6 +138,7 @@ async function withMockChromeCdpServer(params: {
 async function stopChromeWithProc(proc: ReturnType<typeof makeChromeTestProc>, timeoutMs: number) {
   await stopOpenClawChrome(
     {
+      pid: proc.pid,
       proc,
       cdpPort: 12345,
     } as unknown as StopChromeTarget,
@@ -147,14 +151,24 @@ function makeChromeTestProc(
     killed: boolean;
     exitCode: number | null;
     signalCode: NodeJS.Signals | null;
+    exitOnSignal: NodeJS.Signals | false;
   }>,
 ) {
-  return {
+  const proc = Object.assign(new EventEmitter(), {
+    pid: process.pid,
     killed: overrides?.killed ?? false,
     exitCode: overrides?.exitCode ?? null,
     signalCode: overrides?.signalCode ?? null,
-    kill: vi.fn(),
-  };
+    kill: vi.fn((signal: NodeJS.Signals = "SIGTERM") => {
+      proc.killed = true;
+      if ((overrides?.exitOnSignal ?? "SIGTERM") === signal) {
+        proc.signalCode = signal;
+        proc.emit("exit", null, signal);
+      }
+      return true;
+    }),
+  });
+  return proc;
 }
 
 describe("browser chrome profile decoration", () => {
@@ -983,10 +997,34 @@ describe("browser chrome helpers", () => {
     );
   });
 
-  it("stopOpenClawChrome no-ops when process is already killed", async () => {
+  it("verifies the exact managed browser pid through CDP SystemInfo", async () => {
+    await withMockChromeCdpServer({
+      wsPath: "/devtools/browser/process-owner",
+      onConnection: (wss) => {
+        wss.on("connection", (ws) => {
+          ws.on("message", (data) => {
+            const req = JSON.parse(rawDataToString(data)) as { id: number; method: string };
+            expect(req.method).toBe("SystemInfo.getProcessInfo");
+            ws.send(
+              JSON.stringify({
+                id: req.id,
+                result: { processInfo: [{ type: "browser", id: 44001 }] },
+              }),
+            );
+          });
+        });
+      },
+      run: async (baseUrl) => {
+        await expect(isChromeCdpOwnedByPid(baseUrl, 44001, 100)).resolves.toBe(true);
+        await expect(isChromeCdpOwnedByPid(baseUrl, 44002, 100)).resolves.toBe(false);
+      },
+    });
+  });
+
+  it("does not mistake ChildProcess.killed for process exit", async () => {
     const proc = makeChromeTestProc({ killed: true });
     await stopChromeWithProc(proc, 10);
-    expect(proc.kill).not.toHaveBeenCalled();
+    expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
   });
 
   it.each([
@@ -1011,14 +1049,26 @@ describe("browser chrome helpers", () => {
 
   it("stopOpenClawChrome asks Chrome to close gracefully before sending a signal", async () => {
     let closeRequested = false;
+    const proc = makeChromeTestProc({ exitOnSignal: false });
     await withMockChromeCdpServer({
       wsPath: "/devtools/browser/graceful-stop",
       onConnection: (wss) => {
         wss.on("connection", (ws) => {
           ws.on("message", (data) => {
             const req = JSON.parse(rawDataToString(data)) as { id: number; method: string };
+            if (req.method === "SystemInfo.getProcessInfo") {
+              ws.send(
+                JSON.stringify({
+                  id: req.id,
+                  result: { processInfo: [{ type: "browser", id: proc.pid }] },
+                }),
+              );
+              return;
+            }
             expect(req.method).toBe("Browser.close");
             closeRequested = true;
+            proc.exitCode = 0;
+            proc.emit("exit", 0, null);
             ws.send(JSON.stringify({ id: req.id, result: {} }));
           });
         });
@@ -1034,7 +1084,6 @@ describe("browser chrome helpers", () => {
             return jsonResponse({ webSocketDebuggerUrl: browserWsUrl });
           }),
         );
-        const proc = makeChromeTestProc();
         await stopChromeWithProc(proc, 20);
 
         expect(closeRequested).toBe(true);
@@ -1044,12 +1093,22 @@ describe("browser chrome helpers", () => {
   });
 
   it("stopOpenClawChrome escalates when graceful close leaves CDP reachable", async () => {
+    const proc = makeChromeTestProc({ exitOnSignal: "SIGKILL" });
     await withMockChromeCdpServer({
       wsPath: "/devtools/browser/stuck-stop",
       onConnection: (wss) => {
         wss.on("connection", (ws) => {
           ws.on("message", (data) => {
             const req = JSON.parse(rawDataToString(data)) as { id: number; method: string };
+            if (req.method === "SystemInfo.getProcessInfo") {
+              ws.send(
+                JSON.stringify({
+                  id: req.id,
+                  result: { processInfo: [{ type: "browser", id: proc.pid }] },
+                }),
+              );
+              return;
+            }
             expect(req.method).toBe("Browser.close");
             ws.send(JSON.stringify({ id: req.id, result: {} }));
           });
@@ -1061,7 +1120,6 @@ describe("browser chrome helpers", () => {
           "fetch",
           vi.fn(async () => jsonResponse({ webSocketDebuggerUrl: browserWsUrl })),
         );
-        const proc = makeChromeTestProc();
         await stopChromeWithProc(proc, 1);
         expect(proc.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
         expect(proc.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
@@ -1069,51 +1127,50 @@ describe("browser chrome helpers", () => {
     });
   });
 
-  it("stopOpenClawChrome releases the managed-proxy CDP bypass exactly once on a double stop", async () => {
+  it("returns the exact child when shutdown cannot prove process exit", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("down")));
-    const proc = makeChromeTestProc();
-    const release = vi.fn();
-    const running = {
-      proc,
-      cdpPort: 12345,
-      releaseCdpProxyBypass: release,
-    } as unknown as StopChromeTarget;
-    await stopOpenClawChrome(running, 10);
-    await stopOpenClawChrome(running, 10);
-    expect(release).toHaveBeenCalledOnce();
-  });
+    const proc = makeChromeTestProc({ exitOnSignal: false });
 
-  it("stopOpenClawChrome still releases the bypass when the SIGKILL fallback fires", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => jsonResponse({ webSocketDebuggerUrl: "ws://127.0.0.1/devtools" })),
-    );
-    const proc = makeChromeTestProc();
-    const release = vi.fn();
-    const running = {
-      proc,
-      cdpPort: 12345,
-      releaseCdpProxyBypass: release,
-    } as unknown as StopChromeTarget;
-    await stopOpenClawChrome(running, 1);
+    const error = await stopChromeWithProc(proc, 1).catch((err: unknown) => err);
+
+    expect(error).toBeInstanceOf(ManagedChromeCleanupError);
+    expect(error).toMatchObject({ running: { pid: proc.pid, proc } });
     expect(proc.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
     expect(proc.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
-    expect(release).toHaveBeenCalledOnce();
   });
 
-  it("stopOpenClawChrome swallows a throw from the bypass release callback", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("down")));
+  it("does not close a replacement browser that reused the managed CDP port", async () => {
+    const methods: string[] = [];
     const proc = makeChromeTestProc();
-    const release = vi.fn(() => {
-      throw new Error("release blew up");
+    await withMockChromeCdpServer({
+      wsPath: "/devtools/browser/replacement",
+      onConnection: (wss) => {
+        wss.on("connection", (ws) => {
+          ws.on("message", (data) => {
+            const req = JSON.parse(rawDataToString(data)) as { id: number; method: string };
+            methods.push(req.method);
+            ws.send(
+              JSON.stringify({
+                id: req.id,
+                result: { processInfo: [{ type: "browser", id: proc.pid + 1 }] },
+              }),
+            );
+          });
+        });
+      },
+      run: async (baseUrl) => {
+        const browserWsUrl = `${baseUrl.replace("http://", "ws://")}/devtools/browser/replacement`;
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(async () => jsonResponse({ webSocketDebuggerUrl: browserWsUrl })),
+        );
+
+        await stopChromeWithProc(proc, 10);
+
+        expect(methods).toEqual(["SystemInfo.getProcessInfo"]);
+        expect(proc.kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+      },
     });
-    const running = {
-      proc,
-      cdpPort: 12345,
-      releaseCdpProxyBypass: release,
-    } as unknown as StopChromeTarget;
-    await expect(stopOpenClawChrome(running, 10)).resolves.toBeUndefined();
-    expect(release).toHaveBeenCalledOnce();
   });
 });
 

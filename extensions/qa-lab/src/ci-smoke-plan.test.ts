@@ -5,6 +5,21 @@ import { createQaSmokeCiPart } from "./ci-smoke-plan.js";
 import { readQaScenarioPack } from "./scenario-catalog.js";
 import { readQaScorecardTaxonomyReport } from "./scorecard-taxonomy.js";
 
+type QaScenario = ReturnType<typeof readQaScenarioPack>["scenarios"][number];
+
+function estimateScenarioCost(scenario: QaScenario | undefined): number {
+  if (!scenario) {
+    throw new Error("QA smoke plan selected an unknown scenario.");
+  }
+  if (scenario.execution.kind === "script") {
+    return 8;
+  }
+  if (scenario.execution.kind === "playwright") {
+    return 6;
+  }
+  return scenario.execution.kind === "flow" && scenario.execution.isolationReason ? 4 : 1;
+}
+
 describe("createQaSmokeCiPart", () => {
   it("balances the bounded automatic smoke set across two profile parts", () => {
     const first = createQaSmokeCiPart("profile-1");
@@ -40,10 +55,23 @@ describe("createQaSmokeCiPart", () => {
       .map((category) => category.id);
     expect(uncoveredCategoryIds).toEqual([]);
 
-    const primaryRunSizes = [first, second].map(
-      (part) => part.runs.find((run) => run.slug === "primary")?.scenario_ids.length ?? 0,
+    const primaryScenarioIds = [first, second].map(
+      (part) => part.runs.find((run) => run.slug === "primary")?.scenario_ids ?? [],
     );
-    expect(Math.abs(primaryRunSizes[0] - primaryRunSizes[1])).toBeLessThanOrEqual(2);
+    const primaryRunCosts = primaryScenarioIds.map((ids) =>
+      ids.reduce(
+        (cost, scenarioId) => cost + estimateScenarioCost(scenarioById.get(scenarioId)),
+        0,
+      ),
+    );
+    const largestScenarioCost = Math.max(
+      ...primaryScenarioIds.flatMap((ids) =>
+        ids.map((scenarioId) => estimateScenarioCost(scenarioById.get(scenarioId))),
+      ),
+    );
+    expect(Math.abs(primaryRunCosts[0] - primaryRunCosts[1])).toBeLessThanOrEqual(
+      largestScenarioCost,
+    );
   });
 
   it("rejects undeclared profile parts", () => {

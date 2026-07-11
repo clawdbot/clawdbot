@@ -54,7 +54,7 @@ export async function runTrackedBrowserTabCleanupOnce(params?: {
 /** Starts the recurring Browser tab cleanup timer and returns its disposer. */
 export function startTrackedBrowserTabCleanupTimer(params: {
   onWarn: (message: string) => void;
-}): () => void {
+}): () => Promise<void> {
   let stopped = false;
   let timer: NodeJS.Timeout | null = null;
   let running: Promise<unknown> | null = null;
@@ -88,11 +88,12 @@ export function startTrackedBrowserTabCleanupTimer(params: {
   };
 
   schedule();
-  return () => {
+  return async () => {
     stopped = true;
     if (timer) {
       clearTimeout(timer);
       timer = null;
     }
+    await running?.catch(() => {});
   };
 }

@@ -10,10 +10,11 @@ import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { resolveCdpControlPolicy } from "../cdp-reachability-policy.js";
 import { withCdpSocket } from "../cdp.helpers.js";
 import { getChromeWebSocketUrl } from "../chrome.js";
-import { toBrowserErrorResponse } from "../errors.js";
+import { BrowserProfileUnavailableError, toBrowserErrorResponse } from "../errors.js";
 import { getPwAiModule } from "../pw-ai-module.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import type { ProfileContext } from "../server-context.js";
+import { isProfileRestartRequiredError } from "../server-context.lifecycle.js";
 import { readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserRouteRegistrar } from "./types.js";
 import {
@@ -21,6 +22,7 @@ import {
   getProfileContext,
   jsonBrowserError,
   jsonError,
+  runProfileRouteOperation,
   toStringOrEmpty,
 } from "./utils.js";
 
@@ -81,7 +83,9 @@ async function grantPermissions(params: {
   optionalPermissions: string[];
   timeoutMs: number;
   ssrfPolicy?: SsrFPolicy;
+  signal: AbortSignal;
 }) {
+  params.signal.throwIfAborted();
   const allPermissions = [
     ...new Set([...params.requiredPermissions, ...params.optionalPermissions]),
   ];
@@ -107,11 +111,13 @@ async function grantPermissions(params: {
           grantMethod: "playwright",
         };
       } catch {
+        params.signal.throwIfAborted();
         // Fall back to the raw CDP browser command below. Some routes call this
         // before a page exists, while attached browser profiles need Playwright.
       }
     }
   }
+  params.signal.throwIfAborted();
   let unsupportedPermissions: string[] = [];
   await withCdpSocket(
     params.wsUrl,
@@ -135,6 +141,7 @@ async function grantPermissions(params: {
     },
     { commandTimeoutMs: params.timeoutMs },
   );
+  params.signal.throwIfAborted();
   return {
     grantedPermissions: allPermissions.filter((value) => !unsupportedPermissions.includes(value)),
     unsupportedPermissions,
@@ -161,11 +168,6 @@ export function registerBrowserPermissionRoutes(
   app.post(
     "/permissions/grant",
     asyncBrowserRoute(async (req, res) => {
-      const profileCtx = getProfileContext(req, ctx);
-      if ("error" in profileCtx) {
-        return jsonError(res, profileCtx.status, profileCtx.error);
-      }
-
       const body = (req.body ?? {}) as GrantPermissionsBody;
       const origin = readOrigin(body.origin);
       if (!origin) {
@@ -184,28 +186,48 @@ export function registerBrowserPermissionRoutes(
         return jsonError(res, 400, formatErrorMessage(err));
       }
 
+      const profileCtx = getProfileContext(req, ctx);
+      if ("error" in profileCtx) {
+        return jsonError(res, profileCtx.status, profileCtx.error);
+      }
+
       try {
-        await profileCtx.ensureBrowserAvailable();
-        const cdpPolicy = resolveCdpControlPolicy(
-          profileCtx.profile,
-          ctx.state().resolved.ssrfPolicy,
-        );
-        const wsUrl = await getChromeWebSocketUrl(profileCtx.profile.cdpUrl, timeoutMs, cdpPolicy);
-        if (!wsUrl) {
-          return jsonError(res, 409, "browser CDP WebSocket unavailable");
-        }
-        const granted = await grantPermissions({
+        const granted = await runProfileRouteOperation({
           profileCtx,
-          targetId,
-          wsUrl,
-          origin,
-          requiredPermissions,
-          optionalPermissions,
-          timeoutMs,
-          ssrfPolicy: cdpPolicy,
+          signal: req.signal,
+          run: async (signal) => {
+            await profileCtx.ensureBrowserAvailable({ signal });
+            const cdpPolicy = resolveCdpControlPolicy(
+              profileCtx.profile,
+              ctx.state().resolved.ssrfPolicy,
+            );
+            const wsUrl = await getChromeWebSocketUrl(
+              profileCtx.profile.cdpUrl,
+              timeoutMs,
+              cdpPolicy,
+            );
+            signal.throwIfAborted();
+            if (!wsUrl) {
+              throw new BrowserProfileUnavailableError("browser CDP WebSocket unavailable");
+            }
+            return await grantPermissions({
+              profileCtx,
+              targetId,
+              wsUrl,
+              origin,
+              requiredPermissions,
+              optionalPermissions,
+              timeoutMs,
+              ssrfPolicy: cdpPolicy,
+              signal,
+            });
+          },
         });
         return res.json({ ok: true, origin, ...granted });
       } catch (error) {
+        if (isProfileRestartRequiredError(error)) {
+          throw error;
+        }
         const mapped = toBrowserErrorResponse(error);
         if (mapped) {
           return jsonBrowserError(res, mapped);

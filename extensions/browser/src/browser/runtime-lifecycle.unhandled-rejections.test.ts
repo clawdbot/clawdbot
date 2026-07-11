@@ -52,6 +52,7 @@ vi.mock("./pw-ai-state.js", () => ({
 }));
 
 vi.mock("./pw-ai-module.js", () => ({
+  getLoadedPwAiModule: () => null,
   getPwAiModule: getPwAiModuleMock,
 }));
 
@@ -132,5 +133,61 @@ describe("browser unhandled rejection lifecycle", () => {
     expect(stopKnownBrowserProfilesMock).toHaveBeenCalledTimes(1);
     expect(clearState).toHaveBeenCalledTimes(1);
     expect(getUnhandledRejectionHandlers()).toStrictEqual([]);
+  });
+
+  it("leaves process-global Playwright adapters to profile-scoped drains", async () => {
+    isPwAiLoadedMock.mockReturnValue(true);
+    getPwAiModuleMock.mockResolvedValue({
+      closePlaywrightBrowserConnection: vi.fn(),
+    });
+    const state = await createBrowserRuntimeState({
+      resolved: { profiles: {} } as never,
+      port: 18_791,
+      onWarn: vi.fn(),
+    });
+
+    await stopBrowserRuntime({
+      current: state,
+      getState: () => state,
+      clearState: vi.fn(),
+      onWarn: vi.fn(),
+    });
+
+    expect(getPwAiModuleMock).not.toHaveBeenCalled();
+  });
+
+  it("drains profiles when a custom tab-cleanup disposer throws synchronously", async () => {
+    let releaseProfiles!: () => void;
+    const profileGate = new Promise<void>((resolve) => {
+      releaseProfiles = resolve;
+    });
+    let profilesDrained = false;
+    stopKnownBrowserProfilesMock.mockImplementationOnce(async () => {
+      await profileGate;
+      profilesDrained = true;
+    });
+    const state = {
+      port: 18_791,
+      resolved: { profiles: {} },
+      profiles: new Map(),
+      stopTrackedTabCleanup: () => {
+        throw new Error("tab cleanup failed");
+      },
+    } as never;
+    const clearState = vi.fn();
+
+    const stopping = stopBrowserRuntime({
+      current: state,
+      getState: () => state,
+      clearState,
+      onWarn: vi.fn(),
+    });
+    await Promise.resolve();
+    expect(profilesDrained).toBe(false);
+    releaseProfiles();
+
+    await expect(stopping).rejects.toThrow("tab cleanup failed");
+    expect(profilesDrained).toBe(true);
+    expect(clearState).not.toHaveBeenCalled();
   });
 });

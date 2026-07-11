@@ -8,6 +8,7 @@ import {
   ensureBrowserControlRuntime,
   getBrowserControlState,
   stopBrowserControlRuntime,
+  withBrowserControlStart,
 } from "./browser-control-state.js";
 import { deleteBridgeAuthForPort, setBridgeAuthForPort } from "./browser/bridge-auth-registry.js";
 import { loadBrowserConfigForRuntimeRefresh } from "./browser/config-refresh-source.js";
@@ -31,8 +32,7 @@ import { isDefaultBrowserPluginEnabled } from "./plugin-enabled.js";
 const log = createSubsystemLogger("browser");
 const logServer = log.child("server");
 
-/** Starts the Browser control HTTP server from runtime config. */
-export async function startBrowserControlServerFromConfig(): Promise<BrowserServerState | null> {
+async function startBrowserControlServerUnlocked(): Promise<BrowserServerState | null> {
   const current = getBrowserControlState();
   if (current?.server) {
     return current;
@@ -97,13 +97,21 @@ export async function startBrowserControlServerFromConfig(): Promise<BrowserServ
     return null;
   }
 
-  const state = await ensureBrowserControlRuntime({
-    server,
-    port,
-    resolved,
-    owner: "server",
-    onWarn: (message) => logServer.warn(message),
-  });
+  let state: BrowserServerState;
+  try {
+    state = await ensureBrowserControlRuntime({
+      server,
+      port,
+      resolved,
+      owner: "server",
+      onWarn: (message) => logServer.warn(message),
+    });
+  } catch (err) {
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
+    throw err;
+  }
   setBridgeAuthForPort(port, browserAuth);
 
   const authMode = browserAuth.token ? "token" : browserAuth.password ? "password" : "off";
@@ -111,15 +119,19 @@ export async function startBrowserControlServerFromConfig(): Promise<BrowserServ
   return state;
 }
 
+/** Starts the Browser control HTTP server from runtime config. */
+export async function startBrowserControlServerFromConfig(): Promise<BrowserServerState | null> {
+  return await withBrowserControlStart(startBrowserControlServerUnlocked);
+}
+
 /** Stops the Browser control HTTP server and unregisters bridge auth. */
 export async function stopBrowserControlServer(): Promise<void> {
-  const current = getBrowserControlState();
-  if (current?.port) {
-    deleteBridgeAuthForPort(current.port);
-  }
-  await stopBrowserControlRuntime({
+  const stopped = await stopBrowserControlRuntime({
     requestedBy: "server",
     closeServer: true,
     onWarn: (message) => logServer.warn(message),
   });
+  if (stopped?.port) {
+    deleteBridgeAuthForPort(stopped.port);
+  }
 }

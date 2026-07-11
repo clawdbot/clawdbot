@@ -131,7 +131,7 @@ describe("local-managed browser snapshot routes", () => {
     expect(response.body).toEqual({ error: "browser navigation blocked by policy" });
     expect(routeState.profileCtx.ensureTabAvailable).toHaveBeenCalledWith(undefined, {
       allowPlaywrightFallback: false,
-      signal: undefined,
+      signal: expect.any(AbortSignal),
       timeoutMs: undefined,
     });
     expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenCalledWith({

@@ -80,7 +80,7 @@ struct OpenClawApp: App {
             self.applyStatusItemAppearance(paused: self.state.isPaused, sleeping: self.isGatewaySleeping)
             if self.controlChannel.state == .connected {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                    BrowserProfileImportPrompter.shared.checkAndPromptIfNeeded()
+                    Task { await BrowserProfileImportModel.shared.refreshIfIdle() }
                 }
             }
         }
@@ -93,6 +93,7 @@ struct OpenClawApp: App {
         .onChange(of: self.state.connectionMode) { _, mode in
             Task { await ConnectionModeCoordinator.shared.apply(mode: mode, paused: self.state.isPaused) }
             CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "connection-mode")
+            BrowserProfileImportModel.shared.handleConnectionModeChange()
         }
 
         Window("OpenClaw Settings", id: SettingsWindowOpener.windowID) {
@@ -446,7 +447,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "launch")
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) {
-            BrowserProfileImportPrompter.shared.checkAndPromptIfNeeded()
+            Task { await BrowserProfileImportModel.shared.refreshIfIdle() }
         }
 
         #if DEBUG

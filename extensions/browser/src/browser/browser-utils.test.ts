@@ -11,6 +11,7 @@ import { shouldRejectBrowserMutation } from "./csrf.js";
 import { toBoolean } from "./routes/utils.js";
 import type { BrowserServerState } from "./server-context.js";
 import { listKnownProfileNames } from "./server-context.js";
+import { createProfileRuntimeState } from "./server-context.lifecycle.js";
 import { resolveTargetIdFromTabs } from "./target-id.js";
 
 describe("toBoolean", () => {
@@ -253,13 +254,7 @@ describe("browser server-context listKnownProfileNames", () => {
       port: 18791,
       resolved,
       profiles: new Map([
-        [
-          "stale-removed",
-          {
-            profile: { ...openclaw, name: "stale-removed" },
-            running: null,
-          },
-        ],
+        ["stale-removed", createProfileRuntimeState({ ...openclaw, name: "stale-removed" })],
       ]),
     };
 

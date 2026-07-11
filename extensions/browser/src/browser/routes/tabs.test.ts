@@ -247,6 +247,21 @@ describe("browser tab routes", () => {
     );
   });
 
+  it("validates tab-open input before resolving or leasing a profile", async () => {
+    const profileCtx = createProfileContext();
+    const routeCtx = createRouteContext(profileCtx);
+    const forProfile = vi.fn(routeCtx.forProfile);
+    const { app, postHandlers } = createBrowserRouteApp();
+    registerBrowserTabRoutes(app, { ...routeCtx, forProfile } as never);
+    const response = createBrowserRouteResponse();
+
+    await postHandlers.get("/tabs/open")?.({ params: {}, query: {}, body: {} }, response.res);
+
+    expect(response.statusCode).toBe(400);
+    expect(response.body).toEqual({ error: "url is required" });
+    expect(forProfile).not.toHaveBeenCalled();
+  });
+
   it("returns browser-not-running for close when the browser is not reachable", async () => {
     await expectBrowserNotRunningAction("close");
   });
@@ -365,7 +380,7 @@ describe("browser tab routes", () => {
     const response = await callTabsList({ profileCtx });
 
     expect(response.statusCode).toBe(200);
-    expect(isReachable).toHaveBeenCalledWith(300);
+    expect(isReachable).toHaveBeenCalledWith(300, { signal: expect.any(AbortSignal) });
   });
 
   it("normalizes configured existing-session tab reachability timeouts", async () => {
@@ -380,14 +395,16 @@ describe("browser tab routes", () => {
 
     const zeroResponse = await callTabsList({ profileCtx, actionTimeoutMs: 0 });
     expect(zeroResponse.statusCode).toBe(200);
-    expect(isReachable).toHaveBeenLastCalledWith(300);
+    expect(isReachable).toHaveBeenLastCalledWith(300, { signal: expect.any(AbortSignal) });
 
     const hugeResponse = await callTabsList({
       profileCtx,
       actionTimeoutMs: Number.MAX_SAFE_INTEGER,
     });
     expect(hugeResponse.statusCode).toBe(200);
-    expect(isReachable).toHaveBeenLastCalledWith(MAX_TIMER_TIMEOUT_MS);
+    expect(isReachable).toHaveBeenLastCalledWith(MAX_TIMER_TIMEOUT_MS, {
+      signal: expect.any(AbortSignal),
+    });
   });
 
   it("redacts blocked tab URLs from GET /tabs", async () => {

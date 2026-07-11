@@ -51,13 +51,15 @@ export function createBrowserPluginService(): OpenClawPluginService {
     },
     stop: async () => {
       const current = handle;
-      handle = null;
       if (current) {
-        await current.stop().catch(() => {});
+        await current.stop();
+        if (handle === current) {
+          handle = null;
+        }
         return;
       }
       const { stopBrowserControlService } = await import("./control-service.js");
-      await stopBrowserControlService().catch(() => {});
+      await stopBrowserControlService();
     },
   };
 }

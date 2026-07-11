@@ -5,9 +5,10 @@ import { vi } from "vitest";
 import { withBrowserFetchPreconnect } from "../../test-fetch.js";
 import { resolveCdpControlPolicy } from "./cdp-reachability-policy.js";
 import type { ResolvedBrowserProfile } from "./config.js";
+import { createProfileRuntimeState } from "./server-context.lifecycle.js";
 import { createProfileSelectionOps } from "./server-context.selection.js";
 import { createProfileTabOps } from "./server-context.tab-ops.js";
-import type { BrowserServerState, ProfileRuntimeState } from "./server-context.types.js";
+import type { BrowserServerState } from "./server-context.types.js";
 
 /** Original global fetch restored between remote-tab harness tests. */
 export const originalFetch = globalThis.fetch;
@@ -107,22 +108,19 @@ export function createTestBrowserRouteContext(opts: { getState: () => BrowserSer
   const forProfile = (profileName?: string) => {
     const state = opts.getState();
     const profile = resolveProfileForTest(state, profileName ?? state.resolved.defaultProfile);
-    const getProfileState = (): ProfileRuntimeState => {
-      let profileState = state.profiles.get(profile.name);
-      if (!profileState) {
-        profileState = { profile, running: null, lastTargetId: null, reconcile: null };
-        state.profiles.set(profile.name, profileState);
-      }
-      return profileState;
-    };
+    let runtime = state.profiles.get(profile.name);
+    if (!runtime) {
+      runtime = createProfileRuntimeState(profile);
+      state.profiles.set(profile.name, runtime);
+    }
     const tabOps = createProfileTabOps({
       profile,
       state: () => state,
-      getProfileState,
+      runtime,
     });
     const selectionOps = createProfileSelectionOps({
       profile,
-      getProfileState,
+      runtime,
       getCdpControlPolicy: () => resolveCdpControlPolicy(profile, state.resolved.ssrfPolicy),
       ensureBrowserAvailable: async () => {},
       listTabs: tabOps.listTabs,

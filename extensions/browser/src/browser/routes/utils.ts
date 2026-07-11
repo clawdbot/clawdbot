@@ -4,8 +4,13 @@
  * Wraps async handlers, profile lookup, JSON errors, and route value coercion
  * shared across browser control endpoints.
  */
-import type { BrowserErrorResponse } from "../errors.js";
-import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
+import { BrowserProfileUnavailableError, type BrowserErrorResponse } from "../errors.js";
+import {
+  type BrowserRouteContext,
+  type ProfileContext,
+  withProfileContextOperation,
+} from "../server-context.js";
+import { isProfileRestartRequiredError } from "../server-context.lifecycle.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteHandler } from "./types.js";
 
 function normalizeOptionalString(value: string): string | undefined {
@@ -44,8 +49,44 @@ export function getProfileContext(
   try {
     return ctx.forProfile(profileName);
   } catch (err) {
-    return { error: String(err), status: 404 };
+    const mapped = ctx.mapTabError(err);
+    return mapped
+      ? { error: mapped.message, status: mapped.status }
+      : { error: String(err), status: 404 };
   }
+}
+
+/** Run one profile-scoped route transaction, restarting an unhealthy owned browser once. */
+export async function runProfileRouteOperation<T>(params: {
+  profileCtx: ProfileContext;
+  signal?: AbortSignal;
+  run: (signal: AbortSignal) => Promise<T>;
+}): Promise<T> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await withProfileContextOperation(params.profileCtx, params.signal, params.run);
+    } catch (err) {
+      if (!isProfileRestartRequiredError(err)) {
+        throw err;
+      }
+      if (attempt !== 0) {
+        throw new BrowserProfileUnavailableError(
+          `Browser profile "${params.profileCtx.profile.name}" could not stabilize after restart.`,
+        );
+      }
+      try {
+        await params.profileCtx.ensureBrowserAvailable({ signal: params.signal });
+      } catch (restartErr) {
+        if (isProfileRestartRequiredError(restartErr)) {
+          throw new BrowserProfileUnavailableError(
+            `Browser profile "${params.profileCtx.profile.name}" could not restart.`,
+          );
+        }
+        throw restartErr;
+      }
+    }
+  }
+  throw new Error("browser profile could not stabilize");
 }
 
 /** Send a simple JSON error response. */

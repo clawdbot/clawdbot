@@ -124,6 +124,12 @@ async function flushTasks() {
   await Promise.resolve();
 }
 
+async function waitForNextTask() {
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+}
+
 async function waitMs(ms: number) {
   await new Promise((resolve) => {
     setTimeout(resolve, ms);
@@ -570,10 +576,10 @@ describe("login-qr", () => {
     });
     expect(start.qrDataUrl).toBe(encodedQr("qr-data"));
 
-    await waitMs(50);
-    await flushTasks();
+    await waitForQrRenderCallCount(2);
     resolveLogin();
-    await flushTasks();
+    await vi.waitFor(() => expect(readWebAuthExistsForDecisionMock).toHaveBeenCalledTimes(2));
+    await waitForNextTask();
 
     await expect(
       waitForWebLogin({

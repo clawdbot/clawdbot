@@ -124,7 +124,20 @@ struct GeneralSettings: View {
                     showsDivider: false)
                 {
                     Button("Import…") {
-                        BrowserProfileImportPrompter.shared.checkAndPromptIfNeeded(force: true)
+                        Task { @MainActor in
+                            switch await BrowserProfileImportModel.shared.refresh(force: true) {
+                            case .offering:
+                                // The banner lives in the dashboard window; force
+                                // offers must surface it even if that window is closed.
+                                AppNavigationActions.openDashboard()
+                            case let .unavailable(title, message):
+                                let alert = NSAlert()
+                                alert.messageText = title
+                                alert.informativeText = message
+                                alert.addButton(withTitle: "OK")
+                                alert.runModal()
+                            }
+                        }
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)

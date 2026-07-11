@@ -65,7 +65,10 @@ describe("browser default executable detection", () => {
   }
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.mocked(execFileSync).mockReset();
+    vi.mocked(fs.existsSync).mockReset();
+    vi.mocked(fs.readFileSync).mockReset();
+    vi.mocked(os.homedir).mockReset();
     vi.mocked(os.homedir).mockReturnValue("/Users/test");
   });
 
@@ -161,5 +164,71 @@ describe("browser default executable detection", () => {
     );
 
     expect(exe?.path).toContain("Google Chrome.app/Contents/MacOS/Google Chrome");
+  });
+
+  it("resolves an Opera default-browser launcher to the directly owned binary on Windows", () => {
+    const installDir = "C:\\Users\\test\\AppData\\Local\\Programs\\Opera";
+    const launcher = `${installDir}\\launcher.exe`;
+    const opera = `${installDir}\\100.0.4815.76\\opera.exe`;
+    vi.mocked(execFileSync)
+      .mockReturnValueOnce("ProgId    REG_SZ    OperaStable")
+      .mockReturnValueOnce(`(Default)    REG_SZ    "${launcher}" "%1"`);
+    vi.mocked(fs.existsSync).mockImplementation((candidate) => {
+      const value = String(candidate);
+      return value === launcher || value === opera;
+    });
+    vi.mocked(fs.readFileSync).mockImplementation((candidate) => {
+      if (String(candidate).endsWith("installation_status.json")) {
+        return JSON.stringify({ _subfolder: "100.0.4815.76" });
+      }
+      throw new Error(`unexpected file: ${String(candidate)}`);
+    });
+
+    const exe = resolveBrowserExecutableForPlatform(
+      {} as Parameters<typeof resolveBrowserExecutableForPlatform>[0],
+      "win32",
+    );
+
+    expect(exe).toEqual({ kind: "chromium", path: opera });
+  });
+
+  it("rejects an unsafe Opera launcher target and falls back to a direct browser", () => {
+    const launcher = "C:\\Users\\test\\AppData\\Local\\Programs\\Opera\\launcher.exe";
+    vi.mocked(execFileSync)
+      .mockReturnValueOnce("ProgId    REG_SZ    OperaStable")
+      .mockReturnValueOnce(`(Default)    REG_SZ    "${launcher}" "%1"`);
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ _subfolder: "..\\escape" }));
+    vi.mocked(fs.existsSync).mockImplementation((candidate) => {
+      const value = String(candidate).toLowerCase();
+      return (
+        value === launcher.toLowerCase() ||
+        value.endsWith("\\google\\chrome\\application\\chrome.exe")
+      );
+    });
+
+    const exe = resolveBrowserExecutableForPlatform(
+      {} as Parameters<typeof resolveBrowserExecutableForPlatform>[0],
+      "win32",
+    );
+
+    expect(exe?.path.toLowerCase()).toMatch(/\\google\\chrome\\application\\chrome\.exe$/);
+  });
+
+  it("canonicalizes an explicitly configured Opera launcher", () => {
+    const installDir = "C:\\Users\\test\\AppData\\Local\\Programs\\Opera";
+    const launcher = `${installDir}\\launcher.exe`;
+    const opera = `${installDir}\\101.0.4843.33\\opera.exe`;
+    vi.mocked(fs.existsSync).mockImplementation((candidate) => {
+      const value = String(candidate);
+      return value === launcher || value === opera;
+    });
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ _subfolder: "101.0.4843.33" }));
+
+    const exe = resolveBrowserExecutableForPlatform(
+      { executablePath: launcher } as Parameters<typeof resolveBrowserExecutableForPlatform>[0],
+      "win32",
+    );
+
+    expect(exe).toEqual({ kind: "custom", path: opera });
   });
 });
