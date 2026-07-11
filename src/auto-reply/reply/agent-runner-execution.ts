@@ -2000,7 +2000,7 @@ async function runAgentTurnWithFallbackInternal(
         params.sessionCtx.Surface ??
         params.sessionCtx.Provider,
       trigger: resolveReplyHookTrigger(
-        params.isHeartbeat === true && params.opts?.isHeartbeat !== true
+        params.isHeartbeat && params.opts?.isHeartbeat !== true
           ? { ...params.opts, isHeartbeat: true }
           : params.opts,
       ),
@@ -2495,7 +2495,7 @@ async function runAgentTurnWithFallbackInternal(
             ? "heartbeat"
             : "default";
       const replyHookOptions =
-        params.isHeartbeat === true && params.opts?.isHeartbeat !== true
+        params.isHeartbeat && params.opts?.isHeartbeat !== true
           ? { ...params.opts, isHeartbeat: true }
           : params.opts;
       // Profiler-only milestone: it separates fallback setup from the actual
