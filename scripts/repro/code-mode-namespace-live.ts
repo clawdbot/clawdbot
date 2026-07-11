@@ -200,7 +200,7 @@ function stringParam(params: Record<string, unknown>, key: string): string {
 function makeTool(
   name: string,
   description: string,
-  properties: Record<string, unknown>,
+  properties: Parameters<typeof Type.Object>[0],
   execute: (params: Record<string, unknown>) => unknown,
 ): AnyAgentTool {
   const tool = {

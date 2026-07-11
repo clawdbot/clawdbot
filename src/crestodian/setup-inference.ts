@@ -140,6 +140,7 @@ export type ActivateSetupInferenceDeps = {
   runCliAgent?: typeof import("../agents/cli-runner.js").runCliAgent;
   applySetup?: typeof applyCrestodianSetup;
   ensureCodexRuntimePlugin?: typeof import("../commands/codex-runtime-plugin-install.js").ensureCodexRuntimePluginForModelSelection;
+  ensureSelectedAgentHarnessPlugin?: typeof import("../agents/harness/runtime-plugin.js").ensureSelectedAgentHarnessPlugin;
   detectNativeCodexAppServer?: typeof detectNativeCodexAppServer;
   transformConfigWithPendingPluginInstalls?: typeof import("../plugins/install-record-commit.js").transformConfigWithPendingPluginInstalls;
   refreshPluginRegistryAfterConfigMutation?: typeof import("../plugins/registry-refresh.js").refreshPluginRegistryAfterConfigMutation;
@@ -347,6 +348,7 @@ type SetupInferenceTestPlan = {
   provider: string;
   model: string;
   modelRef: string;
+  agentHarnessRuntimeOverride?: string;
   config: OpenClawConfig;
   agentId?: string;
   agentDir?: string;
@@ -360,6 +362,31 @@ type SetupInferenceTestPlan = {
     pluginId?: string;
   };
 };
+
+function configureCodexCliNativeAuth(cfg: OpenClawConfig): OpenClawConfig {
+  const entry = cfg.plugins?.entries?.codex;
+  const pluginConfig = entry?.config ?? {};
+  const appServer =
+    pluginConfig.appServer && typeof pluginConfig.appServer === "object"
+      ? pluginConfig.appServer
+      : {};
+  return {
+    ...cfg,
+    plugins: {
+      ...cfg.plugins,
+      entries: {
+        ...cfg.plugins?.entries,
+        codex: {
+          ...entry,
+          config: {
+            ...pluginConfig,
+            appServer: { ...appServer, transport: "stdio", homeScope: "user" },
+          },
+        },
+      },
+    },
+  };
+}
 
 type RunResult = {
   payloads?: Array<{ text?: string }>;
@@ -520,6 +547,7 @@ async function buildTestPlan(params: {
         runner: "embedded",
         ...ref,
         modelRef,
+        agentHarnessRuntimeOverride: "codex",
         config: cfg,
         agentId: resolveDefaultAgentId(cfg),
         agentDir: params.agentDir,
@@ -842,7 +870,6 @@ async function activateSetupInferenceUnredacted(
     if ("error" in plan) {
       return { ok: false, status: "unavailable", error: plan.error };
     }
-
     const agentRuntimeId = agentRuntimeIdForSetupKind(params.kind);
     let testPlan = plan;
     if (plan.persistModelRef) {
@@ -981,10 +1008,15 @@ async function activateSetupInferenceUnredacted(
                 ...(agentRuntimeId ? { agentRuntimeId } : {}),
               })
             : currentCodexConfig;
-        const enabledCodex = enablePluginInConfig(
-          normalizePluginTargetConfig(currentCodexSelection, "codex"),
+        const normalizedCodexSelection = normalizePluginTargetConfig(
+          currentCodexSelection,
           "codex",
         );
+        const currentCodexPrepared =
+          codexPluginActivation === "selected"
+            ? configureCodexCliNativeAuth(normalizedCodexSelection)
+            : normalizedCodexSelection;
+        const enabledCodex = enablePluginInConfig(currentCodexPrepared, "codex");
         if (!enabledCodex.enabled) {
           return {
             ok: false,
@@ -1008,6 +1040,42 @@ async function activateSetupInferenceUnredacted(
             config: enableCodexSupervisionForGuidedSetup(stagedCodexConfig, codexSourceConfig),
             agentId: resolveDefaultAgentId(stagedCodexConfig),
           };
+
+          // The Gateway registry predates a runtime installed during this request.
+          // Refresh and load the exact harness before auth selection snapshots it.
+          const refreshPluginRegistry =
+            deps.refreshPluginRegistryAfterConfigMutation ??
+            (await import("../plugins/registry-refresh.js"))
+              .refreshPluginRegistryAfterConfigMutation;
+          let registryRefreshWarning: string | undefined;
+          await refreshPluginRegistry({
+            config: testPlan.config,
+            reason: "source-changed",
+            workspaceDir: workspace,
+            policyPluginIds: ["codex"],
+            traceCommand: "crestodian-setup-probe",
+            logger: { warn: (message) => (registryRefreshWarning = message) },
+          });
+          const ensureHarnessPlugin =
+            deps.ensureSelectedAgentHarnessPlugin ??
+            (await import("../agents/harness/runtime-plugin.js")).ensureSelectedAgentHarnessPlugin;
+          try {
+            await ensureHarnessPlugin({
+              provider: testPlan.provider,
+              modelId: testPlan.model,
+              config: testPlan.config,
+              agentId: testPlan.agentId,
+              agentHarnessRuntimeOverride: "codex",
+              workspaceDir: tempDir,
+            });
+          } catch (error) {
+            const loadError = `Could not load the Codex runtime plugin: ${formatErrorMessage(error)}`;
+            return {
+              ok: false,
+              status: "unavailable",
+              error: registryRefreshWarning ? `${registryRefreshWarning} ${loadError}` : loadError,
+            };
+          }
         }
       }
     }
@@ -1027,7 +1095,6 @@ async function activateSetupInferenceUnredacted(
     if (!test.ok) {
       return test;
     }
-
     // The probe is agent-scoped. A concurrent default-agent switch would make
     // the final setup write target an untested agent (and potentially a
     // different credential store), so fail cleanly and let the user retry.
@@ -1392,6 +1459,9 @@ async function runSetupInferenceTest(params: {
         prompt: SETUP_INFERENCE_TEST_PROMPT,
         provider: plan.provider,
         model: plan.model,
+        ...(plan.agentHarnessRuntimeOverride
+          ? { agentHarnessRuntimeOverride: plan.agentHarnessRuntimeOverride }
+          : {}),
         ...(plan.authProfileId
           ? { authProfileId: plan.authProfileId, authProfileIdSource: "user" as const }
           : {}),

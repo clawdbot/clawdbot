@@ -4,9 +4,7 @@ import { property, state } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
-import { icons } from "../../components/icons.ts";
 import "../../components/resizable-divider.ts";
-import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { readSessionDragData, sessionDragActive } from "../../lib/sessions/drag.ts";
@@ -529,22 +527,9 @@ export class ChatPage extends OpenClawLightDomElement {
                 .showPaneHeader=${false}
                 .onFocusPane=${this.handleFocusPane}
                 .onPaneSessionChange=${this.handlePaneSessionChange}
+                .onOpenSplitView=${this.narrow ? undefined : this.openSplitView}
               ></openclaw-chat-pane>
             `}
-        ${!this.layout && !this.narrow
-          ? html`
-              <openclaw-tooltip .content=${t("chat.splitView.open")}>
-                <button
-                  class="btn btn--sm btn--icon chat-open-split-view"
-                  type="button"
-                  aria-label=${t("chat.splitView.open")}
-                  @click=${this.openSplitView}
-                >
-                  ${icons.panelRightOpen}
-                </button>
-              </openclaw-tooltip>
-            `
-          : nothing}
         ${indicator
           ? html`<div
               class="chat-split-view__drop-indicator ${indicator.zone.kind === "center"

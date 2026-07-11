@@ -49,7 +49,13 @@ final class ExecApprovalsGatewayPrompter {
             // decision. If this Mac cannot present UI, leave the request
             // unresolved so the Gateway applies its current timeout fallback.
             guard self.shouldPresent(request: request) else { return }
-            guard let decision = ExecApprovalsPromptPresenter.prompt(request.request) else {
+            let nowMs = Int(Date().timeIntervalSince1970 * 1000)
+            let (remainingMs, overflow) = request.expiresAtMs.subtractingReportingOverflow(nowMs)
+            guard !overflow, remainingMs > 0 else { return }
+            guard let decision = await ExecApprovalsPromptPresenter.prompt(
+                request.request,
+                timeoutMs: remainingMs)
+            else {
                 return
             }
             try await GatewayConnection.shared.requestVoid(

@@ -18,6 +18,7 @@ import type { TSchema } from "typebox";
 import { configureMemoryCoreDreamingState } from "./src/dreaming-state.js";
 import { registerShortTermPromotionDreaming } from "./src/dreaming.js";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
+import { configureMemoryCoreEmbeddingLocalService } from "./src/memory/embedding-local-service.js";
 import { buildPromptSection } from "./src/prompt-section.js";
 
 type MemoryToolsModule = typeof import("./src/tools.js");
@@ -174,6 +175,7 @@ export default definePluginEntry({
   description: "File-backed memory search tools and CLI",
   kind: "memory",
   register(api) {
+    configureMemoryCoreEmbeddingLocalService(api.runtime.llm?.acquireLocalService);
     configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) =>
       api.runtime.state.openKeyedStore<T>(options),
     );

@@ -30,6 +30,7 @@ final class CLIInstallPrompter {
             launchAgentUsesManagedCLI: Self.launchAgentUsesManagedCLI(
                 programArguments: GatewayLaunchAgentManager.launchdConfigSnapshot()?.programArguments ?? []),
             gatewayUpdateChannel: OpenClawConfigFile.gatewayUpdateChannel(),
+            installPolicy: CLIInstallPolicy.storedPolicy(),
             launchAgentWriteDisabled: GatewayLaunchAgentManager.isLaunchAgentWriteDisabled())
         if await self.completePendingManagedRestartIfNeeded(managedStatus: managedStatus) {
             return
@@ -48,6 +49,9 @@ final class CLIInstallPrompter {
             {
                 return
             }
+            // A completed install with an unverified restart owns recovery on
+            // the next trigger; the stale pre-install status must not prompt again.
+            if Self.hasPendingManagedRestart() { return }
         }
         guard !status.isReady else { return }
         let lastPrompt = UserDefaults.standard.string(forKey: cliInstallPromptedVersionKey)
@@ -269,24 +273,30 @@ final class CLIInstallPrompter {
     static func managedRepairGatesOpen(
         launchAgentUsesManagedCLI: Bool,
         gatewayUpdateChannel: String?,
+        installPolicy: String?,
         launchAgentWriteDisabled: Bool) -> Bool
     {
         guard !launchAgentWriteDisabled else { return false }
         guard launchAgentUsesManagedCLI else { return false }
+        // Exact pins make the app the Gateway version owner; channel policies
+        // leave updates to gateway update.run instead of Sparkle repair.
+        guard installPolicy == nil || installPolicy == "exact" else { return false }
         // Extended-stable pins an intentionally older gateway; moving it to the
         // app's newer stable version without consent keeps the prompt instead.
-        return gatewayUpdateChannel?.lowercased() != "extended-stable"
+        return gatewayUpdateChannel != "extended-stable"
     }
 
     static func shouldAutomaticallyRepair(
         status: CLIInstaller.Status,
         launchAgentUsesManagedCLI: Bool,
         gatewayUpdateChannel: String? = nil,
+        installPolicy: String? = nil,
         launchAgentWriteDisabled: Bool = GatewayLaunchAgentManager.isLaunchAgentWriteDisabled()) -> Bool
     {
         guard self.managedRepairGatesOpen(
             launchAgentUsesManagedCLI: launchAgentUsesManagedCLI,
             gatewayUpdateChannel: gatewayUpdateChannel,
+            installPolicy: installPolicy,
             launchAgentWriteDisabled: launchAgentWriteDisabled)
         else { return false }
         guard case let .incompatible(location, found, required) = status else { return false }

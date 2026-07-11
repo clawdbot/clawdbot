@@ -598,6 +598,19 @@ describe("scripts/changed-lanes", () => {
     });
   });
 
+  it.each([
+    "scripts/control-ui-i18n.ts",
+    "scripts/lib/example.ts",
+    "scripts/lib/example.d.mts",
+    "tsconfig.scripts.json",
+  ])("routes %s to the scripts typecheck lane", (changedPath) => {
+    const result = detectChangedLanes([changedPath]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(result.lanes.scripts).toBe(true);
+    expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:scripts");
+  });
+
   it("falls back to full core lint for broad core diffs", () => {
     const targets = Array.from({ length: 9 }, (_, index) => `src/shared/file-${index}.ts`);
     const command = createTargetedCoreLintCommand(targets, { PATH: "/usr/bin" });
@@ -1818,6 +1831,7 @@ describe("scripts/changed-lanes", () => {
       coreTests: false,
       extensions: false,
       extensionTests: false,
+      scripts: false,
       apps: false,
       docs: false,
       tooling: false,

@@ -233,6 +233,28 @@ describe("probeGatewayMemoryStatus", () => {
     });
   });
 
+  it("carries last-known llama.cpp facts from the gateway", async () => {
+    callGateway.mockResolvedValue({
+      embedding: { ok: true },
+      embeddingRuntime: {
+        engine: "llama.cpp",
+        state: "ready",
+        backend: "metal",
+        buildType: "prebuilt",
+      },
+    });
+
+    await expect(probeGatewayMemoryStatus({ cfg })).resolves.toMatchObject({
+      checked: true,
+      ready: true,
+      runtimeFacts: {
+        state: "ready",
+        backend: "metal",
+        buildType: "prebuilt",
+      },
+    });
+  });
+
   it("treats outer gateway timeouts as inconclusive (skipped: false)", async () => {
     // A transport timeout must NOT be treated as a skipped probe. It is a real
     // diagnostic signal and the renderer should warn for key-optional providers.

@@ -126,12 +126,14 @@ enum CommandResolver {
     {
         guard let executable = defaults.string(forKey: cliValidatedExecutableKey),
               fileManager.isExecutableFile(atPath: executable),
-              let validatedVersion = Semver.parse(defaults.string(forKey: cliValidatedVersionKey))
+              let validatedVersion = defaults.string(forKey: cliValidatedVersionKey),
+              Semver.parse(validatedVersion) != nil
         else {
             return nil
         }
-        guard let required = Semver.parse(requiredVersion) else { return executable }
-        return validatedVersion.compatible(with: required) ? executable : nil
+        return Semver.satisfiesExpectedGatewayVersion(
+            installed: validatedVersion,
+            expected: requiredVersion) ? executable : nil
     }
 
     private static func openclawManagedPaths(home: URL) -> [String] {

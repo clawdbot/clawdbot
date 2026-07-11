@@ -2173,6 +2173,21 @@
   animation: fade-in 0.2s var(--ease-out);
 }
 
+.chat-side-result--pending .chat-side-result__meta {
+  animation: chat-side-result-pending-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes chat-side-result-pending-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.45;
+  }
+}
+
 .chat-side-result--error {
   border-color: rgba(239, 68, 68, 0.28);
   background: linear-gradient(180deg, rgba(239, 68, 68, 0.08), rgba(239, 68, 68, 0.03));

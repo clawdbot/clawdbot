@@ -28,6 +28,10 @@
   background: color-mix(in srgb, var(--bg-elevated) 48%, var(--card) 52%);
 }
 
+.about-build-strip--with-branch {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
 .about-build-strip__item {
   min-width: 0;
   padding: 16px 18px;
@@ -169,7 +173,10 @@
     padding: 18px 16px;
   }
 
-  .about-build-strip {
+  /* Repeat the modifier so the narrow single-column fallback outranks the
+     two-class four-column rule above. */
+  .about-build-strip,
+  .about-build-strip--with-branch {
     grid-template-columns: minmax(0, 1fr);
   }
 

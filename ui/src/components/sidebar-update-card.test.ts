@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UpdateAvailable } from "../api/types.ts";
+import { NATIVE_UPDATE_DECLINED_EVENT } from "../app/native-link-routing.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import "./sidebar-update-card.ts";
 
@@ -108,6 +109,32 @@ describe("SidebarUpdateCard", () => {
 
     expect(postMessage).toHaveBeenCalledWith({ type: "start-update" });
     expect(onUpdate).not.toHaveBeenCalled();
+  });
+
+  it("returns a declined native click to the gateway while connected", async () => {
+    const element = await mount({
+      currentVersion: "1.0.0",
+      latestVersion: "2.0.0",
+      channel: "stable",
+    });
+    const onUpdate = vi.fn();
+    element.onUpdate = onUpdate;
+
+    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
+    expect(onUpdate).toHaveBeenCalledOnce();
+
+    element.updateRunning = true;
+    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
+    expect(onUpdate).toHaveBeenCalledOnce();
+
+    element.updateRunning = false;
+    element.updateAvailable = null;
+    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
+    expect(onUpdate).toHaveBeenCalledOnce();
+
+    element.remove();
+    window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_DECLINED_EVENT));
+    expect(onUpdate).toHaveBeenCalledOnce();
   });
 
   it("disables the action while updating", async () => {

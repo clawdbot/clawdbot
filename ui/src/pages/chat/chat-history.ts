@@ -20,7 +20,11 @@ import {
   stripHeartbeatTokenForDisplay,
 } from "../../lib/chat/heartbeat-display.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
-import type { ChatSideResult } from "../../lib/chat/side-result.ts";
+import {
+  retirePendingChatSideQuestion,
+  type ChatSideResult,
+  type ChatSideResultPending,
+} from "../../lib/chat/side-result.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
@@ -447,6 +451,7 @@ export type ChatState = {
   lastError: string | null;
   chatError?: string | null;
   chatSideResult?: ChatSideResult | null;
+  chatSideResultPending?: ChatSideResultPending | null;
   chatSideResultTerminalRuns?: Set<string>;
   chatReplyTarget?: unknown;
   agentsError?: string | null;
@@ -849,6 +854,10 @@ export async function clearChatHistory(
     clearSideResultTerminalRuns: true,
     clearRunStatus: !hadActiveRun,
   });
+  // After the suppression-set wipe above: retire (not just drop) a pending
+  // BTW run so its late resultless terminal event cannot re-enter the freshly
+  // cleared transcript.
+  retirePendingChatSideQuestion(state);
   await loadChatHistory(state);
   scheduleChatScroll(state);
   return "completed";

@@ -2,7 +2,7 @@
 
 // Executed directly via Node.js native type stripping in the release workflow.
 
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   appendFileSync,
@@ -19,10 +19,11 @@ import {
   realpathSync,
   rmSync,
   statSync,
+  type WriteStream,
   writeFileSync,
 } from "node:fs";
 import { mkdtempSync } from "node:fs";
-import { createServer } from "node:http";
+import { createServer, type Server } from "node:http";
 import { createConnection as createNetConnection, createServer as createNetServer } from "node:net";
 import type { Socket } from "node:net";
 import { tmpdir } from "node:os";
@@ -32,19 +33,113 @@ import { isLocalBuildMetadataDistPath } from "./lib/local-build-metadata-paths.m
 import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
+type CrossOsSuite = "packaged-fresh" | "installer-fresh" | "packaged-upgrade" | "dev-update";
+type CrossOsMode = "fresh" | "upgrade" | "both";
+type CrossOsOsId = "ubuntu" | "windows" | "macos";
+type ProviderId = "openai" | "anthropic" | "minimax";
+type ProviderConfig = {
+  extensionId: string;
+  secretEnv: string;
+  authChoice: string;
+  model: string;
+  baseUrl?: string;
+  timeoutSeconds?: number;
+};
+type ParsedArgs = Record<string, string>;
+type LaneResult = { status: string; error?: string } & Record<string, unknown>;
+type CandidateBuild = {
+  candidateTgz: string;
+  candidateVersion: string;
+  candidateFileName: string;
+  sourceDir: string;
+  sourceSha: string;
+};
+type PackageJson = {
+  name?: string;
+  version?: string;
+  scripts?: Record<string, string>;
+  openclaw?: { commit?: string };
+};
+type LaneState = {
+  name: string;
+  rootDir: string;
+  prefixDir: string;
+  homeDir: string;
+  stateDir: string;
+  appDataDir: string;
+  gatewayPort: number;
+  phaseTimings: Array<{ name: string; status: "pass" | "fail"; durationMs: number }>;
+};
+type GatewayHandle = {
+  child: ChildProcess;
+  closeLog: () => Promise<void>;
+  logPath: string;
+};
+type CommandResult = { exitCode: number; stdout: string; stderr: string };
+type AgentTurnResult = CommandResult | { status: number; stdout: string; stderr: string };
+type CommandOptions = {
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  logPath: string;
+  timeoutMs?: number;
+  check?: boolean;
+  maxOutputBytes?: number;
+};
+type CommandInvocation = {
+  command: string;
+  args: string[];
+  shell?: boolean | string;
+  windowsVerbatimArguments?: boolean;
+};
+type Cleanup = () => Promise<void> | void;
+type LaneBaseParams = {
+  logsDir: string;
+  providerConfig: ProviderConfig;
+  providerSecretValue: string;
+};
+type LaneCommandParams = {
+  lane: LaneState;
+  env: NodeJS.ProcessEnv;
+  logPath: string;
+};
+type AgentOutputOptions = { logText?: string; logPath?: string };
+type SummaryPayload = {
+  provider: string;
+  suite: string;
+  mode: string;
+  sourceSha?: string;
+  candidateVersion?: string;
+  baselineSpec: string;
+  result?: {
+    status?: string;
+    installTarget?: string;
+    installVersion?: string;
+    baselineVersion?: string;
+    installedVersion?: string;
+    installedCommit?: string;
+    cliPath?: string;
+    gatewayPort?: number;
+    dashboardStatus?: string;
+    discordStatus?: string;
+    agentOutput?: string;
+    error?: string;
+    phaseTimings?: LaneState["phaseTimings"];
+  };
+};
+
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const PUBLISHED_INSTALLER_BASE_URL = "https://openclaw.ai";
 
-const SUPPORTED_MODES = new Set(["fresh", "upgrade", "both"]);
-const SUPPORTED_SUITES = new Set([
+const SUPPORTED_MODES = new Set<CrossOsMode>(["fresh", "upgrade", "both"]);
+const SUPPORTED_SUITES = new Set<CrossOsSuite>([
   "packaged-fresh",
   "installer-fresh",
   "packaged-upgrade",
   "dev-update",
 ]);
-const SUPPORTED_OS_IDS = new Set(["ubuntu", "windows", "macos"]);
+const SUPPORTED_OS_IDS = new Set<CrossOsOsId>(["ubuntu", "windows", "macos"]);
 
-const CROSS_OS_SIGNAL_EXIT_CODES = {
+const CROSS_OS_SIGNAL_EXIT_CODES: Partial<Record<NodeJS.Signals, number>> = {
   SIGHUP: 129,
   SIGINT: 130,
   SIGTERM: 143,
@@ -69,6 +164,9 @@ const CROSS_OS_AGENT_TURN_OPTIONAL = resolveCrossOsAgentTurnOptional();
 for (const signal of Object.keys(CROSS_OS_SIGNAL_EXIT_CODES) as NodeJS.Signals[]) {
   process.on(signal, () => {
     forwardedSignalExitCode ??= CROSS_OS_SIGNAL_EXIT_CODES[signal];
+    if (forwardedSignalExitCode === undefined) {
+      return;
+    }
     if (CROSS_OS_ACTIVE_CHILD_TREE_KILLERS.size === 0) {
       process.exit(forwardedSignalExitCode);
     }
@@ -117,13 +215,13 @@ const providerConfig = {
     authChoice: "minimax-global-api",
     model: "minimax/MiniMax-M2.7",
   },
-};
+} satisfies Record<ProviderId, ProviderConfig>;
 
-export function resolveProviderConfig(provider, env = process.env) {
-  const config = providerConfig[provider];
-  if (!config) {
+export function resolveProviderConfig(provider: string, env = process.env): ProviderConfig | null {
+  if (!Object.hasOwn(providerConfig, provider)) {
     return null;
   }
+  const config: ProviderConfig = providerConfig[provider as ProviderId];
   const providerEnvKey = `OPENCLAW_CROSS_OS_${provider.toUpperCase().replace(/[^A-Z0-9]+/gu, "_")}_MODEL`;
   const model = env[providerEnvKey]?.trim() || env.OPENCLAW_CROSS_OS_MODEL?.trim() || config.model;
   return { ...config, model };
@@ -138,7 +236,7 @@ const RELEASE_SMOKE_PLUGIN_ALLOWLIST_BASE = [
   "talk-voice",
 ];
 
-export function buildCrossOsReleaseSmokePluginAllowlist(providerMeta) {
+export function buildCrossOsReleaseSmokePluginAllowlist(providerMeta: ProviderConfig) {
   return [...new Set([providerMeta.extensionId, ...RELEASE_SMOKE_PLUGIN_ALLOWLIST_BASE])];
 }
 
@@ -146,13 +244,13 @@ export function buildCrossOsReleaseSmokeMemorySlotConfigArgs() {
   return ["config", "set", "plugins.slots.memory", JSON.stringify("none"), "--strict-json"];
 }
 
-function shouldSeedProviderConfigModels(providerMeta) {
+function shouldSeedProviderConfigModels(providerMeta: ProviderConfig) {
   return (
     typeof providerMeta.baseUrl === "string" || typeof providerMeta.timeoutSeconds === "number"
   );
 }
 
-function buildReleaseProviderConfigOverride(providerMeta) {
+function buildReleaseProviderConfigOverride(providerMeta: ProviderConfig) {
   if (!shouldSeedProviderConfigModels(providerMeta)) {
     return null;
   }
@@ -194,7 +292,7 @@ export const CROSS_OS_COMMAND_HEARTBEAT_SECONDS = parsePositiveIntegerEnv(
   60,
 );
 
-export function resolveNpmPackTarballFileName(value, label = "npm pack") {
+export function resolveNpmPackTarballFileName(value: unknown, label = "npm pack") {
   const filename = typeof value === "string" ? value.trim() : "";
   if (
     !filename.endsWith(".tgz") ||
@@ -207,7 +305,11 @@ export function resolveNpmPackTarballFileName(value, label = "npm pack") {
   return filename;
 }
 
-export function resolvePackDestinationTarball(value, packDestination, label = "package pack") {
+export function resolvePackDestinationTarball(
+  value: unknown,
+  packDestination: string,
+  label = "package pack",
+) {
   const filename = typeof value === "string" ? value.trim() : "";
   const fileName = basename(filename);
   const destinationDir = resolve(packDestination);
@@ -241,8 +343,8 @@ function isMainModule() {
   return resolve(invokedPath) === SCRIPT_PATH;
 }
 
-export function parseArgs(argv) {
-  const parsed = {};
+export function parseArgs(argv: string[]): ParsedArgs {
+  const parsed: ParsedArgs = {};
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
     if (!token.startsWith("--")) {
@@ -260,7 +362,7 @@ export function parseArgs(argv) {
   return parsed;
 }
 
-export function parsePositiveIntegerEnv(name, fallback, env = process.env) {
+export function parsePositiveIntegerEnv(name: string, fallback: number, env = process.env): number {
   const raw = env[name]?.trim();
   if (!raw) {
     return fallback;
@@ -275,7 +377,7 @@ export function parsePositiveIntegerEnv(name, fallback, env = process.env) {
   return value;
 }
 
-function parseBooleanEnv(name, fallback, env = process.env) {
+function parseBooleanEnv(name: string, fallback: boolean, env = process.env): boolean {
   const raw = env[name]?.trim();
   if (!raw) {
     return fallback;
@@ -293,14 +395,14 @@ export function resolveCrossOsAgentTurnOptional(env = process.env) {
   return parseBooleanEnv("OPENCLAW_CROSS_OS_AGENT_TURN_OPTIONAL", false, env);
 }
 
-export function looksLikeReleaseVersionRef(ref) {
+export function looksLikeReleaseVersionRef(ref: string) {
   const trimmed = normalizeRequestedRef(ref);
   return /^v?[0-9]{4}\.[0-9]+\.[0-9]+(?:-(?:[1-9][0-9]*)|[-.](?:alpha|beta|rc)[-.]?[0-9]+)?$/iu.test(
     trimmed,
   );
 }
 
-export function normalizeRequestedRef(ref) {
+export function normalizeRequestedRef(ref?: string) {
   const trimmed = ref?.trim() || "";
   if (!trimmed) {
     return "";
@@ -314,16 +416,16 @@ export function normalizeRequestedRef(ref) {
   return trimmed;
 }
 
-export function isImmutableReleaseRef(ref) {
+export function isImmutableReleaseRef(ref?: string) {
   const trimmed = ref?.trim() || "";
   return trimmed.startsWith("refs/tags/") || looksLikeReleaseVersionRef(trimmed);
 }
 
-export function resolveRequestedSuites(mode, ref) {
-  if (!SUPPORTED_MODES.has(mode)) {
+export function resolveRequestedSuites(mode: string, ref: string): CrossOsSuite[] {
+  if (!SUPPORTED_MODES.has(mode as CrossOsMode)) {
     throw new Error(`Unsupported mode "${mode}".`);
   }
-  const suites = [];
+  const suites: CrossOsSuite[] = [];
   if (mode === "fresh" || mode === "both") {
     suites.push("packaged-fresh", "installer-fresh");
   }
@@ -336,8 +438,18 @@ export function resolveRequestedSuites(mode, ref) {
   return suites;
 }
 
-export function resolveRunnerMatrix(params) {
-  const pick = (...values) =>
+export function resolveRunnerMatrix(params: {
+  mode: string;
+  ref: string;
+  suiteFilter?: string;
+  ubuntuRunner?: string;
+  windowsRunner?: string;
+  macosRunner?: string;
+  varUbuntuRunner?: string;
+  varWindowsRunner?: string;
+  varMacosRunner?: string;
+}) {
+  const pick = (...values: Array<string | undefined>) =>
     values.find((value) => typeof value === "string" && value.trim().length > 0)?.trim();
   const suites = resolveRequestedSuites(params.mode, params.ref);
   const suiteFilter = parseCrossOsSuiteFilter(params.suiteFilter ?? "");
@@ -363,7 +475,7 @@ export function resolveRunnerMatrix(params) {
   ];
   const include = runners.flatMap((runner) =>
     suites
-      .filter((suite) => suiteFilter.matches(runner.os_id, suite))
+      .filter((suite) => suiteFilter.matches(runner.os_id as CrossOsOsId, suite))
       .map((suite) =>
         Object.assign({}, runner, {
           suite,
@@ -382,8 +494,8 @@ export function resolveRunnerMatrix(params) {
   };
 }
 
-export function parseCrossOsSuiteFilter(rawFilter) {
-  const tokens = String(rawFilter ?? "")
+export function parseCrossOsSuiteFilter(rawFilter: string) {
+  const tokens = rawFilter
     .split(/[, ]+/u)
     .map((token) => normalizeCrossOsSuiteFilterToken(token))
     .filter(Boolean);
@@ -395,11 +507,11 @@ export function parseCrossOsSuiteFilter(rawFilter) {
   }
 
   const matchers = tokens.map((token) => {
-    if (SUPPORTED_SUITES.has(token)) {
-      return { osId: "", suite: token };
+    if (SUPPORTED_SUITES.has(token as CrossOsSuite)) {
+      return { osId: "", suite: token as CrossOsSuite };
     }
-    if (SUPPORTED_OS_IDS.has(token)) {
-      return { osId: token, suite: "" };
+    if (SUPPORTED_OS_IDS.has(token as CrossOsOsId)) {
+      return { osId: token as CrossOsOsId, suite: "" };
     }
     for (const separator of ["/", ":", "-"]) {
       const matchedOs = [...SUPPORTED_OS_IDS].find((osId) =>
@@ -409,10 +521,10 @@ export function parseCrossOsSuiteFilter(rawFilter) {
         continue;
       }
       const suite = token.slice(matchedOs.length + separator.length);
-      if (!SUPPORTED_SUITES.has(suite)) {
+      if (!SUPPORTED_SUITES.has(suite as CrossOsSuite)) {
         break;
       }
-      return { osId: matchedOs, suite };
+      return { osId: matchedOs, suite: suite as CrossOsSuite };
     }
     throw new Error(
       `Unsupported cross_os_suite_filter token ${JSON.stringify(token)}. Use an OS id, suite id, or os/suite pair such as windows/packaged-upgrade.`,
@@ -420,7 +532,7 @@ export function parseCrossOsSuiteFilter(rawFilter) {
   });
 
   return {
-    matches: (osId, suite) =>
+    matches: (osId: CrossOsOsId, suite: CrossOsSuite) =>
       matchers.some((matcher) => {
         const osMatches = !matcher.osId || matcher.osId === osId;
         const suiteMatches = !matcher.suite || matcher.suite === suite;
@@ -430,7 +542,7 @@ export function parseCrossOsSuiteFilter(rawFilter) {
   };
 }
 
-function normalizeCrossOsSuiteFilterToken(token) {
+function normalizeCrossOsSuiteFilterToken(token: string) {
   return token
     .trim()
     .toLowerCase()
@@ -465,7 +577,7 @@ export function readRunnerOverrideEnv(env = process.env) {
   };
 }
 
-function formatSuiteLabel(suite) {
+function formatSuiteLabel(suite: CrossOsSuite) {
   if (suite === "packaged-fresh") {
     return "packaged fresh";
   }
@@ -478,7 +590,7 @@ function formatSuiteLabel(suite) {
   return "dev update";
 }
 
-async function main(argv) {
+async function main(argv: string[]) {
   const args = parseArgs(argv);
 
   if (args["resolve-matrix"] === "true") {
@@ -539,7 +651,7 @@ async function main(argv) {
     return;
   }
 
-  if (!SUPPORTED_SUITES.has(suite)) {
+  if (!SUPPORTED_SUITES.has(suite as CrossOsSuite)) {
     throw new Error(`Unsupported suite "${suite}".`);
   }
   if (!Object.hasOwn(providerConfig, provider)) {
@@ -547,6 +659,9 @@ async function main(argv) {
   }
 
   const selectedProvider = resolveProviderConfig(provider);
+  if (!selectedProvider) {
+    throw new Error(`Unsupported provider "${provider}".`);
+  }
   const providerSecretValue = process.env[selectedProvider.secretEnv]?.trim();
   if (!providerSecretValue) {
     throw new Error(`Missing ${selectedProvider.secretEnv}.`);
@@ -568,11 +683,11 @@ async function main(argv) {
     baselineSpec,
     result: {
       status: "pending",
-    },
+    } as LaneResult,
     discordRoundtrip: runDiscordRoundtrip,
   };
 
-  let build;
+  let build: CandidateBuild;
   try {
     build = sourceDir
       ? await prepareCandidate({
@@ -647,7 +762,11 @@ async function main(argv) {
   }
 }
 
-async function prepareCandidate(params) {
+async function prepareCandidate(params: {
+  outputDir: string;
+  sourceDir: string;
+  logsDir: string;
+}): Promise<CandidateBuild> {
   logPhase("prepare", "resolve-source-sha");
   const packageJson = readPackageJson(params.sourceDir);
   const hasUiBuildScript = packageJsonHasScript(packageJson, "ui:build");
@@ -723,7 +842,7 @@ async function prepareCandidate(params) {
   };
 }
 
-export function resolvePackageCandidatePackCommand(sourceDir, packDir) {
+export function resolvePackageCandidatePackCommand(sourceDir: string, packDir: string) {
   const packageHelper = join(sourceDir, "scripts", "package-openclaw-for-docker.mjs");
   if (existsSync(packageHelper)) {
     return {
@@ -744,7 +863,12 @@ export function resolvePackageCandidatePackCommand(sourceDir, packDir) {
   };
 }
 
-function resolvePackedCandidateFromOutput(params) {
+function resolvePackedCandidateFromOutput(params: {
+  output: string;
+  packDir: string;
+  packageJson: PackageJson;
+  packCommand: ReturnType<typeof resolvePackageCandidatePackCommand>;
+}) {
   if (params.packCommand.kind === "docker-helper") {
     const packOutputLines = params.output.trim().split(/\r?\n/u).filter(Boolean);
     const packedTarball = resolvePackDestinationTarball(
@@ -764,11 +888,13 @@ function resolvePackedCandidateFromOutput(params) {
         2,
       )}\n`,
       path: packedTarball.path,
-      version: String(params.packageJson.version ?? "").trim(),
+      version: (params.packageJson.version ?? "").trim(),
     };
   }
 
-  const parsedPack = JSON.parse(params.output);
+  const parsedPack = JSON.parse(params.output) as
+    | { filename?: string; version?: string }
+    | Array<{ filename?: string; version?: string }>;
   const lastPack = Array.isArray(parsedPack) ? parsedPack.at(-1) : parsedPack;
   const packedTarball = resolvePackDestinationTarball(
     lastPack?.filename,
@@ -779,25 +905,25 @@ function resolvePackedCandidateFromOutput(params) {
     fileName: packedTarball.fileName,
     packJson: params.output,
     path: packedTarball.path,
-    version: String(lastPack?.version ?? params.packageJson.version ?? "").trim(),
+    version: (lastPack?.version ?? params.packageJson.version ?? "").trim(),
   };
 }
 
-function normalizeRelativePath(value) {
+function normalizeRelativePath(value: string) {
   return value.replace(/\\/gu, "/");
 }
 
-function isNotFoundError(error) {
-  return error && typeof error === "object" && error.code === "ENOENT";
+function isNotFoundError(error: unknown) {
+  return error !== null && typeof error === "object" && "code" in error && error.code === "ENOENT";
 }
 
-function isInstallStageDirName(value) {
+function isInstallStageDirName(value: string) {
   return INSTALL_STAGE_DEBRIS_DIR_PATTERN.test(value);
 }
 
-function collectLegacyPluginDependencyStagingDebrisPaths(packageRoot) {
+function collectLegacyPluginDependencyStagingDebrisPaths(packageRoot: string) {
   const rootEntries = readdirSync(packageRoot, { withFileTypes: true });
-  const debris = [];
+  const debris: string[] = [];
   for (const rootEntry of rootEntries) {
     if (!rootEntry.isDirectory() || rootEntry.name.toLowerCase() !== "dist") {
       continue;
@@ -854,7 +980,7 @@ function collectLegacyPluginDependencyStagingDebrisPaths(packageRoot) {
   return debris.toSorted((left, right) => left.localeCompare(right));
 }
 
-function assertNoLegacyPluginDependencyStagingDebris(packageRoot) {
+function assertNoLegacyPluginDependencyStagingDebris(packageRoot: string) {
   const debris = collectLegacyPluginDependencyStagingDebrisPaths(packageRoot);
   if (debris.length === 0) {
     return;
@@ -864,7 +990,7 @@ function assertNoLegacyPluginDependencyStagingDebris(packageRoot) {
   );
 }
 
-function isPackagedDistPath(relativePath) {
+function isPackagedDistPath(relativePath: string) {
   if (!relativePath.startsWith("dist/")) {
     return false;
   }
@@ -886,7 +1012,10 @@ function isPackagedDistPath(relativePath) {
   return true;
 }
 
-export async function writePackageDistInventoryForCandidate(params) {
+export async function writePackageDistInventoryForCandidate(params: {
+  sourceDir: string;
+  logPath: string;
+}) {
   assertNoLegacyPluginDependencyStagingDebris(params.sourceDir);
   const dryRun = await runCommand(
     pnpmCommand(),
@@ -897,7 +1026,9 @@ export async function writePackageDistInventoryForCandidate(params) {
       timeoutMs: 5 * 60 * 1000,
     },
   );
-  const parsedPack = JSON.parse(dryRun.stdout);
+  const parsedPack = JSON.parse(dryRun.stdout) as
+    | { files?: Array<{ path?: string }> }
+    | Array<{ files?: Array<{ path?: string }> }>;
   const lastPack = Array.isArray(parsedPack) ? parsedPack.at(-1) : parsedPack;
   const files = Array.isArray(lastPack?.files) ? lastPack.files : [];
   if (files.length === 0) {
@@ -907,7 +1038,7 @@ export async function writePackageDistInventoryForCandidate(params) {
   }
   const inventory = files
     .flatMap((entry) => {
-      const relativePath = normalizeRelativePath(String(entry?.path ?? "").trim());
+      const relativePath = normalizeRelativePath((entry.path ?? "").trim());
       return isPackagedDistPath(relativePath) ? [relativePath] : [];
     })
     .toSorted((left, right) => left.localeCompare(right));
@@ -916,7 +1047,11 @@ export async function writePackageDistInventoryForCandidate(params) {
   writeFileSync(inventoryPath, `${JSON.stringify(inventory, null, 2)}\n`, "utf8");
 }
 
-function readProvidedCandidate(params) {
+function readProvidedCandidate(params: {
+  candidateTgz: string;
+  candidateVersion: string;
+  sourceSha: string;
+}): CandidateBuild {
   if (!params.candidateTgz) {
     throw new Error("Missing required --candidate-tgz argument when --source-dir is not provided.");
   }
@@ -940,9 +1075,9 @@ function readProvidedCandidate(params) {
   };
 }
 
-async function runFreshLane(params) {
+async function runFreshLane(params: LaneBaseParams & { build: CandidateBuild }) {
   const lane = createLaneState("fresh");
-  const cleanup = [];
+  const cleanup: Cleanup[] = [];
   try {
     const env = buildLaneEnv(lane, params.providerConfig, params.providerSecretValue);
     await runTimedLanePhase(lane, "install-candidate", async () => {
@@ -1045,7 +1180,14 @@ async function runFreshLane(params) {
   }
 }
 
-async function runUpgradeLane(params) {
+async function runUpgradeLane(
+  params: LaneBaseParams & {
+    baselineSpec: string;
+    baselineTgz: string;
+    build: CandidateBuild;
+    candidateUrl: string;
+  },
+) {
   if (!params.baselineTgz && !params.baselineSpec) {
     throw new Error("Missing required --baseline-tgz argument for upgrade mode.");
   }
@@ -1053,7 +1195,7 @@ async function runUpgradeLane(params) {
     throw new Error("Missing candidate package URL for upgrade mode.");
   }
   const lane = createLaneState("upgrade");
-  const cleanup = [];
+  const cleanup: Cleanup[] = [];
   try {
     const env = buildLaneEnv(lane, params.providerConfig, params.providerSecretValue);
     await runTimedLanePhase(lane, "install-baseline", async () => {
@@ -1091,7 +1233,7 @@ async function runUpgradeLane(params) {
     const updateEnv = buildRealUpdateEnv(env);
     const updateArgs = buildPackagedUpgradeUpdateArgs(params.candidateUrl);
     const updateLogPath = join(params.logsDir, "upgrade-update.log");
-    let updateResult;
+    let updateResult: CommandResult | undefined;
     let usedWindowsPackagedUpgradeTimeoutFallback = false;
     await runTimedLanePhase(lane, "update", async () => {
       try {
@@ -1119,6 +1261,9 @@ async function runUpgradeLane(params) {
         };
       }
     });
+    if (!updateResult) {
+      throw new Error("Packaged update completed without a command result.");
+    }
     const usedWindowsPackagedUpgradeFallback =
       usedWindowsPackagedUpgradeTimeoutFallback ||
       isRecoverableWindowsPackagedUpgradeSwapCleanupFailure(updateResult, process.platform);
@@ -1240,12 +1385,14 @@ async function runUpgradeLane(params) {
   }
 }
 
-async function runInstallerFreshSuite(params) {
+async function runInstallerFreshSuite(
+  params: LaneBaseParams & { build: CandidateBuild; runDiscordRoundtrip: boolean },
+) {
   const lane = createLaneState("installer-fresh");
-  const cleanup = [];
+  const cleanup: Cleanup[] = [];
   const usesManagedGateway = shouldUseManagedGatewayService();
   const useManagedGatewayAfterInstall = shouldUseManagedGatewayForInstallerRuntime();
-  const manualGateway = { current: null };
+  const manualGateway: { current: GatewayHandle | null } = { current: null };
   try {
     const env = buildInstallerEnv(lane, params.providerConfig, params.providerSecretValue);
     // Drive the public installer against the exact candidate artifact built from the requested ref.
@@ -1401,9 +1548,16 @@ async function runInstallerFreshSuite(params) {
   }
 }
 
-async function runDevUpdateSuite(params) {
+async function runDevUpdateSuite(
+  params: LaneBaseParams & {
+    baselineSpec: string;
+    ref: string;
+    sourceSha: string;
+    runDiscordRoundtrip: boolean;
+  },
+) {
   const lane = createLaneState("dev-update");
-  const cleanup = [];
+  const cleanup: Cleanup[] = [];
   const installTarget = await resolveInstallerTargetVersion({
     baselineSpec: params.baselineSpec,
     logsDir: params.logsDir,
@@ -1421,7 +1575,7 @@ async function runDevUpdateSuite(params) {
     );
   }
   const verificationRef = resolveDevUpdateVerificationRef(params.ref, params.sourceSha);
-  const manualGateway = { current: null };
+  const manualGateway: { current: GatewayHandle | null } = { current: null };
   try {
     const env = buildInstallerEnv(lane, params.providerConfig, params.providerSecretValue);
     const installerUrl = resolvePublishedInstallerUrl();
@@ -1569,7 +1723,7 @@ async function runDevUpdateSuite(params) {
   }
 }
 
-function createLaneState(name) {
+function createLaneState(name: string): LaneState {
   const rootDir = mkdtempSync(join(tmpdir(), `openclaw-${name}-`));
   const prefixDir = join(rootDir, "prefix");
   const homeDir = join(rootDir, "home");
@@ -1595,7 +1749,11 @@ function createLaneState(name) {
   };
 }
 
-function buildLaneEnv(lane, providerMeta, providerSecretValue) {
+function buildLaneEnv(
+  lane: LaneState,
+  providerMeta: ProviderConfig,
+  providerSecretValue: string,
+): NodeJS.ProcessEnv {
   ensureLocalNpmShim(lane);
   return {
     ...process.env,
@@ -1614,7 +1772,11 @@ function buildLaneEnv(lane, providerMeta, providerSecretValue) {
   };
 }
 
-function buildInstallerEnv(lane, providerMeta, providerSecretValue) {
+function buildInstallerEnv(
+  lane: LaneState,
+  providerMeta: ProviderConfig,
+  providerSecretValue: string,
+): NodeJS.ProcessEnv {
   const localAppData = join(lane.homeDir, "AppData", "Local");
   mkdirSync(localAppData, { recursive: true });
   return {
@@ -1651,27 +1813,27 @@ export function shouldStopManagedGatewayBeforeManualFallback(platform = process.
   return shouldUseManagedGatewayService(platform);
 }
 
-function shouldRunBundledPluginPostinstall() {
+function shouldRunBundledPluginPostinstall(_options?: { lane?: LaneState }) {
   return true;
 }
 
-function looksLikeCommitSha(ref) {
+function looksLikeCommitSha(ref: string) {
   return /^[0-9a-f]{7,40}$/iu.test(ref.trim());
 }
 
-function resolveExpectedDevUpdateRef(ref) {
+function resolveExpectedDevUpdateRef(ref?: string) {
   const trimmed = normalizeRequestedRef(ref) || "main";
   return trimmed || "main";
 }
 
-export function resolveDevUpdateVerificationRef(ref, sourceSha) {
+export function resolveDevUpdateVerificationRef(ref: string, sourceSha: string) {
   if (resolveExpectedDevUpdateRef(ref) === "main" && looksLikeCommitSha(sourceSha ?? "")) {
     return sourceSha.trim();
   }
   return resolveExpectedDevUpdateRef(ref);
 }
 
-export function shouldRunMainChannelDevUpdate(ref) {
+export function shouldRunMainChannelDevUpdate(ref: string) {
   if (isImmutableReleaseRef(ref)) {
     return false;
   }
@@ -1682,8 +1844,8 @@ export function shouldSkipInstallerDaemonHealthCheck(platform = process.platform
   return platform === "win32";
 }
 
-export function buildRealUpdateEnv(env) {
-  const updateEnv = {
+export function buildRealUpdateEnv(env: NodeJS.ProcessEnv) {
+  const updateEnv: NodeJS.ProcessEnv = {
     ...env,
     OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: "1",
     NODE_DISABLE_COMPILE_CACHE: "1",
@@ -1693,7 +1855,10 @@ export function buildRealUpdateEnv(env) {
   return updateEnv;
 }
 
-export function verifyPackagedUpgradeUpdateResult(result, _options) {
+export function verifyPackagedUpgradeUpdateResult(
+  result: CommandResult,
+  _options?: { candidateVersion?: string },
+) {
   if (result.exitCode === 0) {
     return;
   }
@@ -1705,7 +1870,7 @@ export function verifyPackagedUpgradeUpdateResult(result, _options) {
   );
 }
 
-export function buildPackagedUpgradeUpdateArgs(candidateUrl) {
+export function buildPackagedUpgradeUpdateArgs(candidateUrl: string) {
   return [
     "update",
     "--tag",
@@ -1719,10 +1884,10 @@ export function buildPackagedUpgradeUpdateArgs(candidateUrl) {
 }
 
 export function isRecoverableWindowsPackagedUpgradeSwapCleanupFailure(
-  result,
+  result: CommandResult | undefined,
   platform = process.platform,
 ) {
-  if (platform !== "win32" || result.exitCode === 0) {
+  if (platform !== "win32" || !result || result.exitCode === 0) {
     return false;
   }
   const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
@@ -1736,7 +1901,7 @@ export function isRecoverableWindowsPackagedUpgradeSwapCleanupFailure(
 }
 
 export function isRecoverableWindowsPackagedUpgradeTimeoutError(
-  error,
+  error: unknown,
   platform = process.platform,
 ) {
   if (platform !== "win32") {
@@ -1754,13 +1919,16 @@ export function isRecoverableWindowsPackagedUpgradeTimeoutError(
 export function shouldRunPackagedUpgradeStatusProbe({
   platform = process.platform,
   usedWindowsPackagedUpgradeFallback,
-} = {}) {
+}: { platform?: NodeJS.Platform; usedWindowsPackagedUpgradeFallback?: boolean } = {}) {
   return !(platform === "win32" && usedWindowsPackagedUpgradeFallback);
 }
 
 export function verifyWindowsPackagedUpgradeFallbackInstall({
   installedVersion,
   candidateVersion,
+}: {
+  installedVersion: string;
+  candidateVersion: string;
 }) {
   if (installedVersion !== candidateVersion) {
     throw new Error(
@@ -1769,7 +1937,7 @@ export function verifyWindowsPackagedUpgradeFallbackInstall({
   }
 }
 
-export function resolveExplicitBaselineVersion(baselineSpec) {
+export function resolveExplicitBaselineVersion(baselineSpec: string) {
   const trimmed = baselineSpec.trim();
   if (!trimmed || trimmed === "openclaw@latest") {
     return "";
@@ -1780,7 +1948,11 @@ export function resolveExplicitBaselineVersion(baselineSpec) {
   return trimmed;
 }
 
-async function resolveInstallerTargetVersion(params) {
+async function resolveInstallerTargetVersion(params: {
+  baselineSpec: string;
+  logsDir: string;
+  suiteName: string;
+}) {
   const resolvedVersion = resolveExplicitBaselineVersion(params.baselineSpec);
   if (resolvedVersion) {
     return resolvedVersion;
@@ -1796,19 +1968,19 @@ async function resolveInstallerTargetVersion(params) {
   return latestVersion;
 }
 
-function powerShellSingleQuote(value) {
+function powerShellSingleQuote(value: string) {
   return value.replace(/'/gu, "''");
 }
 
-function readPackageJson(packageRoot) {
-  return JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"));
+function readPackageJson(packageRoot: string): PackageJson {
+  return JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")) as PackageJson;
 }
 
-function packageJsonHasScript(packageJson, scriptName) {
+function packageJsonHasScript(packageJson: PackageJson, scriptName: string) {
   return typeof packageJson?.scripts?.[scriptName] === "string";
 }
 
-export function packageHasScript(packageRoot, scriptName) {
+export function packageHasScript(packageRoot: string, scriptName: string) {
   try {
     return packageJsonHasScript(readPackageJson(packageRoot), scriptName);
   } catch {
@@ -1816,28 +1988,28 @@ export function packageHasScript(packageRoot, scriptName) {
   }
 }
 
-function parseMarkerLine(output, marker) {
-  return `${output}`
+function parseMarkerLine(output: string, marker: string) {
+  return output
     .split(/\r?\n/gu)
     .find((line) => line.startsWith(marker))
     ?.slice(marker.length)
     .trim();
 }
 
-export function normalizeWindowsInstalledCliPath(cliPath) {
+export function normalizeWindowsInstalledCliPath(cliPath: string) {
   return normalizeWindowsCommandShimPath(cliPath);
 }
 
-export function normalizeWindowsCommandShimPath(commandPath) {
+export function normalizeWindowsCommandShimPath(commandPath: string) {
   if (typeof commandPath !== "string") {
     return commandPath;
   }
   return commandPath.replace(/\.ps1$/iu, ".cmd");
 }
 
-export function resolveInstalledPrefixDirFromCliPath(cliPath, platform = process.platform) {
+export function resolveInstalledPrefixDirFromCliPath(cliPath: string, platform = process.platform) {
   const resolvedCliPath =
-    platform === "win32" ? normalizeWindowsInstalledCliPath(cliPath) : String(cliPath ?? "");
+    platform === "win32" ? normalizeWindowsInstalledCliPath(cliPath) : cliPath;
   if (!resolvedCliPath?.trim()) {
     throw new Error("Missing installed CLI path.");
   }
@@ -1847,16 +2019,16 @@ export function resolveInstalledPrefixDirFromCliPath(cliPath, platform = process
   return dirname(dirname(resolvedCliPath));
 }
 
-function readInstalledMetadataFromCliPath(cliPath, platform = process.platform) {
+function readInstalledMetadataFromCliPath(cliPath: string, platform = process.platform) {
   return readInstalledMetadataFromPackageRoot(
     resolveInstalledPackageRootFromCliPath(cliPath, platform),
   );
 }
 
 export function resolveCommandSpawnInvocation(
-  command,
-  args,
-  options = {
+  command: string,
+  args: string[],
+  options: { platform?: NodeJS.Platform; comSpec?: string; env?: NodeJS.ProcessEnv } = {
     platform: process.platform,
   },
 ) {
@@ -1873,9 +2045,9 @@ export function resolveCommandSpawnInvocation(
 }
 
 export function resolveInstalledCliInvocation(
-  cliPath,
-  args = [],
-  options = {
+  cliPath: string,
+  args: string[] = [],
+  options: { platform?: NodeJS.Platform; comSpec?: string; env?: NodeJS.ProcessEnv } = {
     platform: process.platform,
   },
 ) {
@@ -1904,11 +2076,11 @@ export function resolveInstalledCliInvocation(
   });
 }
 
-async function runPosixShellScript(script, options) {
+async function runPosixShellScript(script: string, options: CommandOptions) {
   return runCommand("/bin/bash", ["-lc", script], options);
 }
 
-async function runPowerShellScript(script, options) {
+async function runPowerShellScript(script: string, options: CommandOptions) {
   return runCommand(
     "powershell.exe",
     ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
@@ -1916,7 +2088,13 @@ async function runPowerShellScript(script, options) {
   );
 }
 
-async function runInstallerSmoke(params) {
+async function runInstallerSmoke(params: {
+  lane: LaneState;
+  env: NodeJS.ProcessEnv;
+  installerUrl: string;
+  installTarget: string;
+  logPath: string;
+}) {
   if (process.platform === "win32") {
     const script = `
 $response = Invoke-WebRequest -UseBasicParsing '${powerShellSingleQuote(params.installerUrl)}'
@@ -1947,7 +2125,9 @@ if ($content -is [byte[]]) {
   });
 }
 
-export function buildWindowsPathBootstrapScript(options = {}) {
+export function buildWindowsPathBootstrapScript(
+  options: { includeCurrentProcessPath?: boolean } = {},
+) {
   const includeCurrentProcessPath = options.includeCurrentProcessPath !== false;
   const pathCandidates = includeCurrentProcessPath
     ? "@($userPath, $machinePath, $env:Path)"
@@ -1970,7 +2150,7 @@ $env:Path = [string]::Join(';', $segments)
 `.trim();
 }
 
-export function buildWindowsFreshShellVersionCheckScript(params = {}) {
+export function buildWindowsFreshShellVersionCheckScript(params: { expectedNeedle?: string } = {}) {
   const expectedNeedle = powerShellSingleQuote(params.expectedNeedle ?? "");
   return `
 ${buildWindowsPathBootstrapScript()}
@@ -2055,7 +2235,12 @@ throw 'Neither pnpm, corepack, nor npm is discoverable from the reconstructed Wi
 `.trim();
 }
 
-async function verifyFreshShellCommand(params) {
+async function verifyFreshShellCommand(params: {
+  lane: LaneState;
+  env: NodeJS.ProcessEnv;
+  expectedNeedle: string;
+  logPath: string;
+}) {
   if (process.platform === "win32") {
     const script = buildWindowsFreshShellVersionCheckScript({
       expectedNeedle: params.expectedNeedle,
@@ -2067,7 +2252,7 @@ async function verifyFreshShellCommand(params) {
       timeoutMs: 2 * 60 * 1000,
     });
     const cliPath = normalizeWindowsInstalledCliPath(
-      parseMarkerLine(result.stdout, "__OPENCLAW_PATH__="),
+      parseMarkerLine(result.stdout, "__OPENCLAW_PATH__=") ?? "",
     );
     if (!cliPath) {
       throw new Error("Failed to resolve installed openclaw path from fresh Windows shell.");
@@ -2104,7 +2289,15 @@ async function verifyFreshShellCommand(params) {
   return { cliPath, versionOutput };
 }
 
-async function runInstalledCli(params) {
+async function runInstalledCli(params: {
+  cliPath: string;
+  args: string[];
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  logPath: string;
+  timeoutMs?: number;
+  check?: boolean;
+}) {
   const invocation = resolveInstalledCliInvocation(params.cliPath, params.args, {
     env: params.env,
     platform: process.platform,
@@ -2118,7 +2311,12 @@ async function runInstalledCli(params) {
   });
 }
 
-async function readInstalledUpdateStatus(params) {
+async function readInstalledUpdateStatus(params: {
+  cliPath: string;
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  logPath: string;
+}) {
   return runInstalledCli({
     cliPath: params.cliPath,
     args: ["update", "status", "--json"],
@@ -2129,7 +2327,13 @@ async function readInstalledUpdateStatus(params) {
   });
 }
 
-async function ensureDevUpdateGitInstall(params) {
+async function ensureDevUpdateGitInstall(params: {
+  lane: LaneState;
+  env: NodeJS.ProcessEnv;
+  cliPath: string;
+  logsDir: string;
+  requestedRef: string;
+}) {
   const updateStatus = await readInstalledUpdateStatus({
     cliPath: params.cliPath,
     cwd: params.lane.homeDir,
@@ -2143,7 +2347,14 @@ async function ensureDevUpdateGitInstall(params) {
   return { cliPath: params.cliPath };
 }
 
-async function runOnboardWithInstalledCli(params) {
+async function runOnboardWithInstalledCli(params: {
+  lane: LaneState;
+  cliPath: string;
+  env: NodeJS.ProcessEnv;
+  providerConfig: ProviderConfig;
+  installDaemon: boolean;
+  logPath: string;
+}) {
   await withAllocatedGatewayPort(params.lane, async () => {
     const args = buildReleaseOnboardArgs({
       authChoice: params.providerConfig.authChoice,
@@ -2162,8 +2373,13 @@ async function runOnboardWithInstalledCli(params) {
   });
 }
 
-export function buildReleaseOnboardArgs(params) {
-  const args = [
+export function buildReleaseOnboardArgs(params: {
+  authChoice: string;
+  gatewayPort: number;
+  installDaemon?: boolean;
+  skipHealth?: boolean;
+}) {
+  const args: string[] = [
     "onboard",
     "--non-interactive",
     "--mode",
@@ -2190,7 +2406,12 @@ export function buildReleaseOnboardArgs(params) {
   return args;
 }
 
-async function startManualGatewayFromInstalledCli(params) {
+async function startManualGatewayFromInstalledCli(params: {
+  lane: LaneState;
+  cliPath: string;
+  env: NodeJS.ProcessEnv;
+  logPath: string;
+}): Promise<GatewayHandle> {
   mkdirSync(dirname(params.logPath), { recursive: true });
   const gatewayLog = createWriteStream(params.logPath, { flags: "a" });
   const invocation = resolveInstalledCliInvocation(
@@ -2221,7 +2442,7 @@ async function startManualGatewayFromInstalledCli(params) {
       return;
     }
     logClosed = true;
-    await new Promise((resolvePromise) => {
+    await new Promise<void>((resolvePromise) => {
       gatewayLog.once("error", () => resolvePromise());
       gatewayLog.end(() => resolvePromise());
     });
@@ -2235,7 +2456,13 @@ async function startManualGatewayFromInstalledCli(params) {
   return { child, closeLog, logPath: params.logPath };
 }
 
-async function resolveInstalledGatewayStatusArgs(params) {
+async function resolveInstalledGatewayStatusArgs(params: {
+  cliPath: string;
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  logPath: string;
+  requireRpc?: boolean;
+}) {
   const requireRpc = params.requireRpc !== false;
   try {
     const help = await runInstalledCli({
@@ -2254,7 +2481,10 @@ async function resolveInstalledGatewayStatusArgs(params) {
   }
 }
 
-export function buildGatewayStatusArgsFromHelpText(helpText, options = {}) {
+export function buildGatewayStatusArgsFromHelpText(
+  helpText: string,
+  options: { requireRpc?: boolean } = {},
+) {
   const requireRpc = options.requireRpc !== false;
   if (requireRpc && helpText.includes("--require-rpc")) {
     return [
@@ -2268,24 +2498,24 @@ export function buildGatewayStatusArgsFromHelpText(helpText, options = {}) {
   return ["gateway", "status"];
 }
 
-function appendGatewayStatusHelpProbeFallback(logPath, error) {
+function appendGatewayStatusHelpProbeFallback(logPath: string, error: unknown) {
   appendFileSync(
     logPath,
     `${new Date().toISOString()} gateway status help probe failed; assuming current --require-rpc support: ${formatError(error)}\n`,
   );
 }
 
-export async function canConnectToLoopbackPort(port, timeoutMs = 1_000) {
+export async function canConnectToLoopbackPort(port: number, timeoutMs = 1_000) {
   if (!Number.isInteger(port) || port <= 0 || port > 65535) {
     return false;
   }
-  return await new Promise((resolvePromise) => {
+  return await new Promise<boolean>((resolvePromise) => {
     let settled = false;
     const socket = createNetConnection({
       host: "127.0.0.1",
       port,
     });
-    const settle = (value) => {
+    const settle = (value: boolean) => {
       if (settled) {
         return;
       }
@@ -2300,7 +2530,12 @@ export async function canConnectToLoopbackPort(port, timeoutMs = 1_000) {
   });
 }
 
-async function waitForInstalledGateway(params) {
+async function waitForInstalledGateway(params: {
+  lane: LaneState;
+  cliPath: string;
+  env: NodeJS.ProcessEnv;
+  logPath: string;
+}) {
   const statusArgs = await resolveInstalledGatewayStatusArgs({
     cliPath: params.cliPath,
     cwd: params.lane.homeDir,
@@ -2326,7 +2561,12 @@ async function waitForInstalledGateway(params) {
   throw new Error(`Gateway did not become ready on port ${params.lane.gatewayPort}.`);
 }
 
-async function waitForInstalledGatewayToStop(params) {
+async function waitForInstalledGatewayToStop(params: {
+  lane: LaneState;
+  cliPath: string;
+  env: NodeJS.ProcessEnv;
+  logPath: string;
+}) {
   const statusArgs = await resolveInstalledGatewayStatusArgs({
     cliPath: params.cliPath,
     cwd: params.lane.homeDir,
@@ -2356,7 +2596,12 @@ async function waitForInstalledGatewayToStop(params) {
   );
 }
 
-async function ensureManagedGatewayReady(params) {
+async function ensureManagedGatewayReady(params: {
+  lane: LaneState;
+  cliPath: string;
+  env: NodeJS.ProcessEnv;
+  logPath: string;
+}) {
   try {
     await waitForInstalledGateway(params);
     return;
@@ -2374,7 +2619,13 @@ async function ensureManagedGatewayReady(params) {
   await waitForInstalledGateway(params);
 }
 
-async function runInstalledModelsSet(params) {
+async function runInstalledModelsSet(params: {
+  cliPath: string;
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  providerConfig: ProviderConfig;
+  logPath: string;
+}) {
   await runInstalledCli({
     cliPath: params.cliPath,
     args: ["models", "set", params.providerConfig.model],
@@ -2441,7 +2692,13 @@ async function runInstalledModelsSet(params) {
   });
 }
 
-async function runInstalledAgentTurn(params) {
+async function runInstalledAgentTurn(params: {
+  cliPath: string;
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  label: string;
+  logPath: string;
+}): Promise<AgentTurnResult> {
   let lastError;
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     const sessionId = buildCrossOsReleaseAgentSessionId(params.label, attempt);
@@ -2486,10 +2743,15 @@ async function runInstalledAgentTurn(params) {
   throw lastError;
 }
 
-export function verifyDevUpdateStatus(stdout, options = {}) {
+export function verifyDevUpdateStatus(stdout: string, options: { ref?: string } = {}) {
   let payload;
   try {
-    payload = JSON.parse(stdout);
+    payload = JSON.parse(stdout) as {
+      update?: { installKind?: string; git?: { branch?: string; sha?: string } };
+      channel?: { value?: string; channel?: string };
+      installKind?: string;
+      git?: { branch?: string; sha?: string };
+    };
   } catch {
     payload = null;
   }
@@ -2526,7 +2788,11 @@ export function verifyDevUpdateStatus(stdout, options = {}) {
   }
 }
 
-async function verifyWindowsDevUpdateToolchain(params) {
+async function verifyWindowsDevUpdateToolchain(params: {
+  lane: LaneState;
+  env: NodeJS.ProcessEnv;
+  logPath: string;
+}) {
   const script = buildWindowsDevUpdateToolchainCheckScript();
   const result = await runPowerShellScript(script, {
     cwd: params.lane.homeDir,
@@ -2541,7 +2807,7 @@ async function verifyWindowsDevUpdateToolchain(params) {
   }
 }
 
-export function buildDiscordSmokeGuildsConfig(guildId, channelId) {
+export function buildDiscordSmokeGuildsConfig(guildId: string, channelId: string) {
   return {
     [guildId]: {
       channels: {
@@ -2554,7 +2820,17 @@ export function buildDiscordSmokeGuildsConfig(guildId, channelId) {
   };
 }
 
-async function configureDiscordSmoke(params) {
+async function configureDiscordSmoke(params: {
+  lane: LaneState;
+  cliPath: string;
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  gatewayHolder?: { current: GatewayHandle | null };
+  logPath: string;
+  token: string;
+  guildId: string;
+  channelId: string;
+}) {
   const guildsJson = JSON.stringify(
     buildDiscordSmokeGuildsConfig(params.guildId, params.channelId),
   );
@@ -2765,7 +3041,7 @@ export async function verifyDashboardAssetUrls(
   return { failures, ok: failures.length === 0 };
 }
 
-async function waitForDiscordMessage(params) {
+async function waitForDiscordMessage(params: { token: string; channelId: string; needle: string }) {
   const deadline = Date.now() + 3 * 60 * 1000;
   while (Date.now() < deadline) {
     let response;
@@ -2793,18 +3069,24 @@ async function waitForDiscordMessage(params) {
   throw new Error(`Discord host-side visibility check timed out for ${params.needle}.`);
 }
 
-export function buildDiscordFetchInit(token, init = {}) {
+export function buildDiscordFetchInit(
+  token: string,
+  init: RequestInit = {},
+): RequestInit & { signal: AbortSignal } {
+  const headers = new Headers(init.headers);
+  headers.set("Authorization", `Bot ${token}`);
   return {
     ...init,
     signal: init.signal ?? AbortSignal.timeout(CROSS_OS_DISCORD_FETCH_TIMEOUT_MS),
-    headers: {
-      ...init.headers,
-      Authorization: `Bot ${token}`,
-    },
+    headers,
   };
 }
 
-async function postDiscordMessage(params) {
+async function postDiscordMessage(params: {
+  token: string;
+  channelId: string;
+  content: string;
+}): Promise<string | null> {
   const init = buildDiscordFetchInit(params.token, {
     method: "POST",
     headers: {
@@ -2824,13 +3106,18 @@ async function postDiscordMessage(params) {
     throw new Error(`Failed to post Discord smoke message: ${text}`);
   }
   try {
-    return JSON.parse(text)?.id ?? null;
+    const payload = JSON.parse(text) as { id?: string };
+    return payload.id ?? null;
   } catch {
     return null;
   }
 }
 
-export async function deleteDiscordMessage(params) {
+export async function deleteDiscordMessage(params: {
+  token: string;
+  channelId: string;
+  messageId: string | null;
+}) {
   if (!params.messageId) {
     return;
   }
@@ -2847,7 +3134,14 @@ export async function deleteDiscordMessage(params) {
   }
 }
 
-async function waitForInstalledDiscordReadback(params) {
+async function waitForInstalledDiscordReadback(params: {
+  cliPath: string;
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  logPath: string;
+  channelId: string;
+  needle: string;
+}) {
   const deadline = Date.now() + 3 * 60 * 1000;
   while (Date.now() < deadline) {
     const response = await runInstalledCli({
@@ -2877,7 +3171,13 @@ async function waitForInstalledDiscordReadback(params) {
   throw new Error(`Discord guest readback timed out for ${params.needle}.`);
 }
 
-async function maybeRunDiscordRoundtrip(params) {
+async function maybeRunDiscordRoundtrip(params: {
+  lane: LaneState;
+  cliPath: string;
+  env: NodeJS.ProcessEnv;
+  gatewayHolder: { current: GatewayHandle | null };
+  logPath: string;
+}) {
   const token =
     process.env.OPENCLAW_DISCORD_SMOKE_BOT_TOKEN?.trim() ||
     process.env.DISCORD_BOT_TOKEN?.trim() ||
@@ -2889,8 +3189,8 @@ async function maybeRunDiscordRoundtrip(params) {
   }
 
   const { outboundNonce, inboundNonce } = buildCrossOsDiscordRoundtripNonces();
-  let sentMessageId = null;
-  let hostMessageId = null;
+  let sentMessageId: string | null = null;
+  let hostMessageId: string | null = null;
   try {
     await configureDiscordSmoke({
       lane: params.lane,
@@ -2923,9 +3223,13 @@ async function maybeRunDiscordRoundtrip(params) {
       logPath: params.logPath,
       timeoutMs: 2 * 60 * 1000,
     });
-    let parsedSendResult = null;
+    let parsedSendResult: {
+      payload?: { messageId?: string; result?: { messageId?: string } };
+    } | null;
     try {
-      parsedSendResult = JSON.parse(sendResult.stdout);
+      parsedSendResult = JSON.parse(sendResult.stdout) as {
+        payload?: { messageId?: string; result?: { messageId?: string } };
+      };
     } catch {
       parsedSendResult = null;
     }
@@ -2956,7 +3260,15 @@ async function maybeRunDiscordRoundtrip(params) {
   }
 }
 
-async function installTarballPackage(params) {
+async function installTarballPackage(params: {
+  lane: LaneState;
+  env: NodeJS.ProcessEnv;
+  tgzPath: string;
+  logPath: string;
+  timeoutMs?: number;
+  ignoreScripts?: boolean;
+  restoreBundledPluginPostinstall?: boolean;
+}) {
   await installPackageSpec({
     lane: params.lane,
     env: params.env,
@@ -2977,7 +3289,14 @@ async function installTarballPackage(params) {
   }
 }
 
-async function installPackageSpec(params) {
+async function installPackageSpec(params: {
+  lane: LaneState;
+  env: NodeJS.ProcessEnv;
+  packageSpec: string;
+  logPath: string;
+  timeoutMs?: number;
+  ignoreScripts?: boolean;
+}) {
   const installEnv = {
     ...params.env,
     npm_config_global: "true",
@@ -3006,8 +3325,8 @@ async function installPackageSpec(params) {
 }
 
 export function appendLatestNpmDebugLogTail(
-  homeDir,
-  logPath,
+  homeDir: string,
+  logPath: string,
   env = process.env,
   platform = process.platform,
 ) {
@@ -3036,7 +3355,11 @@ export function appendLatestNpmDebugLogTail(
   }
 }
 
-export function resolveNpmDebugLogDirs(homeDir, env = process.env, platform = process.platform) {
+export function resolveNpmDebugLogDirs(
+  homeDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+) {
   const configuredLogsDir = resolveNpmConfiguredPath(
     homeDir,
     env.npm_config_logs_dir ?? env.NPM_CONFIG_LOGS_DIR,
@@ -3057,19 +3380,23 @@ export function resolveNpmDebugLogDirs(homeDir, env = process.env, platform = pr
   return [...new Set(logDirs)];
 }
 
-function resolveNpmConfiguredPath(homeDir, value, platform) {
-  const raw = String(value ?? "").trim();
+function resolveNpmConfiguredPath(
+  homeDir: string,
+  value: string | undefined,
+  platform: NodeJS.Platform,
+) {
+  const raw = (value ?? "").trim();
   if (!raw) {
     return "";
   }
   return platform === "win32" ? pathWin32.resolve(homeDir, raw) : resolve(homeDir, raw);
 }
 
-function normalizeNpmCacheLogDir(logDir) {
+function normalizeNpmCacheLogDir(logDir: string) {
   return logDir.endsWith("/_logs") || logDir.endsWith("\\_logs") ? logDir : join(logDir, "_logs");
 }
 
-function findNpmDebugLogs(logsDir) {
+function findNpmDebugLogs(logsDir: string) {
   if (!existsSync(logsDir)) {
     return [];
   }
@@ -3090,7 +3417,10 @@ function findNpmDebugLogs(logsDir) {
     .toSorted((left, right) => left.mtimeMs - right.mtimeMs);
 }
 
-export function buildNpmGlobalInstallArgs(packageSpec, options = {}) {
+export function buildNpmGlobalInstallArgs(
+  packageSpec: string,
+  options: { ignoreScripts?: boolean } = {},
+) {
   return [
     "install",
     "-g",
@@ -3119,7 +3449,7 @@ function updateStepTimeoutSeconds() {
     : 1200;
 }
 
-async function runBundledPluginPostinstall(params) {
+async function runBundledPluginPostinstall(params: LaneCommandParams) {
   const packageRoot = installedPackageRoot(params.lane.prefixDir);
   const scriptPath = join(packageRoot, "scripts", "postinstall-bundled-plugins.mjs");
   if (!existsSync(scriptPath)) {
@@ -3204,7 +3534,9 @@ export async function stopBrowserControlService() {
 `.trim();
 }
 
-async function runInstalledBrowserOverrideImportSmoke(params) {
+async function runInstalledBrowserOverrideImportSmoke(
+  params: LaneCommandParams & { prefixDir: string },
+) {
   if (!shouldRunWindowsInstalledBrowserOverrideImportSmoke()) {
     return "skipped";
   }
@@ -3247,7 +3579,7 @@ async function runInstalledBrowserOverrideImportSmoke(params) {
   return "pass";
 }
 
-function ensureLocalNpmShim(lane) {
+function ensureLocalNpmShim(lane: LaneState) {
   const shimPath = npmShimPath(lane.prefixDir);
   if (existsSync(shimPath)) {
     return;
@@ -3273,7 +3605,7 @@ function ensureLocalNpmShim(lane) {
   chmodSync(shimPath, 0o755);
 }
 
-async function runOnboard(params) {
+async function runOnboard(params: LaneCommandParams & { providerConfig: ProviderConfig }) {
   await withAllocatedGatewayPort(params.lane, async () => {
     await runOpenClaw({
       lane: params.lane,
@@ -3289,7 +3621,9 @@ async function runOnboard(params) {
   });
 }
 
-async function exerciseManagedGatewayLifecycle(params) {
+async function exerciseManagedGatewayLifecycle(
+  params: Pick<LaneCommandParams, "lane" | "env"> & { cliPath: string; logPrefix: string },
+) {
   logLanePhase(params.lane, "gateway-ready");
   await ensureManagedGatewayReady({
     lane: params.lane,
@@ -3341,7 +3675,7 @@ async function exerciseManagedGatewayLifecycle(params) {
   });
 }
 
-async function startGateway(params) {
+async function startGateway(params: LaneCommandParams): Promise<GatewayHandle> {
   const gatewayLog = createWriteStream(params.logPath, { flags: "a" });
   const useProcessGroup = process.platform !== "win32";
   const child = spawn(
@@ -3377,7 +3711,7 @@ async function startGateway(params) {
       return;
     }
     logClosed = true;
-    await new Promise((resolvePromise) => {
+    await new Promise<void>((resolvePromise) => {
       gatewayLog.once("error", () => resolvePromise());
       gatewayLog.end(() => resolvePromise());
     });
@@ -3393,7 +3727,7 @@ async function startGateway(params) {
   return { child, closeLog, logPath: params.logPath };
 }
 
-async function waitForGateway(params) {
+async function waitForGateway(params: LaneCommandParams) {
   const statusArgs = await resolveGatewayStatusArgs(params.lane, params.env, params.logPath);
   const deadline = Date.now() + gatewayReadyDeadlineMs();
   while (Date.now() < deadline) {
@@ -3425,7 +3759,7 @@ function gatewayReadyDeadlineMs() {
     : CROSS_OS_GATEWAY_READY_TIMEOUT_MS;
 }
 
-async function resolveGatewayStatusArgs(lane, env, logPath) {
+async function resolveGatewayStatusArgs(lane: LaneState, env: NodeJS.ProcessEnv, logPath: string) {
   try {
     const help = await runOpenClaw({
       lane,
@@ -3442,7 +3776,7 @@ async function resolveGatewayStatusArgs(lane, env, logPath) {
   }
 }
 
-async function runModelsSet(params) {
+async function runModelsSet(params: LaneCommandParams & { providerConfig: ProviderConfig }) {
   await runOpenClaw({
     lane: params.lane,
     env: params.env,
@@ -3503,7 +3837,9 @@ async function runModelsSet(params) {
   });
 }
 
-async function runAgentTurn(params) {
+async function runAgentTurn(
+  params: LaneCommandParams & { label: string },
+): Promise<AgentTurnResult> {
   let lastError;
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     const sessionId = buildCrossOsReleaseAgentSessionId(params.label, attempt);
@@ -3547,7 +3883,11 @@ async function runAgentTurn(params) {
   throw lastError;
 }
 
-export function maybeBuildOptionalAgentTurnSkipResult(error, logPath, options = {}) {
+export function maybeBuildOptionalAgentTurnSkipResult(
+  error: unknown,
+  logPath: string,
+  options: { attempt?: number; maxAttempts?: number; optional?: boolean } = {},
+) {
   const attempt = options.attempt ?? 1;
   const maxAttempts = options.maxAttempts ?? 2;
   const optional = options.optional ?? CROSS_OS_AGENT_TURN_OPTIONAL;
@@ -3573,7 +3913,7 @@ export function maybeBuildOptionalAgentTurnSkipResult(error, logPath, options = 
   };
 }
 
-export function shouldSkipOptionalCrossOsAgentTurnError(error, logPath) {
+export function shouldSkipOptionalCrossOsAgentTurnError(error: unknown, logPath: string) {
   const message = error instanceof Error ? error.message : String(error);
   if (
     /model idle timeout|did not produce a response before the model idle timeout|gateway request timeout for agent|Command timed out|timed out and could not be terminated cleanly/u.test(
@@ -3589,7 +3929,7 @@ export function shouldSkipOptionalCrossOsAgentTurnError(error, logPath) {
   return /"status"\s*:\s*"timeout"|Request timed out before a response was generated/u.test(log);
 }
 
-export function buildCrossOsReleaseAgentSessionId(label, attempt) {
+export function buildCrossOsReleaseAgentSessionId(label: string, attempt: number) {
   return `cross-os-release-check-${label}-${randomUUID()}-${attempt}`;
 }
 
@@ -3600,7 +3940,7 @@ export function buildCrossOsDiscordRoundtripNonces() {
   };
 }
 
-function buildReleaseAgentTurnArgs(sessionId) {
+function buildReleaseAgentTurnArgs(sessionId: string) {
   return [
     "agent",
     "--agent",
@@ -3617,14 +3957,17 @@ function buildReleaseAgentTurnArgs(sessionId) {
   ];
 }
 
-export function shouldRetryCrossOsAgentTurnError(error) {
+export function shouldRetryCrossOsAgentTurnError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
   return /Agent output did not contain the expected OK marker|Agent turn used embedded fallback instead of gateway|model idle timeout|did not produce a response before the model idle timeout|gateway request timeout for agent|Command timed out|timed out and could not be terminated cleanly|rate limit reached|rate_limit_exceeded|HTTP 429|HTTP 503|upstream connect error|disconnect\/reset before headers|connection timeout/u.test(
     message,
   );
 }
 
-export function agentTurnUsedEmbeddedFallback(result, options = {}) {
+export function agentTurnUsedEmbeddedFallback(
+  result: Pick<AgentTurnResult, "stdout" | "stderr">,
+  options: AgentOutputOptions = {},
+) {
   const logText =
     typeof options.logText === "string"
       ? options.logText
@@ -3634,7 +3977,7 @@ export function agentTurnUsedEmbeddedFallback(result, options = {}) {
   return /EMBEDDED FALLBACK:/u.test(`${result.stdout ?? ""}\n${result.stderr ?? ""}\n${logText}`);
 }
 
-export function agentOutputHasExpectedOkMarker(stdout, options = {}) {
+export function agentOutputHasExpectedOkMarker(stdout: string, options: AgentOutputOptions = {}) {
   const payloadTexts = parseAgentPayloadTexts(stdout);
   if (payloadTexts.some((text) => text.trim() === "OK")) {
     return true;
@@ -3650,7 +3993,7 @@ export function agentOutputHasExpectedOkMarker(stdout, options = {}) {
   return logTexts.some((text) => text.trim() === "OK");
 }
 
-function readLogFileSize(logPath) {
+function readLogFileSize(logPath: string) {
   try {
     return statSync(logPath).size;
   } catch {
@@ -3658,20 +4001,23 @@ function readLogFileSize(logPath) {
   }
 }
 
-function readLogTextSince(logPath, offsetBytes) {
+function readLogTextSince(logPath: string, offsetBytes: number) {
   return readLogTextWindow(logPath, {
     offsetBytes,
     maxBytes: CROSS_OS_AGENT_LOG_FALLBACK_TAIL_BYTES,
   });
 }
 
-function readLogTextTail(logPath) {
+function readLogTextTail(logPath: string) {
   return readLogTextWindow(logPath, {
     maxBytes: CROSS_OS_AGENT_LOG_FALLBACK_TAIL_BYTES,
   });
 }
 
-function readLogTextWindow(logPath, options = {}) {
+function readLogTextWindow(
+  logPath: string,
+  options: { maxBytes?: number; offsetBytes?: number } = {},
+) {
   const maxBytes = Math.max(
     1,
     Math.floor(options.maxBytes ?? CROSS_OS_AGENT_LOG_FALLBACK_TAIL_BYTES),
@@ -3707,9 +4053,17 @@ function readLogTextWindow(logPath, options = {}) {
   }
 }
 
-function parseAgentPayloadTexts(stdout) {
+function parseAgentPayloadTexts(stdout: string) {
   try {
-    const payload = JSON.parse(stdout);
+    type AgentPayload = {
+      text?: string;
+      finalAssistantVisibleText?: string;
+      finalAssistantRawText?: string;
+      meta?: AgentPayload;
+      result?: AgentPayload;
+      payloads?: AgentPayload[];
+    };
+    const payload = JSON.parse(stdout) as AgentPayload;
     const directTexts = [
       payload?.finalAssistantVisibleText,
       payload?.finalAssistantRawText,
@@ -3739,7 +4093,7 @@ function parseAgentPayloadTexts(stdout) {
   }
 }
 
-async function runDashboardSmoke(params) {
+async function runDashboardSmoke(params: Pick<LaneCommandParams, "lane" | "logPath">) {
   const dashboardUrl = `http://127.0.0.1:${params.lane.gatewayPort}/`;
   const logStream = createWriteStream(params.logPath, { flags: "a" });
   const deadline = Date.now() + CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS;
@@ -3784,11 +4138,11 @@ async function runDashboardSmoke(params) {
   throw new Error(`Dashboard HTML did not become ready at ${dashboardUrl}.`);
 }
 
-function hasChildExited(child) {
+function hasChildExited(child: ChildProcess) {
   return child.exitCode !== null || (child.signalCode ?? null) !== null;
 }
 
-async function stopGateway(gateway) {
+async function stopGateway(gateway: GatewayHandle | null) {
   try {
     if (!gateway?.child?.pid) {
       return;
@@ -3827,7 +4181,7 @@ async function stopGateway(gateway) {
   }
 }
 
-function signalChildProcessTree(child, signal) {
+function signalChildProcessTree(child: ChildProcess, signal: NodeJS.Signals) {
   if (process.platform !== "win32" && child.pid) {
     try {
       process.kill(-child.pid, signal);
@@ -3839,8 +4193,8 @@ function signalChildProcessTree(child, signal) {
   child.kill(signal);
 }
 
-function registerActiveChildProcessTree(child) {
-  const killChildTree = (signal) => signalChildProcessTree(child, signal);
+function registerActiveChildProcessTree(child: ChildProcess) {
+  const killChildTree = (signal: NodeJS.Signals) => signalChildProcessTree(child, signal);
   CROSS_OS_ACTIVE_CHILD_TREE_KILLERS.add(killChildTree);
   return {
     killChildTree,
@@ -3850,13 +4204,13 @@ function registerActiveChildProcessTree(child) {
   };
 }
 
-async function waitForChildExit(child, timeoutMs) {
+async function waitForChildExit(child: ChildProcess, timeoutMs: number) {
   if (hasChildExited(child)) {
     return true;
   }
-  return new Promise((resolvePromise) => {
+  return new Promise<boolean>((resolvePromise) => {
     let settled = false;
-    const finish = (didExit) => {
+    const finish = (didExit: boolean) => {
       if (settled) {
         return;
       }
@@ -3885,7 +4239,7 @@ async function waitForChildExit(child, timeoutMs) {
   });
 }
 
-async function runCleanup(cleanupFns) {
+async function runCleanup(cleanupFns: Cleanup[]) {
   for (const cleanupFn of cleanupFns.toReversed()) {
     try {
       await cleanupFn();
@@ -3895,7 +4249,14 @@ async function runCleanup(cleanupFns) {
   }
 }
 
-async function runOpenClaw(params) {
+async function runOpenClaw(params: {
+  lane: LaneState;
+  args: string[];
+  env: NodeJS.ProcessEnv;
+  logPath: string;
+  timeoutMs?: number;
+  check?: boolean;
+}) {
   return runCommand(process.execPath, [installedEntryPath(params.lane.prefixDir), ...params.args], {
     cwd: params.lane.homeDir,
     env: params.env,
@@ -3905,38 +4266,36 @@ async function runOpenClaw(params) {
   });
 }
 
-function readInstalledPackageManifest(prefixDir) {
+function readInstalledPackageManifest(prefixDir: string) {
   const packageRoot = installedPackageRoot(prefixDir);
   return readInstalledPackageManifestFromPackageRoot(packageRoot);
 }
 
-function readInstalledPackageManifestFromPackageRoot(packageRoot) {
+function readInstalledPackageManifestFromPackageRoot(packageRoot: string) {
   const packageJsonPath = join(packageRoot, "package.json");
   if (!existsSync(packageJsonPath)) {
     throw new Error(`Installed package manifest missing: ${packageJsonPath}`);
   }
-  const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8")) as {
-    version?: unknown;
-  };
+  const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8")) as PackageJson;
   return { packageJson, packageRoot };
 }
 
-export function readInstalledVersion(prefixDir) {
+export function readInstalledVersion(prefixDir: string) {
   const { packageJson } = readInstalledPackageManifest(prefixDir);
   return typeof packageJson.version === "string" ? packageJson.version.trim() : "";
 }
 
-function readInstalledMetadata(prefixDir) {
+function readInstalledMetadata(prefixDir: string) {
   const { packageJson, packageRoot } = readInstalledPackageManifest(prefixDir);
   return readInstalledMetadataFromManifest(packageJson, packageRoot);
 }
 
-function readInstalledMetadataFromPackageRoot(packageRoot) {
+function readInstalledMetadataFromPackageRoot(packageRoot: string) {
   const { packageJson } = readInstalledPackageManifestFromPackageRoot(packageRoot);
   return readInstalledMetadataFromManifest(packageJson, packageRoot);
 }
 
-function readInstalledMetadataFromManifest(packageJson, packageRoot) {
+function readInstalledMetadataFromManifest(packageJson: PackageJson, packageRoot: string) {
   const buildInfoPath = join(packageRoot, "dist", "build-info.json");
   if (!existsSync(buildInfoPath)) {
     throw new Error(`Installed build info missing: ${buildInfoPath}`);
@@ -3950,7 +4309,10 @@ function readInstalledMetadataFromManifest(packageJson, packageRoot) {
   };
 }
 
-function verifyInstalledCandidate(installed, build) {
+function verifyInstalledCandidate(
+  installed: { version: string; commit: string },
+  build: CandidateBuild,
+) {
   if (installed.version !== build.candidateVersion) {
     throw new Error(
       `Installed version mismatch. Expected ${build.candidateVersion}, found ${installed.version || "<missing>"}.`,
@@ -3964,7 +4326,7 @@ function verifyInstalledCandidate(installed, build) {
 }
 
 export function resolveInstalledPackageRootFromCliPath(
-  cliPath,
+  cliPath: string,
   platform = process.platform,
   env = process.env,
 ) {
@@ -3972,7 +4334,7 @@ export function resolveInstalledPackageRootFromCliPath(
   const candidates = [installedPackageRoot(prefixDir, platform)];
 
   if (platform !== "win32") {
-    const resolvedCliPath = String(cliPath ?? "").trim();
+    const resolvedCliPath = cliPath.trim();
     if (resolvedCliPath) {
       try {
         const realCliPath = realpathSync(resolvedCliPath);
@@ -4010,21 +4372,21 @@ export function resolveInstalledPackageRootFromCliPath(
   throw new Error(`Installed package manifest missing. Checked: ${checked.join(", ")}`);
 }
 
-function installedPackageRoot(prefixDir, platform = process.platform) {
+function installedPackageRoot(prefixDir: string, platform = process.platform) {
   return platform === "win32"
     ? join(prefixDir, "node_modules", "openclaw")
     : join(prefixDir, "lib", "node_modules", "openclaw");
 }
 
-function installedEntryPath(prefixDir) {
+function installedEntryPath(prefixDir: string) {
   return join(installedPackageRoot(prefixDir), "openclaw.mjs");
 }
 
-function npmShimPath(prefixDir) {
+function npmShimPath(prefixDir: string) {
   return process.platform === "win32" ? join(prefixDir, "npm.cmd") : join(prefixDir, "bin", "npm");
 }
 
-function binDirForPrefix(prefixDir) {
+function binDirForPrefix(prefixDir: string) {
   return process.platform === "win32" ? prefixDir : join(prefixDir, "bin");
 }
 
@@ -4040,7 +4402,7 @@ function gitCommand() {
   return process.platform === "win32" ? "git.exe" : "git";
 }
 
-function resolveCommandCaptureLimit(options) {
+function resolveCommandCaptureLimit(options: CommandOptions) {
   const value = options.maxOutputBytes;
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     return CROSS_OS_COMMAND_CAPTURE_TAIL_BYTES;
@@ -4048,7 +4410,7 @@ function resolveCommandCaptureLimit(options) {
   return Math.max(1, Math.floor(value));
 }
 
-function appendBoundedCommandOutput(current, chunk, maxBytes) {
+function appendBoundedCommandOutput(current: string, chunk: Uint8Array | string, maxBytes: number) {
   const chunkBuffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
   if (chunkBuffer.byteLength >= maxBytes) {
     return chunkBuffer.subarray(chunkBuffer.byteLength - maxBytes).toString("utf8");
@@ -4065,7 +4427,11 @@ function appendBoundedCommandOutput(current, chunk, maxBytes) {
   return Buffer.concat([currentTail, chunkBuffer], maxBytes).toString("utf8");
 }
 
-export async function runCommand(command, args, options) {
+export async function runCommand(
+  command: string,
+  args: string[],
+  options: CommandOptions,
+): Promise<CommandResult> {
   const invocation = resolveCommandSpawnInvocation(command, args, {
     env: options.env,
     platform: process.platform,
@@ -4073,8 +4439,11 @@ export async function runCommand(command, args, options) {
   return runCommandInvocation(invocation, options);
 }
 
-async function runCommandInvocation(invocation, options) {
-  return new Promise((resolvePromise, rejectPromise) => {
+async function runCommandInvocation(
+  invocation: CommandInvocation,
+  options: CommandOptions,
+): Promise<CommandResult> {
+  return new Promise<CommandResult>((resolvePromise, rejectPromise) => {
     const commandLabel = `${invocation.command} ${invocation.args.join(" ")}`;
     const useProcessGroup = process.platform !== "win32";
     const child = spawn(invocation.command, invocation.args, {
@@ -4093,9 +4462,9 @@ async function runCommandInvocation(invocation, options) {
     let timedOut = false;
     let settled = false;
     const startedAt = Date.now();
-    let killWaitTimer = null;
-    let timer = null;
-    let heartbeatTimer = null;
+    let killWaitTimer: NodeJS.Timeout | null = null;
+    let timer: NodeJS.Timeout | null = null;
+    let heartbeatTimer: NodeJS.Timeout | null = null;
     const maxCapturedOutputBytes = resolveCommandCaptureLimit(options);
 
     const clearTimers = () => {
@@ -4110,9 +4479,9 @@ async function runCommandInvocation(invocation, options) {
       }
     };
 
-    const finishLogStream = (callback) => {
+    const finishLogStream = (callback: (error?: Error | null) => void) => {
       let completed = false;
-      const finish = (error) => {
+      const finish = (error?: Error | null) => {
         if (completed) {
           return;
         }
@@ -4124,7 +4493,7 @@ async function runCommandInvocation(invocation, options) {
       logStream.end();
     };
 
-    const finalize = (callback) => {
+    const finalize = (callback: () => void) => {
       if (settled) {
         return;
       }
@@ -4247,14 +4616,17 @@ async function runCommandInvocation(invocation, options) {
   });
 }
 
-export async function startStaticFileServer(params) {
+export async function startStaticFileServer(params: {
+  filePath: string;
+  logPath: string;
+}): Promise<{ url: string; close: () => Promise<void> }> {
   mkdirSync(dirname(params.logPath), { recursive: true });
   const logStream = createWriteStream(params.logPath, { flags: "a" });
-  let logStreamError = null;
+  let logStreamError: Error | null = null;
   logStream.on("error", (error) => {
     logStreamError ??= error;
   });
-  const fileName = String(params.filePath.split(/[/\\]/u).at(-1) ?? "artifact");
+  const fileName = params.filePath.split(/[/\\]/u).at(-1) ?? "artifact";
   const fileStat = statSync(params.filePath);
   const sockets = new Set<Socket>();
   const server = createServer((request, response) => {
@@ -4287,20 +4659,20 @@ export async function startStaticFileServer(params) {
       sockets.delete(socket);
     });
   });
-  await new Promise((resolvePromise, rejectPromise) => {
+  await new Promise<void>((resolvePromise, rejectPromise) => {
     server.once("error", rejectPromise);
-    server.listen(0, "127.0.0.1", resolvePromise);
+    server.listen(0, "127.0.0.1", () => resolvePromise());
   });
   const address = server.address();
   if (!address || typeof address === "string") {
     throw new Error("Failed to bind static file server.");
   }
   const port = address.port;
-  let closePromise;
+  let closePromise: Promise<void> | undefined;
   return {
     url: `http://127.0.0.1:${port}/${fileName}`,
     close: () => {
-      closePromise ??= new Promise((resolvePromise, rejectPromise) => {
+      closePromise ??= new Promise<void>((resolvePromise, rejectPromise) => {
         closeStaticFileServerConnections(server, sockets);
         server.close((error) => {
           void (async () => {
@@ -4330,7 +4702,7 @@ export async function startStaticFileServer(params) {
   };
 }
 
-function closeStaticFileServerConnections(server, sockets) {
+function closeStaticFileServerConnections(server: Server, sockets: Set<Socket>) {
   for (const socket of sockets) {
     socket.destroy();
   }
@@ -4339,8 +4711,8 @@ function closeStaticFileServerConnections(server, sockets) {
   }
 }
 
-function finishStaticFileServerLog(logStream, pendingError) {
-  return new Promise((resolvePromise, rejectPromise) => {
+function finishStaticFileServerLog(logStream: WriteStream, pendingError: Error | null) {
+  return new Promise<void>((resolvePromise, rejectPromise) => {
     if (pendingError) {
       logStream.destroy();
       rejectPromise(new Error(`Static file server log write failed: ${formatError(pendingError)}`));
@@ -4354,7 +4726,7 @@ function finishStaticFileServerLog(logStream, pendingError) {
       completed = true;
       resolvePromise();
     };
-    const fail = (error) => {
+    const fail = (error: unknown) => {
       if (completed) {
         return;
       }
@@ -4367,7 +4739,7 @@ function finishStaticFileServerLog(logStream, pendingError) {
   });
 }
 
-export function resolveStaticFileContentType(filePath) {
+export function resolveStaticFileContentType(filePath: string) {
   if (filePath.endsWith(".sh") || filePath.endsWith(".ps1")) {
     return "text/plain; charset=utf-8";
   }
@@ -4381,7 +4753,7 @@ export function resolvePublishedInstallerUrl(platform = process.platform) {
   return `${PUBLISHED_INSTALLER_BASE_URL}/install.sh`;
 }
 
-function writeSummary(baseDir, summaryPayload) {
+function writeSummary(baseDir: string, summaryPayload: SummaryPayload) {
   const summaryJsonPath = join(baseDir, "summary.json");
   const summaryMarkdownPath = join(baseDir, "summary.md");
   writeFileSync(summaryJsonPath, `${JSON.stringify(summaryPayload, null, 2)}\n`, "utf8");
@@ -4419,7 +4791,7 @@ function writeSummary(baseDir, summaryPayload) {
   writeFileSync(summaryMarkdownPath, `${lines.join("\n")}\n`, "utf8");
 }
 
-function writeCandidateManifest(baseDir, build) {
+function writeCandidateManifest(baseDir: string, build: CandidateBuild) {
   const manifestPath = join(baseDir, "candidate.json");
   writeFileSync(
     manifestPath,
@@ -4446,7 +4818,7 @@ function platformLabel() {
   return "Linux Release Checks";
 }
 
-function requireArg(argsMap, key) {
+function requireArg(argsMap: ParsedArgs, key: string) {
   const value = argsMap[key]?.trim();
   if (!value) {
     throw new Error(`Missing required --${key} argument.`);
@@ -4454,7 +4826,7 @@ function requireArg(argsMap, key) {
   return value;
 }
 
-function resolveCommandPath(command) {
+function resolveCommandPath(command: string) {
   const pathValue = process.env.PATH ?? "";
   const pathEntries = pathValue.split(process.platform === "win32" ? ";" : ":").filter(Boolean);
   const candidates =
@@ -4472,19 +4844,19 @@ function resolveCommandPath(command) {
   return null;
 }
 
-function shellEscapeForSh(value) {
+function shellEscapeForSh(value: string) {
   return value.replace(/'/gu, `'"'"'`);
 }
 
-function logPhase(scope, phase) {
+function logPhase(scope: string, phase: string) {
   process.stdout.write(`[release-checks] ${scope}: ${phase}\n`);
 }
 
-function logLanePhase(lane, phase) {
+function logLanePhase(lane: LaneState, phase: string) {
   logPhase(`lane.${lane.name}`, phase);
 }
 
-async function runTimedLanePhase(lane, phase, callback) {
+async function runTimedLanePhase<T>(lane: LaneState, phase: string, callback: () => Promise<T>) {
   const startedAt = Date.now();
   logLanePhase(lane, phase);
   try {
@@ -4501,7 +4873,7 @@ async function runTimedLanePhase(lane, phase, callback) {
   }
 }
 
-function trimForSummary(value) {
+function trimForSummary(value: string) {
   const trimmed = value.trim();
   if (trimmed.length <= 600) {
     return trimmed;
@@ -4509,20 +4881,20 @@ function trimForSummary(value) {
   return `${trimmed.slice(0, 600)}...`;
 }
 
-function formatError(error) {
+function formatError(error: unknown) {
   if (error instanceof Error) {
     return error.stack || error.message;
   }
   return String(error);
 }
 
-function sleep(ms) {
-  return new Promise((resolvePromise) => {
+function sleep(ms: number) {
+  return new Promise<void>((resolvePromise) => {
     setTimeout(resolvePromise, ms);
   });
 }
 
-async function withAllocatedGatewayPort(lane, callback) {
+async function withAllocatedGatewayPort<T>(lane: LaneState, callback: () => Promise<T>) {
   let lastError = null;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     const reservation = await reservePort();
@@ -4544,7 +4916,7 @@ async function withAllocatedGatewayPort(lane, callback) {
   );
 }
 
-function reservePort() {
+function reservePort(): Promise<{ port: number; release: () => Promise<void> }> {
   return new Promise((resolvePromise, rejectPromise) => {
     const server = createNetServer();
     server.listen(0, "127.0.0.1", () => {
@@ -4557,7 +4929,7 @@ function reservePort() {
       resolvePromise({
         port: address.port,
         release: () =>
-          new Promise((releaseResolve, releaseReject) => {
+          new Promise<void>((releaseResolve, releaseReject) => {
             server.close((error) => {
               if (error) {
                 releaseReject(error);
@@ -4572,7 +4944,7 @@ function reservePort() {
   });
 }
 
-function isAddressInUseError(error) {
+function isAddressInUseError(error: unknown) {
   const message = formatError(error);
   return message.includes("EADDRINUSE") || /address.+in use/iu.test(message);
 }

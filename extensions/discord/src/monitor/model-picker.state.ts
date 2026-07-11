@@ -4,6 +4,7 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { ModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
 import { parseStrictInteger, parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
+import { decodeCustomIdComponent, encodeCustomIdComponent } from "../custom-id-codec.js";
 import type { ComponentData } from "../internal/discord.js";
 
 export const DISCORD_MODEL_PICKER_CUSTOM_ID_KEY = "mdlpk";
@@ -109,18 +110,6 @@ export type DiscordModelPickerModelPage = DiscordModelPickerPage<string> & {
 const loadModelsProviderRuntime = createLazyRuntimeModule(
   () => import("openclaw/plugin-sdk/models-provider-runtime"),
 );
-
-function encodeCustomIdValue(value: string): string {
-  return encodeURIComponent(value);
-}
-
-function decodeCustomIdValue(value: string): string {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-}
 
 function isValidCommandContext(value: string): value is DiscordModelPickerCommandContext {
   return (COMMAND_CONTEXTS as readonly string[]).includes(value);
@@ -236,18 +225,18 @@ export function buildDiscordModelPickerCustomId(params: {
       : undefined;
 
   const parts = [
-    `${DISCORD_MODEL_PICKER_CUSTOM_ID_KEY}:c=${encodeCustomIdValue(params.command)}`,
-    `a=${encodeCustomIdValue(params.action)}`,
-    `v=${encodeCustomIdValue(params.view)}`,
-    `u=${encodeCustomIdValue(userId)}`,
+    `${DISCORD_MODEL_PICKER_CUSTOM_ID_KEY}:c=${encodeCustomIdComponent(params.command)}`,
+    `a=${encodeCustomIdComponent(params.action)}`,
+    `v=${encodeCustomIdComponent(params.view)}`,
+    `u=${encodeCustomIdComponent(userId)}`,
     `g=${String(page)}`,
   ];
   if (normalizedProvider) {
-    parts.push(`p=${encodeCustomIdValue(normalizedProvider)}`);
+    parts.push(`p=${encodeCustomIdComponent(normalizedProvider)}`);
   }
   const runtime = params.runtime?.trim();
   if (runtime) {
-    parts.push(`r=${encodeCustomIdValue(runtime)}`);
+    parts.push(`r=${encodeCustomIdComponent(runtime)}`);
   }
   const runtimeIndex =
     typeof params.runtimeIndex === "number" && Number.isFinite(params.runtimeIndex)
@@ -267,11 +256,11 @@ export function buildDiscordModelPickerCustomId(params: {
   }
   const providerBucket = params.providerBucket?.trim().toLowerCase();
   if (providerBucket) {
-    parts.push(`pb=${encodeCustomIdValue(providerBucket)}`);
+    parts.push(`pb=${encodeCustomIdComponent(providerBucket)}`);
   }
   const modelBucket = params.modelBucket?.trim().toLowerCase();
   if (modelBucket) {
-    parts.push(`mb=${encodeCustomIdValue(modelBucket)}`);
+    parts.push(`mb=${encodeCustomIdComponent(modelBucket)}`);
   }
 
   const customId = parts.join(";");
@@ -313,19 +302,19 @@ export function parseDiscordModelPickerData(data: ComponentData): DiscordModelPi
     return null;
   }
 
-  const command = decodeCustomIdValue(coerceString(data.c ?? data.cmd));
-  const action = decodeCustomIdValue(coerceString(data.a ?? data.act));
-  const view = decodeCustomIdValue(coerceString(data.v ?? data.view));
-  const userId = decodeCustomIdValue(coerceString(data.u));
-  const providerRaw = decodeCustomIdValue(coerceString(data.p));
-  const runtimeRaw = decodeCustomIdValue(coerceString(data.r));
+  const command = decodeCustomIdComponent(coerceString(data.c ?? data.cmd));
+  const action = decodeCustomIdComponent(coerceString(data.a ?? data.act));
+  const view = decodeCustomIdComponent(coerceString(data.v ?? data.view));
+  const userId = decodeCustomIdComponent(coerceString(data.u));
+  const providerRaw = decodeCustomIdComponent(coerceString(data.p));
+  const runtimeRaw = decodeCustomIdComponent(coerceString(data.r));
   const runtimeIndex = parseRawPositiveInt(data.ri);
   const page = parseRawPage(data.g ?? data.pg);
   const providerPage = parseRawPositiveInt(data.pp);
   const modelIndex = parseRawPositiveInt(data.mi);
   const recentSlot = parseRawPositiveInt(data.rs);
-  const providerBucketRaw = decodeCustomIdValue(coerceString(data.pb)).trim().toLowerCase();
-  const modelBucketRaw = decodeCustomIdValue(coerceString(data.mb)).trim().toLowerCase();
+  const providerBucketRaw = decodeCustomIdComponent(coerceString(data.pb)).trim().toLowerCase();
+  const modelBucketRaw = decodeCustomIdComponent(coerceString(data.mb)).trim().toLowerCase();
 
   if (!isValidCommandContext(command) || !isValidPickerAction(action) || !isValidPickerView(view)) {
     return null;

@@ -2,11 +2,36 @@
 import { describe, expect, it } from "vitest";
 import {
   collectPreparedPrepackErrors,
+  resolvePrepackAllowUnreleasedChangelog,
   resolvePrepackBuildEnvironment,
   resolvePrepackCommandStdio,
   resolvePrepackCommandTimeoutMs,
   runPrepackCommand,
 } from "../scripts/openclaw-prepack.ts";
+
+describe("resolvePrepackAllowUnreleasedChangelog", () => {
+  it("requires an explicit non-publish opt-in", () => {
+    for (const raw of [undefined, "", "0", "false"]) {
+      expect(
+        resolvePrepackAllowUnreleasedChangelog({
+          OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG: raw,
+        }),
+      ).toBe(false);
+    }
+    for (const raw of ["1", "true"]) {
+      expect(
+        resolvePrepackAllowUnreleasedChangelog({
+          OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG: raw,
+        }),
+      ).toBe(true);
+    }
+    expect(() =>
+      resolvePrepackAllowUnreleasedChangelog({
+        OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG: "yes",
+      }),
+    ).toThrow("invalid OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG: yes");
+  });
+});
 
 describe("resolvePrepackBuildEnvironment", () => {
   it("pins one timestamp across package and Control UI builds", () => {

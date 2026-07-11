@@ -20,7 +20,7 @@ import {
   type SlashCommandCategory,
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
-import type { ChatSideResult } from "../../../lib/chat/side-result.ts";
+import type { ChatSideResult, ChatSideResultPending } from "../../../lib/chat/side-result.ts";
 import { formatCompactTokenCount, formatCost } from "../../../lib/format.ts";
 import { isMonitoredAuthProvider } from "../../../lib/model-auth.ts";
 import {
@@ -92,6 +92,7 @@ type ChatComposerProps = {
   messages: unknown[];
   stream: string | null;
   sideResult?: ChatSideResult | null;
+  sideResultPending?: ChatSideResultPending | null;
   queue: ChatQueueItem[];
   draft: string;
   sessions: SessionsListResult | null;
@@ -1029,10 +1030,41 @@ export function renderChatQueue(props: ChatQueueProps) {
 
 export function renderSideResult(
   sideResult: ChatSideResult | null | undefined,
+  pending?: ChatSideResultPending | null,
   onDismiss?: () => void,
 ): TemplateResult | typeof nothing {
   if (!sideResult) {
-    return nothing;
+    // A fresh side result always supersedes the pending placeholder; the
+    // pending card only bridges the gap until chat.side_result arrives.
+    if (!pending) {
+      return nothing;
+    }
+    return html`
+      <section
+        class="chat-side-result chat-side-result--pending"
+        role="status"
+        aria-live="polite"
+        aria-label="BTW side question pending"
+      >
+        <div class="chat-side-result__header">
+          <div class="chat-side-result__label-row">
+            <span class="chat-side-result__label">BTW</span>
+            <span class="chat-side-result__meta">Thinking…</span>
+          </div>
+          <openclaw-tooltip content="Dismiss">
+            <button
+              class="btn chat-side-result__dismiss"
+              type="button"
+              aria-label="Dismiss BTW question"
+              @click=${() => onDismiss?.()}
+            >
+              ${icons.x}
+            </button>
+          </openclaw-tooltip>
+        </div>
+        <div class="chat-side-result__question">${pending.question}</div>
+      </section>
+    `;
   }
   return html`
     <section
@@ -2410,7 +2442,7 @@ export function renderChatComposer(props: ChatComposerProps) {
       onQueueSteer: props.connected && canCompose ? props.onQueueSteer : undefined,
       onQueueRemove: props.onQueueRemove,
     })}
-    ${renderSideResult(props.sideResult, props.onDismissSideResult)}
+    ${renderSideResult(props.sideResult, props.sideResultPending, props.onDismissSideResult)}
     ${props.showNewMessages
       ? html`
           <button class="chat-new-messages" type="button" @click=${props.onScrollToBottom}>

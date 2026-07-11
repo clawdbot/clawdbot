@@ -789,6 +789,7 @@ export const hi: TranslationMap = {
     artifactDetails: "Control UI बिल्ड विवरण",
     version: "संस्करण",
     commit: "Commit",
+    branch: "Branch",
     built: "बिल्ड किया गया",
     unavailable: "अनुपलब्ध",
     copyCommit: "पूरा commit hash कॉपी करें",

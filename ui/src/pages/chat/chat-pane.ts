@@ -31,6 +31,7 @@ import {
 import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
+import { retirePendingChatSideQuestion } from "../../lib/chat/side-result.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { resolveSessionKey, scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
@@ -188,6 +189,7 @@ class ChatPane extends OpenClawLightDomElement {
   @property({ attribute: false }) showPaneHeader = false;
   @property({ attribute: false }) paneTitle = "";
   @property({ attribute: false }) narrow = false;
+  @property({ attribute: false }) onOpenSplitView?: () => void;
   @property({ attribute: false }) onSplitDown?: (paneId: string) => void;
   @property({ attribute: false }) onSplitRight?: (paneId: string) => void;
   @property({ attribute: false }) onClosePane?: (paneId: string) => void;
@@ -1312,6 +1314,7 @@ class ChatPane extends OpenClawLightDomElement {
       fallbackStatus: state.fallbackStatus,
       messages: state.chatMessages,
       sideResult: state.chatSideResult,
+      sideResultPending: state.chatSideResultPending,
       toolMessages: state.chatToolMessages,
       streamSegments: state.chatStreamSegments,
       stream: state.chatStream,
@@ -1404,6 +1407,7 @@ class ChatPane extends OpenClawLightDomElement {
       sessionWorkspace,
       backgroundTasks,
       paneHeaderActive: this.showPaneHeader,
+      onOpenSplitView: this.onOpenSplitView,
       taskSuggestions: this.taskSuggestions,
       pullRequests: this.sessionPullRequests.filter(
         (pullRequest) => !this.dismissedSessionPullRequestIds.has(chatPullRequestId(pullRequest)),
@@ -1428,6 +1432,7 @@ class ChatPane extends OpenClawLightDomElement {
       onRevealWorkspaceFile: (path) => revealSessionWorkspaceFile(state, path),
       onRefresh: () => {
         state.chatSideResult = null;
+        retirePendingChatSideQuestion(state);
         state.resetToolStream();
         void refreshPageChat(state, { awaitHistory: true, scheduleScroll: false });
       },
@@ -1467,8 +1472,12 @@ class ChatPane extends OpenClawLightDomElement {
       onQueueRetry: (id) => void state.retryQueuedChatMessage(id),
       onQueueSteer: (id) => void state.steerQueuedChatMessage(id),
       onGoalCommand: (command) => void state.handleSendChat(command),
+      onSideQuestion: (command) => void state.handleSendChat(command),
       onDismissSideResult: () => {
         state.chatSideResult = null;
+        // Retire (not just clear) so a dismissed question's still-running
+        // detached run cannot leak its late reply into the transcript.
+        retirePendingChatSideQuestion(state);
         state.requestUpdate?.();
       },
       replyTarget: state.chatReplyTarget ?? null,

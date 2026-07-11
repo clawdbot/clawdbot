@@ -626,6 +626,12 @@ export const icons = {
       <path d="M8 10l3 2-3 2" stroke-linecap="round" stroke-linejoin="round" />
     </svg>
   `,
+  columns2: html`
+    <svg viewBox="0 0 24 24">
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <path d="M12 3v18" stroke-linecap="round" />
+    </svg>
+  `,
   panelBottomOpen: html`
     <svg viewBox="0 0 24 24">
       <rect x="3" y="3" width="18" height="18" rx="2" />

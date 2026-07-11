@@ -124,7 +124,32 @@ export type DoctorMemoryStatusPayload = {
     checkedAtMs?: number;
     cacheExpiresAtMs?: number;
   };
+  embeddingRuntime?: DoctorMemoryEmbeddingRuntimePayload;
   dreaming?: DoctorMemoryDreamingPayload;
+};
+
+export type DoctorMemoryEmbeddingRuntimePayload = {
+  engine: "llama.cpp";
+  state: "ready" | "failed";
+  backend?: "metal" | "cuda" | "vulkan" | "cpu";
+  buildType?: "localBuild" | "prebuilt";
+  deviceNames?: string[];
+  memory?: {
+    totalBytes: number;
+    usedBytes: number;
+    freeBytes: number;
+    unifiedBytes: number;
+    observedAtMs: number;
+  };
+  offload?: {
+    supported: boolean;
+    offloadedLayers?: number;
+    totalLayers?: number;
+  };
+  context?: {
+    requestedSize: number | "auto";
+  };
+  loadError?: string;
 };
 
 export type DoctorMemoryDreamDiaryPayload = {
@@ -727,11 +752,14 @@ export const doctorHandlers: GatewayRequestHandlers = {
     }
 
     try {
-      const status = manager.status();
+      let status = manager.status();
       const shouldProbe = shouldProbeMemoryEmbeddings(params);
       let embedding = shouldProbe
         ? await manager.probeEmbeddingAvailability()
         : (manager.getCachedEmbeddingAvailability?.() ?? SKIPPED_MEMORY_EMBEDDING_PROBE);
+      if (shouldProbe) {
+        status = manager.status();
+      }
       if (!embedding.ok && !embedding.error) {
         embedding = { ok: false, error: "memory embeddings unavailable" };
       }
@@ -774,6 +802,12 @@ export const doctorHandlers: GatewayRequestHandlers = {
         agentId,
         provider: status.provider,
         embedding,
+        embeddingRuntime: (() => {
+          const runtime = asOptionalRecord(asOptionalRecord(status.custom)?.llamaCppRuntime);
+          return runtime?.engine === "llama.cpp"
+            ? (runtime as DoctorMemoryEmbeddingRuntimePayload)
+            : undefined;
+        })(),
         dreaming: {
           ...dreamingConfig,
           ...storeStats,

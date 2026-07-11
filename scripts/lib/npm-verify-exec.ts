@@ -1,9 +1,13 @@
 // Npm Verify Exec script supports OpenClaw repository automation.
-import { execFileSync } from "node:child_process";
+import { execFileSync, type ExecFileSyncOptionsWithStringEncoding } from "node:child_process";
 
-type NpmVerifyCommandInvocation = {
+export type NpmVerifyCommandInvocation = {
   command: string;
   args: string[];
+  windowsVerbatimArguments?: boolean;
+};
+
+type NpmVerifyExecOptions = ExecFileSyncOptionsWithStringEncoding & {
   windowsVerbatimArguments?: boolean;
 };
 
@@ -40,7 +44,7 @@ export function runNpmVerifyCommand(
       DEFAULT_NPM_VERIFY_COMMAND_MAX_BUFFER_BYTES,
     );
 
-  return execFileSync(invocation.command, invocation.args, {
+  const execOptions: NpmVerifyExecOptions = {
     cwd,
     encoding: "utf8",
     killSignal: "SIGKILL",
@@ -48,5 +52,6 @@ export function runNpmVerifyCommand(
     stdio: ["ignore", "pipe", "pipe"],
     timeout: timeoutMs,
     windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-  }).trim();
+  };
+  return execFileSync(invocation.command, invocation.args, execOptions).trim();
 }

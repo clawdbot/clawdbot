@@ -810,6 +810,24 @@ html.openclaw-native-macos .shell-nav-expand {
   margin: 0 8px 10px;
 }
 
+.sidebar-update-card--floating .sidebar-update-card {
+  width: min(360px, calc(100% - 32px));
+  margin: 12px 16px 0;
+}
+
+@media (min-width: 1101px) {
+  /* Keep the card beside the collapsed-nav control so their hit targets stay distinct. */
+  .sidebar-update-card--floating .sidebar-update-card {
+    width: min(360px, calc(100% - 48px));
+    margin-left: 32px;
+  }
+
+  /* Native dashboard actions must also clear AppKit's drag strip. */
+  html.openclaw-native-macos .sidebar-update-card--floating .sidebar-update-card {
+    margin-top: calc(var(--openclaw-native-titlebar-height, 50px) + 2px);
+  }
+}
+
 .sidebar-update-card__action {
   width: 100%;
   min-height: 62px;
@@ -939,59 +957,6 @@ html.openclaw-native-macos .shell-nav-expand {
   min-height: 0;
   padding: 0 8px;
   margin-top: 10px;
-}
-
-.sidebar-new-session {
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 8px;
-  width: 100%;
-  min-height: 34px;
-  box-sizing: border-box;
-  padding: 0 9px;
-  border: none;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--accent);
-  font: inherit;
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 1.2;
-  transition:
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease;
-}
-
-.sidebar-new-session:hover:not(:disabled) {
-  background: var(--accent-subtle);
-  color: var(--accent-hover);
-}
-
-.sidebar-new-session:disabled {
-  cursor: not-allowed;
-  opacity: 0.52;
-}
-
-.sidebar-new-session__icon,
-.sidebar-new-session__icon svg {
-  width: 15px;
-  height: 15px;
-}
-
-.sidebar-new-session__icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: currentColor;
-}
-
-.sidebar-new-session__icon svg {
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.8px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 /* min-height: 0 down this chain lets the recent list shrink and scroll instead
@@ -1721,8 +1686,7 @@ openclaw-session-menu[popover] {
   color: var(--accent);
 }
 
-/* Single compact icon row: status dot, then utility icons right-aligned.
-   The footer signals connectivity only; gateway version lives in Settings. */
+/* Single compact row: status, build identity, then utility icons right-aligned. */
 .sidebar-footer-bar {
   display: flex;
   align-items: center;
@@ -1733,6 +1697,26 @@ openclaw-session-menu[popover] {
 
 .sidebar-footer-bar__spacer {
   flex: 1 1 auto;
+}
+
+/* Host elements are display:contents, so the anchor itself is the flex item;
+   min-width 0 lets it yield to the footer icons and ellipsize. */
+.sidebar-footer-build {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-decoration: none;
+}
+
+.sidebar-footer-build:hover,
+.sidebar-footer-build:focus-visible {
+  color: var(--text);
+  text-decoration: none;
 }
 
 /* Dev-checkout branch strip: only rendered when the gateway runs from a git

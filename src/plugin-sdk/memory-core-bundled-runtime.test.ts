@@ -4,6 +4,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());
+const configureMemoryCoreEmbeddingLocalServiceImpl = vi.hoisted(() => vi.fn());
 const configureMemoryCoreDreamingStateImpl = vi.hoisted(() => vi.fn());
 const createEmbeddingProviderImpl = vi.hoisted(() => vi.fn());
 const removeGroundedShortTermCandidatesImpl = vi.hoisted(() => vi.fn());
@@ -24,6 +25,7 @@ vi.mock("./facade-loader.js", async () => {
 
 describe("plugin-sdk memory-core bundled runtime", () => {
   beforeEach(() => {
+    configureMemoryCoreEmbeddingLocalServiceImpl.mockReset();
     configureMemoryCoreDreamingStateImpl.mockReset();
     createEmbeddingProviderImpl.mockReset().mockResolvedValue({ provider: { id: "openai" } });
     removeGroundedShortTermCandidatesImpl.mockReset().mockResolvedValue({ removed: 1 });
@@ -38,6 +40,7 @@ describe("plugin-sdk memory-core bundled runtime", () => {
       .mockImplementation(({ artifactBasename }) => {
         if (artifactBasename === "runtime-api.js") {
           return {
+            configureMemoryCoreEmbeddingLocalService: configureMemoryCoreEmbeddingLocalServiceImpl,
             configureMemoryCoreDreamingState: configureMemoryCoreDreamingStateImpl,
             createEmbeddingProvider: createEmbeddingProviderImpl,
             removeGroundedShortTermCandidates: removeGroundedShortTermCandidatesImpl,
@@ -68,6 +71,7 @@ describe("plugin-sdk memory-core bundled runtime", () => {
       artifactBasename: "runtime-api.js",
     });
     expect(configureMemoryCoreDreamingStateImpl).toHaveBeenCalledWith(expect.any(Function));
+    expect(configureMemoryCoreEmbeddingLocalServiceImpl).toHaveBeenCalledWith(expect.any(Function));
   });
 
   it("delegates doctor and embedding helpers through the bundled public surfaces", async () => {

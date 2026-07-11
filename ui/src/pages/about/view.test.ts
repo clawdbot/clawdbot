@@ -14,6 +14,8 @@ function createProps(overrides: Partial<AboutProps> = {}): AboutProps {
       version: "2026.7.10",
       commit: COMMIT,
       builtAt: BUILT_AT,
+      branch: "feature/build-chip",
+      dirty: true,
       buildId: "test",
     },
     gatewayVersion: "2026.7.9",
@@ -29,7 +31,7 @@ describe("renderAbout", () => {
     await i18n.setLocale("en");
   });
 
-  it("keeps version, short commit, and localized UTC build date in one definition strip", () => {
+  it("keeps version, commit, branch, and localized UTC build date in one definition strip", () => {
     const container = document.createElement("div");
     render(renderAbout(createProps()), container);
 
@@ -37,13 +39,15 @@ describe("renderAbout", () => {
     const items = strip?.querySelectorAll(":scope > div");
     expect(strip?.getAttribute("role")).toBe("group");
     expect(strip?.getAttribute("aria-label")).toBe("Control UI build details");
-    expect(items).toHaveLength(3);
+    expect(items).toHaveLength(4);
     expect(items?.[0]?.textContent).toContain("2026.7.10");
     expect(items?.[1]?.querySelector("code")?.textContent).toBe(COMMIT.slice(0, 12));
     expect(items?.[1]?.querySelector("code")?.getAttribute("title")).toBe(COMMIT);
     expect(items?.[1]?.querySelector("code")?.getAttribute("dir")).toBe("ltr");
 
-    const time = items?.[2]?.querySelector("time");
+    expect(items?.[2]?.textContent).toContain("feature/build-chip*");
+
+    const time = items?.[3]?.querySelector("time");
     expect(time?.getAttribute("datetime")).toBe(BUILT_AT);
     expect(time?.getAttribute("title")).toBe(BUILT_AT);
     expect(time?.getAttribute("dir")).toBe("auto");
@@ -80,7 +84,14 @@ describe("renderAbout", () => {
     render(
       renderAbout(
         createProps({
-          buildInfo: { version: null, commit: null, builtAt: null, buildId: "dev" },
+          buildInfo: {
+            version: null,
+            commit: null,
+            builtAt: null,
+            branch: null,
+            dirty: null,
+            buildId: "dev",
+          },
           gatewayVersion: null,
         }),
       ),

@@ -13,6 +13,8 @@ const DOCS_PATH_RE = /^(?:docs\/|README\.md$|AGENTS\.md$|.*\.mdx?$)/u;
 const APP_PATH_RE = /^(?:apps\/|Swabble\/|appcast\.xml$)/u;
 const EXTENSION_PATH_RE = /^extensions\/[^/]+(?:\/|$)/u;
 const CORE_PATH_RE = /^(?:src\/|ui\/|packages\/)/u;
+const SCRIPTS_TYPECHECK_PATH_RE =
+  /^(?:scripts\/.*\.(?:[cm]?ts|[cm]?tsx)|tsconfig\.scripts\.json)$/u;
 const TOOLING_PATH_RE =
   /^(?:scripts\/|test\/vitest\/|\.github\/|\.vscode\/|config\/|deploy\/|git-hooks\/|Dockerfile\.sandbox(?:-(?:browser|common))?$|Makefile$|docker-setup\.sh$|setup-podman\.sh$|openclaw\.podman\.env$|skills\/pyproject\.toml$|vitest(?:\..+)?\.config\.ts$|tsconfig.*\.json$|\.dockerignore$|\.gitignore$|\.jscpd\.json$|\.npmignore$|\.pre-commit-config\.yaml$|\.swiftformat$|\.swiftlint\.yml$|\.oxlint.*|\.oxfmt.*)/u;
 const ROOT_GLOBAL_PATH_RE =
@@ -54,7 +56,7 @@ export const RELEASE_METADATA_PATHS = new Set([
   "package.json",
 ]);
 
-/** @typedef {"core" | "coreTests" | "extensions" | "extensionTests" | "apps" | "docs" | "tooling" | "liveDockerTooling" | "releaseMetadata" | "all"} ChangedLane */
+/** @typedef {"core" | "coreTests" | "extensions" | "extensionTests" | "scripts" | "apps" | "docs" | "tooling" | "liveDockerTooling" | "releaseMetadata" | "all"} ChangedLane */
 
 /**
  * @typedef {{
@@ -85,6 +87,7 @@ export function createEmptyChangedLanes() {
     coreTests: false,
     extensions: false,
     extensionTests: false,
+    scripts: false,
     apps: false,
     docs: false,
     tooling: false,
@@ -139,6 +142,10 @@ export function detectChangedLanes(changedPaths, options = {}) {
   }
 
   for (const changedPath of paths) {
+    if (SCRIPTS_TYPECHECK_PATH_RE.test(changedPath)) {
+      lanes.scripts = true;
+    }
+
     if (DOCS_PATH_RE.test(changedPath)) {
       lanes.docs = true;
       continue;

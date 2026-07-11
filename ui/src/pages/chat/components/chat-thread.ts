@@ -17,6 +17,10 @@ import {
 import { CHAT_HISTORY_RENDER_LIMIT } from "../../../lib/chat/chat-types.ts";
 import type { ChatQueueItem, ChatStreamSegment } from "../../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
+import {
+  buildMoreDetailsSideCommand,
+  combineSideChatComposerDraft,
+} from "../../../lib/chat/side-question.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -45,6 +49,7 @@ import {
   renderStreamGroup,
 } from "./chat-message.ts";
 import { renderRealtimeTalkConversation } from "./chat-realtime-controls.ts";
+import { handleChatSelectionPointerUp, removeChatSelectionPopup } from "./chat-selection-popup.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 import { renderWelcomeState, resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 
@@ -119,9 +124,13 @@ type ChatThreadProps = {
   onScrollToBottom?: () => void;
   onChatScroll?: (event: Event) => void;
   onDraftChange: (next: string) => void;
+  /** Current composer draft; the selection popup preserves it when prefilling. */
+  getDraft?: () => string;
   onSend: () => void;
   onSetReply?: (target: ReplyTarget) => void;
   onFocusComposer?: () => void;
+  /** Sends a detached /btw side question built from the selection popup. */
+  onSideQuestion?: (command: string) => void;
 };
 
 type ChatPinnedMessagesProps = Pick<
@@ -196,6 +205,9 @@ function getPinnedMessageSummary(message: unknown): string {
 
 export function resetChatThreadPresentationState(paneId?: string) {
   removeReplyContextMenu(paneId);
+  // The selection popup is body-portaled; pane teardown/route changes must
+  // drop it so it cannot outlive the render that owns its callbacks.
+  removeChatSelectionPopup();
   const states = paneId
     ? ([threadStates.get(paneId)].filter(Boolean) as ChatThreadState[])
     : [...threadStates.values()];
@@ -559,6 +571,28 @@ function createReplyContextMenuButton(onClick: () => void): HTMLButtonElement {
   return button;
 }
 
+function handleChatThreadSelectionPointerUp(event: PointerEvent, props: ChatThreadProps) {
+  if (typeof props.onSideQuestion !== "function") {
+    return;
+  }
+  handleChatSelectionPointerUp(event, {
+    onMoreDetails: (selection) => {
+      const command = buildMoreDetailsSideCommand(selection);
+      if (command) {
+        props.onSideQuestion?.(command);
+      }
+    },
+    onAskSideChat: (selection) => {
+      const draft = combineSideChatComposerDraft(selection, props.getDraft?.());
+      if (draft) {
+        props.onDraftChange(draft);
+        props.onRequestUpdate?.();
+        props.onFocusComposer?.();
+      }
+    },
+  });
+}
+
 function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   const bubble = (event.target as HTMLElement).closest(".chat-bubble");
   if (!bubble || typeof props.onSetReply !== "function") {
@@ -782,6 +816,7 @@ export function renderChatThread(props: ChatThreadProps) {
         }
       }}
       @contextmenu=${(event: MouseEvent) => handleChatContextMenu(event, props)}
+      @pointerup=${(event: PointerEvent) => handleChatThreadSelectionPointerUp(event, props)}
     >
       <div class="chat-thread-inner">
         ${showLoadingSkeleton ? renderLoadingSkeleton() : nothing}

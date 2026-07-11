@@ -8,6 +8,7 @@ import { pathToFileURL } from "node:url";
 
 const WORKSPACE_DIRS_ENV = "OPENCLAW_OCM_WORKSPACE_DEPENDENCY_DIRS";
 const REAL_NPM_ENV = "OPENCLAW_OCM_REAL_NPM_BIN";
+const ALLOW_UNRELEASED_CHANGELOG_ENV = "OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG";
 
 export function parseWorkspaceDependencyDirs(
   raw = process.env[WORKSPACE_DIRS_ENV],
@@ -55,13 +56,23 @@ export function buildInstallManifest(rootArchive, workspacePackages) {
 
 function runNpm(npm, args, options = {}) {
   const result = spawnSync(npm, args, {
-    ...options,
     env: process.env,
+    ...options,
   });
   if (result.error) {
     throw result.error;
   }
   return result;
+}
+
+export function resolveNpmEnvironment(args, env = process.env) {
+  if (args[0] !== "pack") {
+    return env;
+  }
+  return {
+    ...env,
+    [ALLOW_UNRELEASED_CHANGELOG_ENV]: "1",
+  };
 }
 
 function runTar(args) {
@@ -162,7 +173,10 @@ function main() {
   const workspaceDirs = parseWorkspaceDependencyDirs();
   const plan = resolveWorkspaceInstallPlan(args, workspaceDirs);
   if (!plan) {
-    const result = runNpm(npm, args, { stdio: "inherit" });
+    const result = runNpm(npm, args, {
+      env: resolveNpmEnvironment(args),
+      stdio: "inherit",
+    });
     return result.status ?? 1;
   }
 

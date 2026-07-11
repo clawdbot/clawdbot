@@ -42,6 +42,19 @@ struct DashboardWindowSmokeTests {
             buttonNumber: 1))
     }
 
+    @Test func `dashboard navigation shortcuts target the focused browser`() throws {
+        let dashboard = try #require(URL(string: "http://127.0.0.1:18789/control/"))
+        let controller = DashboardWindowController(
+            url: dashboard,
+            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil))
+        #expect(controller._testNavigationWebViewIdentity == controller._testDashboardWebViewIdentity)
+
+        controller._testOpenLinkBrowser(try #require(URL(string: "https://docs.openclaw.ai/")))
+        let linkWebView = try #require(controller._testLinkBrowserWebViewIdentity)
+        #expect(controller._testFocusLinkBrowser())
+        #expect(controller._testNavigationWebViewIdentity == linkWebView)
+    }
+
     @Test func `dashboard parses only bounded native link requests`() throws {
         let request = DashboardWindowController.linkRequest(from: [
             "type": "open-link",

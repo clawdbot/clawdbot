@@ -789,6 +789,7 @@ export const ar: TranslationMap = {
     artifactDetails: "تفاصيل بناء Control UI",
     version: "الإصدار",
     commit: "Commit",
+    branch: "الفرع",
     built: "تم البناء",
     unavailable: "غير متاح",
     copyCommit: "نسخ تجزئة Commit الكاملة",

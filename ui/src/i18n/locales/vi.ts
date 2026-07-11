@@ -794,6 +794,7 @@ export const vi: TranslationMap = {
     artifactDetails: "Chi tiết bản dựng Control UI",
     version: "Phiên bản",
     commit: "Commit",
+    branch: "Nhánh",
     built: "Đã xây dựng",
     unavailable: "Không khả dụng",
     copyCommit: "Sao chép đầy đủ hash commit",

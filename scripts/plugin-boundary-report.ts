@@ -322,6 +322,9 @@ function extractCompatTokens(record: PluginCompatRecord): string[] {
   const tokens = new Set<string>();
   const values = [record.code, record.replacement, ...record.surfaces, ...record.diagnostics];
   for (const value of values) {
+    if (value === undefined) {
+      continue;
+    }
     for (const match of value.matchAll(/`([^`]+)`/g)) {
       const token = match[1]?.trim();
       if (token && !token.includes(" ")) {
@@ -523,7 +526,7 @@ function buildSummary(report: BoundaryReport, owner?: string): BoundaryReportSum
   };
 }
 
-function buildReport(options: Pick<CliOptions, "owner" | "summary"> = {}): BoundaryReport {
+function buildReport(options: Partial<Pick<CliOptions, "owner" | "summary">> = {}): BoundaryReport {
   const files = options.summary
     ? collectSummaryWorkspaceTextFileSources()
     : collectWorkspaceTextFileSources();

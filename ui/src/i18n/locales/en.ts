@@ -791,6 +791,7 @@ export const en: TranslationMap = {
     artifactDetails: "Control UI build details",
     version: "Version",
     commit: "Commit",
+    branch: "Branch",
     built: "Built",
     unavailable: "Unavailable",
     copyCommit: "Copy full commit hash",

@@ -8,7 +8,15 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/plistbuddy.sh"
 source "$ROOT_DIR/scripts/lib/swift-toolchain.sh"
 source "$ROOT_DIR/scripts/lib/build-metadata.sh"
-APP_ROOT="$ROOT_DIR/dist/OpenClaw.app"
+DEFAULT_APP_ROOT="$ROOT_DIR/dist/OpenClaw.app"
+APP_ROOT="${OPENCLAW_PACKAGE_APP_ROOT:-$DEFAULT_APP_ROOT}"
+case "$APP_ROOT" in
+  "$ROOT_DIR/dist/"*) ;;
+  *)
+    echo "ERROR: OPENCLAW_PACKAGE_APP_ROOT must stay under $ROOT_DIR/dist" >&2
+    exit 1
+    ;;
+esac
 BUILD_ROOT="$ROOT_DIR/apps/macos/.build"
 PRODUCT="OpenClaw"
 MLX_TTS_HELPER_PRODUCT="openclaw-mlx-tts"

@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildInstallManifest,
   parseWorkspaceDependencyDirs,
+  resolveNpmEnvironment,
   resolveWorkspaceInstallPlan,
   rewriteWorkspaceDependencyVersions,
 } from "../../scripts/ocm-npm-workspace-deps.mjs";
@@ -16,6 +17,15 @@ const adapterPath = fileURLToPath(
 );
 
 describe("OCM npm workspace dependency adapter", () => {
+  it("allows Unreleased notes only for non-publishing pack commands", () => {
+    const env = { KEEP: "value" };
+    expect(resolveNpmEnvironment(["install"], env)).toBe(env);
+    expect(resolveNpmEnvironment(["pack", "--silent"], env)).toEqual({
+      KEEP: "value",
+      OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG: "1",
+    });
+  });
+
   it("resolves workspace package directories", () => {
     expect(
       parseWorkspaceDependencyDirs(["packages/ai", "extensions/example"].join(delimiter), "/repo"),

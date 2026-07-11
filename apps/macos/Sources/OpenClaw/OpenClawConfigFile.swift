@@ -205,7 +205,12 @@ enum OpenClawConfigFile {
     static func gatewayUpdateChannel() -> String? {
         let root = self.loadDict()
         let update = root["update"] as? [String: Any]
-        return update?["channel"] as? String
+        return self.normalizedGatewayUpdateChannel(update?["channel"] as? String)
+    }
+
+    static func normalizedGatewayUpdateChannel(_ channel: String?) -> String? {
+        let normalized = channel?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized?.isEmpty == false ? normalized : nil
     }
 
     static func browserControlEnabled(defaultValue: Bool = true) -> Bool {

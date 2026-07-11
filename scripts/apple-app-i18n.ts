@@ -24,7 +24,12 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, string[]> = {
   ],
 };
 
-const CATALOGS = [
+type AppleCatalogSpec = {
+  path: string;
+  coverage: Record<string, readonly string[]>;
+};
+
+const CATALOGS: readonly AppleCatalogSpec[] = [
   {
     path: "apps/ios/Resources/Localizable.xcstrings",
     coverage: {
@@ -99,7 +104,7 @@ const CATALOGS = [
       "apps/macos/Sources/OpenClaw/CronSettings+Rows.swift": ["Run now"],
     },
   },
-] as const;
+];
 
 type Catalog = {
   sourceLanguage?: string;

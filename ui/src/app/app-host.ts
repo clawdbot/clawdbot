@@ -12,6 +12,7 @@ import "../components/github-link-hovercard.ts";
 import "../components/login-gate.ts";
 import "../components/browser/browser-panel.ts";
 import "../components/resizable-divider.ts";
+import "../components/sidebar-update-card.ts";
 import "../components/terminal/terminal-panel.ts";
 import "../components/tooltip.ts";
 import "../components/update-banner.ts";
@@ -135,6 +136,32 @@ function isBrowserPanelAvailable(snapshot: ApplicationContext["gateway"]["snapsh
 
 function isMobileNavLayout(): boolean {
   return globalThis.matchMedia?.("(max-width: 1100px)").matches ?? false;
+}
+
+export function navigationSurfaceIsHidden(params: {
+  navCollapsed: boolean;
+  navDrawerOpen: boolean;
+  mobileNavLayout: boolean;
+}): boolean {
+  return params.mobileNavLayout ? !params.navDrawerOpen : params.navCollapsed;
+}
+
+export function renderFloatingUpdateCard(params: {
+  navigationSurfaceHidden: boolean;
+  onboarding: boolean;
+  updateAvailable: ApplicationContext["overlays"]["snapshot"]["updateAvailable"];
+  updateRunning: boolean;
+  onUpdate: () => void;
+}) {
+  if (!params.navigationSurfaceHidden || params.onboarding) {
+    return nothing;
+  }
+  return html`<openclaw-sidebar-update-card
+    class="sidebar-update-card--floating"
+    .updateAvailable=${params.updateAvailable}
+    .updateRunning=${params.updateRunning}
+    .onUpdate=${params.onUpdate}
+  ></openclaw-sidebar-update-card>`;
 }
 
 class OpenClawApp extends OpenClawLightDomElement {
@@ -836,6 +863,11 @@ class OpenClawShell extends OpenClawLightDomElement {
     // stays persisted for when the viewport returns to the desktop layout.
     // The settings sidebar has a fixed width, so the collapse state pauses too.
     const navCollapsed = navigationSnapshot.navCollapsed && !navDrawerOpen && !settingsTakeover;
+    const navigationSurfaceHidden = navigationSurfaceIsHidden({
+      navCollapsed,
+      navDrawerOpen,
+      mobileNavLayout: isMobileNavLayout(),
+    });
     const shellWidth = Math.max(globalThis.innerWidth || 0, NAV_WIDTH_MAX);
     // One storage read per render; theme.refresh() re-renders on pref changes.
     const uiSettings = loadSettings();
@@ -897,7 +929,7 @@ class OpenClawShell extends OpenClawLightDomElement {
                   context.config.current.serverVersion ??
                   gatewaySnapshot.hello?.server?.version ??
                   "",
-                updateAvailable: overlaySnapshot.updateAvailable,
+                updateAvailable: navigationSurfaceHidden ? null : overlaySnapshot.updateAvailable,
                 updateRunning: overlaySnapshot.updateRunning,
                 onUpdate: () => void context.overlays.runUpdate(),
                 searchQuery: this.settingsSearchQuery,
@@ -927,7 +959,7 @@ class OpenClawShell extends OpenClawLightDomElement {
                 gatewaySnapshot.hello?.server?.version ??
                 null}
                 .devGitBranch=${context.config.current.devGitBranch}
-                .updateAvailable=${overlaySnapshot.updateAvailable}
+                .updateAvailable=${navigationSurfaceHidden ? null : overlaySnapshot.updateAvailable}
                 .updateRunning=${overlaySnapshot.updateRunning}
                 .onUpdate=${() => void context.overlays.runUpdate()}
                 .onOpenPalette=${this.openPalette}
@@ -985,6 +1017,13 @@ class OpenClawShell extends OpenClawLightDomElement {
               statusBanner: overlaySnapshot.updateStatusBanner,
             }}
           ></openclaw-update-banner>
+          ${renderFloatingUpdateCard({
+            navigationSurfaceHidden,
+            onboarding: this.onboarding,
+            updateAvailable: overlaySnapshot.updateAvailable,
+            updateRunning: overlaySnapshot.updateRunning,
+            onUpdate: () => void context.overlays.runUpdate(),
+          })}
           <openclaw-router-outlet
             .router=${runtime.router}
             .retryContext=${context}

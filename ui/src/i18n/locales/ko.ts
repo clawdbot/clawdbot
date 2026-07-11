@@ -796,6 +796,7 @@ export const ko: TranslationMap = {
     artifactDetails: "Control UI 빌드 세부 정보",
     version: "버전",
     commit: "커밋",
+    branch: "브랜치",
     built: "빌드됨",
     unavailable: "사용할 수 없음",
     copyCommit: "전체 커밋 해시 복사",

@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import {
   openOpenClawAgentDatabase,
@@ -465,7 +465,7 @@ function percentile(values: number[], pct: number): number {
 function runTimedQuery(
   db: DatabaseSync,
   query: string,
-  params: unknown[],
+  params: SQLInputValue[],
   runs: number,
 ): TimedQuery {
   const statement = db.prepare(query);

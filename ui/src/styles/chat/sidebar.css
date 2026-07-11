@@ -64,7 +64,8 @@
 
 .chat-workspace-open,
 .chat-tasks-open,
-.chat-diff-open {
+.chat-diff-open,
+.chat-open-split-view {
   /* Match the 28px pane-header/split-view openers; .btn--icon's
      min-width/height of 36px would win otherwise. */
   width: 28px;
@@ -419,7 +420,9 @@
   flex-shrink: 0;
   flex-wrap: wrap;
   gap: 4px;
-  padding: 0 12px 8px;
+  /* Top padding keeps the count pills clear of the path row's divider line
+     (and of the header divider when no workspace root renders a path). */
+  padding: 8px 12px;
 }
 
 .chat-workspace-rail__summary span {

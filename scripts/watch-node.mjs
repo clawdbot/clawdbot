@@ -19,6 +19,8 @@ const WATCH_LOCK_WAIT_MS = 5_000;
 const WATCH_LOCK_POLL_MS = 100;
 const WATCH_SHUTDOWN_KILL_GRACE_MS = 5_000;
 const WATCH_LOCK_DIR = path.join(".local", "watch-node");
+const WATCH_DIST_ENTRY_POLL_MS = 1_000;
+const WATCH_DIST_ENTRY_TIMEOUT_MS = 5 * 60 * 1_000;
 const AUTO_DOCTOR_DISABLE_VALUES = new Set(["0", "false", "no", "off"]);
 // The source watcher cannot import the TypeScript owner; keep this literal
 // aligned with src/commands/doctor-invocation.ts.
@@ -250,6 +252,7 @@ const releaseWatchLock = (lockHandle) => {
  *   cwd?: string;
  *   args?: string[];
  *   env?: NodeJS.ProcessEnv;
+ *   fs?: Pick<typeof fs, "existsSync">;
  *   now?: () => number;
  *   sleep?: (ms: number) => Promise<void>;
  *   signalProcess?: (pid: number, signal: string | number) => void;
@@ -271,6 +274,7 @@ export async function runWatchMain(params = {}) {
     cwd: params.cwd ?? process.cwd(),
     args: params.args ?? process.argv.slice(2),
     env: params.env ? { ...params.env } : { ...process.env },
+    fs: params.fs ?? fs,
     now: params.now ?? Date.now,
     sleep: params.sleep ?? sleep,
     signalProcess: params.signalProcess ?? ((pid, signal) => process.kill(pid, signal)),
@@ -296,6 +300,8 @@ export async function runWatchMain(params = {}) {
     let settled = false;
     let shuttingDown = false;
     let restartRequested = false;
+    let deferredRestartGeneration = 0;
+    let deferredRestartActive = false;
     let watchProcess = null;
     let watcher = null;
     let lockHandle = null;
@@ -400,6 +406,29 @@ export async function runWatchMain(params = {}) {
         if (restartRequested || shouldRestartAfterChildExit(exitCode, exitSignal)) {
           forceKillWatchProcessGroup(exitedProcess);
           restartRequested = false;
+          deferredRestartGeneration += 1;
+          deferredRestartActive = false;
+          if (!hasDistEntry()) {
+            deferredRestartActive = true;
+            const generation = deferredRestartGeneration;
+            logWatcher("Watcher child exited mid-build; waiting for the build entry.", deps);
+            deferRestartUntilDistEntryExists({
+              generation,
+              targetProcess: null,
+              onReady: () => {
+                if (!watchProcess) {
+                  startRunner();
+                }
+              },
+              onTimeout: () => {
+                logWatcher("Build entry wait timed out; starting run-node recovery.", deps);
+                if (!watchProcess) {
+                  startRunner();
+                }
+              },
+            });
+            return;
+          }
           startRunner();
           return;
         }
@@ -489,15 +518,85 @@ export async function runWatchMain(params = {}) {
       });
     };
 
+    const hasDistEntry = () => deps.fs.existsSync(path.join(deps.cwd, "dist", "entry.js"));
+
+    const deferRestartUntilDistEntryExists = ({
+      generation,
+      targetProcess,
+      onReady,
+      onTimeout,
+    }) => {
+      void (async () => {
+        const deadline = deps.now() + WATCH_DIST_ENTRY_TIMEOUT_MS;
+        while (true) {
+          if (
+            generation !== deferredRestartGeneration ||
+            settled ||
+            shuttingDown ||
+            (targetProcess && (!restartRequested || watchProcess !== targetProcess))
+          ) {
+            return;
+          }
+          await deps.sleep(WATCH_DIST_ENTRY_POLL_MS);
+          if (
+            generation !== deferredRestartGeneration ||
+            settled ||
+            shuttingDown ||
+            (targetProcess && (!restartRequested || watchProcess !== targetProcess))
+          ) {
+            return;
+          }
+          if (hasDistEntry()) {
+            deferredRestartActive = false;
+            onReady();
+            return;
+          }
+          if (deps.now() >= deadline) {
+            deferredRestartActive = false;
+            onTimeout();
+            return;
+          }
+        }
+      })();
+    };
+
     const requestRestart = (changedPath) => {
       if (shuttingDown || isIgnoredWatchPath(changedPath, deps.cwd, deps.watchPaths)) {
         return;
       }
       if (!watchProcess) {
+        if (deferredRestartActive) {
+          return;
+        }
         startRunner();
         return;
       }
       restartRequested = true;
+
+      // A separate build can temporarily remove dist while this healthy child is
+      // still serving. Keep it alive until run-node can take ownership safely.
+      if (!hasDistEntry()) {
+        if (!deferredRestartActive) {
+          deferredRestartActive = true;
+          deferredRestartGeneration += 1;
+          logWatcher("Build entry missing; keeping watcher child alive until it returns.", deps);
+          const targetProcess = watchProcess;
+          deferRestartUntilDistEntryExists({
+            generation: deferredRestartGeneration,
+            targetProcess,
+            onReady: () => {
+              logWatcher("Build entry restored; restarting watcher child.", deps);
+              signalWatchProcess(targetProcess, WATCH_RESTART_SIGNAL);
+            },
+            onTimeout: () => {
+              restartRequested = false;
+              logWatcher("Build entry wait timed out; keeping the healthy watcher child.", deps);
+            },
+          });
+        }
+        return;
+      }
+
       if (typeof watchProcess.kill === "function") {
         signalWatchProcess(watchProcess, WATCH_RESTART_SIGNAL);
       }

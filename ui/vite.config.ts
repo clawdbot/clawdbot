@@ -9,6 +9,7 @@ import { controlUiManualChunk } from "./config/control-ui-chunking.ts";
 import {
   deriveControlUiBuildId,
   normalizeControlUiBuildId,
+  normalizeControlUiBranch,
   normalizeControlUiBuildTimestamp,
   normalizeControlUiCommit,
   type ControlUiBuildInfo,
@@ -79,11 +80,37 @@ function readGitCommit(): string | null {
   }
 }
 
+function readGitBranch(): string | null {
+  try {
+    const raw = execFileSync("git", ["-C", repoRoot, "rev-parse", "--abbrev-ref", "HEAD"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return raw.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+function readGitDirty(): boolean | null {
+  try {
+    const raw = execFileSync("git", ["-C", repoRoot, "status", "--porcelain"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return Boolean(raw.trim());
+  } catch {
+    return null;
+  }
+}
+
 type ControlUiBuildInfoSources = {
   env?: NodeJS.ProcessEnv;
   now?: () => Date;
   readPackageVersion?: () => string | null;
   readGitCommit?: () => string | null;
+  readGitBranch?: () => string | null;
+  readGitDirty?: () => boolean | null;
 };
 
 function normalizeBuildTimestamp(value: string | undefined, now: () => Date): string | null {
@@ -131,10 +158,21 @@ export function resolveControlUiBuildInfo(
     env.OPENCLAW_BUILD_TIMESTAMP,
     sources.now ?? (() => new Date()),
   );
+  // Branch/dirty identity is advisory: the readers return null instead of
+  // throwing, so malformed environment or Git state never blocks a build.
+  // Tags must not be presented as branches in GitHub-built artifacts.
+  const githubBranch = env.GITHUB_REF_TYPE === "branch" ? env.GITHUB_REF_NAME : null;
+  const branch =
+    normalizeControlUiBranch(env.GIT_BRANCH) ??
+    normalizeControlUiBranch(githubBranch) ??
+    normalizeControlUiBranch((sources.readGitBranch ?? readGitBranch)());
+  const dirty = (sources.readGitDirty ?? readGitDirty)();
   const metadata = { version, commit, builtAt };
   const explicitBuildId = env.OPENCLAW_CONTROL_UI_BUILD_ID?.trim();
   return {
     ...metadata,
+    branch,
+    dirty,
     buildId: explicitBuildId
       ? normalizeControlUiBuildId(explicitBuildId)
       : deriveControlUiBuildId(metadata),

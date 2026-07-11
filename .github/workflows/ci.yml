@@ -1348,6 +1348,7 @@ jobs:
               ;;
             test-types)
               pnpm check:test-types
+              pnpm tsgo:scripts
               ;;
             *)
               echo "Unsupported check task: $TASK" >&2

@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -33,6 +33,7 @@ import {
 
 const SCRIPT = "scripts/release-ci-summary.mjs";
 const MANIFEST_ARTIFACT_ENTRY = "full-release-validation-manifest.json";
+const hasUnzip = spawnSync("unzip", ["-v"], { stdio: "ignore" }).status === 0;
 
 function crc32(input: Buffer): number {
   let crc = 0xffffffff;
@@ -524,50 +525,53 @@ describe("release CI summary child correlation", () => {
     );
   });
 
-  it("hashes and safely streams one bounded manifest entry from the exact artifact ZIP", () => {
-    const root = mkdtempSync(join(tmpdir(), "release-manifest-artifact-"));
-    try {
-      const archivePath = join(root, "manifest.zip");
-      const manifest = { runAttempt: 1, runId: "29071366025" };
-      const archive = makeStoredZip({
-        [MANIFEST_ARTIFACT_ENTRY]: JSON.stringify(manifest),
-      });
-      writeFileSync(archivePath, archive);
-      expect(readManifestArtifactArchive(archivePath, artifactDigest(archive))).toEqual(manifest);
-      expect(() => readManifestArtifactArchive(archivePath, `sha256:${"0".repeat(64)}`)).toThrow(
-        "artifact digest mismatch",
-      );
+  it.skipIf(!hasUnzip)(
+    "hashes and safely streams one bounded manifest entry from the exact artifact ZIP",
+    () => {
+      const root = mkdtempSync(join(tmpdir(), "release-manifest-artifact-"));
+      try {
+        const archivePath = join(root, "manifest.zip");
+        const manifest = { runAttempt: 1, runId: "29071366025" };
+        const archive = makeStoredZip({
+          [MANIFEST_ARTIFACT_ENTRY]: JSON.stringify(manifest),
+        });
+        writeFileSync(archivePath, archive);
+        expect(readManifestArtifactArchive(archivePath, artifactDigest(archive))).toEqual(manifest);
+        expect(() => readManifestArtifactArchive(archivePath, `sha256:${"0".repeat(64)}`)).toThrow(
+          "artifact digest mismatch",
+        );
 
-      const extraEntryArchive = makeStoredZip({
-        [MANIFEST_ARTIFACT_ENTRY]: JSON.stringify(manifest),
-        "unexpected.json": "{}",
-      });
-      writeFileSync(archivePath, extraEntryArchive);
-      expect(() =>
-        readManifestArtifactArchive(archivePath, artifactDigest(extraEntryArchive)),
-      ).toThrow(`must contain only ${MANIFEST_ARTIFACT_ENTRY}`);
+        const extraEntryArchive = makeStoredZip({
+          [MANIFEST_ARTIFACT_ENTRY]: JSON.stringify(manifest),
+          "unexpected.json": "{}",
+        });
+        writeFileSync(archivePath, extraEntryArchive);
+        expect(() =>
+          readManifestArtifactArchive(archivePath, artifactDigest(extraEntryArchive)),
+        ).toThrow(`must contain only ${MANIFEST_ARTIFACT_ENTRY}`);
 
-      const oversizedManifestArchive = makeStoredZip({
-        [MANIFEST_ARTIFACT_ENTRY]: "x".repeat(128 * 1024 + 1),
-      });
-      writeFileSync(archivePath, oversizedManifestArchive);
-      expect(() =>
-        readManifestArtifactArchive(archivePath, artifactDigest(oversizedManifestArchive)),
-      ).toThrow("artifact entry size is invalid");
+        const oversizedManifestArchive = makeStoredZip({
+          [MANIFEST_ARTIFACT_ENTRY]: "x".repeat(128 * 1024 + 1),
+        });
+        writeFileSync(archivePath, oversizedManifestArchive);
+        expect(() =>
+          readManifestArtifactArchive(archivePath, artifactDigest(oversizedManifestArchive)),
+        ).toThrow("artifact entry size is invalid");
 
-      const oversizedArchive = Buffer.alloc(256 * 1024 + 1);
-      writeFileSync(archivePath, oversizedArchive);
-      expect(() =>
-        readManifestArtifactArchive(archivePath, artifactDigest(oversizedArchive)),
-      ).toThrow("artifact compressed size is invalid");
+        const oversizedArchive = Buffer.alloc(256 * 1024 + 1);
+        writeFileSync(archivePath, oversizedArchive);
+        expect(() =>
+          readManifestArtifactArchive(archivePath, artifactDigest(oversizedArchive)),
+        ).toThrow("artifact compressed size is invalid");
 
-      const source = readFileSync(SCRIPT, "utf8");
-      expect(source).toContain('execFileSync("unzip", ["-p", archivePath');
-      expect(source).not.toContain('execFileSync("unzip", ["-q", archivePath, "-d"');
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
+        const source = readFileSync(SCRIPT, "utf8");
+        expect(source).toContain('execFileSync("unzip", ["-p", archivePath');
+        expect(source).not.toContain('execFileSync("unzip", ["-q", archivePath, "-d"');
+      } finally {
+        rmSync(root, { force: true, recursive: true });
+      }
+    },
+  );
 
   it("bridges only attempt-one manifest v2 artifacts with the legacy stable name", () => {
     const legacyV2 = trustedMainPackageFixture();

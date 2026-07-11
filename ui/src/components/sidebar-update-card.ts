@@ -1,7 +1,7 @@
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { UpdateAvailable } from "../api/types.ts";
-import { postNativeUpdate } from "../app/native-link-routing.ts";
+import { NATIVE_UPDATE_DECLINED_EVENT, postNativeUpdate } from "../app/native-link-routing.ts";
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
@@ -52,6 +52,22 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) updateRunning = false;
   @property({ attribute: false }) onUpdate: () => void = () => undefined;
   @state() private dismissedUpdateKey: string | null = null;
+
+  private readonly handleNativeUpdateDeclined = () => {
+    if (this.updateAvailable && !this.updateRunning) {
+      this.onUpdate();
+    }
+  };
+
+  override connectedCallback() {
+    super.connectedCallback();
+    window.addEventListener(NATIVE_UPDATE_DECLINED_EVENT, this.handleNativeUpdateDeclined);
+  }
+
+  override disconnectedCallback() {
+    window.removeEventListener(NATIVE_UPDATE_DECLINED_EVENT, this.handleNativeUpdateDeclined);
+    super.disconnectedCallback();
+  }
 
   override render() {
     const update = this.updateAvailable;

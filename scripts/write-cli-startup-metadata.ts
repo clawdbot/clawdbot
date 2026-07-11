@@ -343,9 +343,6 @@ function createIsolatedRootHelpRenderContext(
         workspace: workspaceDir,
       },
     },
-    plugins: {
-      loadPaths: [],
-    },
   };
   return { config, env };
 }

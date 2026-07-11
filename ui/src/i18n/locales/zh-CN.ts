@@ -784,6 +784,7 @@ export const zh_CN: TranslationMap = {
     artifactDetails: "Control UI 构建详细信息",
     version: "版本",
     commit: "提交",
+    branch: "分支",
     built: "构建时间",
     unavailable: "不可用",
     copyCommit: "复制完整提交哈希",

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   deriveControlUiBuildId,
   normalizeControlUiBuildInfo,
+  normalizeControlUiBranch,
   normalizeControlUiBuildTimestamp,
   normalizeControlUiCommit,
 } from "./build-info.ts";
@@ -13,6 +14,13 @@ describe("Control UI build info", () => {
     expect(normalizeControlUiCommit(COMMIT.toUpperCase())).toBe(COMMIT);
     expect(normalizeControlUiCommit(COMMIT.slice(0, 12))).toBeNull();
     expect(normalizeControlUiCommit("not-a-sha")).toBeNull();
+  });
+
+  it("normalizes advisory branch identity", () => {
+    expect(normalizeControlUiBranch("  feature/build-chip  ")).toBe("feature/build-chip");
+    expect(normalizeControlUiBranch("HEAD")).toBeNull();
+    expect(normalizeControlUiBranch(" ")).toBeNull();
+    expect(normalizeControlUiBranch("x".repeat(101))).toBe("x".repeat(100));
   });
 
   it("canonicalizes only valid UTC build timestamps", () => {
@@ -38,9 +46,25 @@ describe("Control UI build info", () => {
         version: "  ",
         commit: "deadbeef",
         builtAt: "later",
+        branch: "HEAD",
+        dirty: "yes",
         buildId: "",
       }),
-    ).toEqual({ version: null, commit: null, builtAt: null, buildId: "dev" });
+    ).toEqual({
+      version: null,
+      commit: null,
+      builtAt: null,
+      branch: null,
+      dirty: null,
+      buildId: "dev",
+    });
+  });
+
+  it("passes through normalized branch and boolean dirty state", () => {
+    expect(normalizeControlUiBuildInfo({ branch: " feature/x ", dirty: false })).toMatchObject({
+      branch: "feature/x",
+      dirty: false,
+    });
   });
 
   it("derives a stable service-worker id from the same artifact metadata", () => {

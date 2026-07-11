@@ -800,6 +800,7 @@ export const ru: TranslationMap = {
     artifactDetails: "Сведения о сборке Control UI",
     version: "Версия",
     commit: "Коммит",
+    branch: "Ветка",
     built: "Сборка",
     unavailable: "Недоступно",
     copyCommit: "Скопировать полный хеш коммита",

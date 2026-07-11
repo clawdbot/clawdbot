@@ -20,6 +20,7 @@ import type {
 import { logDebug, logError } from "openclaw/plugin-sdk/logging-core";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { shouldHandleDiscordApprovalRequest } from "./approval-shared.js";
+import { encodeCustomIdComponent } from "./custom-id-codec.js";
 import { isDiscordExecApprovalClientEnabled } from "./exec-approvals.js";
 import {
   Button,
@@ -385,7 +386,7 @@ export function buildExecApprovalCustomId(
   approvalId: string,
   action: ExecApprovalDecision,
 ): string {
-  return [`execapproval:id=${encodeURIComponent(approvalId)}`, `action=${action}`].join(";");
+  return [`execapproval:id=${encodeCustomIdComponent(approvalId)}`, `action=${action}`].join(";");
 }
 
 async function updateMessage(params: {

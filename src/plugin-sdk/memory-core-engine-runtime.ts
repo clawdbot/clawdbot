@@ -2,6 +2,8 @@
  * @deprecated Public SDK subpath has no bundled extension production imports.
  * Prefer vendor-neutral memory-host SDK subpaths for new plugin code.
  */
+import { createConfiguredProviderLocalServiceAcquirer } from "../agents/provider-local-service.js";
+import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 import {
@@ -112,6 +114,9 @@ type MemoryIndexManagerFacade = {
 };
 
 type FacadeModule = {
+  configureMemoryCoreEmbeddingLocalService: (
+    acquireLocalService: ReturnType<typeof createConfiguredProviderLocalServiceAcquirer>,
+  ) => void;
   configureMemoryCoreDreamingState: (
     openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
   ) => void;
@@ -155,6 +160,9 @@ function loadFacadeModule(): FacadeModule {
   });
   module.configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) =>
     createPluginStateKeyedStore<T>("memory-core", options),
+  );
+  module.configureMemoryCoreEmbeddingLocalService(
+    createConfiguredProviderLocalServiceAcquirer(getRuntimeConfig),
   );
   return module;
 }

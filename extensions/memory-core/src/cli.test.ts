@@ -472,6 +472,14 @@ describe("memory cli", () => {
           provider: "auto",
           requestedProvider: "auto",
           vector: { enabled: true },
+          custom: {
+            llamaCppRuntime: {
+              engine: "llama.cpp",
+              state: "ready",
+              backend: "metal",
+              buildType: "prebuilt",
+            },
+          },
         }),
       close,
     });
@@ -483,6 +491,7 @@ describe("memory cli", () => {
     expect(probeEmbeddingAvailability).not.toHaveBeenCalled();
     expectLogged(log, "Provider: auto");
     expectLogged(log, "Vector store: unknown");
+    expectNotLogged(log, "llama.cpp:");
     expect(close).toHaveBeenCalled();
   });
 
@@ -589,7 +598,35 @@ describe("memory cli", () => {
       probeVectorStoreAvailability,
       probeVectorAvailability,
       probeEmbeddingAvailability,
-      status: () => makeMemoryStatus({ files: 1, chunks: 1 }),
+      status: () =>
+        makeMemoryStatus({
+          files: 1,
+          chunks: 1,
+          custom: {
+            llamaCppRuntime: {
+              engine: "llama.cpp",
+              state: "ready",
+              backend: "metal",
+              buildType: "prebuilt",
+              deviceNames: ["Apple M4 Max"],
+              memory: {
+                totalBytes: 64 * 1024 ** 3,
+                usedBytes: 8 * 1024 ** 3,
+                freeBytes: 56 * 1024 ** 3,
+                unifiedBytes: 64 * 1024 ** 3,
+                observedAtMs: Date.parse("2026-07-10T12:00:00.000Z"),
+              },
+              offload: {
+                supported: true,
+                offloadedLayers: 20,
+                totalLayers: 24,
+              },
+              context: {
+                requestedSize: 4096,
+              },
+            },
+          },
+        }),
       close,
     });
 
@@ -600,6 +637,14 @@ describe("memory cli", () => {
     expect(probeVectorAvailability).toHaveBeenCalled();
     expect(probeEmbeddingAvailability).toHaveBeenCalled();
     expectLogged(log, "Embeddings: ready");
+    expectLogged(log, "llama.cpp: metal (prebuilt)");
+    expectLogged(log, "Devices: Apple M4 Max");
+    expectLogged(
+      log,
+      "VRAM snapshot: 8.0 GB used · 56 GB free · 64 GB total · 64 GB unified (2026-07-10T12:00:00.000Z)",
+    );
+    expectLogged(log, "GPU offload: 20/24 layers");
+    expectLogged(log, "Requested context: 4096 tokens");
     expect(close).toHaveBeenCalled();
   });
 

@@ -337,6 +337,15 @@ describe("plugin runtime command execution", () => {
       },
     },
     {
+      name: "exposes runtime.llm completion and provider-service acquisition",
+      assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
+        expectFunctionKeys(runtime.llm as Record<string, unknown>, [
+          "complete",
+          "acquireLocalService",
+        ]);
+      },
+    },
+    {
       name: "exposes runtime.modelAuth with raw and runtime-ready auth helpers",
       assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
         expectFunctionKeys(runtime.modelAuth, [

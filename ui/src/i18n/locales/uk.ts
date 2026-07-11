@@ -794,6 +794,7 @@ export const uk: TranslationMap = {
     artifactDetails: "Відомості про збірку Control UI",
     version: "Версія",
     commit: "Коміт",
+    branch: "Гілка",
     built: "Зібрано",
     unavailable: "Недоступно",
     copyCommit: "Копіювати повний хеш коміту",

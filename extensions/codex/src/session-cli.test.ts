@@ -135,6 +135,12 @@ describe("registerCodexSessionCli", () => {
         await program.parseAsync(["codex", "sessions"], { from: "user" });
       });
 
+      expect(gatewayRuntime.callGatewayFromCli).toHaveBeenCalledWith(
+        "codex.sessions.list",
+        { timeout: "75000", json: false },
+        {},
+        { mode: "cli", scopes: ["operator.write"] },
+      );
       expect(output).toContain("MacBook Pro (gateway · gateway:local) — connected — 1 session");
       expect(output).toContain("00000000-0000-4000-8000-000000000002");
       expect(output).toContain("Build Codex fleet sessions");
@@ -147,6 +153,14 @@ describe("registerCodexSessionCli", () => {
       );
       expect(output).toContain("Dev Box (node · node:devbox · devbox) — offline — 0 sessions");
       expect(output).toContain("Error [NODE_OFFLINE]: Paired node is offline");
+    });
+
+    it("declares the extended federated catalog timeout in help", () => {
+      const program = createProgram();
+      const codex = program.commands.find((command) => command.name() === "codex");
+      const sessions = codex?.commands.find((command) => command.name() === "sessions");
+
+      expect(sessions?.helpInformation()).toContain('(default: "75000")');
     });
 
     it("neutralizes terminal controls in human-readable host and session metadata", async () => {

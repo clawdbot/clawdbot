@@ -233,6 +233,17 @@ import Testing
             defaults: defaults,
             fileManager: .default,
             requiredVersion: "2026.8.0") == nil)
+
+        defaults.set("2026.7.3-beta.1", forKey: cliValidatedVersionKey)
+        #expect(CommandResolver.validatedOpenClawExecutable(
+            defaults: defaults,
+            fileManager: .default,
+            requiredVersion: "2026.7.3") == nil)
+        defaults.set("2026.7.3", forKey: cliValidatedVersionKey)
+        #expect(CommandResolver.validatedOpenClawExecutable(
+            defaults: defaults,
+            fileManager: .default,
+            requiredVersion: "2026.7.3-beta.1") == nil)
     }
 
     @Test func `builds SSH command for remote mode`() {

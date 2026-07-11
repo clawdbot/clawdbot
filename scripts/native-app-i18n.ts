@@ -659,7 +659,7 @@ function extractCandidates(
   uiCallNames: ReadonlySet<string>,
 ): Candidate[] {
   const entries: Candidate[] = [];
-  const patterns =
+  const patterns: Array<readonly [RegExp, string]> =
     surface === "apple"
       ? [
           [APPLE_UI_MULTILINE_CALLS, "ui-call-multiline"],

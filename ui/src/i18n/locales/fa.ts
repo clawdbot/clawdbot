@@ -793,6 +793,7 @@ export const fa: TranslationMap = {
     artifactDetails: "جزئیات ساخت Control UI",
     version: "نسخه",
     commit: "کامیت",
+    branch: "شاخه",
     built: "ساخته‌شده",
     unavailable: "در دسترس نیست",
     copyCommit: "کپی هش کامل کامیت",

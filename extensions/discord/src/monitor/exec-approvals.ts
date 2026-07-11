@@ -6,18 +6,12 @@ import type {
   DiscordExecApprovalConfig,
   OpenClawConfig,
 } from "openclaw/plugin-sdk/config-contracts";
+import { decodeCustomIdComponent } from "../custom-id-codec.js";
 import { Button, type ButtonInteraction, type ComponentData } from "../internal/discord.js";
 export { buildExecApprovalCustomId } from "../approval-handler.runtime.js";
 import { getDiscordExecApprovalApprovers } from "../exec-approvals.js";
 
 export { extractDiscordChannelId } from "../approval-native.js";
-function decodeCustomIdValue(value: string): string {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-}
 
 export function parseExecApprovalData(
   data: ComponentData,
@@ -37,7 +31,7 @@ export function parseExecApprovalData(
     return null;
   }
   return {
-    approvalId: decodeCustomIdValue(rawId),
+    approvalId: decodeCustomIdComponent(rawId),
     action,
   };
 }

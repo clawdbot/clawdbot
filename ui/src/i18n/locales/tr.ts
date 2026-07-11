@@ -804,6 +804,7 @@ export const tr: TranslationMap = {
     artifactDetails: "Control UI derleme ayrıntıları",
     version: "Sürüm",
     commit: "Commit",
+    branch: "Dal",
     built: "Derlendi",
     unavailable: "Kullanılamıyor",
     copyCommit: "Tam commit hash’ini kopyala",

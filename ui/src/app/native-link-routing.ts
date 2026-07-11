@@ -21,6 +21,8 @@ type WebKitUpdateMessageHandler = {
   postMessage(message: NativeUpdateMessage): void;
 };
 
+export const NATIVE_UPDATE_DECLINED_EVENT = "openclaw:native-update-declined";
+
 export type NativeLinkRouting = {
   dispose(): void;
 };

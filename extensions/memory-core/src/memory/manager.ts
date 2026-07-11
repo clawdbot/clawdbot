@@ -69,6 +69,17 @@ import {
   type MemoryReadonlyRecoveryState,
 } from "./manager-sync-control.js";
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
+
+const LOCAL_EMBEDDING_RUNTIME_FACTS = Symbol.for("openclaw.localEmbeddingRuntimeFacts");
+
+function getLocalEmbeddingRuntimeFacts(provider: EmbeddingProvider | null): unknown {
+  if (!provider) {
+    return undefined;
+  }
+  const getRuntimeFacts = Reflect.get(provider, LOCAL_EMBEDDING_RUNTIME_FACTS);
+  return typeof getRuntimeFacts === "function" ? getRuntimeFacts() : undefined;
+}
+
 const SNIPPET_MAX_CHARS = 700;
 const VECTOR_TABLE = MEMORY_INDEX_VECTOR_TABLE;
 const FTS_TABLE = MEMORY_INDEX_FTS_TABLE;
@@ -1206,6 +1217,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         lastProvider: this.batchFailureLastProvider,
       },
       custom: {
+        llamaCppRuntime: getLocalEmbeddingRuntimeFacts(this.provider),
         searchMode: providerInfo.searchMode,
         providerState: this.providerLifecycle,
         providerUnavailableReason: this.providerUnavailableReason,

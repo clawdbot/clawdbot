@@ -266,6 +266,92 @@ describe("noteMemorySearchHealth", () => {
     expect(note).not.toHaveBeenCalled();
   });
 
+  it("reports last-known llama.cpp runtime facts from the gateway", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "local",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: {
+        checked: true,
+        ready: true,
+        runtimeFacts: {
+          engine: "llama.cpp",
+          state: "ready",
+          backend: "cuda",
+          buildType: "prebuilt",
+          deviceNames: ["NVIDIA Test GPU"],
+          memory: {
+            totalBytes: 24 * 1024 ** 3,
+            usedBytes: 8 * 1024 ** 3,
+            freeBytes: 16 * 1024 ** 3,
+            unifiedBytes: 0,
+            observedAtMs: Date.parse("2026-07-10T12:00:00.000Z"),
+          },
+          offload: {
+            supported: true,
+            offloadedLayers: 24,
+            totalLayers: 24,
+          },
+          context: {
+            requestedSize: 4096,
+          },
+        },
+      },
+    });
+
+    expect(note).toHaveBeenCalledWith(
+      [
+        "llama.cpp runtime: cuda, prebuilt",
+        "Devices: NVIDIA Test GPU",
+        "VRAM snapshot: 8.0 GB used, 16 GB free, 24 GB total (2026-07-10T12:00:00.000Z)",
+        "GPU offload: 24/24 layers",
+        "Requested context: 4096 tokens",
+      ].join("\n"),
+      "Memory search",
+    );
+  });
+
+  it("reports failed llama.cpp runtime facts alongside the readiness warning", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "local",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: {
+        checked: true,
+        ready: false,
+        error: "GGUF load failed",
+        runtimeFacts: {
+          engine: "llama.cpp",
+          state: "failed",
+          backend: "cpu",
+          buildType: "prebuilt",
+          offload: {
+            supported: false,
+          },
+          context: {
+            requestedSize: 512,
+          },
+          loadError: "GGUF load failed",
+        },
+      },
+    });
+
+    expect(note).toHaveBeenCalledTimes(1);
+    const message = firstNoteMessage();
+    expect(message).toContain("llama.cpp runtime: cpu, prebuilt (failed)");
+    expect(message).toContain("GPU offload: unsupported");
+    expect(message).toContain("Requested context: 512 tokens");
+    expect(message).toContain("Load error: GGUF load failed");
+    expect(message).toContain("local embeddings are not confirmed ready");
+    expect(message).not.toContain("Gateway probe: GGUF load failed");
+  });
+
   it("does not warn when local provider readiness probe was intentionally skipped", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "local",

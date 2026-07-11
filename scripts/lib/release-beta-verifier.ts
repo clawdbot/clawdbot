@@ -843,7 +843,12 @@ function validateBootstrapPackageEvidence(
   }
   const expectedSize = value.expectedSize;
   const registrySize = value.registrySize;
-  if (!Number.isSafeInteger(expectedSize) || expectedSize <= 0 || registrySize !== expectedSize) {
+  if (
+    typeof expectedSize !== "number" ||
+    !Number.isSafeInteger(expectedSize) ||
+    expectedSize <= 0 ||
+    registrySize !== expectedSize
+  ) {
     throw new Error(
       `${params.packageName} registry artifact size differs from the packed artifact.`,
     );
@@ -1316,6 +1321,9 @@ export async function verifyBetaRelease(
   }
 
   const workflowRuns: WorkflowRunSummary[] = [];
+  const allowedReleaseWorkflowHeadBranches = args.workflowRef
+    ? ["main", args.workflowRef]
+    : ["main"];
   if (args.workflowRuns.fullReleaseValidation !== undefined) {
     workflowRuns.push(
       verifyWorkflowRun({
@@ -1323,7 +1331,7 @@ export async function verifyBetaRelease(
         label: "Full Release Validation",
         repo: args.repo,
         expectedWorkflowName: "Full Release Validation",
-        allowedHeadBranches: ["main", args.workflowRef],
+        allowedHeadBranches: allowedReleaseWorkflowHeadBranches,
         rerunFailed: false,
       }),
     );
@@ -1383,7 +1391,7 @@ export async function verifyBetaRelease(
         label: "NPM Telegram Beta E2E",
         repo: args.repo,
         expectedWorkflowName: "NPM Telegram Beta E2E",
-        allowedHeadBranches: ["main", args.workflowRef],
+        allowedHeadBranches: allowedReleaseWorkflowHeadBranches,
         rerunFailed: false,
       }),
     );

@@ -1119,21 +1119,19 @@ extension MacNodeRuntime {
         }
 
         if requiresAsk, !approvedByAsk {
-            let promptDecision = await MainActor.run {
-                ExecApprovalsPromptPresenter.prompt(
-                    ExecApprovalPromptRequest(
-                        command: context.displayCommand,
-                        cwd: params.cwd,
-                        host: "node",
-                        security: context.security.rawValue,
-                        ask: context.ask.rawValue,
-                        agentId: context.agentId,
-                        resolvedPath: context.resolution?.resolvedPath,
-                        sessionKey: context.sessionKey,
-                        allowedDecisions: ExecApprovalPromptRequest.allowedDecisions(
-                            forAsk: context.ask.rawValue,
-                            allowAlwaysEligible: context.allowAlwaysEligible)))
-            }
+            let promptDecision = await ExecApprovalsPromptPresenter.prompt(
+                ExecApprovalPromptRequest(
+                    command: context.displayCommand,
+                    cwd: params.cwd,
+                    host: "node",
+                    security: context.security.rawValue,
+                    ask: context.ask.rawValue,
+                    agentId: context.agentId,
+                    resolvedPath: context.resolution?.resolvedPath,
+                    sessionKey: context.sessionKey,
+                    allowedDecisions: ExecApprovalPromptRequest.allowedDecisions(
+                        forAsk: context.ask.rawValue,
+                        allowAlwaysEligible: context.allowAlwaysEligible)))
             guard let decision = promptDecision else {
                 await self.emitExecEvent(
                     "exec.denied",

@@ -3,6 +3,10 @@ import { sanitizeAndNormalizeEmbedding } from "./embedding-vectors.js";
 import { createLocalEmbeddingWorkerProvider } from "./embeddings-worker.js";
 import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.types.js";
 import {
+  attachLocalEmbeddingRuntimeFacts,
+  type LocalEmbeddingRuntimeFacts,
+} from "./local-embedding-runtime-facts.js";
+import {
   importNodeLlamaCpp,
   type Llama,
   type LlamaEmbeddingContext,
@@ -50,6 +54,40 @@ async function disposeResources(
   }
 }
 
+async function readLlamaRuntimeFacts(llama: Llama): Promise<LocalEmbeddingRuntimeFacts> {
+  const facts: LocalEmbeddingRuntimeFacts = {
+    engine: "llama.cpp",
+    state: "failed",
+    backend: llama.gpu || "cpu",
+    buildType: llama.buildType,
+    offload: {
+      supported: llama.supportsGpuOffloading,
+    },
+  };
+  try {
+    facts.deviceNames = await llama.getGpuDeviceNames();
+  } catch {
+    // Diagnostics must not prevent a model that otherwise works from loading.
+  }
+  try {
+    const memory = await llama.getVramState();
+    facts.memory = {
+      totalBytes: memory.total,
+      usedBytes: memory.used,
+      freeBytes: memory.free,
+      unifiedBytes: memory.unifiedSize,
+      observedAtMs: Date.now(),
+    };
+  } catch {
+    // Some backends cannot report memory state; keep the other runtime facts.
+  }
+  return facts;
+}
+
+function formatRuntimeLoadError(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 export async function createLocalEmbeddingProvider(
   options: EmbeddingProviderOptions,
   runtimeOptions?: LocalEmbeddingProviderRuntimeOptions,
@@ -78,6 +116,7 @@ export async function createLocalEmbeddingProviderInProcess(
   let initPromise: Promise<LlamaEmbeddingContext> | null = null;
   let initAbortController: AbortController | null = null;
   let closePromise: Promise<void> | null = null;
+  let runtimeFacts: LocalEmbeddingRuntimeFacts | undefined;
   let closed = false;
 
   const throwIfClosed = () => {
@@ -111,6 +150,10 @@ export async function createLocalEmbeddingProviderInProcess(
             logLevel: LlamaLogLevel.error,
           });
           llama = await disposeAndThrowIfClosed(nextLlama);
+          runtimeFacts = {
+            ...(await readLlamaRuntimeFacts(llama)),
+            context: { requestedSize: contextSize },
+          };
         }
         if (!embeddingModel) {
           const resolved = await resolveModelFile(modelPath, {
@@ -121,8 +164,28 @@ export async function createLocalEmbeddingProviderInProcess(
           const nextModel = await llama.loadModel({
             modelPath: resolved,
             loadSignal: abortController.signal,
+            ...(typeof contextSize === "number"
+              ? {
+                  gpuLayers: {
+                    fitContext: {
+                      contextSize,
+                      embeddingContext: true,
+                    },
+                  },
+                }
+              : {}),
           });
           embeddingModel = await disposeAndThrowIfClosed(nextModel);
+          runtimeFacts = {
+            ...runtimeFacts,
+            engine: "llama.cpp",
+            state: "failed",
+            offload: {
+              supported: llama.supportsGpuOffloading,
+              offloadedLayers: embeddingModel.gpuLayers,
+              totalLayers: embeddingModel.fileInsights.totalLayers,
+            },
+          };
         }
         if (!embeddingContext) {
           const nextContext = await embeddingModel.createEmbeddingContext({
@@ -130,9 +193,30 @@ export async function createLocalEmbeddingProviderInProcess(
             createSignal: abortController.signal,
           });
           embeddingContext = await disposeAndThrowIfClosed(nextContext);
+          const refreshedRuntimeFacts = await readLlamaRuntimeFacts(llama);
+          runtimeFacts = {
+            ...runtimeFacts,
+            ...refreshedRuntimeFacts,
+            engine: "llama.cpp",
+            state: "ready",
+            offload: {
+              supported: llama.supportsGpuOffloading,
+              offloadedLayers: embeddingModel.gpuLayers,
+              totalLayers: embeddingModel.fileInsights.totalLayers,
+            },
+            context: { requestedSize: contextSize },
+            loadError: undefined,
+          };
         }
         return embeddingContext;
       } catch (err) {
+        runtimeFacts = {
+          ...runtimeFacts,
+          engine: "llama.cpp",
+          state: "failed",
+          context: { requestedSize: contextSize },
+          loadError: formatRuntimeLoadError(err),
+        };
         initPromise = null;
         throw err;
       } finally {
@@ -149,7 +233,7 @@ export async function createLocalEmbeddingProviderInProcess(
   const normalize = (vector: ArrayLike<number>): number[] =>
     sanitizeAndNormalizeEmbedding(copyEmbeddingVector(vector, outputDimensionality));
 
-  return {
+  const provider: EmbeddingProvider = {
     id: "local",
     model: modelPath,
     embedQuery: async (text, optionsValue) => {
@@ -196,4 +280,6 @@ export async function createLocalEmbeddingProviderInProcess(
       return closePromise;
     },
   };
+  attachLocalEmbeddingRuntimeFacts(provider, () => runtimeFacts);
+  return provider;
 }

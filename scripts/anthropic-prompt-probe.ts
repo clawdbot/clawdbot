@@ -212,17 +212,16 @@ function listSetupTokenProfiles(
   store: { profiles: Record<string, AuthProfileCredential> },
   normalizeProviderId: (provider: string) => string,
 ): Array<{ id: string; token: string }> {
-  return Object.entries(store.profiles)
-    .filter(([, cred]) => {
-      if (cred.type !== "token") {
-        return false;
-      }
-      if (normalizeProviderId(cred.provider) !== "anthropic") {
-        return false;
-      }
-      return isSetupToken(cred.token ?? "");
-    })
-    .map(([id, cred]) => ({ id, token: cred.token ?? "" }));
+  return Object.entries(store.profiles).flatMap(([id, cred]) => {
+    if (
+      cred.type !== "token" ||
+      normalizeProviderId(cred.provider) !== "anthropic" ||
+      !isSetupToken(cred.token ?? "")
+    ) {
+      return [];
+    }
+    return [{ id, token: cred.token ?? "" }];
+  });
 }
 
 function pickSetupTokenProfile(candidates: Array<{ id: string; token: string }>): {
@@ -390,15 +389,16 @@ async function startAnthropicProxy(params: { port: number; upstreamBaseUrl: stri
           }
           headers.set(key, Array.isArray(value) ? value.join(", ") : value);
         }
-        const upstreamRes = await fetch(upstreamUrl, {
+        const upstreamInit = {
           method,
           headers,
           body:
             method === "GET" || method === "HEAD" || requestBody.byteLength === 0
               ? undefined
-              : requestBody,
+              : Uint8Array.from(requestBody),
           duplex: "half",
-        });
+        } as RequestInit & { duplex: "half" };
+        const upstreamRes = await fetch(upstreamUrl, upstreamInit);
         const responseHeaders: Record<string, string> = {};
         for (const [key, value] of upstreamRes.headers.entries()) {
           const lower = key.toLowerCase();
@@ -926,19 +926,21 @@ async function runGatewayPrompt(prompt: string): Promise<PromptResult> {
       mode: "cli",
     });
     const text = extractPayloadText(waitRes);
+    const waitStatus = typeof waitRes.status === "string" ? waitRes.status : undefined;
+    const waitError = typeof waitRes.error === "string" ? waitRes.error : undefined;
     const logTail = await readLogTail(logPath);
-    const matched400 = matchesExtraUsage400(waitRes.error, logTail, JSON.stringify(waitRes));
+    const matched400 = matchesExtraUsage400(waitError, logTail, JSON.stringify(waitRes));
     return {
       prompt,
-      ok: waitRes.status === "ok" && !matched400,
+      ok: waitStatus === "ok" && !matched400,
       transport: "gateway",
       promptMode: GATEWAY_PROMPT_MODE,
-      status: waitRes.status,
+      status: waitStatus,
       text: text || undefined,
       error:
-        waitRes.status === "ok"
+        waitStatus === "ok"
           ? undefined
-          : redactForDevToolLog(waitRes.error || logTail || "agent.wait failed"),
+          : redactForDevToolLog(waitError || logTail || "agent.wait failed"),
       matchedExtraUsage400: matched400,
       capture: summarizeCapture(proxy?.getLastCapture(), prompt),
       ...promptProbeTmpResult(tmpDir),

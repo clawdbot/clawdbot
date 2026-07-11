@@ -131,7 +131,7 @@ enum MacNodeCodexThreadCatalog {
     static let defaultUserMacOSBetaAppExecutable = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Applications/Codex Beta.app/Contents/Resources/codex")
         .path
-    static let defaultTimeoutSeconds: Double = 24
+    static let defaultTimeoutSeconds: Double = 60
     private static let maxSessionIdLength = 256
     private static let maxSessionNameLength = 500
     private static let maxCwdLength = 4096

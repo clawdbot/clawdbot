@@ -797,6 +797,7 @@ export const id: TranslationMap = {
     artifactDetails: "Detail build Control UI",
     version: "Versi",
     commit: "Commit",
+    branch: "Branch",
     built: "Dibuat",
     unavailable: "Tidak tersedia",
     copyCommit: "Salin hash commit lengkap",

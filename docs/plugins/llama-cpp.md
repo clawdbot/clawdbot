@@ -47,6 +47,11 @@ model. `local.modelCacheDir` overrides where downloaded models are cached
 (default: `~/.node-llama-cpp/models`), and `local.contextSize` accepts an
 integer or `"auto"`.
 
+When `local.contextSize` is numeric, the provider also gives that requirement
+to node-llama-cpp's automatic GPU-layer placement. This lets node-llama-cpp fit
+the model and embedding context together while retaining its memory-safety
+checks. With `"auto"`, node-llama-cpp keeps its normal automatic placement.
+
 ## Native Runtime
 
 Use Node 24 for the smoothest native install path. Source checkouts using
@@ -56,6 +61,18 @@ pnpm may need to approve and rebuild the native dependency:
 pnpm approve-builds
 pnpm rebuild node-llama-cpp
 ```
+
+## Runtime diagnostics
+
+Run `openclaw memory status --deep` after the provider has loaded to inspect
+the selected backend and build, device names, GPU offloaded layers, requested
+context size, and the last observed VRAM or unified-memory snapshot. The VRAM
+values include an observation timestamp because passive status reads do not
+reload the model or poll the device.
+
+The same last-known facts can appear in `openclaw doctor` when the running
+Gateway has already used the local provider. A normal status or doctor command
+does not load a model just to collect diagnostics.
 
 ## Troubleshooting
 

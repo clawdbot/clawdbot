@@ -8,6 +8,9 @@ struct UpdateOrchestrationTests {
     @Test func `Sparkle channels follow the Gateway update channel`() {
         #expect(allowedSparkleChannels(forGatewayUpdateChannel: "beta") == ["beta"])
         #expect(allowedSparkleChannels(forGatewayUpdateChannel: "dev") == ["beta"])
+        #expect(allowedSparkleChannels(forGatewayUpdateChannel:
+            OpenClawConfigFile.normalizedGatewayUpdateChannel("  BETA \n")) == ["beta"])
+        #expect(OpenClawConfigFile.normalizedGatewayUpdateChannel(" \n") == nil)
         #expect(allowedSparkleChannels(forGatewayUpdateChannel: "stable").isEmpty)
         #expect(allowedSparkleChannels(forGatewayUpdateChannel: "extended-stable").isEmpty)
         #expect(allowedSparkleChannels(forGatewayUpdateChannel: "future").isEmpty)
@@ -138,23 +141,43 @@ struct UpdateOrchestrationTests {
         #expect(CLIInstallPrompter.managedRepairGatesOpen(
             launchAgentUsesManagedCLI: true,
             gatewayUpdateChannel: nil,
+            installPolicy: nil,
             launchAgentWriteDisabled: false))
         #expect(CLIInstallPrompter.managedRepairGatesOpen(
             launchAgentUsesManagedCLI: true,
             gatewayUpdateChannel: "beta",
+            installPolicy: "exact",
             launchAgentWriteDisabled: false))
         #expect(!CLIInstallPrompter.managedRepairGatesOpen(
             launchAgentUsesManagedCLI: false,
             gatewayUpdateChannel: nil,
+            installPolicy: nil,
             launchAgentWriteDisabled: false))
         #expect(!CLIInstallPrompter.managedRepairGatesOpen(
             launchAgentUsesManagedCLI: true,
             gatewayUpdateChannel: "extended-stable",
+            installPolicy: nil,
             launchAgentWriteDisabled: false))
         #expect(!CLIInstallPrompter.managedRepairGatesOpen(
             launchAgentUsesManagedCLI: true,
             gatewayUpdateChannel: nil,
+            installPolicy: nil,
             launchAgentWriteDisabled: true))
+        #expect(!CLIInstallPrompter.managedRepairGatesOpen(
+            launchAgentUsesManagedCLI: true,
+            gatewayUpdateChannel: nil,
+            installPolicy: "stable",
+            launchAgentWriteDisabled: false))
+        #expect(!CLIInstallPrompter.managedRepairGatesOpen(
+            launchAgentUsesManagedCLI: true,
+            gatewayUpdateChannel: nil,
+            installPolicy: "beta",
+            launchAgentWriteDisabled: false))
+        #expect(!CLIInstallPrompter.managedRepairGatesOpen(
+            launchAgentUsesManagedCLI: true,
+            gatewayUpdateChannel: nil,
+            installPolicy: "dev",
+            launchAgentWriteDisabled: false))
     }
 
     @Test func `pending managed restart marker round trips`() {

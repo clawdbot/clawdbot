@@ -20,7 +20,7 @@ openclaw codex continue <thread-id> [--json] [--url <url>] [--token <token>] [--
 openclaw codex archive <thread-id> --confirm-no-other-runner [--json] [--url <url>] [--token <token>] [--timeout <ms>] [--expect-final]
 ```
 
-The catalog never includes archived threads and has no archived or include-archived option. `--limit` defaults to 50 sessions per host, `--cursor` requires `--host`, and the Gateway timeout defaults to 30,000 ms. All three commands require `operator.write`. Paired-node rows are list-only; continue and archive operate only on the Gateway-local host, and archive requires the no-other-runner confirmation.
+The catalog never includes archived threads and has no archived or include-archived option. `--limit` defaults to 50 sessions per host, `--cursor` requires `--host`, and the sessions Gateway timeout defaults to 75,000 ms so cold paired-node catalogs can complete. Continue and archive retain the shared 30,000 ms default. All three commands require `operator.write`. Paired-node rows are list-only; continue and archive operate only on the Gateway-local host, and archive requires the no-other-runner confirmation.
 
 A supervised OpenClaw Chat cannot be deleted while its model-selection lock protects the native binding. Before native archive, OpenClaw checks the exact target and every non-archived spawned descendant reported by Codex; any active OpenClaw binding blocks the operation. Descendant pagination errors, cycles, and safety-limit exhaustion also fail closed. Codex still does not expose a conditional archive operation or cross-process runner lease, so the confirmation covers unknown native clients and the race between the status read and archive request.
 

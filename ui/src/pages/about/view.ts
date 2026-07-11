@@ -95,7 +95,13 @@ export function renderAbout(props: AboutProps) {
           <p class="card-sub">${t("aboutPage.artifactSubtitle")}</p>
         </div>
 
-        <dl class="about-build-strip" role="group" aria-label=${t("aboutPage.artifactDetails")}>
+        <dl
+          class="about-build-strip ${props.buildInfo.branch
+            ? "about-build-strip--with-branch"
+            : ""}"
+          role="group"
+          aria-label=${t("aboutPage.artifactDetails")}
+        >
           <div class="about-build-strip__item">
             <dt>${t("aboutPage.version")}</dt>
             <dd>
@@ -112,6 +118,16 @@ export function renderAbout(props: AboutProps) {
             <dt>${t("aboutPage.commit")}</dt>
             <dd>${renderCommit(props)}</dd>
           </div>
+          ${props.buildInfo.branch
+            ? html`<div class="about-build-strip__item">
+                <dt>${t("aboutPage.branch")}</dt>
+                <dd>
+                  <code dir="ltr" title=${props.buildInfo.branch}
+                    >${props.buildInfo.branch}${props.buildInfo.dirty === true ? "*" : ""}</code
+                  >
+                </dd>
+              </div>`
+            : nothing}
           <div class="about-build-strip__item">
             <dt>${t("aboutPage.built")}</dt>
             <dd>

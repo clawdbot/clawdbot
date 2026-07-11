@@ -9,7 +9,10 @@ import {
   isGatewayCredentialsRequiredError,
 } from "../gateway/call.js";
 import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
-import type { DoctorMemoryStatusPayload } from "../gateway/server-methods/doctor.js";
+import type {
+  DoctorMemoryEmbeddingRuntimePayload,
+  DoctorMemoryStatusPayload,
+} from "../gateway/server-methods/doctor.js";
 import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -26,6 +29,7 @@ type GatewayMemoryProbe = {
   checked: boolean;
   ready: boolean;
   error?: string;
+  runtimeFacts?: DoctorMemoryEmbeddingRuntimePayload;
   /**
    * True when the probe was intentionally skipped by the gateway (probe: false
    * path). Distinct from checked: false caused by a network timeout or
@@ -170,6 +174,7 @@ export async function probeGatewayMemoryStatus(params: {
       checked: gatewayChecked,
       ready: payload.embedding.ok,
       error: payload.embedding.error,
+      ...(payload.embeddingRuntime ? { runtimeFacts: payload.embeddingRuntime } : {}),
       skipped: !gatewayChecked,
     };
   } catch (err) {

@@ -372,18 +372,53 @@ describe("scripts/restart-mac.sh", () => {
 
   it("target-only mode refuses foreign app processes without broad cleanup", () => {
     const script = readFileSync(restartScriptPath, "utf8");
-    const targetBlock = script.slice(
+    const initialTargetBlock = script.slice(
       script.indexOf('if [[ "$TARGET_ONLY" -eq 1 ]]; then', script.indexOf("# 1)")),
       script.indexOf("else", script.indexOf("# 1)")),
     );
+    const switchTargetBlock = script.slice(
+      script.indexOf('if [[ "$TARGET_ONLY" -eq 1 ]]; then', script.indexOf("ATTACH_ONLY_ARGS")),
+      script.indexOf("# 4) Launch"),
+    );
 
-    expect(targetBlock).toContain("foreign_openclaw_process_pids");
-    expect(targetBlock).toContain("kill_managed_openclaw");
-    expect(targetBlock).not.toContain("stop_launch_agent");
-    expect(targetBlock).not.toContain("kill_all_openclaw");
+    expect(initialTargetBlock).toContain("foreign_openclaw_process_pids");
+    expect(initialTargetBlock).not.toContain("kill_managed_openclaw");
+    expect(initialTargetBlock).not.toContain("stop_launch_agent");
+    expect(initialTargetBlock).not.toContain("kill_all_openclaw");
+    expect(switchTargetBlock).toContain("foreign_openclaw_process_pids");
+    expect(switchTargetBlock).toContain("kill_managed_openclaw");
     expect(script).toContain('[[ "${executable}" == "${TARGET_EXECUTABLE}" ]] && continue');
     expect(script).toContain('process_pids_for_executable "${TARGET_EXECUTABLE}"');
     expect(script).toContain("target-only restart deferred");
+  });
+
+  it("keeps the managed app alive until the signed replacement is ready", () => {
+    const script = readFileSync(restartScriptPath, "utf8");
+    const packageIndex = script.indexOf('run_step "package app"');
+    const verifyIndex = script.indexOf('run_step "verify packaged app"');
+    const switchIndex = script.indexOf('log "==> Switching managed installed');
+    const installIndex = script.indexOf('run_step "install packaged app"');
+    const launchIndex = script.indexOf('run_step "launch app"');
+
+    expect(packageIndex).toBeGreaterThan(-1);
+    expect(script).toContain('OPENCLAW_PACKAGE_APP_ROOT="${STAGED_APP_BUNDLE}"');
+    expect(verifyIndex).toBeGreaterThan(packageIndex);
+    expect(switchIndex).toBeGreaterThan(packageIndex);
+    expect(installIndex).toBeGreaterThan(switchIndex);
+    expect(launchIndex).toBeGreaterThan(installIndex);
+    expect(launchIndex).toBeGreaterThan(switchIndex);
+  });
+
+  it("restores the previous bundle if the staged install cannot complete", () => {
+    const script = readFileSync(restartScriptPath, "utf8");
+    const installBlock = script.slice(
+      script.indexOf("install_staged_app()"),
+      script.indexOf("choose_app_bundle()"),
+    );
+
+    expect(installBlock).toContain('mv "${TARGET_APP_BUNDLE}" "${previous}"');
+    expect(installBlock).toContain('if ! mv "${STAGED_APP_BUNDLE}" "${TARGET_APP_BUNDLE}"');
+    expect(installBlock).toContain('mv "${previous}" "${TARGET_APP_BUNDLE}"');
   });
 
   it("escalates only exact managed app processes when graceful shutdown stalls", () => {

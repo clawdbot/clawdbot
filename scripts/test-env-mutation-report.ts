@@ -165,7 +165,7 @@ function envKeysFromObjectLiteral(node: ts.Expression): string[] {
   }
   return node.properties
     .map((property) => (ts.isPropertyAssignment(property) ? propertyNameText(property.name) : null))
-    .filter((key): key is string => Boolean(key) && TRACKED_ENV_KEYS.has(key));
+    .filter((key): key is string => key !== null && TRACKED_ENV_KEYS.has(key));
 }
 
 function isAssignmentOperator(kind: ts.SyntaxKind): boolean {

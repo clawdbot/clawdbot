@@ -522,11 +522,9 @@ function emitDiscriminatedUnion(name: string, schema: JsonSchema): string | unde
     if (cases.some((entry) => !entry)) {
       continue;
     }
-    const resolvedCases: Array<{
-      branchName: string;
-      caseName: string;
-      literal: boolean | number | string | null;
-    }> = cases;
+    const resolvedCases = cases.filter(
+      (entry): entry is NonNullable<typeof entry> => entry !== undefined,
+    );
     const [firstCase] = resolvedCases;
     if (!firstCase) {
       continue;

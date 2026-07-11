@@ -1474,6 +1474,29 @@ describe("chat composer workbench", () => {
     expect(onToggleCollapsed).toHaveBeenCalledTimes(1);
   });
 
+  it("renders the split-view opener in the floating toggle cluster", () => {
+    const onOpenSplitView = vi.fn();
+    const container = renderChatView({ onOpenSplitView });
+
+    const cluster = container.querySelector(".chat-floating-toggles");
+    const opener = cluster?.querySelector<HTMLButtonElement>(".chat-open-split-view");
+    expect(opener?.getAttribute("aria-label")).toBe("Open split view");
+
+    opener?.click();
+    expect(onOpenSplitView).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides the split-view opener while the detail sidebar is open", () => {
+    const container = renderChatView({
+      onOpenSplitView: () => undefined,
+      sidebarOpen: true,
+      sidebarContent: { kind: "markdown", content: "detail" },
+      onCloseSidebar: () => undefined,
+    });
+
+    expect(container.querySelector(".chat-open-split-view")).toBeNull();
+  });
+
   it("suppresses the floating workspace toggle when a pane header hosts it", () => {
     const container = renderChatView({
       paneHeaderActive: true,

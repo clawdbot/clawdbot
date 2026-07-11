@@ -387,7 +387,8 @@ final class OnboardingAISetupModel {
             guard token == self.attemptToken else { return }
             // Activation can persist config before a response is decoded, and Codex plugin
             // setup can outlive a dropped socket. Re-read state with an error-specific budget.
-            switch Self.activationReconciliationMode(after: error) {
+            let reconciliationMode = Self.activationReconciliationMode(after: error)
+            switch reconciliationMode {
             case .none:
                 break
             case .immediate:
@@ -413,6 +414,20 @@ final class OnboardingAISetupModel {
             guard token == self.attemptToken else { return }
             let failure = Self.transportFailure(error.localizedDescription)
             if await !(GatewayConnection.shared.isCurrentServerLease(serverLease)) {
+                if reconciliationMode != .none {
+                    // A successful local setup can restart the managed Gateway before its RPC reply
+                    // reaches the app. Reconnect briefly and verify the exact persisted transition.
+                    if await self.reconcileActivationAfterGatewayRestart(
+                        kind: kind,
+                        token: token,
+                        before: persistedStateBeforeActivation,
+                        originalServerLease: serverLease)
+                    {
+                        return
+                    }
+                }
+                // The old candidate list is bound to the retired lease even when the
+                // failure itself was definitive. Refresh before any retry.
                 self.requireFreshDetection(after: failure)
                 return
             }
@@ -425,8 +440,6 @@ final class OnboardingAISetupModel {
 
     /// After a timeout or undecodable reply on the still-live setup socket,
     /// poll `crestodian.setup.detect` and accept only an exact state transition.
-    /// A real disconnect retires the server lease and fails visibly; retrying
-    /// then starts a fresh, server-bound attempt.
     private func reconcileActivationAfterUnknownOutcome(
         kind: String,
         token: UUID,
@@ -459,17 +472,66 @@ final class OnboardingAISetupModel {
         return false
     }
 
+    private func reconcileActivationAfterGatewayRestart(
+        kind: String,
+        token: UUID,
+        before: PersistedActivationState?,
+        originalServerLease: GatewayConnection.ServerLease) async -> Bool
+    {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(30))
+        var delayMs: UInt64 = 250
+        while clock.now < deadline {
+            guard token == self.attemptToken else { return false }
+            let leaseTimeoutMs = Self.remainingMilliseconds(
+                until: deadline,
+                clock: clock,
+                cappedAt: 3000)
+            guard leaseTimeoutMs > 0 else { return false }
+            if let replacementLease = try? await GatewayConnection.shared.acquireServerLease(
+                ifSameRouteAs: originalServerLease,
+                timeoutMs: Double(leaseTimeoutMs)),
+                await self.reconcilePersistedActivation(
+                    kind: kind,
+                    token: token,
+                    before: before,
+                    serverLease: replacementLease,
+                    timeoutMs: Self.remainingMilliseconds(
+                        until: deadline,
+                        clock: clock,
+                        cappedAt: 10000))
+            {
+                self.serverLease = replacementLease
+                return true
+            }
+            let remainingSleepMs = Self.remainingMilliseconds(
+                until: deadline,
+                clock: clock,
+                cappedAt: Int(delayMs))
+            guard remainingSleepMs > 0 else { return false }
+            do {
+                try await Task.sleep(nanoseconds: UInt64(remainingSleepMs) * 1_000_000)
+            } catch {
+                return false
+            }
+            delayMs = min(delayMs * 2, 2000)
+        }
+        return false
+    }
+
     private func reconcilePersistedActivation(
         kind: String,
         token: UUID,
         before: PersistedActivationState?,
-        serverLease: GatewayConnection.ServerLease) async -> Bool
+        serverLease: GatewayConnection.ServerLease,
+        timeoutMs: Int = 10000) async -> Bool
     {
+        guard timeoutMs > 0 else { return false }
         guard let expected = candidates.first(where: { $0.kind == kind })?.modelRef,
               let data = try? await GatewayConnection.shared.request(
                   method: "crestodian.setup.detect",
                   params: [:],
-                  timeoutMs: 10000,
+                  timeoutMs: Double(timeoutMs),
                   ifCurrentServerLease: serverLease),
               token == attemptToken,
               let result = try? JSONDecoder().decode(DetectResult.self, from: data),
@@ -490,6 +552,16 @@ final class OnboardingAISetupModel {
                 status: nil,
                 error: nil))
         return true
+    }
+
+    private static func remainingMilliseconds(
+        until deadline: ContinuousClock.Instant,
+        clock: ContinuousClock,
+        cappedAt capMs: Int) -> Int
+    {
+        let components = clock.now.duration(to: deadline).components
+        let milliseconds = components.seconds * 1000 + components.attoseconds / 1_000_000_000_000_000
+        return max(0, min(capMs, Int(milliseconds)))
     }
 
     func submitManualKey() {

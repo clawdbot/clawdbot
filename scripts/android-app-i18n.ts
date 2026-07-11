@@ -65,7 +65,7 @@ export async function checkAndroidAppI18n() {
   ]);
   const [base, ...translations] = localeStrings;
   const baseKeys = new Set(base.keys());
-  const problems = translations.flatMap((strings, index) => {
+  const problems: Array<readonly [string, string[]]> = translations.flatMap((strings, index) => {
     const locale = NATIVE_I18N_LOCALES[index];
     const keys = new Set(strings.keys());
     const placeholderMismatches = [...base].flatMap(([key, sourceValue]) => {

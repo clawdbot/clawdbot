@@ -31,12 +31,16 @@ describe("Control UI Vite config", () => {
           OPENCLAW_BUILD_TIMESTAMP: "2026-07-10T12:34:56Z",
         },
         readGitCommit,
+        readGitBranch: () => null,
+        readGitDirty: () => null,
         readPackageVersion: () => "2026.7.10",
       }),
     ).toEqual({
       version: "2026.7.10",
       commit: "0123456789abcdef0123456789abcdef01234567",
       builtAt: "2026-07-10T12:34:56.000Z",
+      branch: null,
+      dirty: null,
       buildId: "2026.7.10-0123456789ab-2026-07-10T12-34-56.000Z",
     });
     expect(readGitCommit).not.toHaveBeenCalled();
@@ -48,12 +52,16 @@ describe("Control UI Vite config", () => {
         env: {},
         now: () => new Date("2026-07-10T13:14:15.000Z"),
         readGitCommit: () => "a".repeat(40),
+        readGitBranch: () => null,
+        readGitDirty: () => null,
         readPackageVersion: () => null,
       }),
     ).toEqual({
       version: null,
       commit: "a".repeat(40),
       builtAt: "2026-07-10T13:14:15.000Z",
+      branch: null,
+      dirty: null,
       buildId: "aaaaaaaaaaaa-2026-07-10T13-14-15.000Z",
     });
   });
@@ -97,6 +105,84 @@ describe("Control UI Vite config", () => {
       }).commit,
     ).toBe("a".repeat(40));
     expect(readGitCommit).not.toHaveBeenCalled();
+  });
+
+  it("prefers GIT_BRANCH over GitHub and checked-out Git branch identity", () => {
+    const readGitBranch = vi.fn(() => "git-fallback");
+    expect(
+      resolveControlUiBuildInfo({
+        env: {
+          GIT_BRANCH: " feature/from-env ",
+          GITHUB_REF_NAME: "feature/from-github",
+          GITHUB_REF_TYPE: "branch",
+        },
+        readGitBranch,
+        readGitCommit: () => null,
+        readGitDirty: () => null,
+        readPackageVersion: () => null,
+      }).branch,
+    ).toBe("feature/from-env");
+    expect(readGitBranch).not.toHaveBeenCalled();
+  });
+
+  it("uses GITHUB_REF_NAME only for branch refs", () => {
+    const readGitBranch = vi.fn(() => "git-fallback");
+    expect(
+      resolveControlUiBuildInfo({
+        env: { GITHUB_REF_NAME: "feature/github", GITHUB_REF_TYPE: "branch" },
+        readGitBranch,
+        readGitCommit: () => null,
+        readGitDirty: () => null,
+        readPackageVersion: () => null,
+      }).branch,
+    ).toBe("feature/github");
+    expect(readGitBranch).not.toHaveBeenCalled();
+
+    expect(
+      resolveControlUiBuildInfo({
+        env: { GITHUB_REF_NAME: "v2026.7.10", GITHUB_REF_TYPE: "tag" },
+        readGitBranch,
+        readGitCommit: () => null,
+        readGitDirty: () => null,
+        readPackageVersion: () => null,
+      }).branch,
+    ).toBe("git-fallback");
+  });
+
+  it("falls back to checked-out Git and treats detached HEAD as unknown", () => {
+    expect(
+      resolveControlUiBuildInfo({
+        env: {},
+        readGitBranch: () => "feature/from-git",
+        readGitCommit: () => null,
+        readGitDirty: () => null,
+        readPackageVersion: () => null,
+      }).branch,
+    ).toBe("feature/from-git");
+    expect(
+      resolveControlUiBuildInfo({
+        env: {},
+        readGitBranch: () => "HEAD",
+        readGitCommit: () => null,
+        readGitDirty: () => null,
+        readPackageVersion: () => null,
+      }).branch,
+    ).toBeNull();
+  });
+
+  it("captures clean, dirty, and unavailable Git worktree state", () => {
+    const resolveDirty = (readGitDirty: () => boolean | null) =>
+      resolveControlUiBuildInfo({
+        env: {},
+        readGitBranch: () => null,
+        readGitCommit: () => null,
+        readGitDirty,
+        readPackageVersion: () => null,
+      }).dirty;
+
+    expect(resolveDirty(() => true)).toBe(true);
+    expect(resolveDirty(() => false)).toBe(false);
+    expect(resolveDirty(() => null)).toBeNull();
   });
 
   it("does not let a generic release selector replace the artifact build identity", () => {

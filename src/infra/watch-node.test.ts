@@ -15,6 +15,7 @@ const VOICE_CALL_PACKAGE = bundledPluginFile("voice-call", "package.json");
 const VOICE_CALL_INDEX = bundledPluginFile("voice-call", "index.ts");
 const VOICE_CALL_RUNTIME = bundledPluginFile("voice-call", "src/runtime.ts");
 type WatchRunParams = NonNullable<Parameters<typeof runWatchMain>[0]> & {
+  fs?: { existsSync: (path: string) => boolean };
   lockDisabled?: boolean;
   signalProcess?: (pid: number, signal: NodeJS.Signals | 0) => void;
   sleep?: (ms: number) => Promise<void>;
@@ -85,6 +86,7 @@ const startWatchRun = ({
     args,
     createWatcher,
     env,
+    fs: { existsSync: () => true },
     lockDisabled: true,
     process: fakeProcess,
     spawn,
@@ -518,6 +520,121 @@ describe("watch-node script", () => {
     fakeProcess.emit("SIGINT");
     const exitCode = await runPromise;
     expect(exitCode).toBe(130);
+  });
+
+  it("keeps the healthy child alive until a concurrently rebuilt dist entry returns", async () => {
+    const childA = createKillableChild();
+    const childB = createKillableChild();
+    const spawn = vi.fn().mockReturnValueOnce(childA).mockReturnValueOnce(childB);
+    const watcher = Object.assign(new EventEmitter(), {
+      close: vi.fn(async () => {}),
+    });
+    const fakeProcess = createFakeProcess();
+    let distEntryExists = false;
+    let resumePoll: (() => void) | undefined;
+    const sleep = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resumePoll = resolve;
+        }),
+    );
+    const runPromise = runWatch({
+      args: ["gateway", "--force"],
+      createWatcher: () => watcher,
+      fs: { existsSync: () => distEntryExists },
+      lockDisabled: true,
+      process: fakeProcess,
+      sleep,
+      spawn,
+    });
+
+    watcher.emit("change", "src/infra/restart.ts");
+    watcher.emit("change", "src/infra/restart.ts");
+    expect(childA.kill).not.toHaveBeenCalled();
+    expect(sleep).toHaveBeenCalledTimes(1);
+
+    distEntryExists = true;
+    resumePoll?.();
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(childA.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(spawn).toHaveBeenCalledTimes(2);
+
+    fakeProcess.emit("SIGINT");
+    expect(await runPromise).toBe(130);
+  });
+
+  it("does not resurrect a deferred child after watcher shutdown", async () => {
+    const child = createKillableChild();
+    const spawn = vi.fn(() => child);
+    const watcher = Object.assign(new EventEmitter(), {
+      close: vi.fn(async () => {}),
+    });
+    const fakeProcess = createFakeProcess();
+    let resumePoll: (() => void) | undefined;
+    const runPromise = runWatch({
+      args: ["gateway", "--force"],
+      createWatcher: () => watcher,
+      fs: { existsSync: () => false },
+      lockDisabled: true,
+      process: fakeProcess,
+      sleep: () =>
+        new Promise<void>((resolve) => {
+          resumePoll = resolve;
+        }),
+      spawn,
+    });
+
+    watcher.emit("change", "src/infra/restart.ts");
+    fakeProcess.emit("SIGINT");
+    expect(await runPromise).toBe(130);
+    resumePoll?.();
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for the build entry when the healthy child exits during deferral", async () => {
+    const childA = Object.assign(new EventEmitter(), { kill: vi.fn() });
+    const childB = createKillableChild();
+    const spawn = vi.fn().mockReturnValueOnce(childA).mockReturnValueOnce(childB);
+    const watcher = Object.assign(new EventEmitter(), {
+      close: vi.fn(async () => {}),
+    });
+    const fakeProcess = createFakeProcess();
+    let distEntryExists = false;
+    const resumePolls: Array<() => void> = [];
+    const runPromise = runWatch({
+      args: ["gateway", "--force"],
+      createWatcher: () => watcher,
+      fs: { existsSync: () => distEntryExists },
+      lockDisabled: true,
+      process: fakeProcess,
+      sleep: () =>
+        new Promise<void>((resolve) => {
+          resumePolls.push(resolve);
+        }),
+      spawn,
+    });
+
+    watcher.emit("change", "src/infra/restart.ts");
+    childA.emit("exit", 1, null);
+    watcher.emit("change", "src/infra/restart.ts");
+    expect(spawn).toHaveBeenCalledTimes(1);
+
+    distEntryExists = true;
+    for (const resume of resumePolls) {
+      resume();
+    }
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(spawn).toHaveBeenCalledTimes(2);
+
+    fakeProcess.emit("SIGINT");
+    expect(await runPromise).toBe(130);
   });
 
   it("kills child and exits when watcher emits an error", async () => {

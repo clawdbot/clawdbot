@@ -1,13 +1,14 @@
 /* @vitest-environment jsdom */
 
+import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { navigationSurfaceIsHidden, renderFloatingUpdateCard } from "./app-host.ts";
 import type {
   ApplicationContext,
   ApplicationGateway,
   ApplicationGatewaySnapshot,
 } from "./context.ts";
-import "./app-host.ts";
 
 type AppLifecycleState = {
   loginToken: string;
@@ -213,5 +214,55 @@ describe("OpenClaw shell keyboard shortcuts", () => {
 
     expect(event.defaultPrevented).toBe(false);
     expect(navigate).not.toHaveBeenCalled();
+  });
+});
+
+describe("OpenClaw shell update affordance", () => {
+  it("renders a floating card only while desktop navigation is collapsed", () => {
+    const container = document.createElement("div");
+    const updateAvailable = {
+      currentVersion: "2026.7.1",
+      latestVersion: "2026.7.2",
+      channel: "stable",
+    };
+    const shared = {
+      onboarding: false,
+      updateAvailable,
+      updateRunning: false,
+      onUpdate: vi.fn(),
+    };
+
+    const collapsed = navigationSurfaceIsHidden({
+      navCollapsed: true,
+      navDrawerOpen: false,
+      mobileNavLayout: false,
+    });
+    render(renderFloatingUpdateCard({ ...shared, navigationSurfaceHidden: collapsed }), container);
+    expect(container.querySelector("openclaw-sidebar-update-card")).not.toBeNull();
+
+    const visible = navigationSurfaceIsHidden({
+      navCollapsed: false,
+      navDrawerOpen: false,
+      mobileNavLayout: false,
+    });
+    render(renderFloatingUpdateCard({ ...shared, navigationSurfaceHidden: visible }), container);
+    expect(container.querySelector("openclaw-sidebar-update-card")).toBeNull();
+  });
+
+  it("treats the mobile navigation surface as hidden while its drawer is closed", () => {
+    expect(
+      navigationSurfaceIsHidden({
+        navCollapsed: false,
+        navDrawerOpen: false,
+        mobileNavLayout: true,
+      }),
+    ).toBe(true);
+    expect(
+      navigationSurfaceIsHidden({
+        navCollapsed: false,
+        navDrawerOpen: true,
+        mobileNavLayout: true,
+      }),
+    ).toBe(false);
   });
 });

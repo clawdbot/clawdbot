@@ -1871,6 +1871,7 @@ jobs:
       - name: Validate required QA credential env
         id: validate_credentials
         env:
+          CREDENTIAL_ACQUIRE_TIMEOUT_MS: "60000"
           JOB_TIMEOUT_MINUTES: "60"
           LEASE_TTL_MS: "7200000"
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
@@ -1892,7 +1893,7 @@ jobs:
           EVIDENCE_ROOT: ${{ steps.create_sut.outputs.evidence_root }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
-          OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "1800000"
+          OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "60000"
           OPENCLAW_QA_CREDENTIAL_LEASE_TTL_MS: "7200000"
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
           OPENCLAW_QA_SUT_FORBIDDEN_SENTINEL: trusted-parent-${{ github.run_id }}-${{ github.run_attempt }}
@@ -1935,7 +1936,8 @@ jobs:
           run_qa_attempt() (
             set -euo pipefail
             exec 2>&1
-            attempt="$1"
+            output_name="$1"
+            shift
             workflow_command_token="$(openssl rand -hex 32)"
             printf '::stop-commands::%s\n' "$workflow_command_token"
             trap 'printf "::%s::\n" "$workflow_command_token"' EXIT
@@ -1943,20 +1945,41 @@ jobs:
             TMPDIR="${SUT_RUNTIME_ROOT}/tmp" \
               pnpm openclaw qa telegram \
                 --repo-root "$CANDIDATE_ROOT" \
-                --output-dir "${EVIDENCE_RELATIVE}/attempt-${attempt}" \
+                --output-dir "${EVIDENCE_RELATIVE}/${output_name}" \
                 --provider-mode mock-openai \
                 --model mock-openai/gpt-5.5 \
                 --alt-model mock-openai/gpt-5.5-alt \
                 --fast \
                 --credential-source convex \
-                --credential-role ci
+                --credential-role ci \
+                "$@"
             status="$?"
             set -e
             exit "$status"
           )
 
+          if ! run_qa_attempt preflight --scenario channel-canary; then
+            echo "Telegram channel canary failed; skipping the remaining scenarios." >&2
+            exit 1
+          fi
+          terminate_sut_uid
+
+          remaining_scenarios=()
+          while IFS=$'\t' read -r scenario_id default_label _; do
+            if [[ "$default_label" == "default" && "$scenario_id" != "channel-canary" ]]; then
+              remaining_scenarios+=(--scenario "$scenario_id")
+            fi
+          done < <(
+            TMPDIR="${SUT_RUNTIME_ROOT}/tmp" \
+              pnpm openclaw qa telegram \
+                --repo-root "$CANDIDATE_ROOT" \
+                --provider-mode mock-openai \
+                --list-scenarios
+          )
+          ((${#remaining_scenarios[@]} > 0))
+
           for attempt in 1 2; do
-            if run_qa_attempt "$attempt"; then
+            if run_qa_attempt "attempt-${attempt}" "${remaining_scenarios[@]}"; then
               exit 0
             fi
             terminate_sut_uid

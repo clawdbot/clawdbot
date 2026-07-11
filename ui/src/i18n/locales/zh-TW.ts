@@ -785,6 +785,7 @@ export const zh_TW: TranslationMap = {
     artifactDetails: "Control UI 建置詳細資訊",
     version: "版本",
     commit: "Commit",
+    branch: "分支",
     built: "建置時間",
     unavailable: "無法使用",
     copyCommit: "複製完整 commit 雜湊",

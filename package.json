@@ -1962,6 +1962,7 @@
     "tsgo:extensions:test": "node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.extensions.test.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/extensions-test.tsbuildinfo",
     "tsgo:prod": "pnpm tsgo:core && pnpm tsgo:extensions",
     "tsgo:profile": "node scripts/profile-tsgo.mjs",
+    "tsgo:scripts": "node scripts/run-tsgo.mjs -p tsconfig.scripts.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/scripts.tsbuildinfo",
     "tsgo:test": "pnpm tsgo:core:test && pnpm tsgo:extensions:test",
     "tsgo:test:extensions": "pnpm tsgo:extensions:test",
     "tsgo:test:packages": "node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.test.packages.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/test-packages.tsbuildinfo",

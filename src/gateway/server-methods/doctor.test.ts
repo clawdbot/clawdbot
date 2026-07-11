@@ -322,6 +322,61 @@ describe("doctor.memory.status", () => {
     });
   });
 
+  it("returns llama.cpp runtime facts created by the deep embedding probe", async () => {
+    const close = vi.fn().mockResolvedValue(undefined);
+    let probed = false;
+    getMemorySearchManager.mockResolvedValue({
+      manager: {
+        status: () => ({
+          provider: "local",
+          ...(probed
+            ? {
+                custom: {
+                  llamaCppRuntime: {
+                    engine: "llama.cpp",
+                    state: "ready",
+                    backend: "cuda",
+                    buildType: "prebuilt",
+                    deviceNames: ["NVIDIA Test GPU"],
+                    offload: {
+                      supported: true,
+                      offloadedLayers: 24,
+                      totalLayers: 24,
+                    },
+                    context: {
+                      requestedSize: 4096,
+                    },
+                  },
+                },
+              }
+            : {}),
+        }),
+        probeEmbeddingAvailability: vi.fn(async () => {
+          probed = true;
+          return { ok: true };
+        }),
+        close,
+      },
+    });
+    const respond = vi.fn();
+
+    await invokeDoctorMemoryStatus(respond, { params: { probe: true } });
+
+    expect(respondPayload(respond).embeddingRuntime).toMatchObject({
+      state: "ready",
+      backend: "cuda",
+      deviceNames: ["NVIDIA Test GPU"],
+      offload: {
+        offloadedLayers: 24,
+        totalLayers: 24,
+      },
+      context: {
+        requestedSize: 4096,
+      },
+    });
+    expect(close).toHaveBeenCalled();
+  });
+
   it("does not live-probe embedding readiness by default", async () => {
     const close = vi.fn().mockResolvedValue(undefined);
     const probeEmbeddingAvailability = vi.fn().mockResolvedValue({ ok: true });

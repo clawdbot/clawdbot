@@ -58,7 +58,7 @@ export type PublishablePluginPackage = {
   packageName: string;
   version: string;
   channel: "stable" | "alpha" | "beta";
-  publishTag: "latest" | "alpha" | "beta";
+  publishTag: "latest" | "alpha" | "beta" | "extended-stable";
   requiredLatestDependencies?: RequiredLatestDependency[];
 };
 

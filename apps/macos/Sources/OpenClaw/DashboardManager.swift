@@ -30,6 +30,7 @@ final class DashboardManager {
             launchAgentUsesManagedCLI: CLIInstallPrompter.launchAgentUsesManagedCLI(
                 programArguments: GatewayLaunchAgentManager.launchdConfigSnapshot()?.programArguments ?? []),
             gatewayUpdateChannel: OpenClawConfigFile.gatewayUpdateChannel(),
+            installPolicy: CLIInstallPolicy.storedPolicy(),
             launchAgentWriteDisabled: GatewayLaunchAgentManager.isLaunchAgentWriteDisabled())
     }
 
@@ -160,6 +161,16 @@ final class DashboardManager {
 
     func close() {
         self.controller?.closeDashboard()
+    }
+
+    func navigateBack() {
+        guard self.controller?.window?.isKeyWindow == true else { return }
+        self.controller?.navigateBack()
+    }
+
+    func navigateForward() {
+        guard self.controller?.window?.isKeyWindow == true else { return }
+        self.controller?.navigateForward()
     }
 
     private static func websocketURLString(for dashboardURL: URL) -> String {

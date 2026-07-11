@@ -3181,6 +3181,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         if (prop === "llm") {
           const llm = getRuntimeProperty();
           return {
+            acquireLocalService: (...args) =>
+              withPluginRuntimePluginIdScope(pluginId, () => llm.acquireLocalService(...args)),
             complete: (params) =>
               withPluginRuntimePluginIdScope(pluginId, () => llm.complete(params)),
           } satisfies PluginRuntime["llm"];

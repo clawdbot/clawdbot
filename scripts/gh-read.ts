@@ -191,7 +191,7 @@ async function withGitHubFetchTimeout<T>(
     }, timeoutMs);
   });
   try {
-    return await Promise.race([run(controller.signal), timeoutPromise]);
+    return await Promise.race([run(controller.signal, timeoutPromise), timeoutPromise]);
   } finally {
     if (timeout) {
       clearTimeout(timeout);

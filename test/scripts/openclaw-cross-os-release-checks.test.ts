@@ -869,7 +869,9 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     const topLevelImports = source.slice(0, source.indexOf("const SCRIPT_PATH"));
 
     expect(topLevelImports).not.toContain("package-dist-inventory");
-    expect(source).toContain("function assertNoLegacyPluginDependencyStagingDebris(packageRoot)");
+    expect(source).toMatch(
+      /function assertNoLegacyPluginDependencyStagingDebris\(packageRoot: string\)/u,
+    );
   });
 
   it("filters the cross-OS runner matrix to a focused OS suite", () => {
@@ -1724,11 +1726,10 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(init).toMatchObject({
       method: "POST",
       body: "{}",
-      headers: {
-        Authorization: "Bot discord-token",
-        "Content-Type": "application/json",
-      },
     });
+    const headers = new Headers(init.headers);
+    expect(headers.get("Authorization")).toBe("Bot discord-token");
+    expect(headers.get("Content-Type")).toBe("application/json");
     expect(init.signal).toBeInstanceOf(AbortSignal);
   });
 

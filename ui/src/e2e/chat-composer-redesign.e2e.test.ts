@@ -129,9 +129,7 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       await expect.poll(() => settings.isVisible()).toBe(true);
       await expect.poll(() => splitView.isVisible()).toBe(true);
       await expect
-        .poll(() =>
-          splitView.evaluate((node) => node.closest(".agent-chat__composer-shell") == null),
-        )
+        .poll(() => splitView.evaluate((node) => node.closest(".chat-floating-toggles") != null))
         .toBe(true);
       await expect.poll(() => attach.isVisible()).toBe(true);
       await expect.poll(() => camera.isVisible()).toBe(false);
@@ -419,20 +417,22 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
       expect(activeModelBox.x).toBeGreaterThanOrEqual(
         activeProgressBox.x + activeProgressBox.width - 1,
       );
+      // The opener lives in the floating toggle cluster pinned to the
+      // top-right corner of the chat area. The cluster's right edge hugs the
+      // corner; the opener itself is the leftmost button in the row.
+      const toggleClusterBox = await page.locator(".chat-floating-toggles").boundingBox();
+      expect(toggleClusterBox).not.toBeNull();
+      if (!toggleClusterBox) {
+        throw new Error("expected the floating toggle cluster to have a layout box");
+      }
       expect(
         Math.abs(
           activeChatContentBox.x +
             activeChatContentBox.width -
-            (activeSplitViewBox.x + activeSplitViewBox.width),
+            (toggleClusterBox.x + toggleClusterBox.width),
         ),
       ).toBeLessThanOrEqual(24);
-      expect(
-        Math.abs(
-          activeChatContentBox.y +
-            activeChatContentBox.height -
-            (activeSplitViewBox.y + activeSplitViewBox.height),
-        ),
-      ).toBeLessThanOrEqual(24);
+      expect(Math.abs(activeSplitViewBox.y - activeChatContentBox.y)).toBeLessThanOrEqual(24);
       expect(
         Math.abs(
           activeProgressBox.y +

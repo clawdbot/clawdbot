@@ -708,6 +708,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   ["scripts/clawtributors-map.json", ["test/scripts/update-clawtributors.test.ts"]],
   ["scripts/tsconfig.json", ["test/scripts/oxlint-config.test.ts"]],
+  [
+    "tsconfig.scripts.json",
+    ["test/scripts/changed-lanes.test.ts", "test/scripts/test-projects.test.ts"],
+  ],
   ["scripts/build-all.mjs", ["test/scripts/build-all.test.ts"]],
   ["scripts/build-stamp.mjs", ["src/infra/build-stamp.test.ts"]],
   ["scripts/crabbox-wrapper-providers.mjs", ["test/scripts/crabbox-wrapper.test.ts"]],

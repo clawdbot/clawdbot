@@ -163,8 +163,7 @@ openclaw-chat-pane {
   flex: 0 0 auto;
 }
 
-.chat-pane__actions .btn--icon,
-.chat-open-split-view.btn--icon {
+.chat-pane__actions .btn--icon {
   width: 28px;
   /* .btn--icon's min-width: 36px otherwise wins over width and stretches
      these into 36x28 pills. */
@@ -172,22 +171,4 @@ openclaw-chat-pane {
   height: 28px;
   min-height: 28px;
   padding: 5px;
-}
-
-.chat-open-split-view {
-  position: absolute;
-  right: 16px;
-  bottom: 16px;
-  z-index: 12;
-  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
-  background: color-mix(in srgb, var(--panel) 92%, transparent);
-  box-shadow: var(--shadow-sm);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-}
-
-@media (max-width: 1099px) {
-  .chat-open-split-view {
-    display: none;
-  }
 }

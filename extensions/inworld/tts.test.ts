@@ -192,6 +192,22 @@ describe("listInworldVoices", () => {
 
     expect(lastGuardRequest().url).toBe("https://api.inworld.ai/voices/v1/voices?languages=EN_US");
   });
+
+  it("defaults to a bounded timeout for voice list requests", async () => {
+    queueGuardedResponse(new Response(JSON.stringify({ voices: [] }), { status: 200 }));
+
+    await listInworldVoices({ apiKey: "test-key" });
+
+    expect(lastGuardRequest().timeoutMs).toBe(30_000);
+  });
+
+  it("preserves an explicit timeout for voice list requests", async () => {
+    queueGuardedResponse(new Response(JSON.stringify({ voices: [] }), { status: 200 }));
+
+    await listInworldVoices({ apiKey: "test-key", timeoutMs: 5_000 });
+
+    expect(lastGuardRequest().timeoutMs).toBe(5_000);
+  });
 });
 
 describe("inworldTTS", () => {

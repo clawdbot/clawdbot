@@ -2158,6 +2158,62 @@ describe("memory index", () => {
     }
   });
 
+  it("exposes already-created local runtime facts without probing embeddings", async () => {
+    const cfg = createCfg({});
+    const { getRequiredMemoryIndexManager } = await import("./test-manager-helpers.js");
+    const manager = await getRequiredMemoryIndexManager({
+      cfg,
+      agentId: "main",
+      purpose: "status",
+    });
+    try {
+      const getRuntimeFacts = vi.fn(() => ({
+        engine: "llama.cpp" as const,
+        state: "ready" as const,
+        backend: "cuda" as const,
+        buildType: "prebuilt" as const,
+        deviceNames: ["NVIDIA Test GPU"],
+        offload: {
+          supported: true,
+          offloadedLayers: 24,
+          totalLayers: 24,
+        },
+        context: {
+          requestedSize: 4096,
+        },
+      }));
+      const provider = {
+        id: "local",
+        model: "test-model.gguf",
+        embedQuery: vi.fn(async () => [1, 0, 0, 0]),
+        embedBatch: vi.fn(async (texts: string[]) => texts.map(() => [1, 0, 0, 0])),
+      };
+      Object.defineProperty(provider, Symbol.for("openclaw.localEmbeddingRuntimeFacts"), {
+        value: getRuntimeFacts,
+      });
+      const fields = manager as unknown as {
+        provider: typeof provider | null;
+      };
+      fields.provider = provider;
+
+      expect(manager.status().custom?.llamaCppRuntime).toMatchObject({
+        state: "ready",
+        backend: "cuda",
+        deviceNames: ["NVIDIA Test GPU"],
+        offload: {
+          offloadedLayers: 24,
+          totalLayers: 24,
+        },
+        context: {
+          requestedSize: 4096,
+        },
+      });
+      expect(getRuntimeFacts).toHaveBeenCalledTimes(1);
+    } finally {
+      await manager.close?.();
+    }
+  });
+
   it("keeps metadata after unchanged in-place force reindex", async () => {
     const cfg = createCfg({});
     const manager = await getFreshManager(cfg);

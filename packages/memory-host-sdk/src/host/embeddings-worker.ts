@@ -13,6 +13,10 @@ import type {
   EmbeddingProviderCallOptions,
   EmbeddingProviderOptions,
 } from "./embeddings.types.js";
+import {
+  attachLocalEmbeddingRuntimeFacts,
+  type LocalEmbeddingRuntimeFacts,
+} from "./local-embedding-runtime-facts.js";
 import { normalizeOptionalString } from "./string-utils.js";
 
 // Parent-side local embedding worker client for isolating node-llama-cpp state.
@@ -45,10 +49,12 @@ type LocalEmbeddingWorkerResponse =
       id: number;
       ok: true;
       value?: number[] | number[][];
+      runtimeFacts?: LocalEmbeddingRuntimeFacts;
     }
   | {
       id: number;
       ok: false;
+      runtimeFacts?: LocalEmbeddingRuntimeFacts;
       error:
         | string
         | {
@@ -174,6 +180,7 @@ class LocalEmbeddingWorkerClient {
   private child: ChildProcess | null = null;
   private nextRequestId = 1;
   private pending = new Map<number, PendingRequest>();
+  private lastRuntimeFacts: LocalEmbeddingRuntimeFacts | undefined;
 
   constructor(private readonly scriptPath: string) {}
 
@@ -200,6 +207,10 @@ class LocalEmbeddingWorkerClient {
   ): Promise<number[][]> {
     const result = await this.send({ type: "embedBatch", options, texts }, callOptions);
     return Array.isArray(result) ? (result as number[][]) : [];
+  }
+
+  getRuntimeFacts(): LocalEmbeddingRuntimeFacts | undefined {
+    return this.lastRuntimeFacts;
   }
 
   /** Ask the child to close gracefully, then force shutdown after a short grace period. */
@@ -311,6 +322,9 @@ class LocalEmbeddingWorkerClient {
     if (typeof response.id !== "number") {
       return;
     }
+    if (response.runtimeFacts) {
+      this.lastRuntimeFacts = response.runtimeFacts;
+    }
     const pending = this.pending.get(response.id);
     if (!pending) {
       return;
@@ -383,7 +397,7 @@ export async function createLocalEmbeddingWorkerProvider(
     }
   };
 
-  return {
+  const provider: EmbeddingProvider = {
     id: "local",
     model: modelPath,
     embedQuery: async (text, callOptions) => {
@@ -402,6 +416,8 @@ export async function createLocalEmbeddingWorkerProvider(
       await client.close();
     },
   };
+  attachLocalEmbeddingRuntimeFacts(provider, () => client.getRuntimeFacts());
+  return provider;
 }
 
 /** Convert abort reasons or arbitrary thrown values into lint-safe Error objects. */

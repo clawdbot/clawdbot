@@ -151,18 +151,6 @@ function buildConfig(options: Options, workspaceDir: string): OpenClawConfig {
       controlUi: { enabled: false },
       mode: "local",
     },
-    memory: {
-      active: {
-        allowedChatTypes: ["direct"],
-        agents: ["main"],
-        logging: false,
-        maxSummaryChars: 220,
-        persistTranscripts: false,
-        promptStyle: "balanced",
-        queryMode: "recent",
-        timeoutMs: 15_000,
-      },
-    },
     models: {
       mode: "replace",
       providers,

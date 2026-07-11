@@ -25,6 +25,8 @@ describe("About responsive browser layout", () => {
             version: "2026.7.10",
             commit: COMMIT,
             builtAt: "2026-07-10T12:34:56.000Z",
+            branch: "feature/build-chip",
+            dirty: false,
             buildId: "test",
           },
           gatewayVersion: "2026.7.9",

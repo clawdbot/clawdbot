@@ -182,6 +182,7 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
     name: "Claude Opus 4.6",
     api: "anthropic-messages",
     provider: "anthropic",
+    baseUrl: "https://api.anthropic.com",
     reasoning: true,
     input: ["text", "image"],
     cost: { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 },

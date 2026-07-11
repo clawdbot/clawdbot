@@ -107,7 +107,10 @@ type CodexPromptSnapshotApi = {
     developerInstructions: string;
     threadStartParams: Record<string, unknown>;
     threadResumeParams: Record<string, unknown>;
-    turnStartParams: Record<string, unknown>;
+    turnStartParams: Record<string, unknown> & {
+      input?: unknown;
+      collaborationMode?: { settings?: { developer_instructions?: string } };
+    };
   };
   createCodexDynamicToolSpecsForPromptSnapshot: (params: {
     tools: AnyAgentTool[];
@@ -249,25 +252,7 @@ const baseConfig: OpenClawConfig = {
   agents: {
     defaults: {
       heartbeat: {
-        enabled: true,
         every: "30m",
-      },
-    },
-  },
-  tools: {
-    profiles: {
-      coding: {
-        allow: [
-          "message",
-          "heartbeat_respond",
-          "sessions_spawn",
-          "sessions_list",
-          "sessions_yield",
-          "cron",
-          "memory_search",
-          "memory_get",
-          "session_status",
-        ],
       },
     },
   },

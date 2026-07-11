@@ -159,7 +159,6 @@ jobs:
       REPORT_DIR: ${{ github.workspace }}/.artifacts/kova/reports/${{ matrix.lane }}
       BUNDLE_DIR: ${{ github.workspace }}/.artifacts/kova/bundles/${{ matrix.lane }}
       SUMMARY_DIR: ${{ github.workspace }}/.artifacts/kova/summaries
-      SOURCE_PERF_DIR: ${{ github.workspace }}/.artifacts/openclaw-performance/source/${{ matrix.lane }}
       LANE_ID: ${{ matrix.lane }}
       TARGET_REF: ${{ needs.resolve_target.outputs.tested_ref }}
       EXPECTED_TESTED_SHA: ${{ needs.resolve_target.outputs.tested_sha }}
@@ -553,8 +552,69 @@ jobs:
             exit 1
           fi
 
+      - name: Upload Kova artifacts
+        if: ${{ always() && steps.lane.outputs.run == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: openclaw-performance-${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .artifacts/kova/reports/${{ matrix.lane }}
+            .artifacts/kova/bundles/${{ matrix.lane }}
+            .artifacts/kova/summaries/${{ matrix.lane }}.md
+          if-no-files-found: error
+          retention-days: ${{ matrix.deep_profile == 'true' && 14 || 30 }}
+
+  source_performance:
+    name: OpenClaw source performance probes
+    needs: resolve_target
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 120
+    env:
+      PERFORMANCE_HELPER_DIR: ${{ github.workspace }}/.artifacts/performance-workflow
+      SOURCE_PERF_DIR: ${{ github.workspace }}/.artifacts/openclaw-performance/source/mock-provider
+      TARGET_REF: ${{ needs.resolve_target.outputs.tested_ref }}
+      EXPECTED_TESTED_SHA: ${{ needs.resolve_target.outputs.tested_sha }}
+      TESTED_REF: ${{ needs.resolve_target.outputs.tested_ref }}
+      TESTED_SHA: ${{ needs.resolve_target.outputs.tested_sha }}
+      REQUESTED_REPEAT: ${{ inputs.repeat || '3' }}
+    steps:
+      - name: Checkout OpenClaw source target
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.resolve_target.outputs.checkout_ref }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout source performance helpers
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ github.sha }}
+          path: .artifacts/performance-workflow
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Record source performance revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          tested_sha="$(git rev-parse HEAD)"
+          if [[ "$tested_sha" != "$EXPECTED_TESTED_SHA" ]]; then
+            echo "::error::Checked out ${tested_sha}, expected resolved target ${EXPECTED_TESTED_SHA}."
+            exit 1
+          fi
+          {
+            echo "Tested ref: ${TESTED_REF}"
+            echo "Tested SHA: ${TESTED_SHA}"
+            echo "Workflow ref: ${GITHUB_REF_NAME}"
+            echo "Workflow SHA: ${GITHUB_SHA}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Set up source performance environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
       - name: Fetch previous source performance baseline
-        if: ${{ steps.lane.outputs.run == 'true' && matrix.lane == 'mock-provider' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -587,7 +647,6 @@ jobs:
           fi
 
       - name: Run OpenClaw source performance probes
-        if: ${{ steps.lane.outputs.run == 'true' && matrix.lane == 'mock-provider' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -718,23 +777,19 @@ jobs:
 
           cat "$SOURCE_PERF_DIR/index.md" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload Kova artifacts
-        if: ${{ always() && steps.lane.outputs.run == 'true' }}
+      - name: Upload source performance artifacts
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: openclaw-performance-${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            .artifacts/kova/reports/${{ matrix.lane }}
-            .artifacts/kova/bundles/${{ matrix.lane }}
-            .artifacts/kova/summaries/${{ matrix.lane }}.md
-            .artifacts/openclaw-performance/source/${{ matrix.lane }}
+          name: openclaw-performance-source-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/openclaw-performance/source
           if-no-files-found: error
-          retention-days: ${{ matrix.deep_profile == 'true' && 14 || 30 }}
+          retention-days: 30
 
   publish:
     name: Publish ${{ matrix.title }} report
-    needs: [resolve_target, kova]
-    if: ${{ always() && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish_reports == true)) && needs.resolve_target.result == 'success' && needs.kova.result != 'cancelled' }}
+    needs: [resolve_target, kova, source_performance]
+    if: ${{ always() && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish_reports == true)) && needs.resolve_target.result == 'success' && needs.kova.result != 'cancelled' && needs.source_performance.result != 'cancelled' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -795,6 +850,7 @@ jobs:
           set -euo pipefail
           annotation="$([[ "$REPORT_PUBLISH_REQUIRED" == "true" ]] && printf error || printf warning)"
           prefix="openclaw-performance-${LANE_ID}-${GITHUB_RUN_ID}-"
+          source_prefix="openclaw-performance-source-${GITHUB_RUN_ID}-"
           if ! artifacts="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" --jq '.artifacts[] | select(.expired == false) | [.id, .name] | @tsv')"; then
             echo "::${annotation}::Unable to list Kova artifacts for this workflow run."
             exit 1
@@ -802,13 +858,23 @@ jobs:
 
           artifact_id=""
           producer_attempt=0
+          source_artifact_id=""
+          source_producer_attempt=0
           while IFS=$'\t' read -r candidate_id candidate_name; do
-            [[ "$candidate_name" == "$prefix"* ]] || continue
-            candidate_attempt="${candidate_name#"$prefix"}"
-            [[ "$candidate_id" =~ ^[0-9]+$ && "$candidate_attempt" =~ ^[0-9]+$ ]] || continue
-            if (( candidate_attempt <= GITHUB_RUN_ATTEMPT && candidate_attempt > producer_attempt )); then
-              artifact_id="$candidate_id"
-              producer_attempt="$candidate_attempt"
+            if [[ "$candidate_name" == "$prefix"* ]]; then
+              candidate_attempt="${candidate_name#"$prefix"}"
+              [[ "$candidate_id" =~ ^[0-9]+$ && "$candidate_attempt" =~ ^[0-9]+$ ]] || continue
+              if (( candidate_attempt <= GITHUB_RUN_ATTEMPT && candidate_attempt > producer_attempt )); then
+                artifact_id="$candidate_id"
+                producer_attempt="$candidate_attempt"
+              fi
+            elif [[ "$LANE_ID" == "mock-provider" && "$candidate_name" == "$source_prefix"* ]]; then
+              candidate_attempt="${candidate_name#"$source_prefix"}"
+              [[ "$candidate_id" =~ ^[0-9]+$ && "$candidate_attempt" =~ ^[0-9]+$ ]] || continue
+              if (( candidate_attempt <= GITHUB_RUN_ATTEMPT && candidate_attempt > source_producer_attempt )); then
+                source_artifact_id="$candidate_id"
+                source_producer_attempt="$candidate_attempt"
+              fi
             fi
           done <<< "$artifacts"
 
@@ -816,8 +882,21 @@ jobs:
             echo "::${annotation}::No Kova artifact is available for ${LANE_ID} through attempt ${GITHUB_RUN_ATTEMPT}."
             exit 1
           fi
+          artifact_ids="$artifact_id"
+          if [[ "$LANE_ID" == "mock-provider" ]]; then
+            if [[ -z "$source_artifact_id" ]]; then
+              echo "::${annotation}::No source performance artifact is available through attempt ${GITHUB_RUN_ATTEMPT}."
+              exit 1
+            fi
+            artifact_ids="${artifact_ids},${source_artifact_id}"
+            if (( source_producer_attempt > producer_attempt )); then
+              producer_attempt="$source_producer_attempt"
+            fi
+          fi
           echo "id=$artifact_id" >> "$GITHUB_OUTPUT"
+          echo "ids=$artifact_ids" >> "$GITHUB_OUTPUT"
           echo "producer_attempt=$producer_attempt" >> "$GITHUB_OUTPUT"
+          echo "source_producer_attempt=$source_producer_attempt" >> "$GITHUB_OUTPUT"
 
       - name: Create isolated publisher paths
         id: paths
@@ -837,7 +916,7 @@ jobs:
         continue-on-error: ${{ env.REPORT_PUBLISH_REQUIRED != 'true' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          artifact-ids: ${{ steps.artifact.outputs.id }}
+          artifact-ids: ${{ steps.artifact.outputs.ids }}
           path: ${{ steps.paths.outputs.input_root }}
 
       - name: Prepare clawgrit report commit
@@ -851,6 +930,7 @@ jobs:
           TESTED_REF: ${{ needs.resolve_target.outputs.tested_ref }}
           TESTED_SHA: ${{ needs.resolve_target.outputs.tested_sha }}
           PRODUCER_ATTEMPT: ${{ steps.artifact.outputs.producer_attempt }}
+          SOURCE_PRODUCER_ATTEMPT: ${{ steps.artifact.outputs.source_producer_attempt }}
         shell: bash
         run: |
           set -euo pipefail
@@ -862,12 +942,14 @@ jobs:
             echo "::${annotation}::Publisher paths escaped RUNNER_TEMP."
             exit 1
           fi
-          if [[ ! "$ARTIFACT_ID" =~ ^[0-9]+$ || ! "$PRODUCER_ATTEMPT" =~ ^[0-9]+$ || "$PRODUCER_ATTEMPT" -gt "$GITHUB_RUN_ATTEMPT" ]]; then
+          if [[ ! "$ARTIFACT_ID" =~ ^[0-9]+$ || ! "$PRODUCER_ATTEMPT" =~ ^[0-9]+$ || "$PRODUCER_ATTEMPT" -gt "$GITHUB_RUN_ATTEMPT" || ! "$SOURCE_PRODUCER_ATTEMPT" =~ ^[0-9]+$ || "$SOURCE_PRODUCER_ATTEMPT" -gt "$GITHUB_RUN_ATTEMPT" ]]; then
             echo "::${annotation}::Kova artifact attempt metadata is invalid."
             exit 1
           fi
 
-          mapfile -d '' report_dirs < <(find "$input_root" -type d -path "*/kova/reports/${LANE_ID}" -print0)
+          # download-artifact extracts one ID directly, but nests multiple IDs
+          # under artifact names. Recursive Kova lookup supports both layouts.
+          mapfile -d '' report_dirs < <(find "$input_root" -type d -path "*/reports/${LANE_ID}" -print0)
           if [[ "${#report_dirs[@]}" != "1" ]]; then
             echo "::${annotation}::Expected exactly one Kova report directory for ${LANE_ID}; found ${#report_dirs[@]}."
             exit 1
@@ -896,8 +978,8 @@ jobs:
             report_md=""
           fi
 
-          mapfile -d '' summaries < <(find "$input_root" -type f -path "*/kova/summaries/${LANE_ID}.md" -print0)
-          mapfile -d '' bundles < <(find "$input_root" -type d -path "*/kova/bundles/${LANE_ID}" -print0)
+          mapfile -d '' summaries < <(find "$input_root" -type f -path "*/summaries/${LANE_ID}.md" -print0)
+          mapfile -d '' bundles < <(find "$input_root" -type d -path "*/bundles/${LANE_ID}" -print0)
           if [[ "${#summaries[@]}" != "1" || "${#bundles[@]}" != "1" ]]; then
             echo "::${annotation}::Kova summary or bundle is missing for ${LANE_ID}."
             exit 1
@@ -914,15 +996,25 @@ jobs:
           fi
 
           source_dir=""
-          mapfile -d '' sources < <(find "$input_root" -type d -path "*/openclaw-performance/source/${LANE_ID}" -print0)
-          if [[ "${#sources[@]}" == "1" ]]; then
-            source_dir="$(realpath "${sources[0]}")"
+          if [[ "$LANE_ID" == "mock-provider" ]]; then
+            if [[ "$SOURCE_PRODUCER_ATTEMPT" == "0" ]]; then
+              echo "::${annotation}::Source probe artifact attempt metadata is missing."
+              exit 1
+            fi
+            # The mock lane downloads two IDs, so its source artifact is nested
+            # under the immutable artifact name rather than extracted directly.
+            source_path="${input_root}/openclaw-performance-source-${GITHUB_RUN_ID}-${SOURCE_PRODUCER_ATTEMPT}/${LANE_ID}"
+            if [[ ! -d "$source_path" ]]; then
+              echo "::${annotation}::Source probe artifact is missing for ${LANE_ID}."
+              exit 1
+            fi
+            source_dir="$(realpath "$source_path")"
             if [[ "$source_dir" != "$input_root/"* ]] || find "$source_dir" -type l -print -quit | grep -q . || find "$source_dir" ! -type d ! -type f -print -quit | grep -q .; then
               echo "::${annotation}::Source probe artifact contains an unsafe path."
               exit 1
             fi
-          elif [[ "${#sources[@]}" != "0" ]]; then
-            echo "::${annotation}::Expected at most one source probe directory for ${LANE_ID}."
+          elif [[ "$SOURCE_PRODUCER_ATTEMPT" != "0" ]]; then
+            echo "::${annotation}::Unexpected source probe artifact attempt for ${LANE_ID}."
             exit 1
           fi
 

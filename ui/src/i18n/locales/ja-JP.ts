@@ -801,6 +801,7 @@ export const ja_JP: TranslationMap = {
     artifactDetails: "Control UI のビルド詳細",
     version: "バージョン",
     commit: "コミット",
+    branch: "ブランチ",
     built: "ビルド日時",
     unavailable: "利用不可",
     copyCommit: "完全なコミットハッシュをコピー",

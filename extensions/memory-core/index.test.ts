@@ -1,6 +1,6 @@
 // Memory Core tests cover index plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { OpenClawPluginCommandDefinition } from "openclaw/plugin-sdk/core";
+import type { OpenClawPluginApi, OpenClawPluginCommandDefinition } from "openclaw/plugin-sdk/core";
 import type { MemoryPluginRuntime } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -24,10 +24,17 @@ vi.mock("./src/runtime-provider.js", () => ({
 
 import plugin from "./index.js";
 
+const hostRuntime = {
+  llm: {
+    acquireLocalService: async () => undefined,
+  },
+} as unknown as OpenClawPluginApi["runtime"];
+
 function registerMemoryCoreRuntime(): MemoryPluginRuntime {
   let runtime: MemoryPluginRuntime | undefined;
   plugin.register(
     createTestPluginApi({
+      runtime: hostRuntime,
       registerMemoryCapability(capability) {
         runtime = capability.runtime;
       },
@@ -93,6 +100,7 @@ describe("memory-core plugin runtime registration", () => {
     let command: OpenClawPluginCommandDefinition | undefined;
     plugin.register(
       createTestPluginApi({
+        runtime: hostRuntime,
         registerCommand(definition) {
           command = definition;
         },

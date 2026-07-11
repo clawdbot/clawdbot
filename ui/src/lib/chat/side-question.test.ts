@@ -1,0 +1,76 @@
+import { describe, expect, it } from "vitest";
+import {
+  buildMoreDetailsSideCommand,
+  buildSideChatComposerDraft,
+  CHAT_SELECTION_SNIPPET_MAX_CHARS,
+  collapseChatSelectionSnippet,
+  combineSideChatComposerDraft,
+  extractSideQuestionDisplayText,
+} from "./side-question.ts";
+
+describe("collapseChatSelectionSnippet", () => {
+  it("collapses newlines and runs of whitespace into single spaces", () => {
+    expect(collapseChatSelectionSnippet("Let's Encrypt cert\n  is valid\tfor both")).toBe(
+      "Let's Encrypt cert is valid for both",
+    );
+  });
+
+  it("caps overlong selections", () => {
+    const collapsed = collapseChatSelectionSnippet("x".repeat(5000));
+    expect(collapsed.length).toBeLessThanOrEqual(CHAT_SELECTION_SNIPPET_MAX_CHARS);
+  });
+});
+
+describe("side question builders", () => {
+  it("builds a single-line /btw command quoting the selection", () => {
+    expect(buildMoreDetailsSideCommand("Let's Encrypt cert\nis valid")).toBe(
+      `/btw Explain "Let's Encrypt cert is valid" from this conversation in more detail.`,
+    );
+  });
+
+  it("builds a composer draft that leaves room for the user's question", () => {
+    expect(buildSideChatComposerDraft("cron scan job")).toBe(`/btw Regarding "cron scan job": `);
+  });
+
+  it("returns null for whitespace-only selections", () => {
+    expect(buildMoreDetailsSideCommand("  \n\t ")).toBeNull();
+    expect(buildSideChatComposerDraft("")).toBeNull();
+  });
+});
+
+describe("combineSideChatComposerDraft", () => {
+  it("keeps an unsent prose draft as the question part", () => {
+    expect(combineSideChatComposerDraft("cron scan job", "why does this run twice?")).toBe(
+      `/btw Regarding "cron scan job": why does this run twice?`,
+    );
+  });
+
+  it("collapses multiline drafts so the single-line /btw send loses nothing", () => {
+    expect(combineSideChatComposerDraft("cron scan job", "first line\nsecond line")).toBe(
+      `/btw Regarding "cron scan job": first line second line`,
+    );
+  });
+
+  it("replaces slash-command drafts instead of embedding them", () => {
+    expect(combineSideChatComposerDraft("cron scan job", "/compact")).toBe(
+      `/btw Regarding "cron scan job": `,
+    );
+  });
+
+  it("behaves like the plain prefill when the composer is empty", () => {
+    expect(combineSideChatComposerDraft("cron scan job", "")).toBe(
+      `/btw Regarding "cron scan job": `,
+    );
+    expect(combineSideChatComposerDraft("cron scan job", undefined)).toBe(
+      `/btw Regarding "cron scan job": `,
+    );
+  });
+});
+
+describe("extractSideQuestionDisplayText", () => {
+  it("drops the /btw and /side prefixes", () => {
+    expect(extractSideQuestionDisplayText("/btw what changed?")).toBe("what changed?");
+    expect(extractSideQuestionDisplayText("/side: what changed?")).toBe("what changed?");
+    expect(extractSideQuestionDisplayText("/btw")).toBe("");
+  });
+});

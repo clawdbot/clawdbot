@@ -919,6 +919,45 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   height: 16px;
   flex-shrink: 0;
 }
+
+.chat-selection-popup {
+  position: fixed;
+  z-index: 9999;
+  display: flex;
+  gap: 2px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 3px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  animation: fade-in 0.12s var(--ease-out);
+}
+
+.chat-selection-popup button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: none;
+  background: none;
+  color: var(--fg);
+  border-radius: 6px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.chat-selection-popup button:hover,
+.chat-selection-popup button:focus-visible {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  outline: none;
+}
+
+.chat-selection-popup button svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: var(--muted);
+}
 .agent-chat__composer-shell {
   display: grid;
   grid-template-columns: minmax(0, 1fr);

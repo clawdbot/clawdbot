@@ -40,6 +40,7 @@ export type PluginPackageJson = {
       pluginSdkVersion?: string;
     };
     release?: {
+      publishToClawHub?: boolean;
       publishToNpm?: boolean;
       requireLatestDependencies?: unknown;
     };

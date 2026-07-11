@@ -146,7 +146,8 @@ openclaw codex archive <thread-id> --confirm-no-other-runner [--json] [gateway-o
 ```
 
 `[gateway-options]` is `--url <url>`, `--token <token>`, `--timeout <ms>`, and
-the inherited `--expect-final` switch. The timeout defaults to 30,000 ms;
+the inherited `--expect-final` switch. Session listing defaults to 75,000 ms;
+continue and archive default to 30,000 ms;
 `--expect-final` has no additional effect for these unary RPCs. Session search
 is title-only and case-insensitive; each response scans a bounded native page
 chain, and `--cursor` continues older results. The limit defaults to 50 per host

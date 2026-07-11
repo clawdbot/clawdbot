@@ -38,6 +38,8 @@ type CodexArchiveCliOptions = CodexGatewayOptions & {
   confirmNoOtherRunner?: boolean;
 };
 
+const CODEX_SESSION_CATALOG_CLI_TIMEOUT_MS = 75_000;
+
 function writeLine(value = ""): void {
   process.stdout.write(`${value}\n`);
 }
@@ -293,6 +295,7 @@ export function registerCodexSessionCli(program: Command): void {
       .option("--limit <count>", "Maximum sessions returned per host")
       .option("--cursor <cursor>", "Continue one host page (requires --host)")
       .option("--json", "Print the structured catalog response", false),
+    { timeoutMs: CODEX_SESSION_CATALOG_CLI_TIMEOUT_MS },
   ).action(async (options: CodexSessionsCliOptions) => {
     await listCodexSessions(options);
   });

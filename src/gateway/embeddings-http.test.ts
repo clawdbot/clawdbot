@@ -18,7 +18,12 @@ const WRITE_SCOPE_HEADER = { "x-openclaw-scopes": "operator.write" };
 let startGatewayServer: typeof import("./server.js").startGatewayServer;
 let createEmbeddingProviderMock: ReturnType<
   typeof vi.fn<
-    (options: { provider: string; model: string; agentDir?: string }) => Promise<{
+    (options: {
+      provider: string;
+      model: string;
+      agentDir?: string;
+      acquireLocalService?: unknown;
+    }) => Promise<{
       provider: {
         id: string;
         model: string;
@@ -125,10 +130,14 @@ beforeAll(async () => {
     autoSelectPriority: 20,
     allowExplicitWhenConfiguredAuto: true,
     create: async (options) => {
+      const localServiceOptions = options as typeof options & {
+        acquireLocalService?: unknown;
+      };
       const result = await createEmbeddingProviderMock({
-        provider: "openai",
+        provider: options.provider ?? "openai",
         model: options.model,
         agentDir: options.agentDir,
+        acquireLocalService: localServiceOptions.acquireLocalService,
       });
       return result;
     },
@@ -220,6 +229,7 @@ function latestCreateEmbeddingProviderOptions(): {
   agentDir?: string;
   model?: string;
   provider?: string;
+  acquireLocalService?: unknown;
 } {
   const calls = createEmbeddingProviderMock.mock.calls;
   const call = calls[calls.length - 1];
@@ -299,6 +309,52 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
       expect(lastCall.agentDir).toBe(resolveAgentDir({}, "beta"));
     } finally {
       testState.agentsConfig = undefined;
+      resetConfigRuntimeState();
+    }
+  });
+
+  it("passes provider aliases and local-service acquisition to memory adapters", async () => {
+    const configPath = createConfigIO().configPath;
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          models: {
+            providers: {
+              "tenant-embeddings": {
+                api: "openai",
+                baseUrl: genericEmbeddingBaseUrl,
+                models: [],
+              },
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+    try {
+      testState.agentConfig = {
+        memorySearch: {
+          provider: "tenant-embeddings",
+          model: "tenant-embeddings/nomic-embed-text",
+        },
+      };
+      resetConfigRuntimeState();
+
+      const res = await postEmbeddings({
+        model: "openclaw/default",
+        input: "hello",
+      });
+      await expectDefaultEmbeddingResponse(res);
+      const lastCall = latestCreateEmbeddingProviderOptions();
+      expect(lastCall.provider).toBe("tenant-embeddings");
+      expect(lastCall.model).toBe("nomic-embed-text");
+      expect(lastCall.acquireLocalService).toEqual(expect.any(Function));
+    } finally {
+      testState.agentConfig = undefined;
       resetConfigRuntimeState();
     }
   });

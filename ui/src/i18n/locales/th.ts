@@ -786,6 +786,7 @@ export const th: TranslationMap = {
     artifactDetails: "รายละเอียดบิลด์ Control UI",
     version: "เวอร์ชัน",
     commit: "คอมมิต",
+    branch: "บรานช์",
     built: "สร้างเมื่อ",
     unavailable: "ไม่พร้อมใช้งาน",
     copyCommit: "คัดลอกแฮชคอมมิตแบบเต็ม",

@@ -430,11 +430,19 @@ actor GatewayConnection {
     /// recovery path so a fresh local Gateway can start and a remote tunnel can
     /// recover before onboarding freezes the successful physical connection.
     func acquireServerLease() async throws -> ServerLease {
+        try await self.acquireServerLease(timeoutMs: 15000, retryTransportFailures: true)
+    }
+
+    private func acquireServerLease(
+        timeoutMs: Double,
+        retryTransportFailures: Bool) async throws -> ServerLease
+    {
         let shutdownGeneration = self.shutdownGeneration
         _ = try await self.request(
             method: Method.health.rawValue,
             params: nil,
-            timeoutMs: 15000)
+            timeoutMs: timeoutMs,
+            retryTransportFailures: retryTransportFailures)
         try self.requireCurrentShutdownGeneration(shutdownGeneration)
         let cfg = try await configProvider()
         guard let client = self.configuredClient(
@@ -460,6 +468,30 @@ actor GatewayConnection {
             throw OpenClawChatTransportSendError.notDispatched
         }
         return lease
+    }
+
+    /// Reconnect one physical socket without crossing the route that owned the
+    /// original request. Endpoint or credential changes must start fresh work.
+    func acquireServerLease(
+        ifSameRouteAs previous: ServerLease,
+        timeoutMs: Double) async throws -> ServerLease
+    {
+        guard await self.isCurrentRoute(previous.route) else {
+            throw OpenClawChatTransportSendError.notDispatched
+        }
+        // Restart reconciliation owns its overall deadline. One short, non-retrying
+        // health request keeps a failed attempt from consuming the whole budget.
+        let replacement = try await self.acquireServerLease(
+            timeoutMs: timeoutMs,
+            retryTransportFailures: false)
+        guard replacement.route.generation == previous.route.generation,
+              replacement.route.url == previous.route.url,
+              replacement.route.token == previous.route.token,
+              replacement.route.password == previous.route.password
+        else {
+            throw OpenClawChatTransportSendError.notDispatched
+        }
+        return replacement
     }
 
     func isCurrentRoute(_ route: Route) async -> Bool {

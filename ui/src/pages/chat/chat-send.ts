@@ -14,6 +14,11 @@ import type {
   ChatQueueSkillWorkshopRevision,
 } from "../../lib/chat/chat-types.ts";
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
+import { extractSideQuestionDisplayText } from "../../lib/chat/side-question.ts";
+import {
+  retirePendingChatSideQuestion,
+  type ChatSideResultPending,
+} from "../../lib/chat/side-result.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
   scopedAgentIdForSession,
@@ -125,6 +130,10 @@ export type ChatHost = ChatInputHistoryState &
     agentsList?: ChatAgentsListSnapshot | null;
     /** Selected message to reply to (right-click / keyboard shortcut). */
     chatReplyTarget?: { messageId: string; text: string; senderLabel?: string | null } | null;
+    /** Placeholder for an in-flight /btw side question awaiting chat.side_result. */
+    chatSideResultPending?: ChatSideResultPending | null;
+    /** Retired/handled BTW run ids whose late events must not reach the transcript. */
+    chatSideResultTerminalRuns?: Set<string>;
   };
 
 type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
@@ -369,6 +378,7 @@ async function sendChatMessageWithGeneratedRunId(
   message: string,
   attachments?: ChatAttachment[],
   canApplyError: () => boolean = () => true,
+  runIdOverride?: string,
 ): Promise<ChatSendAck | null> {
   if (!state.client || !state.connected) {
     return null;
@@ -381,7 +391,7 @@ async function sendChatMessageWithGeneratedRunId(
   if (canApplyError()) {
     setChatError(state, null);
   }
-  const runId = generateUUID();
+  const runId = runIdOverride ?? generateUUID();
   try {
     return await requestChatSend(state, { message: msg, attachments, runId });
   } catch (err) {
@@ -396,8 +406,9 @@ export async function sendDetachedChatMessage(
   state: ChatState,
   message: string,
   attachments?: ChatAttachment[],
+  runId?: string,
 ): Promise<ChatSendAck | null> {
-  return sendChatMessageWithGeneratedRunId(state, message, attachments);
+  return sendChatMessageWithGeneratedRunId(state, message, attachments, () => true, runId);
 }
 
 export async function sendSteerChatMessage(
@@ -1297,12 +1308,14 @@ async function sendDetachedCommandMessage(
     previousDraft?: string;
     attachments?: ChatAttachment[];
     previousAttachments?: ChatAttachment[];
+    runId?: string;
   },
 ) {
   const ack = await sendDetachedChatMessage(
     host as unknown as ChatState,
     message,
     opts?.attachments,
+    opts?.runId,
   );
   const ok = isAcceptedChatSendAck(ack);
   if (!ok && opts?.previousDraft != null) {
@@ -1321,7 +1334,7 @@ async function sendDetachedCommandMessage(
     );
     releaseChatAttachmentPayloads(excludeComposerAttachments(host, opts?.attachments));
   }
-  return ok;
+  return ack;
 }
 
 export async function steerQueuedChatMessage(host: ChatHost, id: string) {
@@ -2175,11 +2188,44 @@ export async function handleSendChat(
         if (messageOverride == null) {
           recordNonTranscriptInputHistory(host, message);
         }
-        await sendDetachedCommandMessage(host, message, {
+        // BTW runs detached and delivers via chat.side_result only; show a
+        // pending card immediately so the send has visible feedback. The run
+        // id is generated upfront so the card is correlatable before the ack
+        // returns. A new question also supersedes any still-displayed
+        // previous answer — renderSideResult prefers results, so a stale one
+        // would hide the card.
+        const btwPending = isBtwCommand(message)
+          ? {
+              question: extractSideQuestionDisplayText(message),
+              ts: Date.now(),
+              runId: generateUUID(),
+            }
+          : null;
+        if (btwPending) {
+          // The superseded run loses its pending record; retire it so its
+          // late side_result/terminal events cannot reach the card or the
+          // transcript.
+          retirePendingChatSideQuestion(host);
+          host.chatSideResult = null;
+          host.chatSideResultPending = btwPending;
+          host.requestUpdate?.();
+        }
+        const ack = await sendDetachedCommandMessage(host, message, {
           previousDraft: cleared.previousDraft,
           attachments: hasAttachments ? attachmentsToSend : undefined,
           previousAttachments: cleared.previousAttachments,
+          runId: btwPending?.runId,
         });
+        // Touch only this send's card: a side_result (or a newer question)
+        // may already have replaced it while the ack was in flight.
+        if (
+          btwPending &&
+          host.chatSideResultPending === btwPending &&
+          !isAcceptedChatSendAck(ack)
+        ) {
+          host.chatSideResultPending = null;
+          host.requestUpdate?.();
+        }
       });
       return;
     }

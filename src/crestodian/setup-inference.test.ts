@@ -23,10 +23,20 @@ import {
 
 const mocks = vi.hoisted(() => ({
   appendAudit: vi.fn(),
+  ensureSelectedAgentHarnessPlugin: vi.fn(),
+  refreshPluginRegistryAfterConfigMutation: vi.fn(),
 }));
 
 vi.mock("./audit.js", () => ({
   appendCrestodianAuditEntry: mocks.appendAudit,
+}));
+
+vi.mock("../agents/harness/runtime-plugin.js", () => ({
+  ensureSelectedAgentHarnessPlugin: mocks.ensureSelectedAgentHarnessPlugin,
+}));
+
+vi.mock("../plugins/registry-refresh.js", () => ({
+  refreshPluginRegistryAfterConfigMutation: mocks.refreshPluginRegistryAfterConfigMutation,
 }));
 
 vi.mock("../config/config.js", async (importOriginal) => {
@@ -263,6 +273,8 @@ describe("detectSetupInference", () => {
 describe("activateSetupInference", () => {
   beforeEach(() => {
     mocks.appendAudit.mockReset();
+    mocks.ensureSelectedAgentHarnessPlugin.mockReset().mockResolvedValue(undefined);
+    mocks.refreshPluginRegistryAfterConfigMutation.mockReset().mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -1657,7 +1669,6 @@ describe("activateSetupInference", () => {
       plugins: {
         entries: {
           codex: {
-            enabled: false,
             config: { appServer: { command: "codex", mode: "yolo" } },
           },
         },
@@ -1712,6 +1723,9 @@ describe("activateSetupInference", () => {
       events.push("live-test");
       return { meta: { finalAssistantVisibleText: "OK" } };
     });
+    const refreshPluginRegistryAfterConfigMutation = vi.fn(async () => {
+      events.push("refresh-plugin-registry");
+    });
     let persistedConfig: OpenClawConfig = {
       ...initialConfig,
       gateway: { port: 19000 },
@@ -1757,6 +1771,7 @@ describe("activateSetupInference", () => {
         runEmbeddedAgent: runEmbeddedAgent as never,
         applySetup: applySetup as never,
         ensureCodexRuntimePlugin: ensureCodex as never,
+        refreshPluginRegistryAfterConfigMutation: refreshPluginRegistryAfterConfigMutation as never,
         transformConfigWithPendingPluginInstalls: transformConfig as never,
         createTempDir: makeTempDir,
       },
@@ -1805,6 +1820,7 @@ describe("activateSetupInference", () => {
     expect(events).toEqual([
       "install-plugin",
       "persist-plugin-install",
+      "refresh-plugin-registry",
       "live-test",
       "persist-setup",
     ]);
@@ -1836,13 +1852,27 @@ describe("activateSetupInference", () => {
           }),
           plugins: expect.objectContaining({
             entries: expect.objectContaining({
-              codex: expect.objectContaining({ enabled: true }),
+              codex: expect.objectContaining({
+                enabled: true,
+                config: expect.objectContaining({
+                  appServer: {
+                    command: "codex",
+                    mode: "yolo",
+                    transport: "stdio",
+                    homeScope: "user",
+                  },
+                  supervision: { enabled: true },
+                }),
+              }),
             }),
           }),
         }),
       }),
     );
-    expect(runEmbeddedAgent.mock.calls[0]?.[0]).not.toHaveProperty("agentHarnessRuntimeOverride");
+    expect(runEmbeddedAgent.mock.calls[0]?.[0]).toHaveProperty(
+      "agentHarnessRuntimeOverride",
+      "codex",
+    );
     expect(persistedConfig).toMatchObject({
       gateway: { port: 19000 },
       models: {
@@ -1871,7 +1901,12 @@ describe("activateSetupInference", () => {
           codex: {
             enabled: true,
             config: {
-              appServer: { command: "codex", mode: "yolo" },
+              appServer: {
+                command: "codex",
+                mode: "yolo",
+                transport: "stdio",
+                homeScope: "user",
+              },
               supervision: { enabled: true },
             },
           },
@@ -1886,6 +1921,17 @@ describe("activateSetupInference", () => {
         expectedConfigHash: null,
         enablePluginId: "codex",
         refreshPluginRegistry: true,
+        configPatch: expect.objectContaining({
+          plugins: expect.objectContaining({
+            entries: expect.objectContaining({
+              codex: expect.objectContaining({
+                config: expect.objectContaining({
+                  appServer: expect.objectContaining({ transport: "stdio", homeScope: "user" }),
+                }),
+              }),
+            }),
+          }),
+        }),
       }),
     );
     expect(pendingCodexInstalls[0]).toMatchObject({
@@ -1902,15 +1948,29 @@ describe("activateSetupInference", () => {
     const ensureCodex = vi.fn(async (params: { cfg: OpenClawConfig }) => ({
       cfg: {
         ...params.cfg,
-        plugins: { entries: { codex: { enabled: true } } },
+        plugins: {
+          ...params.cfg.plugins,
+          entries: {
+            ...params.cfg.plugins?.entries,
+            codex: { ...params.cfg.plugins?.entries?.codex, enabled: true },
+          },
+        },
       },
       required: true,
       installed: true,
       status: "installed" as const,
     }));
-    const runEmbeddedAgent = vi.fn(async () => ({
-      meta: { finalAssistantVisibleText: "OK" },
-    }));
+    const ensureSelectedAgentHarnessPlugin = vi.fn(async () => {});
+    const refreshPluginRegistryAfterConfigMutation = vi.fn(
+      async (params: { logger?: { warn?: (message: string) => void } }) => {
+        params.logger?.warn?.("best-effort refresh warning");
+      },
+    );
+    const runEmbeddedAgent = vi.fn(async () => {
+      expect(refreshPluginRegistryAfterConfigMutation).toHaveBeenCalledOnce();
+      expect(ensureSelectedAgentHarnessPlugin).toHaveBeenCalledOnce();
+      return { meta: { finalAssistantVisibleText: "OK" } };
+    });
     const transformConfig = vi.fn(
       async (params: { transform: (config: OpenClawConfig) => { nextConfig: OpenClawConfig } }) => {
         persistedConfig = params.transform(persistedConfig).nextConfig;
@@ -1918,7 +1978,6 @@ describe("activateSetupInference", () => {
       },
     );
     const applySetup = vi.fn(async () => ({ configPath: "/tmp/openclaw.json", lines: ["ok"] }));
-
     const result = await activateSetupInference({
       kind: "codex-cli",
       modelRef: "openai/gpt-5.4",
@@ -1935,6 +1994,8 @@ describe("activateSetupInference", () => {
           runtimeConfig: initialConfig,
         })) as never,
         ensureCodexRuntimePlugin: ensureCodex as never,
+        ensureSelectedAgentHarnessPlugin: ensureSelectedAgentHarnessPlugin as never,
+        refreshPluginRegistryAfterConfigMutation: refreshPluginRegistryAfterConfigMutation as never,
         runEmbeddedAgent: runEmbeddedAgent as never,
         transformConfigWithPendingPluginInstalls: transformConfig as never,
         applySetup: applySetup as never,
@@ -1944,8 +2005,24 @@ describe("activateSetupInference", () => {
 
     expect(result).toMatchObject({ ok: true, modelRef: "openai/gpt-5.4" });
     expect(ensureCodex).toHaveBeenCalledWith(expect.objectContaining({ model: "openai/gpt-5.4" }));
+    expect(ensureSelectedAgentHarnessPlugin).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        modelId: "gpt-5.4",
+        agentHarnessRuntimeOverride: "codex",
+      }),
+    );
+    expect(refreshPluginRegistryAfterConfigMutation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: "source-changed",
+        policyPluginIds: ["codex"],
+        traceCommand: "crestodian-setup-probe",
+        workspaceDir: "/tmp/work",
+      }),
+    );
     expect(runEmbeddedAgent).toHaveBeenCalledWith(
       expect.objectContaining({
+        agentHarnessRuntimeOverride: "codex",
         provider: "openai",
         model: "gpt-5.4",
         config: expect.objectContaining({
@@ -1967,6 +2044,10 @@ describe("activateSetupInference", () => {
               codex: expect.objectContaining({
                 enabled: true,
                 config: expect.objectContaining({
+                  appServer: expect.objectContaining({
+                    transport: "stdio",
+                    homeScope: "user",
+                  }),
                   supervision: { enabled: true },
                 }),
               }),
@@ -1981,6 +2062,17 @@ describe("activateSetupInference", () => {
         agentRuntimeId: "codex",
         enablePluginId: "codex",
         refreshPluginRegistry: true,
+        configPatch: expect.objectContaining({
+          plugins: expect.objectContaining({
+            entries: expect.objectContaining({
+              codex: expect.objectContaining({
+                config: expect.objectContaining({
+                  appServer: expect.objectContaining({ transport: "stdio", homeScope: "user" }),
+                }),
+              }),
+            }),
+          }),
+        }),
       }),
     );
   });
@@ -2359,9 +2451,10 @@ describe("activateSetupInference", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(persistedConfig.plugins?.entries?.codex).toEqual({
+    expect(persistedConfig.plugins?.entries?.codex).toMatchObject({
       enabled: true,
       config: {
+        appServer: { transport: "stdio", homeScope: "user" },
         discovery: { enabled: true },
         supervision: { enabled: false, allowRawTranscripts: true },
       },
@@ -2390,11 +2483,11 @@ describe("activateSetupInference", () => {
 
     expect(result.ok).toBe(true);
     expect(persistedConfig.plugins?.allow).toEqual(["codex"]);
-    expect(persistedConfig.plugins?.entries).toEqual({
+    expect(persistedConfig.plugins?.entries).toMatchObject({
       codex: {
         enabled: true,
         config: {
-          appServer: { transport: "websocket", url: "ws://127.0.0.1:4500" },
+          appServer: { transport: "stdio", url: "ws://127.0.0.1:4500", homeScope: "user" },
           supervision: { enabled: false },
         },
       },
@@ -2417,7 +2510,10 @@ describe("activateSetupInference", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(persistedConfig.plugins?.entries?.codex).toEqual({ enabled: true });
+    expect(persistedConfig.plugins?.entries?.codex).toMatchObject({
+      enabled: true,
+      config: { appServer: { transport: "stdio", homeScope: "user" } },
+    });
   });
 
   it("fails closed when effective plugin policy changes before the success commit", async () => {
@@ -2433,7 +2529,7 @@ describe("activateSetupInference", () => {
       status: "unavailable",
       error: expect.stringContaining("blocked by denylist"),
     });
-    expect(refreshPluginRegistry).not.toHaveBeenCalled();
+    expect(refreshPluginRegistry).toHaveBeenCalledOnce();
     expect(applySetup).toHaveBeenCalledOnce();
   });
 });

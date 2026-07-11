@@ -1197,6 +1197,13 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it("keeps the scripts typecheck project on its routing tests", () => {
+    expect(resolveChangedTestTargetPlan(["tsconfig.scripts.json"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/changed-lanes.test.ts", "test/scripts/test-projects.test.ts"],
+    });
+  });
+
   it("keeps docs i18n behavior fixture edits on behavior baseline tests", () => {
     for (const fixturePath of [
       "scripts/docs-i18n/testdata/behavior/fenced-singleton-retry/case.json",

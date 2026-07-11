@@ -153,7 +153,8 @@ openclaw codex archive <thread-id> --confirm-no-other-runner [--json] [--url <ur
 - `--json` prints the structured Gateway response.
 
 All three commands inherit `--url`, `--token`, and `--timeout <ms>` from the
-Gateway client; the default timeout is 30,000 ms. They also expose the shared
+Gateway client. Session listing defaults to 75,000 ms so cold paired-node
+catalogs can complete; continue and archive default to 30,000 ms. They also expose the shared
 `--expect-final` switch, which does not change these unary supervision RPCs.
 Each command requires the `operator.write` Gateway scope.
 Standard `-h, --help` output is available on each subcommand.

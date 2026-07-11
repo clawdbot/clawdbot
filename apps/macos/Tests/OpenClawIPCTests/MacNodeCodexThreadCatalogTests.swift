@@ -941,7 +941,7 @@ struct MacNodeCodexThreadCatalogTests {
     }
 
     @Test func `default deadline allows cold large catalog scans`() {
-        #expect(MacNodeCodexThreadCatalog.defaultTimeoutSeconds == 24)
+        #expect(MacNodeCodexThreadCatalog.defaultTimeoutSeconds == 60)
     }
 
     @Test func `rejects unknown and out of range params before launch`() async {

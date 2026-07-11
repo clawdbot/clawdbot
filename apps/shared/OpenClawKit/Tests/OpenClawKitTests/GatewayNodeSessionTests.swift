@@ -11,6 +11,19 @@ extension NSLock {
     }
 }
 
+private final class InvokeCancellationFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+
+    func markCancelled() {
+        self.lock.withLock { self.cancelled = true }
+    }
+
+    func isCancelled() -> Bool {
+        self.lock.withLock { self.cancelled }
+    }
+}
+
 private final class DoubleCallbackPingWebSocketTask: WebSocketTasking, @unchecked Sendable {
     private let callbacks: [Error?]
 
@@ -2558,6 +2571,28 @@ struct GatewayNodeSessionTests {
         #expect(response.ok == false)
         #expect(response.error?.code == .unavailable)
         #expect(response.error?.message.contains("timed out") == true)
+    }
+
+    @Test
+    func `invoke timeout cancels the in-flight operation`() async {
+        let cancellation = InvokeCancellationFlag()
+        let response = await GatewayNodeSession.invokeWithTimeout(
+            request: BridgeInvokeRequest(id: "cancelled", command: "x", paramsJSON: nil),
+            timeoutMs: 10,
+            onInvoke: { request in
+                await withTaskCancellationHandler {
+                    try? await Task.sleep(for: .seconds(1))
+                    return BridgeInvokeResponse(id: request.id, ok: true, payloadJSON: nil, error: nil)
+                } onCancel: {
+                    cancellation.markCancelled()
+                }
+            })
+
+        for _ in 0..<50 where !cancellation.isCancelled() {
+            try? await Task.sleep(for: .milliseconds(1))
+        }
+        #expect(response.ok == false)
+        #expect(cancellation.isCancelled())
     }
 
     @Test

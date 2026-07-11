@@ -478,16 +478,30 @@ describe("release Telegram QA workflow", () => {
       (step) => step.name === "Validate required QA credential env",
     );
     expect(validateStep?.env?.RUNNER_ENVIRONMENT).toBe("${{ runner.environment }}");
+    expect(validateStep?.env?.CREDENTIAL_ACQUIRE_TIMEOUT_MS).toBe("60000");
     expect(validateStep?.env?.JOB_TIMEOUT_MINUTES).toBe("60");
     expect(validateStep?.env?.LEASE_TTL_MS).toBe("7200000");
     expect(validateStep?.run).toContain('[[ "$RUNNER_ENVIRONMENT" == "github-hosted" ]]');
     expect(validateStep?.run).toContain("JOB_TIMEOUT_MINUTES * 60 * 1000 < LEASE_TTL_MS");
 
     const runStep = job?.steps?.find((step) => step.name === "Run Telegram live lane");
+    expect(runStep?.env?.OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS).toBe("60000");
     expect(runStep?.env?.OPENCLAW_QA_CREDENTIAL_LEASE_TTL_MS).toBe("7200000");
     expect(runStep?.env?.OPENCLAW_QA_TELEGRAM_SUT_CLEANUP_TIMEOUT_MS).toBe("60000");
     expect(runStep?.run).toContain("trap terminate_sut_uid_on_exit EXIT");
     expect(runStep?.run).toContain('"$OPENCLAW_QA_TELEGRAM_SUT_OPENCLAW_COMMAND" --terminate-uid');
+    expect(runStep?.run).toContain("run_qa_attempt preflight --scenario channel-canary");
+    expect(runStep?.run).toContain(
+      "Telegram channel canary failed; skipping the remaining scenarios.",
+    );
+    expect(runStep?.run).toContain("--list-scenarios");
+    expect(runStep?.run).toContain('"$scenario_id" != "channel-canary"');
+    expect(runStep?.run).toContain(
+      'run_qa_attempt "attempt-${attempt}" "${remaining_scenarios[@]}"',
+    );
+    expect(
+      runStep?.run?.indexOf("run_qa_attempt preflight --scenario channel-canary"),
+    ).toBeLessThan(runStep?.run?.indexOf("for attempt in 1 2") ?? -1);
   });
 
   it("serializes stderr behind the workflow-command pause", () => {
@@ -498,7 +512,7 @@ describe("release Telegram QA workflow", () => {
       (step) => step.name === "Run Telegram live lane",
     );
     expect(runStep?.run).toMatch(
-      /run_qa_attempt\(\) \(\n\s+set -euo pipefail\n\s+exec 2>&1\n\s+attempt=/u,
+      /run_qa_attempt\(\) \(\n\s+set -euo pipefail\n\s+exec 2>&1\n\s+output_name=/u,
     );
     expect(runStep?.run).toContain("::stop-commands::%s");
   });

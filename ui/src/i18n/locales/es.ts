@@ -799,6 +799,7 @@ export const es: TranslationMap = {
     artifactDetails: "Detalles de compilación de Control UI",
     version: "Versión",
     commit: "Commit",
+    branch: "Rama",
     built: "Compilado",
     unavailable: "No disponible",
     copyCommit: "Copiar hash completo del commit",

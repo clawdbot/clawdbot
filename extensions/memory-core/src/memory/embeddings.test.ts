@@ -3,12 +3,14 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { EmbeddingProviderAdapter } from "openclaw/plugin-sdk/embedding-providers";
 import type { MemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { configureMemoryCoreEmbeddingLocalService } from "./embedding-local-service.js";
 import { createEmbeddingProvider, resolveEmbeddingProviderFallbackModel } from "./embeddings.js";
 
 const mockEmbeddingRegistry = vi.hoisted(() => ({
   genericAdapters: [] as EmbeddingProviderAdapter[],
   adapters: [] as MemoryEmbeddingProviderAdapter[],
   genericLookupConfigs: [] as Array<OpenClawConfig | undefined>,
+  acquireLocalService: vi.fn(async () => undefined),
 }));
 
 vi.mock("openclaw/plugin-sdk/embedding-providers", () => ({
@@ -100,9 +102,11 @@ function registerMemoryEmbeddingProvider(adapter: MemoryEmbeddingProviderAdapter
 describe("createEmbeddingProvider", () => {
   beforeEach(() => {
     clearMemoryEmbeddingProviders();
+    configureMemoryCoreEmbeddingLocalService(mockEmbeddingRegistry.acquireLocalService);
   });
 
   afterEach(() => {
+    configureMemoryCoreEmbeddingLocalService(undefined);
     clearMemoryEmbeddingProviders();
   });
 
@@ -161,15 +165,24 @@ describe("createEmbeddingProvider", () => {
   it("uses a generic embedding provider when no memory-specific provider exists", async () => {
     registerGenericEmbeddingProvider({
       id: "openai-compatible",
-      create: async () => ({
-        provider: {
-          id: "generic",
-          model: "generic-model",
-          embed: async (_input, options) => (options?.inputType === "query" ? [1] : [2]),
-          embedBatch: async (inputs, options) =>
-            inputs.map(() => (options?.inputType === "document" ? [3] : [4])),
-        },
-      }),
+      create: async (options) => {
+        expect(
+          (
+            options as typeof options & {
+              acquireLocalService?: typeof mockEmbeddingRegistry.acquireLocalService;
+            }
+          ).acquireLocalService,
+        ).toBe(mockEmbeddingRegistry.acquireLocalService);
+        return {
+          provider: {
+            id: "generic",
+            model: "generic-model",
+            embed: async (_input, callOptions) => (callOptions?.inputType === "query" ? [1] : [2]),
+            embedBatch: async (inputs, callOptions) =>
+              inputs.map(() => (callOptions?.inputType === "document" ? [3] : [4])),
+          },
+        };
+      },
     });
 
     const options = createOptions("openai-compatible");

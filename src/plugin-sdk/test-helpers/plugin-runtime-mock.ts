@@ -861,6 +861,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       removeIfLossless: vi.fn(),
     },
     llm: {
+      acquireLocalService: vi.fn(),
       complete: vi.fn(),
     },
     nodes: {

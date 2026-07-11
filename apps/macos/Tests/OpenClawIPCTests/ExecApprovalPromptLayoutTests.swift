@@ -5,6 +5,18 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct ExecApprovalPromptLayoutTests {
+    @Test func `queued prompt expires without later presentation`() async throws {
+        let reservation = try #require(ExecApprovalsPromptPresenter.reservePromptForTesting())
+        defer { ExecApprovalsPromptPresenter.releasePromptForTesting(id: reservation) }
+
+        let decision = await ExecApprovalsPromptPresenter.prompt(
+            ExecApprovalPromptRequest(command: "/usr/bin/printf ok"),
+            timeoutMs: 1)
+
+        #expect(decision == nil)
+        #expect(ExecApprovalsPromptPresenter.pendingPromptCountForTesting == 0)
+    }
+
     @Test func `allowed decisions omit durable approval even when ask allows it`() {
         let decisions = ExecApprovalsPromptPresenter.allowedPromptDecisions(
             ExecApprovalPromptRequest(
