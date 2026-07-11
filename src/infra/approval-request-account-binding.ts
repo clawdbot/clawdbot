@@ -1,8 +1,7 @@
 // Matches approval requests against channel account and session bindings.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStorePath } from "../config/sessions/paths.js";
-import { loadSessionStore } from "../config/sessions/store-load.js";
-import { resolveMaintenanceConfigFromInput } from "../config/sessions/store-maintenance.js";
+import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalAccountId } from "../routing/account-id.js";
@@ -39,10 +38,11 @@ export function resolvePersistedApprovalRequestSessionEntry(params: {
   const parsed = parseAgentSessionKey(sessionKey);
   const agentId = parsed?.agentId ?? params.request.request.agentId ?? "main";
   const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
-  const store = loadSessionStore(storePath, {
-    maintenanceConfig: resolveMaintenanceConfigFromInput(params.cfg.session?.maintenance),
+  const entry = loadSessionEntry({
+    storePath,
+    sessionKey,
+    clone: false,
   });
-  const entry = store[sessionKey];
   if (!entry) {
     return null;
   }

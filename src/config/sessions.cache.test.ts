@@ -792,30 +792,6 @@ describe("Session Store Cache", () => {
     expect(cached["session:1"].deliveryContext?.to).toBe("chat-1");
   });
 
-  it("patches serialized JSON for one-entry updates without stringifying untouched entries", async () => {
-    await saveSessionStore(storePath, {
-      "session:1": createSessionEntry({ sessionId: "id-1", displayName: "Before" }),
-      "session:2": createSessionEntry({ sessionId: "id-2", displayName: "Untouched" }),
-    });
-    const cached = loadSessionStore(storePath, { clone: false });
-    Object.defineProperty(cached["session:2"], "toJSON", {
-      value: () => {
-        throw new Error("full store stringify touched session:2");
-      },
-    });
-
-    await updateSessionStoreEntry({
-      storePath,
-      sessionKey: "session:1",
-      update: async () => ({ displayName: "After", updatedAt: 123 }),
-      takeCacheOwnership: true,
-    });
-
-    const disk = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<string, SessionEntry>;
-    expect(disk["session:1"].displayName).toBe("After");
-    expect(disk["session:2"].displayName).toBe("Untouched");
-  });
-
   it("falls back to full projection when untouched entries need prompt blob repair", async () => {
     const prompt = "skill prompt ".repeat(80);
     await saveSessionStore(storePath, {

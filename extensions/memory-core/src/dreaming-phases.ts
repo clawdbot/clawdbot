@@ -686,10 +686,16 @@ function hashSessionMessageId(value: string): string {
   return createHash("sha1").update(value).digest("hex");
 }
 
-function buildSessionScopeKey(agentId: string, absolutePath: string): string {
+function buildSessionScopeKey(agentId: string, sessionId: string): string {
+  const logicalSessionId =
+    parseUsageCountedSessionIdFromFileName(`${sessionId}.jsonl`) ?? sessionId;
+  return `${agentId}:${logicalSessionId}`;
+}
+
+function buildSessionFileScopeKey(agentId: string, absolutePath: string): string {
   const fileName = path.basename(absolutePath);
   const logicalSessionId = parseUsageCountedSessionIdFromFileName(fileName) ?? fileName;
-  return `${agentId}:${logicalSessionId}`;
+  return buildSessionScopeKey(agentId, logicalSessionId);
 }
 
 function mergeTrackedMessageHashes(existing: string[], additions: string[]): string[] {
@@ -722,8 +728,12 @@ function areStringArraysEqual(a: string[], b: string[]): boolean {
   return true;
 }
 
-function buildSessionStateKey(agentId: string, absolutePath: string): string {
-  return `${agentId}:${sessionPathForFile(absolutePath)}`;
+function buildSessionStateKey(agentId: string, sessionPath: string): string {
+  return `${agentId}:${sessionPath}`;
+}
+
+function buildSqliteDreamingSessionPath(agentId: string, sessionId: string): string {
+  return path.join("sessions", agentId, sessionId).replace(/\\/g, "/");
 }
 
 function isCheckpointSessionTranscriptPath(absolutePath: string): boolean {
@@ -852,7 +862,10 @@ async function collectSessionIngestionBatches(params: {
     absolutePath: string;
     generatedByDreamingNarrative: boolean;
     generatedByCronRun: boolean;
+    sessionId: string;
     sessionPath: string;
+    transcriptSource?: "sqlite";
+    updatedAtMs?: number;
   }> = [];
   for (const agentId of agentIds) {
     for (const entry of await listSessionTranscriptCorpusEntriesForAgent(agentId)) {
@@ -870,7 +883,13 @@ async function collectSessionIngestionBatches(params: {
         absolutePath,
         generatedByDreamingNarrative: entry.generatedByDreamingNarrative === true,
         generatedByCronRun: entry.generatedByCronRun === true,
-        sessionPath: sessionPathForFile(absolutePath),
+        sessionId: entry.sessionId,
+        sessionPath:
+          entry.transcriptSource === "sqlite"
+            ? buildSqliteDreamingSessionPath(entry.agentId, entry.sessionId)
+            : sessionPathForFile(absolutePath),
+        ...(entry.transcriptSource === "sqlite" ? { transcriptSource: "sqlite" as const } : {}),
+        ...(entry.updatedAtMs !== undefined ? { updatedAtMs: entry.updatedAtMs } : {}),
       });
     }
   }
@@ -896,42 +915,62 @@ async function collectSessionIngestionBatches(params: {
     if (remaining <= 0) {
       break;
     }
-    const stateKey = buildSessionStateKey(file.agentId, file.absolutePath);
+    const stateKey = buildSessionStateKey(file.agentId, file.sessionPath);
     const previous = params.state.files[stateKey];
-    const stat = await fs.stat(file.absolutePath).catch((err: unknown) => {
-      if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
-        return null;
+    let fingerprint: { mtimeMs: number; size: number };
+    let entry: Awaited<ReturnType<typeof buildSessionEntry>>;
+    if (file.transcriptSource === "sqlite") {
+      entry = await buildSessionEntry(file.absolutePath, {
+        generatedByDreamingNarrative: file.generatedByDreamingNarrative,
+        generatedByCronRun: file.generatedByCronRun,
+        ...(file.updatedAtMs !== undefined ? { updatedAtMs: file.updatedAtMs } : {}),
+      });
+      if (!entry) {
+        if (previous) {
+          changed = true;
+        }
+        continue;
       }
-      throw err;
-    });
-    if (!stat) {
-      if (previous) {
-        changed = true;
+      fingerprint = {
+        mtimeMs: Math.floor(Math.max(0, entry.mtimeMs)),
+        size: Math.floor(Math.max(0, entry.size)),
+      };
+    } else {
+      const stat = await fs.stat(file.absolutePath).catch((err: unknown) => {
+        if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
+          return null;
+        }
+        throw err;
+      });
+      if (!stat) {
+        if (previous) {
+          changed = true;
+        }
+        continue;
       }
-      continue;
-    }
-    const fingerprint = {
-      mtimeMs: Math.floor(Math.max(0, stat.mtimeMs)),
-      size: Math.floor(Math.max(0, stat.size)),
-    };
-    const cursorAtEnd = previous !== undefined && previous.lastContentLine >= previous.lineCount;
-    const unchanged =
-      Boolean(previous) &&
-      previous.mtimeMs === fingerprint.mtimeMs &&
-      previous.size === fingerprint.size &&
-      previous.contentHash.length > 0 &&
-      cursorAtEnd;
-    if (unchanged) {
-      nextFiles[stateKey] = previous!;
-      continue;
-    }
+      fingerprint = {
+        mtimeMs: Math.floor(Math.max(0, stat.mtimeMs)),
+        size: Math.floor(Math.max(0, stat.size)),
+      };
+      const cursorAtEnd = previous !== undefined && previous.lastContentLine >= previous.lineCount;
+      const unchanged =
+        Boolean(previous) &&
+        previous.mtimeMs === fingerprint.mtimeMs &&
+        previous.size === fingerprint.size &&
+        previous.contentHash.length > 0 &&
+        cursorAtEnd;
+      if (unchanged) {
+        nextFiles[stateKey] = previous!;
+        continue;
+      }
 
-    const entry = await buildSessionEntry(file.absolutePath, {
-      generatedByDreamingNarrative: file.generatedByDreamingNarrative,
-      generatedByCronRun: file.generatedByCronRun,
-    });
-    if (!entry) {
-      continue;
+      entry = await buildSessionEntry(file.absolutePath, {
+        generatedByDreamingNarrative: file.generatedByDreamingNarrative,
+        generatedByCronRun: file.generatedByCronRun,
+      });
+      if (!entry) {
+        continue;
+      }
     }
     if (entry.generatedByDreamingNarrative || entry.generatedByCronRun) {
       nextFiles[stateKey] = {
@@ -966,9 +1005,19 @@ async function collectSessionIngestionBatches(params: {
       continue;
     }
 
-    const sessionScope = buildSessionScopeKey(file.agentId, file.absolutePath);
+    const sessionScope =
+      file.transcriptSource === "sqlite"
+        ? `${file.agentId}:${file.sessionPath}`
+        : buildSessionFileScopeKey(file.agentId, file.absolutePath);
+    const preFlipSessionScope =
+      file.transcriptSource === "sqlite"
+        ? buildSessionScopeKey(file.agentId, file.sessionId)
+        : undefined;
     const previousSeen = nextSeenMessages[sessionScope] ?? [];
     const seenSet = new Set(previousSeen);
+    const preFlipSeenSet = preFlipSessionScope
+      ? new Set(nextSeenMessages[preFlipSessionScope] ?? [])
+      : null;
     const newSeenHashes: string[] = [];
 
     const lines = entry.content.length > 0 ? entry.content.split("\n") : [];
@@ -1007,7 +1056,13 @@ async function collectSessionIngestionBatches(params: {
       const dedupeBasis =
         messageTimestampMs > 0 ? `ts:${Math.floor(messageTimestampMs)}` : `line:${lineNumber}`;
       const messageHash = hashSessionMessageId(`${sessionScope}\n${dedupeBasis}\n${snippet}`);
-      if (seenSet.has(messageHash)) {
+      const preFlipMessageHash = preFlipSessionScope
+        ? hashSessionMessageId(`${preFlipSessionScope}\n${dedupeBasis}\n${snippet}`)
+        : undefined;
+      if (
+        seenSet.has(messageHash) ||
+        (preFlipMessageHash !== undefined && preFlipSeenSet?.has(preFlipMessageHash))
+      ) {
         continue;
       }
       const rendered = buildSessionRenderedLine({

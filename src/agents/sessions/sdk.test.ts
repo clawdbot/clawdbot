@@ -7,6 +7,7 @@ import {
   createUserTurnTranscriptRecorder,
   takeRuntimeUserTurnTranscriptContext,
 } from "../../sessions/user-turn-transcript.js";
+import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 
 const thinkingMocks = vi.hoisted(() => ({
   resolveThinkingDefaultForModel: vi.fn(() => "medium"),
@@ -200,7 +201,7 @@ describe("AgentSession queued user turns", () => {
         text: "visible group prompt",
         sender: { id: "user-42", name: "Ada" },
       },
-      target: { transcriptPath: "/tmp/unused-session.jsonl" },
+      target: createTestUserTurnTranscriptTarget(),
     });
     const steer = vi.spyOn(session.agent, "steer").mockImplementation(() => undefined);
 

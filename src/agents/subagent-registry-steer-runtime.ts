@@ -1,3 +1,4 @@
+import type { AgentRunSessionTarget } from "./run-session-target.js";
 /**
  * Late-bound steer hooks for the subagent registry.
  *
@@ -11,7 +12,7 @@ type ReplaceSubagentRunAfterSteerParams = {
   fallback?: SubagentRunRecord;
   runTimeoutSeconds?: number;
   preserveFrozenResultFallback?: boolean;
-  transcriptFile?: string;
+  transcriptTarget?: AgentRunSessionTarget;
   /**
    * Optional task override for the replacement run.  Callers that dispatched a
    * new message (steer, descendant wake, orphan resume) should pass the text

@@ -167,15 +167,18 @@ describe("version resolution", () => {
   }
 
   it("prefers runtime VERSION over stale OPENCLAW_VERSION for compatibility checks", () => {
+    const previousCompatibility = process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
     const previous = process.env.OPENCLAW_VERSION;
     const previousService = process.env.OPENCLAW_SERVICE_VERSION;
     const previousPackage = process.env.npm_package_version;
     try {
+      delete process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
       process.env.OPENCLAW_VERSION = "2026.3.25";
       process.env.OPENCLAW_SERVICE_VERSION = "2026.3.25-service";
       process.env.npm_package_version = "2026.3.25-package";
       expect(resolveCompatibilityHostVersion()).toBe(VERSION);
     } finally {
+      restoreEnvValue("OPENCLAW_COMPATIBILITY_HOST_VERSION", previousCompatibility);
       restoreEnvValue("OPENCLAW_VERSION", previous);
       restoreEnvValue("OPENCLAW_SERVICE_VERSION", previousService);
       restoreEnvValue("npm_package_version", previousPackage);

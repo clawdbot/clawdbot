@@ -12,7 +12,8 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
-import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
+import { resolveStorePath } from "../config/sessions.js";
+import { listSessionEntries } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   isAcpSessionKey,
@@ -86,9 +87,17 @@ function isSameAgentSessionStore(leftSessionKey: string, rightSessionKey: string
   return Boolean(leftAgentId) && leftAgentId === rightAgentId;
 }
 
-function readSessionStore(storePath: string): Record<string, SessionCapabilityEntry> {
+function readSessionStore(
+  storePath: string,
+  agentId: string,
+): Record<string, SessionCapabilityEntry> {
   try {
-    return loadSessionStore(storePath);
+    return Object.fromEntries(
+      listSessionEntries({ agentId, storePath, clone: false }).map(({ sessionKey, entry }) => [
+        sessionKey,
+        entry,
+      ]),
+    );
   } catch {
     return {};
   }
@@ -129,7 +138,7 @@ function resolveSessionCapabilityEntry(params: {
     return undefined;
   }
   const storePath = resolveStorePath(params.cfg.session?.store, { agentId: parsed.agentId });
-  const store = readSessionStore(storePath);
+  const store = readSessionStore(storePath, parsed.agentId);
   return store[params.sessionKey] ?? findEntryBySessionId(store, params.sessionKey);
 }
 
@@ -156,7 +165,7 @@ export function resolveSubagentCapabilityStore(
     return undefined;
   }
   const storePath = resolveStorePath(opts.cfg.session?.store, { agentId: parsed.agentId });
-  return readSessionStore(storePath);
+  return readSessionStore(storePath, parsed.agentId);
 }
 
 /** Resolve depth-derived role/scope booleans for a subagent position. */

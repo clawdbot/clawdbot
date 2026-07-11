@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { listSessionEntries, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import {
   createNoopLogger,
   createCronStoreHarness,
@@ -132,16 +133,12 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
     await fs.writeFile(store.storePath, "{invalid-json", "utf-8");
 
     // Seed an expired cron-run session entry that should be pruned by the reaper.
-    await fs.mkdir(path.dirname(sessionStorePath), { recursive: true });
-    await fs.writeFile(
-      sessionStorePath,
-      JSON.stringify({
-        "agent:agent-default:cron:failing-job:run:stale": {
-          sessionId: "session-stale",
-          updatedAt: now - 3 * 24 * 3_600_000,
-        },
-      }),
-      "utf-8",
+    await replaceSessionEntry(
+      { storePath: sessionStorePath, sessionKey: "agent:agent-default:cron:failing-job:run:stale" },
+      {
+        sessionId: "session-stale",
+        updatedAt: now - 3 * 24 * 3_600_000,
+      },
     );
 
     const state = createCronServiceState({
@@ -158,10 +155,7 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
     await withCronServiceStateForTest(state, async () => {
       await expect(onTimer(state)).resolves.toBeUndefined();
 
-      const updatedSessionStore = JSON.parse(
-        await fs.readFile(sessionStorePath, "utf-8"),
-      ) as Record<string, unknown>;
-      expect(updatedSessionStore).toStrictEqual({});
+      expect(listSessionEntries({ storePath: sessionStorePath })).toStrictEqual([]);
       expect(state.running).toBe(false);
     });
   });

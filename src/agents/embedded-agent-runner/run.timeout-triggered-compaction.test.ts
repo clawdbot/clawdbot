@@ -167,7 +167,7 @@ describe("timeout-triggered compaction", () => {
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
     const compactParams = compactCallAt(0);
     expect(compactParams.sessionId).toBe("test-session");
-    expect(compactParams.sessionFile).toBe("/tmp/session.json");
+    expect(compactParams.sessionFile).toBeUndefined();
     expect(compactParams.tokenBudget).toBe(200000);
     expect(compactParams.force).toBe(true);
     expect(compactParams.compactionTarget).toBe("budget");

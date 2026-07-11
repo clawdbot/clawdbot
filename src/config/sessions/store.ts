@@ -16,13 +16,6 @@ import {
 } from "../../sessions/agent-harness-session-key.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
-import {
-  deliveryContextFromChannelRoute,
-  deliveryContextFromSession,
-  mergeDeliveryContext,
-  normalizeDeliveryContext,
-  normalizeSessionDeliveryFields,
-} from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { getFileStatSnapshot } from "../cache-utils.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
@@ -32,7 +25,7 @@ import {
   type SessionUnreferencedArtifactSweepResult,
 } from "./disk-budget.js";
 import { extractGeneratedTranscriptSessionId } from "./generated-transcript-session-id.js";
-import { deriveSessionMetaPatch } from "./metadata.js";
+import { deriveLastRoutePatch, deriveSessionMetaPatch } from "./metadata.js";
 import { resolveExplicitSessionFilePath, resolveSessionFilePath } from "./paths.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import {
@@ -150,15 +143,6 @@ const loadTrajectoryCleanupRuntime = createLazyRuntimeModule(
   () => import("../../trajectory/cleanup.js"),
 );
 
-function removeThreadFromDeliveryContext(context?: DeliveryContext): DeliveryContext | undefined {
-  if (!context || context.threadId == null) {
-    return context;
-  }
-  const next: DeliveryContext = { ...context };
-  delete next.threadId;
-  return next;
-}
-
 export function readSessionUpdatedAt(params: {
   storePath: string;
   sessionKey: string;
@@ -242,6 +226,8 @@ type SessionEntryWorkflowOptions = {
 };
 
 export type SessionLifecycleArtifactCleanupParams = {
+  /** Agent owner used by SQLite-backed cleanup when the store path is custom. */
+  agentId?: string;
   /** Session store to clean. */
   storePath: string;
   /** Archive exact transcripts referenced by removed entries before the orphan marker scan. */
@@ -304,6 +290,8 @@ export type SessionEntryLifecycleRemoval = {
   archiveRemovedTranscript?: boolean;
   /** Optional guard for stale plans built from a prior store read. */
   expectedSessionId?: string;
+  /** Optional guard for stale plans built from a prior store read. */
+  expectedLifecycleRevision?: string;
   /** Optional guard for stale plans built from a prior store read. */
   expectedUpdatedAt?: number;
 };
@@ -1540,6 +1528,12 @@ function shouldRemoveSessionEntry(
   if (removal.expectedSessionId !== undefined && entry.sessionId !== removal.expectedSessionId) {
     return false;
   }
+  if (
+    removal.expectedLifecycleRevision !== undefined &&
+    entry.lifecycleRevision !== removal.expectedLifecycleRevision
+  ) {
+    return false;
+  }
   if (removal.expectedUpdatedAt !== undefined && entry.updatedAt !== removal.expectedUpdatedAt) {
     return false;
   }
@@ -2243,70 +2237,21 @@ export async function updateLastRoute(params: {
     if (!existing && !createIfMissing) {
       return null;
     }
-    const explicitContext = normalizeDeliveryContext(params.deliveryContext);
-    const inlineContext = normalizeDeliveryContext({
+    const patch = deriveLastRoutePatch({
       channel,
       to,
       accountId,
       threadId,
-    });
-    const routeContext = deliveryContextFromChannelRoute(params.route);
-    const mergedInput = mergeDeliveryContext(
-      routeContext,
-      mergeDeliveryContext(explicitContext, inlineContext),
-    );
-    const explicitDeliveryContext = params.deliveryContext;
-    const explicitThreadFromDeliveryContext =
-      explicitDeliveryContext != null && Object.hasOwn(explicitDeliveryContext, "threadId")
-        ? explicitDeliveryContext.threadId
-        : undefined;
-    const explicitThreadValue =
-      explicitThreadFromDeliveryContext ??
-      (threadId != null && threadId !== "" ? threadId : undefined);
-    const explicitRouteProvided = Boolean(
-      routeContext?.channel ||
-      routeContext?.to ||
-      explicitContext?.channel ||
-      explicitContext?.to ||
-      inlineContext?.channel ||
-      inlineContext?.to,
-    );
-    const clearThreadFromFallback = explicitRouteProvided && explicitThreadValue == null;
-    const fallbackContext = clearThreadFromFallback
-      ? removeThreadFromDeliveryContext(deliveryContextFromSession(existing))
-      : deliveryContextFromSession(existing);
-    const merged = mergeDeliveryContext(mergedInput, fallbackContext);
-    const normalized = normalizeSessionDeliveryFields({
       route: params.route,
-      deliveryContext: {
-        channel: merged?.channel,
-        to: merged?.to,
-        accountId: merged?.accountId,
-        threadId: merged?.threadId,
-      },
+      deliveryContext: params.deliveryContext,
+      ctx,
+      groupResolution: params.groupResolution,
+      existing,
+      sessionKey: resolved.normalizedKey,
     });
-    const metaPatch = ctx
-      ? deriveSessionMetaPatch({
-          ctx,
-          sessionKey: resolved.normalizedKey,
-          existing,
-          groupResolution: params.groupResolution,
-        })
-      : null;
-    const basePatch: Partial<SessionEntry> = {
-      route: normalized.route,
-      deliveryContext: normalized.deliveryContext,
-      lastChannel: normalized.lastChannel,
-      lastTo: normalized.lastTo,
-      lastAccountId: normalized.lastAccountId,
-      lastThreadId: normalized.lastThreadId,
-    };
     // Route updates must not refresh activity timestamps; idle/daily reset
     // evaluation relies on updatedAt from actual session turns (#49515).
-    const next = mergeSessionEntryPreserveActivity(
-      existing,
-      metaPatch ? { ...basePatch, ...metaPatch } : basePatch,
-    );
+    const next = mergeSessionEntryPreserveActivity(existing, patch);
     return await persistResolvedSessionEntry({
       storePath,
       store,

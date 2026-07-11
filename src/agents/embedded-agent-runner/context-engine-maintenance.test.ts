@@ -366,6 +366,12 @@ describe("runContextEngineMaintenance", () => {
   });
 
   it("passes a rewrite-capable runtime context into maintain()", async () => {
+    const sessionTarget = {
+      agentId: "main",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      storePath: "/tmp/state/openclaw.sqlite",
+    };
     const maintain = vi.fn(async (_params?: unknown) => ({
       changed: false,
       bytesFreed: 0,
@@ -382,6 +388,7 @@ describe("runContextEngineMaintenance", () => {
       },
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
+      sessionTarget,
       sessionFile: "/tmp/session.jsonl",
       reason: "turn",
       runtimeContext: { workspaceDir: "/tmp/workspace" },
@@ -396,11 +403,15 @@ describe("runContextEngineMaintenance", () => {
     expectRecordFields(maintainParams, {
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
+      sessionTarget,
       sessionFile: "/tmp/session.jsonl",
     });
-    expect(
-      requireRecord(maintainParams.runtimeContext, "maintain runtime context").workspaceDir,
-    ).toBe("/tmp/workspace");
+    const maintainRuntimeContext = requireRecord(
+      maintainParams.runtimeContext,
+      "maintain runtime context",
+    );
+    expect(maintainRuntimeContext.workspaceDir).toBe("/tmp/workspace");
+    expect(maintainRuntimeContext.sessionTarget).toEqual(sessionTarget);
     const runtimeContext = maintainParams.runtimeContext as
       | { rewriteTranscriptEntries?: (request: unknown) => Promise<unknown> }
       | undefined;

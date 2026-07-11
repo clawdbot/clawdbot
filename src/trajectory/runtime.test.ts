@@ -3,12 +3,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
-  resolveTrajectoryFilePath,
-  resolveTrajectoryPointerFilePath,
-  resolveTrajectoryPointerOpenFlags,
-} from "./paths.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { TRAJECTORY_RUNTIME_EVENT_MAX_BYTES, resolveTrajectoryPointerOpenFlags } from "./paths.js";
+import { loadSqliteTrajectoryRuntimeEvents } from "./runtime-store.sqlite.js";
 import { createTrajectoryRuntimeRecorder, toTrajectoryToolDefinitions } from "./runtime.js";
 
 type TrajectoryRuntimeRecorder = NonNullable<ReturnType<typeof createTrajectoryRuntimeRecorder>>;
@@ -23,6 +23,8 @@ function makeTempDir(): string {
 
 afterEach(() => {
   vi.useRealTimers();
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -39,24 +41,6 @@ function expectTrajectoryRuntimeRecorder(
 }
 
 describe("trajectory runtime", () => {
-  it("resolves a session-adjacent trajectory file by default", () => {
-    expect(
-      resolveTrajectoryFilePath({
-        sessionFile: "/tmp/session.jsonl",
-        sessionId: "session-1",
-      }),
-    ).toBe("/tmp/session.trajectory.jsonl");
-  });
-
-  it("sanitizes session ids when resolving an override directory", () => {
-    expect(
-      resolveTrajectoryFilePath({
-        env: { OPENCLAW_TRAJECTORY_DIR: "/tmp/traces" },
-        sessionId: "../evil/session",
-      }),
-    ).toBe(path.join(path.resolve("/tmp/traces"), "___evil_session.jsonl"));
-  });
-
   it("records sanitized runtime events by default", () => {
     const writes: string[] = [];
     const recorder = createTrajectoryRuntimeRecorder({
@@ -103,6 +87,93 @@ describe("trajectory runtime", () => {
     expect(JSON.stringify(parsed.data)).not.toContain("sk-other-secret-token");
     expect(JSON.stringify(parsed.data)).not.toContain("ya29.fake-access-token");
     expect(JSON.stringify(parsed.data)).not.toContain("abcd-efgh-ijkl-mnop");
+  });
+
+  it("records SQLite marker runtime events without active JSONL sidecars", async () => {
+    const tempDir = makeTempDir();
+    const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
+    const sessionKey = "agent:main:main";
+    await replaceSessionEntry({ sessionKey, storePath }, { sessionId: "session-1", updatedAt: 10 });
+    const recorder = createTrajectoryRuntimeRecorder({
+      sessionId: "session-1",
+      sessionKey,
+      sessionFile: formatSqliteSessionFileMarker({
+        agentId: "main",
+        sessionId: "session-1",
+        storePath,
+      }),
+      provider: "openai",
+      modelId: "gpt-5.4",
+      modelApi: "responses",
+      workspaceDir: "/tmp/workspace",
+    });
+
+    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
+    runtimeRecorder.recordEvent("context.compiled", {
+      prompt: "hello",
+    });
+    runtimeRecorder.recordEvent("model.completed", {
+      usage: { input: 1, output: 2, total: 3 },
+    });
+    expect(runtimeRecorder.describeFlushState()).toContain("pendingRows=2");
+    await runtimeRecorder.flush();
+
+    await expect(
+      loadSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath }),
+    ).resolves.toEqual([
+      expect.objectContaining({ source: "runtime", type: "context.compiled" }),
+      expect.objectContaining({ source: "runtime", type: "model.completed" }),
+    ]);
+    expect(fs.existsSync(path.join(path.dirname(storePath), "trajectory", "session-1.jsonl"))).toBe(
+      false,
+    );
+  });
+
+  it("stores bounded oversized runtime events in SQLite", async () => {
+    const tempDir = makeTempDir();
+    const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
+    const sessionKey = "agent:main:main";
+    const usage = {
+      input: 384_954,
+      output: 5_624,
+      cacheRead: 333_824,
+      reasoningTokens: 2_038,
+      total: 724_402,
+    };
+    await replaceSessionEntry({ sessionKey, storePath }, { sessionId: "session-1", updatedAt: 10 });
+    const recorder = createTrajectoryRuntimeRecorder({
+      sessionId: "session-1",
+      sessionKey,
+      sessionFile: formatSqliteSessionFileMarker({
+        agentId: "main",
+        sessionId: "session-1",
+        storePath,
+      }),
+    });
+
+    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
+    runtimeRecorder.recordEvent("model.completed", {
+      usage,
+      messagesSnapshot: Array.from({ length: 12 }, (_value, index) => ({
+        role: index % 2 === 0 ? "user" : "assistant",
+        content: `message-${index} ${"x".repeat(32_000)}`,
+      })),
+    });
+    await runtimeRecorder.flush();
+
+    const [event] = await loadSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath });
+    expect(event).toMatchObject({
+      type: "model.completed",
+      data: {
+        truncated: true,
+        reason: "trajectory-event-size-limit",
+        usage,
+      },
+    });
+    expect(event?.data?.messagesSnapshot).toBeUndefined();
+    expect(Buffer.byteLength(JSON.stringify(event), "utf8")).toBeLessThanOrEqual(
+      TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
+    );
   });
 
   it("bounds large runtime event fields before serialization", () => {
@@ -311,130 +382,6 @@ describe("trajectory runtime", () => {
     expect(preservedUsage).not.toContain("sk-other-secret-token");
   });
 
-  it("rotates runtime capture at the file budget and keeps newer events", async () => {
-    const tmpDir = makeTempDir();
-    const sessionFile = path.join(tmpDir, "session.jsonl");
-    const maxRuntimeFileBytes = 1_600;
-    const firstRecorder = createTrajectoryRuntimeRecorder({
-      sessionId: "session-1",
-      sessionFile,
-      maxRuntimeFileBytes,
-    });
-
-    const firstRuntimeRecorder = expectTrajectoryRuntimeRecorder(firstRecorder);
-    for (const marker of ["old-1", "old-2", "old-3"]) {
-      firstRuntimeRecorder.recordEvent("prompt.submitted", {
-        marker,
-        prompt: "x".repeat(260),
-      });
-    }
-    await firstRuntimeRecorder.flush();
-
-    const secondRecorder = createTrajectoryRuntimeRecorder({
-      sessionId: "session-1",
-      sessionFile,
-      maxRuntimeFileBytes,
-    });
-    const secondRuntimeRecorder = expectTrajectoryRuntimeRecorder(secondRecorder);
-    for (const marker of ["new-1", "new-2", "new-3"]) {
-      secondRuntimeRecorder.recordEvent("prompt.submitted", {
-        marker,
-        prompt: "y".repeat(260),
-      });
-    }
-    await secondRuntimeRecorder.flush();
-
-    const runtimeFile = resolveTrajectoryFilePath({ sessionFile, sessionId: "session-1" });
-    const raw = fs.readFileSync(runtimeFile, "utf8");
-    expect(Buffer.byteLength(raw, "utf8")).toBeLessThanOrEqual(maxRuntimeFileBytes);
-    expect(raw).not.toContain("old-1");
-    expect(raw).toContain("new-3");
-  });
-
-  it.runIf(process.platform !== "win32")(
-    "preserves existing trajectory directory permissions",
-    async () => {
-      const tmpDir = makeTempDir();
-      fs.chmodSync(tmpDir, 0o755);
-      const sessionFile = path.join(tmpDir, "session.jsonl");
-      const recorder = createTrajectoryRuntimeRecorder({
-        sessionId: "session-1",
-        sessionFile,
-        maxRuntimeFileBytes: 1_600,
-      });
-
-      const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
-      runtimeRecorder.recordEvent("prompt.submitted", {
-        prompt: "hello",
-      });
-      await runtimeRecorder.flush();
-
-      expect(fs.statSync(tmpDir).mode & 0o777).toBe(0o755);
-    },
-  );
-
-  it("merges stale recorder flushes with newer runtime events", async () => {
-    const tmpDir = makeTempDir();
-    const sessionFile = path.join(tmpDir, "session.jsonl");
-    const staleRecorder = createTrajectoryRuntimeRecorder({
-      sessionId: "session-1",
-      sessionFile,
-      maxRuntimeFileBytes: 2_400,
-    });
-
-    const staleRuntimeRecorder = expectTrajectoryRuntimeRecorder(staleRecorder);
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
-    staleRuntimeRecorder.recordEvent("prompt.submitted", {
-      marker: "old-recorder",
-      prompt: "x".repeat(260),
-    });
-
-    const newerRecorder = createTrajectoryRuntimeRecorder({
-      sessionId: "session-1",
-      sessionFile,
-      maxRuntimeFileBytes: 2_400,
-    });
-    const newerRuntimeRecorder = expectTrajectoryRuntimeRecorder(newerRecorder);
-    newerRuntimeRecorder.recordEvent("prompt.submitted", {
-      marker: "new-recorder",
-      prompt: "y".repeat(260),
-    });
-    vi.useRealTimers();
-    await newerRuntimeRecorder.flush();
-    await staleRuntimeRecorder.flush();
-
-    const runtimeFile = resolveTrajectoryFilePath({ sessionFile, sessionId: "session-1" });
-    const raw = fs.readFileSync(runtimeFile, "utf8");
-    expect(raw).toContain("old-recorder");
-    expect(raw).toContain("new-recorder");
-    expect(raw.indexOf("old-recorder")).toBeLessThan(raw.indexOf("new-recorder"));
-  });
-
-  it.runIf(process.platform !== "win32")(
-    "refuses runtime capture through symlinked parent directories",
-    async () => {
-      const tmpDir = makeTempDir();
-      const targetDir = path.join(tmpDir, "target");
-      const linkDir = path.join(tmpDir, "link");
-      fs.mkdirSync(targetDir);
-      fs.symlinkSync(targetDir, linkDir);
-      const recorder = createTrajectoryRuntimeRecorder({
-        sessionId: "session-1",
-        sessionFile: path.join(linkDir, "session.jsonl"),
-        maxRuntimeFileBytes: 2_400,
-      });
-
-      const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
-      runtimeRecorder.recordEvent("prompt.submitted", {
-        prompt: "hello",
-      });
-      await runtimeRecorder.flush();
-
-      expect(fs.existsSync(path.join(targetDir, "session.trajectory.jsonl"))).toBe(false);
-    },
-  );
-
   it("describes queued writer state for cleanup timeout logs", () => {
     const recorder = createTrajectoryRuntimeRecorder({
       sessionId: "session-1",
@@ -460,28 +407,6 @@ describe("trajectory runtime", () => {
     expect(runtimeRecorder.describeFlushState()).toBe(
       "pendingWrites=2 queuedBytes=256 activeOperation=file-append yieldBeforeWrite=true activeWriteBytes=128 maxQueuedBytes=1024 maxFileBytes=1024",
     );
-  });
-
-  it("writes a session-adjacent pointer when using an override directory", () => {
-    const tmpDir = makeTempDir();
-    const sessionFile = path.join(tmpDir, "session.jsonl");
-    const trajectoryDir = path.join(tmpDir, "traces");
-    const recorder = createTrajectoryRuntimeRecorder({
-      env: { OPENCLAW_TRAJECTORY_DIR: trajectoryDir },
-      sessionId: "session-1",
-      sessionFile,
-      writer: {
-        filePath: path.join(trajectoryDir, "session-1.jsonl"),
-        write: () => undefined,
-        flush: async () => undefined,
-      },
-    });
-
-    expectTrajectoryRuntimeRecorder(recorder);
-    const pointer = JSON.parse(
-      fs.readFileSync(resolveTrajectoryPointerFilePath(sessionFile), "utf8"),
-    ) as { runtimeFile?: string };
-    expect(pointer.runtimeFile).toBe(path.join(trajectoryDir, "session-1.jsonl"));
   });
 
   it("keeps pointer write flags usable when O_NOFOLLOW is unavailable", () => {

@@ -134,6 +134,7 @@ function createRouteContext(
     state: () => ({
       resolved: {
         actionTimeoutMs: options?.actionTimeoutMs ?? 45_000,
+        extraArgs: [],
         ssrfPolicy: options?.ssrfPolicy,
       },
     }),

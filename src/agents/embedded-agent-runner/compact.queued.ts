@@ -1,6 +1,7 @@
 /**
  * Queues embedded-agent session compaction onto the correct command lane.
  */
+import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import {
@@ -13,6 +14,7 @@ import {
   type ContextEngine,
   type ContextEngineRuntimeContext,
   type ContextEngineRuntimeSettings,
+  type ContextEngineSessionTarget,
 } from "../../context-engine/types.js";
 import {
   createFileBackedCompactionCheckpointStore,
@@ -37,7 +39,9 @@ import { maybeCompactAgentHarnessSession } from "../harness/compaction.js";
 import { resolveAgentHarnessPolicy } from "../harness/policy.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import { isOpenAIProvider } from "../openai-routing.js";
+import { resolveAgentRunSessionTarget } from "../run-session-target.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
+import { SessionManager } from "../sessions/index.js";
 import { DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON } from "./compact-reasons.js";
 import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
 import { asCompactionHookRunner, runPostCompactionSideEffects } from "./compaction-hooks.js";
@@ -130,6 +134,24 @@ function shouldDeferOwningContextEngineBudgetCompaction(params: {
   );
 }
 
+function buildContextEngineCompactionSessionTarget(
+  params: CompactEmbeddedAgentSessionParams,
+): ContextEngineSessionTarget {
+  const sqliteMarker = parseSqliteSessionFileMarker(params.sessionFile);
+  const agentId = params.sessionTarget?.agentId ?? params.agentId ?? sqliteMarker?.agentId;
+  const sessionKey = params.sessionTarget?.sessionKey ?? params.sessionKey ?? params.sessionId;
+  const storePath = params.sessionTarget?.storePath ?? sqliteMarker?.storePath;
+  return {
+    ...(agentId ? { agentId } : {}),
+    sessionId: params.sessionTarget?.sessionId ?? sqliteMarker?.sessionId ?? params.sessionId,
+    ...(sessionKey ? { sessionKey } : {}),
+    ...(storePath ? { storePath } : {}),
+    ...(params.sessionTarget?.threadId !== undefined
+      ? { threadId: params.sessionTarget.threadId }
+      : {}),
+  };
+}
+
 async function disposeContextEngine(contextEngine: ContextEngine): Promise<void> {
   try {
     await contextEngine.dispose?.();
@@ -153,6 +175,7 @@ async function deferOwningContextEngineBudgetCompaction(params: {
       contextEngine: params.contextEngine,
       sessionId: params.compactParams.sessionId,
       sessionKey: params.compactParams.sessionKey,
+      sessionTarget: buildContextEngineCompactionSessionTarget(params.compactParams),
       sessionFile: params.compactParams.sessionFile,
       reason: "turn",
       runtimeContext: params.contextEngineRuntimeContext,
@@ -459,9 +482,13 @@ async function compactEmbeddedAgentSessionImpl(
         // Fire before_compaction / after_compaction hooks here so plugin subscribers
         // are notified regardless of which engine is active.
         const engineOwnsCompaction = contextEngine.info.ownsCompaction === true;
+        const isSqliteSessionTranscript = Boolean(parseSqliteSessionFileMarker(params.sessionFile));
         checkpointSnapshot = engineOwnsCompaction
           ? await compactionCheckpointStore.captureSnapshot({
               sessionFile: params.sessionFile,
+              ...(isSqliteSessionTranscript
+                ? { sessionManager: SessionManager.open(params.sessionFile) }
+                : {}),
             })
           : null;
         const hookRunner = engineOwnsCompaction
@@ -509,12 +536,16 @@ async function compactEmbeddedAgentSessionImpl(
         // of throwing a raw rejection at callers that only inspect result.ok.
         let result: Awaited<ReturnType<typeof contextEngine.compact>>;
         try {
+          const compactionSessionTarget = buildContextEngineCompactionSessionTarget(params);
           result = await compactContextEngineWithSafetyTimeout(
             contextEngine,
             {
               sessionId: params.sessionId,
-              sessionKey: params.sessionKey,
-              sessionFile: params.sessionFile,
+              sessionKey: hookSessionKey,
+              ...(compactionSessionTarget.agentId
+                ? { agentId: compactionSessionTarget.agentId }
+                : {}),
+              sessionTarget: compactionSessionTarget,
               tokenBudget: contextTokenBudget,
               currentTokenCount: params.currentTokenCount,
               compactionTarget: params.trigger === "manual" ? "threshold" : "budget",
@@ -550,16 +581,34 @@ async function compactEmbeddedAgentSessionImpl(
           };
         }
         const delegatedSuccessor = resolveCompactionSuccessorTranscript(result);
+        const delegatedSessionTarget = result.result?.sessionTarget;
         const delegatedSessionId = delegatedSuccessor.sessionId;
         const delegatedSessionFile = delegatedSuccessor.sessionFile;
         const delegatedRotatedTranscript =
           (typeof delegatedSessionId === "string" && delegatedSessionId !== params.sessionId) ||
           (typeof delegatedSessionFile === "string" && delegatedSessionFile !== params.sessionFile);
         let postCompactionSessionId = delegatedSessionId ?? params.sessionId;
+        // Shipped pre-sessionTarget engines report rotation via the deprecated
+        // sessionFile field; honor it when no typed target is present.
         let postCompactionSessionFile = delegatedSessionFile ?? params.sessionFile;
+        if (delegatedSessionTarget) {
+          const resolvedDelegatedTarget = await resolveAgentRunSessionTarget({
+            agentId: delegatedSessionTarget.agentId ?? sessionAgentId,
+            config: params.config,
+            sessionId: delegatedSessionTarget.sessionId ?? postCompactionSessionId,
+            sessionKey: delegatedSessionTarget.sessionKey ?? params.sessionKey,
+            sessionTarget: delegatedSessionTarget,
+          });
+          postCompactionSessionId = resolvedDelegatedTarget.sessionId;
+          postCompactionSessionFile = resolvedDelegatedTarget.sessionFile;
+        }
         let postCompactionLeafId: string | undefined;
         if (result.ok && result.compacted) {
-          if (shouldRotateCompactionTranscript(params.config) && !delegatedRotatedTranscript) {
+          if (
+            shouldRotateCompactionTranscript(params.config) &&
+            !delegatedRotatedTranscript &&
+            !isSqliteSessionTranscript
+          ) {
             try {
               const rotation = await rotateTranscriptFileAfterCompaction({
                 sessionFile: params.sessionFile,
@@ -614,6 +663,12 @@ async function compactEmbeddedAgentSessionImpl(
             contextEngine,
             sessionId: postCompactionSessionId,
             sessionKey: params.sessionKey,
+            sessionTarget: buildContextEngineCompactionSessionTarget({
+              ...params,
+              sessionFile: postCompactionSessionFile,
+              sessionId: postCompactionSessionId,
+              sessionTarget: delegatedSessionTarget ?? params.sessionTarget,
+            }),
             sessionFile: postCompactionSessionFile,
             reason: "compaction",
             runtimeContext,
@@ -625,6 +680,7 @@ async function compactEmbeddedAgentSessionImpl(
           await runPostCompactionSideEffects({
             config: params.config,
             sessionKey: params.sessionKey,
+            sessionId: postCompactionSessionId,
             agentId: sessionAgentId,
             sessionFile: postCompactionSessionFile,
           });
@@ -761,8 +817,10 @@ function buildCompactionContextEngineRuntimeContext(params: {
     config: params.params.config,
     agentId: params.params.agentId,
   });
+  const { sessionFile: _sessionFile, ...runtimeParams } = params.params;
   return {
-    ...params.params,
+    ...runtimeParams,
+    sessionTarget: buildContextEngineCompactionSessionTarget(params.params),
     ...buildEmbeddedCompactionRuntimeContext({
       sessionKey: params.params.sessionKey,
       messageChannel: params.params.messageChannel,

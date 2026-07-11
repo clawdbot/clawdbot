@@ -99,6 +99,33 @@ export const PLUGIN_COMPAT_RECORDS = [
       "Memory-specific embedding provider registration remains wired as a deprecated compatibility path while providers migrate to the generic embedding provider contract.",
   },
   {
+    code: "removed-session-transcript-file-api",
+    status: "removed",
+    owner: "sdk",
+    introduced: "2026-07-01",
+    replacement:
+      "session identity (`sessionKey`/`sessionId`), `SessionTranscriptUpdate.target`, and Gateway/runtime session helpers",
+    docsPath: "/plugins/sdk-migration#removed-session-and-transcript-file-apis",
+    surfaces: [
+      "loadSessionStore",
+      "saveSessionStore",
+      "updateSessionStore",
+      "resolveSessionFilePath",
+      "resolveSessionTranscriptPathInDir",
+      "resolveAndPersistSessionFile",
+      "readLatestAssistantTextFromSessionTranscript",
+      "SessionTranscriptUpdate.sessionFile",
+      "sessionFiles",
+      "transcriptPath",
+      "sessionFile",
+      "plugins inspect compatibility notices",
+    ],
+    diagnostics: ["plugin compatibility notice"],
+    tests: ["src/plugins/status.test.ts", "src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "Session/transcript file APIs were removed with the SQLite session storage flip; plugins now use session identity and Gateway/runtime session helpers.",
+  },
+  {
     code: "legacy-root-sdk-import",
     status: "deprecated",
     owner: "sdk",

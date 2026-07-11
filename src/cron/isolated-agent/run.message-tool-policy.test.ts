@@ -958,7 +958,9 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
 
   it("releases cron run context references after completion", async () => {
     const initialSessionEntry = { retained: true };
-    loadSessionEntryMock.mockReturnValue(initialSessionEntry);
+    loadSessionEntryMock.mockImplementation((_storePath, sessionKey) =>
+      sessionKey === "agent:default:cron:message-tool-policy" ? initialSessionEntry : undefined,
+    );
     const cronSession = makeCronSession({
       store: { "agent:default:cron:message-tool-policy": initialSessionEntry },
       initialSessionEntry,
@@ -1043,7 +1045,9 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
 
   it("keeps shared cron run context references active after completion", async () => {
     const initialSessionEntry = { retained: true };
-    loadSessionEntryMock.mockReturnValue(initialSessionEntry);
+    loadSessionEntryMock.mockImplementation((_storePath, sessionKey) =>
+      sessionKey === "agent:default:cron:message-tool-policy" ? initialSessionEntry : undefined,
+    );
     const cronSession = makeCronSession({
       store: { "agent:default:cron:message-tool-policy": initialSessionEntry },
       initialSessionEntry,

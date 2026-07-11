@@ -227,7 +227,6 @@ export async function getSessionsSpawnTool(opts: CreateOpenClawToolsOpts) {
         maxTokens: 100_000,
       },
     }),
-    updateSessionStore: async (_storePath, mutator) => mutator({}),
   });
   cachedSubagentRegistryTesting.setDepsForTest({
     callGateway: (optsUnknown) => hoisted.callGatewayMock(optsUnknown),

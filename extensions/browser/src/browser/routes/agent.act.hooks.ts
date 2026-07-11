@@ -55,6 +55,7 @@ export function registerBrowserAgentActHookRoutes(
         res,
         ctx,
         targetId,
+        enforceCurrentUrlAllowed: true,
         run: async ({ profileCtx, cdpUrl, tab, signal }) => {
           const resolvedResult = await resolveExistingUploadPaths({ requestedPaths: paths });
           if (!resolvedResult.ok) {
@@ -147,6 +148,7 @@ export function registerBrowserAgentActHookRoutes(
         res,
         ctx,
         targetId,
+        enforceCurrentUrlAllowed: true,
         run: async ({ profileCtx, cdpUrl, tab, signal }) => {
           if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
             if (dialogId) {

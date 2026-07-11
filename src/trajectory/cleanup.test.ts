@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   removeRemovedSessionTrajectoryArtifacts,
@@ -63,6 +64,31 @@ describe("trajectory cleanup", () => {
       expect(removed.map((entry) => entry.kind).toSorted()).toEqual(["pointer", "runtime"]);
       await expectPathMissing(runtimeFile);
       await expectPathMissing(pointerPath);
+    });
+  });
+
+  it("removes legacy runtime sidecars for SQLite marker sessions", async () => {
+    await withTempDir({ prefix: "openclaw-trajectory-cleanup-" }, async (dir) => {
+      const sessionId = "session-1";
+      const storePath = path.join(dir, "sessions.json");
+      const sessionFile = formatSqliteSessionFileMarker({
+        agentId: "main",
+        sessionId,
+        storePath,
+      });
+      const runtimeFile = resolveTrajectoryFilePath({ env: {}, sessionFile, sessionId });
+      await fs.mkdir(path.dirname(runtimeFile), { recursive: true });
+      await fs.writeFile(runtimeFile, runtimeEvent(sessionId), "utf8");
+
+      const removed = await removeSessionTrajectoryArtifacts({
+        sessionId,
+        sessionFile,
+        storePath,
+        restrictToStoreDir: true,
+      });
+
+      expect(removed).toEqual([{ kind: "runtime", path: runtimeFile }]);
+      await expectPathMissing(runtimeFile);
     });
   });
 

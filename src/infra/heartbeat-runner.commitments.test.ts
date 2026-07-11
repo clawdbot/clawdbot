@@ -19,7 +19,11 @@ import {
   startHeartbeatRunner,
 } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
-import { seedSessionStore, withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
+import {
+  readSessionStoreForTest,
+  seedSessionStore,
+  withTempHeartbeatSandbox,
+} from "./heartbeat-runner.test-utils.js";
 import { requestHeartbeat, resetHeartbeatWakeStateForTests } from "./heartbeat-wake.js";
 import {
   enqueueSystemEvent,
@@ -275,10 +279,9 @@ describe("runHeartbeatOnce commitments", () => {
         return {
           result: resultResult,
           sendTelegram: sendTelegramResult,
-          sessionStore: JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-            string,
-            { heartbeatTaskState?: Record<string, number> }
-          >,
+          sessionStore: readSessionStoreForTest<{
+            heartbeatTaskState?: Record<string, number>;
+          }>(storePath),
           store: await loadCommitmentStore(),
         };
       },
@@ -560,9 +563,10 @@ describe("runHeartbeatOnce commitments", () => {
         lastAttemptAtMs: nowMs,
       });
       expect(store.commitments[0]?.sentAtMs).toBeUndefined();
-      const sessionStoreAfterSuppressed = JSON.parse(
-        await fs.readFile(storePath, "utf-8"),
-      ) as Record<string, { lastHeartbeatText?: string; lastHeartbeatSentAt?: number }>;
+      const sessionStoreAfterSuppressed = readSessionStoreForTest<{
+        lastHeartbeatText?: string;
+        lastHeartbeatSentAt?: number;
+      }>(storePath);
       expect(sessionStoreAfterSuppressed[sessionKey]?.lastHeartbeatText).toBeUndefined();
       expect(sessionStoreAfterSuppressed[sessionKey]?.lastHeartbeatSentAt).toBeUndefined();
       expect(getLastHeartbeatEvent()).toMatchObject({
@@ -689,20 +693,15 @@ tasks:
 `,
           "utf-8",
         );
-        // Seed heartbeatTaskState so the task ran at nowMs (well within 5m interval — not due).
-        await fs.writeFile(
-          storePath,
-          JSON.stringify({
-            [sessionKey]: {
-              sessionId: "sid",
-              updatedAt: Date.now(),
-              lastChannel: "telegram",
-              lastProvider: "telegram",
-              lastTo: "155462274",
-              heartbeatTaskState: { "check-deployment": nowMs },
-            },
-          }),
-        );
+        // Seed heartbeatTaskState so the task ran at nowMs (well within 5m interval, not due).
+        await seedSessionStore(storePath, sessionKey, {
+          sessionId: "sid",
+          updatedAt: nowMs,
+          lastChannel: "telegram",
+          lastProvider: "telegram",
+          lastTo: "155462274",
+          heartbeatTaskState: { "check-deployment": nowMs },
+        });
         await saveCommitmentStore(undefined, {
           version: 1,
           commitments: [buildCommitment({ id: "cm_interview", sessionKey, to: "155462274" })],
@@ -785,19 +784,14 @@ tasks:
 `,
           "utf-8",
         );
-        await fs.writeFile(
-          storePath,
-          JSON.stringify({
-            [sessionKey]: {
-              sessionId: "sid",
-              updatedAt: Date.now(),
-              lastChannel: "telegram",
-              lastProvider: "telegram",
-              lastTo: "155462274",
-              heartbeatTaskState: { "global-ops-audit": nowMs - 10 * 60_000 },
-            },
-          }),
-        );
+        await seedSessionStore(storePath, sessionKey, {
+          sessionId: "sid",
+          updatedAt: nowMs,
+          lastChannel: "telegram",
+          lastProvider: "telegram",
+          lastTo: "155462274",
+          heartbeatTaskState: { "global-ops-audit": nowMs - 10 * 60_000 },
+        });
         enqueueSystemEvent("Reminder: run the global audit", {
           sessionKey,
           deliveryContext: {
@@ -857,10 +851,9 @@ tasks:
           result: resultLocal,
           sendTelegram: sendTelegramLocal,
           pendingEvents: peekSystemEventEntries(sessionKey),
-          sessionStore: JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-            string,
-            { heartbeatTaskState?: Record<string, number> }
-          >,
+          sessionStore: readSessionStoreForTest<{
+            heartbeatTaskState?: Record<string, number>;
+          }>(storePath),
           store: await loadCommitmentStore(),
         };
       });

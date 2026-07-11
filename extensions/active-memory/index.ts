@@ -29,6 +29,11 @@ import {
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { parseAgentSessionKey, parseThreadSessionSuffix } from "openclaw/plugin-sdk/routing";
 import { isPathInside } from "openclaw/plugin-sdk/security-runtime";
+import { parseSqliteSessionFileMarker } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  readSessionTranscriptEvents,
+  type SessionTranscriptTargetParams,
+} from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
   asOptionalRecord as asRecord,
   normalizeLowercaseStringOrEmpty,
@@ -294,6 +299,16 @@ type TranscriptReadLimits = {
   maxLines?: number;
   maxBytes?: number;
 };
+
+type ActiveMemoryTranscriptSource =
+  | {
+      kind: "runtime";
+      target: SessionTranscriptTargetParams;
+    }
+  | {
+      kind: "file";
+      sessionFile: string;
+    };
 
 type RecallSubagentResult = {
   rawReply: string;
@@ -1746,6 +1761,90 @@ async function streamBoundedTranscriptJsonl(params: {
   }
 }
 
+function fileTranscriptSource(sessionFile: string): ActiveMemoryTranscriptSource {
+  return { kind: "file", sessionFile };
+}
+
+function transcriptSourceFromReturnedSessionFile(params: {
+  sessionFile: string;
+  sessionKey: string;
+}): ActiveMemoryTranscriptSource {
+  const marker = parseSqliteSessionFileMarker(normalizeOptionalString(params.sessionFile));
+  if (!marker) {
+    return fileTranscriptSource(params.sessionFile);
+  }
+  return {
+    kind: "runtime",
+    target: {
+      agentId: marker.agentId,
+      sessionId: marker.sessionId,
+      sessionKey: params.sessionKey,
+      storePath: marker.storePath,
+    },
+  };
+}
+
+function estimateTranscriptEventsBytes(events: readonly unknown[]): number {
+  let total = 0;
+  for (const event of events) {
+    try {
+      total += Buffer.byteLength(`${JSON.stringify(event)}\n`, "utf8");
+    } catch {
+      total += 1;
+    }
+  }
+  return total;
+}
+
+async function streamRuntimeTranscriptEvents(params: {
+  target: SessionTranscriptTargetParams;
+  limits?: TranscriptReadLimits;
+  onRecord: (record: unknown) => boolean | void;
+}): Promise<void> {
+  const limits = resolveTranscriptReadLimits(params.limits);
+  let events: readonly unknown[];
+  try {
+    events = await readSessionTranscriptEvents(params.target);
+  } catch {
+    return;
+  }
+  if (estimateTranscriptEventsBytes(events) > limits.maxBytes) {
+    return;
+  }
+  let seenLines = 0;
+  for (const event of events) {
+    seenLines += 1;
+    if (seenLines > limits.maxLines) {
+      break;
+    }
+    try {
+      if (params.onRecord(event)) {
+        break;
+      }
+    } catch {}
+  }
+}
+
+async function streamActiveMemoryTranscriptRecords(params: {
+  source: ActiveMemoryTranscriptSource;
+  limits?: TranscriptReadLimits;
+  onRecord: (record: unknown) => boolean | void;
+}): Promise<void> {
+  if (params.source.kind === "runtime") {
+    await streamRuntimeTranscriptEvents({
+      target: params.source.target,
+      limits: params.limits,
+      onRecord: params.onRecord,
+    });
+    return;
+  }
+  await streamBoundedTranscriptJsonl({
+    sessionFile: params.source.sessionFile,
+    limits: params.limits,
+    onRecord: params.onRecord,
+  });
+}
+
 function extractActiveMemorySearchDebugFromSessionRecord(
   value: unknown,
 ): ActiveMemorySearchDebug | undefined {
@@ -1983,7 +2082,7 @@ function hasUsableMemoryResultInSessionRecord(
 }
 
 async function readActiveMemoryTranscriptState(
-  sessionFile: string,
+  source: ActiveMemoryTranscriptSource | string,
   limits?: TranscriptReadLimits,
   toolsAllow?: readonly string[],
 ): Promise<{
@@ -1994,8 +2093,8 @@ async function readActiveMemoryTranscriptState(
   let searchDebug: ActiveMemorySearchDebug | undefined;
   let hasUsableMemoryResult = false;
   let hasUnavailableMemorySearchResult = false;
-  await streamBoundedTranscriptJsonl({
-    sessionFile,
+  await streamActiveMemoryTranscriptRecords({
+    source: typeof source === "string" ? fileTranscriptSource(source) : source,
     limits,
     onRecord: (record) => {
       const debug = extractActiveMemorySearchDebugFromSessionRecord(record);
@@ -2013,14 +2112,14 @@ async function readActiveMemoryTranscriptState(
 }
 
 async function readActiveMemorySearchDebug(
-  sessionFile: string,
+  source: ActiveMemoryTranscriptSource | string,
   limits?: TranscriptReadLimits,
 ): Promise<ActiveMemorySearchDebug | undefined> {
-  return (await readActiveMemoryTranscriptState(sessionFile, limits)).searchDebug;
+  return (await readActiveMemoryTranscriptState(source, limits)).searchDebug;
 }
 
 async function readMergedActiveMemoryTranscriptState(params: {
-  sessionFiles: readonly string[];
+  sources: readonly ActiveMemoryTranscriptSource[];
   toolsAllow: readonly string[];
 }): Promise<{
   searchDebug?: ActiveMemorySearchDebug;
@@ -2030,8 +2129,17 @@ async function readMergedActiveMemoryTranscriptState(params: {
   let searchDebug: ActiveMemorySearchDebug | undefined;
   let hasUsableMemoryResult = false;
   let hasUnavailableMemorySearchResult = false;
-  for (const sessionFile of new Set(params.sessionFiles)) {
-    const state = await readActiveMemoryTranscriptState(sessionFile, undefined, params.toolsAllow);
+  const seen = new Set<string>();
+  for (const source of params.sources) {
+    const key =
+      source.kind === "runtime"
+        ? `runtime:${source.target.agentId ?? ""}:${source.target.sessionId}:${source.target.sessionKey}:${source.target.storePath ?? ""}:${source.target.threadId ?? ""}`
+        : `file:${source.sessionFile}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    const state = await readActiveMemoryTranscriptState(source, undefined, params.toolsAllow);
     searchDebug = state.searchDebug ?? searchDebug;
     hasUsableMemoryResult ||= state.hasUsableMemoryResult;
     hasUnavailableMemorySearchResult ||= state.hasUnavailableMemorySearchResult;
@@ -2040,7 +2148,7 @@ async function readMergedActiveMemoryTranscriptState(params: {
 }
 
 async function readTerminalMemorySearchResult(
-  sessionFile: string,
+  source: ActiveMemoryTranscriptSource,
   limits?: TranscriptReadLimits,
   toolsAllow?: readonly string[],
 ): Promise<TerminalMemorySearchResult | undefined> {
@@ -2057,8 +2165,8 @@ async function readTerminalMemorySearchResult(
   const unavailablePathNames = new Set<string>();
   let hasUsableMemoryResult = false;
   let searchDebug: ActiveMemorySearchDebug | undefined;
-  await streamBoundedTranscriptJsonl({
-    sessionFile,
+  await streamActiveMemoryTranscriptRecords({
+    source,
     limits,
     onRecord: (record) => {
       hasUsableMemoryResult ||= hasUsableMemoryResultInSessionRecord(record, toolsAllow);
@@ -2085,8 +2193,22 @@ async function readTerminalMemorySearchResult(
   };
 }
 
+async function readTerminalMemorySearchResultFromSources(
+  sources: readonly ActiveMemoryTranscriptSource[],
+  limits: TranscriptReadLimits | undefined,
+  toolsAllow: readonly string[],
+): Promise<TerminalMemorySearchResult | undefined> {
+  for (const source of sources) {
+    const result = await readTerminalMemorySearchResult(source, limits, toolsAllow);
+    if (result) {
+      return result;
+    }
+  }
+  return undefined;
+}
+
 function watchTerminalMemorySearchResult(params: {
-  getSessionFile: () => string | undefined;
+  getTranscriptSources: () => readonly ActiveMemoryTranscriptSource[];
   abortSignal: AbortSignal;
   toolsAllow: readonly string[];
 }): TerminalMemorySearchWatch {
@@ -2128,10 +2250,11 @@ function watchTerminalMemorySearchResult(params: {
     }
     inFlight = true;
     try {
-      const sessionFile = params.getSessionFile();
-      const result = sessionFile
-        ? await readTerminalMemorySearchResult(sessionFile, undefined, params.toolsAllow)
-        : undefined;
+      const result = await readTerminalMemorySearchResultFromSources(
+        params.getTranscriptSources(),
+        undefined,
+        params.toolsAllow,
+      );
       if (result) {
         finish(result);
         return;
@@ -2262,17 +2385,17 @@ function extractAssistantTextFromSessionRecord(value: unknown): string {
 }
 
 async function readPartialAssistantText(
-  sessionFile: string | undefined,
+  source: ActiveMemoryTranscriptSource | string | undefined,
   limits?: TranscriptReadLimits,
 ): Promise<string | null> {
-  if (!sessionFile) {
+  if (!source) {
     return null;
   }
   const texts: string[] = [];
   const resolvedLimits = resolveTranscriptReadLimits(limits);
   let collectedChars = 0;
-  await streamBoundedTranscriptJsonl({
-    sessionFile,
+  await streamActiveMemoryTranscriptRecords({
+    source: typeof source === "string" ? fileTranscriptSource(source) : source,
     limits: resolvedLimits,
     onRecord: (record) => {
       const text = extractAssistantTextFromSessionRecord(record);
@@ -2297,6 +2420,19 @@ async function readPartialAssistantText(
   // Accepted chunks and separators are charged before append, so the join is already bounded.
   const joined = texts.join("\n").trim();
   return joined || null;
+}
+
+async function readPartialAssistantTextFromSources(
+  sources: readonly ActiveMemoryTranscriptSource[],
+  limits?: TranscriptReadLimits,
+): Promise<string | null> {
+  for (const source of sources) {
+    const text = await readPartialAssistantText(source, limits);
+    if (text) {
+      return text;
+    }
+  }
+  return null;
 }
 
 function attachPartialTimeoutData(
@@ -2370,7 +2506,7 @@ async function waitForSubagentPartialTimeoutData(
 async function buildTimeoutRecallResult(params: {
   elapsedMs: number;
   maxSummaryChars: number;
-  sessionFile?: string;
+  transcriptSources: readonly ActiveMemoryTranscriptSource[];
   rawReply?: string;
   searchDebug?: ActiveMemorySearchDebug;
   hasUnavailableMemorySearchResult?: boolean;
@@ -2383,14 +2519,18 @@ async function buildTimeoutRecallResult(params: {
   const rawReply =
     params.rawReply ??
     subagentPartialData.rawReply ??
-    (await readPartialAssistantText(params.sessionFile));
+    (await readPartialAssistantTextFromSources(params.transcriptSources));
   const summary = truncateSummary(
     normalizeActiveSummary(rawReply ?? "") ?? "",
     params.maxSummaryChars,
   );
-  const transcriptState = params.sessionFile
-    ? await readActiveMemoryTranscriptState(params.sessionFile, undefined, params.toolsAllow)
-    : undefined;
+  const transcriptState =
+    params.transcriptSources.length > 0
+      ? await readMergedActiveMemoryTranscriptState({
+          sources: params.transcriptSources,
+          toolsAllow: params.toolsAllow,
+        })
+      : undefined;
   const searchDebug =
     params.searchDebug ?? subagentPartialData.searchDebug ?? transcriptState?.searchDebug;
   if (
@@ -2942,6 +3082,64 @@ function getModelRef(
   return undefined;
 }
 
+function collectActiveMemoryTranscriptSources(params: {
+  artifactSessionFile: string;
+  runtimeSource: ActiveMemoryTranscriptSource;
+  activeSessionFile?: string;
+  activeSessionKey: string;
+}): ActiveMemoryTranscriptSource[] {
+  const sources: ActiveMemoryTranscriptSource[] = [params.runtimeSource];
+  sources.push(fileTranscriptSource(params.artifactSessionFile));
+  if (params.activeSessionFile && params.activeSessionFile !== params.artifactSessionFile) {
+    sources.push(
+      transcriptSourceFromReturnedSessionFile({
+        sessionFile: params.activeSessionFile,
+        sessionKey: params.activeSessionKey,
+      }),
+    );
+  }
+  return sources;
+}
+
+async function persistActiveMemoryTranscriptArtifact(params: {
+  sources: readonly ActiveMemoryTranscriptSource[];
+  sessionFile: string;
+}): Promise<void> {
+  const events: unknown[] = [];
+  const seen = new Set<string>();
+  for (const source of params.sources) {
+    if (source.kind !== "runtime") {
+      continue;
+    }
+    let sourceEvents: readonly unknown[];
+    try {
+      sourceEvents = await readSessionTranscriptEvents(source.target);
+    } catch {
+      continue;
+    }
+    for (const event of sourceEvents) {
+      const serialized = JSON.stringify(event);
+      if (seen.has(serialized)) {
+        continue;
+      }
+      seen.add(serialized);
+      events.push(event);
+    }
+  }
+  if (events.length === 0) {
+    return;
+  }
+  await fs.mkdir(path.dirname(params.sessionFile), { recursive: true, mode: 0o700 });
+  await fs.writeFile(
+    params.sessionFile,
+    `${events.map((event) => JSON.stringify(event)).join("\n")}\n`,
+    {
+      encoding: "utf8",
+      mode: 0o600,
+    },
+  );
+}
+
 async function runRecallSubagent(params: {
   api: OpenClawPluginApi;
   config: ResolvedActiveRecallPluginConfig;
@@ -2956,7 +3154,7 @@ async function runRecallSubagent(params: {
   currentModelId?: string;
   modelRef?: { provider: string; model: string };
   abortSignal?: AbortSignal;
-  onSessionFile?: (sessionFile: string) => void;
+  onTranscriptSources?: (sources: readonly ActiveMemoryTranscriptSource[]) => void;
 }): Promise<RecallSubagentResult> {
   const workspaceDir = resolveAgentWorkspaceDir(params.api.config, params.agentId);
   const agentDir = resolveAgentDir(params.api.config, params.agentId);
@@ -3003,7 +3201,27 @@ async function runRecallSubagent(params: {
     persistedDir !== undefined
       ? path.join(persistedDir, `${subagentSessionId}.jsonl`)
       : path.join(requireTransientWorkspaceDir(tempDir), "session.jsonl");
-  params.onSessionFile?.(sessionFile);
+  const storePath = params.api.runtime.agent.session.resolveStorePath(
+    params.api.config.session?.store,
+    {
+      agentId: params.agentId,
+    },
+  );
+  const runtimeSource: ActiveMemoryTranscriptSource = {
+    kind: "runtime",
+    target: {
+      agentId: params.agentId,
+      sessionId: subagentSessionId,
+      sessionKey: subagentSessionKey,
+      storePath,
+    },
+  };
+  let transcriptSources = collectActiveMemoryTranscriptSources({
+    artifactSessionFile: sessionFile,
+    runtimeSource,
+    activeSessionKey: subagentSessionKey,
+  });
+  params.onTranscriptSources?.(transcriptSources);
   if (persistedDir) {
     await fs.mkdir(persistedDir, { recursive: true, mode: 0o700 });
     await fs.chmod(persistedDir, 0o700).catch(() => undefined);
@@ -3022,7 +3240,6 @@ async function runRecallSubagent(params: {
     channelId: params.channelId,
   });
 
-  let activeSessionFile = sessionFile;
   let harnessHasUsableMemoryResult = false;
   let harnessHasUnavailableMemorySearchResult = false;
   try {
@@ -3032,6 +3249,12 @@ async function runRecallSubagent(params: {
       sessionId: subagentSessionId,
       sessionKey: subagentSessionKey,
       agentId: params.agentId,
+      sessionTarget: {
+        agentId: params.agentId,
+        sessionId: subagentSessionId,
+        sessionKey: subagentSessionKey,
+        storePath,
+      },
       messageChannel,
       messageProvider,
       sessionFile,
@@ -3065,7 +3288,14 @@ async function runRecallSubagent(params: {
         harnessHasUnavailableMemorySearchResult ||= evidence.hasUnavailableMemorySearchResult;
       },
     });
-    activeSessionFile = readActiveMemorySessionFileFromRunResult(result) ?? sessionFile;
+    const activeSessionFile = readActiveMemorySessionFileFromRunResult(result) ?? sessionFile;
+    transcriptSources = collectActiveMemoryTranscriptSources({
+      artifactSessionFile: sessionFile,
+      runtimeSource,
+      activeSessionFile,
+      activeSessionKey: subagentSessionKey,
+    });
+    params.onTranscriptSources?.(transcriptSources);
     if (params.abortSignal?.aborted) {
       const reason = params.abortSignal.reason;
       if (reason instanceof Error) {
@@ -3083,15 +3313,18 @@ async function runRecallSubagent(params: {
       .filter(Boolean)
       .join("\n")
       .trim();
+    if (params.config.persistTranscripts) {
+      await persistActiveMemoryTranscriptArtifact({ sources: transcriptSources, sessionFile });
+    }
     const transcriptState = await readMergedActiveMemoryTranscriptState({
-      sessionFiles: [sessionFile, activeSessionFile],
+      sources: transcriptSources,
       toolsAllow: params.config.toolsAllow,
     });
     const searchDebug =
       transcriptState.searchDebug ?? readActiveMemorySearchDebugFromRunResult(result);
     return {
       rawReply: rawReply || "NONE",
-      transcriptPath: params.config.persistTranscripts ? activeSessionFile : undefined,
+      transcriptPath: params.config.persistTranscripts ? sessionFile : undefined,
       searchDebug,
       hasUsableMemoryResult: transcriptState.hasUsableMemoryResult || harnessHasUsableMemoryResult,
       hasUnavailableMemorySearchResult:
@@ -3099,12 +3332,11 @@ async function runRecallSubagent(params: {
     };
   } catch (error) {
     if (params.abortSignal?.aborted) {
-      const partialReply = await readPartialAssistantText(activeSessionFile);
-      const transcriptState = await readActiveMemoryTranscriptState(
-        activeSessionFile,
-        undefined,
-        params.config.toolsAllow,
-      );
+      const partialReply = await readPartialAssistantTextFromSources(transcriptSources);
+      const transcriptState = await readMergedActiveMemoryTranscriptState({
+        sources: transcriptSources,
+        toolsAllow: params.config.toolsAllow,
+      });
       attachPartialTimeoutData(
         error,
         partialReply,
@@ -3255,7 +3487,7 @@ async function maybeResolveActiveRecall(params: {
     abortFromParent();
   }
   const TIMEOUT_SENTINEL = Symbol("timeout");
-  let sessionFile: string | undefined;
+  let transcriptSources: readonly ActiveMemoryTranscriptSource[] = [];
   let recallTimedOut = false;
   const watchdogTimeoutMs = params.config.timeoutMs + params.config.setupGraceTimeoutMs;
   const timeoutId = setTimeout(() => {
@@ -3285,12 +3517,12 @@ async function maybeResolveActiveRecall(params: {
       ...params,
       modelRef: resolvedModelRef,
       abortSignal: controller.signal,
-      onSessionFile: (value) => {
-        sessionFile = value;
+      onTranscriptSources: (sources) => {
+        transcriptSources = sources;
       },
     });
     terminalMemorySearchWatch = watchTerminalMemorySearchResult({
-      getSessionFile: () => sessionFile,
+      getTranscriptSources: () => transcriptSources,
       abortSignal: controller.signal,
       toolsAllow: params.config.toolsAllow,
     });
@@ -3338,7 +3570,7 @@ async function maybeResolveActiveRecall(params: {
         : await buildTimeoutRecallResult({
             elapsedMs,
             maxSummaryChars: params.config.maxSummaryChars,
-            sessionFile,
+            transcriptSources,
             subagentPromise,
             toolsAllow: params.config.toolsAllow,
           });
@@ -3437,7 +3669,7 @@ async function maybeResolveActiveRecall(params: {
       const result = await buildTimeoutRecallResult({
         elapsedMs: Date.now() - startedAt,
         maxSummaryChars: params.config.maxSummaryChars,
-        sessionFile,
+        transcriptSources,
         rawReply: partialTimeoutData.rawReply,
         searchDebug: partialTimeoutData.searchDebug,
         hasUnavailableMemorySearchResult: partialTimeoutData.hasUnavailableMemorySearchResult,

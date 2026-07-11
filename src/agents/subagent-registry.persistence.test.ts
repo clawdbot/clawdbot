@@ -6,10 +6,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./subagent-registry.mocks.shared.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import {
   clearSessionStoreCacheForTest,
   drainSessionStoreWriterQueuesForTest,
 } from "../config/sessions/store.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import type { DetachedTaskLifecycleRuntime } from "../tasks/detached-task-runtime-contract.js";
@@ -538,15 +540,14 @@ describe("subagent registry persistence", () => {
       updatedAt: completedAt,
     });
     const store = await readSubagentSessionStore(storePath);
-    store["agent:main:subagent:kill-race"] = {
+    await replaceSessionEntry({ storePath, sessionKey: "agent:main:subagent:kill-race" }, {
       ...store["agent:main:subagent:kill-race"],
       status: "done",
       startedAt,
       endedAt: completedAt,
       runtimeMs: 500,
       abortedLastRun: true,
-    };
-    await fs.writeFile(storePath, `${JSON.stringify(store)}\n`, "utf8");
+    } as SessionEntry);
 
     await persistSubagentSessionTiming({
       runId: "run-kill-race",

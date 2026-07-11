@@ -430,7 +430,7 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
     }
     ```
 
-    - `sessionRetention`: prune completed isolated run sessions from `sessions.json` (default `24h`; set `false` to disable).
+    - `sessionRetention`: prune completed isolated run sessions from SQLite session rows (default `24h`; set `false` to disable).
     - `runLog`: prune retained cron run-history rows per job. History is stored in SQLite; `maxBytes` (default `2_000_000`) is retained for compatibility with older file-backed run logs, `keepLines` defaults to `2000`.
     - See [Cron jobs](/automation/cron-jobs) for feature overview and CLI examples.
 

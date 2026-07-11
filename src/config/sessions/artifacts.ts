@@ -3,6 +3,7 @@
 
 import { timestampMsToIsoFileStamp } from "@openclaw/normalization-core/number-coercion";
 import { escapeRegExp } from "../../shared/regexp.js";
+import { stripSessionArchiveCompressionSuffix } from "./archive-compression.js";
 
 export type SessionArchiveReason = "bak" | "reset" | "deleted";
 
@@ -19,12 +20,15 @@ const CHECKPOINT_MARKER_RE =
   /\.checkpoint\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.jsonl$/i;
 
 function hasArchiveSuffix(fileName: string, reason: SessionArchiveReason): boolean {
+  // Compressed archives carry a trailing .zst; strip it so every classifier
+  // sees one canonical `<id>.jsonl.<reason>.<timestamp>` shape.
   const marker = `.${reason}.`;
-  const index = fileName.lastIndexOf(marker);
+  const normalized = stripSessionArchiveCompressionSuffix(fileName);
+  const index = normalized.lastIndexOf(marker);
   if (index < 0) {
     return false;
   }
-  const raw = fileName.slice(index + marker.length);
+  const raw = normalized.slice(index + marker.length);
   return ARCHIVE_TIMESTAMP_RE.test(raw);
 }
 
@@ -159,11 +163,12 @@ export function parseUsageCountedSessionIdFromFileName(fileName: string): string
   if (isPrimarySessionTranscriptFileName(fileName)) {
     return fileName.slice(0, -".jsonl".length);
   }
+  const normalized = stripSessionArchiveCompressionSuffix(fileName);
   for (const reason of ["reset", "deleted"] as const) {
     const marker = `.jsonl.${reason}.`;
-    const index = fileName.lastIndexOf(marker);
-    if (index > 0 && hasArchiveSuffix(fileName, reason)) {
-      return fileName.slice(0, index);
+    const index = normalized.lastIndexOf(marker);
+    if (index > 0 && hasArchiveSuffix(normalized, reason)) {
+      return normalized.slice(0, index);
     }
   }
   return null;
@@ -187,11 +192,12 @@ export function parseSessionArchiveTimestamp(
   reason: SessionArchiveReason,
 ): number | null {
   const marker = `.${reason}.`;
-  const index = fileName.lastIndexOf(marker);
+  const normalized = stripSessionArchiveCompressionSuffix(fileName);
+  const index = normalized.lastIndexOf(marker);
   if (index < 0) {
     return null;
   }
-  const raw = fileName.slice(index + marker.length);
+  const raw = normalized.slice(index + marker.length);
   if (!raw) {
     return null;
   }

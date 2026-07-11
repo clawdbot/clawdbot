@@ -22,6 +22,7 @@ final class ShareViewController: UIViewController {
     private struct ExtractedShareContent {
         var payload: SharedContentPayload
         var attachments: [LoadedAttachment]
+        var attachmentError: ShareImageProcessor.ProcessError?
     }
 
     private let logger = Logger(subsystem: "ai.openclawfoundation.app", category: "ShareExtension")
@@ -29,6 +30,7 @@ final class ShareViewController: UIViewController {
     private var didPrepareDraft = false
     private var isSending = false
     private var pendingAttachments: [ShareAttachment] = []
+    private var attachmentError: ShareImageProcessor.ProcessError?
 
     override func loadView() {
         self.view = self.composeView
@@ -58,6 +60,7 @@ final class ShareViewController: UIViewController {
         let extracted = await self.extractSharedContent()
         let payload = extracted.payload
         self.pendingAttachments = extracted.attachments.map(\.payload)
+        self.attachmentError = extracted.attachmentError
         self.logger.info("share payload trace=\(traceId, privacy: .public)")
         self.logger.info(
             "share payload title=\(payload.title?.count ?? 0) text=\(payload.text?.count ?? 0)")
@@ -66,11 +69,15 @@ final class ShareViewController: UIViewController {
         let message = ShareDraftComposer.compose(from: payload)
         self.composeView.setDraft(message)
         self.composeView.setAttachmentPreviews(extracted.attachments.map(\.preview))
-        self.composeView.apply(.ready)
         self.composeView.focusDraft()
-        if message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if let attachmentError = extracted.attachmentError {
+            ShareGatewayRelaySettings.saveLastEvent("Share blocked: image processing failed.")
+            self.composeView.apply(.blocked(self.imageProcessingErrorMessage(attachmentError)))
+        } else if message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            self.composeView.apply(.ready)
             ShareGatewayRelaySettings.saveLastEvent("Share ready: waiting for message input.")
         } else {
+            self.composeView.apply(.ready)
             ShareGatewayRelaySettings.saveLastEvent("Share ready: draft prepared.")
         }
     }
@@ -81,6 +88,10 @@ final class ShareViewController: UIViewController {
     }
 
     private func sendCurrentDraft() async {
+        if let attachmentError = self.attachmentError {
+            self.composeView.apply(.blocked(self.imageProcessingErrorMessage(attachmentError)))
+            return
+        }
         let trimmed = self.composeView.draftText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             ShareGatewayRelaySettings.saveLastEvent("Share blocked: message is empty.")
@@ -270,7 +281,8 @@ final class ShareViewController: UIViewController {
         guard let items = self.extensionContext?.inputItems as? [NSExtensionItem] else {
             return ExtractedShareContent(
                 payload: SharedContentPayload(title: nil, url: nil, text: nil),
-                attachments: [])
+                attachments: [],
+                attachmentError: nil)
         }
 
         var title: String?
@@ -278,6 +290,7 @@ final class ShareViewController: UIViewController {
         var sharedText: String?
         var attributedContentText: String?
         var attachments: [LoadedAttachment] = []
+        var attachmentError: ShareImageProcessor.ProcessError?
         let maxImageAttachments = 3
 
         for item in items {
@@ -297,11 +310,19 @@ final class ShareViewController: UIViewController {
                     sharedText = await self.loadText(from: provider)
                 }
 
-                if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier),
-                   attachments.count < maxImageAttachments,
-                   let attachment = await self.loadImageAttachment(from: provider, index: attachments.count)
-                {
-                    attachments.append(attachment)
+                if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
+                    if attachments.count < maxImageAttachments, attachmentError == nil {
+                        do {
+                            let attachment = try await self.loadImageAttachment(
+                                from: provider,
+                                index: attachments.count)
+                            attachments.append(attachment)
+                        } catch let error as ShareImageProcessor.ProcessError {
+                            attachmentError = error
+                        } catch {
+                            attachmentError = .encodeFailed
+                        }
+                    }
                 }
             }
         }
@@ -314,20 +335,21 @@ final class ShareViewController: UIViewController {
             sharedURL: sharedURL)
         return ExtractedShareContent(
             payload: SharedContentPayload(title: title ?? supplementalTitle, url: sharedURL, text: sharedText),
-            attachments: attachments)
+            attachments: attachments,
+            attachmentError: attachmentError)
     }
 
-    private func loadImageAttachment(from provider: NSItemProvider, index: Int) async -> LoadedAttachment? {
+    private func loadImageAttachment(from provider: NSItemProvider, index: Int) async throws -> LoadedAttachment {
         let imageUTI = self.preferredImageTypeIdentifier(from: provider) ?? UTType.image.identifier
         guard let rawData = await self.loadDataValue(from: provider, typeIdentifier: imageUTI) else {
-            return nil
+            throw ShareImageProcessor.ProcessError.invalidImage
         }
 
-        let maxBytes = 5_000_000
-        guard let image = UIImage(data: rawData),
-              let data = self.normalizedJPEGData(from: image, maxBytes: maxBytes)
-        else {
-            return nil
+        let data = try await Task.detached(priority: .userInitiated) {
+            try ShareImageProcessor.processForUpload(data: rawData)
+        }.value
+        guard let image = UIImage(data: data) else {
+            throw ShareImageProcessor.ProcessError.invalidImage
         }
 
         return await LoadedAttachment(
@@ -337,6 +359,12 @@ final class ShareViewController: UIViewController {
                 fileName: "shared-image-\(index + 1).jpg",
                 content: data.base64EncodedString()),
             preview: self.boundedPreview(from: image))
+    }
+
+    private func imageProcessingErrorMessage(_: ShareImageProcessor.ProcessError) -> String {
+        NSLocalizedString(
+            "The shared image could not be prepared.",
+            comment: "Share extension image processing failure")
     }
 
     /// Previews are retained for the sheet's lifetime; keep them bounded so
@@ -366,19 +394,6 @@ final class ShareViewController: UIViewController {
                 return identifier
             }
         }
-        return nil
-    }
-
-    private func normalizedJPEGData(from image: UIImage, maxBytes: Int) -> Data? {
-        var quality: CGFloat = 0.9
-        while quality >= 0.4 {
-            if let data = image.jpegData(compressionQuality: quality), data.count <= maxBytes {
-                return data
-            }
-            quality -= 0.1
-        }
-        guard let fallback = image.jpegData(compressionQuality: 0.35) else { return nil }
-        if fallback.count <= maxBytes { return fallback }
         return nil
     }
 

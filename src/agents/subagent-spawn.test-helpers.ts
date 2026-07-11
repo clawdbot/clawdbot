@@ -141,7 +141,6 @@ export async function loadSubagentSpawnModuleForTest(params: {
   forkSessionFromParentMock?: MockFn;
   resolveContextEngineMock?: MockFn;
   resolveParentForkDecisionMock?: MockFn;
-  pruneLegacyStoreKeysMock?: MockFn;
   registerSubagentRunMock?: MockFn;
   emitSessionLifecycleEventMock?: MockFn;
   hookRunner?: HookRunner;
@@ -264,6 +263,8 @@ export async function loadSubagentSpawnModuleForTest(params: {
     getRuntimeConfig: () =>
       params.getRuntimeConfig?.() ??
       createSubagentSpawnTestConfig(params.workspaceDir ?? os.tmpdir()),
+    loadSessionEntry: (scope: { storePath?: string; sessionKey: string }) =>
+      ((params.loadSessionStoreMock?.(scope.storePath) ?? {}) as SessionStore)[scope.sessionKey],
     loadSessionStore: params.loadSessionStoreMock ?? (() => ({})),
     ensureContextEnginesInitialized:
       params.ensureContextEnginesInitializedMock ?? (() => undefined),
@@ -309,7 +310,26 @@ export async function loadSubagentSpawnModuleForTest(params: {
     // Real scope resolver: spawn's admin-tier pinning depends on params-aware
     // sessions.patch policy, so a stub here would hide policy regressions.
     resolveLeastPrivilegeOperatorScopesForMethod,
-    pruneLegacyStoreKeys: (...args: unknown[]) => params.pruneLegacyStoreKeysMock?.(...args),
+    upsertSessionEntry: async (
+      scope: { storePath?: string; sessionKey: string },
+      patch: Record<string, unknown>,
+    ) => {
+      const updateSessionStore =
+        params.updateSessionStoreMock ??
+        (async (_storePath: string, mutator: SessionStoreMutator) => {
+          const store: SessionStore = {};
+          await mutator(store);
+          return store;
+        });
+      let updated: Record<string, unknown> | undefined;
+      const storePath =
+        scope.storePath ?? params.sessionStorePath ?? "/tmp/subagent-spawn-model-session.json";
+      await updateSessionStore(storePath, (store: SessionStore) => {
+        updated = Object.assign({}, store[scope.sessionKey], patch);
+        store[scope.sessionKey] = updated;
+      });
+      return updated ?? null;
+    },
     getSessionBindingService:
       params.getSessionBindingService ??
       (() => ({

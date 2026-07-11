@@ -27,6 +27,7 @@ import {
   shouldRunPromptSnapshotOwnerTest,
   shouldRunRuntimeSidecarBaselineCheck,
   shouldRunShrinkwrapGuard,
+  shouldRunSqliteSessionSchemaBaselineCheck,
   shouldRunTestTempCreationReport,
   createShrinkwrapGuardCommand,
 } from "../../scripts/check-changed.mjs";
@@ -1583,6 +1584,26 @@ describe("scripts/changed-lanes", () => {
         args: ["test:serial", "src/plugins/bundled-plugin-metadata.test.ts"],
       }),
     );
+  });
+
+  it("runs SQLite sessions/transcripts schema baseline checks for baseline owner surfaces", () => {
+    expect(
+      shouldRunSqliteSessionSchemaBaselineCheck([
+        "src/state/openclaw-agent-schema.sql",
+        "scripts/generate-sqlite-session-schema-baseline.ts",
+        "scripts/lib/sqlite-session-schema-baseline.ts",
+        "test/scripts/sqlite-session-schema-baseline.test.ts",
+        "docs/.generated/sqlite-session-transcript-schema-baseline.sha256",
+      ]),
+    ).toBe(true);
+
+    const result = detectChangedLanes(["src/state/openclaw-agent-schema.sql"]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(plan.commands).toContainEqual({
+      name: "SQLite sessions/transcripts schema baseline",
+      args: ["sqlite:sessions-schema:check"],
+    });
   });
 
   it("guards release metadata package changes to the top-level version field", () => {

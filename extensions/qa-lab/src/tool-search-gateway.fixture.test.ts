@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   countSessionLogMentions,
@@ -141,6 +142,68 @@ describe("tool search gateway e2e session log scanner", () => {
         tool_search_code: 0,
       });
     } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("counts target mentions from SQLite transcript rows", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tool-search-sqlite-"));
+    const sqlitePath = path.join(stateDir, "agents", "qa", "agent", "openclaw-agent.sqlite");
+    await fs.mkdir(path.dirname(sqlitePath), { recursive: true });
+    const db = new DatabaseSync(sqlitePath);
+    try {
+      const sessionsDir = path.join(stateDir, "agents", "qa", "sessions");
+      db.exec(`
+        CREATE TABLE transcript_events (
+          session_id TEXT NOT NULL,
+          seq INTEGER NOT NULL,
+          event_json TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          PRIMARY KEY (session_id, seq)
+        );
+      `);
+      const insert = db.prepare(
+        "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES (?, ?, ?, ?)",
+      );
+      insert.run(
+        "sqlite-session",
+        1,
+        JSON.stringify({
+          message: {
+            role: "user",
+            content: "tool search qa check target=fake_plugin_tool_17",
+          },
+        }),
+        1,
+      );
+      insert.run(
+        "sqlite-session",
+        2,
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: 'FAKE_PLUGIN_OK fake_plugin_tool_17 via tool_search_code quoted_call("alpha")',
+          },
+        }),
+        2,
+      );
+
+      await expect(
+        countSessionLogMentions({
+          sessionsDir,
+          needles: {
+            fake_plugin_tool_17: "fake_plugin_tool_17",
+            quoted_call: 'quoted_call("alpha")',
+            tool_search_code: "tool_search_code",
+          },
+        }),
+      ).resolves.toEqual({
+        fake_plugin_tool_17: 1,
+        quoted_call: 1,
+        tool_search_code: 1,
+      });
+    } finally {
+      db.close();
       await fs.rm(stateDir, { recursive: true, force: true });
     }
   });

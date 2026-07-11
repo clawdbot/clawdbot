@@ -356,7 +356,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   >();
   private sessionWarm = new Set<string>();
   private syncing: Promise<void> | null = null;
-  private queuedSessionFiles = new Set<string>();
+  private queuedArchiveFiles = new Set<string>();
   private queuedSessions = new Map<string, MemorySessionSyncTarget>();
   private queuedSessionSync: Promise<void> | null = null;
   private readonlyRecoveryAttempts = 0;
@@ -1259,13 +1259,13 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }
 
   private enqueueTargetedSessionSync(
-    targets?: Pick<MemorySyncParams, "sessions" | "sessionFiles">,
+    targets?: Pick<MemorySyncParams, "sessions" | "archiveFiles">,
   ): Promise<void> {
     return enqueueMemoryTargetedSessionSync(
       {
         isClosed: () => this.closed,
         getSyncing: () => this.syncing,
-        getQueuedSessionFiles: () => this.queuedSessionFiles,
+        getQueuedArchiveFiles: () => this.queuedArchiveFiles,
         getQueuedSessions: () => this.queuedSessions,
         getQueuedSessionSync: () => this.queuedSessionSync,
         setQueuedSessionSync: (value) => {
@@ -1637,7 +1637,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
 function hasTargetedSessionSyncParams(params: MemorySyncParams | undefined): boolean {
   return Boolean(
     params?.sessions?.some((session) => session.sessionId.trim().length > 0) ||
-    params?.sessionFiles?.some((sessionFile) => sessionFile.trim().length > 0),
+    params?.archiveFiles?.some((sessionFile) => sessionFile.trim().length > 0),
   );
 }
 

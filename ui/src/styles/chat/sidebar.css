@@ -190,6 +190,7 @@
 }
 
 .chat-main {
+  position: relative;
   min-width: 312px;
   display: flex;
   flex-direction: column;

@@ -5,6 +5,10 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  persistSessionTranscriptTurn,
+  upsertSessionEntry,
+} from "../config/sessions/session-accessor.js";
+import {
   setGatewayModelPricingForTest,
   clearGatewayModelPricingCacheState,
 } from "../gateway/model-pricing-cache-state.js";
@@ -23,6 +27,7 @@ import {
   loadSessionUsageTimeSeries,
   requestCostUsageCacheRefresh,
   refreshCostUsageCache,
+  resolveExistingUsageSessionFile,
 } from "./session-cost-usage.js";
 
 describe("session cost usage", () => {
@@ -153,6 +158,203 @@ describe("session cost usage", () => {
       expect(populated).toHaveLength(1);
       expect(summary.totals.totalTokens).toBe(50);
       expect(summary.totals.totalCost).toBeCloseTo(0.03003, 5);
+    });
+  });
+
+  it("includes SQLite-only sessions in cached usage cost summaries", async () => {
+    const root = await makeSessionCostRoot("sqlite-cost");
+    const storePath = path.join(root, "agents", "main", "sessions", "sessions.json");
+    const sessionKey = "agent:main:main";
+    const sessionId = "sqlite-cost-session";
+    const now = Date.UTC(2026, 5, 25, 12, 0, 0);
+
+    await withStateDir(root, async () => {
+      await upsertSessionEntry(
+        { sessionKey, storePath },
+        {
+          sessionFile: `sqlite:main:${sessionId}:${storePath}`,
+          sessionId,
+          updatedAt: now,
+        },
+      );
+      await persistSessionTranscriptTurn(
+        { agentId: "main", sessionId, sessionKey, storePath },
+        {
+          messages: [
+            { message: { role: "user", content: "sqlite usage prompt", timestamp: now } },
+            {
+              message: {
+                role: "assistant",
+                content: "sqlite usage answer",
+                model: "gpt-5.4",
+                provider: "openai",
+                timestamp: now + 1000,
+                usage: {
+                  input: 7,
+                  output: 11,
+                  totalTokens: 18,
+                  cost: { total: 0.018 },
+                },
+              },
+            },
+          ],
+          touchSessionEntry: false,
+        },
+      );
+
+      const legacyJsonl = path.join(path.dirname(storePath), `${sessionId}.jsonl`);
+      await fs.mkdir(path.dirname(legacyJsonl), { recursive: true });
+      await fs.writeFile(
+        legacyJsonl,
+        transcriptText(sessionId, {
+          type: "message",
+          timestamp: "2026-06-25T12:00:00.000Z",
+          message: {
+            role: "assistant",
+            model: "gpt-5.4",
+            provider: "openai",
+            usage: {
+              input: 100,
+              output: 100,
+              totalTokens: 200,
+              cost: { total: 0.2 },
+            },
+          },
+        }),
+        "utf-8",
+      );
+      expect(nodeFs.existsSync(legacyJsonl)).toBe(true);
+      await refreshCostUsageCache({ agentId: "main" });
+      const summary = await loadCostUsageSummaryFromCache({
+        agentId: "main",
+        startMs: Date.UTC(2026, 5, 25),
+        endMs: Date.UTC(2026, 5, 25, 23, 59, 59, 999),
+        requestRefresh: false,
+      });
+
+      expect(summary.totals.totalTokens).toBe(18);
+      expect(summary.totals.totalCost).toBeCloseTo(0.018, 8);
+      expect(summary.cacheStatus?.status).toBe("fresh");
+
+      const sessionFile = `sqlite:main:${sessionId}:${storePath}`;
+      const sessionEntry = {
+        sessionFile,
+        sessionId,
+        updatedAt: now,
+      };
+      await refreshCostUsageCache({ agentId: "main", sessionFiles: [sessionFile] });
+      const bulk = await loadSessionCostSummariesFromCache({
+        agentId: "main",
+        sessions: [{ sessionId, sessionFile }],
+        startMs: Date.UTC(2026, 5, 25),
+        endMs: Date.UTC(2026, 5, 25, 23, 59, 59, 999),
+        requestRefresh: false,
+      });
+      expect(bulk.cacheStatus.status).toBe("fresh");
+      expect(bulk.summaries[0]?.totalTokens).toBe(18);
+
+      const summaryFromStalePath = await loadSessionCostSummary({
+        agentId: "main",
+        sessionEntry,
+        sessionFile: legacyJsonl,
+        sessionId,
+      });
+      expect(summaryFromStalePath?.totalTokens).toBe(18);
+
+      await expect(loadSessionUsageTimeSeries({ agentId: "main", sessionFile })).resolves.toEqual({
+        sessionId: undefined,
+        points: [
+          expect.objectContaining({
+            input: 7,
+            output: 11,
+            totalTokens: 18,
+          }),
+        ],
+      });
+      await expect(
+        loadSessionUsageTimeSeries({
+          agentId: "main",
+          sessionEntry,
+          sessionFile: legacyJsonl,
+          sessionId,
+        }),
+      ).resolves.toEqual({
+        sessionId,
+        points: [
+          expect.objectContaining({
+            input: 7,
+            output: 11,
+            totalTokens: 18,
+          }),
+        ],
+      });
+      await expect(loadSessionLogs({ agentId: "main", sessionFile })).resolves.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            cost: 0.018,
+            role: "assistant",
+            tokens: 18,
+          }),
+        ]),
+      );
+      await expect(
+        loadSessionLogs({
+          agentId: "main",
+          sessionEntry,
+          sessionFile: legacyJsonl,
+          sessionId,
+        }),
+      ).resolves.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            cost: 0.018,
+            role: "assistant",
+            tokens: 18,
+          }),
+        ]),
+      );
+    });
+  });
+
+  it("does not fall back from empty SQLite transcripts to stale JSONL usage files", async () => {
+    const root = await makeSessionCostRoot("sqlite-cost-empty");
+    const storePath = path.join(root, "agents", "main", "sessions", "sessions.json");
+    const sessionKey = "agent:main:empty-sqlite-cost";
+    const sessionId = "empty-sqlite-cost-session";
+    const sqliteMarker = `sqlite:main:${sessionId}:${storePath}`;
+    const legacyJsonl = path.join(path.dirname(storePath), `${sessionId}.jsonl`);
+
+    await withStateDir(root, async () => {
+      await upsertSessionEntry(
+        { sessionKey, storePath },
+        {
+          sessionFile: sqliteMarker,
+          sessionId,
+          updatedAt: Date.UTC(2026, 5, 25, 12, 0, 0),
+        },
+      );
+      await fs.mkdir(path.dirname(legacyJsonl), { recursive: true });
+      await fs.writeFile(
+        legacyJsonl,
+        transcriptText(sessionId, {
+          type: "message",
+          timestamp: "2026-06-25T12:00:00.000Z",
+          message: {
+            role: "assistant",
+            usage: { input: 100, output: 100, totalTokens: 200, cost: { total: 0.2 } },
+          },
+        }),
+        "utf-8",
+      );
+
+      expect(
+        resolveExistingUsageSessionFile({
+          agentId: "main",
+          sessionEntry: { sessionFile: sqliteMarker, sessionId, updatedAt: 1 },
+          sessionFile: legacyJsonl,
+          sessionId,
+        }),
+      ).toBe(sqliteMarker);
     });
   });
 

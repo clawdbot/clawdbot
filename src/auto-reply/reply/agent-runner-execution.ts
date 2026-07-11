@@ -3593,11 +3593,6 @@ async function runAgentTurnWithFallbackInternal(
                 bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
                   embeddedRunResult.meta?.systemPromptReport,
                 );
-                const resultCompactionCount = Math.max(
-                  0,
-                  embeddedRunResult.meta?.agentMeta?.compactionCount ?? 0,
-                );
-                attemptCompactionCount = Math.max(attemptCompactionCount, resultCompactionCount);
                 return {
                   result: embeddedRunResult,
                   continueWorkRequests: attemptContinueWorkRequests,

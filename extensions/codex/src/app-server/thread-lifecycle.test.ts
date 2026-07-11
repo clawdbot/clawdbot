@@ -26,7 +26,9 @@ import {
   buildTurnStartParams,
   buildThreadResumeParams,
   buildThreadStartParams,
+  areCodexDynamicToolFingerprintsCompatible,
   codexDynamicToolsFingerprint,
+  codexLegacyDynamicToolsFingerprint,
   formatCodexThreadLifecycleTimingSummary,
   resolveCodexAppServerThreadModelSelection,
   resolveReasoningEffort,
@@ -565,6 +567,36 @@ describe("Codex app-server native code mode config", () => {
     ]);
 
     expect(searchableFingerprint).not.toBe(directFingerprint);
+  });
+
+  it("keeps hashed dynamic tool fingerprints compatible with legacy JSON bindings", () => {
+    const tools = [
+      {
+        type: "function" as const,
+        name: "message",
+        description: "Send a visible message",
+        inputSchema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            text: { type: "string" },
+          },
+          required: ["text"],
+        },
+      },
+    ];
+    const hashed = codexDynamicToolsFingerprint(tools);
+    const legacy = codexLegacyDynamicToolsFingerprint(tools);
+
+    expect(hashed).toMatch(/^sha256:/);
+    expect(legacy).toContain('"name":"message"');
+    expect(
+      areCodexDynamicToolFingerprintsCompatible({
+        previous: legacy,
+        next: hashed,
+        nextLegacy: legacy,
+      }),
+    ).toBe(true);
   });
 
   it("keeps OpenClaw skill catalogs out of developer instructions", () => {

@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { resolveStorePath } from "../config/sessions.js";
@@ -8,6 +7,7 @@ import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harne
 import {
   seedMainSessionStore,
   seedSessionStore,
+  readSessionStoreForTest,
   withTempHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
 
@@ -34,10 +34,6 @@ describe("runHeartbeatOnce identity", () => {
         };
         const mainStorePath = resolveStorePath(storeTemplate, { agentId: "main" });
         const historianStorePath = resolveStorePath(storeTemplate, { agentId: "historian2" });
-        await Promise.all([
-          fs.mkdir(path.dirname(mainStorePath), { recursive: true }),
-          fs.mkdir(path.dirname(historianStorePath), { recursive: true }),
-        ]);
         await seedSessionStore(mainStorePath, "global", {
           lastChannel: "slack",
           lastProvider: "slack",
@@ -48,7 +44,7 @@ describe("runHeartbeatOnce identity", () => {
           lastProvider: "slack",
           lastTo: "channel:HISTORIAN",
         });
-        const mainStoreBefore = await fs.readFile(mainStorePath, "utf-8");
+        const mainStoreBefore = readSessionStoreForTest(mainStorePath);
         replySpy.mockResolvedValue({ text: "needs attention" });
         const sendSlack = vi.fn().mockResolvedValue({ messageId: "m1", channelId: "HISTORIAN" });
 
@@ -72,11 +68,8 @@ describe("runHeartbeatOnce identity", () => {
           "needs attention",
           expect.any(Object),
         );
-        expect(await fs.readFile(mainStorePath, "utf-8")).toBe(mainStoreBefore);
-        const historianStore = JSON.parse(await fs.readFile(historianStorePath, "utf-8")) as Record<
-          string,
-          unknown
-        >;
+        expect(readSessionStoreForTest(mainStorePath)).toEqual(mainStoreBefore);
+        const historianStore = readSessionStoreForTest(historianStorePath);
         expect(historianStore.global).toBeDefined();
         expect(historianStore["global:heartbeat"] !== undefined).toBe(isolatedSession);
       });

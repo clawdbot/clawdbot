@@ -297,7 +297,12 @@ function sameDeliveryChannelRoute(
   );
 }
 
-function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
+/**
+ * Rebuilds malformed/legacy delivery `route` state from the entry's delivery
+ * fields. Runs on file-era store loads and on the doctor SQLite import so the
+ * SQLite store only holds canonical delivery shapes; SQLite reads do no repair.
+ */
+export function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
   const entryRoute = normalizeDeliveryChannelRoute(entry.route);
   const normalized = normalizeSessionDeliveryFields({
     route: entryRoute,

@@ -12,6 +12,7 @@ import type {
   ContextEngine,
   ContextEngineRuntimeContext,
   ContextEngineRuntimeSettings,
+  ContextEngineSessionTarget,
 } from "../../context-engine/types.js";
 import { runContextEngineMaintenance } from "../embedded-agent-runner/context-engine-maintenance.js";
 import {
@@ -78,6 +79,7 @@ export async function bootstrapHarnessContextEngine(params: {
   contextEngine?: HarnessContextEngine;
   sessionId: string;
   sessionKey?: string;
+  sessionTarget?: ContextEngineSessionTarget;
   sessionFile: string;
   sessionManager?: unknown;
   runtimeContext?: ContextEngineRuntimeContext;
@@ -107,14 +109,17 @@ export async function bootstrapHarnessContextEngine(params: {
       await params.contextEngine.bootstrap({
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
+        sessionTarget: params.sessionTarget,
         sessionFile: params.sessionFile,
         runtimeSettings,
+        runtimeContext: params.runtimeContext,
       });
     }
     await (params.runMaintenance ?? runHarnessContextEngineMaintenance)({
       contextEngine: params.contextEngine,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
+      sessionTarget: params.sessionTarget,
       sessionFile: params.sessionFile,
       reason: "bootstrap",
       sessionManager: params.sessionManager,
@@ -215,6 +220,7 @@ export async function finalizeHarnessContextEngineTurn(params: {
   yieldAborted: boolean;
   sessionIdUsed: string;
   sessionKey?: string;
+  sessionTarget?: ContextEngineSessionTarget;
   sessionFile: string;
   messagesSnapshot: AgentMessage[];
   prePromptMessageCount: number;
@@ -253,6 +259,7 @@ export async function finalizeHarnessContextEngineTurn(params: {
       await params.contextEngine.afterTurn({
         sessionId: params.sessionIdUsed,
         sessionKey: params.sessionKey,
+        sessionTarget: params.sessionTarget,
         sessionFile: params.sessionFile,
         messages: conversationSnapshot.messages,
         prePromptMessageCount: conversationSnapshot.prePromptMessageCount,
@@ -310,6 +317,7 @@ export async function finalizeHarnessContextEngineTurn(params: {
       contextEngine: params.contextEngine,
       sessionId: params.sessionIdUsed,
       sessionKey: params.sessionKey,
+      sessionTarget: params.sessionTarget,
       sessionFile: params.sessionFile,
       reason: "turn",
       sessionManager: params.sessionManager,
@@ -363,6 +371,7 @@ export async function runHarnessContextEngineMaintenance(params: {
   contextEngine?: HarnessContextEngine;
   sessionId: string;
   sessionKey?: string;
+  sessionTarget?: ContextEngineSessionTarget;
   sessionFile: string;
   reason: "bootstrap" | "compaction" | "turn";
   sessionManager?: unknown;
@@ -387,6 +396,7 @@ export async function runHarnessContextEngineMaintenance(params: {
     contextEngine: params.contextEngine,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
+    sessionTarget: params.sessionTarget,
     sessionFile: params.sessionFile,
     reason: params.reason,
     sessionManager: params.sessionManager as Parameters<

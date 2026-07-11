@@ -1462,5 +1462,13 @@
   {
     "source": "Crabbox plugin",
     "target": "Crabbox 插件"
+  },
+  {
+    "source": "Path 3 SQLite session artifact family",
+    "target": "Path 3 SQLite 会话工件族"
+  },
+  {
+    "source": "Path 3 live SQLite E2E harness",
+    "target": "Path 3 live SQLite E2E harness"
   }
 ]

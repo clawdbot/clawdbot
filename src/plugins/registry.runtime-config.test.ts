@@ -345,8 +345,6 @@ describe("plugin registry runtime config scope", () => {
     } satisfies PluginRuntime["subagent"];
     const runtime = createPluginRuntime({ subagent });
     const session = runtime.agent.session;
-    const loadSessionStore = vi.fn(() => structuredClone(entries));
-    session.loadSessionStore = loadSessionStore;
     session.getSessionEntry = vi.fn((params) => entries[params.sessionKey as keyof typeof entries]);
     session.listSessionEntries = vi.fn(() =>
       Object.entries(entries).map(([sessionKey, entry]) => ({ sessionKey, entry })),
@@ -370,13 +368,6 @@ describe("plugin registry runtime config scope", () => {
       admissionScope = getPluginRuntimeGatewayRequestScope();
       return await run(new AbortController().signal);
     });
-    session.saveSessionStore = vi.fn(async () => {});
-    session.updateSessionStore = vi.fn(
-      async (_storePath, mutator) =>
-        await mutator({
-          ...structuredClone(entries),
-        }),
-    ) as typeof session.updateSessionStore;
     let embeddedRunScope = getPluginRuntimeGatewayRequestScope();
     const runEmbeddedAgent = vi.fn(async () => {
       embeddedRunScope = getPluginRuntimeGatewayRequestScope();
@@ -637,44 +628,6 @@ describe("plugin registry runtime config scope", () => {
     ).resolves.toEqual({ ok: true });
 
     await expect(
-      otherApi.runtime.agent.session.updateSessionStore("/tmp/sessions.json", (store) => {
-        store[ordinaryKey] = { ...ordinaryEntry, label: "allowed" };
-      }),
-    ).resolves.toBeUndefined();
-    await expect(
-      otherApi.runtime.agent.session.updateSessionStore("/tmp/sessions.json", (store) => {
-        store[reservedKey] = { ...reservedEntry, label: "blocked" };
-      }),
-    ).rejects.toThrow('owned by plugin "codex-owner"');
-    await expect(
-      otherApi.runtime.agent.session.updateSessionStore("/tmp/sessions.json", (store) => {
-        store[lockedOrdinaryKey] = { ...lockedOrdinaryEntry, label: "blocked" };
-      }),
-    ).rejects.toThrow('owned by plugin "codex-owner"');
-    await expect(
-      otherApi.runtime.agent.session.updateSessionStore("/tmp/sessions.json", (store) => {
-        store[legacyPrefixedKey] = { ...legacyPrefixedEntry, label: "allowed" };
-      }),
-    ).resolves.toBeUndefined();
-    await expect(
-      otherApi.runtime.agent.session.updateSessionStore("/tmp/sessions.json", (store) => {
-        store["agent:main:harness:codex:new"] = {
-          sessionId: "new-prefixed-session",
-          updatedAt: 1,
-        };
-      }),
-    ).rejects.toThrow('owned by plugin "codex-owner"');
-    await expect(
-      otherApi.runtime.agent.session.saveSessionStore("/tmp/sessions.json", {
-        [reservedKey]: reservedEntry,
-      }),
-    ).rejects.toThrow('owned by plugin "codex-owner"');
-    expect(
-      otherApi.runtime.agent.session.loadSessionStore("/tmp/sessions.json", { clone: false }),
-    ).toEqual(entries);
-    expect(loadSessionStore).toHaveBeenLastCalledWith("/tmp/sessions.json", { clone: true });
-
-    await expect(
       otherApi.runtime.agent.runEmbeddedAgent({
         ...runParams,
         sessionId: ordinaryEntry.sessionId,
@@ -684,58 +637,5 @@ describe("plugin registry runtime config scope", () => {
     await expect(
       otherApi.runtime.gateway.request("voicecall.start", { to: "+15550001234" }),
     ).resolves.toEqual({ ok: true });
-  });
-
-  it("keeps grandfathered unlocked harness-prefixed rows ordinary in whole-store APIs", async () => {
-    const legacyKey = "agent:main:harness:notes";
-    const legacyEntry = {
-      sessionId: "legacy-session",
-      updatedAt: 1,
-      agentHarnessId: "legacy-runtime",
-    };
-    const runtime = createPluginRuntime();
-    const session = runtime.agent.session;
-    session.loadSessionStore = vi.fn(() => ({ [legacyKey]: structuredClone(legacyEntry) }));
-    session.saveSessionStore = vi.fn(async () => {});
-    session.updateSessionStore = vi.fn(
-      async (_storePath, mutator) => await mutator({ [legacyKey]: structuredClone(legacyEntry) }),
-    ) as typeof session.updateSessionStore;
-    const pluginRegistry = createTestRegistry(runtime);
-    const record = createPluginRecord({
-      id: "legacy-plugin",
-      source: "/plugins/legacy-plugin/index.js",
-      origin: "global",
-      enabled: true,
-      configSchema: false,
-    });
-    const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
-
-    await expect(
-      api.runtime.agent.session.saveSessionStore("/tmp/sessions.json", {
-        [legacyKey]: { ...legacyEntry, label: "allowed" },
-      }),
-    ).resolves.toBeUndefined();
-    await expect(
-      api.runtime.agent.session.updateSessionStore("/tmp/sessions.json", (store) => {
-        store[legacyKey] = { ...legacyEntry, label: "allowed" };
-      }),
-    ).resolves.toBeUndefined();
-    await expect(
-      api.runtime.agent.session.saveSessionStore("/tmp/sessions.json", {
-        [legacyKey]: legacyEntry,
-        "agent:main:harness:codex:new": {
-          sessionId: "new-prefixed-session",
-          updatedAt: 1,
-        },
-      }),
-    ).rejects.toThrow("because its harness is not registered");
-    await expect(
-      api.runtime.agent.session.updateSessionStore("/tmp/sessions.json", (store) => {
-        store["agent:main:harness:codex:new"] = {
-          sessionId: "new-prefixed-session",
-          updatedAt: 1,
-        };
-      }),
-    ).rejects.toThrow("because its harness is not registered");
   });
 });

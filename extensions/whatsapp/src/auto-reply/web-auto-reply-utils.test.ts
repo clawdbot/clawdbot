@@ -3,14 +3,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeMainKey } from "openclaw/plugin-sdk/routing";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import { createTestWebInboundMessage } from "../inbound/test-message.test-helper.js";
 import type { AdmittedWebInboundMessage } from "../inbound/types.js";
 import {
   evaluateSessionFreshness,
-  loadSessionStore,
   resolveChannelResetConfig,
   resolveSessionKey,
   resolveSessionResetPolicy,
@@ -95,8 +94,10 @@ function getSessionSnapshotForTest(
       { From: from, To: "", Body: "" },
       normalizeMainKey(sessionCfg?.mainKey),
     );
-  const store = loadSessionStore(resolveStorePath(sessionCfg?.store));
-  const entry = store[key];
+  const entry = getSessionEntry({
+    sessionKey: key,
+    storePath: resolveStorePath(sessionCfg?.store),
+  });
   const isThread = resolveThreadFlag({
     sessionKey: key,
     messageThreadId: ctx?.messageThreadId ?? null,

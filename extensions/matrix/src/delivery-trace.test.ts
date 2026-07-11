@@ -17,8 +17,6 @@ import {
   runDeliveryTraceScenario,
   type DeliveryTraceInStep,
   type DeliveryTraceScenario,
-  type DeliveryTraceScenarioName,
-  type DeliveryTraceStep,
   type WireRecorder,
 } from "openclaw/plugin-sdk/channel-contract-testing";
 import {
@@ -277,14 +275,6 @@ async function setupMatrixTrace(recorder: WireRecorder) {
   };
 }
 
-// Matrix records generation-scoped edit-streaming shapes the shared v1
-// library does not model; the runner treats the scenario name as opaque data
-// (it only keys the golden filename), so widening the closed union stays
-// test-local instead of leaking matrix names into the core scenario library.
-function matrixScenario(name: string, steps: readonly DeliveryTraceStep[]): DeliveryTraceScenario {
-  return { name: name as DeliveryTraceScenarioName, steps };
-}
-
 const GEN_ONE_PARTIAL = "Build check:";
 const GEN_ONE_BLOCK = "Build check: all suites green.";
 const GEN_TWO_PARTIAL = "Deploying to production now.";
@@ -297,50 +287,61 @@ const MENTION_FINAL = "Paging @oncall:example.org for the deploy review.";
 
 // The draft stream throttles edits at 1000ms; each generation streams one
 // create plus one throttled m.replace edit before its boundary settles it.
+// Matrix records generation-scoped edit-streaming shapes the shared v1
+// library does not model; the scenario name only keys the golden filename.
 const MATRIX_TRACE_SCENARIOS: readonly DeliveryTraceScenario[] = [
   // Two generations separated by a tool round: one preview event per
   // generation, cumulative slices, block finalize-in-place for generation one,
   // and a final replace-edit because the final text differs from the last
   // rendered preview of generation two.
-  matrixScenario("streaming-happy-multi-generation", [
-    { kind: "reply-start" },
-    { kind: "partial", text: GEN_ONE_PARTIAL },
-    { kind: "advance", ms: 400 },
-    { kind: "partial", text: GEN_ONE_BLOCK },
-    { kind: "advance", ms: 700 },
-    { kind: "block-final", text: GEN_ONE_BLOCK },
-    { kind: "tool-progress", name: "deploy", phase: "start" },
-    { kind: "tool-progress", name: "deploy", phase: "result" },
-    { kind: "partial", text: GEN_TWO_PARTIAL },
-    { kind: "advance", ms: 400 },
-    { kind: "partial", text: GEN_TWO_PREVIEW },
-    { kind: "advance", ms: 700 },
-    { kind: "final", text: GEN_TWO_FINAL },
-    { kind: "idle" },
-  ]),
+  {
+    name: "streaming-happy-multi-generation",
+    steps: [
+      { kind: "reply-start" },
+      { kind: "partial", text: GEN_ONE_PARTIAL },
+      { kind: "advance", ms: 400 },
+      { kind: "partial", text: GEN_ONE_BLOCK },
+      { kind: "advance", ms: 700 },
+      { kind: "block-final", text: GEN_ONE_BLOCK },
+      { kind: "tool-progress", name: "deploy", phase: "start" },
+      { kind: "tool-progress", name: "deploy", phase: "result" },
+      { kind: "partial", text: GEN_TWO_PARTIAL },
+      { kind: "advance", ms: 400 },
+      { kind: "partial", text: GEN_TWO_PREVIEW },
+      { kind: "advance", ms: 700 },
+      { kind: "final", text: GEN_TWO_FINAL },
+      { kind: "idle" },
+    ],
+  },
   // Final text equals the last rendered preview: the draft is finalized in
   // place with an edit that only clears the MSC4357 live marker.
-  matrixScenario("final-in-place", [
-    { kind: "reply-start" },
-    { kind: "partial", text: IN_PLACE_PARTIAL },
-    { kind: "advance", ms: 400 },
-    { kind: "partial", text: IN_PLACE_FINAL },
-    { kind: "advance", ms: 700 },
-    { kind: "final", text: IN_PLACE_FINAL },
-    { kind: "idle" },
-  ]),
+  {
+    name: "final-in-place",
+    steps: [
+      { kind: "reply-start" },
+      { kind: "partial", text: IN_PLACE_PARTIAL },
+      { kind: "advance", ms: 400 },
+      { kind: "partial", text: IN_PLACE_FINAL },
+      { kind: "advance", ms: 700 },
+      { kind: "final", text: IN_PLACE_FINAL },
+      { kind: "idle" },
+    ],
+  },
   // Previews are mentions-inert and an edit cannot retro-notify, so a final
   // whose text would activate mentions redacts the preview and re-sends the
   // final as a fresh mention-bearing event.
-  matrixScenario("final-mentions-fresh", [
-    { kind: "reply-start" },
-    { kind: "partial", text: MENTION_PARTIAL },
-    { kind: "advance", ms: 400 },
-    { kind: "partial", text: MENTION_FINAL },
-    { kind: "advance", ms: 700 },
-    { kind: "final", text: MENTION_FINAL },
-    { kind: "idle" },
-  ]),
+  {
+    name: "final-mentions-fresh",
+    steps: [
+      { kind: "reply-start" },
+      { kind: "partial", text: MENTION_PARTIAL },
+      { kind: "advance", ms: 400 },
+      { kind: "partial", text: MENTION_FINAL },
+      { kind: "advance", ms: 700 },
+      { kind: "final", text: MENTION_FINAL },
+      { kind: "idle" },
+    ],
+  },
   // Shared abandon shape: the handler's finally block flushes the pending
   // throttled edit, then redacts the unconsumed draft.
   deliveryTraceScenarios["cancel-mid-stream"],

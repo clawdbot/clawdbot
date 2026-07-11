@@ -15,7 +15,6 @@ import {
   expectDeliveryTraceMatchesGolden,
   runDeliveryTraceScenario,
   type DeliveryTraceInStep,
-  type DeliveryTraceScenario,
   type DeliveryTraceStep,
   type TraceEvent,
   type TraceNormalizer,
@@ -215,8 +214,8 @@ const BLOCKS_FINAL_PRESENTATION = {
   ],
 };
 
-// Slack-specific scenario scripts. The runner only consumes `steps`, so local
-// names outside the shared scenario-library union are safe behind one cast.
+// Slack-specific scenario scripts; the runner only consumes `steps` and the
+// name (outside the shared scenario library) keys the golden filename.
 const slackTraceScenarios: Record<SlackTraceScenarioName, readonly DeliveryTraceStep[]> = {
   "streaming-happy-native": [
     { kind: "reply-start" },
@@ -270,10 +269,6 @@ const slackTraceScenarios: Record<SlackTraceScenarioName, readonly DeliveryTrace
     { kind: "idle" },
   ],
 };
-
-function asTraceScenario(name: SlackTraceScenarioName): DeliveryTraceScenario {
-  return { name, steps: slackTraceScenarios[name] } as unknown as DeliveryTraceScenario;
-}
 
 /** Canonicalizes Slack `sec.micro` timestamps to `ts#N` in first-seen order. */
 function createSlackTsNormalizer(): TraceNormalizer {
@@ -624,7 +619,7 @@ describe("slack delivery trace goldens", () => {
   for (const scenarioName of Object.keys(slackTraceScenarios) as SlackTraceScenarioName[]) {
     it(`records ${scenarioName}`, async () => {
       const events = await runDeliveryTraceScenario({
-        scenario: asTraceScenario(scenarioName),
+        scenario: { name: scenarioName, steps: slackTraceScenarios[scenarioName] },
         setup: (recorder) => setupSlackTrace(recorder, scenarioName),
         normalize: createSlackTsNormalizer(),
       });

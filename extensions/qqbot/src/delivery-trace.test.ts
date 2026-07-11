@@ -29,7 +29,6 @@ import {
   runDeliveryTraceScenario,
   type DeliveryTraceInStep,
   type DeliveryTraceScenario,
-  type DeliveryTraceStep,
   type WireRecorder,
 } from "openclaw/plugin-sdk/channel-contract-testing";
 import { chunkMarkdownText } from "openclaw/plugin-sdk/reply-runtime";
@@ -384,13 +383,6 @@ function setupQqbotTrace(recorder: WireRecorder, msgId: string) {
   };
 }
 
-// Channel-specific scenario names are not yet part of the shared
-// DeliveryTraceScenarioName union; the runner only consumes steps and the
-// golden is keyed by file name, so a local cast keeps the harness untouched.
-function qqbotScenario(name: string, steps: readonly DeliveryTraceStep[]): DeliveryTraceScenario {
-  return { name: name as DeliveryTraceScenario["name"], steps };
-}
-
 const MEDIA_INTERRUPT_FULL_TEXT =
   "Here is the chart:\n<qqimg>https://example.com/chart.png</qqimg>\nKey takeaways: ship it.";
 
@@ -398,41 +390,47 @@ const QQBOT_TRACE_SCENARIOS: readonly DeliveryTraceScenario[] = [
   // Official REPLACE-mode stream lifecycle over the shared streaming-happy
   // script: one stream session, cumulative GENERATING chunks, boundary joined
   // with "\n\n", DONE chunk sealing the full text.
-  qqbotScenario("streaming-happy-c2c", deliveryTraceScenarios["streaming-happy"].steps),
+  { name: "streaming-happy-c2c", steps: deliveryTraceScenarios["streaming-happy"].steps },
   // Budget lifecycle against one msg_id: initial input_notify plus exactly
   // TYPING_RENEWAL_LIMIT (3) renewals, then a renewal-free tick proving the
   // reserved final reply; five message-tool sends where only the first can
   // claim the fifth passive slot; then a static final. Every later text send
   // falls back to a proactive body without msg_id/msg_seq.
-  qqbotScenario("budget-exhaustion", [
-    { kind: "reply-start" },
-    { kind: "advance", ms: 5000 },
-    { kind: "advance", ms: 5000 },
-    { kind: "advance", ms: 5000 },
-    { kind: "advance", ms: 5000 },
-    { kind: "tool-progress", name: "message", phase: "result" },
-    { kind: "tool-progress", name: "message", phase: "result" },
-    { kind: "tool-progress", name: "message", phase: "result" },
-    { kind: "tool-progress", name: "message", phase: "result" },
-    { kind: "tool-progress", name: "message", phase: "result" },
-    { kind: "final", text: "Budget check complete." },
-    { kind: "idle" },
-  ]),
-  qqbotScenario("final-only", deliveryTraceScenarios["final-only"].steps),
-  qqbotScenario("cancel-mid-stream", deliveryTraceScenarios["cancel-mid-stream"].steps),
+  {
+    name: "budget-exhaustion",
+    steps: [
+      { kind: "reply-start" },
+      { kind: "advance", ms: 5000 },
+      { kind: "advance", ms: 5000 },
+      { kind: "advance", ms: 5000 },
+      { kind: "advance", ms: 5000 },
+      { kind: "tool-progress", name: "message", phase: "result" },
+      { kind: "tool-progress", name: "message", phase: "result" },
+      { kind: "tool-progress", name: "message", phase: "result" },
+      { kind: "tool-progress", name: "message", phase: "result" },
+      { kind: "tool-progress", name: "message", phase: "result" },
+      { kind: "final", text: "Budget check complete." },
+      { kind: "idle" },
+    ],
+  },
+  deliveryTraceScenarios["final-only"],
+  deliveryTraceScenarios["cancel-mid-stream"],
   // Media arriving mid-stream interrupts the session: DONE chunk for the text
   // before the tag, synchronous upload + media message (both budget spends),
   // then a fresh stream session with a new stream_msg_id and msg_seq resumes
   // the remaining text.
-  qqbotScenario("media-interrupt", [
-    { kind: "reply-start" },
-    { kind: "partial", text: "Here is the chart:" },
-    { kind: "advance", ms: 300 },
-    { kind: "partial", text: MEDIA_INTERRUPT_FULL_TEXT },
-    { kind: "advance", ms: 300 },
-    { kind: "final", text: MEDIA_INTERRUPT_FULL_TEXT },
-    { kind: "idle" },
-  ]),
+  {
+    name: "media-interrupt",
+    steps: [
+      { kind: "reply-start" },
+      { kind: "partial", text: "Here is the chart:" },
+      { kind: "advance", ms: 300 },
+      { kind: "partial", text: MEDIA_INTERRUPT_FULL_TEXT },
+      { kind: "advance", ms: 300 },
+      { kind: "final", text: MEDIA_INTERRUPT_FULL_TEXT },
+      { kind: "idle" },
+    ],
+  },
 ];
 
 const EXPECTED_REPLY_BUDGET_REMAINING: Readonly<Record<string, number>> = {

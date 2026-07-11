@@ -2126,9 +2126,9 @@ export const zh_CN: TranslationMap = {
       workSessions: "工作",
     },
     welcome: {
-      ready: "准备好聊天",
       hintBeforeShortcut: "在下方输入消息 · 输入",
       hintAfterShortcut: "查看命令",
+      recentSessions: "最近聊天",
       suggestions: {
         whatCanYouDo: "你能做什么？",
         summarizeRecentSessions: "总结我最近的会话",

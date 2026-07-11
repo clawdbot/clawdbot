@@ -52,6 +52,12 @@ type EmbeddedRunContextWindowInfo = {
 
 export type EmbeddedRunFastModeParam = boolean | (() => boolean | undefined);
 
+/** Host-owned trajectory recorder supplied to plugin harnesses for attempt-local runtime events. */
+export type EmbeddedRunAttemptTrajectoryRecorder = {
+  recordEvent: (type: string, data?: Record<string, unknown>) => void;
+  flush: () => Promise<void>;
+};
+
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   /** Active file-backed artifact target resolved by the run/session target seam. */
   sessionFile: string;
@@ -88,6 +94,10 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   runtimePlan?: AgentRuntimePlan;
   /** Host-issued scope for harnesses that mirror native child runs into task state. */
   agentHarnessTaskRuntimeScope?: AgentHarnessTaskRuntimeScope;
+  /** Storage-neutral trajectory target for harness-owned runtime trace artifacts. */
+  trajectorySessionFile?: string;
+  /** Storage-aware trajectory recorder owned by the OpenClaw host. */
+  trajectoryRecorder?: EmbeddedRunAttemptTrajectoryRecorder | null;
   /** Live observer called after wrapped tool outcomes are recorded. */
   onToolOutcome?: ToolOutcomeObserver;
   /** Signals that the attempt's own run-timeout watchdog is active. */

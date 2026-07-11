@@ -12,6 +12,7 @@ import {
   createUserTurnTranscriptRecorder,
   type PersistedUserTurnMessage,
 } from "../../sessions/user-turn-transcript.js";
+import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import type { GetReplyOptions } from "../types.js";
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "./agent-runner-failure-copy.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
@@ -35,6 +36,8 @@ let noOpRearmGuardForTest: typeof import("./no-op-rearm-guard.js");
 let clearRuntimeConfigSnapshot: typeof import("../../config/config.js").clearRuntimeConfigSnapshot;
 let loadSessionStore: typeof import("../../config/sessions/store.js").loadSessionStore;
 let saveSessionStore: typeof import("../../config/sessions/store.js").saveSessionStore;
+let loadSessionEntry: typeof import("../../config/sessions/session-accessor.js").loadSessionEntry;
+let replaceSessionEntrySync: typeof import("../../config/sessions/session-accessor.js").replaceSessionEntrySync;
 let clearSessionStoreCacheForTest: typeof import("../../config/sessions/store.js").clearSessionStoreCacheForTest;
 let clearFollowupQueue: typeof import("./queue.js").clearFollowupQueue;
 let enqueueFollowupRun: typeof import("./queue.js").enqueueFollowupRun;
@@ -80,7 +83,7 @@ function joinPromptSections(...sections: Array<string | undefined>): string {
 function createTestUserTurnRecorder(message: PersistedUserTurnMessage) {
   return createUserTurnTranscriptRecorder({
     message,
-    target: { transcriptPath: "/tmp/session.jsonl" },
+    target: createTestUserTurnTranscriptTarget(),
     updateMode: "none",
   });
 }
@@ -150,7 +153,11 @@ function registerFollowupTestSessionStore(
   sessionStore: Record<string, SessionEntry>,
 ): void {
   fsSync.mkdirSync(path.dirname(storePath), { recursive: true });
-  fsSync.writeFileSync(storePath, JSON.stringify(sessionStore));
+  // Seed the sqlite accessor so the runner's loadSessionEntry/admitReplyTurn reads
+  // observe these fixtures; the in-memory map still backs the mocked accounting helpers.
+  for (const [sessionKey, entry] of Object.entries(sessionStore)) {
+    replaceSessionEntrySync({ sessionKey, storePath }, entry);
+  }
   FOLLOWUP_TEST_SESSION_STORES.set(storePath, sessionStore);
   FOLLOWUP_TEST_SESSION_STORE_PATHS.add(storePath);
 }
@@ -498,6 +505,8 @@ async function loadFreshFollowupRunnerModuleForTest() {
     await import("../../config/config.js"));
   ({ clearSessionStoreCacheForTest, loadSessionStore, saveSessionStore } =
     await import("../../config/sessions/store.js"));
+  ({ loadSessionEntry, replaceSessionEntrySync } =
+    await import("../../config/sessions/session-accessor.js"));
   ({ clearFollowupQueue, enqueueFollowupRun } = await import("./queue.js"));
   sessionRunAccounting = await import("./session-run-accounting.js");
   ({ createMockFollowupRun, createMockTypingController } = await import("./test-helpers.js"));
@@ -667,6 +676,9 @@ function makeFollowupContinuationConfig(storePath: string): OpenClawConfig {
   return {
     agents: {
       defaults: {
+        models: {
+          "anthropic/claude": { agentRuntime: { id: "openclaw" } },
+        },
         continuation: {
           enabled: true,
           maxChainLength: 200,
@@ -7260,6 +7272,7 @@ describe("createFollowupRunner continueWorkOpts threading (#746)", () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session-followup-delegate-config",
       sessionFile: path.join(tmpDir, "session.jsonl"),
+      agentRuntimeOverride: "openclaw",
       updatedAt: Date.now(),
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
@@ -7272,7 +7285,7 @@ describe("createFollowupRunner continueWorkOpts threading (#746)", () => {
       crossSessionTargeting: "enabled",
     };
     setRuntimeConfigSnapshot(runtimeConfig);
-    await saveSessionStore(storePath, sessionStore);
+    registerFollowupTestSessionStore(storePath, sessionStore);
     const delegateDispatch = await import("../continuation/delegate-dispatch.js");
     const dispatchSpy = vi
       .spyOn(delegateDispatch, "dispatchToolDelegates")
@@ -7339,6 +7352,7 @@ describe("createFollowupRunner continueWorkOpts threading (#746)", () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session-followup-cw",
       sessionFile: path.join(tmpDir, "session.jsonl"),
+      agentRuntimeOverride: "openclaw",
       updatedAt: Date.now(),
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
@@ -7359,7 +7373,7 @@ describe("createFollowupRunner continueWorkOpts threading (#746)", () => {
       session: { store: storePath },
     } as OpenClawConfig;
     setRuntimeConfigSnapshot(runtimeConfig);
-    await saveSessionStore(storePath, sessionStore);
+    registerFollowupTestSessionStore(storePath, sessionStore);
     runEmbeddedAgentMock.mockImplementationOnce(async (callArgs: unknown) => {
       const opts = (
         callArgs as {
@@ -7409,7 +7423,7 @@ describe("createFollowupRunner continueWorkOpts threading (#746)", () => {
         }),
       );
 
-      const stored = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+      const stored = loadSessionEntry({ storePath, sessionKey });
       expect(stored).toMatchObject({
         continuationChainCount: 1,
         continuationChainTokens: 12,
@@ -7433,11 +7447,13 @@ describe("createFollowupRunner continueWorkOpts threading (#746)", () => {
     const outerEntry: SessionEntry = {
       sessionId: "session-outer-followup",
       sessionFile: path.join(tmpDir, "outer.jsonl"),
+      agentRuntimeOverride: "openclaw",
       updatedAt: Date.now(),
     };
     const replyEntry: SessionEntry = {
       sessionId: "session-queued-followup",
       sessionFile: path.join(tmpDir, "queued.jsonl"),
+      agentRuntimeOverride: "openclaw",
       updatedAt: Date.now(),
     };
     const sessionStore: Record<string, SessionEntry> = {
@@ -7446,7 +7462,7 @@ describe("createFollowupRunner continueWorkOpts threading (#746)", () => {
     };
     const runtimeConfig = makeFollowupContinuationConfig(storePath);
     setRuntimeConfigSnapshot(runtimeConfig);
-    await saveSessionStore(storePath, sessionStore);
+    registerFollowupTestSessionStore(storePath, sessionStore);
     runEmbeddedAgentMock.mockImplementationOnce(async (callArgs: unknown) => {
       requestContinueWorkFromCall(callArgs, {
         reason: "queued key continuation",
@@ -7492,9 +7508,10 @@ describe("createFollowupRunner continueWorkOpts threading (#746)", () => {
       const { listTaskFlowsForOwnerKey } = await import("../../tasks/task-flow-registry.js");
       expect(listTaskFlowsForOwnerKey(outerSessionKey)).toHaveLength(0);
       expect(listTaskFlowsForOwnerKey(replySessionKey)).toHaveLength(1);
-      const stored = loadSessionStore(storePath, { skipCache: true });
-      expect(stored[outerSessionKey]?.continuationChainCount).toBeUndefined();
-      expect(stored[replySessionKey]).toMatchObject({
+      expect(
+        loadSessionEntry({ storePath, sessionKey: outerSessionKey })?.continuationChainCount,
+      ).toBeUndefined();
+      expect(loadSessionEntry({ storePath, sessionKey: replySessionKey })).toMatchObject({
         continuationChainCount: 1,
         continuationChainTokens: 7,
       });
@@ -7515,12 +7532,13 @@ describe("createFollowupRunner continueWorkOpts threading (#746)", () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session-followup-fallback-cw",
       sessionFile: path.join(tmpDir, "session.jsonl"),
+      agentRuntimeOverride: "openclaw",
       updatedAt: Date.now(),
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     const runtimeConfig = makeFollowupContinuationConfig(storePath);
     setRuntimeConfigSnapshot(runtimeConfig);
-    await saveSessionStore(storePath, sessionStore);
+    registerFollowupTestSessionStore(storePath, sessionStore);
     runWithModelFallbackMock.mockImplementationOnce(
       async (params: { run: (provider: string, model: string) => Promise<unknown> }) => {
         await params.run("anthropic", "discarded");
@@ -7610,12 +7628,13 @@ describe("createFollowupRunner continueWorkOpts threading (#746)", () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session-followup-unsafe-cw",
       sessionFile: path.join(tmpDir, "session.jsonl"),
+      agentRuntimeOverride: "openclaw",
       updatedAt: Date.now(),
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     const runtimeConfig = makeFollowupContinuationConfig(storePath);
     setRuntimeConfigSnapshot(runtimeConfig);
-    await saveSessionStore(storePath, sessionStore);
+    registerFollowupTestSessionStore(storePath, sessionStore);
     runEmbeddedAgentMock.mockImplementationOnce(async (callArgs: unknown) => {
       requestContinueWorkFromCall(callArgs, {
         reason: "unsafe request",
@@ -7666,7 +7685,7 @@ describe("createFollowupRunner continueWorkOpts threading (#746)", () => {
 
       const { listTaskFlowsForOwnerKey } = await import("../../tasks/task-flow-registry.js");
       expect(listTaskFlowsForOwnerKey(sessionKey)).toHaveLength(0);
-      const stored = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+      const stored = loadSessionEntry({ storePath, sessionKey });
       expect(stored?.continuationChainCount).toBeUndefined();
     } finally {
       const { resetContinuationWorkDispatchForTests } =
@@ -7685,6 +7704,7 @@ describe("createFollowupRunner continueWorkOpts threading (#746)", () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session-followup-token-cw",
       sessionFile: path.join(tmpDir, "session.jsonl"),
+      agentRuntimeOverride: "openclaw",
       updatedAt: Date.now(),
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
@@ -7705,7 +7725,7 @@ describe("createFollowupRunner continueWorkOpts threading (#746)", () => {
       session: { store: storePath },
     } as OpenClawConfig;
     setRuntimeConfigSnapshot(runtimeConfig);
-    await saveSessionStore(storePath, sessionStore);
+    registerFollowupTestSessionStore(storePath, sessionStore);
     runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "done\nCONTINUE_WORK" }],
       meta: {

@@ -90,7 +90,6 @@ function existingSessionRejectsActTimeout(request: BrowserActRequest): boolean {
     case "drag":
     case "select":
     case "fill":
-    case "evaluate":
       return true;
     default:
       return false;

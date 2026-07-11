@@ -130,6 +130,68 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(options.crossStateDirImports).toBe(false);
   });
 
+  it("passes session sqlite options to doctor command", async () => {
+    doctorCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli([
+      "doctor",
+      "--session-sqlite",
+      "import",
+      "--session-sqlite-store",
+      "/tmp/openclaw/sessions.json",
+      "--json",
+    ]);
+
+    expect(doctorCommand).toHaveBeenCalledTimes(1);
+    const [runtimeArg, options] = commandCall(doctorCommand);
+    expect(runtimeArg).toBe(runtime);
+    expect(options.sessionSqlite).toBe("import");
+    expect(options.sessionSqliteStore).toBe("/tmp/openclaw/sessions.json");
+    expect(options.json).toBe(true);
+    expect(runtime.exit).toHaveBeenCalledWith(0);
+  });
+
+  it("passes session sqlite recover GitHub issue option to doctor command", async () => {
+    doctorCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli(["doctor", "--session-sqlite", "recover", "--github-issue", "--yes"]);
+
+    expect(doctorCommand).toHaveBeenCalledTimes(1);
+    const [, options] = commandCall(doctorCommand);
+    expect(options.sessionSqlite).toBe("recover");
+    expect(options.sessionSqliteGithubIssue).toBe(true);
+    expect(options.yes).toBe(true);
+    expect(runtime.exit).toHaveBeenCalledWith(0);
+  });
+
+  it("passes session sqlite compact mode to doctor command", async () => {
+    doctorCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli([
+      "doctor",
+      "--session-sqlite",
+      "compact",
+      "--session-sqlite-agent",
+      "main",
+    ]);
+
+    expect(doctorCommand).toHaveBeenCalledTimes(1);
+    const [, options] = commandCall(doctorCommand);
+    expect(options.sessionSqlite).toBe("compact");
+    expect(options.sessionSqliteAgent).toBe("main");
+    expect(runtime.exit).toHaveBeenCalledWith(0);
+  });
+
+  it("rejects session sqlite selectors without session sqlite mode", async () => {
+    await runMaintenanceCli(["doctor", "--session-sqlite-agent", "main"]);
+
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      "doctor session SQLite options require --session-sqlite. Use `openclaw doctor --session-sqlite dry-run ...`.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
+
   it("runs doctor lint mode without invoking repair doctor", async () => {
     runDoctorLintCli.mockResolvedValue(1);
 

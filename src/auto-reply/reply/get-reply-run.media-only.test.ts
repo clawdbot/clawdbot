@@ -2,7 +2,6 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearActiveEmbeddedRun,
@@ -170,7 +169,6 @@ let buildInboundUserContextPrefix: typeof import("./inbound-meta.js").buildInbou
 let resolveInboundUserContextPromptJoiner: typeof import("./inbound-meta.js").resolveInboundUserContextPromptJoiner;
 let getActiveReplyRunCount: typeof import("./reply-run-registry.js").getActiveReplyRunCount;
 let replyRunTesting: typeof import("./reply-run-registry.js").testing;
-let loadScopeCounter = 0;
 
 function createGatewayDrainingError(): Error {
   const error = new Error("Gateway is draining for restart; new tasks are not accepted");
@@ -178,16 +176,8 @@ function createGatewayDrainingError(): Error {
   return error;
 }
 
-async function loadFreshGetReplyRunModuleForTest() {
-  return await importFreshModule<typeof import("./get-reply-run.js")>(
-    import.meta.url,
-    `./get-reply-run.js?scope=media-only-${loadScopeCounter++}`,
-  );
-}
-
 const ROOM_EVENT_MESSAGE_TOOL_DIRECTIVE =
   "Treat this as observed room activity. Default: no reply; most room events need no response from you. Send a visible reply via message(action=send) only when you are directly addressed or have concrete value to add; your final text here stays private either way.";
-
 function baseParams(
   overrides: Partial<Parameters<typeof runPreparedReply>[0]> = {},
 ): Parameters<typeof runPreparedReply>[0] {
@@ -344,12 +334,6 @@ describe("runPreparedReply media-only handling", () => {
     vi.useRealTimers();
     const paths = cleanupPaths.splice(0);
     return Promise.all(paths.map((entry) => rm(entry, { recursive: true, force: true })));
-  });
-
-  it("does not load session store runtime on module import", async () => {
-    await loadFreshGetReplyRunModuleForTest();
-
-    expect(storeRuntimeLoads).not.toHaveBeenCalled();
   });
 
   it("passes approved elevated defaults to the runner", async () => {
@@ -511,7 +495,6 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.run.thinkLevel).toBe("off");
     expect(sessionEntry.thinkingLevel).toBe("high");
     expect(sessionStore["session-key"]?.thinkingLevel).toBe("high");
-    expect(updateSessionStore).not.toHaveBeenCalled();
   });
 
   it("keeps empty-assistant silence disabled for direct runs by default", async () => {

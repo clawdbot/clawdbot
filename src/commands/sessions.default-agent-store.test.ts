@@ -121,15 +121,28 @@ describe("sessionsCommand default store agent selection", () => {
     expect(payload.sessions?.map((session) => session.agentId)).toContain("voice");
   });
 
-  it("avoids duplicate rows when --all-agents resolves to a shared store path", async () => {
+  it("lists each SQLite owner when --all-agents resolves to a shared store path", async () => {
     loadConfigMock.mockImplementation(() => createSessionsConfig("/tmp/shared-sessions.json"));
     listSessionEntriesMock.mockReset();
-    listSessionEntriesMock.mockReturnValue(
-      toSessionEntrySummaries({
-        "agent:main:room": { sessionId: "s1", updatedAt: Date.now() - 60_000, model: "test:opus" },
-        "agent:voice:room": { sessionId: "s2", updatedAt: Date.now() - 30_000, model: "test:opus" },
-      }),
-    );
+    listSessionEntriesMock
+      .mockReturnValueOnce(
+        toSessionEntrySummaries({
+          "agent:main:room": {
+            sessionId: "s1",
+            updatedAt: Date.now() - 60_000,
+            model: "test:opus",
+          },
+        }),
+      )
+      .mockReturnValueOnce(
+        toSessionEntrySummaries({
+          "agent:voice:room": {
+            sessionId: "s2",
+            updatedAt: Date.now() - 30_000,
+            model: "test:opus",
+          },
+        }),
+      );
     const { runtime, logs } = createRuntime();
 
     await sessionsCommand({ allAgents: true, json: true }, runtime);
@@ -142,12 +155,15 @@ describe("sessionsCommand default store agent selection", () => {
     };
     expect(payload.count).toBe(2);
     expect(payload.allAgents).toBe(true);
-    expect(payload.stores).toEqual([{ agentId: "main", path: "/tmp/shared-sessions.json" }]);
+    expect(payload.stores).toEqual([
+      { agentId: "main", path: "/tmp/shared-sessions.json" },
+      { agentId: "voice", path: "/tmp/shared-sessions.json" },
+    ]);
     expect(payload.sessions?.map((session) => session.agentId).toSorted()).toEqual([
       "main",
       "voice",
     ]);
-    expect(listSessionEntriesMock).toHaveBeenCalledTimes(1);
+    expect(listSessionEntriesMock).toHaveBeenCalledTimes(2);
   });
 
   it("uses configured default agent id when resolving implicit session store path", async () => {

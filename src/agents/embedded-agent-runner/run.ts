@@ -16,7 +16,12 @@ import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { getRuntimeConfigSnapshot } from "../../config/config.js";
 import { resolveStorePath } from "../../config/sessions.js";
-import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  resolveSessionTranscriptRuntimeReadTarget,
+  updateSessionEntry,
+} from "../../config/sessions/session-accessor.js";
+import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import {
@@ -24,7 +29,10 @@ import {
   resolveContextEngineOwnerPluginId,
 } from "../../context-engine/registry.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
-import { resolveCompactionSuccessorTranscript } from "../../context-engine/types.js";
+import {
+  type ContextEngineSessionTarget,
+  resolveCompactionSuccessorTranscript,
+} from "../../context-engine/types.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   captureAgentRunLifecycleGeneration,
@@ -49,6 +57,7 @@ import type { CommandQueueEnqueueOptions } from "../../process/command-queue.typ
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { looksLikeSecretSentinel, resolveSecretSentinel } from "../../secrets/sentinel.js";
 import { createAgentHarnessTaskRuntimeScope } from "../../tasks/agent-harness-task-runtime-scope.js";
+import { createTrajectoryRuntimeRecorder } from "../../trajectory/runtime.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import {
@@ -151,6 +160,7 @@ import {
 import { createAgentRunDirectAbortError } from "../run-termination.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
+import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import {
   resolveSessionSuspensionReason,
@@ -264,7 +274,7 @@ import type { EmbeddedRunFastModeParam } from "./run/types.js";
 import {
   resolveLiveToolResultMaxChars,
   sessionLikelyHasOversizedToolResults,
-  truncateOversizedToolResultsInSession,
+  truncateOversizedToolResultsInActiveTarget,
 } from "./tool-result-truncation.js";
 import type {
   EmbeddedAgentMeta,
@@ -277,6 +287,9 @@ import { mapThinkingLevelForProvider } from "./utils.js";
 
 type ApiKeyInfo = ResolvedProviderAuth;
 
+const CODEX_HARNESS_ID = "codex";
+const OPENAI_RESPONSES_API = "openai-responses";
+const OPENAI_CODEX_RESPONSES_API = "openai-chatgpt-responses";
 const MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES = 1;
 const EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS = 30_000;
 const EMBEDDED_RUN_LANE_HEARTBEAT_MS = EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS / 2;
@@ -300,6 +313,68 @@ type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
 type RunEmbeddedAgentParamsWithSessionFile = RunEmbeddedAgentInternalParams & {
   sessionFile: string;
 };
+
+function normalizeRuntimeId(value: string | undefined): string {
+  return value?.trim().toLowerCase() ?? "";
+}
+
+function resolveAttemptTrajectoryAttribution(params: {
+  model: { api?: string; provider?: string };
+  modelId: string;
+  provider: string;
+  runtimePlan: {
+    auth?: Pick<AgentRuntimePlan["auth"], "authProfileProviderForAuth">;
+    observability?: Pick<AgentRuntimePlan["observability"], "harnessId">;
+  };
+}): { modelApi?: string; modelId: string; provider: string } {
+  const authProfileProvider = normalizeRuntimeId(
+    params.runtimePlan.auth?.authProfileProviderForAuth,
+  );
+  const harnessId = normalizeRuntimeId(params.runtimePlan.observability?.harnessId);
+  if (
+    harnessId === CODEX_HARNESS_ID &&
+    authProfileProvider !== OPENAI_PROVIDER_ID &&
+    normalizeRuntimeId(params.model.provider) === OPENAI_PROVIDER_ID &&
+    normalizeRuntimeId(params.model.api) === OPENAI_RESPONSES_API
+  ) {
+    return {
+      modelApi: OPENAI_CODEX_RESPONSES_API,
+      modelId: params.modelId,
+      provider: OPENAI_PROVIDER_ID,
+    };
+  }
+  return {
+    ...(params.model.api ? { modelApi: params.model.api } : {}),
+    modelId: params.modelId,
+    provider: params.provider,
+  };
+}
+
+function buildContextEngineCompactionSessionTarget(params: {
+  agentId: string;
+  config?: RunEmbeddedAgentParams["config"];
+  sessionFile: string;
+  sessionId: string;
+  sessionKey?: string;
+  sessionTarget?: RunEmbeddedAgentParams["sessionTarget"];
+}): ContextEngineSessionTarget {
+  const sqliteMarker = parseSqliteSessionFileMarker(params.sessionFile);
+  const agentId = params.sessionTarget?.agentId ?? sqliteMarker?.agentId ?? params.agentId;
+  const sessionKey = params.sessionTarget?.sessionKey ?? params.sessionKey ?? params.sessionId;
+  const storePath =
+    params.sessionTarget?.storePath ??
+    sqliteMarker?.storePath ??
+    resolveStorePath(params.config?.session?.store, { agentId });
+  return {
+    agentId,
+    sessionId: params.sessionTarget?.sessionId ?? sqliteMarker?.sessionId ?? params.sessionId,
+    ...(sessionKey ? { sessionKey } : {}),
+    ...(storePath ? { storePath } : {}),
+    ...(params.sessionTarget?.threadId !== undefined
+      ? { threadId: params.sessionTarget.threadId }
+      : {}),
+  };
+}
 
 function isNoRealConversationCompactionNoop(params: {
   ok?: boolean;
@@ -887,7 +962,12 @@ async function runEmbeddedAgentInternal(
     // Same-session reads below must see any prior deferred transcript rewrite.
     // Checkpoint before the global lane so unrelated sessions can still start
     // while this session waits on its own maintenance lane.
-    await waitForDeferredTurnMaintenanceForSession(params.sessionKey);
+    params.replyOperation?.markWaitingForDeferredMaintenance();
+    try {
+      await waitForDeferredTurnMaintenanceForSession(params.sessionKey);
+    } finally {
+      params.replyOperation?.markDeferredMaintenanceWaitEnded();
+    }
     throwIfAborted();
     return enqueueGlobal(async () => {
       throwIfAborted();
@@ -1088,7 +1168,8 @@ async function runEmbeddedAgentInternal(
         sessionKey: normalizedSessionKey,
         modelFallbacksOverride: params.modelFallbacksOverride,
       });
-      const resolvedSessionKey = normalizedSessionKey;
+      const resolvedSessionKey =
+        normalizedSessionKey ?? params.sessionTarget?.sessionKey ?? params.sessionId;
       const hookRunner = getGlobalHookRunner();
       const hookCtx = {
         runId: params.runId,
@@ -1809,6 +1890,15 @@ async function runEmbeddedAgentInternal(
       const rateLimitProfileRotationLimit = resolveRateLimitProfileRotationLimit(params.config);
       let activeSessionId = params.sessionId;
       let activeSessionFile = params.sessionFile;
+      let activeSessionTarget: ContextEngineSessionTarget | undefined =
+        buildContextEngineCompactionSessionTarget({
+          agentId: params.agentId ?? sessionAgentId,
+          config: params.config,
+          sessionFile: activeSessionFile,
+          sessionId: activeSessionId,
+          sessionKey: resolvedSessionKey,
+          sessionTarget: params.sessionTarget,
+        });
       const adoptActiveSessionId = (nextSessionId: string | undefined) => {
         if (!nextSessionId || nextSessionId === activeSessionId) {
           return;
@@ -1823,6 +1913,23 @@ async function runEmbeddedAgentInternal(
           lifecycleGeneration,
         });
       };
+      const adoptActiveSessionTarget = async (
+        nextSessionTarget: ContextEngineSessionTarget | undefined,
+      ) => {
+        if (!nextSessionTarget) {
+          return;
+        }
+        const resolvedTarget = await resolveAgentRunSessionTarget({
+          agentId: nextSessionTarget.agentId ?? sessionAgentId,
+          config: params.config,
+          sessionId: nextSessionTarget.sessionId ?? activeSessionId,
+          sessionKey: nextSessionTarget.sessionKey ?? resolvedSessionKey,
+          sessionTarget: nextSessionTarget,
+        });
+        activeSessionTarget = nextSessionTarget;
+        activeSessionFile = resolvedTarget.sessionFile;
+        adoptActiveSessionId(resolvedTarget.sessionId);
+      };
       let suppressNextUserMessagePersistence = params.suppressNextUserMessagePersistence ?? false;
       // The embedded agent owns JSONL persistence; this marker lets the outer retry avoid
       // replaying the same inbound channel message after overflow compaction.
@@ -1830,15 +1937,60 @@ async function runEmbeddedAgentInternal(
       const onUserMessagePersisted: RunEmbeddedAgentParams["onUserMessagePersisted"] = (
         message,
       ) => {
-        if (params.currentMessageId !== undefined) {
-          lastPersistedCurrentMessageId = params.currentMessageId;
+        const messageMetadata = message as {
+          __openclaw?: { beforeAgentRunBlocked?: unknown };
+        };
+        const blockedBeforeAgentRun = messageMetadata["__openclaw"]?.beforeAgentRunBlocked;
+        const markCurrentUserMessagePersisted = () => {
+          if (params.currentMessageId !== undefined) {
+            lastPersistedCurrentMessageId = params.currentMessageId;
+          }
+          params.onUserMessagePersisted?.(message);
+        };
+        const recorder = params.userTurnTranscriptRecorder;
+        if (!recorder) {
+          markCurrentUserMessagePersisted();
+          return;
         }
-        params.userTurnTranscriptRecorder?.markRuntimePersisted(message);
-        params.onUserMessagePersisted?.(message);
+        const markWhenPersisted = (persisted: { message?: unknown } | undefined) => {
+          if (persisted?.message || recorder.hasPersisted()) {
+            markCurrentUserMessagePersisted();
+          }
+        };
+        if (blockedBeforeAgentRun !== undefined) {
+          const canonicalPersistence = recorder
+            .persistBlocked(message)
+            .then(markWhenPersisted)
+            .catch((persistError: unknown) => {
+              log.warn(
+                `failed to persist canonical blocked embedded user turn transcript: ${formatErrorMessage(
+                  persistError,
+                )}`,
+              );
+            });
+          recorder.markRuntimePersistencePending(canonicalPersistence);
+          return;
+        }
+        const canonicalPersistence = recorder
+          .persistApproved()
+          .then(markWhenPersisted)
+          .catch((persistError: unknown) => {
+            log.warn(
+              `failed to persist canonical embedded user turn transcript: ${formatErrorMessage(
+                persistError,
+              )}`,
+            );
+          });
+        recorder.markRuntimePersistencePending(canonicalPersistence);
       };
       const continueFromCurrentTranscript = () => {
         nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
         suppressNextUserMessagePersistence = true;
+      };
+      const waitForCurrentUserMessagePersistence = async () => {
+        if (params.userTurnTranscriptRecorder?.hasRuntimePersistencePending() === true) {
+          await params.userTurnTranscriptRecorder.waitForRuntimePersistence();
+        }
       };
       const maybeEscalateRateLimitProfileFallback = (paramsLocal: {
         failoverProvider: string;
@@ -2010,15 +2162,28 @@ async function runEmbeddedAgentInternal(
           ...hookCtx,
           sessionId: activeSessionId,
         });
-        const adoptCompactionTranscript = (
+        const adoptCompactionTranscript = async (
           compactResult: Awaited<ReturnType<typeof contextEngine.compact>>,
-        ): string | undefined => {
+        ): Promise<string | undefined> => {
           const previousSessionId = activeSessionId;
+          const nextSessionTarget = compactResult.result?.sessionTarget;
           const successor = resolveCompactionSuccessorTranscript(compactResult);
-          adoptActiveSessionId(successor.sessionId);
-          if (successor.sessionFile && successor.sessionFile !== activeSessionFile) {
+          await adoptActiveSessionTarget(
+            nextSessionTarget && successor.sessionId
+              ? {
+                  ...nextSessionTarget,
+                  sessionId: nextSessionTarget.sessionId ?? successor.sessionId,
+                }
+              : nextSessionTarget,
+          );
+          if (
+            !nextSessionTarget &&
+            successor.sessionFile &&
+            successor.sessionFile !== activeSessionFile
+          ) {
             activeSessionFile = successor.sessionFile;
           }
+          adoptActiveSessionId(successor.sessionId);
           return successor.sessionId && successor.sessionId !== previousSessionId
             ? previousSessionId
             : undefined;
@@ -2163,6 +2328,18 @@ async function runEmbeddedAgentInternal(
             runtimeAuthState,
           });
           const attemptFastMode = resolveAttemptFastModeParam();
+          const trajectorySessionFile = resolvedSessionKey
+            ? (
+                await resolveSessionTranscriptRuntimeReadTarget({
+                  agentId: workspaceResolution.agentId,
+                  sessionId: activeSessionId,
+                  sessionKey: resolvedSessionKey,
+                  storePath: resolveStorePath(params.config?.session?.store, {
+                    agentId: workspaceResolution.agentId,
+                  }),
+                })
+              ).sessionFile
+            : activeSessionFile;
           if (!startupStagesEmitted) {
             startupStages.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.prompt);
           }
@@ -2195,6 +2372,27 @@ async function runEmbeddedAgentInternal(
               fastMode: attemptFastMode,
             },
           });
+          const trajectoryAttribution = resolveAttemptTrajectoryAttribution({
+            model: effectiveModel,
+            modelId,
+            provider,
+            runtimePlan,
+          });
+          const hostTrajectoryRecorder =
+            agentHarness.id === CODEX_HARNESS_ID
+              ? createTrajectoryRuntimeRecorder({
+                  cfg: params.config,
+                  env: process.env,
+                  runId: params.runId,
+                  sessionId: activeSessionId,
+                  sessionKey: resolvedSessionKey,
+                  sessionFile: trajectorySessionFile,
+                  provider: trajectoryAttribution.provider,
+                  modelId: trajectoryAttribution.modelId,
+                  modelApi: trajectoryAttribution.modelApi,
+                  workspaceDir: resolvedWorkspace,
+                })
+              : undefined;
           if (!startupStagesEmitted) {
             startupStages.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.runtimePlan);
             startupStages.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.dispatch);
@@ -2313,6 +2511,9 @@ async function runEmbeddedAgentInternal(
             replyToMode: params.replyToMode,
             hasRepliedRef: params.hasRepliedRef,
             sessionFile: activeSessionFile,
+            sessionTarget: activeSessionTarget,
+            trajectorySessionFile,
+            trajectoryRecorder: hostTrajectoryRecorder,
             workspaceDir: resolvedWorkspace,
             cwd: params.cwd,
             agentDir,
@@ -2491,6 +2692,7 @@ async function runEmbeddedAgentInternal(
             throw postCompactionAbortError;
           }
           const attempt = normalizeEmbeddedRunAttemptResult(rawAttempt);
+          await waitForCurrentUserMessagePersistence();
           if (attemptCancellationRequested) {
             throwIfAborted();
             throw createAgentRunDirectAbortError();
@@ -2517,9 +2719,25 @@ async function runEmbeddedAgentInternal(
           };
           const timedOutDuringToolExecution = attempt.timedOutDuringToolExecution ?? false;
           const timedOutByRunBudget = attempt.timedOutByRunBudget ?? false;
+          const previousActiveSessionId = activeSessionId;
+          const previousActiveSessionFile = activeSessionFile;
           adoptActiveSessionId(sessionIdUsed);
           if (sessionFileUsed && sessionFileUsed !== activeSessionFile) {
             activeSessionFile = sessionFileUsed;
+          }
+          if (
+            (sessionIdUsed && sessionIdUsed !== previousActiveSessionId) ||
+            (sessionFileUsed && sessionFileUsed !== previousActiveSessionFile)
+          ) {
+            const activeSqliteMarker = parseSqliteSessionFileMarker(activeSessionFile);
+            activeSessionTarget = activeSqliteMarker
+              ? {
+                  agentId: activeSqliteMarker.agentId,
+                  sessionId: activeSqliteMarker.sessionId,
+                  sessionKey: resolvedSessionKey,
+                  storePath: activeSqliteMarker.storePath,
+                }
+              : undefined;
           }
           bootstrapPromptWarningSignaturesSeen =
             attempt.bootstrapPromptWarningSignaturesSeen ??
@@ -2806,8 +3024,16 @@ async function runEmbeddedAgentInternal(
                   contextEngine,
                   {
                     sessionId: activeSessionId,
-                    sessionKey: params.sessionKey,
-                    sessionFile: activeSessionFile,
+                    sessionKey: resolvedSessionKey,
+                    agentId: sessionAgentId,
+                    sessionTarget: buildContextEngineCompactionSessionTarget({
+                      agentId: sessionAgentId,
+                      config: params.config,
+                      sessionFile: activeSessionFile,
+                      sessionId: activeSessionId,
+                      sessionKey: resolvedSessionKey,
+                      sessionTarget: activeSessionTarget,
+                    }),
                     tokenBudget: contextTokenBudget,
                     force: true,
                     compactionTarget: "budget",
@@ -2830,7 +3056,7 @@ async function runEmbeddedAgentInternal(
                 };
               }
               const previousSessionId = timeoutCompactResult.compacted
-                ? adoptCompactionTranscript(timeoutCompactResult)
+                ? await adoptCompactionTranscript(timeoutCompactResult)
                 : undefined;
               await runOwnsCompactionAfterHook(
                 "timeout recovery",
@@ -2850,6 +3076,7 @@ async function runEmbeddedAgentInternal(
                   await runPostCompactionSideEffects({
                     config: params.config,
                     sessionKey: params.sessionKey,
+                    sessionId: activeSessionId,
                     agentId: sessionAgentId,
                     sessionFile: activeSessionFile,
                   });
@@ -3044,8 +3271,16 @@ async function runEmbeddedAgentInternal(
                   contextEngine,
                   {
                     sessionId: activeSessionId,
-                    sessionKey: params.sessionKey,
-                    sessionFile: activeSessionFile,
+                    sessionKey: resolvedSessionKey,
+                    agentId: sessionAgentId,
+                    sessionTarget: buildContextEngineCompactionSessionTarget({
+                      agentId: sessionAgentId,
+                      config: params.config,
+                      sessionFile: activeSessionFile,
+                      sessionId: activeSessionId,
+                      sessionKey: resolvedSessionKey,
+                      sessionTarget: activeSessionTarget,
+                    }),
                     tokenBudget: contextTokenBudget,
                     ...(overflowTokenCountForCompaction !== undefined
                       ? { currentTokenCount: overflowTokenCountForCompaction }
@@ -3059,11 +3294,12 @@ async function runEmbeddedAgentInternal(
                   params.abortSignal,
                 );
                 if (compactResult.ok && compactResult.compacted) {
-                  previousSessionId = adoptCompactionTranscript(compactResult);
+                  previousSessionId = await adoptCompactionTranscript(compactResult);
                   await runContextEngineMaintenance({
                     contextEngine,
                     sessionId: activeSessionId,
                     sessionKey: params.sessionKey,
+                    sessionTarget: activeSessionTarget,
                     sessionFile: activeSessionFile,
                     reason: "compaction",
                     runtimeContext: overflowCompactionRuntimeContext,
@@ -3105,7 +3341,7 @@ async function runEmbeddedAgentInternal(
                 continue;
               }
               if (compactResult.compacted) {
-                adoptCompactionTranscript(compactResult);
+                await adoptCompactionTranscript(compactResult);
                 if (
                   typeof compactResult.result?.tokensAfter === "number" &&
                   Number.isFinite(compactResult.result.tokensAfter) &&
@@ -3114,17 +3350,19 @@ async function runEmbeddedAgentInternal(
                   lastCompactionTokensAfter = Math.floor(compactResult.result.tokensAfter);
                 }
                 if (preflightRecovery?.route === "compact_then_truncate") {
-                  const truncResult = await truncateOversizedToolResultsInSession({
-                    sessionFile: activeSessionFile,
+                  const truncResult = await truncateOversizedToolResultsInActiveTarget({
+                    scope: {
+                      sessionId: activeSessionId,
+                      sessionKey: params.sessionKey ?? activeSessionId,
+                      sessionFile: activeSessionFile,
+                      agentId: sessionAgentId,
+                    },
                     contextWindowTokens: contextTokenBudget,
                     maxCharsOverride: resolveLiveToolResultMaxChars({
                       contextWindowTokens: contextTokenBudget,
                       cfg: params.config,
                       agentId: sessionAgentId,
                     }),
-                    sessionId: activeSessionId,
-                    sessionKey: params.sessionKey,
-                    agentId: sessionAgentId,
                     config: params.config,
                     protectTrailingToolResults: true,
                   });
@@ -3145,15 +3383,18 @@ async function runEmbeddedAgentInternal(
                 postCompactionGuard.armPostCompaction();
                 if (preflightRecovery?.source === "mid-turn") {
                   continueFromCurrentTranscript();
-                } else if (
-                  params.currentMessageId !== undefined &&
-                  params.currentMessageId === lastPersistedCurrentMessageId
-                ) {
-                  // The first attempt reached the embedded agent far enough to persist this user turn.
-                  // Retrying the original prompt would replay it, so resume from the
-                  // compacted transcript and suppress the next user append.
-                  nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
-                  suppressNextUserMessagePersistence = true;
+                } else {
+                  await waitForCurrentUserMessagePersistence();
+                  if (
+                    params.currentMessageId !== undefined &&
+                    params.currentMessageId === lastPersistedCurrentMessageId
+                  ) {
+                    // The first attempt reached the embedded agent far enough to persist this user turn.
+                    // Retrying the original prompt would replay it, so resume from the
+                    // compacted transcript and suppress the next user append.
+                    nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
+                    suppressNextUserMessagePersistence = true;
+                  }
                 }
                 continue;
               }
@@ -3182,13 +3423,15 @@ async function runEmbeddedAgentInternal(
                   `[context-overflow-recovery] Attempting tool result truncation for ${provider}/${modelId} ` +
                     `(contextWindow=${contextWindowTokens} tokens)`,
                 );
-                const truncResult = await truncateOversizedToolResultsInSession({
-                  sessionFile: activeSessionFile,
+                const truncResult = await truncateOversizedToolResultsInActiveTarget({
+                  scope: {
+                    sessionId: activeSessionId,
+                    sessionKey: params.sessionKey ?? activeSessionId,
+                    sessionFile: activeSessionFile,
+                    agentId: sessionAgentId,
+                  },
                   contextWindowTokens,
                   maxCharsOverride: toolResultMaxChars,
-                  sessionId: activeSessionId,
-                  sessionKey: params.sessionKey,
-                  agentId: sessionAgentId,
                   config: params.config,
                   protectTrailingToolResults: preflightRecovery?.route === "compact_then_truncate",
                 });

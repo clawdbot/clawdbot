@@ -3,6 +3,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
+import { listSessionEntries, loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { embeddedRunMock, testState, writeSessionStore } from "./test-helpers.js";
 import {
@@ -17,6 +18,7 @@ import {
   sessionStoreEntry,
   expectActiveRunCleanup,
   directSessionReq,
+  seedSessionTranscript,
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, seedActiveMainSession } = setupGatewaySessionsTestHarness();
@@ -87,7 +89,7 @@ function expectStringWithPrefix(value: unknown, prefix: string, label: string): 
 }
 
 async function configureGlobalAgentSessionStore(dir: string) {
-  const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
+  const storeTemplate = path.join(dir, "agents", "{agentId}", "sessions", "sessions.json");
   const configPath = expectStringValue(process.env.OPENCLAW_CONFIG_PATH, "OPENCLAW_CONFIG_PATH");
   const { clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js");
   testState.sessionStorePath = storeTemplate;
@@ -134,50 +136,69 @@ async function withGlobalAgentSessionStore<T>(
 }
 
 async function writeGlobalSessionFile(storePath: string, sessionId: string) {
-  await fs.mkdir(path.dirname(storePath), { recursive: true });
-  await fs.writeFile(
+  const agentId = path.basename(path.dirname(path.dirname(storePath)));
+  await writeSessionStore({
+    agentId,
+    entries: {
+      global: sessionStoreEntry(sessionId),
+    },
     storePath,
-    JSON.stringify({ global: sessionStoreEntry(sessionId) }, null, 2),
-    "utf-8",
-  );
+  });
 }
 
 async function writeMessageTranscript(params: {
-  dir: string;
   sessionId: string;
+  sessionKey: string;
+  storePath: string;
+  agentId?: string;
   content: string;
   messageId?: string;
 }) {
-  const transcriptPath = path.join(params.dir, `${params.sessionId}.jsonl`);
-  await fs.writeFile(
-    transcriptPath,
-    `${JSON.stringify({
-      type: "message",
-      id: params.messageId ?? "m1",
-      message: { role: "user", content: params.content },
-    })}\n`,
-    "utf-8",
-  );
-  return transcriptPath;
+  await seedSessionTranscript({
+    agentId: params.agentId,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+    messages: [{ role: "user", content: params.content, id: params.messageId ?? "m1" }],
+  });
 }
 
 async function writeMainTranscriptSession(params: {
-  dir: string;
   sessionId: string;
   content: string;
   messageId?: string;
 }) {
-  const transcriptPath = await writeMessageTranscript(params);
+  const storePath = expectStringValue(testState.sessionStorePath, "testState.sessionStorePath");
   await writeSessionStore({
     entries: {
       main: {
         sessionId: params.sessionId,
-        sessionFile: transcriptPath,
         updatedAt: Date.now(),
       },
     },
   });
-  return transcriptPath;
+  await writeMessageTranscript({
+    ...params,
+    agentId: "main",
+    sessionKey: "agent:main:main",
+    storePath,
+  });
+  return expectStringValue(
+    loadSessionEntry({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      storePath,
+    })?.sessionFile,
+    "sessionFile",
+  );
+}
+
+function loadEntry(params: { agentId?: string; sessionKey: string; storePath: string }) {
+  return loadSessionEntry({
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+  });
 }
 
 async function writeMainSessionEntry(
@@ -275,12 +296,10 @@ function claudeCliBindings(sessionId: string) {
 
 function cliBoundSessionEntry(
   sessionId: string,
-  sessionFile: string,
   cliSessionId: string,
   overrides: Parameters<typeof sessionStoreEntry>[1] = {},
 ) {
   return sessionStoreEntry(sessionId, {
-    sessionFile,
     ...overrides,
     ...claudeCliBindings(cliSessionId),
   });
@@ -298,22 +317,13 @@ async function resolveGatewaySessionStorePathForKey(key: string) {
 }
 
 async function loadGatewaySessionStoreForKey(key: string) {
-  const [{ loadSessionStore }, gatewayStorePath] = await Promise.all([
-    import("../config/sessions.js"),
-    resolveGatewaySessionStorePathForKey(key),
-  ]);
-  return loadSessionStore(gatewayStorePath, { skipCache: true });
-}
-
-async function updateGatewaySessionStoreForKey(
-  key: string,
-  update: Parameters<(typeof import("../config/sessions.js"))["updateSessionStore"]>[1],
-) {
-  const [{ updateSessionStore }, gatewayStorePath] = await Promise.all([
-    import("../config/sessions.js"),
-    resolveGatewaySessionStorePathForKey(key),
-  ]);
-  await updateSessionStore(gatewayStorePath, update);
+  const gatewayStorePath = await resolveGatewaySessionStorePathForKey(key);
+  return Object.fromEntries(
+    listSessionEntries({ storePath: gatewayStorePath }).map(({ sessionKey, entry }) => [
+      sessionKey,
+      entry,
+    ]),
+  );
 }
 
 function expectCliBindingsCleared(
@@ -368,9 +378,8 @@ test("sessions.reset does not begin cleanup after losing lifecycle ownership", a
 });
 
 test("sessions.reset emits before_reset hook with transcript context", async () => {
-  const { dir } = await createSessionStoreDir();
+  await createSessionStoreDir();
   const transcriptPath = await writeMainTranscriptSession({
-    dir,
     sessionId: "sess-main",
     content: "hello from transcript",
   });
@@ -417,15 +426,19 @@ test("sessions.reset infers selected global agent from agent-prefixed aliases", 
       agentId: "work",
     });
     expect(resetTarget.storePath).toBe(globalConfig.workStorePath);
-    const mainStore = JSON.parse(await fs.readFile(globalConfig.mainStorePath, "utf-8")) as {
-      global?: { sessionId?: string };
-    };
-    const workStore = JSON.parse(await fs.readFile(resetTarget.storePath, "utf-8")) as {
-      global?: { sessionId?: string };
-    };
-    expect(mainStore.global?.sessionId).toBe("sess-main-global");
-    expect(workStore.global?.sessionId).toBe(reset.entry.sessionId);
-    expect(workStore.global?.sessionId).not.toBe("sess-work-global");
+    const mainEntry = loadEntry({
+      agentId: "main",
+      sessionKey: "global",
+      storePath: globalConfig.mainStorePath,
+    });
+    const workEntry = loadEntry({
+      agentId: "work",
+      sessionKey: "global",
+      storePath: resetTarget.storePath,
+    });
+    expect(mainEntry?.sessionId).toBe("sess-main-global");
+    expect(workEntry?.sessionId).toBe(reset.entry.sessionId);
+    expect(workEntry?.sessionId).not.toBe("sess-work-global");
   });
 });
 
@@ -486,9 +499,8 @@ test("sessions.reset emits inferred selected global agent scope", async () => {
 });
 
 test("sessions.reset emits enriched session_end and session_start hooks", async () => {
-  const { dir } = await createSessionStoreDir();
+  await createSessionStoreDir();
   await writeMainTranscriptSession({
-    dir,
     sessionId: "sess-main",
     content: "hello from transcript",
   });
@@ -504,13 +516,12 @@ test("sessions.reset emits enriched session_end and session_start hooks", async 
   expect(endEvent.sessionKey).toBe("agent:main:main");
   expect(endEvent.reason).toBe("new");
   expect(endEvent.transcriptArchived).toBe(true);
-  const realDir = await fs.realpath(dir);
   const archivedSessionFile = expectStringWithPrefix(
-    endEvent.sessionFile,
-    path.join(realDir, "sess-main.jsonl.reset."),
+    path.basename(expectStringValue(endEvent.sessionFile, "archived session file")),
+    "sess-main.jsonl.reset.",
     "archived session file",
   );
-  expect(path.dirname(archivedSessionFile)).toBe(realDir);
+  expect(archivedSessionFile).toContain(".jsonl.reset.");
   expect(endEvent.nextSessionId).toBe(startEvent.sessionId);
   expectMainHookContext(endContext, "sess-main");
   expect(startEvent.sessionKey).toBe("agent:main:main");
@@ -542,11 +553,13 @@ test("sessions.reset returns unavailable when active run does not stop", async (
   expect(waitCallCountAtSnapshotClear).toEqual([1]);
   expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();
 
-  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-    string,
-    { sessionId?: string }
-  >;
-  expect(store["agent:main:main"]?.sessionId).toBe("sess-main");
+  expect(
+    loadEntry({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      storePath,
+    })?.sessionId,
+  ).toBe("sess-main");
   const filesAfterResetAttempt = await fs.readdir(dir);
   expect(
     filesAfterResetAttempt.filter((file) => file.startsWith("sess-main.jsonl.reset.")),
@@ -554,36 +567,47 @@ test("sessions.reset returns unavailable when active run does not stop", async (
 });
 
 test("sessions.reset emits before_reset for the entry actually reset in the writer slot", async () => {
-  const { dir } = await createSessionStoreDir();
-  const oldTranscriptPath = await writeMessageTranscript({
-    dir,
-    sessionId: "sess-old",
-    content: "old transcript",
-    messageId: "m-old",
-  });
-  const newTranscriptPath = await writeMessageTranscript({
-    dir,
-    sessionId: "sess-new",
-    content: "new transcript",
-    messageId: "m-new",
-  });
+  const { storePath } = await createSessionStoreDir();
 
   await writeSessionStore({
     entries: {
       main: {
         sessionId: "sess-old",
-        sessionFile: oldTranscriptPath,
         updatedAt: Date.now(),
       },
     },
   });
+  await writeMessageTranscript({
+    agentId: "main",
+    sessionId: "sess-old",
+    sessionKey: "agent:main:main",
+    storePath,
+    content: "old transcript",
+    messageId: "m-old",
+  });
 
   beforeResetHookState.hasBeforeResetHook = true;
-  await updateGatewaySessionStoreForKey("main", (store) => {
-    store["agent:main:main"] = sessionStoreEntry("sess-new", {
-      sessionFile: newTranscriptPath,
-    });
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-new"),
+    },
   });
+  await writeMessageTranscript({
+    agentId: "main",
+    sessionId: "sess-new",
+    sessionKey: "agent:main:main",
+    storePath,
+    content: "new transcript",
+    messageId: "m-new",
+  });
+  const newSessionFile = expectStringValue(
+    loadEntry({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      storePath,
+    })?.sessionFile,
+    "new sessionFile",
+  );
 
   const reset = await performSessionReset({
     key: "main",
@@ -597,7 +621,7 @@ test("sessions.reset emits before_reset for the entry actually reset in the writ
   expect(internalEvent?.context?.previousSessionEntry?.sessionId).toBe("sess-new");
   expect(beforeResetHookMocks.runBeforeReset).toHaveBeenCalledTimes(1);
   const [event, context] = firstHookCall(beforeResetHookMocks.runBeforeReset);
-  expectTranscriptResetEvent({ event, sessionFile: newTranscriptPath, content: "new transcript" });
+  expectTranscriptResetEvent({ event, sessionFile: newSessionFile, content: "new transcript" });
   expectMainHookContext(context, "sess-new");
 });
 
@@ -613,9 +637,8 @@ test("sessions.create with emitCommandHooks=true fires command:new hook against 
 });
 
 test("sessions.create with emitCommandHooks=true emits reset lifecycle hooks against parent (#76957)", async () => {
-  const { dir } = await createSessionStoreDir();
+  await createSessionStoreDir();
   const transcriptPath = await writeMainTranscriptSession({
-    dir,
     sessionId: "sess-parent-hooks",
     content: "remember this before new",
   });
@@ -732,12 +755,7 @@ test("sessions.create fences new parent work while rollover hooks run", async ()
 });
 
 test("sessions.create with emitCommandHooks=true resets parent in place when session.dmScope is 'main' (#77434)", async () => {
-  const { dir } = await createSessionStoreDir();
-  const transcriptPath = await writeMessageTranscript({
-    dir,
-    sessionId: "sess-parent-dms",
-    content: "hello before /new",
-  });
+  const { storePath } = await createSessionStoreDir();
 
   testState.sessionConfig = { dmScope: "main" };
   try {
@@ -745,10 +763,16 @@ test("sessions.create with emitCommandHooks=true resets parent in place when ses
       entries: {
         main: {
           sessionId: "sess-parent-dms",
-          sessionFile: transcriptPath,
           updatedAt: Date.now(),
         },
       },
+    });
+    await writeMessageTranscript({
+      agentId: "main",
+      sessionId: "sess-parent-dms",
+      sessionKey: "agent:main:main",
+      storePath,
+      content: "hello before /new",
     });
     embeddedRunMock.activeIds.add("sess-parent-dms");
 
@@ -782,12 +806,7 @@ test("sessions.create with emitCommandHooks=true resets parent in place when ses
 });
 
 test("sessions.create keeps an explicit TUI child key when session.dmScope is 'main'", async () => {
-  const { dir } = await createSessionStoreDir();
-  const transcriptPath = await writeMessageTranscript({
-    dir,
-    sessionId: "sess-parent-tui",
-    content: "hello before TUI /new",
-  });
+  const { storePath } = await createSessionStoreDir();
 
   testState.sessionConfig = { dmScope: "main" };
   try {
@@ -795,10 +814,16 @@ test("sessions.create keeps an explicit TUI child key when session.dmScope is 'm
       entries: {
         main: {
           sessionId: "sess-parent-tui",
-          sessionFile: transcriptPath,
           updatedAt: Date.now(),
         },
       },
+    });
+    await writeMessageTranscript({
+      agentId: "main",
+      sessionId: "sess-parent-tui",
+      sessionKey: "agent:main:main",
+      storePath,
+      content: "hello before TUI /new",
     });
 
     const result = await directSessionReq<{ key: string; sessionId: string }>("sessions.create", {
@@ -849,19 +874,12 @@ test("sessions.reset drops cli session bindings so the next turn does not --resu
 });
 
 test("sessions.reset clears cli session bindings for parent-linked non-subagent sessions (e.g. dashboard children)", async () => {
-  const { dir } = await createSessionStoreDir();
-  const dashboardTranscript = await writeMessageTranscript({
-    dir,
-    sessionId: "sess-dashboard-child",
-    content: "hello from dashboard child",
-    messageId: "m-dashboard",
-  });
+  const { storePath } = await createSessionStoreDir();
 
   await writeSessionStore({
     entries: {
       "dashboard:child:42": cliBoundSessionEntry(
         "sess-dashboard-child",
-        dashboardTranscript,
         "claude-cli-dashboard-session",
         {
           // parentSessionKey is set but the session key carries no `:subagent:`
@@ -873,6 +891,14 @@ test("sessions.reset clears cli session bindings for parent-linked non-subagent 
       ),
     },
   });
+  await writeMessageTranscript({
+    agentId: "main",
+    sessionId: "sess-dashboard-child",
+    sessionKey: "agent:main:dashboard:child:42",
+    storePath,
+    content: "hello from dashboard child",
+    messageId: "m-dashboard",
+  });
 
   await resetSession("dashboard:child:42");
 
@@ -881,24 +907,13 @@ test("sessions.reset clears cli session bindings for parent-linked non-subagent 
 });
 
 test("sessions.reset preserves cli session bindings for spawned subagents (Tak Hoffman's fa56682b3ced contract)", async () => {
-  const { dir } = await createSessionStoreDir();
+  const { storePath } = await createSessionStoreDir();
   const reseedPromptHash = "a".repeat(64);
-  const childTranscript = await writeMessageTranscript({
-    dir,
-    sessionId: "sess-spawned-child",
-    content: "hello from spawned child",
-    messageId: "m-child",
+  const childEntry = cliBoundSessionEntry("sess-spawned-child", "claude-cli-child-session", {
+    parentSessionKey: "agent:main:main",
+    spawnedBy: "agent:main:main",
+    subagentRole: "orchestrator",
   });
-  const childEntry = cliBoundSessionEntry(
-    "sess-spawned-child",
-    childTranscript,
-    "claude-cli-child-session",
-    {
-      parentSessionKey: "agent:main:main",
-      spawnedBy: "agent:main:main",
-      subagentRole: "orchestrator",
-    },
-  );
   childEntry.cliSessionBindings = {
     "claude-cli": {
       sessionId: "claude-cli-child-session",
@@ -915,6 +930,14 @@ test("sessions.reset preserves cli session bindings for spawned subagents (Tak H
     entries: {
       "subagent:child": childEntry,
     },
+  });
+  await writeMessageTranscript({
+    agentId: "main",
+    sessionId: "sess-spawned-child",
+    sessionKey: "agent:main:subagent:child",
+    storePath,
+    content: "hello from spawned child",
+    messageId: "m-child",
   });
 
   await resetSession("subagent:child");

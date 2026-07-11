@@ -164,6 +164,7 @@ const sessionStoreMocks = vi.hoisted(() => ({
   currentEntry: undefined as Record<string, unknown> | undefined,
   entriesBySessionKey: new Map<string, Record<string, unknown>>(),
   loadSessionEntry: vi.fn((..._args: unknown[]) => sessionStoreMocks.currentEntry),
+  loadSessionStoreEntry: vi.fn(() => sessionStoreMocks.currentEntry),
   loadSessionStore: vi.fn(() => ({})),
   readSessionEntry: vi.fn(() => sessionStoreMocks.currentEntry),
   resolveStorePath: vi.fn(() => "/tmp/mock-sessions.json"),
@@ -491,6 +492,7 @@ vi.mock("../../config/sessions/thread-info.js", () => ({
 }));
 vi.mock("./dispatch-from-config.runtime.js", () => ({
   createInternalHookEvent: internalHookMocks.createInternalHookEvent,
+  loadSessionStoreEntry: sessionStoreMocks.loadSessionStoreEntry,
   loadSessionStore: sessionStoreMocks.loadSessionStore,
   readSessionEntry: sessionStoreMocks.readSessionEntry,
   resolveSessionStoreEntry: sessionStoreMocks.resolveSessionStoreEntry,
@@ -1169,6 +1171,10 @@ describe("dispatchReplyFromConfig", () => {
     sessionStoreMocks.entriesBySessionKey.clear();
     sessionStoreMocks.loadSessionEntry.mockReset();
     sessionStoreMocks.loadSessionEntry.mockImplementation(() => sessionStoreMocks.currentEntry);
+    sessionStoreMocks.loadSessionStoreEntry.mockReset();
+    sessionStoreMocks.loadSessionStoreEntry.mockImplementation(
+      () => sessionStoreMocks.currentEntry,
+    );
     sessionStoreMocks.loadSessionStore.mockReset();
     sessionStoreMocks.loadSessionStore.mockReturnValue({});
     sessionStoreMocks.readSessionEntry.mockReset();
@@ -4956,7 +4962,7 @@ describe("dispatchReplyFromConfig", () => {
     sessionStoreMocks.currentEntry = {
       verboseLevel: "off",
     };
-    sessionStoreMocks.readSessionEntry.mockReturnValue({ verboseLevel: "on" });
+    sessionStoreMocks.loadSessionStoreEntry.mockReturnValue({ verboseLevel: "on" });
     const cfg = {
       ...emptyConfig,
       agents: {
@@ -4979,7 +4985,7 @@ describe("dispatchReplyFromConfig", () => {
     ) => {
       sessionStoreMocks.loadSessionStore.mockClear();
       sessionStoreMocks.resolveSessionStoreEntry.mockClear();
-      sessionStoreMocks.readSessionEntry.mockClear();
+      sessionStoreMocks.loadSessionStoreEntry.mockClear();
       await opts?.onPlanUpdate?.({
         phase: "update",
         explanation: "Inspect code, patch it, run tests.",
@@ -4995,10 +5001,13 @@ describe("dispatchReplyFromConfig", () => {
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    expect(sessionStoreMocks.readSessionEntry).toHaveBeenCalledWith(
-      "/tmp/mock-sessions.json",
-      "agent:main:main",
-    );
+    expect(sessionStoreMocks.loadSessionStoreEntry).toHaveBeenCalledWith({
+      agentId: "main",
+      storePath: "/tmp/mock-sessions.json",
+      sessionKey: "agent:main:main",
+      readConsistency: "latest",
+      clone: false,
+    });
     expect(sessionStoreMocks.loadSessionStore).not.toHaveBeenCalled();
     expect(sessionStoreMocks.resolveSessionStoreEntry).not.toHaveBeenCalled();
     expect(firstToolResultPayload(dispatcher)).toMatchObject({
@@ -13107,14 +13116,20 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       parentSessionKey,
       sendPolicy: "allow",
     };
-    sessionStoreMocks.loadSessionStore.mockReturnValueOnce({
-      [parentSessionKey]: {
-        sessionId: "parent",
-        updatedAt: 0,
-        providerOverride: "anthropic",
-        modelOverride: "claude-sonnet-4.6",
-      },
-    });
+    const parentEntry = {
+      sessionId: "parent",
+      updatedAt: 0,
+      providerOverride: "anthropic",
+      modelOverride: "claude-sonnet-4.6",
+    };
+    // Scope the parent-key override to this test; the describe's beforeEach does
+    // not reset loadSessionStoreEntry, so leaving it in place would resolve a
+    // stale "parent" sessionId for a sibling reusing this session key.
+    const defaultLoadSessionStoreEntry = () => sessionStoreMocks.currentEntry;
+    sessionStoreMocks.loadSessionStoreEntry.mockImplementation(((params: unknown) =>
+      (params as { sessionKey?: string }).sessionKey === parentSessionKey
+        ? parentEntry
+        : sessionStoreMocks.currentEntry) as () => Record<string, unknown> | undefined);
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       expect(opts?.sourceReplyDeliveryMode).toBe("automatic");
@@ -13136,8 +13151,17 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     });
 
     expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(sessionStoreMocks.loadSessionStore).not.toHaveBeenCalled();
+    expect(sessionStoreMocks.loadSessionStoreEntry).toHaveBeenCalledWith({
+      agentId: "main",
+      storePath: "/tmp/mock-sessions.json",
+      sessionKey: parentSessionKey,
+      readConsistency: "latest",
+      clone: false,
+    });
     expect(result.queuedFinal).toBe(true);
     expect(firstFinalReplyPayload(dispatcher)?.text).toBe("visible parent-model reply");
+    sessionStoreMocks.loadSessionStoreEntry.mockImplementation(defaultLoadSessionStoreEntry);
   });
 
   it("honors heartbeat model overrides before Codex direct source delivery defaults", async () => {
@@ -13152,6 +13176,12 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
           : { supported: false, reason: "codex provider only" },
       runAttempt: vi.fn(async () => ({}) as never),
     });
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      agentHarnessId: "codex",
+      sendPolicy: "allow",
+    };
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       expect(opts?.sourceReplyDeliveryMode).toBe("automatic");

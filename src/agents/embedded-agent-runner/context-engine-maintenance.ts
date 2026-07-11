@@ -10,6 +10,7 @@ import type {
   ContextEngineMaintenanceResult,
   ContextEngineRuntimeContext,
   ContextEngineRuntimeSettings,
+  ContextEngineSessionTarget,
 } from "../../context-engine/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -49,6 +50,7 @@ type DeferredTurnMaintenanceScheduleParams = {
   contextEngine: ContextEngine;
   sessionId: string;
   sessionKey: string;
+  sessionTarget?: ContextEngineSessionTarget;
   sessionFile: string;
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
@@ -277,6 +279,7 @@ function promoteTurnMaintenanceTaskVisibility(params: {
 export function buildContextEngineMaintenanceRuntimeContext(params: {
   sessionId: string;
   sessionKey?: string;
+  sessionTarget?: ContextEngineSessionTarget;
   sessionFile: string;
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   withSessionManagerRewriteLock?: SessionManagerRewriteLock;
@@ -297,6 +300,7 @@ export function buildContextEngineMaintenanceRuntimeContext(params: {
       contextEnginePluginId: params.contextEnginePluginId,
       purpose: params.purpose ?? "context-engine.maintenance",
     }),
+    ...(params.sessionTarget ? { sessionTarget: params.sessionTarget } : {}),
     ...(params.allowDeferredCompactionExecution ? { allowDeferredCompactionExecution: true } : {}),
     rewriteTranscriptEntries: async (request) => {
       if (params.sessionManager) {
@@ -330,6 +334,7 @@ async function executeContextEngineMaintenance(params: {
   contextEngine: ContextEngine;
   sessionId: string;
   sessionKey?: string;
+  sessionTarget?: ContextEngineSessionTarget;
   sessionFile: string;
   reason: "bootstrap" | "compaction" | "turn";
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
@@ -346,11 +351,13 @@ async function executeContextEngineMaintenance(params: {
   const result = await params.contextEngine.maintain({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
+    sessionTarget: params.sessionTarget,
     sessionFile: params.sessionFile,
     runtimeSettings: params.runtimeSettings,
     runtimeContext: buildContextEngineMaintenanceRuntimeContext({
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
+      sessionTarget: params.sessionTarget,
       sessionFile: params.sessionFile,
       sessionManager: params.executionMode === "background" ? undefined : params.sessionManager,
       withSessionManagerRewriteLock:
@@ -377,6 +384,7 @@ async function runDeferredTurnMaintenanceWorker(params: {
   contextEngine: ContextEngine;
   sessionId: string;
   sessionKey: string;
+  sessionTarget?: ContextEngineSessionTarget;
   sessionFile: string;
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
@@ -432,6 +440,7 @@ async function runDeferredTurnMaintenanceWorker(params: {
       contextEngine: params.contextEngine,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
+      sessionTarget: params.sessionTarget,
       sessionFile: params.sessionFile,
       reason: "turn",
       sessionManager: params.sessionManager,
@@ -579,6 +588,7 @@ function scheduleDeferredTurnMaintenance(
         contextEngine: params.contextEngine,
         sessionId: params.sessionId,
         sessionKey,
+        sessionTarget: params.sessionTarget,
         sessionFile: params.sessionFile,
         sessionManager: params.sessionManager,
         runtimeContext: params.runtimeContext,
@@ -646,6 +656,7 @@ export async function runContextEngineMaintenance(params: {
   contextEngine?: ContextEngine;
   sessionId: string;
   sessionKey?: string;
+  sessionTarget?: ContextEngineSessionTarget;
   sessionFile: string;
   reason: "bootstrap" | "compaction" | "turn";
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
@@ -675,6 +686,7 @@ export async function runContextEngineMaintenance(params: {
         contextEngine: params.contextEngine,
         sessionId: params.sessionId,
         sessionKey: params.sessionKey ?? params.sessionId,
+        sessionTarget: params.sessionTarget,
         sessionFile: params.sessionFile,
         sessionManager: params.sessionManager,
         runtimeContext: params.runtimeContext,
@@ -698,6 +710,7 @@ export async function runContextEngineMaintenance(params: {
       contextEngine: params.contextEngine,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
+      sessionTarget: params.sessionTarget,
       sessionFile: params.sessionFile,
       reason: params.reason,
       sessionManager: params.sessionManager,

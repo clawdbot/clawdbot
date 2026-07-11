@@ -22,12 +22,16 @@ function isStorePathTemplate(store?: string): boolean {
   return typeof store === "string" && store.includes("{agentId}");
 }
 
-function loadGatewayStoreEntries(storePath: string): Record<string, SessionEntry> {
+function loadGatewayStoreEntries(params: {
+  agentId: string;
+  storePath: string;
+}): Record<string, SessionEntry> {
   return Object.fromEntries(
-    listSessionEntries({ clone: false, storePath }).map(({ sessionKey, entry }) => [
-      sessionKey,
-      entry,
-    ]),
+    listSessionEntries({
+      agentId: params.agentId,
+      clone: false,
+      storePath: params.storePath,
+    }).map(({ sessionKey, entry }) => [sessionKey, entry]),
   );
 }
 
@@ -85,7 +89,7 @@ export function loadCombinedSessionStoreForGateway(
     // A single shared store still needs keys canonicalized as if owned by the default agent.
     const storePath = resolveStorePath(storeConfig);
     const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(cfg));
-    const store = loadGatewayStoreEntries(storePath);
+    const store = loadGatewayStoreEntries({ agentId: defaultAgentId, storePath });
     const combined: Record<string, SessionEntry> = {};
     for (const [key, entry] of Object.entries(store)) {
       const canonicalKey = resolveStoredSessionKeyForAgentStore({
@@ -117,7 +121,7 @@ export function loadCombinedSessionStoreForGateway(
   for (const target of targets) {
     const agentId = target.agentId;
     const storePath = target.storePath;
-    const store = loadGatewayStoreEntries(storePath);
+    const store = loadGatewayStoreEntries({ agentId, storePath });
     for (const [key, entry] of Object.entries(store)) {
       const canonicalKey = resolveStoredSessionKeyForAgentStore({
         cfg,

@@ -1,6 +1,9 @@
 // Routing session key tests cover route-derived session key behavior.
 import { describe, expect, it } from "vitest";
-import { resolveSessionStoreAgentId } from "../gateway/session-store-key.js";
+import {
+  resolveSessionStoreAgentId,
+  resolveSessionStoreKey,
+} from "../gateway/session-store-key.js";
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 import {
   getSubagentDepth,
@@ -84,6 +87,22 @@ describe("agentSessionKeysMatchByRequestKey", () => {
     expect(agentSessionKeysMatchByRequestKey("agent:main:main", "main")).toBe(true);
     expect(agentSessionKeysMatchByRequestKey("agent:ops:incident-42", "incident-42")).toBe(true);
     expect(agentSessionKeysMatchByRequestKey("agent:ops:incident-42", "main")).toBe(false);
+  });
+});
+
+describe("resolveSessionStoreKey", () => {
+  it("scopes unprefixed explicit-agent keys to the requested store agent", () => {
+    const cfg = {
+      agents: { list: [{ id: "main", default: true }, { id: "ops" }] },
+      session: { mainKey: "primary" },
+    };
+
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "main", storeAgentId: "ops" })).toBe(
+      "agent:ops:primary",
+    );
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "discord:dm:U1", storeAgentId: "ops" })).toBe(
+      "agent:ops:discord:dm:u1",
+    );
   });
 });
 

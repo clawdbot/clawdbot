@@ -20,6 +20,20 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { isProxy } from "node:util/types";
 import {
+  appendTranscriptEventSync,
+  appendTranscriptMessageSync,
+  loadSessionEntry,
+  loadTranscriptEventsSync,
+  replaceSessionEntrySync,
+  replaceTranscriptEventsSync,
+  resolveTranscriptSessionKeyBySessionId,
+} from "../../config/sessions/session-accessor.js";
+import {
+  formatSqliteSessionFileMarker,
+  parseSqliteSessionFileMarker,
+  type SqliteSessionFileMarker,
+} from "../../config/sessions/sqlite-marker.js";
+import {
   appendJsonlEntrySync,
   appendSerializedJsonlEntrySync,
   serializeJsonlEntry,
@@ -157,9 +171,13 @@ type PromptReleasedSessionEntry =
   | PromptReleasedOpaqueEntry;
 
 type PromptReleasedSessionMergeResult = {
-  sessionFileSnapshot: OwnedSessionTranscriptCacheSnapshot;
+  sessionFileSnapshot?: OwnedSessionTranscriptCacheSnapshot;
   publishedEntries?: readonly OwnedSessionTranscriptPublishedEntry[];
   requiresReload?: true;
+};
+
+type SqliteSessionManagerPersistence = SqliteSessionFileMarker & {
+  sessionKey: string;
 };
 
 /**
@@ -892,6 +910,37 @@ function revalidateLoadedSessionFile(
   return loadEntriesFromFileWithSnapshot(filePath);
 }
 
+function loadSqliteMarkedSessionFile(
+  sessionFile: string,
+  options: { cwdOverride?: string; fallbackCwd?: string } = {},
+):
+  | {
+      cwd: string;
+      entries: FileEntry[];
+      sessionKey: string;
+      sqliteMarker: SqliteSessionFileMarker;
+    }
+  | undefined {
+  const sqliteMarker = parseSqliteSessionFileMarker(sessionFile);
+  if (!sqliteMarker) {
+    return undefined;
+  }
+  const sessionKey = resolveTranscriptSessionKeyBySessionId(sqliteMarker);
+  if (!sessionKey) {
+    throw new Error(`Cannot open SQLite session without session entry: ${sqliteMarker.sessionId}`);
+  }
+  const entries = loadTranscriptEventsSync(sqliteMarker) as FileEntry[];
+  const header = entries.find((e) => isJsonRecord(e) && e.type === "session") as
+    | SessionHeader
+    | undefined;
+  return {
+    cwd: options.cwdOverride ?? header?.cwd ?? options.fallbackCwd ?? process.cwd(),
+    entries,
+    sessionKey,
+    sqliteMarker,
+  };
+}
+
 // Cached entries are deep-frozen so warm hits cannot drift from the file bytes
 // that validated the cache key. The session header (entries[0]) is the one entry
 // callers legitimately mutate in place — `prepareSessionManagerForRun` rewrites
@@ -967,7 +1016,13 @@ function parseJsonlEntries(content: string): FileEntry[] {
   return entries;
 }
 
-function normalizeLoadedFileEntry(entry: FileEntry): FileEntry {
+/**
+ * Repairs legacy JSONL message shapes (string assistant/toolResult content) into
+ * canonical block arrays. Every legacy-JSONL ingress point — file-era transcript
+ * reads and the doctor SQLite import — must apply this so the SQLite store only
+ * ever holds canonical rows; the SQLite read path does no repair.
+ */
+export function normalizeLoadedFileEntry(entry: FileEntry): FileEntry {
   if (!isJsonRecord(entry) || entry.type !== "message" || !isJsonRecord(entry.message)) {
     return entry;
   }
@@ -1498,6 +1553,7 @@ export class SessionManager {
   private promptReleasedSideBranchParentId: string | null | undefined;
   private recoveredCorruptHeader = false;
   private sessionFileSnapshot: SessionFileSnapshot | undefined;
+  private sqlitePersistence: SqliteSessionManagerPersistence | undefined;
 
   private constructor(
     cwd: string,
@@ -1508,19 +1564,28 @@ export class SessionManager {
       entries: FileEntry[];
       snapshot: SessionFileSnapshot | undefined;
     },
+    sqlitePersistence?: SqliteSessionManagerPersistence,
   ) {
     this.cwd = cwd;
     this.sessionDir = sessionDir;
     this.shouldPersist = persist;
+    this.sqlitePersistence = sqlitePersistence;
     if (persist && sessionDir && !existsSync(sessionDir)) {
       mkdirSync(sessionDir, { recursive: true });
     }
 
     if (sessionFile) {
-      this.setLoadedSessionFile(
-        sessionFile,
-        loadedSessionFile ?? loadEntriesFromFileWithSnapshot(sessionFile),
-      );
+      if (sqlitePersistence) {
+        this.setLoadedSqliteSessionFile(
+          sessionFile,
+          loadedSessionFile ?? { entries: [], snapshot: undefined },
+        );
+      } else {
+        this.setLoadedSessionFile(
+          sessionFile,
+          loadedSessionFile ?? loadEntriesFromFileWithSnapshot(sessionFile),
+        );
+      }
     } else {
       this.newSession();
     }
@@ -1528,6 +1593,20 @@ export class SessionManager {
 
   /** Switch to a different session file (used for resume and branching) */
   setSessionFile(sessionFile: string): void {
+    const sqliteLoaded = loadSqliteMarkedSessionFile(sessionFile, { fallbackCwd: this.cwd });
+    if (sqliteLoaded) {
+      this.cwd = sqliteLoaded.cwd;
+      this.sqlitePersistence = {
+        ...sqliteLoaded.sqliteMarker,
+        sessionKey: sqliteLoaded.sessionKey,
+      };
+      this.setLoadedSqliteSessionFile(sessionFile, {
+        entries: sqliteLoaded.entries,
+        snapshot: undefined,
+      });
+      return;
+    }
+    this.sqlitePersistence = undefined;
     this.setLoadedSessionFile(sessionFile, loadEntriesFromFileWithSnapshot(sessionFile));
   }
 
@@ -1559,7 +1638,7 @@ export class SessionManager {
           this.sessionId = header?.id ?? createSessionId();
           migrateToCurrentVersion(this.fileEntries, recovered.fileEntriesByOriginalIndex);
           this.buildIndex();
-          this.rewriteFile();
+          this.replacePersistedTranscript();
           this.recoveredCorruptHeader = true;
           this.flushed = true;
           return;
@@ -1568,7 +1647,7 @@ export class SessionManager {
         const explicitPath = this.sessionFile;
         this.newSession();
         this.sessionFile = explicitPath;
-        this.rewriteFile();
+        this.replacePersistedTranscript();
         this.flushed = true;
         return;
       }
@@ -1582,7 +1661,7 @@ export class SessionManager {
       );
       this.buildIndex();
       if (migrated) {
-        this.rewriteFile();
+        this.replacePersistedTranscript();
       }
 
       this.flushed = true;
@@ -1591,6 +1670,31 @@ export class SessionManager {
       this.newSession();
       this.sessionFile = explicitPath; // preserve explicit path from --session flag
     }
+  }
+
+  private setLoadedSqliteSessionFile(
+    sessionFile: string,
+    loaded: {
+      entries: FileEntry[];
+      snapshot: SessionFileSnapshot | undefined;
+    },
+  ): void {
+    this.sessionFile = sessionFile;
+    this.sessionFileSnapshot = undefined;
+    this.recoveredCorruptHeader = false;
+    const partitioned = partitionSessionFileEntries(loaded.entries);
+    if (partitioned.fileEntries.length === 0) {
+      this.newSession({ id: this.sqlitePersistence?.sessionId });
+      this.sessionFile = sessionFile;
+      return;
+    }
+    this.fileEntries = partitioned.fileEntries;
+    this.opaqueFileEntries = partitioned.opaqueEntries;
+    const header = this.fileEntries.find((e) => e.type === "session");
+    this.sessionId = header?.id ?? this.sqlitePersistence?.sessionId ?? createSessionId();
+    migrateToCurrentVersion(this.fileEntries, partitioned.fileEntriesByOriginalIndex);
+    this.buildIndex();
+    this.flushed = true;
   }
 
   newSession(options?: NewSessionOptions): string | undefined {
@@ -1962,16 +2066,32 @@ export class SessionManager {
     );
   }
 
-  private rewriteFile(options?: {
+  private replacePersistedTranscript(options?: {
     publishSnapshot?: boolean;
     leafAppendParentId?: string | null;
     leafAppendMode?: "side";
   }): void {
-    if (!this.shouldPersist || !this.sessionFile) {
+    if (!this.shouldPersist) {
       return;
     }
     const leafAppendParentId =
       options?.leafAppendParentId === undefined ? this.appendParentId : options.leafAppendParentId;
+    if (this.sqlitePersistence) {
+      replaceTranscriptEventsSync(
+        {
+          agentId: this.sqlitePersistence.agentId,
+          sessionId: this.sqlitePersistence.sessionId,
+          sessionKey: this.sqlitePersistence.sessionKey,
+          storePath: this.sqlitePersistence.storePath,
+        },
+        this.getPersistedFileEntries(leafAppendParentId, options?.leafAppendMode),
+      );
+      this.flushed = true;
+      return;
+    }
+    if (!this.sessionFile) {
+      return;
+    }
     const content = this.writeFullFile(leafAppendParentId, options?.leafAppendMode);
     const rememberedWrite = rememberWrittenSessionEntries(this.sessionFile, content);
     this.sessionFileSnapshot = rememberedWrite.snapshot;
@@ -2115,7 +2235,7 @@ export class SessionManager {
     this.buildIndex();
     this.leafId = this.resolveCanonicalParentId(replacementParentId);
     this.appendParentId = replacementParentId;
-    this.rewriteFile();
+    this.replacePersistedTranscript();
     return removedEntries.length;
   }
 
@@ -2124,6 +2244,10 @@ export class SessionManager {
     options?: AppendPersistenceOptions,
     publishSnapshot = true,
   ): void {
+    if (this.sqlitePersistence) {
+      this.persistSqliteRecord(entry);
+      return;
+    }
     if (!this.shouldPersist || !this.sessionFile) {
       return;
     }
@@ -2193,6 +2317,33 @@ export class SessionManager {
 
   persist(entry: SessionEntry, options?: AppendPersistenceOptions): void {
     this.persistRecord(entry, options);
+  }
+
+  private persistSqliteRecord(entry: unknown): void {
+    if (!isIndexedSessionEntry(entry)) {
+      return;
+    }
+    const persistence = this.sqlitePersistence;
+    if (!persistence) {
+      return;
+    }
+    const scope = {
+      agentId: persistence.agentId,
+      sessionId: persistence.sessionId,
+      sessionKey: persistence.sessionKey,
+      storePath: persistence.storePath,
+    };
+    if (entry.type !== "message") {
+      appendTranscriptEventSync(scope, entry);
+      return;
+    }
+    appendTranscriptMessageSync(scope, {
+      cwd: this.cwd,
+      eventId: entry.id,
+      message: entry.message,
+      now: Date.parse(entry.timestamp),
+      parentId: entry.parentId,
+    });
   }
 
   /**
@@ -2321,8 +2472,23 @@ export class SessionManager {
     const hasAssistant = this.fileEntries.some(
       (entry) => entry.type === "message" && entry.message.role === "assistant",
     );
+    if (this.sqlitePersistence) {
+      const leafEntry = this.createLeafControl(rawTailId, sideBranchParentId, "side");
+      appendTranscriptEventSync(
+        {
+          agentId: this.sqlitePersistence.agentId,
+          sessionId: this.sqlitePersistence.sessionId,
+          sessionKey: this.sqlitePersistence.sessionKey,
+          storePath: this.sqlitePersistence.storePath,
+        },
+        leafEntry,
+      );
+      this.rememberLeafControl(leafEntry);
+      this.flushed = true;
+      return { publishedEntries: [{ kind: "id", id: leafEntry.id }] };
+    }
     if (!this.flushed || !hasAssistant) {
-      this.rewriteFile({
+      this.replacePersistedTranscript({
         publishSnapshot: false,
         leafAppendParentId: sideBranchParentId,
         leafAppendMode: "side",
@@ -2873,7 +3039,14 @@ export class SessionManager {
     const newSessionId = createSessionId();
     const timestamp = new Date().toISOString();
     const fileTimestamp = timestamp.replace(/[:.]/g, "-");
-    const newSessionFile = join(this.getSessionDir(), `${fileTimestamp}_${newSessionId}.jsonl`);
+    const sqlitePersistence = this.sqlitePersistence;
+    const newSessionFile = sqlitePersistence
+      ? formatSqliteSessionFileMarker({
+          agentId: sqlitePersistence.agentId,
+          sessionId: newSessionId,
+          storePath: sqlitePersistence.storePath,
+        })
+      : join(this.getSessionDir(), `${fileTimestamp}_${newSessionId}.jsonl`);
 
     const header: SessionHeader = {
       type: "session",
@@ -2916,6 +3089,28 @@ export class SessionManager {
       this.sessionId = newSessionId;
       this.sessionFile = newSessionFile;
       this.sessionFileSnapshot = undefined;
+      if (sqlitePersistence) {
+        const updatedAt = Date.now();
+        const previousEntry = loadSessionEntry({
+          agentId: sqlitePersistence.agentId,
+          sessionKey: sqlitePersistence.sessionKey,
+          storePath: sqlitePersistence.storePath,
+        });
+        this.sqlitePersistence = { ...sqlitePersistence, sessionId: newSessionId };
+        replaceSessionEntrySync(
+          {
+            agentId: sqlitePersistence.agentId,
+            sessionKey: sqlitePersistence.sessionKey,
+            storePath: sqlitePersistence.storePath,
+          },
+          {
+            ...(previousEntry ?? { updatedAt }),
+            sessionFile: newSessionFile,
+            sessionId: newSessionId,
+            updatedAt,
+          },
+        );
+      }
       this.buildIndex();
 
       // Only write the file now if it contains an assistant message.
@@ -2927,7 +3122,7 @@ export class SessionManager {
         (e) => e.type === "message" && e.message.role === "assistant",
       );
       if (hasAssistant) {
-        this.rewriteFile();
+        this.replacePersistedTranscript();
         this.flushed = true;
       } else {
         this.flushed = false;
@@ -2976,6 +3171,17 @@ export class SessionManager {
    * @param cwdOverride Optional cwd override instead of the session header cwd.
    */
   static open(path: string, sessionDir?: string, cwdOverride?: string): SessionManager {
+    const sqliteLoaded = loadSqliteMarkedSessionFile(path, { cwdOverride });
+    if (sqliteLoaded) {
+      return new SessionManager(
+        sqliteLoaded.cwd,
+        sessionDir ?? "",
+        path,
+        true,
+        { entries: sqliteLoaded.entries, snapshot: undefined },
+        { ...sqliteLoaded.sqliteMarker, sessionKey: sqliteLoaded.sessionKey },
+      );
+    }
     // Re-stat before construction so the single parsed load cannot become
     // stale while deriving cwd/session metadata. Stable warm opens pay only
     // the extra stat; changed files retry through the normal loader.

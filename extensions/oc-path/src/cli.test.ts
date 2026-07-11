@@ -169,6 +169,26 @@ describe("openclaw path CLI", () => {
       expect(readFileSync(filePath, "utf-8")).toBe(before);
     });
 
+    it("CLI-S02b --dry-run human output reports the rendered UTF-8 byte count", async () => {
+      const filePath = join(workspaceDir, "gateway.jsonc");
+      const before = '{ "version": "1.0" }';
+      writeFileSync(filePath, before, "utf-8");
+      const rt = createTestRuntime();
+      await pathSetCommand(
+        "oc://gateway.jsonc/version",
+        "中文",
+        { cwd: workspaceDir, human: true, dryRun: true },
+        rt,
+      );
+
+      const [header, ...bodyLines] = stdoutText(rt).split("\n");
+      const body = bodyLines.join("\n");
+      expect(header).toBe(
+        `--dry-run: would write ${Buffer.byteLength(body, "utf8")} bytes to ${filePath}`,
+      );
+      expect(readFileSync(filePath, "utf-8")).toBe(before);
+    });
+
     it("CLI-S05 --dry-run --diff prints a unified diff", async () => {
       const filePath = join(workspaceDir, "gateway.jsonc");
       const before = '{\n  "version": "1.0",\n  "enabled": true\n}\n';
@@ -412,6 +432,29 @@ describe("openclaw path CLI", () => {
       const out = JSON.parse(stdoutText(rt));
       expect(out.kind).toBe("yaml");
       expect(out.bytes).toBe(before);
+    });
+
+    it("CLI-S07b reports accurate UTF-8 byte counts for multibyte set output", async () => {
+      const filePath = join(workspaceDir, "gateway.jsonc");
+      const before = '{\n  "version": "1.0"\n}\n';
+      writeFileSync(filePath, before, "utf-8");
+      // Replace the whole file with CJK content via the version key.
+      // CJK chars are 1 UTF-16 unit but 3 UTF-8 bytes.
+      const cjkValue = "中".repeat(30);
+      const rt = createTestRuntime();
+      await pathSetCommand(
+        "oc://gateway.jsonc/version",
+        cjkValue,
+        { cwd: workspaceDir, json: true },
+        rt,
+      );
+      expect(rt.exitCode).toBe(0);
+      const out = JSON.parse(stdoutText(rt));
+      // bytesWritten must match the file's actual UTF-8 byte size on disk
+      const onDisk = readFileSync(filePath, "utf-8");
+      expect(out.bytesWritten).toBe(Buffer.byteLength(onDisk, "utf8"));
+      // bytesWritten exceeds JS string length (50 UTF-16 units < ~110 UTF-8 bytes)
+      expect(out.bytesWritten).toBeGreaterThan(onDisk.length);
     });
 
     it("CLI-E03 emit --cwd resolves <file> against the supplied directory", async () => {

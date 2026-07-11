@@ -1,5 +1,6 @@
 // Cron model override tests cover model selection overrides for scheduled runs.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { SessionEntry } from "../../config/sessions.js";
 import {
   clearFastTestEnv,
   loadRunCronIsolatedAgentTurn,
@@ -13,7 +14,7 @@ import {
   resetRunCronIsolatedAgentTurnHarness,
   restoreFastTestEnv,
   runWithModelFallbackMock,
-  updateSessionStoreMock,
+  patchSessionEntryMock,
 } from "./run.test-harness.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
@@ -138,18 +139,36 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
       modelProvider?: string;
       systemSent?: boolean;
     }> = [];
-    // One persistent store across persist calls: the lifecycle claim guard
-    // treats a store that lost the entry between calls as a foreign owner.
-    const persistentStore: Record<string, unknown> = {};
-    updateSessionStoreMock.mockImplementation(
-      async (_path: string, cb: (s: Record<string, unknown>) => void) => {
-        cb(persistentStore);
-        const entry = Object.values(persistentStore)[0] as
-          | { model?: string; modelProvider?: string; systemSent?: boolean }
-          | undefined;
-        if (entry) {
-          persistedSnapshots.push(structuredClone(entry));
+    // The cron persist path calls patchSessionEntry(scope, updater, options);
+    // the committed row is the updater's return, so snapshot that. Thread the
+    // previously committed row forward as existingEntry so the lifecycle claim
+    // guard proves ownership across the run's successive persists.
+    const committedRows = new Map<string, SessionEntry>();
+    patchSessionEntryMock.mockImplementation(
+      async (
+        scope: { storePath?: string; sessionKey: string },
+        update: (
+          entry: SessionEntry,
+          context: { existingEntry: SessionEntry | undefined },
+        ) => SessionEntry | null,
+        options: { fallbackEntry?: SessionEntry } = {},
+      ) => {
+        const key = `${scope.storePath ?? ""}\0${scope.sessionKey}`;
+        const committedRow = committedRows.get(key);
+        const writeBase = committedRow ?? options.fallbackEntry;
+        if (!writeBase) {
+          return null;
         }
+        const committed = update(structuredClone(writeBase), {
+          existingEntry: committedRow ? structuredClone(committedRow) : undefined,
+        });
+        if (committed) {
+          committedRows.set(key, structuredClone(committed));
+          if (!scope.sessionKey.includes(":run:")) {
+            persistedSnapshots.push(structuredClone(committed));
+          }
+        }
+        return committed;
       },
     );
 
@@ -228,15 +247,33 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
     // Persist ordering: [1] skills snapshot, [2] pre-run, [3] post-run.
     // Only the pre-run persist (call 2) should fail — the skills snapshot
     // persist is pre-existing code without a try-catch guard.
-    let callCount = 0;
-    const persistentStore: Record<string, unknown> = {};
-    updateSessionStoreMock.mockImplementation(
-      async (_path: string, update: (store: Record<string, unknown>) => unknown) => {
-        callCount++;
-        if (callCount === 2) {
+    let basePersistCount = 0;
+    const committedRows = new Map<string, SessionEntry>();
+    patchSessionEntryMock.mockImplementation(
+      async (
+        scope: { storePath?: string; sessionKey: string },
+        update: (
+          entry: SessionEntry,
+          context: { existingEntry: SessionEntry | undefined },
+        ) => SessionEntry | null,
+        options: { fallbackEntry?: SessionEntry } = {},
+      ) => {
+        if (!scope.sessionKey.includes(":run:") && ++basePersistCount === 2) {
           throw new Error("ENOSPC: no space left on device");
         }
-        await update(persistentStore);
+        const key = `${scope.storePath ?? ""}\0${scope.sessionKey}`;
+        const current = committedRows.get(key);
+        const writeBase = current ?? options.fallbackEntry;
+        if (!writeBase) {
+          return null;
+        }
+        const committed = update(structuredClone(writeBase), {
+          existingEntry: current ? structuredClone(current) : undefined,
+        });
+        if (committed) {
+          committedRows.set(key, structuredClone(committed));
+        }
+        return committed;
       },
     );
 

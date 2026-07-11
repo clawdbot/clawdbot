@@ -7,7 +7,6 @@
 export { getRuntimeConfig, loadConfig } from "../config/config.js";
 export { resolveContinuationRuntimeConfig } from "../auto-reply/continuation/config.js";
 export {
-  loadSessionStore,
   readSessionEntry,
   resolveAgentIdFromSessionKey,
   resolveStorePath,

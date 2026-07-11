@@ -3,8 +3,16 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadSessionStore, saveSessionStore, type SessionEntry } from "../config/sessions.js";
-import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
+import type { SessionEntry } from "../config/sessions.js";
+import {
+  listSessionEntries,
+  loadTranscriptEvents,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
+import {
+  formatSqliteSessionFileMarker,
+  parseSqliteSessionFileMarker,
+} from "../config/sessions/sqlite-marker.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { runAgentAttempt } from "./command/attempt-execution.runtime.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent.js";
@@ -227,13 +235,20 @@ function makeResult(params: {
   };
 }
 
-async function readSessionMessages(sessionFile: string) {
-  const raw = await fs.readFile(sessionFile, "utf-8");
-  return raw
-    .split(/\r?\n/)
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as { type?: string; message?: { role?: string } })
-    .filter((entry) => entry.type === "message")
+async function readSessionMessages(params: {
+  agentId: string;
+  sessionId: string;
+  storePath: string;
+}) {
+  return (await loadTranscriptEvents(params))
+    .filter(
+      (entry): entry is { message: unknown; type: "message" } =>
+        typeof entry === "object" &&
+        entry !== null &&
+        "message" in entry &&
+        "type" in entry &&
+        entry.type === "message",
+    )
     .map((entry) => entry.message);
 }
 
@@ -318,10 +333,13 @@ describe("agentCommand compaction transcript rotation", () => {
     expect(state.loadManifestModelCatalogMock).not.toHaveBeenCalled();
   });
 
-  it("keeps sessions.json on the rotated successor", async () => {
+  it("keeps SQLite session state on the rotated successor", async () => {
     const storePath = requireStorePath();
-    const sessionsDir = await fs.realpath(path.dirname(storePath));
-    const rotatedSessionFile = path.join(sessionsDir, "rotated-session.jsonl");
+    const rotatedSessionFile = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId: "rotated-session",
+      storePath,
+    });
     state.runAgentAttemptMock.mockResolvedValueOnce(
       makeResult({
         sessionId: "rotated-session",
@@ -337,7 +355,9 @@ describe("agentCommand compaction transcript rotation", () => {
       cwd: state.workspaceDir,
     });
 
-    const storeAfterRotation = loadSessionStore(storePath, { skipCache: true });
+    const storeAfterRotation = Object.fromEntries(
+      listSessionEntries({ storePath }).map(({ entry, sessionKey }) => [sessionKey, entry]),
+    );
     const entriesAfterRotation = Object.entries(storeAfterRotation);
     expect(entriesAfterRotation).toHaveLength(1);
     const [sessionKey, rotatedEntry] = entriesAfterRotation[0] ?? [];
@@ -349,29 +369,22 @@ describe("agentCommand compaction transcript rotation", () => {
       usageFamilySessionIds: ["old-session", "rotated-session"],
       compactionCount: 1,
     });
-    await expect(readSessionMessages(rotatedSessionFile)).resolves.toEqual([
-      expect.objectContaining({ role: "assistant" }),
-    ]);
+    await expect(
+      readSessionMessages({ agentId: "main", sessionId: "rotated-session", storePath }),
+    ).resolves.toContainEqual(expect.objectContaining({ role: "assistant" }));
   });
 
   it("resumes the next turn from the rotated successor", async () => {
     const storePath = requireStorePath();
-    const sessionsDir = await fs.realpath(path.dirname(storePath));
-    const rotatedSessionFile = path.join(sessionsDir, "rotated-session.jsonl");
+    const rotatedSessionFile = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId: "rotated-session",
+      storePath,
+    });
     const sessionKey = "agent:main:explicit:old-session";
-    await fs.writeFile(
-      rotatedSessionFile,
-      `${JSON.stringify({
-        type: "session",
-        version: CURRENT_SESSION_VERSION,
-        id: "rotated-session",
-        timestamp: new Date(0).toISOString(),
-        cwd: state.workspaceDir,
-      })}\n`,
-      "utf-8",
-    );
-    await saveSessionStore(storePath, {
-      [sessionKey]: {
+    await replaceSessionEntry(
+      { sessionKey, storePath },
+      {
         sessionId: "rotated-session",
         sessionFile: rotatedSessionFile,
         updatedAt: Date.now(),
@@ -379,7 +392,7 @@ describe("agentCommand compaction transcript rotation", () => {
         usageFamilySessionIds: ["old-session", "rotated-session"],
         compactionCount: 1,
       },
-    });
+    );
     state.runAgentAttemptMock.mockResolvedValueOnce(
       makeResult({
         sessionId: "rotated-session",
@@ -399,13 +412,20 @@ describe("agentCommand compaction transcript rotation", () => {
     expect(secondAttempt).toMatchObject({
       sessionId: "rotated-session",
       sessionKey,
-      sessionFile: rotatedSessionFile,
+    });
+    expect(parseSqliteSessionFileMarker(secondAttempt?.sessionFile)).toMatchObject({
+      agentId: "main",
+      sessionId: "rotated-session",
+      storePath,
     });
     expect(state.deliveryFreshEntries.at(-1)).toMatchObject({
       sessionId: "rotated-session",
       sessionFile: rotatedSessionFile,
     });
-    expect(loadSessionStore(storePath, { skipCache: true })[sessionKey ?? ""]).toMatchObject({
+    const persisted = Object.fromEntries(
+      listSessionEntries({ storePath }).map(({ entry, sessionKey: key }) => [key, entry]),
+    );
+    expect(persisted[sessionKey]).toMatchObject({
       sessionId: "rotated-session",
       sessionFile: rotatedSessionFile,
     });

@@ -120,36 +120,39 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   margin-inline: auto;
 }
 
-/* New messages indicator - floating pill above compose */
-.chat-new-messages {
+/* Scroll-to-bottom affordance centered above the composer. */
+.chat-scroll-to-bottom-wrap {
   align-self: center;
+  display: flex;
+  margin: 8px auto 0;
+  z-index: 10;
+}
+
+.chat-scroll-to-bottom {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  margin: 8px auto 0;
-  font-size: 12px;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
   line-height: 1;
-  font-family: var(--font-body);
   color: var(--text);
   background: var(--panel-strong);
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
-  white-space: nowrap;
-  z-index: 10;
-  transition:
-    background 150ms ease-out,
-    border-color 150ms ease-out;
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  pointer-events: auto;
 }
 
-.chat-new-messages:hover {
-  background: var(--panel);
-  border-color: var(--accent);
+.chat-scroll-to-bottom:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--text) 28%, transparent);
+  outline-offset: 2px;
 }
 
-.chat-new-messages svg {
-  width: 16px;
-  height: 16px;
+.chat-scroll-to-bottom svg {
+  width: 18px;
+  height: 18px;
   stroke: currentColor;
   fill: none;
   stroke-width: 1.5px;
@@ -4189,79 +4192,154 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   align-items: center;
   justify-content: center;
   text-align: center;
-  gap: 12px;
-  width: min(100%, 560px);
+  gap: 10px;
+  width: min(100%, 640px);
   margin: auto;
-  padding: clamp(28px, 6vh, 56px) 24px;
+  padding: clamp(20px, 4vh, 40px) 24px;
   flex: 1;
   min-height: 0;
 }
 
-.agent-chat__welcome-glow {
-  display: none;
-}
-
 .agent-chat__welcome h2 {
-  font-size: 20px;
+  font-size: 24px;
   font-weight: 600;
   margin: 0;
   color: var(--foreground);
 }
 
-.agent-chat__avatar--logo {
-  width: 48px;
-  height: 48px;
-  border-radius: var(--radius-lg);
-  background: var(--panel-strong);
-  border: 1px solid var(--border);
-  display: grid;
-  place-items: center;
-  overflow: hidden;
+.agent-chat__welcome-avatar {
+  width: 96px;
+  height: 96px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+/* The hero Clawd: the lobster-pet sprite, big and borderless. Idle loop
+   (breathe/blink keyframes) lives in lobster-pet.css; only the periodic
+   wave is welcome-specific. */
+.agent-chat__welcome-clawd {
+  width: 128px;
+  height: 112px;
+  margin-bottom: 2px;
+}
+
+.agent-chat__welcome-clawd .lobster-pet__svg {
+  animation: lobster-pet-breathe 3.4s ease-in-out infinite;
+}
+
+.agent-chat__welcome-clawd .lob-eye-open {
+  animation: lobster-pet-blink-open 5.2s linear infinite;
+}
+
+.agent-chat__welcome-clawd .lob-eye-closed {
+  opacity: 0;
+  animation: lobster-pet-blink-closed 5.2s linear infinite;
+}
+
+.agent-chat__welcome-clawd .lob-claw--r {
+  animation: agent-chat-welcome-wave 9s ease-in-out infinite;
+}
+
+@keyframes agent-chat-welcome-wave {
+  0%,
+  82%,
+  100% {
+    transform: translateY(0) rotate(0deg);
+  }
+  86%,
+  94% {
+    transform: translateY(-6px) rotate(-30deg);
+  }
+  90% {
+    transform: translateY(-6px) rotate(-6deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-chat__welcome-clawd .lobster-pet__svg,
+  .agent-chat__welcome-clawd .lob-eye-open,
+  .agent-chat__welcome-clawd .lob-eye-closed,
+  .agent-chat__welcome-clawd .lob-claw--r {
+    animation: none;
+  }
 }
 
 .agent-chat__avatar--text {
-  width: 56px;
-  height: 56px;
+  width: 80px;
+  height: 80px;
   border-radius: var(--radius-lg);
   background: var(--secondary);
   border: 1px solid var(--border);
   color: var(--foreground);
   display: grid;
   place-items: center;
-  font-size: 20px;
+  font-size: 28px;
   font-weight: 700;
 }
 
-.agent-chat__avatar--logo img {
-  width: 32px;
-  height: 32px;
-  object-fit: contain;
-}
-
-.agent-chat__badges {
+/* Recent user chats replace the canned suggestions once any exist. */
+.agent-chat__recents {
   display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  justify-content: center;
+  flex-direction: column;
+  gap: 4px;
+  width: min(100%, 520px);
+  margin-top: 12px;
+  text-align: left;
 }
 
-.agent-chat__badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+.agent-chat__recents-title {
   font-size: 12px;
-  font-weight: 500;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
   color: var(--muted);
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
-  padding: 4px 12px;
+  margin: 0 0 2px 4px;
 }
 
-.agent-chat__badge img {
-  width: 14px;
-  height: 14px;
-  object-fit: contain;
+.agent-chat__recent {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--foreground);
+  font-size: 13px;
+  text-align: left;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+}
+
+.agent-chat__recent:hover {
+  background: var(--panel);
+  border-color: var(--border);
+}
+
+.agent-chat__recent-name {
+  font-weight: 500;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-chat__recent-sub {
+  color: var(--muted);
+  font-size: 12px;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-chat__recent-time {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 .agent-chat__hint {

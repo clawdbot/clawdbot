@@ -47,7 +47,7 @@ function createDescendantRun(params?: {
   cleanup?: "keep" | "delete";
   endedAt?: number;
   resultText?: string | null;
-  executionTranscriptFile?: string;
+  hasInternalTranscript?: boolean;
 }) {
   return {
     runId: params?.runId ?? "run-1",
@@ -61,11 +61,16 @@ function createDescendantRun(params?: {
     ...(params?.resultText === undefined
       ? {}
       : { completion: { required: true, resultText: params.resultText } }),
-    ...(params?.executionTranscriptFile
+    ...(params?.hasInternalTranscript
       ? {
           execution: {
             status: "terminal" as const,
-            transcriptFile: params.executionTranscriptFile,
+            transcriptTarget: {
+              agentId: "main",
+              sessionId: "internal-run",
+              sessionKey: "agent:main:internal-session-effects:run",
+              storePath: "/tmp/test-store",
+            },
           },
         }
       : {}),
@@ -164,7 +169,7 @@ describe("readDescendantSubagentFallbackReply", () => {
     vi.mocked(listDescendantRunsForRequester).mockReturnValue([
       createDescendantRun({
         resultText: "fresh recovered output",
-        executionTranscriptFile: "/tmp/openclaw-internal-run.jsonl",
+        hasInternalTranscript: true,
       }),
     ]);
     vi.mocked(readLatestAssistantReply).mockResolvedValue("stale visible transcript");
@@ -179,7 +184,7 @@ describe("readDescendantSubagentFallbackReply", () => {
     vi.mocked(listDescendantRunsForRequester).mockReturnValue([
       createDescendantRun({
         resultText: null,
-        executionTranscriptFile: "/tmp/openclaw-empty-internal-run.jsonl",
+        hasInternalTranscript: true,
       }),
     ]);
     vi.mocked(readLatestAssistantReply).mockClear();

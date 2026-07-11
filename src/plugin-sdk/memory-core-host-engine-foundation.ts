@@ -1,7 +1,6 @@
 /**
  * Public SDK foundation surface for memory host engine config, paths, and shared helpers.
  */
-import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 
 export * from "../../packages/memory-host-sdk/src/engine-foundation.js";
 export {
@@ -40,19 +39,13 @@ export type { MemorySearchConfig } from "../config/types.tools.js";
 export { root } from "../infra/fs-safe.js";
 export { createSubsystemLogger } from "../logging/subsystem.js";
 export { detectMime } from "@openclaw/media-core/mime";
-export { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+export {
+  onInternalSessionTranscriptUpdate,
+  onSessionTranscriptUpdate,
+} from "../sessions/transcript-events.js";
 export { resolveGlobalSingleton } from "../shared/global-singleton.js";
 export { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 export { splitShellArgs } from "../utils/shell-argv.js";
-
-const MEMORY_CORE_TRANSCRIPT_UPDATE_SUBSCRIBER_KEY = Symbol.for(
-  "openclaw.memoryCore.sessionTranscriptUpdateSubscriber",
-);
-
-// Memory-core needs target-only internal updates before the SQLite flip, while
-// the public SDK listener stays file-backed during the compatibility window.
-(globalThis as Record<symbol, unknown>)[MEMORY_CORE_TRANSCRIPT_UPDATE_SUBSCRIBER_KEY] ??=
-  onInternalSessionTranscriptUpdate;
 
 export {
   resolveUserPath,

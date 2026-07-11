@@ -125,25 +125,6 @@ export class ContextEngineRuntimeSettingsUnsupportedError extends Error {
   }
 }
 
-/**
- * Typed session target for compaction results.
- *
- * Makes the storage mode explicit and carries precise session identity
- * instead of a raw file path string. File-backed is the only storage mode
- * today; new storage modes extend this union when they ship.
- */
-export type ContextEngineSessionTarget = {
-  kind: "file";
-  /** Agent that owns the session, when the caller resolved it. */
-  agentId?: string;
-  /** Runtime session id for the post-compaction live session. */
-  sessionId: string;
-  /** Stable session key used for aliases, policy, and store resolution. */
-  sessionKey?: string;
-  /** Live transcript artifact path for the file-backed session. */
-  sessionFile: string;
-};
-
 export type CompactResult = {
   ok: boolean;
   compacted: boolean;
@@ -184,7 +165,9 @@ export function resolveCompactionSuccessorTranscript(result: CompactResult): {
   const target = result.result?.sessionTarget;
   return {
     sessionId: target?.sessionId ?? result.result?.sessionId,
-    sessionFile: target?.sessionFile ?? result.result?.sessionFile,
+    // Storage-neutral targets carry no raw locator; the deprecated raw field on
+    // the result remains the only file-era locator shipped engines report.
+    sessionFile: result.result?.sessionFile,
   };
 }
 
@@ -307,6 +290,30 @@ export type ContextEnginePromptCacheInfo = {
   expiresAt?: number;
 };
 
+export type ContextEngineTranscriptStorageInfo = {
+  /**
+   * Authoritative transcript backend for this runtime turn.
+   *
+   * Hosts may still pass legacy locator fields such as `sessionFile` for older
+   * plugin contracts, but context engines should use this field to decide
+   * whether that locator is a live transcript source.
+   */
+  kind: "sqlite";
+};
+
+export type ContextEngineSessionTarget = {
+  /** Agent that owns the session in the runtime store. */
+  agentId?: string;
+  /** Runtime session id to compact. */
+  sessionId?: string;
+  /** Stable session key used for aliases, policy, and store resolution. */
+  sessionKey?: string;
+  /** Session store path that scopes the SQLite-backed runtime session. */
+  storePath?: string;
+  /** Optional transport thread identity for session target resolution. */
+  threadId?: string | number;
+};
+
 export type ContextEngineRuntimeContext = Record<string, unknown> & {
   /** Runtime task working directory; workspaceDir remains the agent bootstrap workspace. */
   cwd?: string;
@@ -323,6 +330,10 @@ export type ContextEngineRuntimeContext = Record<string, unknown> & {
   currentTokenCount?: number;
   /** Optional prompt-cache telemetry for cache-aware engines. */
   promptCache?: ContextEnginePromptCacheInfo;
+  /** Authoritative transcript backend for this turn. */
+  transcriptStorage?: ContextEngineTranscriptStorageInfo;
+  /** Storage-neutral runtime session target for compaction delegation. */
+  sessionTarget?: ContextEngineSessionTarget;
   /**
    * Safe transcript rewrite helper implemented by the runtime.
    *
@@ -356,8 +367,11 @@ export interface ContextEngine {
   bootstrap?(params: {
     sessionId: string;
     sessionKey?: string;
+    /** Storage-neutral runtime session target for transcript/session SDK helpers. */
+    sessionTarget?: ContextEngineSessionTarget;
     sessionFile: string;
     runtimeSettings?: ContextEngineRuntimeSettings;
+    runtimeContext?: ContextEngineRuntimeContext;
   }): Promise<BootstrapResult>;
 
   /**
@@ -369,6 +383,8 @@ export interface ContextEngine {
   maintain?(params: {
     sessionId: string;
     sessionKey?: string;
+    /** Storage-neutral runtime session target for transcript/session SDK helpers. */
+    sessionTarget?: ContextEngineSessionTarget;
     sessionFile: string;
     runtimeSettings?: ContextEngineRuntimeSettings;
     runtimeContext?: ContextEngineRuntimeContext;
@@ -404,6 +420,8 @@ export interface ContextEngine {
   afterTurn?(params: {
     sessionId: string;
     sessionKey?: string;
+    /** Storage-neutral runtime session target for transcript/session SDK helpers. */
+    sessionTarget?: ContextEngineSessionTarget;
     sessionFile: string;
     messages: AgentMessage[];
     /** Number of messages that existed before the prompt was sent. */
@@ -452,8 +470,11 @@ export interface ContextEngine {
    */
   compact(params: {
     sessionId: string;
-    sessionKey?: string;
-    sessionFile: string;
+    sessionKey: string;
+    /** Caller-resolved owner agent for global session aliases. */
+    agentId?: string;
+    /** Storage-neutral runtime session target for delegated compaction. */
+    sessionTarget?: ContextEngineSessionTarget;
     tokenBudget?: number;
     /** Force compaction even below the default trigger threshold. */
     force?: boolean;

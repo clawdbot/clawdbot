@@ -335,7 +335,7 @@ function getExistingSessionUnsupportedMessage(action: BrowserActRequest): string
         ? EXISTING_SESSION_LIMITS.act.waitNetworkIdle
         : null;
     case "evaluate":
-      return action.timeoutMs !== undefined ? EXISTING_SESSION_LIMITS.act.evaluateTimeout : null;
+      return null;
     case "batch":
       return EXISTING_SESSION_LIMITS.act.batch;
     case "resize":

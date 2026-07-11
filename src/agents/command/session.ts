@@ -24,8 +24,8 @@ import {
   resolveSessionResetPolicy,
 } from "../../config/sessions/reset-policy.js";
 import { resolveChannelResetConfig, resolveSessionResetType } from "../../config/sessions/reset.js";
+import { listSessionEntries } from "../../config/sessions/session-accessor.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
-import { loadSessionStore } from "../../config/sessions/store-load.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -82,6 +82,20 @@ type SessionIdMatchSet = {
   storeByKey: Map<string, SessionKeyResolution>;
 };
 
+function loadCommandSessionStore(params: {
+  agentId?: string;
+  clone?: boolean;
+  storePath: string;
+}): Record<string, SessionEntry> {
+  return Object.fromEntries(
+    listSessionEntries({
+      storePath: params.storePath,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      ...(params.clone === false ? { clone: false } : {}),
+    }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+  );
+}
+
 /** Builds the synthetic session key used for explicit session-id runs. */
 export function buildExplicitSessionIdSessionKey(params: {
   sessionId: string;
@@ -132,10 +146,11 @@ function resolveLegacyMainStoreSessionForDefaultAgent(opts: {
     }
     return undefined;
   }
-  const legacyStore = loadSessionStore(
-    legacyStorePath,
-    opts.cloneOnWrite ? { clone: false } : undefined,
-  );
+  const legacyStore = loadCommandSessionStore({
+    agentId: DEFAULT_AGENT_ID,
+    storePath: legacyStorePath,
+    ...(opts.cloneOnWrite ? { clone: false } : {}),
+  });
   for (const legacyKey of legacyKeys) {
     const legacyEntry = legacyStore[legacyKey];
     if (legacyEntry) {
@@ -196,7 +211,11 @@ function collectSessionIdMatchesForRequest(opts: {
     }
     const candidateStorePath = resolveStorePath(opts.cfg.session?.store, { agentId });
     addMatches(
-      loadSessionStore(candidateStorePath, opts.clone === false ? { clone: false } : undefined),
+      loadCommandSessionStore({
+        agentId,
+        storePath: candidateStorePath,
+        ...(opts.clone === false ? { clone: false } : {}),
+      }),
       candidateStorePath,
     );
   }
@@ -219,7 +238,10 @@ export function resolveStoredSessionKeyForSessionId(opts: {
   const storePath = resolveStorePath(opts.cfg.session?.store, {
     agentId: storeAgentId,
   });
-  const sessionStore = loadSessionStore(storePath);
+  const sessionStore = loadCommandSessionStore({
+    storePath,
+    ...(storeAgentId ? { agentId: storeAgentId } : {}),
+  });
   if (!sessionId) {
     return { sessionKey: undefined, sessionStore, storePath };
   }
@@ -273,7 +295,11 @@ export function resolveSessionKeyForRequest(opts: {
     agentId: storeAgentId,
   });
   const loadOptions = opts.clone === false ? { clone: false as const } : undefined;
-  const sessionStore = loadSessionStore(storePath, loadOptions);
+  const sessionStore = loadCommandSessionStore({
+    storePath,
+    agentId: storeAgentId,
+    ...(loadOptions ? { clone: false } : {}),
+  });
 
   const ctx: MsgContext | undefined = opts.to?.trim() ? { From: opts.to } : undefined;
   let sessionKey: string | undefined =

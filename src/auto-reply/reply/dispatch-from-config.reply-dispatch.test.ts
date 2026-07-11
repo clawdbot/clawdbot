@@ -96,6 +96,10 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     sessionBindingMocks.resolveByConversation.mockReset().mockReturnValue(null);
     sessionBindingMocks.touch.mockReset();
     sessionStoreMocks.currentEntry = undefined;
+    sessionStoreMocks.loadSessionStoreEntry.mockReset();
+    sessionStoreMocks.loadSessionStoreEntry.mockImplementation(
+      () => sessionStoreMocks.currentEntry,
+    );
     sessionStoreMocks.loadSessionStore.mockReset().mockReturnValue({});
     sessionStoreMocks.readSessionEntry.mockReset().mockReturnValue(undefined);
     sessionStoreMocks.resolveStorePath.mockReset().mockReturnValue("/tmp/mock-sessions.json");
@@ -204,9 +208,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       pendingFinalDeliveryLastError: "previous failure",
       pendingFinalDeliveryContext: { source: "heartbeat" },
     };
-    sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
-      existing: sessionStoreMocks.currentEntry,
-    });
+    sessionStoreMocks.loadSessionStore.mockClear();
     mocks.routeReply.mockResolvedValue({ ok: true, messageId: "mock" });
 
     const result = await dispatchReplyFromConfig({
@@ -217,6 +219,14 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     });
 
     expect(result.queuedFinal).toBe(true);
+    expect(sessionStoreMocks.loadSessionStoreEntry).toHaveBeenCalledWith({
+      agentId: "test",
+      storePath: "/tmp/mock-sessions.json",
+      sessionKey: "agent:test:session",
+      readConsistency: "latest",
+      clone: false,
+    });
+    expect(sessionStoreMocks.loadSessionStore).not.toHaveBeenCalled();
     expect(sessionStoreMocks.updateSessionStoreEntry).toHaveBeenCalledOnce();
     expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBeUndefined();
     expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryText).toBeUndefined();

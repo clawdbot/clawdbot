@@ -83,7 +83,7 @@ vi.mock("../config/sessions/session-accessor.js", () => ({
 const announceSpy = vi.fn(async (_params: unknown) => true);
 const runSubagentEndedHookMock = vi.fn(async (_eventValue?: unknown, _ctx?: unknown) => {});
 const emitSessionLifecycleEventMock = vi.fn();
-const removeInternalSessionEffectsTranscriptMock = vi.fn(async (_sessionFile?: string) => {});
+const removeInternalSessionEffectsSessionMock = vi.fn(async (_target?: unknown) => {});
 
 function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean) {
   let count = 0;
@@ -171,7 +171,7 @@ vi.mock("./subagent-registry.store.js", () => ({
 }));
 
 vi.mock("./internal-session-effects.js", () => ({
-  removeInternalSessionEffectsTranscript: removeInternalSessionEffectsTranscriptMock,
+  removeInternalSessionEffectsSession: removeInternalSessionEffectsSessionMock,
 }));
 
 describe("subagent registry steer restarts", () => {
@@ -197,7 +197,7 @@ describe("subagent registry steer restarts", () => {
     runSubagentEndedHookMock.mockReset();
     runSubagentEndedHookMock.mockImplementation(async () => {});
     emitSessionLifecycleEventMock.mockReset();
-    removeInternalSessionEffectsTranscriptMock.mockClear();
+    removeInternalSessionEffectsSessionMock.mockClear();
     mod.resetSubagentRegistryForTests({ persist: false });
   });
 
@@ -298,14 +298,19 @@ describe("subagent registry steer restarts", () => {
     previousRunId: string;
     nextRunId: string;
     fallback?: ReturnType<typeof listMainRuns>[number];
-    transcriptFile?: string;
+    transcriptTarget?: {
+      agentId: string;
+      sessionId: string;
+      sessionKey: string;
+      storePath: string;
+    };
     task?: string;
   }) => {
     const replaced = mod.replaceSubagentRunAfterSteer({
       previousRunId: params.previousRunId,
       nextRunId: params.nextRunId,
       fallback: params.fallback,
-      transcriptFile: params.transcriptFile,
+      transcriptTarget: params.transcriptTarget,
       task: params.task,
     });
     expect(replaced).toBe(true);
@@ -325,7 +330,7 @@ describe("subagent registry steer restarts", () => {
     runSubagentEndedHookMock.mockImplementation(async () => {});
     emitSessionLifecycleEventMock.mockReset();
     lifecycleHandler = undefined;
-    removeInternalSessionEffectsTranscriptMock.mockClear();
+    removeInternalSessionEffectsSessionMock.mockClear();
     mod.resetSubagentRegistryForTests({ persist: false });
   });
 
@@ -393,7 +398,12 @@ describe("subagent registry steer restarts", () => {
       previous.execution = {
         status: "interrupted",
         startedAt: previous.startedAt,
-        transcriptFile: "/tmp/openclaw-state/internal-agent-runs/run-old.jsonl",
+        transcriptTarget: {
+          agentId: "main",
+          sessionId: "internal-run-old",
+          sessionKey: "agent:main:internal-session-effects:run-old",
+          storePath: "/tmp/test-store",
+        },
       };
 
       replaceRunAfterSteer({
@@ -402,8 +412,8 @@ describe("subagent registry steer restarts", () => {
         fallback: previous,
       });
 
-      expect(removeInternalSessionEffectsTranscriptMock).toHaveBeenCalledWith(
-        "/tmp/openclaw-state/internal-agent-runs/run-old.jsonl",
+      expect(removeInternalSessionEffectsSessionMock).toHaveBeenCalledWith(
+        previous.execution.transcriptTarget,
       );
     }
   });
@@ -903,7 +913,12 @@ describe("subagent registry steer restarts", () => {
     activeRun.execution = {
       ...activeRun.execution,
       status: activeRun.execution?.status ?? "running",
-      transcriptFile: "/tmp/recovered-subagent.jsonl",
+      transcriptTarget: {
+        agentId: "main",
+        sessionId: "recovered-subagent",
+        sessionKey: "agent:main:internal-session-effects:recovered-subagent",
+        storePath: "/tmp/test-store",
+      },
     };
 
     expect(mod.isSubagentSessionRunActive(childSessionKey)).toBe(true);
@@ -926,7 +941,7 @@ describe("subagent registry steer restarts", () => {
     expect(typeof run?.cleanupCompletedAt).toBe("number");
     await flushAnnounce();
     expect(runSubagentEndedHookMock).not.toHaveBeenCalled();
-    expect(removeInternalSessionEffectsTranscriptMock).not.toHaveBeenCalled();
+    expect(removeInternalSessionEffectsSessionMock).not.toHaveBeenCalled();
   });
 
   it("treats a child session as inactive when only a stale older row is still unended", () => {

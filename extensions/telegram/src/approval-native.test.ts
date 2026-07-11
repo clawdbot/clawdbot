@@ -1,8 +1,11 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { saveSessionStore, type SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { describe, expect, it } from "vitest";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { afterEach, describe, expect, it } from "vitest";
 import { telegramApprovalCapability } from "./approval-native.js";
 
 function buildConfig(
@@ -23,12 +26,27 @@ function buildConfig(
   } as OpenClawConfig;
 }
 
-const STORE_PATH = path.join(os.tmpdir(), "openclaw-telegram-approval-native-test.json");
+const tempDirs: string[] = [];
 
-async function writeStore(store: Record<string, unknown>) {
-  await saveSessionStore(STORE_PATH, store as Record<string, SessionEntry>, {
-    skipMaintenance: true,
-  });
+afterEach(() => {
+  closeOpenClawAgentDatabasesForTest();
+  for (const dir of tempDirs.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+function createTempStorePath(): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-approval-native-"));
+  tempDirs.push(dir);
+  return path.join(dir, "sessions.json");
+}
+
+async function writeSessionEntry(params: {
+  storePath: string;
+  sessionKey: string;
+  entry: SessionEntry;
+}): Promise<void> {
+  await upsertSessionEntry(params);
 }
 
 describe("telegram native approval adapter", () => {
@@ -110,8 +128,11 @@ describe("telegram native approval adapter", () => {
   });
 
   it("falls back to the session-bound origin target for plugin approvals", async () => {
-    await writeStore({
-      "agent:main:telegram:group:-1003841603622:topic:928": {
+    const storePath = createTempStorePath();
+    await writeSessionEntry({
+      storePath,
+      sessionKey: "agent:main:telegram:group:-1003841603622:topic:928",
+      entry: {
         sessionId: "sess",
         updatedAt: Date.now(),
         deliveryContext: {
@@ -126,7 +147,7 @@ describe("telegram native approval adapter", () => {
     const target = await telegramApprovalCapability.native?.resolveOriginTarget?.({
       cfg: {
         ...buildConfig(),
-        session: { store: STORE_PATH },
+        session: { store: storePath },
       },
       accountId: "default",
       approvalKind: "plugin",
@@ -149,8 +170,11 @@ describe("telegram native approval adapter", () => {
   });
 
   it("parses numeric string thread ids from the session store for plugin approvals", async () => {
-    await writeStore({
-      "agent:main:telegram:group:-1003841603622:topic:928": {
+    const storePath = createTempStorePath();
+    await writeSessionEntry({
+      storePath,
+      sessionKey: "agent:main:telegram:group:-1003841603622:topic:928",
+      entry: {
         sessionId: "sess",
         updatedAt: Date.now(),
         deliveryContext: {
@@ -165,7 +189,7 @@ describe("telegram native approval adapter", () => {
     const target = await telegramApprovalCapability.native?.resolveOriginTarget?.({
       cfg: {
         ...buildConfig(),
-        session: { store: STORE_PATH },
+        session: { store: storePath },
       },
       accountId: "default",
       approvalKind: "plugin",

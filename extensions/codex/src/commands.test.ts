@@ -10,7 +10,7 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "openclaw/plugin-sdk/model-session-runtime";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
-import { saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import type { CodexComputerUseStatus } from "./app-server/computer-use.js";
@@ -170,8 +170,10 @@ async function createLockedSessionContextOverrides(
   sessionKey = "agent:main:test:locked",
 ): Promise<Pick<PluginCommandContext, "config" | "sessionKey">> {
   const storePath = path.join(tempDir, "locked-sessions.json");
-  await saveSessionStore(storePath, {
-    [sessionKey]: {
+  await upsertSessionEntry({
+    storePath,
+    sessionKey,
+    entry: {
       sessionId: "session-1",
       updatedAt: Date.now(),
       agentHarnessId: "codex",
@@ -545,8 +547,10 @@ describe("codex command", () => {
       },
       { threadId: "thread-old", cwd: "/old" },
     );
-    await saveSessionStore(storePath, {
-      [sessionKey]: { sessionId: "session-new", updatedAt: Date.now() },
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: { sessionId: "session-new", updatedAt: Date.now() },
     });
     const codexControlRequest = vi.fn(async () =>
       createThreadResumeResponse({ threadId: "thread-new" }),
@@ -615,10 +619,18 @@ describe("codex command", () => {
     const codexControlRequest = vi.fn(async () =>
       createThreadResumeResponse({ threadId: "thread-123" }),
     );
+    const storePath = path.join(tempDir, "worker-sessions.json");
+    await upsertSessionEntry({
+      agentId: "worker",
+      storePath,
+      sessionKey: "agent:worker:session-1",
+      entry: { sessionId: "session-1", updatedAt: Date.now() },
+    });
 
     await handleCodexCommand(
       createContext("resume thread-123", undefined, {
         sessionKey: "agent:worker:session-1",
+        config: { session: { store: storePath } },
       }),
       { deps: createDeps({ codexControlRequest }) },
     );

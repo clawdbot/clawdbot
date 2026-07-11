@@ -6,7 +6,8 @@ import {
   registerTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { loadSessionStore, updateSessionStore, type SessionEntry } from "../../config/sessions.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import { listSessionEntries, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { withTempConfig } from "../../gateway/test-temp-config.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -42,6 +43,26 @@ function extensionNamespace(entry: Record<string, unknown>, pluginId: string, na
   const extensions = requireRecord(entry.pluginExtensions, "plugin extensions");
   const pluginExtensions = requireRecord(extensions[pluginId], `${pluginId} extensions`);
   return requireRecord(pluginExtensions[namespace], `${pluginId}.${namespace} state`);
+}
+
+function loadSessionStore(
+  storePath: string,
+  _options?: { skipCache?: boolean },
+): Record<string, SessionEntry> {
+  return Object.fromEntries(
+    listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+  );
+}
+
+async function updateSessionStore(
+  storePath: string,
+  update: (store: Record<string, SessionEntry>) => void,
+): Promise<void> {
+  const store: Record<string, SessionEntry> = {};
+  update(store);
+  for (const [sessionKey, entry] of Object.entries(store)) {
+    await replaceSessionEntry({ sessionKey, storePath }, entry);
+  }
 }
 
 async function withProjectionSessionStore(

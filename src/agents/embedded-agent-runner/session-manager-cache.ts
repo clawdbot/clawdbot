@@ -8,6 +8,7 @@ import {
   isCacheEnabled,
   resolveCacheTtlMs,
 } from "../../config/cache-utils.js";
+import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 
 const DEFAULT_SESSION_MANAGER_TTL_MS = 45_000; // 45 seconds
 const MIN_SESSION_MANAGER_CACHE_PRUNE_INTERVAL_MS = 1_000;
@@ -59,6 +60,9 @@ export function createSessionManagerCache(options?: {
     keys: () => cache.keys(),
     prewarmSessionFile: async (sessionFile) => {
       if (!isCacheEnabled(getTtlMs())) {
+        return;
+      }
+      if (parseSqliteSessionFileMarker(sessionFile)) {
         return;
       }
       if (cache.get(sessionFile) === true) {

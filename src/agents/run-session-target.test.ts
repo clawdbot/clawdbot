@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { loadSessionStore } from "../config/sessions/store.js";
+import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentRunSessionTarget } from "./run-session-target.js";
 
@@ -33,10 +33,11 @@ describe("agent run session target", () => {
       sessionId: "test-run",
       sessionKey,
     });
-    expect(path.dirname(target.sessionFile)).toBe(path.dirname(storePath));
-    expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]?.sessionFile).toBe(
-      target.sessionFile,
-    );
+    expect(parseSqliteSessionFileMarker(target.sessionFile)).toEqual({
+      agentId: "helper",
+      sessionId: "test-run",
+      storePath,
+    });
   });
 
   it("uses the agent from an agent-scoped session key when agentId is omitted", async () => {
@@ -51,9 +52,43 @@ describe("agent run session target", () => {
 
     const helperStorePath = path.join(tempDir, "agents", "helper", "sessions.json");
     expect(target.agentId).toBe("helper");
-    expect(path.dirname(target.sessionFile)).toBe(path.dirname(helperStorePath));
-    expect(loadSessionStore(helperStorePath, { skipCache: true })[sessionKey]?.sessionFile).toBe(
-      target.sessionFile,
-    );
+    expect(parseSqliteSessionFileMarker(target.sessionFile)).toEqual({
+      agentId: "helper",
+      sessionId: "helper-session",
+      storePath: helperStorePath,
+    });
+  });
+
+  it("prefers typed runtime target identity over deprecated sessionFile", async () => {
+    const storePath = path.join(tempDir, "target-store", "sessions.json");
+    const legacySessionFile = path.join(tempDir, "legacy-session.jsonl");
+
+    const target = await resolveAgentRunSessionTarget({
+      agentId: "main",
+      config: {
+        session: { store: path.join(tempDir, "fallback", "sessions.json") },
+      } as OpenClawConfig,
+      sessionFile: legacySessionFile,
+      sessionId: "legacy-session",
+      sessionKey: "agent:main:legacy-session",
+      sessionTarget: {
+        agentId: "worker",
+        sessionId: "runtime-session",
+        sessionKey: "agent:worker:runtime-session",
+        storePath,
+      },
+    });
+
+    expect(target).toMatchObject({
+      agentId: "worker",
+      sessionId: "runtime-session",
+      sessionKey: "agent:worker:runtime-session",
+    });
+    expect(target.sessionFile).not.toBe(legacySessionFile);
+    expect(parseSqliteSessionFileMarker(target.sessionFile)).toEqual({
+      agentId: "worker",
+      sessionId: "runtime-session",
+      storePath,
+    });
   });
 });

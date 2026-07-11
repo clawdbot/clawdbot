@@ -31,11 +31,4 @@ export {
 } from "./agents/embedded-agent.js";
 export { resolveAgentTimeoutMs } from "./agents/timeout.js";
 export { ensureAgentWorkspace } from "./agents/workspace.js";
-export {
-  resolveStorePath,
-  loadSessionStore,
-  saveSessionStore,
-  updateSessionStore,
-  updateSessionStoreEntry,
-  resolveSessionFilePath,
-} from "./config/sessions.js";
+export { resolveStorePath, updateSessionStoreEntry } from "./config/sessions.js";

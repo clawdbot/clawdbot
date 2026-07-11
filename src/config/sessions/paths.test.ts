@@ -1,7 +1,54 @@
 // Session path helper tests pin default store path contracts used by CLI commands.
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { resolveStorePath } from "./paths.js";
+import { afterEach, describe, expect, it } from "vitest";
+import { resolveSessionFilePath, resolveStorePath } from "./paths.js";
+
+const tempDirs: string[] = [];
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+describe("resolveSessionFilePath cross-root reroot", () => {
+  it("re-roots foreign-root absolute paths when the file exists in the current sessions dir", () => {
+    // Restored backups and moved state dirs persist absolute sessionFile
+    // paths from the old root; migration must find the local copy.
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reroot-")));
+    tempDirs.push(root);
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.writeFileSync(path.join(sessionsDir, "sess-1.jsonl"), "{}\n", "utf8");
+    const foreign = "/nonexistent-old-root/.openclaw/agents/main/sessions/sess-1.jsonl";
+
+    const resolved = resolveSessionFilePath(
+      "sess-1",
+      { sessionFile: foreign },
+      { sessionsDir, agentId: "main" },
+    );
+
+    expect(resolved).toBe(path.join(sessionsDir, "sess-1.jsonl"));
+  });
+
+  it("keeps foreign-root absolute paths when no local copy exists", () => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reroot-keep-")));
+    tempDirs.push(root);
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    const foreign = "/nonexistent-old-root/.openclaw/agents/main/sessions/sess-2.jsonl";
+
+    const resolved = resolveSessionFilePath(
+      "sess-2",
+      { sessionFile: foreign },
+      { sessionsDir, agentId: "main" },
+    );
+
+    expect(resolved).toBe(foreign);
+  });
+});
 
 describe("resolveStorePath", () => {
   it("uses the default agent store when session.store is absent or blank", () => {

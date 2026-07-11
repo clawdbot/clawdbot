@@ -745,9 +745,9 @@ export function createFollowupRunner(params: {
       // Admission may wait while session policy changes. Reload persisted state before any
       // delivery decision; the enqueue-time in-memory snapshot is not authoritative here.
       const admittedSessionEntry = replySessionKey
-        ? storePath
-          ? loadSessionEntry({ storePath, sessionKey: replySessionKey })
-          : sessionStore?.[replySessionKey]
+        ? ((storePath ? loadSessionEntry({ storePath, sessionKey: replySessionKey }) : undefined) ??
+          sessionStore?.[replySessionKey] ??
+          (replySessionKey === sessionKey ? sessionEntry : undefined))
         : undefined;
       if (admittedSessionEntry?.sessionId === replyOperation.sessionId) {
         activeSessionEntry = admittedSessionEntry;
@@ -1419,6 +1419,15 @@ export function createFollowupRunner(params: {
               });
               pendingLifecycleTerminal = { provider, model, backstop: lifecycleBackstop };
               const followupCurrentMessageId = resolveFollowupCurrentMessageId();
+              const runSessionTarget =
+                storePath && run.sessionKey
+                  ? {
+                      ...(run.agentId ? { agentId: run.agentId } : {}),
+                      ...(run.sessionId ? { sessionId: run.sessionId } : {}),
+                      sessionKey: run.sessionKey,
+                      storePath,
+                    }
+                  : undefined;
               const result = await runEmbeddedAgent({
                 allowGatewaySubagentBinding: true,
                 lifecycleGeneration,
@@ -1426,6 +1435,7 @@ export function createFollowupRunner(params: {
                 sessionId: run.sessionId,
                 sessionKey: run.sessionKey,
                 agentId: run.agentId,
+                sessionTarget: runSessionTarget,
                 trigger: resolveReplyHookTrigger(opts),
                 messageChannel: queued.originatingChannel ?? undefined,
                 messageProvider: run.messageProvider,
@@ -1680,7 +1690,9 @@ export function createFollowupRunner(params: {
 
       await drainProgressDeliveries();
 
-      const continuationEnabled = runtimeConfig?.agents?.defaults?.continuation?.enabled === true;
+      const continuationEnabled =
+        runtimeConfig?.agents?.defaults?.continuation?.enabled === true ||
+        run.config?.agents?.defaults?.continuation?.enabled === true;
       const suppressContinuationAfterReplayUnsafeTurn =
         runResult.meta?.error?.kind === "incomplete_turn" && runResult.meta?.replayInvalid === true;
       if (suppressContinuationAfterReplayUnsafeTurn) {

@@ -12,7 +12,8 @@ import type { ModelsProviderData } from "openclaw/plugin-sdk/command-auth-native
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import * as globalsModule from "openclaw/plugin-sdk/runtime-env";
 import {
-  loadSessionStore,
+  getSessionEntry,
+  listSessionEntries,
   resolveStorePath,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
@@ -442,16 +443,13 @@ describe("Discord model picker interactions", () => {
       dispatchSpy,
       model: "openai/gpt-4o",
     });
-    const store = loadSessionStore(
-      resolveStorePath(context.cfg.session?.store, { agentId: "main" }),
-      {
-        skipCache: true,
-      },
-    );
-    const entry = Object.values(store).find(
+    const entries = listSessionEntries({
+      storePath: resolveStorePath(context.cfg.session?.store, { agentId: "main" }),
+    });
+    const entry = entries.find(
       (candidate) =>
-        candidate.providerOverride === "openai" && candidate.modelOverride === "gpt-4o",
-    );
+        candidate.entry.providerOverride === "openai" && candidate.entry.modelOverride === "gpt-4o",
+    )?.entry;
     expect(typeof entry?.sessionId).toBe("string");
     expect(entry?.sessionId).not.toBe("");
     expect(entry?.agentRuntimeOverride).toBe("codex");
@@ -489,17 +487,14 @@ describe("Discord model picker interactions", () => {
       dispatchSpy,
       model: "anthropic/claude-sonnet-4-5",
     });
-    const store = loadSessionStore(
-      resolveStorePath(context.cfg.session?.store, { agentId: "main" }),
-      {
-        skipCache: true,
-      },
-    );
-    const entry = Object.values(store).find(
+    const entries = listSessionEntries({
+      storePath: resolveStorePath(context.cfg.session?.store, { agentId: "main" }),
+    });
+    const entry = entries.find(
       (candidate) =>
-        candidate.providerOverride === "anthropic" &&
-        candidate.modelOverride === "claude-sonnet-4-5",
-    );
+        candidate.entry.providerOverride === "anthropic" &&
+        candidate.entry.modelOverride === "claude-sonnet-4-5",
+    )?.entry;
     expect(entry?.agentRuntimeOverride).toBeUndefined();
   });
 
@@ -534,17 +529,14 @@ describe("Discord model picker interactions", () => {
       dispatchSpy,
       model: "anthropic/claude-sonnet-4-5",
     });
-    const store = loadSessionStore(
-      resolveStorePath(context.cfg.session?.store, { agentId: "main" }),
-      {
-        skipCache: true,
-      },
-    );
-    const entry = Object.values(store).find(
+    const entries = listSessionEntries({
+      storePath: resolveStorePath(context.cfg.session?.store, { agentId: "main" }),
+    });
+    const entry = entries.find(
       (candidate) =>
-        candidate.providerOverride === "anthropic" &&
-        candidate.modelOverride === "claude-sonnet-4-5",
-    );
+        candidate.entry.providerOverride === "anthropic" &&
+        candidate.entry.modelOverride === "claude-sonnet-4-5",
+    )?.entry;
     expect(entry?.agentRuntimeOverride).toBeUndefined();
   });
 
@@ -840,12 +832,10 @@ describe("Discord model picker interactions", () => {
       mi: "1",
     });
 
-    const store = loadSessionStore(storePath, { skipCache: true });
-    expect(store["agent:worker:subagent:bound"]?.providerOverride).toBe("lmstudio");
-    expect(store["agent:worker:subagent:bound"]?.modelOverride).toBe(
-      "unsloth/gemma-4-26b-a4b-it@iq4_xs",
-    );
-    expect(store["agent:worker:subagent:bound"]?.liveModelSwitchPending).toBe(true);
+    const entry = getSessionEntry({ storePath, sessionKey: "agent:worker:subagent:bound" });
+    expect(entry?.providerOverride).toBe("lmstudio");
+    expect(entry?.modelOverride).toBe("unsloth/gemma-4-26b-a4b-it@iq4_xs");
+    expect(entry?.liveModelSwitchPending).toBe(true);
     expectDispatchedModelSelection({
       dispatchSpy,
       model: "lmstudio/unsloth/gemma-4-26b-a4b-it@iq4_xs",
@@ -893,9 +883,9 @@ describe("Discord model picker interactions", () => {
       createModelsViewSubmitData(),
     );
 
-    const store = loadSessionStore(storePath, { skipCache: true });
-    expect(store["agent:worker:subagent:bound"]?.providerOverride).toBeUndefined();
-    expect(store["agent:worker:subagent:bound"]?.modelOverride).toBeUndefined();
+    const entry = getSessionEntry({ storePath, sessionKey: "agent:worker:subagent:bound" });
+    expect(entry?.providerOverride).toBeUndefined();
+    expect(entry?.modelOverride).toBeUndefined();
     expect(
       JSON.stringify(firstMockArg(submitInteraction.followUp, "interaction.followUp")),
     ).toContain("❌ Failed to apply openai/gpt-4o.");
@@ -950,14 +940,15 @@ describe("Discord model picker interactions", () => {
       r: "openclaw",
     });
 
-    const store = loadSessionStore(storePath, { skipCache: true });
-    expect(store["agent:worker:subagent:bound"]).toMatchObject({
-      providerOverride: "openai",
-      modelOverride: "gpt-5.5",
-      agentHarnessId: "codex",
-      agentRuntimeOverride: "codex",
-      modelSelectionLocked: true,
-    });
+    expect(getSessionEntry({ storePath, sessionKey: "agent:worker:subagent:bound" })).toMatchObject(
+      {
+        providerOverride: "openai",
+        modelOverride: "gpt-5.5",
+        agentHarnessId: "codex",
+        agentRuntimeOverride: "codex",
+        modelSelectionLocked: true,
+      },
+    );
     expect(
       JSON.stringify(firstMockArg(submitInteraction.followUp, "interaction.followUp")),
     ).toContain("❌ Model selection is locked for this session.");

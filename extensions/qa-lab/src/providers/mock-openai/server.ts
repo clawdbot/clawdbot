@@ -223,6 +223,9 @@ function isStrandedFinalRetryFailureRequest(allInputText: string): boolean {
   );
 }
 const QA_SUBAGENT_DIRECT_FALLBACK_MARKER = "QA-SUBAGENT-DIRECT-FALLBACK-OK";
+const QA_NATIVE_STOP_DELAY_PROMPT_RE =
+  /subagent recovery worker native command target proof\.\s*wait until stopped\./i;
+const QA_NATIVE_STOP_DELAY_MS = 180_000;
 const QA_IMAGE_GENERATION_PROMPT_RE =
   /image generation check|capability flip image check|\/tool\s+image_generate/i;
 const QA_REASONING_ONLY_RETRY_NEEDLE =
@@ -3223,11 +3226,8 @@ async function buildResponsesPayload(
   if (isGroupChat && isBaselineUnmentionedChannelChatter && !toolOutput) {
     return buildAssistantEvents("NO_REPLY");
   }
-  if (
-    /subagent recovery worker/i.test(prompt) &&
-    !/interrupted by a gateway reload/i.test(prompt)
-  ) {
-    await sleep(60_000);
+  if (QA_NATIVE_STOP_DELAY_PROMPT_RE.test(prompt)) {
+    await sleep(QA_NATIVE_STOP_DELAY_MS);
   }
   return buildAssistantEvents(buildAssistantText(input, body, scenarioState));
 }

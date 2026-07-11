@@ -1,9 +1,11 @@
 // Qa Lab plugin module implements suite runtime agent session behavior.
-import fs from "node:fs/promises";
 import path from "node:path";
-import { StringDecoder } from "node:string_decoder";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  listSessionEntries,
+  loadTranscriptEventsSync,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import {
   isRecord,
   normalizeOptionalString as readNonEmptyString,
@@ -25,8 +27,6 @@ type QaGatewayCallEnv = Pick<
 >;
 
 const SESSION_STORE_LOCK_RETRY_DELAYS_MS = [1_000, 3_000, 5_000] as const;
-const SESSION_TRANSCRIPT_READ_CHUNK_BYTES = 64 * 1024;
-const SESSION_TRANSCRIPT_LINE_MAX_BYTES = 1024 * 1024;
 let sessionStoreLockRetryDelaysMsForTests: readonly number[] | undefined;
 
 function resolveSessionStoreLockRetryDelaysMs(): readonly number[] {
@@ -50,115 +50,30 @@ function isSessionStoreLockTimeout(error: unknown) {
   );
 }
 
-function readSessionTranscriptLineMessage(line: string) {
-  const trimmed = line.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  try {
-    const parsed = JSON.parse(trimmed) as unknown;
-    return isRecord(parsed) && isRecord(parsed.message) ? parsed.message : undefined;
-  } catch {
-    // Ignore malformed transcript rows and keep QA summary checks deterministic.
-    return undefined;
-  }
+function readSessionTranscriptEventMessage(event: unknown) {
+  return isRecord(event) && isRecord(event.message) ? event.message : undefined;
 }
 
-function appendSessionTranscriptLineChunk(params: {
-  pendingLine: string;
-  pendingLineBytes: number;
-  chunk: string;
-  sessionKey: string;
-}) {
-  const pendingLine = params.pendingLine + params.chunk;
-  const pendingLineBytes = params.pendingLineBytes + Buffer.byteLength(params.chunk, "utf8");
-  if (pendingLineBytes > SESSION_TRANSCRIPT_LINE_MAX_BYTES) {
-    throw new Error(
-      `session transcript line exceeded ${SESSION_TRANSCRIPT_LINE_MAX_BYTES} bytes for ${params.sessionKey}`,
-    );
-  }
-  return { pendingLine, pendingLineBytes };
-}
-
-async function readSessionTranscriptFileSummary(
-  transcriptPath: string,
+function summarizeSessionTranscriptEvents(
+  events: unknown[],
   sessionKey: string,
-): Promise<QaSessionTranscriptSummary> {
+): QaSessionTranscriptSummary {
   const scanner = createDirectReplyTranscriptSentinelScanner();
-  const decoder = new StringDecoder("utf8");
-  const buffer = Buffer.allocUnsafe(SESSION_TRANSCRIPT_READ_CHUNK_BYTES);
   let finalText = "";
-  let pendingLine = "";
-  let pendingLineBytes = 0;
-  let hasTranscriptContent = false;
 
-  const processLine = (line: string) => {
-    if (line.trim()) {
-      hasTranscriptContent = true;
-    }
-    const message = readSessionTranscriptLineMessage(line);
+  for (const event of events) {
+    const message = readSessionTranscriptEventMessage(event);
     if (!message || message.role !== "assistant") {
-      return;
+      continue;
     }
     const text = extractGatewayMessageText(message);
     if (text) {
       finalText = text;
     }
     scanner.recordMessage(message);
-  };
-
-  const file = await fs.open(transcriptPath, "r");
-  try {
-    for (;;) {
-      const { bytesRead } = await file.read(buffer, 0, buffer.length, null);
-      if (bytesRead === 0) {
-        break;
-      }
-      let chunk = decoder.write(buffer.subarray(0, bytesRead));
-      for (;;) {
-        const lineEnd = chunk.indexOf("\n");
-        if (lineEnd === -1) {
-          const appended = appendSessionTranscriptLineChunk({
-            pendingLine,
-            pendingLineBytes,
-            chunk,
-            sessionKey,
-          });
-          pendingLine = appended.pendingLine;
-          pendingLineBytes = appended.pendingLineBytes;
-          break;
-        }
-        const appended = appendSessionTranscriptLineChunk({
-          pendingLine,
-          pendingLineBytes,
-          chunk: chunk.slice(0, lineEnd),
-          sessionKey,
-        });
-        processLine(appended.pendingLine);
-        pendingLine = "";
-        pendingLineBytes = 0;
-        chunk = chunk.slice(lineEnd + 1);
-      }
-    }
-    const finalChunk = decoder.end();
-    if (finalChunk) {
-      const appended = appendSessionTranscriptLineChunk({
-        pendingLine,
-        pendingLineBytes,
-        chunk: finalChunk,
-        sessionKey,
-      });
-      pendingLine = appended.pendingLine;
-      pendingLineBytes = appended.pendingLineBytes;
-    }
-    if (pendingLine) {
-      processLine(pendingLine);
-    }
-  } finally {
-    await file.close();
   }
 
-  if (!hasTranscriptContent) {
+  if (events.length === 0) {
     throw new Error(`session transcript is empty for ${sessionKey}`);
   }
 
@@ -247,36 +162,19 @@ async function readSkillStatus(env: QaGatewayCallEnv, agentId = "qa") {
   return payload.skills ?? [];
 }
 
-function resolveQaSessionTranscriptFile(params: {
-  sessionsDir: string;
-  sessionId: string;
-  sessionFile?: string;
-}) {
-  const explicit = readNonEmptyString(params.sessionFile);
-  if (explicit) {
-    return path.isAbsolute(explicit) ? explicit : path.join(params.sessionsDir, explicit);
-  }
-  return path.join(params.sessionsDir, `${params.sessionId}.jsonl`);
+function qaSessionRuntimeEnv(tempRoot: string): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    OPENCLAW_STATE_DIR: path.join(tempRoot, "state"),
+  };
 }
 
 async function readRawQaSessionStore(env: Pick<QaSuiteRuntimeEnv, "gateway">) {
-  const storePath = path.join(
-    env.gateway.tempRoot,
-    "state",
-    "agents",
-    "qa",
-    "sessions",
-    "sessions.json",
+  return Object.fromEntries(
+    listSessionEntries({ agentId: "qa", env: qaSessionRuntimeEnv(env.gateway.tempRoot) }).map(
+      ({ sessionKey, entry }) => [sessionKey, entry as QaRawSessionStoreEntry],
+    ),
   );
-  try {
-    const raw = await fs.readFile(storePath, "utf8");
-    return JSON.parse(raw) as Record<string, QaRawSessionStoreEntry>;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return {};
-    }
-    throw error;
-  }
 }
 
 async function readSessionTranscriptSummary(
@@ -293,13 +191,15 @@ async function readSessionTranscriptSummary(
   if (!sessionId) {
     throw new Error(`session transcript entry not found for ${normalizedSessionKey}`);
   }
-  const sessionsDir = path.join(env.gateway.tempRoot, "state", "agents", "qa", "sessions");
-  const transcriptPath = resolveQaSessionTranscriptFile({
-    sessionsDir,
-    sessionId,
-    sessionFile: entry?.sessionFile,
-  });
-  return readSessionTranscriptFileSummary(transcriptPath, normalizedSessionKey);
+  return summarizeSessionTranscriptEvents(
+    loadTranscriptEventsSync({
+      agentId: "qa",
+      env: qaSessionRuntimeEnv(env.gateway.tempRoot),
+      sessionId,
+      sessionKey: normalizedSessionKey,
+    }),
+    normalizedSessionKey,
+  );
 }
 
 export {

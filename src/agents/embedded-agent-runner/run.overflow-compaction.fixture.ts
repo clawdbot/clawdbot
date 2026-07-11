@@ -1,7 +1,8 @@
-import { isCoreToolNameReplaySafe } from "../tool-replay-safety.js";
 /**
  * Test fixtures for embedded-run overflow compaction scenarios.
  */
+import type { ContextEngineSessionTarget } from "../../context-engine/types.js";
+import { isCoreToolNameReplaySafe } from "../tool-replay-safety.js";
 import { buildAttemptReplayMetadata } from "./run/incomplete-turn.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
@@ -19,6 +20,7 @@ export function makeCompactionSuccess(params: {
   tokensAfter?: number;
   sessionId?: string;
   sessionFile?: string;
+  sessionTarget?: ContextEngineSessionTarget;
 }) {
   return {
     ok: true as const,
@@ -30,6 +32,7 @@ export function makeCompactionSuccess(params: {
       ...(params.tokensAfter !== undefined ? { tokensAfter: params.tokensAfter } : {}),
       ...(params.sessionId !== undefined ? { sessionId: params.sessionId } : {}),
       ...(params.sessionFile !== undefined ? { sessionFile: params.sessionFile } : {}),
+      ...(params.sessionTarget !== undefined ? { sessionTarget: params.sessionTarget } : {}),
     },
   };
 }
@@ -103,6 +106,7 @@ type MockCompactDirect = {
       tokensAfter?: number;
       sessionId?: string;
       sessionFile?: string;
+      sessionTarget?: ContextEngineSessionTarget;
     };
   }) => unknown;
 };

@@ -43,6 +43,7 @@ export type SessionFilePathOptions = {
 };
 
 const MULTI_STORE_PATH_SENTINEL = "(multiple)";
+const SQLITE_TRANSCRIPT_TARGET_PREFIX = "sqlite:";
 
 export function resolveSessionFilePathOptions(params: {
   agentId?: string;
@@ -91,9 +92,35 @@ function resolvePathFromAgentSessionsDir(
   const relative = path.relative(agentBase, realCandidate);
   // Realpath both sides when possible so symlinked session dirs still enforce containment.
   if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
-    return undefined;
+    return resolveRerootedSessionPath(agentBase, candidateAbsPath);
   }
   return path.resolve(agentBase, relative);
+}
+
+// Absolute sessionFile paths recorded under another state root (restored
+// backups, moved OPENCLAW_STATE_DIR, rehearsal copies) never satisfy the
+// relative-containment check above. Re-root the canonical
+// `agents/<id>/sessions/<suffix>` tail onto the current sessions dir, but only
+// when the file exists there: genuine cross-root layouts keep their foreign
+// path via the structural fallback.
+function resolveRerootedSessionPath(
+  agentSessionsDir: string,
+  candidateAbsPath: string,
+): string | undefined {
+  const parsed = resolveAgentSessionsPathParts(candidateAbsPath);
+  if (!parsed) {
+    return undefined;
+  }
+  const relativeSegments = parsed.parts.slice(parsed.sessionsIndex + 1);
+  if (relativeSegments.length === 0) {
+    return undefined;
+  }
+  const rerooted = path.resolve(agentSessionsDir, ...relativeSegments);
+  const contained = path.relative(agentSessionsDir, rerooted);
+  if (!contained || contained.startsWith("..") || path.isAbsolute(contained)) {
+    return undefined;
+  }
+  return fs.existsSync(rerooted) ? rerooted : undefined;
 }
 
 function resolveSiblingAgentSessionsDir(
@@ -285,6 +312,9 @@ export function resolveSessionFilePath(
   const sessionsDir = resolveSessionsDir(opts);
   const candidate = entry?.sessionFile?.trim();
   if (candidate) {
+    if (candidate.startsWith(SQLITE_TRANSCRIPT_TARGET_PREFIX)) {
+      return candidate;
+    }
     try {
       return resolvePathWithinSessionsDir(sessionsDir, candidate, { agentId: opts?.agentId });
     } catch {

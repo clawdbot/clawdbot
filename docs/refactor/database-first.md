@@ -264,7 +264,8 @@ file world:
   status payload field. Runtime and bridge tests no longer contain the
   `storePath` contract name; doctor/migration code owns that legacy vocabulary.
 - Session writes no longer pass through the old in-process `store-writer.ts`
-  queue. SQLite patch writes use conflict detection and bounded retry instead.
+  queue. SQLite patch writes prepare outside the transaction, then use a short
+  synchronous validate/apply transaction with explicit conflict detection.
 - Legacy path discovery still has valid migration uses, but runtime code should
   stop treating `sessions.json` and transcript JSONL files as possible write
   targets.
@@ -582,10 +583,10 @@ Completed consolidation/deletion highlights:
 - Channel session runtime types now expose `{agentId, sessionKey}` for
   updated-at reads, inbound metadata, and last-route updates. The old
   `saveSessionStore(storePath, store)` compatibility type is gone.
-- Plugin runtime, extension API, and `config/sessions` barrel surfaces now steer
-  plugin code to SQLite-backed session row helpers. Root library compatibility
-  exports (`loadSessionStore`, `saveSessionStore`, `resolveStorePath`) remain as
-  deprecated shims for existing consumers. The old
+- Plugin runtime, extension API, and plugin SDK session surfaces now expose
+  SQLite-backed session row helpers instead of active-session whole-store/file
+  compatibility helpers. Root library compatibility exports remain available
+  only outside the plugin SDK for legacy internal and migration callers. The old
   `resolveLegacySessionStorePath` helper is gone; legacy `sessions.json` path
   construction is now local to migration and test fixtures.
 - `src/config/sessions/session-entries.sqlite.ts` now stores canonical session
@@ -2114,8 +2115,9 @@ restore` validates before extraction, uses the verifier's normalized
 
 - One connection per thread/process is fine; do not share handles across
   workers.
-- Use WAL, `foreign_keys=ON`, a 30s busy timeout, and short `BEGIN IMMEDIATE`
-  write transactions.
+- Use WAL, `foreign_keys=ON`, a 5s busy timeout, and short `BEGIN IMMEDIATE`
+  write transactions. Do not layer synchronous lock retries above SQLite's
+  single busy wait.
 - Keep write transaction helpers synchronous unless/until an async transaction
   API adds explicit mutex/backpressure semantics.
 - Keep parent delivery writes small and transactional.

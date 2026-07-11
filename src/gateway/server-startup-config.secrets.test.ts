@@ -197,6 +197,39 @@ function installDiagnosticsTimelineEnv() {
   };
 }
 
+/** Isolate path-based auth store discovery so prior full-suite env cannot force slow path. */
+function installIsolatedStartupFastPathEnv() {
+  const root = mkdtempSync(path.join(tmpdir(), "openclaw-startup-fast-path-env-"));
+  const keys = [
+    "OPENCLAW_HOME",
+    "OPENCLAW_STATE_DIR",
+    "OPENCLAW_CONFIG_PATH",
+    "OPENCLAW_OAUTH_DIR",
+  ] as const;
+  const previous = new Map<(typeof keys)[number], string | undefined>();
+  for (const key of keys) {
+    previous.set(key, process.env[key]);
+  }
+  process.env.OPENCLAW_HOME = path.join(root, "home");
+  process.env.OPENCLAW_STATE_DIR = path.join(root, "state");
+  process.env.OPENCLAW_CONFIG_PATH = path.join(root, "state", "openclaw.json");
+  process.env.OPENCLAW_OAUTH_DIR = path.join(root, "credentials");
+
+  return {
+    cleanup: () => {
+      for (const key of keys) {
+        const value = previous.get(key);
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
+      rmSync(root, { force: true, recursive: true });
+    },
+  };
+}
+
 function installGatewayStartupSecretsRuntimeMock(state: GatewayStartupSecretsRuntimeMock) {
   (
     globalThis as typeof globalThis & {
@@ -757,6 +790,7 @@ describe("gateway startup config secret preflight", () => {
   it("activates no-SecretRef startup config without importing the full secrets runtime", async () => {
     vi.resetModules();
     const agentDir = mkdtempSync(path.join(tmpdir(), "openclaw-startup-fast-path-"));
+    const isolatedEnv = installIsolatedStartupFastPathEnv();
     const runtimeImport = vi.fn();
     const prepareRuntimeSecretsSnapshot = vi.fn(async ({ config }) => preparedSnapshot(config));
     const activateRuntimeSecretsSnapshot = vi.fn();
@@ -840,6 +874,7 @@ describe("gateway startup config secret preflight", () => {
       expect(refreshInput.loadAuthStore).toBeUndefined();
       clearSecretsRuntimeSnapshot();
     } finally {
+      isolatedEnv.cleanup();
       vi.doUnmock("../agents/auth-profiles.js");
       vi.doUnmock("../secrets/runtime.js");
       delete (

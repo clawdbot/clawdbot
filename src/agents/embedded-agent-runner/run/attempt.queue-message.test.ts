@@ -1,6 +1,7 @@
 // Coverage for queued steering message commit and cancellation behavior.
 import { describe, expect, it, vi } from "vitest";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
+import { createTestUserTurnTranscriptTarget } from "../../../sessions/user-turn-transcript.test-support.js";
 import {
   cancelQueuedSteeringMessage,
   steerActiveSessionWithOptionalDeliveryWait,
@@ -13,7 +14,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     const steer = vi.fn(async () => undefined);
     const recorder = createUserTurnTranscriptRecorder({
       input: { text: "visible prompt", sender: { id: "user-42" } },
-      target: { transcriptPath: "/tmp/unused-session.jsonl" },
+      target: createTestUserTurnTranscriptTarget(),
     });
     const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
       steer,

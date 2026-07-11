@@ -6,12 +6,11 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { getRuntimeConfig } from "../config/config.js";
 import {
-  loadSessionStore,
   resolveAgentIdFromSessionKey,
   resolveStorePath,
   type SessionEntry,
 } from "../config/sessions.js";
-import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { listSessionEntries, loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SubagentRunOutcome } from "./subagent-announce-output.js";
 import {
@@ -96,7 +95,12 @@ export function loadSubagentSessionEntry(params: {
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   let store = params.storeCache?.get(storePath);
   if (!store) {
-    store = loadSessionStore(storePath);
+    store = Object.fromEntries(
+      listSessionEntries({ storePath, clone: false }).map(({ sessionKey, entry }) => [
+        sessionKey,
+        entry,
+      ]),
+    );
     params.storeCache?.set(storePath, store);
   }
   return findSessionEntryByKey(store, key);

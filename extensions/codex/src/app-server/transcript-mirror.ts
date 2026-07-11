@@ -278,7 +278,7 @@ export function projectBoundedCodexThreadHistory(params: {
 export async function importCodexThreadHistoryToTranscript(params: {
   thread: CodexThread;
   throughTurnId: string | null;
-  sessionFile: string;
+  storePath: string;
   sessionId: string;
   sessionKey: string;
   agentId?: string;
@@ -294,7 +294,7 @@ export async function importCodexThreadHistoryToTranscript(params: {
   });
   if (projection.transcriptMessages.length > 0) {
     await mirrorCodexAppServerTranscript({
-      sessionFile: params.sessionFile,
+      storePath: params.storePath,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
       ...(params.agentId ? { agentId: params.agentId } : {}),
@@ -413,10 +413,10 @@ export async function mirrorTranscriptBestEffort(params: {
       turnId: params.turnId,
     });
     const mirrorResult = await mirrorCodexAppServerTranscript({
-      sessionFile: params.params.sessionFile,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
       sessionId: params.params.sessionId,
+      storePath: params.params.sessionTarget?.storePath,
       cwd: params.cwd,
       messages,
       // Scope is thread-stable. Each entry in `messagesSnapshot` is tagged
@@ -506,10 +506,10 @@ export async function mirrorPromptAtTurnStartBestEffort(params: {
         `${params.turnId}:prompt`,
       );
       const mirrorResult = await mirrorCodexAppServerTranscript({
-        sessionFile: params.params.sessionFile,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
         sessionId: params.params.sessionId,
+        storePath: params.params.sessionTarget?.storePath,
         cwd: params.cwd,
         messages: [userPromptMessage],
         idempotencyScope: `codex-app-server:${params.threadId}`,
@@ -578,11 +578,11 @@ function buildMirrorDedupeIdentity(message: MirroredAgentMessage): string {
 }
 
 export async function mirrorCodexAppServerTranscript(params: {
-  sessionFile: string;
   sessionId: string;
   cwd?: string;
   sessionKey?: string;
   agentId?: string;
+  storePath?: string;
   messages: AgentMessage[];
   idempotencyScope?: string;
   config?: SessionTranscriptWriteLockParams["config"];
@@ -699,11 +699,11 @@ export async function mirrorCodexAppServerTranscript(params: {
       await publishSessionTranscriptUpdateByIdentity({
         ...transcriptTarget,
         update: {
-          ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
           ...(params.agentId ? { agentId: params.agentId } : {}),
           message: update.message,
           messageId: update.messageId,
           messageSeq: update.messageSeq,
+          sessionKey: transcriptTarget.sessionKey,
         },
       });
     } catch (error) {
@@ -720,15 +720,20 @@ export async function mirrorCodexAppServerTranscript(params: {
 
 function resolveCodexMirrorTranscriptTarget(params: {
   agentId?: string;
-  sessionFile: string;
   sessionId: string;
   sessionKey?: string;
+  storePath?: string;
 }): SessionTranscriptTargetParams {
+  const sessionKey = params.sessionKey?.trim();
+  const storePath = params.storePath?.trim();
+  if (!sessionKey || !storePath) {
+    throw new Error("Codex transcript mirror requires a runtime session identity");
+  }
   return {
     ...(params.agentId ? { agentId: params.agentId } : {}),
-    sessionFile: params.sessionFile,
     sessionId: params.sessionId,
-    sessionKey: params.sessionKey ?? "",
+    sessionKey,
+    storePath,
   };
 }
 

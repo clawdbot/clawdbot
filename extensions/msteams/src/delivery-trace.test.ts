@@ -307,6 +307,9 @@ function setupMSTeamsTrace(recorder: WireRecorder, traceCase: MSTeamsTraceCase) 
         await created.markDispatchIdle();
         break;
       case "wire-fault":
+        // The shared write-error fault vocabulary covers this shape, but a
+        // scripted step records a new IN event and would change the committed
+        // goldens; write-count arming at setup replays the same wire bytes.
         throw new Error("msteams trace scenarios arm stream write faults at setup instead");
     }
   };

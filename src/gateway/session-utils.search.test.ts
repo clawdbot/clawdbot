@@ -10,7 +10,13 @@ import {
 } from "../agents/subagent-registry.test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import {
+  appendTranscriptMessageSync,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   buildGatewaySessionInfo,
   filterAndSortSessionEntries,
@@ -64,6 +70,11 @@ function createModelDefaultsConfig(params: {
       },
     },
   } as OpenClawConfig;
+}
+
+function closeSessionSqliteDatabasesForTest(): void {
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
 }
 
 function createLegacyRuntimeListConfig(
@@ -124,41 +135,65 @@ function createOpenAiPricingConfig(params: {
 type DefaultTranscriptFixtureParams<T> = {
   prefix: string;
   transcriptId?: string;
-  run: (fixture: { storePath: string; now: number }) => T;
+  run: (fixture: { storePath: string; now: number }) => Promise<T> | T;
 };
 
-function withTranscriptFixture<T>(
+function appendUsageTranscriptMessage(params: {
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+  usage: TranscriptUsageFixture;
+}) {
+  appendTranscriptMessageSync(
+    {
+      agentId: "main",
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    },
+    {
+      message: {
+        role: "assistant",
+        provider: params.usage.provider,
+        model: params.usage.model,
+        usage: {
+          input: params.usage.input,
+          output: params.usage.output,
+          cacheRead: params.usage.cacheRead,
+          cost: { total: params.usage.costTotal },
+        },
+      },
+    },
+  );
+}
+
+async function withTranscriptFixture<T>(
   usage: TranscriptUsageFixture,
   params: DefaultTranscriptFixtureParams<T>,
-): T {
+): Promise<T> {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), params.prefix));
   const storePath = path.join(tmpDir, "sessions.json");
   const transcriptId = params.transcriptId ?? MAIN_SESSION_ID;
   const now = Date.now();
-  fs.writeFileSync(
-    path.join(tmpDir, `${transcriptId}.jsonl`),
-    [
-      JSON.stringify({ type: "session", version: 1, id: transcriptId }),
-      JSON.stringify({
-        message: {
-          role: "assistant",
-          provider: usage.provider,
-          model: usage.model,
-          usage: {
-            input: usage.input,
-            output: usage.output,
-            cacheRead: usage.cacheRead,
-            cost: { total: usage.costTotal },
-          },
-        },
-      }),
-    ].join("\n"),
-    "utf-8",
-  );
 
   try {
-    return params.run({ storePath, now });
+    await replaceSessionEntry(
+      {
+        agentId: "main",
+        sessionKey: MAIN_SESSION_KEY,
+        storePath,
+      },
+      { sessionId: transcriptId, updatedAt: now },
+    );
+    appendUsageTranscriptMessage({
+      sessionId: transcriptId,
+      sessionKey: MAIN_SESSION_KEY,
+      storePath,
+      usage,
+    });
+    return await params.run({ storePath, now });
   } finally {
+    closeSessionSqliteDatabasesForTest();
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 }
@@ -373,6 +408,7 @@ describe("listSessionsFromStore search", () => {
   afterEach(() => {
     resetSubagentRegistryForTests();
     resetAgentRunContextForTest();
+    closeSessionSqliteDatabasesForTest();
   });
 
   const baseCfg = {
@@ -634,8 +670,8 @@ describe("listSessionsFromStore search", () => {
     expect(result.sessions[0]?.estimatedCostUsd).toBeCloseTo(TRANSCRIPT_COST_USD, 8);
   });
 
-  test("prefers persisted estimated session cost from the store", () => {
-    withAnthropicTranscriptFixture({
+  test("prefers persisted estimated session cost from the store", async () => {
+    await withAnthropicTranscriptFixture({
       prefix: "openclaw-session-utils-store-cost-",
       run: ({ storePath, now }) => {
         const result = listMainSession({
@@ -665,8 +701,8 @@ describe("listSessionsFromStore search", () => {
     expect(result.sessions[0]?.estimatedCostUsd).toBe(0);
   });
 
-  test("falls back to transcript usage for totalTokens and zero estimatedCostUsd", () => {
-    withFreeOpenAiTranscriptFixture({
+  test("falls back to transcript usage for totalTokens and zero estimatedCostUsd", async () => {
+    await withFreeOpenAiTranscriptFixture({
       prefix: "openclaw-session-utils-zero-cost-",
       run: ({ storePath, now }) => {
         const result = listMainSession({
@@ -685,8 +721,8 @@ describe("listSessionsFromStore search", () => {
     });
   });
 
-  test("falls back to transcript usage for totalTokens and estimatedCostUsd, and derives contextTokens from the resolved model", () => {
-    withAnthropicTranscriptFixture({
+  test("falls back to transcript usage for totalTokens and estimatedCostUsd, and derives contextTokens from the resolved model", async () => {
+    await withAnthropicTranscriptFixture({
       prefix: "openclaw-session-utils-",
       run: ({ storePath, now }) => {
         const result = listMainSession({
@@ -703,8 +739,8 @@ describe("listSessionsFromStore search", () => {
     });
   });
 
-  test("chat history session metadata keeps model context and projects a catalog-pinned harness", () => {
-    withAnthropicTranscriptFixture({
+  test("chat history session metadata keeps model context and projects a catalog-pinned harness", async () => {
+    await withAnthropicTranscriptFixture({
       prefix: "openclaw-session-info-context-",
       run: ({ storePath, now }) => {
         const entry: SessionEntry = {
@@ -749,8 +785,8 @@ describe("listSessionsFromStore search", () => {
     });
   });
 
-  test("uses subagent run model immediately for child sessions while transcript usage fills live totals", () => {
-    withAnthropicTranscriptFixture({
+  test("uses subagent run model immediately for child sessions while transcript usage fills live totals", async () => {
+    await withAnthropicTranscriptFixture({
       prefix: "openclaw-session-utils-subagent-",
       transcriptId: "sess-child",
       run: ({ storePath, now }) => {
@@ -779,8 +815,8 @@ describe("listSessionsFromStore search", () => {
     });
   });
 
-  test("keeps a running subagent model when transcript fallback still reflects an older run", () => {
-    withAnthropicTranscriptFixture({
+  test("keeps a running subagent model when transcript fallback still reflects an older run", async () => {
+    await withAnthropicTranscriptFixture({
       prefix: "openclaw-session-utils-subagent-stale-model-",
       transcriptId: "sess-child-stale",
       run: ({ storePath, now }) => {
@@ -809,8 +845,8 @@ describe("listSessionsFromStore search", () => {
     });
   });
 
-  test("keeps the selected override model when runtime identity was intentionally cleared", () => {
-    withAnthropicTranscriptFixture({
+  test("keeps the selected override model when runtime identity was intentionally cleared", async () => {
+    await withAnthropicTranscriptFixture({
       prefix: "openclaw-session-utils-cleared-runtime-model-",
       transcriptId: "sess-override",
       run: ({ storePath, now }) => {
@@ -829,8 +865,8 @@ describe("listSessionsFromStore search", () => {
     });
   });
 
-  test("does not replace the current runtime model when transcript fallback is only for missing pricing", () => {
-    withAnthropicTranscriptFixture({
+  test("does not replace the current runtime model when transcript fallback is only for missing pricing", async () => {
+    await withAnthropicTranscriptFixture({
       prefix: "openclaw-session-utils-pricing-",
       transcriptId: "sess-pricing",
       run: ({ storePath, now }) => {

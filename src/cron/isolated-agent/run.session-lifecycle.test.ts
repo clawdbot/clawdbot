@@ -35,7 +35,10 @@ function makePersistentCronParams(sessionKey: string) {
     agentId: "main",
     sessionKey,
     job: makeIsolatedAgentJobFixture({
-      sessionTarget: "current",
+      // Bind the run to the persistent session key so the run operates on it
+      // directly; `current`/`isolated` targets derive a detached `cron:<id>`
+      // run session instead, which the lifecycle claim assertions do not target.
+      sessionTarget: `session:${sessionKey}`,
       delivery: { mode: "none" },
     }),
   });

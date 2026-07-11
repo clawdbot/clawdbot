@@ -255,7 +255,7 @@ Current existing-session limits:
 - `click` is left-click only.
 - `type` does not support `slowly=true`.
 - `press` does not support `delayMs`.
-- `hover`, `scrollintoview`, `drag`, `select`, `fill`, and `evaluate` reject per-call timeout overrides.
+- `hover`, `scrollintoview`, `drag`, `select`, and `fill` reject per-call timeout overrides; `evaluate` accepts `--timeout-ms`.
 - `select` supports one value only.
 - `wait --load networkidle` is not supported (works on managed and raw/remote CDP profiles).
 - File uploads require `--ref` / `--input-ref`, do not support CSS `--element`, and support one file at a time.

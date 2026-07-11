@@ -8,6 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
 import { clearConfigCache, getRuntimeConfig } from "../config/config.js";
+import { appendTranscriptEvent, loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { invalidateSessionStoreCache } from "../config/sessions/store-cache.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
@@ -97,13 +98,12 @@ function testSessionFilePath(sessionDir: string, sessionId: string): string {
   return path.join(sessionDir, `${sessionId}.jsonl`);
 }
 
-async function writeMainSessionStore(sessionDir?: string, sessionId = "sess-main") {
+async function writeMainSessionStore(_sessionDir?: string, sessionId = "sess-main") {
   await writeSessionStore({
     entries: {
       main: {
         sessionId,
         updatedAt: futureFixtureUpdatedAt(),
-        ...(sessionDir ? { sessionFile: testSessionFilePath(sessionDir, sessionId) } : {}),
       },
     },
   });
@@ -136,11 +136,32 @@ async function writeGatewayConfig(config: Record<string, unknown>) {
 }
 
 async function writeMainSessionTranscript(
-  sessionDir: string,
+  _sessionDir: string,
   lines: string[],
   sessionId = "sess-main",
+  opts?: {
+    agentId?: string;
+    sessionKey?: string;
+  },
 ) {
-  await fs.writeFile(testSessionFilePath(sessionDir, sessionId), `${lines.join("\n")}\n`, "utf-8");
+  const storePath = testState.sessionStorePath;
+  if (!storePath) {
+    throw new Error("session store path was not initialized");
+  }
+  for (const line of lines) {
+    if (!line.trim()) {
+      continue;
+    }
+    await appendTranscriptEvent(
+      {
+        agentId: opts?.agentId ?? "main",
+        sessionId,
+        sessionKey: opts?.sessionKey ?? "agent:main:main",
+        storePath,
+      },
+      JSON.parse(line) as unknown,
+    );
+  }
 }
 
 async function removeTempDir(dir: string): Promise<void> {
@@ -1433,11 +1454,12 @@ describe("gateway server chat", () => {
           },
         },
       });
-      const [{ deleteSessionEntryLifecycle }, { loadSessionEntry }] = await Promise.all([
-        import("../config/sessions/session-accessor.js"),
-        import("./session-utils.js"),
-      ]);
-      const seededSession = loadSessionEntry("main");
+      const [{ deleteSessionEntryLifecycle }, { loadSessionEntry: loadGatewaySessionEntry }] =
+        await Promise.all([
+          import("../config/sessions/session-accessor.js"),
+          import("./session-utils.js"),
+        ]);
+      const seededSession = loadGatewaySessionEntry("main");
       const seededSessionId = seededSession.entry?.sessionId;
       expect(seededSessionId).toBe("sess-main");
       const mutationStarted = createDeferred();
@@ -3301,12 +3323,13 @@ describe("gateway server chat", () => {
       if (!sessionStorePath) {
         throw new Error("expected session store path");
       }
-      const stored = JSON.parse(await fs.readFile(sessionStorePath, "utf-8")) as Record<
-        string,
-        { lastChannel?: string; lastTo?: string } | undefined
-      >;
-      expect(stored["agent:main:main"]?.lastChannel).toBe("whatsapp");
-      expect(stored["agent:main:main"]?.lastTo).toBe("+1555");
+      const stored = loadSessionEntry({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        storePath: sessionStorePath,
+      });
+      expect(stored?.lastChannel).toBe("whatsapp");
+      expect(stored?.lastTo).toBe("+1555");
 
       await vi.waitFor(async () => {
         const completed = await rpcReq<{ status?: string }>(ws, "chat.send", {
@@ -4013,21 +4036,25 @@ describe("gateway server chat", () => {
       await connectOk(ws);
       const sessionDir = await createSessionDir();
       await writeSessionStore({
+        agentId: "work",
         entries: {
           global: { sessionId: "sess-global", updatedAt: Date.now() },
         },
       });
-      await fs.writeFile(
-        path.join(sessionDir, "sess-global.jsonl"),
-        `${JSON.stringify({
-          id: "msg-global-agent",
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "global agent content" }],
-            timestamp: Date.now(),
-          },
-        })}\n`,
-        "utf-8",
+      await writeMainSessionTranscript(
+        sessionDir,
+        [
+          JSON.stringify({
+            id: "msg-global-agent",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "global agent content" }],
+              timestamp: Date.now(),
+            },
+          }),
+        ],
+        "sess-global",
+        { agentId: "work", sessionKey: "global" },
       );
 
       const full = await fetchChatMessage(ws, {
@@ -4040,9 +4067,10 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.message.get reports oversized transcript entries as unavailable", async () => {
+  test("chat.message.get reports oversized archive transcript entries as unavailable", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      const sessionId = "sess-oversized-archive";
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir, sessionId });
       const oversizedLine = JSON.stringify({
         id: "msg-oversized",
         message: {
@@ -4051,7 +4079,11 @@ describe("gateway server chat", () => {
           timestamp: Date.now(),
         },
       });
-      await writeMainSessionTranscript(sessionDir, [oversizedLine]);
+      await fs.writeFile(
+        `${testSessionFilePath(sessionDir, sessionId)}.reset.2026-02-16T22-26-34.000Z`,
+        [JSON.stringify({ type: "session", version: 1, id: sessionId }), oversizedLine].join("\n"),
+        "utf-8",
+      );
 
       const full = await fetchChatMessage(ws, {
         sessionKey: "main",
@@ -4060,6 +4092,30 @@ describe("gateway server chat", () => {
       expect(full.ok).toBe(false);
       expect(full.unavailableReason).toBe("oversized");
       expect(full.message).toBeUndefined();
+    });
+  });
+
+  test("chat.message.get returns active SQLite oversized transcript entries", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      const oversizedText = "x".repeat(300 * 1024);
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          id: "msg-oversized-sqlite",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: oversizedText }],
+            timestamp: Date.now(),
+          },
+        }),
+      ]);
+
+      const full = await fetchChatMessage(ws, {
+        sessionKey: "main",
+        messageId: "msg-oversized-sqlite",
+      });
+      expect(full.ok).toBe(true);
+      expect(JSON.stringify(full.message)).toContain(oversizedText.slice(0, 256));
     });
   });
 

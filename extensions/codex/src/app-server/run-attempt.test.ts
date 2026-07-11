@@ -16,7 +16,8 @@ import { registerMemoryCapability } from "openclaw/plugin-sdk/memory-core-host-r
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
 import { registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
@@ -179,6 +180,43 @@ async function writeExistingBinding(
     ...(supervisionFingerprint ? { appServerRuntimeFingerprint: supervisionFingerprint } : {}),
     ...overrides,
   });
+}
+
+function attachSqliteSessionTarget(
+  params: EmbeddedRunAttemptParams,
+  storePath: string,
+  sessionId: string,
+): void {
+  params.sessionId = sessionId;
+  params.sessionKey = `agent:main:${sessionId}`;
+  params.sessionTarget = {
+    agentId: "main",
+    sessionId,
+    sessionKey: params.sessionKey,
+    storePath,
+  };
+}
+
+async function readTranscriptMessagesByIdentity(
+  params: EmbeddedRunAttemptParams,
+): Promise<Array<Record<string, unknown>>> {
+  const target = params.sessionTarget;
+  if (!target?.storePath || !target.sessionKey) {
+    throw new Error("expected SQLite session target");
+  }
+  return (
+    await readSessionTranscriptEvents({
+      agentId: target.agentId,
+      sessionId: target.sessionId ?? params.sessionId,
+      sessionKey: target.sessionKey,
+      storePath: target.storePath,
+    })
+  )
+    .map((event) => (event as { message?: unknown }).message)
+    .filter(
+      (message): message is Record<string, unknown> =>
+        typeof message === "object" && message !== null,
+    );
 }
 
 function createThreadLifecycleAppServerOptions(): Parameters<
@@ -1260,11 +1298,23 @@ describe("runCodexAppServerAttempt", () => {
       createMockPluginRegistry([{ hookName: "llm_input", handler: llmInput }]),
     );
     vi.stubEnv("OPENCLAW_TRAJECTORY", "1");
-    vi.stubEnv("OPENCLAW_TRAJECTORY_DIR", path.join(tempDir, "trajectory"));
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
+    const trajectoryEvents: Array<{
+      data?: { prompt?: string; systemPrompt?: string };
+      type: string;
+    }> = [];
+    Object.assign(params, {
+      trajectorySessionFile: `sqlite:main:session-1:${path.join(tempDir, "openclaw-agent.sqlite")}`,
+      trajectoryRecorder: {
+        recordEvent: (type: string, data?: { prompt?: string; systemPrompt?: string }) => {
+          trajectoryEvents.push({ type, data });
+        },
+        flush: async () => undefined,
+      },
+    });
     params.skillsSnapshot = {
       prompt: "<available_skills><skill><name>demo</name></skill></available_skills>",
       skills: [],
@@ -1301,15 +1351,6 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).toBe("hello");
     const [llmInputPayload] = mockCall(llmInput, "llm_input") as [{ prompt?: string }, unknown];
     expect(llmInputPayload.prompt).toBe(inputText);
-    const trajectoryEvents = (
-      await fs.readFile(path.join(tempDir, "trajectory", "session-1.jsonl"), "utf8")
-    )
-      .trim()
-      .split("\n")
-      .map(
-        (line) =>
-          JSON.parse(line) as { data?: { prompt?: string; systemPrompt?: string }; type?: string },
-      );
     const compiledContext = trajectoryEvents.find((event) => event.type === "context.compiled");
     expect(compiledContext?.data?.prompt).toBe(inputText);
     expect(compiledContext?.data?.systemPrompt).toContain("## OpenClaw Skills");
@@ -1499,9 +1540,11 @@ describe("runCodexAppServerAttempt", () => {
 
   it("mirrors the Codex prompt into the transcript when the turn starts", async () => {
     const sessionFile = path.join(tempDir, "session-early-prompt.jsonl");
+    const storePath = path.join(tempDir, "sessions-early-prompt.json");
     const workspaceDir = path.join(tempDir, "workspace-early-prompt");
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
+    attachSqliteSessionTarget(params, storePath, "session-early-prompt");
     params.prompt = "external channel prompt";
     const onUserMessagePersisted = vi.fn();
     params.onUserMessagePersisted = onUserMessagePersisted;
@@ -1509,10 +1552,13 @@ describe("runCodexAppServerAttempt", () => {
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
     await vi.waitFor(async () => {
-      const raw = await fs.readFile(sessionFile, "utf8");
-      expect(raw).toContain('"role":"user"');
-      expect(raw).toContain('"content":"external channel prompt"');
-      expect(raw).toContain('"idempotencyKey":"codex-app-server:thread-1:turn-1:prompt"');
+      expect(await readTranscriptMessagesByIdentity(params)).toContainEqual(
+        expect.objectContaining({
+          role: "user",
+          content: "external channel prompt",
+          idempotencyKey: "codex-app-server:thread-1:turn-1:prompt",
+        }),
+      );
     });
     await vi.waitFor(() => {
       expect(onUserMessagePersisted).toHaveBeenCalledWith(
@@ -1524,56 +1570,66 @@ describe("runCodexAppServerAttempt", () => {
       );
     });
 
-    const rawBeforeCompletion = await fs.readFile(sessionFile, "utf8");
-    expect(rawBeforeCompletion).not.toContain('"role":"assistant"');
+    const messagesBeforeCompletion = await readTranscriptMessagesByIdentity(params);
+    expect(messagesBeforeCompletion.some((message) => message.role === "assistant")).toBe(false);
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
 
-    const rawAfterCompletion = await fs.readFile(sessionFile, "utf8");
-    expect(rawAfterCompletion.match(/"role":"user"/gu)).toHaveLength(1);
+    const messagesAfterCompletion = await readTranscriptMessagesByIdentity(params);
+    expect(messagesAfterCompletion.filter((message) => message.role === "user")).toHaveLength(1);
     expect(onUserMessagePersisted).toHaveBeenCalledTimes(1);
   });
 
   it("does not mirror the Codex prompt early when user message persistence is suppressed", async () => {
     const sessionFile = path.join(tempDir, "session-suppressed-early-prompt.jsonl");
+    const storePath = path.join(tempDir, "sessions-suppressed-early-prompt.json");
     const workspaceDir = path.join(tempDir, "workspace-suppressed-early-prompt");
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
+    attachSqliteSessionTarget(params, storePath, "session-suppressed-early-prompt");
     params.prompt = "already persisted prompt";
     params.suppressNextUserMessagePersistence = true;
-    const readTranscript = async () =>
-      fs.readFile(sessionFile, "utf8").catch((error: unknown) => {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-          return "";
-        }
-        throw error;
-      });
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
     await expect(
       vi.waitFor(
         async () => {
-          const raw = await readTranscript();
-          expect(raw).toContain("already persisted prompt");
+          expect(await readTranscriptMessagesByIdentity(params)).toContainEqual(
+            expect.objectContaining({
+              content: "already persisted prompt",
+            }),
+          );
         },
         { interval: 1, timeout: 100 },
       ),
     ).rejects.toThrow();
-    const rawBeforeCompletion = await readTranscript();
-    expect(rawBeforeCompletion).not.toContain("already persisted prompt");
-    expect(rawBeforeCompletion).not.toContain(
-      '"idempotencyKey":"codex-app-server:thread-1:turn-1:prompt"',
+    const messagesBeforeCompletion = await readTranscriptMessagesByIdentity(params);
+    expect(messagesBeforeCompletion).not.toContainEqual(
+      expect.objectContaining({
+        content: "already persisted prompt",
+      }),
+    );
+    expect(messagesBeforeCompletion).not.toContainEqual(
+      expect.objectContaining({
+        idempotencyKey: "codex-app-server:thread-1:turn-1:prompt",
+      }),
     );
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
 
-    const rawAfterCompletion = await readTranscript();
-    expect(rawAfterCompletion).not.toContain("already persisted prompt");
-    expect(rawAfterCompletion).not.toContain(
-      '"idempotencyKey":"codex-app-server:thread-1:turn-1:prompt"',
+    const messagesAfterCompletion = await readTranscriptMessagesByIdentity(params);
+    expect(messagesAfterCompletion).not.toContainEqual(
+      expect.objectContaining({
+        content: "already persisted prompt",
+      }),
+    );
+    expect(messagesAfterCompletion).not.toContainEqual(
+      expect.objectContaining({
+        idempotencyKey: "codex-app-server:thread-1:turn-1:prompt",
+      }),
     );
   });
 
@@ -4363,18 +4419,20 @@ describe("runCodexAppServerAttempt", () => {
         }) as never,
     );
 
-    const run = runCodexAppServerAttempt(
-      createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
-      {
-        pluginConfig: {
-          computerUse: {
-            enabled: true,
-            marketplaceName: "openai-bundled",
-            mcpServerName: "desktop-control",
-          },
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    attachSqliteSessionTarget(params, path.join(tempDir, "sessions.json"), "session-computer-use");
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: {
+        computerUse: {
+          enabled: true,
+          marketplaceName: "openai-bundled",
+          mcpServerName: "desktop-control",
         },
       },
-    );
+    });
     await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"));
     // The keyed router only accepts turn-scoped requests once the turn is bound.
     await vi.waitFor(() =>
@@ -4410,11 +4468,11 @@ describe("runCodexAppServerAttempt", () => {
     expect(bridgeCall.requestParams?.serverName).toBe("desktop-control");
     expect(bridgeCall.computerUseMcpServerName).toBe("desktop-control");
     const requestCalls = request.mock.calls as unknown as Array<[string, unknown, unknown?]>;
-    const threadStart = requestCalls.find(([method]) => method === "thread/start");
-    const threadStartParams = threadStart?.[1] as
+    const turnStart = requestCalls.find(([method]) => method === "turn/start");
+    const turnStartParams = turnStart?.[1] as
       | { approvalPolicy?: { granular?: { mcp_elicitations?: boolean } } }
       | undefined;
-    expect(threadStartParams?.approvalPolicy?.granular?.mcp_elicitations).toBe(true);
+    expect(turnStartParams?.approvalPolicy?.granular?.mcp_elicitations).toBe(true);
 
     await notify({
       method: "turn/completed",
@@ -6094,8 +6152,10 @@ describe("runCodexAppServerAttempt", () => {
       conversationSourceTransferComplete: true,
     });
     const storePath = path.join(tempDir, "sessions.json");
-    await saveSessionStore(storePath, {
-      [sessionKey]: {
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: {
         sessionId: "session-current",
         updatedAt: Date.now(),
       },

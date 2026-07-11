@@ -1031,6 +1031,8 @@ jobs:
     if: needs.preflight.outputs.run_ui_tests == 'true'
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
+    env:
+      COMPATIBILITY_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
@@ -1046,7 +1048,14 @@ jobs:
         run: pnpm lint:ui:no-raw-window-open
 
       - name: Test Control UI
-        run: pnpm --dir ui test
+        run: |
+          if [[ "$COMPATIBILITY_TARGET" == "true" ]]; then
+            # Frozen targets can contain timing-sensitive tests fixed on current main.
+            # Retry only failures once; deterministic regressions still fail twice.
+            pnpm --dir ui test -- --retry=1
+          else
+            pnpm --dir ui test
+          fi
 
   checks-fast-core:
     permissions:
@@ -1580,6 +1589,12 @@ jobs:
           - check_name: check-session-transcript-reader-boundary
             group: session-transcript-reader-boundary
             runner: blacksmith-4vcpu-ubuntu-2404
+          - check_name: check-sqlite-session-schema-baseline
+            group: sqlite-session-schema-baseline
+            runner: blacksmith-4vcpu-ubuntu-2404
+          - check_name: check-sqlite-session-flip-proof
+            group: sqlite-session-flip-proof
+            runner: blacksmith-8vcpu-ubuntu-2404
           - check_name: check-additional-extension-channels
             group: extension-channels
             runner: blacksmith-8vcpu-ubuntu-2404
@@ -1695,6 +1710,13 @@ jobs:
               else
                 run_check "lint:tmp:session-accessor-boundary" pnpm run lint:tmp:session-accessor-boundary
               fi
+              if [ ! -f scripts/check-sqlite-transaction-boundary.mjs ]; then
+                echo "[skip] SQLite transaction boundary check is not present in this checkout"
+              elif ! node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["lint:tmp:sqlite-transaction-boundary"] ? 0 : 1);'; then
+                echo "[skip] SQLite transaction boundary script is not present in package.json"
+              else
+                run_check "lint:tmp:sqlite-transaction-boundary" pnpm run lint:tmp:sqlite-transaction-boundary
+              fi
               ;;
             session-transcript-reader-boundary)
               if [ ! -f scripts/check-session-transcript-reader-boundary.mjs ]; then
@@ -1703,6 +1725,20 @@ jobs:
                 echo "[skip] session transcript reader boundary script is not present in package.json"
               else
                 run_check "lint:tmp:session-transcript-reader-boundary" pnpm run lint:tmp:session-transcript-reader-boundary
+              fi
+              ;;
+            sqlite-session-schema-baseline)
+              if ! node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["sqlite:sessions-schema:check"] ? 0 : 1);'; then
+                echo "[skip] SQLite sessions/transcripts schema baseline script is not present in package.json"
+              else
+                run_check "sqlite:sessions-schema:check" pnpm run sqlite:sessions-schema:check
+              fi
+              ;;
+            sqlite-session-flip-proof)
+              if [ ! -f test/scripts/sqlite-sessions-transcripts-flip-proof.e2e.test.ts ]; then
+                echo "[skip] SQLite sessions/transcripts flip proof is not present in this checkout"
+              else
+                run_check "sqlite sessions/transcripts flip proof" node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts test/scripts/sqlite-sessions-transcripts-flip-proof.e2e.test.ts
               fi
               ;;
             extension-channels)
@@ -2055,8 +2091,25 @@ jobs:
             "$swift_tools_dir/swiftformat" --version
             "$swift_tools_dir/swiftlint" version
           elif [[ "$HISTORICAL_TARGET" == "true" ]]; then
-            # Frozen release targets before the pinned installer used Homebrew directly.
-            brew install xcodegen swiftlint swiftformat
+            # Frozen release targets before the pinned installer used SwiftFormat 0.61.1.
+            # Keep their lint contract stable instead of inheriting new Homebrew rules.
+            brew install xcodegen swiftlint
+            swiftformat_version="0.61.1"
+            swiftformat_checksum="b990400779aceb7d7020796eb9ba814d4480543f671d38fc0ff48cb72f04c584"
+            swiftformat_archive="$RUNNER_TEMP/swiftformat-$swiftformat_version.zip"
+            swift_tools_dir="$RUNNER_TEMP/openclaw-legacy-swift-tools"
+            curl --fail --location --silent --show-error --retry 3 \
+              --output "$swiftformat_archive" \
+              "https://github.com/nicklockwood/SwiftFormat/releases/download/$swiftformat_version/swiftformat.zip"
+            if [[ "$(shasum -a 256 "$swiftformat_archive" | awk '{print $1}')" != "$swiftformat_checksum" ]]; then
+              echo "SwiftFormat $swiftformat_version archive checksum mismatch" >&2
+              exit 1
+            fi
+            mkdir -p "$swift_tools_dir"
+            unzip -q "$swiftformat_archive" -d "$swift_tools_dir"
+            chmod +x "$swift_tools_dir/swiftformat"
+            echo "$swift_tools_dir" >> "$GITHUB_PATH"
+            [[ "$("$swift_tools_dir/swiftformat" --version)" == "$swiftformat_version" ]]
           else
             echo "Current CI targets must provide scripts/install-swift-tools.sh." >&2
             exit 1

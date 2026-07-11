@@ -510,6 +510,9 @@ export async function getReplyFromConfig(
             ctx: finalized,
             cfg,
             commandAuthorized,
+            ...(internalOptsWithSkillFilter?.expectedExistingSessionId
+              ? { expectedExistingSessionId: internalOptsWithSkillFilter.expectedExistingSessionId }
+              : {}),
             requestedSessionId: internalOptsWithSkillFilter?.requestedSessionId,
             resumeRequestedSession: internalOptsWithSkillFilter?.resumeRequestedSession,
             signal: internalOptsWithSkillFilter?.abortSignal,
@@ -911,6 +914,7 @@ export async function getReplyFromConfig(
       cfg,
       command,
       sessionKey,
+      storePath,
       sessionEntry,
       previousSessionEntry,
       workspaceDir,

@@ -8,7 +8,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveStorePath } from "../config/sessions/paths.js";
-import { loadSessionStore } from "../config/sessions/store-load.js";
+import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
 import {
   resolveExternalBestEffortDeliveryTarget,
@@ -110,10 +110,10 @@ function shouldSuppressExecDeniedFollowup(sessionKey: string | undefined): boole
 
 /**
  * Direct/denied followups bypass the gateway agent dispatch, so the gateway
- * rebind guard never sees them. Resolve the session key's current sessionId
- * from the on-disk store and report whether it was rebound away from the
- * approval-time session by `/new` or `/reset` (#59349). Failure to resolve is
- * treated as "not rebound" so a real result is never suppressed by accident.
+ * rebind guard never sees them. Resolve the session key's current sessionId and
+ * report whether it was rebound away from the approval-time session by `/new`
+ * or `/reset` (#59349). Failure to resolve is treated as "not rebound" so a
+ * real result is never suppressed by accident.
  */
 function isExecApprovalFollowupDirectDeliveryStale(params: {
   sessionKey: string | undefined;
@@ -130,7 +130,11 @@ function isExecApprovalFollowupDirectDeliveryStale(params: {
       agentId: resolveAgentIdFromSessionKey(sessionKey),
     });
     const resolvedSessionId = normalizeOptionalString(
-      loadSessionStore(storePath)?.[sessionKey]?.sessionId,
+      loadSessionEntry({
+        storePath,
+        sessionKey,
+        clone: false,
+      })?.sessionId,
     );
     return isExecApprovalFollowupSessionRebound({ expectedSessionId, resolvedSessionId });
   } catch (err) {

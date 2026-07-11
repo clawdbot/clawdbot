@@ -1,7 +1,6 @@
 /**
  * Owner-only access to native Codex threads stored in the user's Codex home.
  */
-import path from "node:path";
 import {
   jsonResult,
   readStringParam,
@@ -131,7 +130,7 @@ function readLimit(value: unknown): number | undefined {
 function resolveToolSession(
   context: OpenClawPluginToolContext,
   runtime: PluginRuntime,
-): { sessionId: string; sessionFile: string; modelSelectionLocked: boolean } | undefined {
+): { sessionId: string; modelSelectionLocked: boolean } | undefined {
   const sessionKey = context.sessionKey?.trim();
   if (!sessionKey) {
     return undefined;
@@ -145,15 +144,8 @@ function resolveToolSession(
   if (!sessionId) {
     return undefined;
   }
-  const storePath = runtime.agent.session.resolveStorePath(undefined, {
-    agentId: context.agentId,
-  });
   return {
     sessionId,
-    sessionFile: runtime.agent.session.resolveSessionFilePath(sessionId, entry, {
-      agentId: context.agentId,
-      sessionsDir: path.dirname(storePath),
-    }),
     modelSelectionLocked: isModelSelectionLocked(entry),
   };
 }

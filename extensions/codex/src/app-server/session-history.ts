@@ -11,9 +11,11 @@ import {
   parseSessionEntries,
 } from "openclaw/plugin-sdk/agent-sessions";
 import {
-  resolveSessionTranscriptTarget,
-  type SessionTranscriptTargetParams,
-} from "openclaw/plugin-sdk/session-transcript-runtime";
+  listSessionEntries,
+  parseSqliteSessionFileMarker,
+  type SqliteSessionFileMarker,
+} from "openclaw/plugin-sdk/session-store-runtime";
+import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { sanitizeCodexHistoryImagePayloads } from "./image-payload-sanitizer.js";
 
 function isMissingFileError(error: unknown): boolean {
@@ -32,9 +34,7 @@ export async function readCodexMirroredSessionHistoryMessages(
   target: CodexMirroredSessionHistoryTarget,
 ): Promise<AgentMessage[] | undefined> {
   try {
-    await resolveSessionTranscriptTarget(resolveCodexHistoryTranscriptTarget(target));
-    const raw = await fs.readFile(target.sessionFile, "utf-8");
-    const entries = parseSessionEntries(raw);
+    const entries = await readCodexMirroredSessionEntries(target);
     if (entries.length === 0) {
       return [];
     }
@@ -42,7 +42,7 @@ export async function readCodexMirroredSessionHistoryMessages(
     if (firstEntry?.type !== "session" || typeof firstEntry.id !== "string") {
       return undefined;
     }
-    migrateSessionEntries(entries as SessionEntry[]);
+    migrateSessionEntries(entries);
     const sessionEntries = entries.filter((entry): entry is SessionEntry => {
       return (
         entry !== null &&
@@ -64,13 +64,50 @@ export async function readCodexMirroredSessionHistoryMessages(
   }
 }
 
-function resolveCodexHistoryTranscriptTarget(
+async function readCodexMirroredSessionEntries(
   target: CodexMirroredSessionHistoryTarget,
-): SessionTranscriptTargetParams {
-  return {
-    ...(target.agentId ? { agentId: target.agentId } : {}),
-    sessionFile: target.sessionFile,
-    sessionId: target.sessionId,
-    sessionKey: target.sessionKey ?? "",
-  };
+): Promise<SessionEntry[]> {
+  const sqliteMarker = parseSqliteSessionFileMarker(target.sessionFile);
+  if (sqliteMarker) {
+    if (
+      sqliteMarker.sessionId !== target.sessionId ||
+      (target.agentId !== undefined && sqliteMarker.agentId !== target.agentId)
+    ) {
+      return [];
+    }
+    const sessionKey = resolveSqliteMarkerSessionKey(target, sqliteMarker);
+    if (!sessionKey) {
+      return [];
+    }
+    return (await readSessionTranscriptEvents({
+      agentId: sqliteMarker.agentId,
+      sessionId: sqliteMarker.sessionId,
+      sessionKey,
+      storePath: sqliteMarker.storePath,
+    })) as SessionEntry[];
+  }
+  return parseSessionEntries(await fs.readFile(target.sessionFile, "utf-8")) as SessionEntry[];
+}
+
+function resolveSqliteMarkerSessionKey(
+  target: CodexMirroredSessionHistoryTarget,
+  marker: SqliteSessionFileMarker,
+): string | undefined {
+  const explicitSessionKey = target.sessionKey?.trim();
+  if (explicitSessionKey) {
+    return explicitSessionKey;
+  }
+  const entries = listSessionEntries({
+    agentId: marker.agentId,
+    storePath: marker.storePath,
+  });
+  const exactEntry = entries.find(({ entry }) => {
+    return entry.sessionId === marker.sessionId && entry.sessionFile === target.sessionFile;
+  });
+  const sessionEntry =
+    exactEntry ??
+    entries.find(({ entry }) => {
+      return entry.sessionId === marker.sessionId;
+    });
+  return sessionEntry?.sessionKey;
 }

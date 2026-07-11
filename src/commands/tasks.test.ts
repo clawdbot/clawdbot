@@ -1,8 +1,9 @@
 // Tasks command tests cover task listing, status rendering, cron-store integration, and cancellations.
-import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetConfigRuntimeState } from "../config/config.js";
+import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { saveCronStore } from "../cron/store.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -83,6 +84,15 @@ const zeroTaskAuditCounts = {
   stale_queued: 0,
   stale_running: 0,
 };
+
+async function writeSessionEntries(
+  storePath: string,
+  entries: Record<string, SessionEntry>,
+): Promise<void> {
+  for (const [sessionKey, entry] of Object.entries(entries)) {
+    await replaceSessionEntry({ sessionKey, storePath }, entry);
+  }
+}
 
 async function withTaskCommandStateDir(
   run: (state: OpenClawTestState) => Promise<void>,
@@ -377,21 +387,13 @@ describe("tasks commands", () => {
       });
 
       const sessionsDir = state.sessionsDir("main");
-      await fs.mkdir(sessionsDir, { recursive: true });
-      await fs.writeFile(
-        path.join(sessionsDir, "sessions.json"),
-        JSON.stringify(
-          {
-            [childSessionKey]: {
-              sessionId: "child-retained",
-              updatedAt: now,
-            },
-          },
-          null,
-          2,
-        ),
-        "utf8",
-      );
+      const storePath = path.join(sessionsDir, "sessions.json");
+      await writeSessionEntries(storePath, {
+        [childSessionKey]: {
+          sessionId: "child-retained",
+          updatedAt: now,
+        },
+      });
 
       const runtime = createRuntime();
       await tasksMaintenanceCommand({ json: true, apply: false }, runtime);
@@ -435,25 +437,16 @@ describe("tasks commands", () => {
 
       const sessionsDir = state.sessionsDir("main");
       const storePath = path.join(sessionsDir, "sessions.json");
-      await fs.mkdir(sessionsDir, { recursive: true });
-      await fs.writeFile(
-        storePath,
-        JSON.stringify(
-          {
-            [childSessionKey]: {
-              sessionId: "old-run",
-              updatedAt: now - 8 * 24 * 60 * 60_000,
-            },
-            "agent:main:telegram:dm:recent": {
-              sessionId: "recent-session",
-              updatedAt: now - 60_000,
-            },
-          },
-          null,
-          2,
-        ),
-        "utf8",
-      );
+      await writeSessionEntries(storePath, {
+        [childSessionKey]: {
+          sessionId: "old-run",
+          updatedAt: now - 8 * 24 * 60 * 60_000,
+        },
+        "agent:main:telegram:dm:recent": {
+          sessionId: "recent-session",
+          updatedAt: now - 60_000,
+        },
+      });
 
       const runtime = createRuntime();
       await tasksMaintenanceCommand({ json: true, apply: true }, runtime);
@@ -484,9 +477,10 @@ describe("tasks commands", () => {
         }),
       );
 
-      const updated = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, unknown>;
-      expect(updated[childSessionKey]).toBeUndefined();
-      expect(updated["agent:main:telegram:dm:recent"]).toBeDefined();
+      expect(loadSessionEntry({ sessionKey: childSessionKey, storePath })).toBeUndefined();
+      expect(
+        loadSessionEntry({ sessionKey: "agent:main:telegram:dm:recent", storePath }),
+      ).toBeDefined();
     });
   });
 
@@ -516,25 +510,16 @@ describe("tasks commands", () => {
 
       const sessionsDir = state.sessionsDir("main");
       const storePath = path.join(sessionsDir, "sessions.json");
-      await fs.mkdir(sessionsDir, { recursive: true });
       // A running job can be retargeted after its session is created, so maintenance must preserve
       // both the raw and slugged historical shapes.
       const slugKey = "agent:main:cron:daily-report:run:old-run";
       const rawKey = "agent:main:cron:daily report:run:old-run";
       const retiredKey = "agent:main:cron:retired-job:run:old-run";
-      await fs.writeFile(
-        storePath,
-        JSON.stringify(
-          {
-            [slugKey]: { sessionId: "slug-run", updatedAt: old },
-            [rawKey]: { sessionId: "raw-run", updatedAt: old },
-            [retiredKey]: { sessionId: "retired-run", updatedAt: old },
-          },
-          null,
-          2,
-        ),
-        "utf8",
-      );
+      await writeSessionEntries(storePath, {
+        [slugKey]: { sessionId: "slug-run", updatedAt: old },
+        [rawKey]: { sessionId: "raw-run", updatedAt: old },
+        [retiredKey]: { sessionId: "retired-run", updatedAt: old },
+      });
 
       const runtime = createRuntime();
       await tasksMaintenanceCommand({ json: true, apply: true }, runtime);
@@ -543,10 +528,9 @@ describe("tasks commands", () => {
         maintenance: { sessions: { runningCronJobs: number } };
       };
       expect(payload.maintenance.sessions.runningCronJobs).toBe(1);
-      const updated = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, unknown>;
-      expect(updated[slugKey]).toBeDefined();
-      expect(updated[rawKey]).toBeDefined();
-      expect(updated[retiredKey]).toBeUndefined();
+      expect(loadSessionEntry({ sessionKey: slugKey, storePath })).toBeDefined();
+      expect(loadSessionEntry({ sessionKey: rawKey, storePath })).toBeDefined();
+      expect(loadSessionEntry({ sessionKey: retiredKey, storePath })).toBeUndefined();
     });
   });
 
@@ -576,36 +560,33 @@ describe("tasks commands", () => {
 
       const sessionsDir = state.sessionsDir("main");
       const storePath = path.join(sessionsDir, "sessions.json");
-      await fs.mkdir(sessionsDir, { recursive: true });
-      await fs.writeFile(
-        storePath,
-        JSON.stringify(
-          {
-            "agent:main:cron:daily-monitor:run:old-run": {
-              sessionId: "explicit-run",
-              updatedAt: old,
-            },
-            "agent:main:cron:job-uuid:run:old-run": {
-              sessionId: "job-id-run",
-              updatedAt: old,
-            },
-            "agent:main:cron:retired-job:run:old-run": {
-              sessionId: "retired-run",
-              updatedAt: old,
-            },
-          },
-          null,
-          2,
-        ),
-        "utf8",
-      );
+      await writeSessionEntries(storePath, {
+        "agent:main:cron:daily-monitor:run:old-run": {
+          sessionId: "explicit-run",
+          updatedAt: old,
+        },
+        "agent:main:cron:job-uuid:run:old-run": {
+          sessionId: "job-id-run",
+          updatedAt: old,
+        },
+        "agent:main:cron:retired-job:run:old-run": {
+          sessionId: "retired-run",
+          updatedAt: old,
+        },
+      });
 
       const runtime = createRuntime();
       await tasksMaintenanceCommand({ json: true, apply: true }, runtime);
 
-      const updated = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, unknown>;
-      expect(updated["agent:main:cron:daily-monitor:run:old-run"]).toBeDefined();
-      expect(updated["agent:main:cron:retired-job:run:old-run"]).toBeUndefined();
+      expect(
+        loadSessionEntry({
+          sessionKey: "agent:main:cron:daily-monitor:run:old-run",
+          storePath,
+        }),
+      ).toBeDefined();
+      expect(
+        loadSessionEntry({ sessionKey: "agent:main:cron:retired-job:run:old-run", storePath }),
+      ).toBeUndefined();
     });
   });
 
@@ -741,33 +722,24 @@ describe("tasks commands", () => {
       const sessionsDir = state.sessionsDir("main");
       const storePath = path.join(sessionsDir, "sessions.json");
       const old = now - 8 * 24 * 60 * 60_000;
-      await fs.mkdir(sessionsDir, { recursive: true });
-      await fs.writeFile(
-        storePath,
-        JSON.stringify(
-          {
-            "agent:main:cron:done-job:run:old-run": {
-              sessionId: "done-run",
-              updatedAt: old,
-            },
-            "agent:main:cron:running-job:run:old-run": {
-              sessionId: "running-run",
-              updatedAt: old,
-            },
-            "agent:main:cron:done-job:run:recent-run": {
-              sessionId: "recent-run",
-              updatedAt: now - 60_000,
-            },
-            "agent:main:telegram:dm:old": {
-              sessionId: "ordinary-old-session",
-              updatedAt: old,
-            },
-          },
-          null,
-          2,
-        ),
-        "utf-8",
-      );
+      await writeSessionEntries(storePath, {
+        "agent:main:cron:done-job:run:old-run": {
+          sessionId: "done-run",
+          updatedAt: old,
+        },
+        "agent:main:cron:running-job:run:old-run": {
+          sessionId: "running-run",
+          updatedAt: old,
+        },
+        "agent:main:cron:done-job:run:recent-run": {
+          sessionId: "recent-run",
+          updatedAt: now - 60_000,
+        },
+        "agent:main:telegram:dm:old": {
+          sessionId: "ordinary-old-session",
+          updatedAt: old,
+        },
+      });
       await saveCronStore(state.statePath("cron", "jobs.json"), {
         version: 1,
         jobs: [
@@ -818,14 +790,15 @@ describe("tasks commands", () => {
       expect(payload.maintenance.sessions.stores[0]?.pruned).toBe(1);
       expect(payload.maintenance.sessions.stores[0]?.preservedRunning).toBe(1);
 
-      const updated = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, unknown>;
-      expect(updated["agent:main:cron:done-job:run:old-run"]).toBeUndefined();
+      expect(
+        loadSessionEntry({ sessionKey: "agent:main:cron:done-job:run:old-run", storePath }),
+      ).toBeUndefined();
       for (const key of [
         "agent:main:cron:running-job:run:old-run",
         "agent:main:cron:done-job:run:recent-run",
         "agent:main:telegram:dm:old",
       ]) {
-        if (updated[key] === undefined) {
+        if (loadSessionEntry({ sessionKey: key, storePath }) === undefined) {
           throw new Error(`Expected preserved session ${key}`);
         }
       }

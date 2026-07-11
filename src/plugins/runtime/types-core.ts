@@ -300,37 +300,9 @@ export type PluginRuntimeCore = {
         params: RuntimeSessionWorkAdmissionParams,
         run: (signal: AbortSignal) => Promise<T>,
       ) => Promise<T>;
-      /**
-       * @deprecated Use getSessionEntry/listSessionEntries for reads and
-       * patchSessionEntry/upsertSessionEntry for writes. This whole-store
-       * helper is kept only during the transition before SQLite migration.
-       * Callers must migrate away from reading sessions.json directly.
-       */
-      loadSessionStore: typeof import("../../config/sessions/store-load.js").loadSessionStore;
-      /**
-       * @deprecated Use patchSessionEntry/upsertSessionEntry for writes. This
-       * whole-store helper is kept only during the transition before SQLite
-       * migration. Callers must migrate away from writing sessions.json
-       * directly.
-       */
-      saveSessionStore: import("../../config/sessions/runtime-types.js").SaveSessionStore;
-      /**
-       * @deprecated Use patchSessionEntry/upsertSessionEntry for writes. This
-       * whole-store helper is kept only during the transition before SQLite
-       * migration. Callers must migrate away from updating sessions.json
-       * directly.
-       */
-      updateSessionStore: typeof import("../../config/sessions/store.js").updateSessionStore;
       updateSessionStoreEntry: (
         params: RuntimeSessionStoreEntryUpdateParams,
       ) => Promise<RuntimeSessionEntry | null>;
-      /**
-       * @deprecated Use getSessionEntry to read session metadata by
-       * agent/session identity. This file-path helper is kept only during the
-       * transition before SQLite migration. Callers must migrate away from
-       * resolving transcript file paths directly.
-       */
-      resolveSessionFilePath: typeof import("../../config/sessions/paths.js").resolveSessionFilePath;
     };
   };
   system: {

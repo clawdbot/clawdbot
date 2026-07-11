@@ -4,6 +4,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { type Mock, vi } from "vitest";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import type { ContextEngineSessionTarget } from "../../context-engine/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type {
   PluginHookBeforeAgentFinalizeEvent,
@@ -19,6 +20,7 @@ import type {
 import { resetCommandQueueStateForTest } from "../../process/command-queue.js";
 import type { FailoverReason } from "../embedded-agent-helpers/types.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../harness/registry.js";
+import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import type { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
@@ -36,6 +38,7 @@ type MockCompactionResult =
         tokensAfter?: number;
         sessionId?: string;
         sessionFile?: string;
+        sessionTarget?: ContextEngineSessionTarget;
       };
       reason?: string;
     }
@@ -114,10 +117,28 @@ export const mockedContextEngine = {
   })),
 };
 
+type MockRuntimePlan = Pick<AgentRuntimePlan, "auth"> & {
+  observability: Pick<AgentRuntimePlan["observability"], "harnessId">;
+};
+
+function makeMockRuntimePlan(): MockRuntimePlan {
+  return {
+    auth: {
+      authProfileProviderForAuth: "anthropic",
+      providerForAuth: "anthropic",
+    },
+    observability: {
+      harnessId: "codex",
+    },
+  };
+}
+
 export const mockedCompactDirect = mockedContextEngine.compact;
 export const mockedResolveContextEngine = vi.fn(async () => mockedContextEngine);
 export const mockedResolveContextEngineOwnerPluginId = vi.fn(() => undefined);
-export const mockedBuildAgentRuntimePlan = vi.fn(() => ({}));
+export const mockedBuildAgentRuntimePlan = vi.fn<() => AgentRuntimePlan>(
+  () => makeMockRuntimePlan() as AgentRuntimePlan,
+);
 export const mockedRunPostCompactionSideEffects = vi.fn(async () => {});
 export const mockedSleepWithAbort = vi.fn(
   async (_ms: number, _abortSignal?: AbortSignal) => undefined,
@@ -335,7 +356,7 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedResolveContextEngine.mockReset();
   mockedResolveContextEngine.mockResolvedValue(mockedContextEngine);
   mockedBuildAgentRuntimePlan.mockReset();
-  mockedBuildAgentRuntimePlan.mockReturnValue({});
+  mockedBuildAgentRuntimePlan.mockImplementation(() => makeMockRuntimePlan() as AgentRuntimePlan);
   mockedCompactDirect.mockReset();
   mockedCompactDirect.mockResolvedValue({
     ok: false,
@@ -736,7 +757,9 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   vi.doMock("./tool-result-truncation.js", () => ({
     resolveLiveToolResultMaxChars: mockedResolveLiveToolResultMaxChars,
     sessionLikelyHasOversizedToolResults: mockedSessionLikelyHasOversizedToolResults,
+    truncateOversizedToolResultsInActiveTarget: mockedTruncateOversizedToolResultsInSession,
     truncateOversizedToolResultsInSession: mockedTruncateOversizedToolResultsInSession,
+    truncateOversizedToolResultsInRuntimeTranscript: mockedTruncateOversizedToolResultsInSession,
   }));
 
   vi.doMock("./context-engine-maintenance.js", () => ({

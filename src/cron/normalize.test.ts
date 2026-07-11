@@ -158,6 +158,23 @@ describe("normalizeCronJobCreate", () => {
     expect("sessionKey" in cleared).toBe(false);
   });
 
+  it("stores the source session key for case-insensitive current targets", () => {
+    const normalized = normalizeCronJobCreate(
+      {
+        name: "current target",
+        enabled: true,
+        schedule: { kind: "cron", expr: "* * * * *" },
+        sessionTarget: " Current ",
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: "hi" },
+      },
+      { sessionContext: { sessionKey: " agent:main:telegram:direct:42 " } },
+    ) as unknown as Record<string, unknown>;
+
+    expect(normalized.sessionTarget).toBe("current");
+    expect(normalized.sessionKey).toBe("agent:main:telegram:direct:42");
+  });
+
   it("canonicalizes delivery.channel casing", () => {
     const normalized = normalizeIsolatedAgentTurnCreateJob({
       name: "delivery channel casing",
@@ -743,7 +760,7 @@ describe("normalizeCronJobCreate", () => {
     expect(delivery.to).toBe("123");
   });
 
-  it("resolves current sessionTarget to a persistent session when context is available", () => {
+  it("stores current sessionTarget source context when context is available", () => {
     const normalized = normalizeCronJobCreate(
       {
         name: "current-session",
@@ -754,7 +771,8 @@ describe("normalizeCronJobCreate", () => {
       { sessionContext: { sessionKey: "agent:main:discord:group:ops" } },
     ) as unknown as Record<string, unknown>;
 
-    expect(normalized.sessionTarget).toBe("session:agent:main:discord:group:ops");
+    expect(normalized.sessionTarget).toBe("current");
+    expect(normalized.sessionKey).toBe("agent:main:discord:group:ops");
   });
 
   it("falls back current sessionTarget to isolated without context", () => {

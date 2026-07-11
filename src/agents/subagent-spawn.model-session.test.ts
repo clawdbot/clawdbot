@@ -12,7 +12,6 @@ import {
 
 const callGatewayMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
-const pruneLegacyStoreKeysMock = vi.fn();
 
 let resetSubagentRegistryForTests: typeof import("./subagent-registry.js").resetSubagentRegistryForTests;
 let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
@@ -23,7 +22,6 @@ describe("spawnSubagentDirect runtime model persistence", () => {
       callGatewayMock,
       getRuntimeConfig: () => createSubagentSpawnTestConfig(os.tmpdir()),
       updateSessionStoreMock,
-      pruneLegacyStoreKeysMock,
       workspaceDir: os.tmpdir(),
     }));
   });
@@ -32,7 +30,6 @@ describe("spawnSubagentDirect runtime model persistence", () => {
     resetSubagentRegistryForTests();
     callGatewayMock.mockReset();
     updateSessionStoreMock.mockReset();
-    pruneLegacyStoreKeysMock.mockReset();
     setupAcceptedSubagentGatewayMock(callGatewayMock);
 
     updateSessionStoreMock.mockImplementation(
@@ -101,7 +98,6 @@ describe("spawnSubagentDirect runtime model persistence", () => {
       model: "gpt-5.4",
       overrideSource: "user",
     });
-    expect(pruneLegacyStoreKeysMock).toHaveBeenCalledTimes(3);
     expect(operations.indexOf("store:update")).toBeGreaterThan(-1);
     expect(operations.indexOf("gateway:agent")).toBeGreaterThan(
       operations.lastIndexOf("store:update"),
@@ -177,7 +173,6 @@ describe("spawnSubagentDirect runtime model persistence", () => {
           },
         }),
       updateSessionStoreMock: dedicatedUpdateSessionStoreMock,
-      pruneLegacyStoreKeysMock,
       workspaceDir: os.tmpdir(),
     });
     resetForAutoModelTest();

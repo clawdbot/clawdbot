@@ -18,9 +18,21 @@ import {
   parseUsageCountedSessionIdFromFileName,
 } from "../config/sessions/artifacts.js";
 import {
+  resolveDefaultSessionStorePath,
   resolveSessionFilePath,
   resolveSessionTranscriptsDirForAgent,
 } from "../config/sessions/paths.js";
+import {
+  listSessionEntries,
+  loadTranscriptEventsSync,
+  readTranscriptStatsSync,
+} from "../config/sessions/session-accessor.js";
+import {
+  formatSqliteSessionFileMarker,
+  parseSqliteSessionFileMarker,
+  type SqliteSessionFileMarker,
+} from "../config/sessions/sqlite-marker.js";
+import { selectVisibleTranscriptEvents } from "../config/sessions/transcript-visible-events.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -150,6 +162,7 @@ type UsageCostTranscriptFile = {
   filePath: string;
   size: number;
   mtimeMs: number;
+  sessionId?: string;
 };
 
 type UsageCostCacheLock = {
@@ -169,6 +182,15 @@ function resolveUsageCostPricingFingerprint(config?: OpenClawConfig): string {
 
 function resolveUsageCostCachePath(agentId?: string): string {
   return path.join(resolveSessionTranscriptsDirForAgent(agentId), USAGE_COST_CACHE_FILE);
+}
+
+function resolveUsageCostSessionStorePath(params?: {
+  agentId?: string;
+  sessionsDir?: string;
+}): string {
+  return params?.sessionsDir
+    ? path.join(params.sessionsDir, "sessions.json")
+    : resolveDefaultSessionStorePath(params?.agentId);
 }
 
 function resolveUsageCostCacheLockPath(cachePath: string): string {
@@ -410,11 +432,84 @@ async function listUsageCountedTranscriptFileStats(
   return results.filter((file): file is UsageCostTranscriptFile => Boolean(file));
 }
 
+function listUsageCountedSqliteTranscriptStats(
+  agentId?: string,
+  params?: { minMtimeMs?: number; sessionsDir?: string },
+): UsageCostTranscriptFile[] {
+  const storePath = resolveUsageCostSessionStorePath({
+    agentId,
+    ...(params?.sessionsDir ? { sessionsDir: params.sessionsDir } : {}),
+  });
+  const files: UsageCostTranscriptFile[] = [];
+  for (const { entry } of listSessionEntries({ storePath })) {
+    const marker = parseSqliteSessionFileMarker(entry.sessionFile);
+    if (!marker) {
+      continue;
+    }
+    const mtimeMs = asFiniteNumber(entry.updatedAt) ?? 0;
+    if (params?.minMtimeMs !== undefined && mtimeMs < params.minMtimeMs) {
+      continue;
+    }
+    // Usage scans run across every session on hot paths; byte sizes come from
+    // a SQL aggregate so no transcript row is materialized (#86718 class).
+    const stats = readTranscriptStatsSync({
+      agentId: marker.agentId,
+      sessionId: marker.sessionId,
+      storePath: marker.storePath,
+    });
+    files.push({
+      filePath: formatSqliteSessionFileMarker(marker),
+      mtimeMs,
+      sessionId: marker.sessionId,
+      size: stats.sizeBytes,
+    });
+  }
+  return files;
+}
+
 async function listUsageCountedTranscriptFiles(
   agentId?: string,
   params?: { sessionsDir?: string },
 ): Promise<UsageCostTranscriptFile[]> {
-  return await listUsageCountedTranscriptFileStats(agentId, params);
+  return await listUsageCountedTranscriptStats(agentId, params);
+}
+
+async function listUsageCountedTranscriptStats(
+  agentId?: string,
+  params?: { minMtimeMs?: number; sessionsDir?: string; includeCheckpoints?: boolean },
+): Promise<UsageCostTranscriptFile[]> {
+  const fileBacked = await listUsageCountedTranscriptFileStats(agentId, params);
+  const sqliteBacked = listUsageCountedSqliteTranscriptStats(agentId, params);
+  const sqliteSessionIds = new Set(sqliteBacked.map((file) => file.sessionId).filter(Boolean));
+  const canonicalFileBacked = fileBacked.filter((file) => {
+    const sessionId = parseUsageCountedSessionIdFromFileName(path.basename(file.filePath));
+    return !sessionId || !sqliteSessionIds.has(sessionId);
+  });
+  return [...canonicalFileBacked, ...sqliteBacked];
+}
+
+async function resolveUsageCostTranscriptFile(
+  sessionFile: string,
+): Promise<UsageCostTranscriptFile | undefined> {
+  const marker = parseSqliteSessionFileMarker(sessionFile);
+  if (marker) {
+    const entry = listSessionEntries({ storePath: marker.storePath }).find(
+      ({ entry: sessionEntry }) => sessionEntry.sessionId === marker.sessionId,
+    )?.entry;
+    const stats = readTranscriptStatsSync({
+      agentId: marker.agentId,
+      sessionId: marker.sessionId,
+      storePath: marker.storePath,
+    });
+    return {
+      filePath: formatSqliteSessionFileMarker(marker),
+      mtimeMs: asFiniteNumber(entry?.updatedAt) ?? 0,
+      sessionId: marker.sessionId,
+      size: stats.sizeBytes,
+    };
+  }
+  const stats = await fs.promises.stat(sessionFile).catch(() => null);
+  return stats ? { filePath: sessionFile, size: stats.size, mtimeMs: stats.mtimeMs } : undefined;
 }
 
 function isUsageCostCacheEntryFresh(params: {
@@ -879,17 +974,17 @@ const extractCostBreakdown = (usageRaw?: UsageLike | null): CostBreakdown | unde
 };
 
 const parseTimestamp = (entry: Record<string, unknown>): Date | undefined => {
-  const raw = entry.timestamp;
-  if (typeof raw === "string") {
-    const parsed = new Date(raw);
-    if (!Number.isNaN(parsed.valueOf())) {
-      return parsed;
-    }
-  }
   const message = entry.message as Record<string, unknown> | undefined;
   const messageTimestamp = asFiniteNumber(message?.timestamp);
   if (messageTimestamp !== undefined) {
     const parsed = new Date(messageTimestamp);
+    if (!Number.isNaN(parsed.valueOf())) {
+      return parsed;
+    }
+  }
+  const raw = entry.timestamp;
+  if (typeof raw === "string") {
+    const parsed = new Date(raw);
     if (!Number.isNaN(parsed.valueOf())) {
       return parsed;
     }
@@ -1270,11 +1365,41 @@ async function* readJsonlRecords(
   }
 }
 
-async function* readJsonlRecordsBestEffort(
+function loadSqliteUsageTranscriptEvents(
+  marker: SqliteSessionFileMarker,
+): Record<string, unknown>[] {
+  return selectVisibleTranscriptEvents(
+    loadTranscriptEventsSync({
+      agentId: marker.agentId,
+      sessionId: marker.sessionId,
+      storePath: marker.storePath,
+    }),
+  ).filter(
+    (event): event is Record<string, unknown> =>
+      Boolean(event) && typeof event === "object" && !Array.isArray(event),
+  );
+}
+
+async function* readTranscriptRecords(
+  filePath: string,
+  startOffset = 0,
+  endOffset?: number,
+): AsyncGenerator<Record<string, unknown>> {
+  const marker = parseSqliteSessionFileMarker(filePath);
+  if (marker) {
+    for (const event of loadSqliteUsageTranscriptEvents(marker)) {
+      yield event;
+    }
+    return;
+  }
+  yield* readJsonlRecords(filePath, startOffset, endOffset);
+}
+
+async function* readTranscriptRecordsBestEffort(
   filePath: string,
 ): AsyncGenerator<Record<string, unknown>> {
   try {
-    yield* readJsonlRecords(filePath);
+    yield* readTranscriptRecords(filePath);
   } catch {
     // Diagnostic readers return the records available before a stream failure.
     // Durable cache scans use the strict reader so partial data is never marked fresh.
@@ -1290,7 +1415,7 @@ async function scanTranscriptFile(params: {
   onEntry: (entry: ParsedTranscriptEntry) => void;
 }): Promise<void> {
   const resolveCost = params.resolveCost ?? createUsageCostResolver(params.config);
-  for await (const parsed of readJsonlRecords(
+  for await (const parsed of readTranscriptRecords(
     params.filePath,
     params.startOffset,
     params.endOffset,
@@ -1387,10 +1512,21 @@ export function resolveExistingUsageSessionFile(params: {
   sessionFile?: string;
   agentId?: string;
 }): string | undefined {
+  const sessionId = params.sessionId?.trim();
+  const entryMarker = parseSqliteSessionFileMarker(params.sessionEntry?.sessionFile);
+  const explicitMarker = parseSqliteSessionFileMarker(params.sessionFile);
+  const sqliteMarker = entryMarker ?? explicitMarker;
+  if (sqliteMarker) {
+    if (sessionId && sqliteMarker.sessionId !== sessionId) {
+      return undefined;
+    }
+    return formatSqliteSessionFileMarker(sqliteMarker);
+  }
+
   const candidate =
     params.sessionFile ??
-    (params.sessionId
-      ? resolveSessionFilePath(params.sessionId, params.sessionEntry, {
+    (sessionId
+      ? resolveSessionFilePath(sessionId, params.sessionEntry, {
           agentId: params.agentId,
         })
       : undefined);
@@ -1398,8 +1534,6 @@ export function resolveExistingUsageSessionFile(params: {
   if (candidate && fs.existsSync(candidate)) {
     return candidate;
   }
-
-  const sessionId = params.sessionId?.trim();
   if (!sessionId) {
     return candidate;
   }
@@ -1474,7 +1608,7 @@ export async function loadCostUsageSummary(params?: {
   const totals = emptyTotals();
   const resolveCost = createUsageCostResolver(params?.config);
 
-  const files = await listUsageCountedTranscriptFileStats(params?.agentId, {
+  const files = await listUsageCountedTranscriptStats(params?.agentId, {
     minMtimeMs: sinceTime,
   });
 
@@ -1610,7 +1744,9 @@ async function scanUsageFileForCache(params: {
   });
 
   const sessionId =
-    parseUsageCountedSessionIdFromFileName(path.basename(params.file.filePath)) ?? undefined;
+    parseSqliteSessionFileMarker(params.file.filePath)?.sessionId ??
+    parseUsageCountedSessionIdFromFileName(path.basename(params.file.filePath)) ??
+    undefined;
   const combinedTranscriptEntries = shouldTrackTranscriptEntries
     ? [
         ...((appendOnlyPrevious && startOffset !== undefined
@@ -1850,13 +1986,10 @@ export async function loadSessionCostSummaryFromCache(params: {
 }): Promise<{ summary: SessionCostSummary | null; cacheStatus: UsageCacheStatus }> {
   const cachePath = resolveUsageCostCachePath(params.agentId);
   const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config);
-  let [cache, stats] = await Promise.all([
+  let [cache, file] = await Promise.all([
     readUsageCostCache(cachePath, pricingFingerprint),
-    fs.promises.stat(params.sessionFile).catch(() => null),
+    resolveUsageCostTranscriptFile(params.sessionFile),
   ]);
-  let file = stats
-    ? { filePath: params.sessionFile, size: stats.size, mtimeMs: stats.mtimeMs }
-    : undefined;
   let entry = cache.files[params.sessionFile];
   let stale =
     !file ||
@@ -1874,13 +2007,10 @@ export async function loadSessionCostSummaryFromCache(params: {
         sessionFiles: [params.sessionFile],
       });
       if (result === "refreshed") {
-        [cache, stats] = await Promise.all([
+        [cache, file] = await Promise.all([
           readUsageCostCache(cachePath, pricingFingerprint),
-          fs.promises.stat(params.sessionFile).catch(() => null),
+          resolveUsageCostTranscriptFile(params.sessionFile),
         ]);
-        file = stats
-          ? { filePath: params.sessionFile, size: stats.size, mtimeMs: stats.mtimeMs }
-          : undefined;
         entry = cache.files[params.sessionFile];
         stale =
           !file ||
@@ -1971,16 +2101,16 @@ export async function loadSessionCostSummariesFromCache(params: {
 }): Promise<{ summaries: Array<SessionCostSummary | null>; cacheStatus: UsageCacheStatus }> {
   const cachePath = resolveUsageCostCachePath(params.agentId);
   const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config);
-  const statTasks = params.sessions.map(
-    (session) => async () => await fs.promises.stat(session.sessionFile).catch(() => null),
+  const fileTasks = params.sessions.map(
+    (session) => async () => await resolveUsageCostTranscriptFile(session.sessionFile),
   );
-  const statsPromise = runTasksWithConcurrency({
-    tasks: statTasks,
+  const filesPromise = runTasksWithConcurrency({
+    tasks: fileTasks,
     limit: USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY,
   }).then(({ results }) => results);
-  const [cache, stats, refreshRunning] = await Promise.all([
+  const [cache, files, refreshRunning] = await Promise.all([
     readUsageCostCache(cachePath, pricingFingerprint),
-    statsPromise,
+    filesPromise,
     isUsageCostCacheRefreshRunning(cachePath),
   ]);
   const staleFiles = new Set<string>();
@@ -1992,10 +2122,7 @@ export async function loadSessionCostSummariesFromCache(params: {
   const getFormatDayKey = () =>
     (sharedFormatDayKey ??= createUsageDayKeyFormatter(params.dayBucket));
   const summaries = params.sessions.map((session, index) => {
-    const stat = stats[index];
-    const file = stat
-      ? { filePath: session.sessionFile, size: stat.size, mtimeMs: stat.mtimeMs }
-      : undefined;
+    const file = files[index];
     const entry = cache.files[session.sessionFile];
     const stale =
       !file ||
@@ -2178,7 +2305,7 @@ export async function discoverAllSessions(params?: {
   endMs?: number;
   includeFirstUserMessage?: boolean;
 }): Promise<DiscoveredSession[]> {
-  const files = await listUsageCountedTranscriptFileStats(params?.agentId, {
+  const files = await listUsageCountedTranscriptStats(params?.agentId, {
     minMtimeMs: params?.startMs,
     includeCheckpoints: true,
   });
@@ -2189,6 +2316,7 @@ export async function discoverAllSessions(params?: {
     // Do not exclude by endMs: a session can have activity in range even if it continued later.
     const filePath = file.filePath;
     const fileName = path.basename(filePath);
+    const sqliteMarker = parseSqliteSessionFileMarker(filePath);
 
     // Checkpoint-twin dedup: `<parentId>.checkpoint.<uuid>.jsonl`
     // files are pre-compaction snapshot siblings of the parent primary
@@ -2199,7 +2327,7 @@ export async function discoverAllSessions(params?: {
     // checkpoint history. Group them under the parent session id, do not
     // re-read for label (the parent primary already carries it), and advance
     // the parent's mtime if this checkpoint is newer.
-    if (isCheckpointSessionTranscriptFileName(fileName)) {
+    if (!sqliteMarker && isCheckpointSessionTranscriptFileName(fileName)) {
       const parentId = parseParentSessionIdFromCheckpointFileName(fileName);
       if (!parentId) {
         continue;
@@ -2232,17 +2360,17 @@ export async function discoverAllSessions(params?: {
       continue;
     }
 
-    const sessionId = parseUsageCountedSessionIdFromFileName(fileName);
+    const sessionId = sqliteMarker?.sessionId ?? parseUsageCountedSessionIdFromFileName(fileName);
     if (!sessionId) {
       continue;
     }
-    const isPrimaryTranscript = isPrimarySessionTranscriptFileName(fileName);
+    const isPrimaryTranscript = sqliteMarker ? true : isPrimarySessionTranscriptFileName(fileName);
 
     // Try to read first user message for label extraction
     let firstUserMessage: string | undefined;
     if (params?.includeFirstUserMessage !== false) {
       try {
-        for await (const parsed of readJsonlRecords(filePath)) {
+        for await (const parsed of readTranscriptRecords(filePath)) {
           try {
             const message = parsed.message as Record<string, unknown> | undefined;
             if (message?.role === "user") {
@@ -2328,7 +2456,10 @@ export async function loadSessionCostSummary(params: {
   dayBucket?: UsageDailyBucket;
 }): Promise<SessionCostSummary | null> {
   const sessionFile = resolveExistingUsageSessionFile(params);
-  if (!sessionFile || !fs.existsSync(sessionFile)) {
+  if (!sessionFile) {
+    return null;
+  }
+  if (!parseSqliteSessionFileMarker(sessionFile) && !fs.existsSync(sessionFile)) {
     return null;
   }
 
@@ -2639,7 +2770,10 @@ export async function loadSessionUsageTimeSeries(params: {
   maxPoints?: number;
 }): Promise<SessionUsageTimeSeries | null> {
   const sessionFile = resolveExistingUsageSessionFile(params);
-  if (!sessionFile || !fs.existsSync(sessionFile)) {
+  if (!sessionFile) {
+    return null;
+  }
+  if (!parseSqliteSessionFileMarker(sessionFile) && !fs.existsSync(sessionFile)) {
     return null;
   }
 
@@ -2748,7 +2882,10 @@ export async function loadSessionLogs(params: {
   limit?: number;
 }): Promise<SessionLogEntry[] | null> {
   const sessionFile = resolveExistingUsageSessionFile(params);
-  if (!sessionFile || !fs.existsSync(sessionFile)) {
+  if (!sessionFile) {
+    return null;
+  }
+  if (!parseSqliteSessionFileMarker(sessionFile) && !fs.existsSync(sessionFile)) {
     return null;
   }
 
@@ -2763,7 +2900,7 @@ export async function loadSessionLogs(params: {
   const retentionLimit = limit * 2;
   const resolveCost = createUsageCostResolver(params.config);
 
-  for await (const parsed of readJsonlRecordsBestEffort(sessionFile)) {
+  for await (const parsed of readTranscriptRecordsBestEffort(sessionFile)) {
     try {
       const message = parsed.message as Record<string, unknown> | undefined;
       if (!message) {

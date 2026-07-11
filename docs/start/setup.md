@@ -132,7 +132,8 @@ openclaw health
 - **Where state lives:**
   - Channel/provider state: `~/.openclaw/credentials/`
   - Model auth profiles: `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
-  - Sessions: `~/.openclaw/agents/<agentId>/sessions/`
+  - Sessions and transcripts: `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
+  - Legacy/archive session artifacts: `~/.openclaw/agents/<agentId>/sessions/`
   - Logs: `/tmp/openclaw/`
 
 ## Credential storage map

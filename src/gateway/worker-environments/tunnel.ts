@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { computeBackoff, sleepWithAbort, type BackoffPolicy } from "../../infra/backoff.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import type { WorkerSshEndpoint } from "../../plugins/types.js";
@@ -163,7 +164,7 @@ export function createWorkerSshRunner(): WorkerSshRunner {
         if (readySettled) {
           return;
         }
-        stdout = `${stdout}${chunk}`.slice(-STDERR_LIMIT);
+        stdout = sliceUtf16Safe(`${stdout}${chunk}`, -STDERR_LIMIT);
         if (stdout.split(/\r?\n/u).includes(READY_MARKER)) {
           readySettled = true;
           resolveReady();
@@ -172,7 +173,7 @@ export function createWorkerSshRunner(): WorkerSshRunner {
       child.stderr.setEncoding("utf8");
       child.stderr.on("error", () => {});
       child.stderr.on("data", (chunk: string) => {
-        stderr = `${stderr}${chunk}`.slice(-STDERR_LIMIT);
+        stderr = sliceUtf16Safe(`${stderr}${chunk}`, -STDERR_LIMIT);
       });
       child.once("error", settleReadyError);
       child.once("close", (code, signal) => {

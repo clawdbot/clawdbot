@@ -11,6 +11,8 @@ export const HOOK_ONLY_MESSAGE =
   "is hook-only. This remains a supported compatibility path, but it has not migrated to explicit capability registration yet.";
 export const DEPRECATED_MEMORY_EMBEDDING_PROVIDER_API_MESSAGE =
   "uses deprecated memory-specific embedding provider API; use api.registerEmbeddingProvider and contracts.embeddingProviders for new embedding providers.";
+export const REMOVED_SESSION_TRANSCRIPT_FILE_API_MESSAGE =
+  "references removed session/transcript file APIs; migrate to session identity, SessionTranscriptUpdate.target, and Gateway/runtime session helpers.";
 
 export function createCompatibilityNotice(
   params: Pick<PluginCompatibilityNotice, "pluginId" | "code">,
@@ -39,6 +41,14 @@ export function createCompatibilityNotice(
         compatCode: "deprecated-memory-embedding-provider-api",
         severity: "warn",
         message: DEPRECATED_MEMORY_EMBEDDING_PROVIDER_API_MESSAGE,
+      };
+    case "removed-session-transcript-file-api":
+      return {
+        pluginId: params.pluginId,
+        code: params.code,
+        compatCode: "removed-session-transcript-file-api",
+        severity: "warn",
+        message: REMOVED_SESSION_TRANSCRIPT_FILE_API_MESSAGE,
       };
   }
   const unsupportedCode: never = params.code;

@@ -1,11 +1,12 @@
 // Trajectory path helpers resolve storage paths for trajectory artifacts.
 import fs from "node:fs";
 import path from "node:path";
+import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";
 import { isPathInside } from "../infra/path-guards.js";
 
-// Runtime trajectory path helpers. Paths are either beside the session file or
-// inside OPENCLAW_TRAJECTORY_DIR, with names scrubbed for filesystem safety.
+// Legacy trajectory path helpers. Active runtime capture writes SQLite rows;
+// these paths remain for explicit legacy-file reads, export artifacts, and cleanup.
 export const TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES = 10 * 1024 * 1024;
 export const TRAJECTORY_RUNTIME_FILE_MAX_BYTES = 50 * 1024 * 1024;
 export const TRAJECTORY_RUNTIME_EVENT_MAX_BYTES = 256 * 1024;
@@ -61,6 +62,14 @@ export function resolveTrajectoryFilePath(params: {
     return path.join(
       process.cwd(),
       `${safeTrajectorySessionFileName(params.sessionId)}.trajectory.jsonl`,
+    );
+  }
+  const sqliteMarker = parseSqliteSessionFileMarker(params.sessionFile);
+  if (sqliteMarker) {
+    return path.join(
+      path.dirname(path.resolve(sqliteMarker.storePath)),
+      "trajectory",
+      `${safeTrajectorySessionFileName(sqliteMarker.sessionId)}.jsonl`,
     );
   }
   return params.sessionFile.endsWith(".jsonl")

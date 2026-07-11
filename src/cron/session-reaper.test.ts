@@ -3,7 +3,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
+import {
+  listSessionEntries,
+  patchSessionEntry,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { createDeferred } from "../test-utils/deferred.js";
@@ -23,6 +28,21 @@ function createTestLogger(): Logger {
     warn: () => {},
     error: () => {},
   };
+}
+
+async function seedSessionEntries(
+  storePath: string,
+  entries: Record<string, SessionEntry>,
+): Promise<void> {
+  for (const [sessionKey, entry] of Object.entries(entries)) {
+    await replaceSessionEntry({ storePath, sessionKey }, entry);
+  }
+}
+
+function readSessionEntries(storePath: string): Record<string, SessionEntry> {
+  return Object.fromEntries(
+    listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+  );
 }
 
 describe("resolveRetentionMs", () => {
@@ -88,7 +108,7 @@ describe("sweepCronRunSessions", () => {
 
   it("prunes expired cron run sessions", async () => {
     const now = Date.now();
-    const store: Record<string, { sessionId: string; updatedAt: number }> = {
+    const store: Record<string, SessionEntry> = {
       "agent:main:cron:job1": {
         sessionId: "base-session",
         updatedAt: now,
@@ -114,7 +134,7 @@ describe("sweepCronRunSessions", () => {
         updatedAt: now - 100 * 3_600_000, // old but not a cron run
       },
     };
-    fs.writeFileSync(storePath, JSON.stringify(store));
+    await seedSessionEntries(storePath, store);
 
     const result = await sweepCronRunSessions({
       sessionStorePath: storePath,
@@ -126,38 +146,42 @@ describe("sweepCronRunSessions", () => {
     expect(result.swept).toBe(true);
     expect(result.pruned).toBe(2);
 
-    const updated = JSON.parse(fs.readFileSync(storePath, "utf-8"));
-    expect(updated).toEqual({
-      "agent:main:cron:job1": {
-        sessionId: "base-session",
-        updatedAt: now,
-      },
-      "agent:main:cron:job1:run:recent-run": {
-        sessionId: "recent-run",
-        updatedAt: now - 1 * 3_600_000,
-      },
-      "agent:main:cron:job1:run:recent-run:thread:reply": {
-        sessionId: "recent-run-thread",
-        updatedAt: now - 1 * 3_600_000,
-      },
-      "agent:main:telegram:dm:123": {
-        sessionId: "regular-session",
-        updatedAt: now - 100 * 3_600_000,
-      },
+    const updated = readSessionEntries(storePath);
+    expect(Object.keys(updated).toSorted()).toEqual([
+      "agent:main:cron:job1",
+      "agent:main:cron:job1:run:recent-run",
+      "agent:main:cron:job1:run:recent-run:thread:reply",
+      "agent:main:telegram:dm:123",
+    ]);
+    expect(updated["agent:main:cron:job1"]).toMatchObject({
+      sessionId: "base-session",
+      updatedAt: now,
+    });
+    expect(updated["agent:main:cron:job1:run:recent-run"]).toMatchObject({
+      sessionId: "recent-run",
+      updatedAt: now - 1 * 3_600_000,
+    });
+    expect(updated["agent:main:cron:job1:run:recent-run:thread:reply"]).toMatchObject({
+      sessionId: "recent-run-thread",
+      updatedAt: now - 1 * 3_600_000,
+    });
+    expect(updated["agent:main:telegram:dm:123"]).toMatchObject({
+      sessionId: "regular-session",
+      updatedAt: now - 100 * 3_600_000,
     });
   });
 
   it("preserves expired continuation rows while generated media is pending", async () => {
     const now = Date.now();
     const sessionKey = "agent:main:cron:job1:run:pending-run";
-    const store = {
+    const store: Record<string, SessionEntry> = {
       [sessionKey]: {
         sessionId: "pending-run",
         updatedAt: now - 25 * 3_600_000,
         cronRunContinuation: { lifecycleRevision: "revision-1", phase: "ready" },
       },
     };
-    fs.writeFileSync(storePath, JSON.stringify(store));
+    await seedSessionEntries(storePath, store);
     taskStatusMocks.hasPendingGeneratedMediaTask.mockReturnValue(true);
 
     const result = await sweepCronRunSessions({
@@ -168,27 +192,24 @@ describe("sweepCronRunSessions", () => {
     });
 
     expect(result.pruned).toBe(0);
-    expect(JSON.parse(fs.readFileSync(storePath, "utf-8"))).toEqual(store);
+    expect(readSessionEntries(storePath)).toEqual(store);
   });
 
   it("preserves an orphaned gateway continuation while generated media is pending", async () => {
     const now = Date.now();
     const sessionKey = "agent:main:cron:job1:run:orphaned-run";
-    fs.writeFileSync(
-      storePath,
-      JSON.stringify({
-        [sessionKey]: {
-          sessionId: "orphaned-run",
-          updatedAt: now - 25 * 3_600_000,
-          cronRunContinuation: {
-            lifecycleRevision: "revision-1",
-            phase: "continuing",
-            ownerRunId: "dead-gateway-run",
-            basePersisted: false,
-          },
+    await seedSessionEntries(storePath, {
+      [sessionKey]: {
+        sessionId: "orphaned-run",
+        updatedAt: now - 25 * 3_600_000,
+        cronRunContinuation: {
+          lifecycleRevision: "revision-1",
+          phase: "continuing",
+          ownerRunId: "dead-gateway-run",
+          basePersisted: false,
         },
-      }),
-    );
+      },
+    });
     taskStatusMocks.hasPendingGeneratedMediaTask.mockReturnValue(true);
 
     const result = await sweepCronRunSessions({
@@ -199,7 +220,7 @@ describe("sweepCronRunSessions", () => {
     });
 
     expect(result.pruned).toBe(0);
-    expect(JSON.parse(fs.readFileSync(storePath, "utf-8"))[sessionKey]).toMatchObject({
+    expect(readSessionEntries(storePath)[sessionKey]).toMatchObject({
       updatedAt: now - 25 * 3_600_000,
       cronRunContinuation: {
         lifecycleRevision: "revision-1",
@@ -214,28 +235,25 @@ describe("sweepCronRunSessions", () => {
     const now = Date.now();
     const runningKey = "agent:main:cron:job1:run:running-run";
     const continuingKey = "agent:main:cron:job1:run:continuing-run";
-    fs.writeFileSync(
-      storePath,
-      JSON.stringify({
-        [runningKey]: {
-          sessionId: "running-run",
-          updatedAt: now - 25 * 3_600_000,
-          cronRunContinuation: {
-            lifecycleRevision: "revision-1",
-            phase: "running",
-          },
+    await seedSessionEntries(storePath, {
+      [runningKey]: {
+        sessionId: "running-run",
+        updatedAt: now - 25 * 3_600_000,
+        cronRunContinuation: {
+          lifecycleRevision: "revision-1",
+          phase: "running",
         },
-        [continuingKey]: {
-          sessionId: "continuing-run",
-          updatedAt: now - 25 * 3_600_000,
-          cronRunContinuation: {
-            lifecycleRevision: "revision-2",
-            phase: "continuing",
-            ownerRunId: "gateway-run",
-          },
+      },
+      [continuingKey]: {
+        sessionId: "continuing-run",
+        updatedAt: now - 25 * 3_600_000,
+        cronRunContinuation: {
+          lifecycleRevision: "revision-2",
+          phase: "continuing",
+          ownerRunId: "gateway-run",
         },
-      }),
-    );
+      },
+    });
 
     const result = await sweepCronRunSessions({
       sessionStorePath: storePath,
@@ -245,25 +263,26 @@ describe("sweepCronRunSessions", () => {
     });
 
     expect(result.pruned).toBe(2);
-    expect(JSON.parse(fs.readFileSync(storePath, "utf-8"))).toEqual({});
+    expect(readSessionEntries(storePath)).toEqual({});
   });
 
   it("preserves an expired run when work is admitted before writer-owned removal", async () => {
     const now = Date.now();
     const sessionKey = "agent:main:cron:job1:run:active-run";
-    const store = {
+    const store: Record<string, SessionEntry> = {
       [sessionKey]: {
         sessionId: "active-run",
         updatedAt: now - 25 * 3_600_000,
       },
     };
-    fs.writeFileSync(storePath, JSON.stringify(store));
+    await seedSessionEntries(storePath, store);
     const writerStarted = createDeferred();
     const releaseWriter = createDeferred();
     const firstValidation = createDeferred();
-    const writer = runExclusiveSessionStoreWrite(storePath, async () => {
+    const writer = patchSessionEntry({ storePath, sessionKey }, async () => {
       writerStarted.resolve();
       await releaseWriter.promise;
+      return {};
     });
     await writerStarted.promise;
 
@@ -282,87 +301,33 @@ describe("sweepCronRunSessions", () => {
     });
     await firstValidation.promise;
 
+    let admission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
     try {
       releaseWriter.resolve();
       const result = await sweep;
-      const admission = await admissionPromise;
+      admission = await admissionPromise;
 
       expect(result.pruned).toBe(0);
-      expect(JSON.parse(fs.readFileSync(storePath, "utf-8"))).toEqual(store);
-      admission.release();
+      expect(readSessionEntries(storePath)[sessionKey]).toMatchObject({
+        sessionId: "active-run",
+        updatedAt: expect.any(Number),
+      });
     } finally {
+      admission?.release();
       releaseWriter.resolve();
       await Promise.allSettled([writer, sweep, admissionPromise]);
     }
   });
 
-  it("archives transcript files for pruned run sessions that are no longer referenced", async () => {
-    const now = Date.now();
-    const runSessionId = "old-run";
-    const runTranscript = path.join(tmpDir, `${runSessionId}.jsonl`);
-    fs.writeFileSync(runTranscript, '{"type":"session"}\n');
-    const store: Record<string, { sessionId: string; updatedAt: number }> = {
-      "agent:main:cron:job1:run:old-run": {
-        sessionId: runSessionId,
-        updatedAt: now - 25 * 3_600_000,
-      },
-    };
-    fs.writeFileSync(storePath, JSON.stringify(store));
-
-    const result = await sweepCronRunSessions({
-      sessionStorePath: storePath,
-      nowMs: now,
-      log,
-      force: true,
-    });
-
-    expect(result.pruned).toBe(1);
-    expect(fs.existsSync(runTranscript)).toBe(false);
-    const files = fs.readdirSync(tmpDir);
-    const archivedRunTranscripts = files.filter((name) =>
-      name.startsWith(`${runSessionId}.jsonl.deleted.`),
-    );
-    expect(archivedRunTranscripts.length).toBeGreaterThan(0);
-  });
-
-  it("does not archive external transcript paths for pruned runs", async () => {
-    const now = Date.now();
-    const externalDir = fs.mkdtempSync(path.join(os.tmpdir(), "cron-reaper-external-"));
-    const externalTranscript = path.join(externalDir, "outside.jsonl");
-    fs.writeFileSync(externalTranscript, '{"type":"session"}\n');
-    const store: Record<string, { sessionId: string; sessionFile?: string; updatedAt: number }> = {
-      "agent:main:cron:job1:run:old-run": {
-        sessionId: "old-run",
-        sessionFile: externalTranscript,
-        updatedAt: now - 25 * 3_600_000,
-      },
-    };
-    fs.writeFileSync(storePath, JSON.stringify(store));
-
-    try {
-      const result = await sweepCronRunSessions({
-        sessionStorePath: storePath,
-        nowMs: now,
-        log,
-        force: true,
-      });
-
-      expect(result.pruned).toBe(1);
-      expect(fs.existsSync(externalTranscript)).toBe(true);
-    } finally {
-      fs.rmSync(externalDir, { recursive: true, force: true });
-    }
-  });
-
   it("respects custom retention", async () => {
     const now = Date.now();
-    const store: Record<string, { sessionId: string; updatedAt: number }> = {
+    const store: Record<string, SessionEntry> = {
       "agent:main:cron:job1:run:run1": {
         sessionId: "run1",
         updatedAt: now - 2 * 3_600_000, // 2h ago
       },
     };
-    fs.writeFileSync(storePath, JSON.stringify(store));
+    await seedSessionEntries(storePath, store);
 
     const result = await sweepCronRunSessions({
       cronConfig: { sessionRetention: "1h" },
@@ -377,13 +342,13 @@ describe("sweepCronRunSessions", () => {
 
   it("does nothing when pruning is disabled", async () => {
     const now = Date.now();
-    const store: Record<string, { sessionId: string; updatedAt: number }> = {
+    const store: Record<string, SessionEntry> = {
       "agent:main:cron:job1:run:run1": {
         sessionId: "run1",
         updatedAt: now - 100 * 3_600_000,
       },
     };
-    fs.writeFileSync(storePath, JSON.stringify(store));
+    await seedSessionEntries(storePath, store);
 
     const result = await sweepCronRunSessions({
       cronConfig: { sessionRetention: false },
@@ -399,8 +364,6 @@ describe("sweepCronRunSessions", () => {
 
   it("throttles sweeps without force", async () => {
     const now = Date.now();
-    fs.writeFileSync(storePath, JSON.stringify({}));
-
     // First sweep runs
     const r1 = await sweepCronRunSessions({
       sessionStorePath: storePath,
@@ -421,8 +384,6 @@ describe("sweepCronRunSessions", () => {
   it("throttles per store path", async () => {
     const now = Date.now();
     const otherPath = path.join(tmpDir, "sessions-other.json");
-    fs.writeFileSync(storePath, JSON.stringify({}));
-    fs.writeFileSync(otherPath, JSON.stringify({}));
 
     const r1 = await sweepCronRunSessions({
       sessionStorePath: storePath,

@@ -126,4 +126,22 @@ import UniformTypeIdentifiers
             maxBytes: 180_000)
         #expect(out.data.count <= 180_000)
     }
+
+    @Test func explicitlyFailsWhenSizeLimitCannotBeMet() throws {
+        let input = try makeSolidJPEG(width: 800, height: 600)
+
+        do {
+            _ = try JPEGTranscoder.transcodeToJPEG(
+                imageData: input,
+                maxWidthPx: 800,
+                quality: 0.9,
+                maxBytes: 1)
+            Issue.record("Expected a size-limit error")
+        } catch JPEGTranscodeError.sizeLimitExceeded(let maxBytes, let actualBytes) {
+            #expect(maxBytes == 1)
+            #expect(actualBytes > maxBytes)
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+    }
 }

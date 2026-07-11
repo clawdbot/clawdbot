@@ -6455,8 +6455,7 @@ details[open] > .ov-expandable-toggle::after {
    Shared by the sidebar recents list and the chat session picker. Rows read
    as plain text lines: the trailing aside stacks a relative time (or the run
    spinner) and the management actions in one grid cell, so hovering swaps
-   them without any layout shift. The pin action doubles as the pinned badge
-   and stays visible for pinned rows even without hover. */
+   them without any layout shift. */
 .session-row-host {
   position: relative;
 }
@@ -6578,20 +6577,8 @@ details[open] > .ov-expandable-toggle::after {
   }
 }
 
-/* Pinned badge: accent pin visible without hover. A live run wins the
-   trailing slot, so the badge only holds it while the session is idle;
-   both indicators share one grid cell and would overlap otherwise. */
 .session-row-host--pinned .session-action--pin {
   color: var(--accent);
-}
-
-.session-row-host--pinned:not(.session-row-host--running) .session-action--pin {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.session-row-host--pinned:not(.session-row-host--running) .session-row-trail {
-  opacity: 0;
 }
 
 .session-run-spinner {

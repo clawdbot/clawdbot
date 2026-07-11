@@ -2,7 +2,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { loadSessionStore as loadPluginSessionStore } from "../../plugin-sdk/session-store-runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../../sessions/agent-harness-session-key.js";
 import {
   applySessionEntryLifecycleMutation,
@@ -484,32 +483,6 @@ describe("agent harness session store invariant", () => {
         { skipMaintenance: true, skipSaveWhenResult: (result) => result === 0 },
       ),
     ).rejects.toThrow("Model-selection-locked sessions cannot be removed");
-    await updateSessionStore(
-      storePath,
-      (store) => {
-        store["agent:main:ordinary"] = { sessionId: "ordinary-session", updatedAt: 2 };
-      },
-      { skipMaintenance: true },
-    );
-
-    expect(loadSessionStore(storePath, { skipCache: true })).toEqual({
-      [sessionKey]: entry,
-      "agent:main:ordinary": { sessionId: "ordinary-session", updatedAt: 2 },
-    });
-  });
-
-  it("does not expose the writer-owned cache through the plugin SDK", async () => {
-    const sessionKey = "agent:main:harness:codex:supervision:native-thread";
-    const entry: SessionEntry = {
-      agentHarnessId: "codex",
-      modelSelectionLocked: true,
-      sessionId: "native-session",
-      updatedAt: 1,
-    };
-    await saveSessionStore(storePath, { [sessionKey]: entry }, { skipMaintenance: true });
-
-    const exposed = loadPluginSessionStore(storePath, { clone: false });
-    delete exposed[sessionKey];
     await updateSessionStore(
       storePath,
       (store) => {

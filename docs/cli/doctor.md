@@ -23,6 +23,15 @@ Related:
 | Repair  | `openclaw doctor --fix`  | Applies supported repairs, prompting unless non-interactive repair is safe. |
 | Lint    | `openclaw doctor --lint` | Read-only structured findings for CI, preflight, and review gates.          |
 
+Doctor has four postures:
+
+| Posture                  | Command                                   | Behavior                                                                        |
+| ------------------------ | ----------------------------------------- | ------------------------------------------------------------------------------- |
+| Inspect                  | `openclaw doctor`                         | Human-oriented checks and guided prompts.                                       |
+| Repair                   | `openclaw doctor --fix`                   | Applies supported repairs, using prompts unless non-interactive repair is safe. |
+| Lint                     | `openclaw doctor --lint`                  | Read-only structured findings for CI, preflight, and review gates.              |
+| Session SQLite migration | `openclaw doctor --session-sqlite <mode>` | Inspects, imports, validates, compacts, recovers, or restores session state.    |
+
 Prefer `--lint` when automation needs a stable result. Prefer `--fix` when a human operator wants doctor to edit config or state.
 
 ## Examples
@@ -40,6 +49,13 @@ openclaw doctor --fix --non-interactive
 openclaw doctor --generate-gateway-token
 openclaw doctor --post-upgrade
 openclaw doctor --post-upgrade --json
+openclaw doctor --session-sqlite inspect --session-sqlite-all-agents
+openclaw doctor --session-sqlite dry-run --session-sqlite-agent main --json
+openclaw doctor --session-sqlite import --session-sqlite-all-agents
+openclaw doctor --session-sqlite validate --session-sqlite-all-agents --json
+openclaw doctor --session-sqlite compact --session-sqlite-all-agents
+openclaw doctor --session-sqlite recover --github-issue
+openclaw doctor --session-sqlite restore --session-sqlite-all-agents
 ```
 
 For channel-specific permissions, use the channel probes instead of `doctor`:
@@ -53,25 +69,30 @@ openclaw channels status --probe
 
 ## Options
 
-| Option                       | Effect                                                                                                                                                                                  |
-| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--no-workspace-suggestions` | Disable workspace memory/search suggestions.                                                                                                                                            |
-| `--yes`                      | Accept defaults without prompting.                                                                                                                                                      |
-| `--repair` / `--fix`         | Apply recommended non-service repairs without prompting (`--fix` is an alias). Gateway service installs/rewrites still require interactive confirmation or explicit `gateway` commands. |
-| `--force`                    | Apply aggressive repairs, including overwriting custom service config.                                                                                                                  |
-| `--non-interactive`          | Run without prompts; safe migrations and non-service repairs only.                                                                                                                      |
-| `--generate-gateway-token`   | Generate and configure a gateway token.                                                                                                                                                 |
-| `--allow-exec`               | Allow doctor to execute configured `exec` SecretRefs while verifying secrets.                                                                                                           |
-| `--deep`                     | Scan system services for extra gateway installs; report recent Gateway supervisor restart handoffs.                                                                                     |
-| `--lint`                     | Run modernized health checks in read-only mode and emit diagnostic findings.                                                                                                            |
-| `--post-upgrade`             | Run post-upgrade plugin compatibility probes; findings go to stdout; exit code 1 if any error-level finding is present.                                                                 |
-| `--json`                     | With `--lint`: JSON findings. With `--post-upgrade`: machine-readable envelope `{ probesRun, findings }`.                                                                               |
-| `--severity-min <level>`     | With `--lint`: drop findings below `info`, `warning`, or `error`.                                                                                                                       |
-| `--all`                      | With `--lint`: run all registered checks, including opt-in checks excluded from the default set.                                                                                        |
-| `--skip <id>`                | With `--lint`: skip a check id. Repeatable.                                                                                                                                             |
-| `--only <id>`                | With `--lint`: run only the given check id(s). Repeatable.                                                                                                                              |
+| Option                          | Effect                                                                                                                                                                                  |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--no-workspace-suggestions`    | Disable workspace memory/search suggestions.                                                                                                                                            |
+| `--yes`                         | Accept defaults without prompting.                                                                                                                                                      |
+| `--repair` / `--fix`            | Apply recommended non-service repairs without prompting (`--fix` is an alias). Gateway service installs/rewrites still require interactive confirmation or explicit `gateway` commands. |
+| `--force`                       | Apply aggressive repairs, including overwriting custom service config.                                                                                                                  |
+| `--non-interactive`             | Run without prompts; safe migrations and non-service repairs only.                                                                                                                      |
+| `--generate-gateway-token`      | Generate and configure a gateway token.                                                                                                                                                 |
+| `--allow-exec`                  | Allow doctor to execute configured `exec` SecretRefs while verifying secrets.                                                                                                           |
+| `--deep`                        | Scan system services for extra gateway installs; report recent Gateway supervisor restart handoffs.                                                                                     |
+| `--lint`                        | Run modernized health checks in read-only mode and emit diagnostic findings.                                                                                                            |
+| `--post-upgrade`                | Run post-upgrade plugin compatibility probes; findings go to stdout; exit code 1 if any error-level finding is present.                                                                 |
+| `--session-sqlite <mode>`       | Run the targeted session SQLite migration mode: `inspect`, `dry-run`, `import`, `validate`, `compact`, `recover`, or `restore`.                                                         |
+| `--session-sqlite-store <path>` | With `--session-sqlite`: select one legacy `sessions.json` store path.                                                                                                                  |
+| `--session-sqlite-agent <id>`   | With `--session-sqlite`: select one configured agent.                                                                                                                                   |
+| `--session-sqlite-all-agents`   | With `--session-sqlite`: select configured and discovered agent stores.                                                                                                                 |
+| `--github-issue`                | With `--session-sqlite recover`: prepare a sanitized openclaw/openclaw issue report; doctor creates it with `gh` after `--yes` or interactive confirmation.                             |
+| `--json`                        | With `--lint`: JSON findings. With `--post-upgrade`: machine-readable envelope `{ probesRun, findings }`. With `--session-sqlite`: the migration report as JSON.                        |
+| `--severity-min <level>`        | With `--lint`: drop findings below `info`, `warning`, or `error`.                                                                                                                       |
+| `--all`                         | With `--lint`: run all registered checks, including opt-in checks excluded from the default set.                                                                                        |
+| `--skip <id>`                   | With `--lint`: skip a check id. Repeatable.                                                                                                                                             |
+| `--only <id>`                   | With `--lint`: run only the given check id(s). Repeatable.                                                                                                                              |
 
-`--json`, `--severity-min`, `--all`, `--only`, and `--skip` are only accepted together with `--lint`.
+`--severity-min`, `--all`, `--only`, and `--skip` are only accepted together with `--lint`; `--json` is accepted with `--lint`, `--post-upgrade`, and `--session-sqlite`.
 
 ## Lint mode
 
@@ -177,6 +198,107 @@ runs safe state and plugin repairs before reporting ready. If repair cannot
 finish safely, startup exits and tells you to run the same image once with
 `openclaw doctor --fix` against the same mounted state/config before restarting
 the container normally.
+
+## Session SQLite migration
+
+OpenClaw imports legacy session rows and transcript history into each agent's
+SQLite database automatically during gateway startup and during
+`openclaw doctor --fix`. `openclaw doctor --session-sqlite <mode>` is the
+targeted inspection and validation tool for that migration. Current runtime
+session rows live in
+`~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`. Legacy
+`sessions.json` files are migration sources. Hot transcript JSONL files are
+imported and archived out of the active sessions directory after successful
+import; archive-tier JSONL files remain support artifacts, not runtime
+fallbacks.
+
+Modes:
+
+| Mode       | Behavior                                                                                                               |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `inspect`  | Read legacy and SQLite counts, plus unreferenced JSONL files, without importing.                                       |
+| `dry-run`  | Parse legacy entries and transcript JSONL files, count importable rows, and report issues without writing SQLite rows. |
+| `import`   | Import legacy entries and transcript events into SQLite for the selected targets.                                      |
+| `validate` | Compare the selected legacy sources against SQLite rows and transcript event counts.                                   |
+| `compact`  | Checkpoint and VACUUM selected agent SQLite databases to reclaim free pages after large deletes or archive cleanup.    |
+| `recover`  | Restore the latest failed migration run, validate its targets, and prepare a sanitized GitHub issue report.            |
+| `restore`  | Restore archived transcript artifacts from recorded migration manifests without deleting SQLite data.                  |
+
+Selectors:
+
+- Default: the configured default agent store, when that legacy store file exists.
+- `--session-sqlite-agent <id>`: one configured agent.
+- `--session-sqlite-all-agents`: configured agent stores plus discovered agent stores.
+- `--session-sqlite-store <path>`: one explicit legacy `sessions.json` path.
+
+Manual inspection sequence:
+
+```bash
+openclaw doctor --session-sqlite inspect --session-sqlite-all-agents
+openclaw doctor --session-sqlite dry-run --session-sqlite-all-agents --json
+openclaw doctor --session-sqlite import --session-sqlite-all-agents
+openclaw doctor --session-sqlite validate --session-sqlite-all-agents --json
+openclaw doctor --session-sqlite compact --session-sqlite-all-agents
+openclaw doctor --session-sqlite recover --github-issue
+```
+
+Back up the OpenClaw state directory before running `import` on an install with
+important history. `validate` exits non-zero when a selected legacy entry is
+missing from SQLite, a session id differs, or a transcript event count differs.
+When using `--session-sqlite-store <path>`, check that the report contains the
+expected target count; a nonexistent explicit store path selects no targets.
+
+SQLite deletes reclaim pages inside the database first; they do not necessarily
+shrink the database file immediately. After deleting or archiving large
+transcripts, run `openclaw doctor --session-sqlite compact --session-sqlite-all-agents`
+to checkpoint WAL files, run `VACUUM`, and report before/after database and WAL
+sizes. This is explicit doctor maintenance so normal Gateway writes do not pause
+for background vacuum work.
+
+Each import writes a manifest under
+`~/.openclaw/session-sqlite-migration-runs/` before moving transcript artifacts
+into the archive. If startup reports a failed session SQLite migration after
+artifacts moved, run recovery:
+
+```bash
+openclaw doctor --session-sqlite recover --github-issue
+```
+
+Recovery selects the latest failed migration manifest, restores only the
+manifest's archived artifacts, validates the affected targets, refreshes the
+sanitized `.failure.md` and `.failure.json` reports, and prepares a GitHub issue
+body that avoids transcript contents, raw environment, secrets, and unbounded
+config. When no failed migration manifest exists but a selected agent SQLite
+database is corrupt or not a database, recovery preserves the DB, WAL, and SHM
+files by renaming them with a `.corrupt-<timestamp>` suffix so the next startup
+can create a fresh database. With `--github-issue --yes`, doctor uses the GitHub
+CLI to create the issue in `openclaw/openclaw`; without confirmation it writes
+the local support report and prints a prefilled issue URL.
+
+`restore` remains the lower-level undo operation. It uses manifest
+`sourcePath -> archivePath` records, moves archived artifacts back only when the
+original path is missing, reports conflicts when both paths exist, and leaves
+the SQLite database in place.
+
+### Downgrading After Session SQLite Migration
+
+Before starting an older file-backed OpenClaw version, restore the archived
+legacy transcript artifacts:
+
+```bash
+openclaw doctor --session-sqlite restore --session-sqlite-all-agents
+```
+
+Older versions read `sessions.json` entries and the `sessionFile` paths recorded
+in those entries. After the SQLite migration, successful imports move hot JSONL
+transcripts into `session-sqlite-import-archive/`, so the older runtime cannot
+see that history until restore moves those manifest-recorded artifacts back to
+their original paths.
+
+Restore does not delete SQLite data. Sessions created after the SQLite flip
+exist only in SQLite and will not appear to the older runtime. If you later
+upgrade again, run the normal migration validation sequence above so OpenClaw can
+compare restored legacy artifacts with the SQLite rows before importing.
 
 ## Notes
 

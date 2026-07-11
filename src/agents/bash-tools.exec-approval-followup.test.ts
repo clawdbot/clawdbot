@@ -16,8 +16,7 @@ vi.mock("../infra/outbound/message.js", () => ({
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
-import { writeSessionStoreForTest } from "../config/sessions/test-helpers.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import {
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -33,20 +32,34 @@ import { callGatewayTool } from "./tools/gateway.js";
 
 const tempStoreDirs: string[] = [];
 
-// Seed the same JSON session store path the runtime reads; mocking this
-// boundary would hide stale-session regressions in shared workers.
-function writeTempSessionStore(entries: Record<string, { sessionId: string }>): string {
+// Seed the same session store path the runtime reads; mocking this boundary
+// would hide stale-session regressions in shared workers.
+async function writeTempSessionStore(
+  entries: Record<string, { sessionId: string }>,
+): Promise<string> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "exec-approval-followup-store-"));
   tempStoreDirs.push(dir);
   const storePath = path.join(dir, "sessions.json");
-  writeSessionStoreForTest(storePath, entries);
+  await Promise.all(
+    Object.entries(entries).map(([sessionKey, entry]) =>
+      replaceSessionEntry(
+        {
+          storePath,
+          sessionKey,
+        },
+        {
+          sessionId: entry.sessionId,
+          updatedAt: Date.now(),
+        },
+      ),
+    ),
+  );
   return storePath;
 }
 
 afterEach(() => {
   vi.resetAllMocks();
   resetDiagnosticEventsForTest();
-  clearSessionStoreCacheForTest();
   while (tempStoreDirs.length > 0) {
     const dir = tempStoreDirs.pop();
     if (dir) {
@@ -175,7 +188,7 @@ describe("exec approval followup", () => {
   });
 
   it("drops a denied direct followup when the session key was rebound by /new or /reset", async () => {
-    const sessionStore = writeTempSessionStore({
+    const sessionStore = await writeTempSessionStore({
       "agent:main:main": { sessionId: "session-after-reset" },
     });
     const diagnostics: DiagnosticEventPayload[] = [];
@@ -209,7 +222,7 @@ describe("exec approval followup", () => {
   });
 
   it("delivers a denied direct followup when the key still resolves to the approval-time session", async () => {
-    const sessionStore = writeTempSessionStore({
+    const sessionStore = await writeTempSessionStore({
       "agent:main:main": { sessionId: "session-original" },
     });
 
@@ -229,7 +242,7 @@ describe("exec approval followup", () => {
   });
 
   it("drops a non-denied direct fallback when the session key was rebound", async () => {
-    const sessionStore = writeTempSessionStore({
+    const sessionStore = await writeTempSessionStore({
       "agent:main:main": { sessionId: "session-after-reset" },
     });
     const diagnostics: DiagnosticEventPayload[] = [];

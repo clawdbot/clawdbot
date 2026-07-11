@@ -87,11 +87,15 @@ runtime surface.
 
 ## Sessions
 
-Session transcripts are stored as JSONL at:
+Session rows are stored in the per-agent SQLite database:
 
-- `~/.openclaw/agents/<agentId>/sessions/<SessionId>.jsonl`
+- `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
 
-The session ID is stable and chosen by OpenClaw. OpenClaw does not read session folders from other tools.
+Transcript JSONL files can still live under
+`~/.openclaw/agents/<agentId>/sessions/` as legacy migration inputs, deleted or
+reset archives, imports, exports, and support artifacts. Active agent history is
+stored in SQLite with the session rows. The session ID is stable and chosen by
+OpenClaw. OpenClaw does not read session folders from other tools.
 
 ## Steering while streaming
 

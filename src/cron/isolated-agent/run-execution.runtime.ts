@@ -15,7 +15,6 @@ export {
 } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 export { isCliProvider } from "../../agents/model-selection-cli.js";
 export { normalizeVerboseLevel } from "../../auto-reply/thinking.shared.js";
-export { resolveSessionTranscriptPath } from "../../config/sessions/paths.js";
 export { registerAgentRunContext } from "../../infra/agent-events.js";
 export { logWarn } from "../../logger.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";

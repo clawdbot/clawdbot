@@ -9,7 +9,13 @@ import {
 import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import * as memoryCoreHostRuntimeCoreModule from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import * as runtimeConfigSnapshotModule from "openclaw/plugin-sdk/runtime-config-snapshot";
-import * as sessionStoreRuntimeModule from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  listSessionEntries,
+  loadTranscriptEventsSync,
+  upsertSessionEntry,
+  type SessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
+import { appendSqliteSessionTranscriptEventForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   appendNarrativeEntry,
@@ -85,6 +91,40 @@ function expectLogIncludes(source: MockCallSource, text: string): void {
 
 function expectLogExcludes(source: MockCallSource, text: string): void {
   expect(logIncludes(source, text), `Expected log not to include ${text}`).toBe(false);
+}
+
+async function seedSessionStore(
+  storePath: string,
+  entries: Record<string, SessionEntry>,
+): Promise<void> {
+  for (const [sessionKey, entry] of Object.entries(entries)) {
+    await upsertSessionEntry({ storePath, sessionKey, entry });
+  }
+}
+
+function readSessionStoreEntries(storePath: string): Record<string, SessionEntry> {
+  return Object.fromEntries(
+    listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+  );
+}
+
+async function seedDreamingTranscriptEvent(params: {
+  sessionId: string;
+  storePath: string;
+  timestampMs: number;
+  runId?: string;
+}): Promise<void> {
+  await appendSqliteSessionTranscriptEventForTest({
+    agentId: "main",
+    sessionId: params.sessionId,
+    sessionKey: `agent:main:dreaming-narrative-fixture:${params.sessionId}`,
+    storePath: params.storePath,
+    event: {
+      type: "metadata",
+      timestamp: params.timestampMs,
+      runId: params.runId ?? `dreaming-narrative-${params.sessionId}`,
+    },
+  });
 }
 
 async function flushNarrativeSettleTimers<T>(operation: Promise<T>): Promise<T> {
@@ -1223,28 +1263,38 @@ describe("generateAndAppendDreamNarrative", () => {
     const livePath = path.join(sessionsDir, "still-live.jsonl");
     const normalTranscriptPath = path.join(sessionsDir, "normal-user-session.jsonl");
     const updatedAt = Date.now();
-    await sessionStoreRuntimeModule.saveSessionStore(
-      storePath,
-      {
-        "agent:main:dreaming-narrative-light-1": {
-          sessionId: "missing",
-          updatedAt,
-        },
-        "agent:main:kept-session": {
-          sessionId: "still-live",
-          updatedAt,
-        },
-        "agent:main:telegram:group:dreaming-narrative-room": {
-          sessionId: "still-missing-non-dreaming",
-          updatedAt,
-        },
-        "agent:main:dreaming-narrative-corrupt-normal": {
-          sessionId: "normal-user-session",
-          updatedAt,
-        },
+    await seedSessionStore(storePath, {
+      "agent:main:dreaming-narrative-light-1": {
+        sessionId: "missing",
+        updatedAt,
       },
-      { skipMaintenance: true },
-    );
+      "agent:main:kept-session": {
+        sessionId: "still-live",
+        sessionFile: livePath,
+        updatedAt,
+      },
+      "agent:main:telegram:group:dreaming-narrative-room": {
+        sessionId: "still-missing-non-dreaming",
+        updatedAt,
+      },
+      "agent:main:dreaming-narrative-corrupt-normal": {
+        sessionId: "normal-user-session",
+        sessionFile: normalTranscriptPath,
+        updatedAt,
+      },
+    });
+    await seedDreamingTranscriptEvent({
+      sessionId: "orphan",
+      storePath,
+      timestampMs: Date.now() - 600_000,
+      runId: "dreaming-narrative-light-123",
+    });
+    await seedDreamingTranscriptEvent({
+      sessionId: "still-live",
+      storePath,
+      timestampMs: Date.now(),
+      runId: "dreaming-narrative-light-keep",
+    });
     await fs.writeFile(orphanPath, '{"runId":"dreaming-narrative-light-123"}\n', "utf-8");
     await fs.writeFile(livePath, '{"runId":"dreaming-narrative-light-keep"}\n', "utf-8");
     await fs.writeFile(normalTranscriptPath, '{"runId":"ordinary-user-session"}\n', "utf-8");
@@ -1269,15 +1319,18 @@ describe("generateAndAppendDreamNarrative", () => {
       logger,
     });
 
-    const updatedStore = sessionStoreRuntimeModule.loadSessionStore(storePath, {
-      skipCache: true,
-    }) as Record<string, unknown>;
+    const updatedStore = readSessionStoreEntries(storePath) as Record<string, unknown>;
     expect(updatedStore).not.toHaveProperty("agent:main:dreaming-narrative-light-1");
     expect(updatedStore).not.toHaveProperty("agent:main:dreaming-narrative-corrupt-normal");
     expect(updatedStore).toHaveProperty("agent:main:kept-session");
     expect(updatedStore).toHaveProperty("agent:main:telegram:group:dreaming-narrative-room");
+    expect(loadTranscriptEventsSync({ agentId: "main", sessionId: "orphan", storePath })).toEqual(
+      [],
+    );
+    expect(
+      loadTranscriptEventsSync({ agentId: "main", sessionId: "still-live", storePath }),
+    ).not.toEqual([]);
     const sessionFiles = await fs.readdir(sessionsDir);
-    expect(sessionFiles.filter((file) => file.startsWith("orphan.jsonl.deleted."))).not.toEqual([]);
     expect(sessionFiles).toContain("still-live.jsonl");
     expect(sessionFiles).toContain("normal-user-session.jsonl");
     expectLogIncludes(logger.info, "dreaming cleanup scrubbed");
@@ -1296,24 +1349,35 @@ describe("generateAndAppendDreamNarrative", () => {
     // must be preserved.
     const liveTranscript = path.join(sessionsDir, "live-dreaming.jsonl");
     const updatedAt = Date.now();
-    await sessionStoreRuntimeModule.saveSessionStore(
-      storePath,
-      {
-        "agent:main:dreaming-narrative-deep-orphan": {
-          sessionId: "orphan-dreaming",
-          updatedAt,
-        },
-        "agent:main:dreaming-narrative-deep-live": {
-          sessionId: "live-dreaming",
-          updatedAt,
-        },
-        "agent:main:kept-session": {
-          sessionId: "still-live",
-          updatedAt,
-        },
+    await seedSessionStore(storePath, {
+      "agent:main:dreaming-narrative-deep-orphan": {
+        sessionId: "orphan-dreaming",
+        sessionFile: orphanTranscript,
+        updatedAt,
       },
-      { skipMaintenance: true },
-    );
+      "agent:main:dreaming-narrative-deep-live": {
+        sessionId: "live-dreaming",
+        sessionFile: liveTranscript,
+        updatedAt,
+      },
+      "agent:main:kept-session": {
+        sessionId: "still-live",
+        sessionFile: path.join(sessionsDir, "still-live.jsonl"),
+        updatedAt,
+      },
+    });
+    await seedDreamingTranscriptEvent({
+      sessionId: "orphan-dreaming",
+      storePath,
+      timestampMs: Date.now() - 600_000,
+      runId: "dreaming-narrative-deep-orphan",
+    });
+    await seedDreamingTranscriptEvent({
+      sessionId: "live-dreaming",
+      storePath,
+      timestampMs: Date.now(),
+      runId: "dreaming-narrative-deep-live",
+    });
     await fs.writeFile(orphanTranscript, '{"runId":"dreaming-narrative-deep-orphan"}\n', "utf-8");
     await fs.writeFile(liveTranscript, '{"runId":"dreaming-narrative-deep-live"}\n', "utf-8");
     await fs.writeFile(path.join(sessionsDir, "still-live.jsonl"), "{}\n", "utf-8");
@@ -1338,21 +1402,22 @@ describe("generateAndAppendDreamNarrative", () => {
       logger,
     });
 
-    const updatedStore = sessionStoreRuntimeModule.loadSessionStore(storePath, {
-      skipCache: true,
-    }) as Record<string, unknown>;
+    const updatedStore = readSessionStoreEntries(storePath) as Record<string, unknown>;
     // The aged orphan dreaming row is reclaimed even though its transcript existed.
     expect(updatedStore).not.toHaveProperty("agent:main:dreaming-narrative-deep-orphan");
     // The fresh dreaming row and the non-dreaming row survive.
     expect(updatedStore).toHaveProperty("agent:main:dreaming-narrative-deep-live");
     expect(updatedStore).toHaveProperty("agent:main:kept-session");
+    expect(
+      loadTranscriptEventsSync({ agentId: "main", sessionId: "orphan-dreaming", storePath }),
+    ).toEqual([]);
+    expect(
+      loadTranscriptEventsSync({ agentId: "main", sessionId: "live-dreaming", storePath }),
+    ).not.toEqual([]);
 
     const sessionFiles = await fs.readdir(sessionsDir);
-    // The orphan transcript is archived; the live transcript stays.
-    expect(
-      sessionFiles.filter((file) => file.startsWith("orphan-dreaming.jsonl.deleted.")),
-    ).not.toEqual([]);
-    expect(sessionFiles).not.toContain("orphan-dreaming.jsonl");
+    // SQLite transcript state is archived while legacy JSONL support files are left alone.
+    expect(sessionFiles).toContain("orphan-dreaming.jsonl");
     expect(sessionFiles).toContain("live-dreaming.jsonl");
     expectLogIncludes(logger.info, "dreaming cleanup scrubbed");
   });

@@ -124,6 +124,7 @@ export function resolveContextEngineBootstrapProjectionDecision(params: {
   expectedBinding: ReturnType<typeof buildContextEngineBinding>;
   projection: CodexContextEngineThreadBootstrapProjection;
   dynamicToolsFingerprint: string;
+  legacyDynamicToolsFingerprint?: string;
 }): { project: boolean; reason: string } {
   const bindingProjection = params.startupBinding?.contextEngine?.projection;
   if (!params.startupBinding?.threadId || !bindingProjection) {
@@ -144,6 +145,7 @@ export function resolveContextEngineBootstrapProjectionDecision(params: {
     !areCodexDynamicToolFingerprintsCompatible({
       previous: params.startupBinding.dynamicToolsFingerprint,
       next: params.dynamicToolsFingerprint,
+      nextLegacy: params.legacyDynamicToolsFingerprint,
     })
   ) {
     return { project: true, reason: "dynamic-tools-mismatch" };

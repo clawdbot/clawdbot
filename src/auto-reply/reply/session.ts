@@ -20,7 +20,7 @@ import {
 } from "../../config/sessions/lifecycle.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import { deriveSessionMetaPatch } from "../../config/sessions/metadata.js";
-import { resolveSessionTranscriptPath, resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveStorePath } from "../../config/sessions/paths.js";
 import { resolveResetPreservedSelection } from "../../config/sessions/reset-preserved-selection.js";
 import {
   evaluateSessionFreshness,
@@ -37,7 +37,10 @@ import {
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
-import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
+import {
+  isRecoverableTerminalSessionStatus,
+  recoverTerminalSessionEntryForVisibleTurn,
+} from "../../config/sessions/terminal-status.js";
 import {
   DEFAULT_RESET_TRIGGERS,
   type GroupKeyResolution,
@@ -174,21 +177,6 @@ function hasProviderOwnedSession(entry: SessionEntry | undefined): boolean {
   return Boolean(provider && getCliSessionBinding(entry, provider));
 }
 
-function isRecoverableTerminalSessionStatus(status: SessionEntry["status"] | undefined): boolean {
-  return status === "failed" || status === "timeout" || status === "killed";
-}
-
-function recoverTerminalSessionEntryForVisibleTurn(entry: SessionEntry): SessionEntry {
-  return {
-    ...entry,
-    status: undefined,
-    startedAt: undefined,
-    endedAt: undefined,
-    runtimeMs: undefined,
-    abortedLastRun: undefined,
-  };
-}
-
 export type SessionInitResult = {
   sessionCtx: TemplateContext;
   sessionEntry: SessionEntry;
@@ -211,9 +199,11 @@ export type SessionInitResult = {
 };
 
 export type InitSessionStateParams = {
+  abortSignal?: AbortSignal;
   cfg: OpenClawConfig;
   commandAuthorized: boolean;
   ctx: MsgContext;
+  expectedExistingSessionId?: string;
   requestedSessionId?: string;
   resumeRequestedSession?: boolean;
   signal?: AbortSignal;
@@ -634,6 +624,10 @@ async function initSessionStateAttemptLocked(
     Boolean(entry?.sessionId) &&
     typeof entry?.updatedAt === "number" &&
     Number.isFinite(entry.updatedAt);
+  const expectedExistingSessionId = params.expectedExistingSessionId?.trim() || undefined;
+  if (expectedExistingSessionId && entry?.sessionId !== expectedExistingSessionId) {
+    throw new Error(`session rebound for sessionKey: ${sessionKey}`);
+  }
   const requestedSessionId = params.requestedSessionId?.trim() || undefined;
   const requestedCurrentSession = Boolean(
     requestedSessionId && entry?.sessionId && entry.sessionId === requestedSessionId,
@@ -996,16 +990,9 @@ async function initSessionStateAttemptLocked(
   }
   const parentSessionKey = normalizeOptionalString(ctx.ParentSessionKey);
   const alreadyForked = sessionEntry.forkedFromParent === true;
-  const threadIdFromSessionKey = parseSessionThreadInfoFast(
-    sessionCtxForState.SessionKey ?? sessionKey,
-  ).threadId;
-  const fallbackSessionFile = !sessionEntry.sessionFile
-    ? resolveSessionTranscriptPath(
-        sessionEntry.sessionId,
-        agentId,
-        ctx.MessageThreadId ?? threadIdFromSessionKey,
-      )
-    : undefined;
+  if (params.abortSignal?.aborted === true) {
+    throw new Error("reply session initialization aborted");
+  }
   if (isNewSession) {
     sessionEntry.compactionCount = 0;
     sessionEntry.memoryFlushCompactionCount = undefined;
@@ -1050,7 +1037,6 @@ async function initSessionStateAttemptLocked(
     activeSessionKey: sessionKey,
     agentId,
     expectedRevision: initializationSnapshot.revision,
-    fallbackSessionFile,
     maintenanceConfig,
     onArchiveError: (error, sourcePath) => {
       log.warn(
@@ -1065,8 +1051,11 @@ async function initSessionStateAttemptLocked(
         entry: sessionEntry,
         warning,
       }),
-    prepareSessionEntry: async ({ readEntry, sessionEntry: entryToCommit }) =>
-      await prepareReplySessionParentFork({
+    prepareSessionEntry: async ({ readEntry, sessionEntry: entryToCommit }) => {
+      if (params.abortSignal?.aborted === true) {
+        throw new Error("reply session initialization aborted");
+      }
+      return await prepareReplySessionParentFork({
         agentId,
         alreadyForked,
         parentSessionKey,
@@ -1075,7 +1064,8 @@ async function initSessionStateAttemptLocked(
         sessionKey,
         storePath,
         warn: (message) => log.warn(message),
-      }),
+      });
+    },
     previousEntry: previousSessionEntry,
     retiredEntry: retiredLegacyMainDelivery,
     sessionEntry,

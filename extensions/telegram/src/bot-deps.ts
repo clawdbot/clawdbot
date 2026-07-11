@@ -23,7 +23,6 @@ import {
   resolveAmbientTranscriptWatermarkKey,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { loadSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { listSkillCommandsForAgents } from "openclaw/plugin-sdk/skill-commands-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
@@ -40,7 +39,6 @@ export type TelegramBotDeps = {
   resolveStorePath: typeof resolveStorePath;
   getSessionEntry?: typeof getSessionEntry;
   listSessionEntries?: typeof listSessionEntries;
-  loadSessionStore?: typeof loadSessionStore;
   readSessionUpdatedAt?: typeof readSessionUpdatedAt;
   readAmbientTranscriptWatermark?: typeof readAmbientTranscriptWatermark;
   resolveAmbientTranscriptWatermarkKey?: typeof resolveAmbientTranscriptWatermarkKey;
@@ -83,9 +81,6 @@ export const defaultTelegramBotDeps: TelegramBotDeps = {
   },
   get readChannelAllowFromStore() {
     return readChannelAllowFromStore;
-  },
-  get loadSessionStore() {
-    return loadSessionStore;
   },
   get readSessionUpdatedAt() {
     return readSessionUpdatedAt;

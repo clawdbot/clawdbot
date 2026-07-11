@@ -21,6 +21,7 @@ import {
 } from "../../logging/diagnostic-session-state.js";
 import { diagnosticLogger } from "../../logging/diagnostic.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../../shared/number-coercion.js";
 import {
   testing,
@@ -793,7 +794,7 @@ describe("embedded-agent runner run registry", () => {
     operation.setPhase("running");
     const recorder = createUserTurnTranscriptRecorder({
       input: { text: "visible group prompt", sender: { id: "user-42" } },
-      target: { transcriptPath: "/tmp/unused-session.jsonl" },
+      target: createTestUserTurnTranscriptTarget(),
     });
 
     const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(

@@ -12,6 +12,7 @@ import {
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { z } from "zod";
 import { createQaArtifactRunId } from "../../artifact-run-id.js";
 import {
@@ -481,7 +482,7 @@ function formatTelegramQaProgressDetails(details: string): string {
   if (sanitized.length <= TELEGRAM_QA_PROGRESS_DETAIL_LIMIT) {
     return sanitized;
   }
-  return `${sanitized.slice(0, TELEGRAM_QA_PROGRESS_DETAIL_LIMIT - 3).trimEnd()}...`;
+  return `${truncateUtf16Safe(sanitized, TELEGRAM_QA_PROGRESS_DETAIL_LIMIT - 3).trimEnd()}...`;
 }
 
 function resolveTelegramQaRuntimeEnv(env: NodeJS.ProcessEnv = process.env): TelegramQaRuntimeEnv {

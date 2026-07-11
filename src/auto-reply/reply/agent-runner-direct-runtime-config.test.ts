@@ -123,6 +123,8 @@ function createReplyOperation(): ReplyOperation {
     lastActivityAtMs: Date.now(),
     recordActivity: vi.fn(),
     setPhase: vi.fn(),
+    markWaitingForDeferredMaintenance: vi.fn(),
+    markDeferredMaintenanceWaitEnded: vi.fn(),
     updateSessionId: vi.fn(),
     hasOwnedSessionId: vi.fn(() => false),
     attachBackend: vi.fn(),

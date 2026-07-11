@@ -1,3 +1,4 @@
+import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
 /**
  * Shared types for preparing and executing CLI-backed agent runs.
  */
@@ -19,10 +20,7 @@ import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { CliBackendExecutionMode } from "../../plugins/cli-backend.types.js";
 import type { PluginHookChannelContext } from "../../plugins/hook-types.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
-import type {
-  PersistedUserTurnMessage,
-  UserTurnTranscriptRecorder,
-} from "../../sessions/user-turn-transcript.types.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import type { BootstrapContextMode } from "../bootstrap-files.js";
@@ -67,13 +65,16 @@ export type RunCliAgentParams = {
    * background answers and must not reuse or mutate normal agent sessions.
    */
   executionMode?: CliBackendExecutionMode;
-  suppressNextUserMessagePersistence?: boolean;
-  userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
-  onUserMessagePersisted?: (message: PersistedUserTurnMessage) => void | Promise<void>;
   /** Persist the successful CLI assistant reply into the OpenClaw session transcript. */
   persistAssistantTranscript?: boolean;
   /** Session store path used when assistant transcript persistence is enabled. */
   storePath?: string;
+  /** Canonical user-turn recorder shared with gateway/queue dispatch. */
+  userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
+  /** Skip current-turn user persistence when a retry/fallback already wrote it. */
+  suppressNextUserMessagePersistence?: boolean;
+  /** Notification fired after the current user turn has been accepted into the transcript. */
+  onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
   currentInboundEventKind?: InboundEventKind;
   currentInboundContext?: CurrentInboundPromptContext;
   inputProvenance?: InputProvenance;

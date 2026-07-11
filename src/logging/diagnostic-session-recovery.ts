@@ -7,6 +7,7 @@ import type {
 type DiagnosticSessionRecoverySkipReason =
   | "active_embedded_run"
   | "active_reply_work"
+  | "deferred_maintenance_wait"
   | "active_lane_task"
   | "already_in_flight"
   | "missing_session_ref"

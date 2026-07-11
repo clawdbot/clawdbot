@@ -11,11 +11,7 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
-import {
-  loadSessionStore,
-  resolveSessionStoreEntry,
-  resolveStorePath,
-} from "openclaw/plugin-sdk/session-store-runtime";
+import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { z } from "zod";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
@@ -484,19 +480,19 @@ export async function reclaimCurrentCodexSessionGeneration(params: {
     return plan.result;
   }
 
-  // Only a stale stable-key owner needs filesystem authority. Resolve it before
-  // the second mutation so session JSON work never runs inside SQLite's write transaction.
+  // Only a stale stable-key owner needs session-store authority. Resolve it before
+  // the second mutation so the session read never runs inside the binding write transaction.
   try {
     const storePath = resolveStorePath(params.config?.session?.store, {
       agentId: params.identity.agentId,
     });
-    const entry = resolveSessionStoreEntry({
-      store: loadSessionStore(storePath, {
-        skipCache: true,
-        hydrateSkillPromptRefs: false,
-      }),
+    const entry = getSessionEntry({
+      agentId: params.identity.agentId,
+      hydrateSkillPromptRefs: false,
+      readConsistency: "latest",
       sessionKey,
-    }).existing;
+      storePath,
+    });
     if (entry?.sessionId !== params.identity.sessionId) {
       return false;
     }

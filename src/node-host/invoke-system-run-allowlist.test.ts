@@ -4,12 +4,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-  resolveExecApprovalsFromFile,
-  resolvePlannedSegmentArgv,
-  type ExecCommandSegment,
-} from "../infra/exec-approvals.js";
+import { resolveExecApprovalsFromFile, type ExecCommandSegment } from "../infra/exec-approvals.js";
 import { planShellAuthorization } from "../infra/exec-authorization-plan.js";
+import { buildAuthorizedShellCommandFromPlan } from "../infra/exec-authorization-render.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
   evaluateSystemRunAllowlist,
@@ -265,6 +262,16 @@ describe("resolveSystemRunExecArgv", () => {
       const safeBinPolicy = resolveExecSafeBinRuntimePolicy({
         global: { safeBins: ["head"] },
       });
+      const segmentSatisfiedBy: ["safeBins"] = ["safeBins"];
+      const expectedCommand = buildAuthorizedShellCommandFromPlan({
+        plan: authorizationPlan,
+        mode: "safeBins",
+        segmentSatisfiedBy,
+      });
+      expect(expectedCommand.ok).toBe(true);
+      if (!expectedCommand.ok) {
+        throw new Error(expectedCommand.reason);
+      }
 
       const result = await resolveSystemRunExecArgv({
         plannedAllowlistArgv: undefined,
@@ -286,24 +293,15 @@ describe("resolveSystemRunExecArgv", () => {
         segments: authorizationPlan.groups.flatMap((group) =>
           group.candidates.map((candidate) => candidate.sourceSegment),
         ),
-        segmentSatisfiedBy: ["safeBins"],
+        segmentSatisfiedBy,
         authorizationPlan,
         cwd: undefined,
         env,
       });
 
-      const [candidate] = authorizationPlan.groups[0]?.candidates ?? [];
-      if (!candidate) {
-        throw new Error("expected a safe-bin authorization candidate");
-      }
-      const plannedArgv = resolvePlannedSegmentArgv(candidate.sourceSegment);
-      if (!plannedArgv) {
-        throw new Error("expected a safe-bin execution plan");
-      }
-
       expect(result).not.toBeNull();
       expect(result?.[0]).toBe("/bin/sh");
-      expect(result?.[2]).toBe(plannedArgv.join(" "));
+      expect(result?.[2]).toBe(expectedCommand.command);
     },
   );
 });

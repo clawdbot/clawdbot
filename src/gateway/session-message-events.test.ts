@@ -5,6 +5,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
+import {
+  loadTranscriptEvents,
+  persistSessionTranscriptTurn,
+} from "../config/sessions/session-accessor.js";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import * as transcriptEvents from "../sessions/transcript-events.js";
@@ -322,8 +326,21 @@ describe("session.message websocket events", () => {
         role: "assistant",
         content: [{ type: "text", text: "live websocket message" }],
       });
-      const transcript = await fs.readFile(appended.sessionFile, "utf-8");
-      expect(transcript).toContain('"live websocket message"');
+      await expect(
+        loadTranscriptEvents({
+          agentId: "main",
+          sessionId: "sess-main",
+          sessionKey: "agent:main:main",
+          storePath,
+        }),
+      ).resolves.toContainEqual(
+        expect.objectContaining({
+          message: expect.objectContaining({
+            content: [{ type: "text", text: "live websocket message" }],
+          }),
+          type: "message",
+        }),
+      );
     } finally {
       emitSpy.mockRestore();
     }
@@ -577,7 +594,6 @@ describe("session.message websocket events", () => {
       },
       storePath,
     });
-    const transcriptPath = path.join(path.dirname(storePath), "sess-main.jsonl");
     const transcriptMessage = {
       role: "assistant",
       content: [{ type: "text", text: "usage snapshot" }],
@@ -592,20 +608,24 @@ describe("session.message websocket events", () => {
       },
       timestamp: Date.now(),
     };
-    await fs.writeFile(
-      transcriptPath,
-      [
-        JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
-        JSON.stringify({ id: "msg-usage", message: transcriptMessage }),
-      ].join("\n"),
-      "utf-8",
+    const turn = await persistSessionTranscriptTurn(
+      {
+        agentId: "main",
+        sessionId: "sess-main",
+        sessionKey: "agent:main:main",
+        storePath,
+      },
+      {
+        messages: [{ message: transcriptMessage }],
+        updateMode: "none",
+      },
     );
 
     await withOperatorSessionSubscriber(async (ws) => {
       const { messageEvent } = await emitTranscriptUpdateAndCollectMessageEvent({
         ws,
         sessionKey: "agent:main:main",
-        sessionFile: transcriptPath,
+        sessionFile: turn.sessionFile,
         message: transcriptMessage,
         messageId: "msg-usage",
       });
@@ -661,12 +681,10 @@ describe("session.message websocket events", () => {
 
   test("derives message sequence for selected-session transcript subscribers", async () => {
     const storePath = await createSessionStoreFile();
-    const transcriptPath = path.join(path.dirname(storePath), "selected-session.jsonl");
     await writeSessionStore({
       entries: {
         main: {
           sessionId: "sess-main",
-          sessionFile: transcriptPath,
           updatedAt: Date.now(),
         },
       },
@@ -677,13 +695,17 @@ describe("session.message websocket events", () => {
       content: [{ type: "text", text: "early selected prompt" }],
       timestamp: Date.now(),
     };
-    await fs.writeFile(
-      transcriptPath,
-      [
-        JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
-        JSON.stringify({ id: "msg-selected", message: transcriptMessage }),
-      ].join("\n"),
-      "utf-8",
+    const turn = await persistSessionTranscriptTurn(
+      {
+        agentId: "main",
+        sessionId: "sess-main",
+        sessionKey: "agent:main:main",
+        storePath,
+      },
+      {
+        messages: [{ message: transcriptMessage }],
+        updateMode: "none",
+      },
     );
 
     const ws = await harness.openWs();
@@ -697,7 +719,7 @@ describe("session.message websocket events", () => {
 
       const messageEventPromise = waitForSessionMessageEvent(ws, "agent:main:main");
       emitSessionTranscriptUpdate({
-        sessionFile: transcriptPath,
+        sessionFile: turn.sessionFile,
         sessionKey: "agent:main:main",
         message: transcriptMessage,
         messageId: "msg-selected",
@@ -1188,50 +1210,45 @@ describe("session.message websocket events", () => {
     }
   });
 
-  test("routes transcript-only updates to the freshest session owner when different sessionIds share a transcript path", async () => {
+  test("routes transcript-only SQLite marker updates to the matching session owner", async () => {
     const storePath = await createSessionStoreFile();
-    const transcriptPath = path.join(path.dirname(storePath), "shared.jsonl");
     await writeSessionStore({
       entries: {
         older: {
           sessionId: "sess-old",
-          sessionFile: transcriptPath,
           updatedAt: Date.now(),
         },
         newer: {
           sessionId: "sess-new",
-          sessionFile: transcriptPath,
           updatedAt: Date.now() + 10,
         },
       },
       storePath,
     });
-    await fs.writeFile(
-      transcriptPath,
-      [
-        JSON.stringify({ type: "session", version: 1, id: "sess-new" }),
-        JSON.stringify({
-          id: "msg-shared",
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "shared transcript update" }],
-            timestamp: Date.now(),
-          },
-        }),
-      ].join("\n"),
-      "utf-8",
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text: "shared transcript update" }],
+      timestamp: Date.now(),
+    };
+    const turn = await persistSessionTranscriptTurn(
+      {
+        agentId: "main",
+        sessionId: "sess-new",
+        sessionKey: "agent:main:newer",
+        storePath,
+      },
+      {
+        messages: [{ message }],
+        updateMode: "none",
+      },
     );
 
     await withOperatorSessionSubscriber(async (ws) => {
       const messageEventPromise = waitForSessionMessageEvent(ws, "agent:main:newer");
 
       emitSessionTranscriptUpdate({
-        sessionFile: transcriptPath,
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "shared transcript update" }],
-          timestamp: Date.now(),
-        },
+        sessionFile: turn.sessionFile,
+        message,
         messageId: "msg-shared",
       });
 

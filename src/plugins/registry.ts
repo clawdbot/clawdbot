@@ -3081,59 +3081,6 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         assertReservedSessionKeyOwned(params.sessionKey, params.action);
       }
     };
-    const assertStoreContainsOnlyOwnedProtectedSessions = (params: {
-      action: string;
-      after: Record<string, SessionEntry>;
-      before: Record<string, SessionEntry>;
-    }): void => {
-      // Whole-store replacement is not atomic with this read. Refuse it when
-      // the current store contains any locked row owned by another plugin.
-      for (const [sessionKey, entry] of Object.entries(params.before)) {
-        if (entry.modelSelectionLocked === true) {
-          assertLockedSessionEntryOwned(sessionKey, entry, params.action);
-        }
-      }
-      for (const [sessionKey, entry] of Object.entries(params.after)) {
-        assertStoreEntryOwned({
-          action: params.action,
-          before: params.before[sessionKey],
-          entry,
-          sessionKey,
-        });
-      }
-    };
-    const assertForeignLockedSessionsPreserved = (params: {
-      action: string;
-      after: Record<string, SessionEntry>;
-      before: Record<string, SessionEntry>;
-    }): void => {
-      const foreignBefore = new Map<string, { entry: SessionEntry; serialized: string }>();
-      for (const [sessionKey, entry] of Object.entries(params.before)) {
-        if (entry.modelSelectionLocked !== true) {
-          continue;
-        }
-        const registration = resolveHarnessRegistration(entry.agentHarnessId);
-        if (registration?.pluginId !== pluginId) {
-          foreignBefore.set(sessionKey, { entry, serialized: JSON.stringify(entry) });
-        }
-      }
-      for (const [sessionKey, protectedEntry] of foreignBefore) {
-        const { entry, serialized } = protectedEntry;
-        if (JSON.stringify(params.after[sessionKey]) !== serialized) {
-          assertLockedSessionEntryOwned(sessionKey, entry, params.action);
-        }
-      }
-      for (const [sessionKey, entry] of Object.entries(params.after)) {
-        if (foreignBefore.get(sessionKey)?.serialized !== JSON.stringify(entry)) {
-          assertStoreEntryOwned({
-            action: params.action,
-            before: params.before[sessionKey],
-            entry,
-            sessionKey,
-          });
-        }
-      }
-    };
     let scopedAgentRuntime: PluginRuntime["agent"] | undefined;
     const runtime = new Proxy(registryParams.runtime, {
       get(target, prop, receiver) {
@@ -3240,50 +3187,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
           }
           const agent: PluginRuntime["agent"] = getRuntimeProperty();
           const session = agent.session;
-          const saveSessionStore: typeof session.saveSessionStore = async (
-            storePath,
-            store,
-            options,
-          ) =>
-            await runWithPluginScope(async () => {
-              // Whole-store replacement cannot prove that a foreign row stayed current
-              // across the write lock, so keep it limited to rows this plugin owns.
-              const before = session.loadSessionStore(storePath, { clone: true });
-              assertStoreContainsOnlyOwnedProtectedSessions({
-                action: "save",
-                after: store,
-                before,
-              });
-              await session.saveSessionStore(storePath, store, options);
-            });
-          const updateSessionStore: typeof session.updateSessionStore = async (
-            storePath,
-            mutator,
-            options,
-          ) =>
-            await runWithPluginScope(
-              async () =>
-                await session.updateSessionStore(
-                  storePath,
-                  async (store) => {
-                    const before = structuredClone(store);
-                    const result = await mutator(store);
-                    assertForeignLockedSessionsPreserved({
-                      action: "update",
-                      before,
-                      after: store,
-                    });
-                    return result;
-                  },
-                  options,
-                ),
-            );
           const scopedSession = {
-            ...session,
-            loadSessionStore: (storePath, options) =>
-              runWithPluginScope(() =>
-                session.loadSessionStore(storePath, { ...options, clone: true }),
-              ),
+            resolveStorePath: session.resolveStorePath,
+            getSessionEntry: session.getSessionEntry,
+            listSessionEntries: session.listSessionEntries,
             createSessionEntry: async (params) =>
               await runWithPluginScope(async () => {
                 // Session ownership follows the registered harness capability,
@@ -3363,8 +3270,6 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   return await runWithPluginScope(() => run(signal));
                 });
               }),
-            saveSessionStore,
-            updateSessionStore,
             updateSessionStoreEntry: async (params) =>
               await runWithPluginScope(async () => {
                 assertStoredSessionEntryOwned({

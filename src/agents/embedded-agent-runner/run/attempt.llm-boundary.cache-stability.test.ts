@@ -23,12 +23,13 @@ import { streamOpenAICompletions, streamOpenAIResponses } from "@openclaw/ai/int
  */
 import { describe, expect, it } from "vitest";
 import { stripInboundMetadata } from "../../../auto-reply/reply/strip-inbound-meta.js";
+import { loadTranscriptEvents } from "../../../config/sessions/session-accessor.js";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
 import type { Context, Model } from "../../../llm/types.js";
 import {
-  appendUserTurnTranscriptMessage,
   createUserTurnTranscriptRecorder,
   mergePreparedUserTurnMessageForRuntime,
+  persistUserTurnTranscript,
   type UserTurnInput,
 } from "../../../sessions/user-turn-transcript.js";
 import { summarizeMessages } from "../../cache-trace.js";
@@ -371,7 +372,14 @@ describe("prompt-cache byte-identity (issue #3658)", () => {
 describe("append-only late media (issue #99495)", () => {
   it("keeps every sent fingerprint stable and appends one late-media turn", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-99495-boundary-"));
-    const transcriptPath = path.join(dir, "session.jsonl");
+    const target = {
+      agentId: "main",
+      cwd: dir,
+      sessionEntry: undefined,
+      sessionId: "session-99495",
+      sessionKey: "agent:main:cache-99495",
+      storePath: path.join(dir, "sessions.json"),
+    };
     const admittedInput = {
       text: "describe this",
       timestamp: TS_TURN1,
@@ -392,16 +400,13 @@ describe("append-only late media (issue #99495)", () => {
           markResolverStarted();
           return await mediaInput;
         },
-        target: { transcriptPath, sessionId: "session-99495", sessionKey: "main", cwd: dir },
+        target,
       });
       const persistence = recorder.persistFallback();
       await resolverStarted;
-      await appendUserTurnTranscriptMessage({
-        transcriptPath,
+      await persistUserTurnTranscript({
+        ...target,
         input: admittedInput,
-        sessionId: "session-99495",
-        sessionKey: "main",
-        cwd: dir,
       });
       recorder.markRuntimePersisted(recorder.message);
       const admittedRuntimeMessage = mergePreparedUserTurnMessageForRuntime({
@@ -415,11 +420,8 @@ describe("append-only late media (issue #99495)", () => {
         media: [{ path: path.join(dir, "image.png"), contentType: "image/png" }],
       });
       await persistence;
-      const persisted = fs
-        .readFileSync(transcriptPath, "utf8")
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line) as { message?: AgentMsg })
+      const persisted = (await loadTranscriptEvents(target))
+        .map((entry) => entry as { message?: AgentMsg })
         .flatMap((entry) => (entry.message ? [entry.message] : []));
       const next = normalizeMessagesForLlmBoundary(persisted, { timezone: TZ });
       const sentSummary = summarizeMessages(sent);
@@ -442,7 +444,13 @@ describe("append-only late media (issue #99495)", () => {
         timestamp: TS_TURN1,
         media: [{ path: "media://inbound/image.jpg", contentType: "image/jpeg" }],
       }),
-      target: { transcriptPath: "/unused/session.jsonl" },
+      target: {
+        agentId: "main",
+        sessionEntry: undefined,
+        sessionId: "unused-session",
+        sessionKey: "agent:main:unused",
+        storePath: "/tmp/openclaw-unused-sessions.json",
+      },
     });
     const resolved = await prepared.resolveMessage();
     const merged = mergePreparedUserTurnMessageForRuntime({

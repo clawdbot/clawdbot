@@ -62,6 +62,8 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-qmd", () => {
       sessionId: target.sessionId,
     }),
     sessionPathForFile: (filePath: string) => `sessions/${basename(filePath)}`,
+    sessionPathForSessionIdentity: (agentId: string, sessionId: string) =>
+      `sessions/${agentId}/${sessionId}`,
   };
 });
 
@@ -126,17 +128,17 @@ class SessionSyncYieldHarness extends MemoryManagerSyncOps {
     super();
   }
 
-  async syncTargetSessionFiles(files: string[]): Promise<void> {
+  async syncTargetArchiveFiles(files: string[]): Promise<void> {
     await (
       this as unknown as {
-        syncSessionFiles: (params: {
+        syncArchiveFiles: (params: {
           needsFullReindex: boolean;
-          targetSessionFiles: string[];
+          targetArchiveFiles: string[];
         }) => Promise<void>;
       }
-    ).syncSessionFiles({
+    ).syncArchiveFiles({
       needsFullReindex: false,
-      targetSessionFiles: files,
+      targetArchiveFiles: files,
     });
   }
 
@@ -217,7 +219,7 @@ describe("session sync responsiveness", () => {
       }
     });
 
-    await harness.syncTargetSessionFiles(files);
+    await harness.syncTargetArchiveFiles(files);
 
     expect(harness.indexedPaths).toHaveLength(files.length);
     expect(observedBeforeLastFile).toEqual([true]);

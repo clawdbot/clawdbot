@@ -3300,6 +3300,24 @@ describe("qa mock openai server", () => {
     expect(await secondFanout.text()).toContain('\\"label\\":\\"qa-fanout-beta\\"');
   });
 
+  it("does not delay native stop recovery follow-up prompts", async () => {
+    const server = await startMockServer();
+    const startedAt = Date.now();
+
+    const response = await postResponses(server, {
+      stream: false,
+      input: [
+        makeUserInput("Subagent recovery worker native command target proof. Wait until stopped."),
+        makeUserInput("Reply exactly: QA-NATIVE-STOP-RECOVERY-OK"),
+      ],
+    });
+
+    expect(response.status).toBe(200);
+    const payload = requireRecord(await response.json(), "native stop recovery response");
+    expect(JSON.stringify(payload)).toContain("QA-NATIVE-STOP-RECOVERY-OK");
+    expect(Date.now() - startedAt).toBeLessThan(10_000);
+  });
+
   it("keeps source discovery reports out of subagent handoff prose", async () => {
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",

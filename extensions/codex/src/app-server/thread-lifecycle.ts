@@ -1,5 +1,5 @@
 // Codex plugin module implements thread lifecycle behavior.
-import crypto from "node:crypto";
+import * as crypto from "node:crypto";
 import {
   buildSkillWorkshopPromptSection,
   embeddedAgentLog,
@@ -445,8 +445,12 @@ export async function startOrResumeThread(params: {
       ...params.timing,
       enabled: params.timing?.enabled ?? isCodexAppServerProfilerEnabled(params.params.config),
     });
+    const legacyDynamicToolsFingerprint = lifecycleTiming.measureSync(
+      "legacy-dynamic-tools-fingerprint",
+      () => legacyFingerprintDynamicTools(params.dynamicTools),
+    );
     const dynamicToolsFingerprint = lifecycleTiming.measureSync("dynamic-tools-fingerprint", () =>
-      fingerprintDynamicTools(params.dynamicTools),
+      hashDynamicToolFingerprint(legacyDynamicToolsFingerprint),
     );
     const dynamicToolsContainDeferred = flattenCodexDynamicToolFunctions(params.dynamicTools).some(
       (tool) => tool.deferLoading === true,
@@ -922,12 +926,13 @@ export async function startOrResumeThread(params: {
         !areDynamicToolFingerprintsCompatible(
           binding.dynamicToolsFingerprint,
           dynamicToolsFingerprint,
+          legacyDynamicToolsFingerprint,
         )
       ) {
         assertCodexBindingMayBeReplaced(binding, "changing the dynamic tool catalog");
         preserveExistingBinding = shouldStartTransientNoToolThread({
           previous: binding.dynamicToolsFingerprint,
-          next: dynamicToolsFingerprint,
+          nextHasDynamicTools: params.dynamicTools.length > 0,
         });
         if (preserveExistingBinding) {
           embeddedAgentLog.debug(
@@ -2849,17 +2854,30 @@ export function codexDynamicToolsFingerprint(dynamicTools: CodexDynamicToolSpec[
   return fingerprintDynamicTools(dynamicTools);
 }
 
+export function codexLegacyDynamicToolsFingerprint(dynamicTools: CodexDynamicToolSpec[]): string {
+  return legacyFingerprintDynamicTools(dynamicTools);
+}
+
 export function areCodexDynamicToolFingerprintsCompatible(params: {
   previous?: string;
   next: string;
+  nextLegacy?: string;
 }): boolean {
-  return areDynamicToolFingerprintsCompatible(params.previous, params.next);
+  return areDynamicToolFingerprintsCompatible(params.previous, params.next, params.nextLegacy);
 }
 
 function fingerprintDynamicTools(dynamicTools: CodexDynamicToolSpec[]): string {
+  return hashDynamicToolFingerprint(legacyFingerprintDynamicTools(dynamicTools));
+}
+
+function legacyFingerprintDynamicTools(dynamicTools: CodexDynamicToolSpec[]): string {
   return JSON.stringify(
     dynamicTools.map(fingerprintDynamicToolSpec).toSorted(compareJsonFingerprint),
   );
+}
+
+function hashDynamicToolFingerprint(canonical: string): string {
+  return "sha256:" + crypto.createHash("sha256").update(canonical).digest("hex");
 }
 
 function fingerprintUserMcpServersConfigPatch(
@@ -2959,20 +2977,34 @@ function readActiveCodexTurnIds(thread: unknown): string[] {
     .filter((turnId) => turnId.trim().length > 0);
 }
 
-const EMPTY_DYNAMIC_TOOLS_FINGERPRINT = JSON.stringify([]);
+const LEGACY_EMPTY_DYNAMIC_TOOLS_FINGERPRINT = legacyFingerprintDynamicTools([]);
+const EMPTY_DYNAMIC_TOOLS_FINGERPRINT = hashDynamicToolFingerprint(
+  LEGACY_EMPTY_DYNAMIC_TOOLS_FINGERPRINT,
+);
 
-function areDynamicToolFingerprintsCompatible(previous: string | undefined, next: string): boolean {
-  return !previous || previous === next;
+function areDynamicToolFingerprintsCompatible(
+  previous: string | undefined,
+  next: string,
+  nextLegacy?: string,
+): boolean {
+  return !previous || previous === next || previous === nextLegacy;
 }
 
 function shouldStartTransientNoToolThread(params: {
   previous: string | undefined;
-  next: string;
+  nextHasDynamicTools: boolean;
 }): boolean {
   return Boolean(
     params.previous &&
-    params.previous !== EMPTY_DYNAMIC_TOOLS_FINGERPRINT &&
-    params.next === EMPTY_DYNAMIC_TOOLS_FINGERPRINT,
+    !isEmptyDynamicToolsFingerprint(params.previous) &&
+    !params.nextHasDynamicTools,
+  );
+}
+
+function isEmptyDynamicToolsFingerprint(fingerprint: string): boolean {
+  return (
+    fingerprint === EMPTY_DYNAMIC_TOOLS_FINGERPRINT ||
+    fingerprint === LEGACY_EMPTY_DYNAMIC_TOOLS_FINGERPRINT
   );
 }
 

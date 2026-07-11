@@ -1,10 +1,10 @@
 // Tests get-reply behavior while probing an auto-fallback primary model.
-import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { ModelDefinitionConfig, OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { ThinkLevel } from "../thinking.js";
 import { withFastReplyConfig } from "./get-reply-fast-path.js";
 import {
@@ -147,11 +147,11 @@ function mockAutoFallbackSession(params: { modelSelectionLocked?: boolean } = {}
     modelOverrideFallbackOriginModel: "gpt-5.5",
     modelSelectionLocked: params.modelSelectionLocked,
   };
-  // Reply-turn admission re-reads the store from disk before starting work;
-  // seed a real per-test store so the guard sees the same session the mocks
-  // describe instead of depending on leftover host files.
+  // Reply-turn admission re-reads the canonical SQLite store before starting
+  // work; seed a real per-test store so the guard sees the same session the
+  // mocks describe instead of depending on leftover host state.
   const storePath = path.join(tempDirs.make("auto-fallback-store"), "sessions.json");
-  fs.writeFileSync(storePath, JSON.stringify({ [sessionKey]: sessionEntry }));
+  replaceSessionEntrySync({ storePath, sessionKey }, sessionEntry);
   mocks.initSessionState.mockResolvedValue(
     createGetReplySessionState({
       sessionKey,

@@ -16,8 +16,14 @@ import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import * as runtimeSnapshotModule from "../config/runtime-snapshot.js";
-import { loadSessionStore } from "../config/sessions/store-load.js";
+import {
+  listSessionEntries,
+  loadSessionEntry,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
+import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   emitAgentEvent,
@@ -77,10 +83,10 @@ vi.mock("../agents/auth-profiles/source-check.js", () => ({
   hasAnyAuthProfileStoreSource: vi.fn(() => false),
 }));
 
-vi.mock("../agents/command/session-store.runtime.js", () => {
+vi.mock("../agents/command/session-store.runtime.js", async () => {
+  const accessor = await import("../config/sessions/session-accessor.js");
   return {
-    loadSessionEntry: ({ storePath, sessionKey }: { storePath: string; sessionKey: string }) =>
-      loadSessionStore(storePath, { skipCache: true })[sessionKey],
+    loadSessionEntry: accessor.loadSessionEntry,
     updateSessionStoreAfterAgentRun: vi.fn(async () => undefined),
   };
 });
@@ -224,25 +230,6 @@ vi.mock("../agents/command/delivery.runtime.js", () => {
 });
 
 vi.mock("../config/sessions/transcript-resolve.runtime.js", () => {
-  const dirname = (filePath: string): string => {
-    const lastSlash = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"));
-    return lastSlash >= 0 ? filePath.slice(0, lastSlash) : ".";
-  };
-  const joinPath = (...parts: string[]): string => {
-    const separator = parts.some((part) => part.includes("\\")) ? "\\" : "/";
-    const normalizedParts: string[] = [];
-    for (const [index, part] of parts.entries()) {
-      const normalized =
-        index === 0 ? part.replace(/[\\/]+$/u, "") : part.replace(/^[\\/]+|[\\/]+$/gu, "");
-      if (normalized.length > 0) {
-        normalizedParts.push(normalized);
-      }
-    }
-    return normalizedParts.join(separator);
-  };
-  const resolveSessionFile = (sessionId: string, agentId: string, sessionsDir?: string): string =>
-    joinPath(sessionsDir ?? ".openclaw", "agents", agentId, "sessions", `${sessionId}.jsonl`);
-
   return {
     resolveSessionTranscriptFile: vi.fn(
       async (params: {
@@ -254,15 +241,11 @@ vi.mock("../config/sessions/transcript-resolve.runtime.js", () => {
         agentId: string;
         threadId?: string | number;
       }) => {
-        const sessionsDir = params.storePath ? dirname(params.storePath) : undefined;
-        const sessionFileFromStorePath =
+        const sessionFile =
           params.sessionEntry?.sessionFile ??
-          resolveSessionFile(params.sessionId, params.agentId, sessionsDir);
-        const sessionFile = params.sessionEntry?.sessionFile
-          ? sessionFileFromStorePath
-          : resolveSessionFile(params.sessionId, params.agentId, sessionsDir);
+          `sqlite:${params.agentId}:${params.sessionId}:${params.storePath ?? ""}`;
         let sessionEntry = params.sessionEntry;
-        if (params.sessionStore && params.storePath && params.sessionKey) {
+        if (params.sessionStore && params.sessionKey) {
           const existingEntry = params.sessionStore[params.sessionKey] ?? {};
           sessionEntry = {
             ...existingEntry,
@@ -270,7 +253,6 @@ vi.mock("../config/sessions/transcript-resolve.runtime.js", () => {
             sessionFile,
           };
           params.sessionStore[params.sessionKey] = sessionEntry;
-          fs.writeFileSync(params.storePath, JSON.stringify(params.sessionStore));
         }
         return { sessionFile, sessionEntry };
       },
@@ -314,12 +296,19 @@ function mockConfig(
   return cfg;
 }
 
-function writeSessionStoreSeed(
+async function writeSessionStoreSeed(
   storePath: string,
   sessions: Record<string, Record<string, unknown>>,
-) {
+): Promise<void> {
   fs.mkdirSync(path.dirname(storePath), { recursive: true });
-  fs.writeFileSync(storePath, JSON.stringify(sessions));
+  for (const [sessionKey, entry] of Object.entries(sessions)) {
+    const sessionId = typeof entry.sessionId === "string" ? entry.sessionId : sessionKey;
+    await replaceSessionEntry({ sessionKey, storePath }, {
+      ...entry,
+      sessionId,
+      updatedAt: typeof entry.updatedAt === "number" ? entry.updatedAt : Date.now(),
+    } as SessionEntry);
+  }
 }
 
 function createDefaultAgentResult(params?: {
@@ -347,7 +336,25 @@ function expectLastRunProviderModel(provider: string, model: string): void {
 }
 
 function readSessionStore<T>(storePath: string): Record<string, T> {
-  return JSON.parse(fs.readFileSync(storePath, "utf-8")) as Record<string, T>;
+  return Object.fromEntries(
+    listSessionEntries({ storePath }).map(({ entry, sessionKey }) => [sessionKey, entry as T]),
+  );
+}
+
+function expectSqliteSessionFileMarker(params: {
+  agentId: string;
+  sessionFile: string | undefined;
+  sessionId?: string;
+  storePath: string;
+}): void {
+  const marker = parseSqliteSessionFileMarker(params.sessionFile);
+  expect(marker?.agentId).toBe(params.agentId);
+  if (params.sessionId) {
+    expect(marker?.sessionId).toBe(params.sessionId);
+  } else {
+    expect(marker?.sessionId).toBeTruthy();
+  }
+  expect(marker?.storePath).toBe(path.resolve(params.storePath));
 }
 
 async function runAgentWithSessionKey(sessionKey: string): Promise<void> {
@@ -512,7 +519,7 @@ describe("agentCommand", () => {
       const store = path.join(home, "sessions.json");
       const sessionKey = "agent:main:harness:openclaw:supervision:existing";
       mockConfig(home, store);
-      writeSessionStoreSeed(store, {
+      await writeSessionStoreSeed(store, {
         [sessionKey]: {
           sessionId: "existing-harness-session",
           updatedAt: Date.now(),
@@ -541,7 +548,7 @@ describe("agentCommand", () => {
       const sessionKey = "agent:main:discord:channel:voice-1";
       const staleStartedAt = Date.now() - 2 * 24 * 60 * 60_000;
       mockConfig(home, store);
-      writeSessionStoreSeed(store, {
+      await writeSessionStoreSeed(store, {
         [sessionKey]: {
           sessionId: "stale-voice-session",
           updatedAt: staleStartedAt,
@@ -589,7 +596,7 @@ describe("agentCommand", () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
       mockConfig(home, store);
-      writeSessionStoreSeed(store, {
+      await writeSessionStoreSeed(store, {
         "agent:main:subagent:archived": {
           sessionId: "archived-session-id",
           archivedAt: Date.now(),
@@ -620,11 +627,11 @@ describe("agentCommand", () => {
       const sessionKey = "agent:main:subagent:archive-race";
       const sessionId = "archive-race-session-id";
       mockConfig(home, store);
-      writeSessionStoreSeed(store, {
+      await writeSessionStoreSeed(store, {
         [sessionKey]: { sessionId, updatedAt: Date.now() },
       });
       vi.mocked(ensureAgentWorkspace).mockImplementationOnce(async (params) => {
-        writeSessionStoreSeed(store, {
+        await writeSessionStoreSeed(store, {
           [sessionKey]: {
             sessionId,
             archivedAt: Date.now(),
@@ -656,7 +663,7 @@ describe("agentCommand", () => {
       const sessionKey = "agent:main:subagent:restore-race";
       const sessionId = "restore-race-session-id";
       mockConfig(home, store);
-      writeSessionStoreSeed(store, {
+      await writeSessionStoreSeed(store, {
         [sessionKey]: {
           sessionId,
           archivedAt: Date.now(),
@@ -664,7 +671,7 @@ describe("agentCommand", () => {
         },
       });
       vi.mocked(ensureAgentWorkspace).mockImplementationOnce(async (params) => {
-        writeSessionStoreSeed(store, {
+        await writeSessionStoreSeed(store, {
           [sessionKey]: { sessionId, updatedAt: Date.now() },
         });
         return { dir: params?.dir ?? "/tmp/openclaw-workspace" };
@@ -692,7 +699,7 @@ describe("agentCommand", () => {
       const sessionKey = "agent:main:subagent:in-band-lifecycle";
       const sessionId = "in-band-lifecycle-session-id";
       mockConfig(home, store);
-      writeSessionStoreSeed(store, {
+      await writeSessionStoreSeed(store, {
         [sessionKey]: { sessionId, updatedAt: Date.now() },
       });
       vi.mocked(runEmbeddedAgent).mockImplementationOnce(async () => {
@@ -725,7 +732,7 @@ describe("agentCommand", () => {
       const sessionKey = "agent:main:subagent:lifecycle-restart";
       const sessionId = "lifecycle-restart-session-id";
       mockConfig(home, store);
-      writeSessionStoreSeed(store, {
+      await writeSessionStoreSeed(store, {
         [sessionKey]: { sessionId, updatedAt: Date.now() },
       });
       let observedAbortReason: unknown;
@@ -771,7 +778,7 @@ describe("agentCommand", () => {
       const store = path.join(home, "sessions.json");
       const sessionKey = "agent:main:subagent:stale-request";
       mockConfig(home, store);
-      writeSessionStoreSeed(store, {
+      await writeSessionStoreSeed(store, {
         [sessionKey]: { sessionId: "current-session-id", updatedAt: Date.now() },
       });
 
@@ -859,10 +866,7 @@ describe("agentCommand", () => {
         runtime,
       );
 
-      const saved = JSON.parse(fs.readFileSync(store, "utf-8")) as Record<
-        string,
-        { thinkingLevel?: string; verboseLevel?: string }
-      >;
+      const saved = readSessionStore<{ thinkingLevel?: string; verboseLevel?: string }>(store);
       const entry = Object.values(saved)[0];
       expect(entry.thinkingLevel).toBe("high");
       expect(entry.verboseLevel).toBe("on");
@@ -1052,7 +1056,7 @@ describe("agentCommand", () => {
       const store = path.join(home, "sessions.json");
       const sessionKey = "agent:main:main";
       mockConfig(home, store, { models: {} });
-      writeSessionStoreSeed(store, {
+      await writeSessionStoreSeed(store, {
         [sessionKey]: {
           sessionId: "acp-backed-session",
           updatedAt: Date.now(),
@@ -1101,7 +1105,7 @@ describe("agentCommand", () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
       const sessionKey = "agent:main:cache-borrow";
-      writeSessionStoreSeed(store, {
+      await writeSessionStoreSeed(store, {
         [sessionKey]: {
           sessionId: "session-cache-borrow",
           updatedAt: Date.now(),
@@ -1121,10 +1125,10 @@ describe("agentCommand", () => {
         },
         runtime,
       );
-      const cached = loadSessionStore(store, { clone: false });
+      const cached = loadSessionEntry({ storePath: store, sessionKey, clone: false });
 
       expect(prepared.sessionStore).not.toBe(cached);
-      expect(prepared.sessionEntry).not.toBe(cached[sessionKey]);
+      expect(prepared.sessionEntry).not.toBe(cached);
       expect(prepared.sessionStore?.[sessionKey]).toBe(prepared.sessionEntry);
       expect(prepared.sessionStore?.["agent:main:other"]).toBeUndefined();
     });
@@ -1133,7 +1137,7 @@ describe("agentCommand", () => {
   it("passes resolved session-id resume files to embedded runs", async () => {
     await withTempHome(async (home) => {
       const resumeStore = path.join(home, "sessions-resume.json");
-      writeSessionStoreSeed(resumeStore, {
+      await writeSessionStoreSeed(resumeStore, {
         foo: {
           sessionId: "session-123",
           updatedAt: Date.now(),
@@ -1149,9 +1153,12 @@ describe("agentCommand", () => {
 
       const callArgs = getLastEmbeddedCall();
       expect(callArgs?.sessionId).toBe("session-123");
-      expect(callArgs?.sessionFile).toContain(
-        `${path.dirname(resumeStore)}${path.sep}agents${path.sep}main${path.sep}sessions${path.sep}session-123.jsonl`,
-      );
+      expectSqliteSessionFileMarker({
+        agentId: "main",
+        sessionFile: callArgs?.sessionFile,
+        sessionId: "session-123",
+        storePath: resumeStore,
+      });
     });
   });
 
@@ -1235,7 +1242,7 @@ describe("agentCommand", () => {
   it("probes the configured primary first for origin-backed auto session model overrides", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
-      writeSessionStoreSeed(store, {
+      await writeSessionStoreSeed(store, {
         "agent:main:subagent:test": {
           sessionId: "session-subagent",
           updatedAt: Date.now(),
@@ -1296,7 +1303,7 @@ describe("agentCommand", () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions-locked-model.json");
       const sessionKey = "agent:main:subagent:locked-model";
-      writeSessionStoreSeed(store, {
+      await writeSessionStoreSeed(store, {
         [sessionKey]: {
           sessionId: "session-locked-model",
           updatedAt: Date.now(),
@@ -1340,7 +1347,7 @@ describe("agentCommand", () => {
   it("clears legacy auto session model overrides without origin metadata", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions-legacy-auto-override.json");
-      writeSessionStoreSeed(store, {
+      await writeSessionStoreSeed(store, {
         "agent:main:subagent:legacy-auto": {
           sessionId: "session-legacy-auto",
           updatedAt: Date.now(),
@@ -1396,7 +1403,7 @@ describe("agentCommand", () => {
   it("does not repair locked legacy auto session model overrides", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions-locked-legacy-auto-override.json");
-      writeSessionStoreSeed(store, {
+      await writeSessionStoreSeed(store, {
         "agent:main:subagent:locked-legacy-auto": {
           sessionId: "session-locked-legacy-auto",
           updatedAt: Date.now(),
@@ -1457,7 +1464,7 @@ describe("agentCommand", () => {
   it("does not use fallback list for user session model overrides", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions-user-override.json");
-      writeSessionStoreSeed(store, {
+      await writeSessionStoreSeed(store, {
         "agent:main:subagent:user-override": {
           sessionId: "session-user-override",
           updatedAt: Date.now(),
@@ -1506,7 +1513,7 @@ describe("agentCommand", () => {
   it("clears disallowed stored override fields", async () => {
     await withTempHome(async (home) => {
       const clearStore = path.join(home, "sessions-clear-overrides.json");
-      writeSessionStoreSeed(clearStore, {
+      await writeSessionStoreSeed(clearStore, {
         "agent:main:subagent:clear-overrides": {
           sessionId: "session-clear-overrides",
           updatedAt: Date.now(),
@@ -1563,7 +1570,7 @@ describe("agentCommand", () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions-locked-disallowed-override.json");
       const sessionKey = "agent:main:subagent:locked-disallowed";
-      writeSessionStoreSeed(store, {
+      await writeSessionStoreSeed(store, {
         [sessionKey]: {
           sessionId: "session-locked-disallowed",
           updatedAt: Date.now(),
@@ -1610,7 +1617,7 @@ describe("agentCommand", () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions-locked-one-off-override.json");
       const sessionKey = "agent:main:subagent:locked-one-off";
-      writeSessionStoreSeed(store, {
+      await writeSessionStoreSeed(store, {
         [sessionKey]: {
           sessionId: "session-locked-one-off",
           updatedAt: Date.now(),
@@ -1675,7 +1682,7 @@ describe("agentCommand", () => {
       expect(saved["agent:main:subagent:run-override"]?.providerOverride).toBeUndefined();
       expect(saved["agent:main:subagent:run-override"]?.modelOverride).toBeUndefined();
 
-      writeSessionStoreSeed(store, {
+      await writeSessionStoreSeed(store, {
         "agent:main:subagent:temp-openai-run": {
           sessionId: "session-temp-openai-run",
           updatedAt: Date.now(),
@@ -1799,7 +1806,11 @@ describe("agentCommand", () => {
       );
       let callArgs = getLastEmbeddedCall();
       expect(callArgs?.sessionKey).toBe("agent:ops:main");
-      expect(callArgs?.sessionFile).toContain(`${path.sep}agents${path.sep}ops${path.sep}sessions`);
+      expectSqliteSessionFileMarker({
+        agentId: "ops",
+        sessionFile: callArgs?.sessionFile,
+        storePath: store,
+      });
       expect(callArgs?.messageChannel).toBe("slack");
       expect(runtime.log).toHaveBeenCalledWith("ok");
 
@@ -1907,7 +1918,11 @@ describe("agentCommand", () => {
       let callArgs = getLastEmbeddedCall();
       expect(callArgs?.agentId).toBe("ops");
       expect(callArgs?.sessionKey).toBe("agent:ops:incident-42");
-      expect(callArgs?.sessionFile).toContain(`${path.sep}agents${path.sep}ops${path.sep}sessions`);
+      expectSqliteSessionFileMarker({
+        agentId: "ops",
+        sessionFile: callArgs?.sessionFile,
+        storePath: store,
+      });
 
       await agentCommand({ message: "hi", agentId: "ops", sessionKey: "incident-42" }, runtime);
 
@@ -1920,7 +1935,11 @@ describe("agentCommand", () => {
       callArgs = getLastEmbeddedCall();
       expect(callArgs?.agentId).toBe("ops");
       expect(callArgs?.sessionKey).toBe("agent:ops:global");
-      expect(callArgs?.sessionFile).toContain(`${path.sep}agents${path.sep}ops${path.sep}sessions`);
+      expectSqliteSessionFileMarker({
+        agentId: "ops",
+        sessionFile: callArgs?.sessionFile,
+        storePath: store,
+      });
     });
   });
 
@@ -1928,7 +1947,7 @@ describe("agentCommand", () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
       const sessionKey = "agent:main:openclaw-weixin:direct:o9cq802hhmfc@im.wechat";
-      writeSessionStoreSeed(store, {
+      await writeSessionStoreSeed(store, {
         [sessionKey]: { sessionId: "wechat-session", updatedAt: Date.now() },
       });
       mockConfig(home, store, undefined, undefined, [{ id: "main" }, { id: "work" }]);
@@ -1944,7 +1963,7 @@ describe("agentCommand", () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
       const sessionKey = "agent:main:openclaw-weixin:direct:o9cq802hhmfc@im.wechat";
-      writeSessionStoreSeed(store, {
+      await writeSessionStoreSeed(store, {
         [sessionKey]: {
           sessionId: "wechat-session",
           updatedAt: Date.now(),
@@ -1993,14 +2012,22 @@ describe("agentCommand", () => {
       callArgs = getLastEmbeddedCall();
       expect(callArgs?.agentId).toBe("ops");
       expect(callArgs?.sessionKey).toBe("global");
-      expect(callArgs?.sessionFile).toContain(`${path.sep}agents${path.sep}ops${path.sep}sessions`);
+      expectSqliteSessionFileMarker({
+        agentId: "ops",
+        sessionFile: callArgs?.sessionFile,
+        storePath: store,
+      });
 
       await agentCommand({ message: "hi", sessionKey: "unknown" }, runtime);
 
       callArgs = getLastEmbeddedCall();
       expect(callArgs?.agentId).toBe("ops");
       expect(callArgs?.sessionKey).toBe("unknown");
-      expect(callArgs?.sessionFile).toContain(`${path.sep}agents${path.sep}ops${path.sep}sessions`);
+      expectSqliteSessionFileMarker({
+        agentId: "ops",
+        sessionFile: callArgs?.sessionFile,
+        storePath: store,
+      });
     });
   });
 });

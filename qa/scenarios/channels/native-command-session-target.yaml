@@ -70,7 +70,7 @@ flow:
             - lambda:
                 async: true
                 expr: "env.gateway.call('sessions.list', {}).then((result) => result.sessions?.find((session) => session.hasActiveRun === true))"
-            - expr: liveTurnTimeoutMs(env, 15000)
+            - expr: liveTurnTimeoutMs(env, 30000)
             - 100
         - set: startIndex
           value:
@@ -115,6 +115,6 @@ flow:
             textIncludes:
               expr: config.recoveryMarker
             timeoutMs:
-              expr: liveTurnTimeoutMs(env, 60000)
+              expr: liveTurnTimeoutMs(env, 90000)
           saveAs: recoveryReply
       detailsExpr: "`native command reply=${abortReply.text}; recovery reply=${recoveryReply.text}`"

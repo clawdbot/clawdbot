@@ -46,6 +46,7 @@ const CATALOGS: readonly AppleCatalogSpec[] = [
         "Message is empty.",
         "OpenClaw is not connected to a gateway yet.",
         "Send failed: %@",
+        "The shared image could not be prepared.",
       ],
       "apps/ios/Sources/Design/SettingsChannelsDestination.swift": ["Logout"],
       "apps/ios/Sources/Design/ChatProTab.swift": [

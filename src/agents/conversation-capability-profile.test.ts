@@ -2,6 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
@@ -182,29 +184,23 @@ describe("resolveConversationCapabilityProfile", () => {
     expect(profile.policy.explicitToolOverrideAllowlist).toEqual(["pdf"]);
   });
 
-  it("keeps inherited subagent grants out of explicit overrides", () => {
-    const storePath = path.join(
-      os.tmpdir(),
-      `openclaw-capability-profile-inherited-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
-    );
-    fs.writeFileSync(
-      storePath,
-      JSON.stringify({
-        "agent:main:subagent:limited": {
-          sessionId: "limited-session",
-          updatedAt: Date.now(),
-          spawnDepth: 1,
-          subagentRole: "orchestrator",
-          subagentControlScope: "children",
-          inheritedToolAllow: ["image_generate"],
-        },
-      }),
-    );
+  it("keeps inherited subagent grants out of explicit overrides", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-capability-profile-"));
+    const storePath = path.join(tempDir, "sessions.json");
+    const sessionKey = "agent:main:subagent:limited";
+    await replaceSessionEntry({ storePath, sessionKey }, {
+      sessionId: "limited-session",
+      updatedAt: Date.now(),
+      spawnDepth: 1,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+      inheritedToolAllow: ["image_generate"],
+    } as SessionEntry);
 
     try {
       const profile = resolveConversationCapabilityProfile({
         config: { session: { store: storePath } },
-        sessionKey: "agent:main:subagent:limited",
+        sessionKey,
         agentId: "main",
         modelProvider: "ollama",
         modelId: "qwen3.5:9b",
@@ -213,7 +209,7 @@ describe("resolveConversationCapabilityProfile", () => {
       expect(profile.policy.explicitToolAllowlist).toContain("image_generate");
       expect(profile.policy.explicitToolOverrideAllowlist).not.toContain("image_generate");
     } finally {
-      fs.rmSync(storePath, { force: true });
+      fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
 

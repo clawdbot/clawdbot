@@ -16,7 +16,7 @@ import { ensureAgentWorkspace } from "../../agents/workspace.js";
 import { normalizeThinkLevel, resolveThinkingProfile } from "../../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
-import { resolveSessionFilePath, resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveStorePath } from "../../config/sessions/paths.js";
 import {
   deleteSessionEntryLifecycle,
   listSessionEntries as listAccessorSessionEntries,
@@ -28,12 +28,7 @@ import {
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { normalizeResolvedMaintenanceConfigInput } from "../../config/sessions/store-maintenance.js";
-import {
-  loadSessionStore,
-  saveSessionStore,
-  updateSessionStore,
-  type ResolvedSessionMaintenanceConfigInput,
-} from "../../config/sessions/store.js";
+import type { ResolvedSessionMaintenanceConfigInput } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
   beginSessionWorkAdmission,
@@ -480,11 +475,7 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     patchSessionEntry,
     upsertSessionEntry,
     runWithWorkAdmission: runWithSessionWorkAdmission,
-    loadSessionStore,
-    saveSessionStore,
-    updateSessionStore,
     updateSessionStoreEntry,
-    resolveSessionFilePath,
   }));
 
   return agentRuntime as PluginRuntime["agent"];

@@ -6,6 +6,13 @@ import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  appendTranscriptMessage,
+  loadTranscriptEvents,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { buildSessionWriteLockModuleMock } from "../../test-utils/session-write-lock-module-mock.js";
 
 const acquireSessionWriteLockReleaseMock = vi.hoisted(() => vi.fn(async () => {}));
@@ -140,13 +147,6 @@ function requireValue<T>(value: T | undefined, label: string): T {
   // Fail with a labeled invariant instead of letting optional entries produce
   // weak assertions later in transcript-branch tests.
   if (value === undefined) {
-    throw new Error(`expected ${label}`);
-  }
-  return value;
-}
-
-function requireString(value: string | undefined, label: string): string {
-  if (!value) {
     throw new Error(`expected ${label}`);
   }
   return value;
@@ -324,42 +324,48 @@ describe("rewriteTranscriptEntriesInRuntimeTranscript", () => {
   it("rewrites runtime transcripts through scoped session identity", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-rewrite-runtime-"));
     const storePath = path.join(dir, "sessions.json");
-    const sessionManager = SessionManager.create(dir, dir);
-    const entryIds = appendSessionMessages(sessionManager, [
-      asAppendMessage({
+    const sessionId = "runtime-sqlite-rewrite";
+    const sessionFile = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId,
+      storePath,
+    });
+    const scope = {
+      agentId: "main",
+      sessionId,
+      sessionKey: "agent:main:test",
+      storePath,
+    };
+    await replaceSessionEntry({ sessionKey: "agent:main:test", storePath }, {
+      sessionFile,
+      sessionId,
+      updatedAt: 10,
+    } as SessionEntry);
+    await appendTranscriptMessage(scope, {
+      message: {
         role: "user",
         content: "run tool",
         timestamp: 1,
-      }),
-      asAppendMessage({
+      },
+    });
+    const toolResult = await appendTranscriptMessage(scope, {
+      message: {
         role: "toolResult",
         toolCallId: "call_1",
         toolName: "exec",
         content: createTextContent("before rewrite"),
         isError: false,
         timestamp: 2,
-      }),
-      asAppendMessage({
+      },
+    });
+    await appendTranscriptMessage(scope, {
+      message: {
         role: "assistant",
         content: createTextContent("summarized"),
         timestamp: 3,
-      }),
-    ]);
-    const sessionFile = requireString(sessionManager.getSessionFile(), "persisted session file");
-    const resolvedSessionFile = await fs.realpath(sessionFile);
-    const sessionId = path.basename(sessionFile, ".jsonl");
-    await fs.writeFile(
-      storePath,
-      JSON.stringify({
-        "agent:main:test": {
-          sessionFile,
-          sessionId,
-          updatedAt: 10,
-        },
-      }),
-      "utf8",
-    );
-    const toolResultEntryId = entryIds[1];
+      },
+    });
+    const toolResultEntryId = toolResult.messageId;
     const listener = vi.fn();
     const cleanup = onSessionTranscriptUpdate(listener);
 
@@ -382,16 +388,10 @@ describe("rewriteTranscriptEntriesInRuntimeTranscript", () => {
       });
 
       expect(result.changed).toBe(true);
-      expect(acquireSessionWriteLockMock).toHaveBeenCalledWith({
-        sessionFile: resolvedSessionFile,
-        staleMs: 1_800_000,
-        timeoutMs: 60_000,
-        maxHoldMs: 300_000,
-      });
-      expect(acquireSessionWriteLockReleaseMock).toHaveBeenCalledTimes(1);
+      expect(acquireSessionWriteLockMock).not.toHaveBeenCalled();
+      expect(acquireSessionWriteLockReleaseMock).not.toHaveBeenCalled();
       expect(listener).toHaveBeenCalledWith({
         agentId: "main",
-        sessionFile: resolvedSessionFile,
         sessionId,
         sessionKey: "agent:main:test",
         target: {
@@ -401,8 +401,16 @@ describe("rewriteTranscriptEntriesInRuntimeTranscript", () => {
         },
       });
 
-      const rewrittenSession = SessionManager.open(sessionFile);
-      const branchMessages = getBranchMessages(rewrittenSession);
+      const branchMessages = (await loadTranscriptEvents(scope))
+        .filter(
+          (entry): entry is { message: AgentMessage; type: "message" } =>
+            typeof entry === "object" &&
+            entry !== null &&
+            "message" in entry &&
+            "type" in entry &&
+            entry.type === "message",
+        )
+        .map((entry) => entry.message);
       expect(branchMessages.map((message) => message.role)).toEqual([
         "user",
         "toolResult",

@@ -77,6 +77,18 @@ afterEach(async () => {
 });
 
 describe("repairSessionFileIfNeeded", () => {
+  it("skips SQLite transcript markers instead of treating them as file paths", async () => {
+    const result = await repairSessionFileIfNeeded({
+      sessionFile: "sqlite:main:session-1:/tmp/openclaw/sessions.json",
+    });
+
+    expect(result).toEqual({
+      repaired: false,
+      droppedLines: 0,
+      reason: "sqlite transcript",
+    });
+  });
+
   it("rewrites session files that contain malformed lines", async () => {
     const { file } = await createTempSessionPath();
     const { header, message } = buildSessionHeaderAndMessage();

@@ -6,7 +6,10 @@ import type {
   CodexBundleMcpThreadConfig,
   LoadCodexBundleMcpThreadConfigParams,
 } from "../agents/codex-mcp-config.types.js";
-import type { EmbeddedRunAttemptResult } from "../agents/embedded-agent-runner/run/types.js";
+import type {
+  EmbeddedRunAttemptParams as CoreEmbeddedRunAttemptParams,
+  EmbeddedRunAttemptResult,
+} from "../agents/embedded-agent-runner/run/types.js";
 import {
   abortAndDrainEmbeddedAgentRun,
   abortEmbeddedAgentRun,
@@ -58,10 +61,8 @@ export type {
   AgentHarnessUserInputPromptOptions,
   AgentHarnessUserInputQuestion,
 } from "../agents/harness/user-input-bridge.js";
-export type {
-  EmbeddedRunAttemptParams,
-  EmbeddedRunAttemptResult,
-} from "../agents/embedded-agent-runner/run/types.js";
+export type EmbeddedRunAttemptParams = Omit<CoreEmbeddedRunAttemptParams, "trajectoryRecorder">;
+export type { EmbeddedRunAttemptResult };
 export type {
   ContextEngine as HarnessContextEngine,
   ContextEngineHostCapability,
@@ -301,18 +302,6 @@ export {
   resolveSessionWriteLockOptions,
   type SessionWriteLockAcquireTimeoutConfig,
 } from "../agents/session-write-lock.js";
-/**
- * @deprecated Use appendSessionTranscriptMessageByIdentity from
- * openclaw/plugin-sdk/session-transcript-runtime so transcript writes target a
- * session identity instead of an active JSONL transcript file.
- */
-export { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
-/**
- * @deprecated Use publishSessionTranscriptUpdateByIdentity from
- * openclaw/plugin-sdk/session-transcript-runtime so transcript updates target
- * a session identity instead of an active JSONL transcript file.
- */
-export { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 export {
   consumeAdjustedParamsForToolCall,
   consumePreExecutionBlockedToolCall,

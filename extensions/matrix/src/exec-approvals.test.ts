@@ -3,7 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   getMatrixExecApprovalApprovers,
@@ -24,6 +25,7 @@ type MatrixExecApprovalRequest = Parameters<
 >[0]["request"];
 
 afterEach(() => {
+  closeOpenClawAgentDatabasesForTest();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -346,23 +348,28 @@ describe("matrix exec approvals", () => {
   it("scopes non-matrix turn sources to the stored matrix account", async () => {
     const tmpDir = createTempDir();
     const storePath = path.join(tmpDir, "sessions.json");
-    await saveSessionStore(
+    await upsertSessionEntry({
       storePath,
-      {
-        "agent:ops-agent:matrix:channel:!room:example.org": {
-          sessionId: "main",
-          updatedAt: 1,
-          origin: {
-            provider: "matrix",
-            accountId: "ops",
-          },
-          lastChannel: "slack",
-          lastTo: "channel:C999",
-          lastAccountId: "work",
+      sessionKey: "agent:ops-agent:matrix:channel:!room:example.org",
+      entry: {
+        sessionId: "main",
+        updatedAt: 1,
+        origin: {
+          provider: "matrix",
+          accountId: "ops",
+          to: "room:!room:example.org",
+          nativeChannelId: "!room:example.org",
         },
+        deliveryContext: {
+          channel: "matrix",
+          to: "room:!room:example.org",
+          accountId: "ops",
+        },
+        lastChannel: "slack",
+        lastTo: "channel:C999",
+        lastAccountId: "work",
       },
-      { skipMaintenance: true },
-    );
+    });
     const cfg = buildMultiAccountMatrixConfig({ sessionStorePath: storePath });
     const request = makeForeignChannelApprovalRequest({
       id: "req-3",

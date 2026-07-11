@@ -90,6 +90,33 @@ describe("projectAnthropicTools", () => {
     });
   });
 
+  it("quarantines Anthropic tools with non-finite numeric schema values", () => {
+    const projection = projectAnthropicTools(
+      [
+        {
+          name: "BadLimits",
+          description: "Read a numeric value",
+          parameters: {
+            type: "object",
+            properties: {
+              amount: { type: "number", maximum: Number.POSITIVE_INFINITY },
+            },
+          },
+        },
+        {
+          name: "Lookup",
+          description: "Lookup a value",
+          parameters: { type: "object", properties: {} },
+        },
+      ],
+      (name) => name.toLowerCase(),
+    );
+
+    expect(projection.tools).toHaveLength(1);
+    expect(projection.tools[0]?.wireName).toBe("lookup");
+    expect(projection.unavailableOriginalNames).toEqual(new Set(["BadLimits"]));
+  });
+
   it("does not rewrite instance data that resembles a tuple schema", () => {
     const tupleLikeValue = {
       items: ["first", "second"],

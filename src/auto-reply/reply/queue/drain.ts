@@ -322,22 +322,10 @@ function buildCollectTranscriptPrompt(items: FollowupRun[]): string {
 }
 
 function resolveFollowupTranscriptTarget(source: FollowupRun) {
-  const sessionKey = normalizeOptionalString(source.run.sessionKey);
-  const storePath = sessionKey
-    ? resolveStorePath(source.run.config.session?.store, {
-        agentId: source.run.agentId,
-      })
-    : undefined;
-  if (!sessionKey || !storePath) {
-    return {
-      transcriptPath: source.run.sessionFile,
-      sessionId: source.run.sessionId,
-      agentId: source.run.agentId,
-      sessionKey: source.run.sessionId,
-      cwd: source.run.cwd ?? source.run.workspaceDir,
-      config: source.run.config,
-    };
-  }
+  const sessionKey = normalizeOptionalString(source.run.sessionKey) ?? source.run.sessionId;
+  const storePath = resolveStorePath(source.run.config.session?.store, {
+    agentId: source.run.agentId,
+  });
   const sessionEntry = loadSessionEntry({
     storePath,
     sessionKey,

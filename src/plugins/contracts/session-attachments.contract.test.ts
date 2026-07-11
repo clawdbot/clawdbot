@@ -7,7 +7,8 @@ import {
   registerTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { withTempConfig } from "../../gateway/test-temp-config.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -91,14 +92,11 @@ async function writeSessionEntry(
   entry: TestSessionEntry = { deliveryContext: DEFAULT_TELEGRAM_ROUTE },
   key = MAIN_SESSION_KEY,
 ) {
-  await updateSessionStore(storePath, (store) => {
-    store[key] = {
-      sessionId: "session-id",
-      updatedAt: Date.now(),
-      ...entry,
-    } as unknown as SessionEntry;
-    return undefined;
-  });
+  await replaceSessionEntry({ storePath, sessionKey: key }, {
+    sessionId: "session-id",
+    updatedAt: Date.now(),
+    ...entry,
+  } as unknown as SessionEntry);
 }
 
 function mockSuccessfulAttachmentDelivery(messageId = "attachment-1") {

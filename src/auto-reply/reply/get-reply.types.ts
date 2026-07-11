@@ -12,6 +12,8 @@ export type ReplySessionBinding = {
 };
 
 type InternalReplySessionOptions = {
+  expectedExistingSessionId?: string;
+  onSessionPrepared?: (binding: ReplySessionBinding) => void;
   requestedSessionId?: string;
   resumeRequestedSession?: boolean;
   sessionPromptSourceReplyDeliveryMode?: GetReplyOptions["sourceReplyDeliveryMode"];

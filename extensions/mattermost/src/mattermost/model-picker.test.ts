@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
 import {
@@ -215,37 +216,52 @@ describe("Mattermost model picker", () => {
     }
   });
 
-  it("resolves current and parent model overrides from targeted session entries", () => {
+  it("resolves current and parent model overrides from targeted session entries", async () => {
     const testDir = fs.mkdtempSync(path.join(os.tmpdir(), "mm-model-picker-"));
     try {
-      const storePath = path.join(testDir, "{agentId}.json");
-      const supportStorePath = path.join(testDir, "support.json");
+      const storePath = path.join(testDir, "agents", "{agentId}", "sessions", "sessions.json");
+      const supportStorePath = path.join(testDir, "agents", "support", "sessions", "sessions.json");
       const parentSessionKey = "agent:support:mattermost:default:channel-1";
       const childSessionKey = "agent:support:mattermost:default:child-with-explicit-parent";
       const directSessionKey = "agent:support:mattermost:default:direct-1";
-      fs.writeFileSync(
-        supportStorePath,
-        JSON.stringify(
-          {
-            [parentSessionKey]: {
-              providerOverride: "anthropic",
-              modelOverride: "claude-sonnet-4-5",
-              sessionId: "parent-session",
-            },
-            [childSessionKey]: {
-              parentSessionKey,
-              sessionId: "child-session",
-            },
-            [directSessionKey]: {
-              providerOverride: "openai",
-              modelOverride: "gpt-5",
-              sessionId: "direct-session",
-            },
-          },
-          null,
-          2,
-        ),
-      );
+      await upsertSessionEntry({
+        agentId: "support",
+        storePath: supportStorePath,
+        sessionKey: parentSessionKey,
+        entry: {
+          providerOverride: "anthropic",
+          modelOverride: "claude-sonnet-4-5",
+          chatType: "channel",
+          channel: "channel-1",
+          sessionId: "parent-session",
+          updatedAt: 1,
+        },
+      });
+      await upsertSessionEntry({
+        agentId: "support",
+        storePath: supportStorePath,
+        sessionKey: childSessionKey,
+        entry: {
+          parentSessionKey,
+          chatType: "channel",
+          channel: "child-with-explicit-parent",
+          sessionId: "child-session",
+          updatedAt: 2,
+        },
+      });
+      await upsertSessionEntry({
+        agentId: "support",
+        storePath: supportStorePath,
+        sessionKey: directSessionKey,
+        entry: {
+          providerOverride: "openai",
+          modelOverride: "gpt-5",
+          chatType: "channel",
+          channel: "direct-1",
+          sessionId: "direct-session",
+          updatedAt: 3,
+        },
+      });
       const cfg: OpenClawConfig = {
         session: {
           store: storePath,
@@ -260,6 +276,7 @@ describe("Mattermost model picker", () => {
             sessionKey: directSessionKey,
           },
           data,
+          readConsistency: "latest",
         }),
       ).toBe("openai/gpt-5");
       expect(
@@ -270,6 +287,7 @@ describe("Mattermost model picker", () => {
             sessionKey: childSessionKey,
           },
           data,
+          readConsistency: "latest",
         }),
       ).toBe("anthropic/claude-sonnet-4-5");
     } finally {

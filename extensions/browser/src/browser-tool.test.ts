@@ -523,6 +523,7 @@ describe("browser tool description", () => {
     expect(tool.description).toContain("Do not assume a profile name");
     expect(tool.description).not.toContain('profile="user"');
     expect(tool.description).toContain("omit timeoutMs on act:type");
+    expect(tool.description).toContain("act:evaluate supports timeoutMs");
     expect(tool.description).toContain("existing-session profiles");
     expect(tool.description).toContain("browser-automation skill");
     expect(tool.description).toContain("trigger ref with paths in the same upload call");
@@ -1895,6 +1896,32 @@ describe("browser tool act compatibility", () => {
     );
     const opts = lastMockCallArg<{ profile?: string }>(browserActionsMocks.browserAct, 2);
     expect(request).toEqual({ kind: "type", ref: "f1e3", text: "Test Title" });
+    expect(opts.profile).toBe("user");
+  });
+
+  it("injects configured action timeout for existing-session evaluate actions", async () => {
+    setResolvedBrowserProfiles({
+      user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
+    });
+    configMocks.loadConfig.mockReturnValue({ browser: { actionTimeoutMs: 45_000 } });
+
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "act",
+      profile: "user",
+      target: "host",
+      request: {
+        kind: "evaluate",
+        fn: "() => 1 + 1",
+      },
+    });
+
+    const request = lastMockCallArg<{ kind?: string; fn?: string; timeoutMs?: number }>(
+      browserActionsMocks.browserAct,
+      1,
+    );
+    const opts = lastMockCallArg<{ profile?: string }>(browserActionsMocks.browserAct, 2);
+    expect(request).toEqual({ kind: "evaluate", fn: "() => 1 + 1", timeoutMs: 45_000 });
     expect(opts.profile).toBe("user");
   });
 

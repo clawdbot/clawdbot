@@ -17,6 +17,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
@@ -1560,14 +1561,15 @@ async function createOrReuseAdoptedSession(params: {
           sessionKey: entry.key,
           config: params.config,
         });
-        const sessionFile = entry.entry.sessionFile?.trim();
-        if (!sessionFile) {
-          throw new Error("Codex supervision session creation did not produce a transcript file");
-        }
+        // Post-flip the mirror targets SQLite rows; resolve the agent's store
+        // path instead of trusting the legacy sessionFile locator marker.
+        const storePath = resolveStorePath(params.config.session?.store, {
+          agentId: entry.agentId,
+        });
         await importCodexThreadHistoryToTranscript({
           thread: params.sourceThread,
           throughTurnId: pendingLastTurnId ?? null,
-          sessionFile,
+          storePath,
           sessionId: entry.sessionId,
           sessionKey: entry.key,
           agentId: entry.agentId,

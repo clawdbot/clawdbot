@@ -1,12 +1,12 @@
 // Gateway agent integration tests cover channel routing, session context,
 // WebSocket requests, agent event delivery, and provider/runtime error handling.
-import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { AcpRuntimeError } from "../acp/runtime/errors.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
+import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
 import {
   createChannelTestPluginBase,
@@ -273,15 +273,17 @@ describe("gateway server agent", () => {
     if (!sessionStorePath) {
       throw new Error("expected session store path");
     }
-    const stored = JSON.parse(await fs.readFile(sessionStorePath, "utf-8")) as Record<
-      string,
-      {
-        cliSessionBindings?: Record<string, unknown>;
-        cliSessionIds?: Record<string, string>;
-        claudeCliSessionId?: string;
-      }
-    >;
-    expect(stored["agent:main:main"]?.cliSessionBindings).toEqual({
+    const stored = loadSessionEntry({
+      sessionKey: "agent:main:main",
+      storePath: sessionStorePath,
+    }) as
+      | {
+          cliSessionBindings?: Record<string, unknown>;
+          cliSessionIds?: Record<string, string>;
+          claudeCliSessionId?: string;
+        }
+      | undefined;
+    expect(stored?.cliSessionBindings).toEqual({
       "claude-cli": {
         sessionId: "cli-session-123",
         authProfileId: "anthropic:work",
@@ -289,10 +291,10 @@ describe("gateway server agent", () => {
         mcpResumeHash: "mcp-resume-hash",
       },
     });
-    expect(stored["agent:main:main"]?.cliSessionIds).toEqual({
+    expect(stored?.cliSessionIds).toEqual({
       "claude-cli": "cli-session-123",
     });
-    expect(stored["agent:main:main"]?.claudeCliSessionId).toBe("cli-session-123");
+    expect(stored?.claudeCliSessionId).toBe("cli-session-123");
   });
 
   test("agent accepts built-in channel alias (imsg)", async () => {
@@ -502,11 +504,8 @@ describe("gateway server agent", () => {
       expect(viaAgent.ok).toBe(false);
       expect(viaAgent.error?.message).toContain("missing scope: operator.admin");
 
-      const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-        string,
-        { sessionId?: string }
-      >;
-      expect(store["agent:main:main"]?.sessionId).toBe("sess-main-before-write-reset");
+      const stored = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
+      expect(stored?.sessionId).toBe("sess-main-before-write-reset");
       expect(vi.mocked(agentCommand)).not.toHaveBeenCalled();
 
       writeWs.close();

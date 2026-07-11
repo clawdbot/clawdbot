@@ -493,6 +493,12 @@ describe("hasCompletedBootstrapTurn", () => {
     expect(await hasCompletedBootstrapTurn(path.join(tmpDir, "missing.jsonl"))).toBe(false);
   });
 
+  it("returns false for SQLite transcript markers", async () => {
+    expect(
+      await hasCompletedBootstrapTurn("sqlite:main:session-1:/tmp/openclaw/sessions.json"),
+    ).toBe(false);
+  });
+
   it("returns false for empty session files", async () => {
     const sessionFile = path.join(tmpDir, "empty.jsonl");
     await fs.writeFile(sessionFile, "", "utf8");

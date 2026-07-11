@@ -2337,7 +2337,11 @@ const RUNNABLE_VITEST_CONFIG_TARGETS = new Set([
   ...Object.values(VITEST_CONFIG_BY_KIND),
   ...fullSuiteVitestShards.flatMap((shard) => [shard.config, ...shard.projects]),
 ]);
-const CHANNEL_CONTRACT_CONFIG_PATTERNS = new Map([
+// Duplicates the per-config pattern arrays in test/vitest/vitest.contracts-shared.ts
+// because this file must stay loader-free plain JS. Drift silently drops
+// contract files from lane routing, so test/scripts/test-projects.test.ts
+// asserts both enumerations stay identical.
+export const CHANNEL_CONTRACT_CONFIG_PATTERNS = new Map([
   [
     CONTRACTS_CHANNEL_SURFACE_VITEST_CONFIG,
     [

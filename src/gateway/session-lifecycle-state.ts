@@ -4,7 +4,8 @@ import {
   buildAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
-import { updateSessionStoreEntry, type SessionEntry } from "../config/sessions.js";
+import type { SessionEntry } from "../config/sessions.js";
+import { updateSessionEntry } from "../config/sessions/session-accessor.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import { loadSessionEntry } from "./session-utils.js";
@@ -290,13 +291,12 @@ export async function persistGatewaySessionLifecycleEvent(params: {
       : undefined;
 
   const exactCronRun = parseCronRunScopeSuffix(sessionEntry.canonicalKey).runId !== undefined;
-  await updateSessionStoreEntry({
-    storePath: sessionEntry.storePath,
-    sessionKey: sessionEntry.canonicalKey,
-    skipMaintenance: true,
-    takeCacheOwnership: true,
-    requireWriteSuccess: true,
-    update: async (entry) => {
+  await updateSessionEntry(
+    {
+      storePath: sessionEntry.storePath,
+      sessionKey: sessionEntry.canonicalKey,
+    },
+    async (entry) => {
       if (
         exactCronRun &&
         !acceptsCronRunContinuationLifecycleEvent({ entry, event: params.event })
@@ -317,5 +317,10 @@ export async function persistGatewaySessionLifecycleEvent(params: {
       });
       return Object.keys(patch).length > 0 ? patch : null;
     },
-  });
+    {
+      skipMaintenance: true,
+      takeCacheOwnership: true,
+      requireWriteSuccess: true,
+    },
+  );
 }

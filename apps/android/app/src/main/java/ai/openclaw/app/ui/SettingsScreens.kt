@@ -763,6 +763,7 @@ private fun NotificationSettingsScreen(
   onBack: () -> Unit,
 ) {
   val context = LocalContext.current
+  val lifecycleOwner = LocalLifecycleOwner.current
   val enabled by viewModel.notificationForwardingEnabled.collectAsState()
   val mode by viewModel.notificationForwardingMode.collectAsState()
   val packages by viewModel.notificationForwardingPackages.collectAsState()
@@ -785,6 +786,18 @@ private fun NotificationSettingsScreen(
       )
     }
   var listenerEnabled by remember { mutableStateOf(DeviceNotificationListenerService.isAccessEnabled(context)) }
+
+  DisposableEffect(lifecycleOwner, context) {
+    val observer =
+      LifecycleEventObserver { _, event ->
+        if (event == Lifecycle.Event.ON_RESUME) {
+          listenerEnabled = DeviceNotificationListenerService.isAccessEnabled(context)
+        }
+      }
+    lifecycleOwner.lifecycle.addObserver(observer)
+    onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+  }
+
   val notificationPermissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
       viewModel.setNotificationForwardingEnabled(granted)
@@ -827,7 +840,6 @@ private fun NotificationSettingsScreen(
         text = if (listenerEnabled) "Check Access" else "Open System Access",
         onClick = {
           openNotificationListenerSettings(context)
-          listenerEnabled = DeviceNotificationListenerService.isAccessEnabled(context)
         },
         modifier = Modifier.weight(1f),
       )

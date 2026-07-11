@@ -1116,6 +1116,159 @@ describe("doctor legacy state migrations", () => {
     }
   });
 
+  it("migrates legacy ACP metadata from retired custom-root agent stores", async () => {
+    const root = await makeTempRoot();
+    const customRoot = await makeTempRoot();
+    const legacySessionKey = "acp:binding:discord:default:feedface";
+    const sessionKey = "agent:ops:acp:binding:discord:default:feedface";
+    const storePath = path.join(customRoot, "agents", "ops", "sessions", "sessions.json");
+    const cfg: OpenClawConfig = {
+      session: {
+        store: path.join(customRoot, "agents", "{agentId}", "sessions", "sessions.json"),
+      },
+    };
+    writeJson5(storePath, {
+      [legacySessionKey]: {
+        sessionId: "sess-acp",
+        updatedAt: 100,
+        acp: {
+          backend: "acpx",
+          agent: "codex",
+          runtimeSessionName: "codex-discord",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: 123,
+        },
+      },
+    });
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    const result = await runLegacyStateMigrations({
+      detected,
+      config: cfg,
+      now: () => 456,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes.some((change) => change.includes("ACP session metadata"))).toBe(true);
+    const store = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<string, SessionEntry>;
+    expect(store[legacySessionKey]?.acp).toBeUndefined();
+
+    const sqlite = requireNodeSqlite();
+    const db = new sqlite.DatabaseSync(path.join(root, "state", "openclaw.sqlite"));
+    try {
+      const row = db
+        .prepare(
+          "SELECT backend, agent, runtime_session_name, mode, state, last_activity_at FROM acp_sessions WHERE session_key = ?",
+        )
+        .get(sessionKey) as
+        | {
+            backend: string;
+            agent: string;
+            runtime_session_name: string;
+            mode: string;
+            state: string;
+            last_activity_at: number | bigint;
+          }
+        | undefined;
+      expect(row).toMatchObject({
+        backend: "acpx",
+        agent: "codex",
+        runtime_session_name: "codex-discord",
+        mode: "persistent",
+        state: "idle",
+      });
+      expect(Number(row?.last_activity_at)).toBe(123);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("skips symlinked managed-agent ACP metadata stores", async () => {
+    const root = await makeTempRoot();
+    const outsideRoot = await makeTempRoot();
+    const sessionKey = "agent:main:acp:binding:discord:default:feedface";
+    const managedStorePath = path.join(root, "agents", "main", "sessions", "sessions.json");
+    const outsideStorePath = path.join(outsideRoot, "sessions.json");
+    writeJson5(outsideStorePath, {
+      [sessionKey]: {
+        sessionId: "sess-acp",
+        updatedAt: 100,
+        acp: {
+          backend: "acpx",
+          agent: "codex",
+          runtimeSessionName: "codex-discord",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: 123,
+        },
+      },
+    });
+    fs.mkdirSync(path.dirname(managedStorePath), { recursive: true });
+    fs.symlinkSync(outsideStorePath, managedStorePath);
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: {},
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    const result = await runLegacyStateMigrations({ detected });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes.some((change) => change.includes("ACP session metadata"))).toBe(false);
+    const outsideStore = JSON.parse(fs.readFileSync(outsideStorePath, "utf8")) as Record<
+      string,
+      SessionEntry
+    >;
+    expect(outsideStore[sessionKey]?.acp).toBeDefined();
+  });
+
+  it("skips symlinked custom agent-store ACP metadata stores", async () => {
+    const root = await makeTempRoot();
+    const customRoot = await makeTempRoot();
+    const outsideRoot = await makeTempRoot();
+    const sessionKey = "agent:main:acp:binding:discord:default:feedface";
+    const cfg: OpenClawConfig = {
+      session: {
+        store: path.join(customRoot, "agents", "{agentId}", "sessions", "sessions.json"),
+      },
+    };
+    const managedStorePath = path.join(customRoot, "agents", "main", "sessions", "sessions.json");
+    const outsideStorePath = path.join(outsideRoot, "sessions.json");
+    writeJson5(outsideStorePath, {
+      [sessionKey]: {
+        sessionId: "sess-acp",
+        updatedAt: 100,
+        acp: {
+          backend: "acpx",
+          agent: "codex",
+          runtimeSessionName: "codex-discord",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: 123,
+        },
+      },
+    });
+    fs.mkdirSync(path.dirname(managedStorePath), { recursive: true });
+    fs.symlinkSync(outsideStorePath, managedStorePath);
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    const result = await runLegacyStateMigrations({ detected, config: cfg });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes.some((change) => change.includes("ACP session metadata"))).toBe(false);
+    const outsideStore = JSON.parse(fs.readFileSync(outsideStorePath, "utf8")) as Record<
+      string,
+      SessionEntry
+    >;
+    expect(outsideStore[sessionKey]?.acp).toBeDefined();
+  });
+
   it("keeps shipped WhatsApp legacy group keys channel-qualified during migration", async () => {
     const root = await makeTempRoot();
     const cfg: OpenClawConfig = {};

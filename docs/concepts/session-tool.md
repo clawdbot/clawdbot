@@ -56,7 +56,7 @@ The returned view is intentionally bounded and safety-filtered:
 
 Both tools accept either a **session key** (like `"main"`) or a **session ID** from a previous list call.
 
-If you need the exact byte-for-byte transcript, inspect the transcript file on disk instead of treating `sessions_history` as a raw dump.
+If you need the exact raw transcript, inspect the scoped SQLite transcript rows instead of treating `sessions_history` as an unfiltered dump.
 
 ## Sending cross-session messages
 

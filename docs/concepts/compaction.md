@@ -104,10 +104,16 @@ Compaction summarization preserves opaque identifiers by default (`identifierPol
 
 ### Active transcript byte guard
 
-When `agents.defaults.compaction.maxActiveTranscriptBytes` is set, OpenClaw triggers normal local compaction before a run if the active JSONL reaches that size. This is useful for long-running sessions where provider-side context management may keep model context healthy while the local transcript keeps growing. It does not split raw JSONL bytes; it asks the normal compaction pipeline to create a semantic summary.
+When `agents.defaults.compaction.maxActiveTranscriptBytes` is set, OpenClaw
+triggers normal local compaction before a run if transcript history reaches
+that size. This is useful for long-running sessions where provider-side context
+management may keep model context healthy while persisted transcript history
+keeps growing. It does not split raw bytes; it asks the normal compaction
+pipeline to create a semantic summary.
 
 <Warning>
-The byte guard requires `truncateAfterCompaction: true`. Without transcript rotation, the active file would not shrink and the guard remains inactive.
+The byte guard applies to the active SQLite transcript history. Legacy JSONL
+checkpoint artifacts are not the active compaction target.
 </Warning>
 
 ### Successor transcripts

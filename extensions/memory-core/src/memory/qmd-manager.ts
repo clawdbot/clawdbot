@@ -1767,7 +1767,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   async sync(params?: MemorySyncParams): Promise<void> {
     if (
       params?.sessions?.some((session) => session.sessionId.trim().length > 0) ||
-      params?.sessionFiles?.some((sessionFile) => sessionFile.trim().length > 0)
+      params?.archiveFiles?.some((sessionFile) => sessionFile.trim().length > 0)
     ) {
       log.debug("qmd sync ignoring targeted session hint; running regular update");
     }
@@ -2872,6 +2872,8 @@ export class QmdMemoryManager implements MemorySearchManager {
       const entry = await buildSessionEntry(sessionFile, {
         generatedByDreamingNarrative: corpusEntry.generatedByDreamingNarrative === true,
         generatedByCronRun: corpusEntry.generatedByCronRun === true,
+        ...(corpusEntry.sessionKey ? { sessionKey: corpusEntry.sessionKey } : {}),
+        ...(corpusEntry.updatedAtMs !== undefined ? { updatedAtMs: corpusEntry.updatedAtMs } : {}),
       });
       if (!entry) {
         continue;
@@ -2879,7 +2881,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       if (cutoff && entry.mtimeMs < cutoff) {
         continue;
       }
-      const targetName = `${path.basename(sessionFile, ".jsonl")}.md`;
+      const targetName = `${this.sessionExportStem(corpusEntry)}.md`;
       const target = path.join(exportDir, targetName);
       tracked.add(sessionFile);
       const identity = this.buildSessionArtifactMapping(
@@ -2958,6 +2960,12 @@ export class QmdMemoryManager implements MemorySearchManager {
     };
   }
 
+  private sessionExportStem(corpusEntry: SessionTranscriptCorpusEntry): string {
+    return corpusEntry.transcriptSource === "sqlite"
+      ? corpusEntry.sessionId
+      : path.basename(corpusEntry.sessionFile, ".jsonl");
+  }
+
   private refreshSessionArtifactDocIds(): void {
     if (!this.sessionExporter) {
       return;
@@ -2973,7 +2981,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private renderSessionMarkdown(entry: SessionFileEntry): string {
-    const header = `# Session ${path.basename(entry.absPath, path.extname(entry.absPath))}`;
+    const header = `# Session ${path.basename(entry.path, path.extname(entry.path))}`;
     const body = entry.content?.trim().length ? entry.content.trim() : "(empty)";
     return `${header}\n\n${body}\n`;
   }

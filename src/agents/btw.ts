@@ -619,6 +619,7 @@ export async function runBtwSideQuestion(
       messages: await readBtwTranscriptMessages({
         sessionFile,
         sessionId,
+        sessionKey: params.sessionKey,
         snapshotLeafId: activeRunSnapshot?.transcriptLeafId,
       }),
       imageLimits,

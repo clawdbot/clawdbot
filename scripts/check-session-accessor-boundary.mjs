@@ -66,15 +66,7 @@ const sessionStoreRuntimeFileBackedCompatNames = new Set([
 ]);
 const embeddedAgentSessionFileRuntimeNames = new Set(["resolveSessionFilePath"]);
 
-export const allowedSessionStoreRuntimeFileBackedCompatExports = new Set([
-  "loadSessionStore",
-  "readLatestAssistantTextFromSessionTranscript",
-  "resolveAndPersistSessionFile",
-  "resolveSessionFilePath",
-  "resolveSessionStoreEntry",
-  "saveSessionStore",
-  "updateSessionStore",
-]);
+export const allowedSessionStoreRuntimeFileBackedCompatExports = new Set([]);
 
 export const migratedSessionAccessorFiles = new Set([
   "packages/memory-host-sdk/src/host/session-files.ts",

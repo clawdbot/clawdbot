@@ -1,7 +1,6 @@
 // Whatsapp helper module supports config behavior.
 export {
   evaluateSessionFreshness,
-  loadSessionStore,
   resolveSessionKey,
   resolveSessionResetPolicy,
   resolveSessionResetType,

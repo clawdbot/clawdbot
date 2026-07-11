@@ -268,15 +268,17 @@ export type SessionMaintenanceConfig = {
   /** @deprecated Ignored. Run `openclaw doctor --fix` to remove. */
   rotateBytes?: number | string;
   /**
-   * Retention for archived reset transcripts (`*.reset.<timestamp>`).
-   * Set `false` to disable reset-archive cleanup. Default: same as `pruneAfter` (30d).
+   * Age-based retention for archived transcripts (`*.reset.<timestamp>` and
+   * `*.deleted.<timestamp>`). Default and `false`: keep archives until the
+   * disk budget evicts them oldest-first; a duration opts into deletion.
    */
   resetArchiveRetention?: string | number | false;
   /**
-   * Optional per-agent sessions-directory disk budget (e.g. "500mb").
-   * When exceeded, warn (mode=warn) or enforce oldest-first cleanup (mode=enforce).
+   * Per-agent sessions-directory disk budget (e.g. "500mb"). Default: "2gb".
+   * When exceeded, warn (mode=warn) or enforce oldest-first cleanup
+   * (mode=enforce). Set `false` to disable the budget entirely.
    */
-  maxDiskBytes?: number | string;
+  maxDiskBytes?: number | string | false;
   /**
    * Target size after disk-budget cleanup (high-water mark), e.g. "400mb".
    * Default: 80% of maxDiskBytes.

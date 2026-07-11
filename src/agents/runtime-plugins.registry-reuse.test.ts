@@ -38,6 +38,8 @@ function createRegistryWithPlugin(pluginId: string): PluginRegistry {
 }
 
 beforeEach(() => {
+  clearPluginLoaderCache();
+  resetPluginRuntimeStateForTest();
   mocks.getCurrentPluginMetadataSnapshot.mockReset();
   mocks.loadOpenClawPlugins.mockReset();
 });

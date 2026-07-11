@@ -6,11 +6,11 @@ import type { SessionEntry } from "../config/sessions.js";
 
 const persistenceMocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
-  updateSessionStoreEntry: vi.fn(),
+  updateSessionEntry: vi.fn(),
 }));
 
-vi.mock("../config/sessions.js", () => ({
-  updateSessionStoreEntry: persistenceMocks.updateSessionStoreEntry,
+vi.mock("../config/sessions/session-accessor.js", () => ({
+  updateSessionEntry: persistenceMocks.updateSessionEntry,
 }));
 
 vi.mock("./session-utils.js", () => ({
@@ -28,9 +28,8 @@ type PersistedLifecycleInput = Parameters<typeof derivePersistedSessionLifecycle
 type PersistedLifecycleData = PersistedLifecycleInput["event"]["data"];
 type PersistedLifecyclePatch = NonNullable<ReturnType<typeof derivePersistedSessionLifecyclePatch>>;
 type PersistedLifecycleStatus = PersistedLifecyclePatch["status"];
-type UpdateSessionStoreEntryParams = Parameters<
-  typeof import("../config/sessions.js").updateSessionStoreEntry
->[0];
+type UpdateSessionEntry =
+  typeof import("../config/sessions/session-accessor.js").updateSessionEntry;
 
 type PersistedLifecycleCase = {
   name: string;
@@ -108,10 +107,11 @@ async function persistExactCronLifecycle(options: {
     canonicalKey: exactCronSessionKey,
     entry: currentEntry,
   });
-  persistenceMocks.updateSessionStoreEntry
+  persistenceMocks.updateSessionEntry
     .mockReset()
-    .mockImplementation(async (params: UpdateSessionStoreEntryParams) => {
-      const patch = await params.update(structuredClone(currentEntry));
+    .mockImplementation(async (...args: Parameters<UpdateSessionEntry>) => {
+      const [, update] = args;
+      const patch = await update(structuredClone(currentEntry));
       if (patch) {
         currentEntry = { ...currentEntry, ...patch };
       }
@@ -532,9 +532,11 @@ describe("session lifecycle state", () => {
 
     expect(persisted?.status).toBe(testCase.expectedStatus);
     // One exact-row write only. Continuation settlement owns base projection.
-    expect(persistenceMocks.updateSessionStoreEntry).toHaveBeenCalledTimes(1);
-    expect(persistenceMocks.updateSessionStoreEntry.mock.calls[0]?.[0]).toMatchObject({
+    expect(persistenceMocks.updateSessionEntry).toHaveBeenCalledTimes(1);
+    expect(persistenceMocks.updateSessionEntry.mock.calls[0]?.[0]).toMatchObject({
       sessionKey: exactCronSessionKey,
+    });
+    expect(persistenceMocks.updateSessionEntry.mock.calls[0]?.[2]).toMatchObject({
       requireWriteSuccess: true,
     });
   });

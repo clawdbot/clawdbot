@@ -137,6 +137,10 @@ const providerHttpMocks = vi.hoisted(() => ({
   }),
 }));
 
+const providerHttpMockKeys = vi.hoisted(() => ({
+  sanitizeConfiguredModelProviderRequest: "sanitizeConfiguredModelProviderRequest",
+}));
+
 providerHttpMocks.executeProviderOperationWithRetryMock.mockImplementation(
   async (params: {
     stage?: string;
@@ -299,7 +303,7 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
     defaultTimeoutMs,
   resolveProviderHttpRequestConfig: providerHttpMocks.resolveProviderHttpRequestConfigMock,
   resolveProviderRequestHeaders: providerHttpMocks.resolveProviderRequestHeadersMock,
-  sanitizeConfiguredModelProviderRequest:
+  [providerHttpMockKeys.sanitizeConfiguredModelProviderRequest]:
     providerHttpMocks.sanitizeConfiguredModelProviderRequestMock,
   waitProviderOperationPollInterval: async () => {},
 }));

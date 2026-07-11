@@ -4,8 +4,9 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
+import { loadSessionEntry, replaceSessionEntry } from "./session-accessor.js";
 import { runSessionRegistryMaintenanceForStore } from "./session-registry-maintenance.js";
-import { loadSessionStore, saveSessionStore } from "./store.js";
+import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import type { SessionEntry } from "./types.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -27,14 +28,25 @@ async function createStore(entries: Record<string, SessionEntry>): Promise<strin
   const dir = await fixtureSuite.createCaseDir("store");
   const storePath = path.join(dir, "sessions.json");
   await fs.mkdir(dir, { recursive: true });
-  await saveSessionStore(storePath, entries, { skipMaintenance: true });
+  for (const [sessionKey, entry] of Object.entries(entries)) {
+    await replaceSessionEntry({ sessionKey, storePath }, entry);
+  }
   return storePath;
+}
+
+function resolveRequiredSqlitePath(storePath: string): string {
+  const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath).path;
+  if (!sqlitePath) {
+    throw new Error(`Expected a SQLite target for ${storePath}`);
+  }
+  return sqlitePath;
 }
 
 describe("runSessionRegistryMaintenanceForStore", () => {
   it("summarizes a missing store without creating it", async () => {
     const dir = await fixtureSuite.createCaseDir("missing-store");
     const storePath = path.join(dir, "sessions.json");
+    const sqlitePath = resolveRequiredSqlitePath(storePath);
 
     const result = await runSessionRegistryMaintenanceForStore({
       apply: true,
@@ -50,6 +62,28 @@ describe("runSessionRegistryMaintenanceForStore", () => {
       pruned: 0,
     });
     await expect(fs.stat(storePath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(sqlitePath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("previews a missing store without creating SQLite state", async () => {
+    const dir = await fixtureSuite.createCaseDir("missing-store-preview");
+    const storePath = path.join(dir, "sessions.json");
+    const sqlitePath = resolveRequiredSqlitePath(storePath);
+
+    const result = await runSessionRegistryMaintenanceForStore({
+      apply: false,
+      retentionMs: 7 * DAY_MS,
+      runningCronJobIds: new Set(),
+      storePath,
+    });
+
+    expect(result).toEqual({
+      beforeCount: 0,
+      afterCount: 0,
+      preservedRunning: 0,
+      pruned: 0,
+    });
+    await expect(fs.stat(sqlitePath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("previews stale cron-run pruning without mutating the store", async () => {
@@ -72,9 +106,9 @@ describe("runSessionRegistryMaintenanceForStore", () => {
       preservedRunning: 0,
       pruned: 1,
     });
-    expect(loadSessionStore(storePath, { skipCache: true })).toHaveProperty(
-      "agent:main:cron:done-job:run:old-run",
-    );
+    expect(
+      loadSessionEntry({ sessionKey: "agent:main:cron:done-job:run:old-run", storePath }),
+    ).toEqual(sessionEntry("old-run", now - 8 * DAY_MS));
   });
 
   it("applies one store-sized pruning transaction and preserves running cron rows", async () => {
@@ -98,10 +132,15 @@ describe("runSessionRegistryMaintenanceForStore", () => {
       preservedRunning: 1,
       pruned: 1,
     });
-    const updated = loadSessionStore(storePath, { skipCache: true });
-    expect(updated["agent:main:cron:done-job:run:old-run"]).toBeUndefined();
-    expect(updated).toHaveProperty("agent:main:cron:running-job:run:old-run");
-    expect(updated).toHaveProperty("agent:main:cron:done-job:run:recent-run");
+    expect(
+      loadSessionEntry({ sessionKey: "agent:main:cron:done-job:run:old-run", storePath }),
+    ).toBeUndefined();
+    expect(
+      loadSessionEntry({ sessionKey: "agent:main:cron:running-job:run:old-run", storePath }),
+    ).toEqual(sessionEntry("running-run", now - 8 * DAY_MS));
+    expect(
+      loadSessionEntry({ sessionKey: "agent:main:cron:done-job:run:recent-run", storePath }),
+    ).toEqual(sessionEntry("recent-run", now));
   });
 
   it("skips generic session maintenance while applying task registry pruning", async () => {
@@ -120,9 +159,12 @@ describe("runSessionRegistryMaintenanceForStore", () => {
     });
 
     expect(result.pruned).toBe(1);
-    const updated = loadSessionStore(storePath, { skipCache: true });
-    expect(updated["agent:main:cron:done-job:run:old-run"]).toBeUndefined();
-    expect(updated).toHaveProperty(oldOrdinaryKey);
+    expect(
+      loadSessionEntry({ sessionKey: "agent:main:cron:done-job:run:old-run", storePath }),
+    ).toBeUndefined();
+    expect(loadSessionEntry({ sessionKey: oldOrdinaryKey, storePath })).toEqual(
+      sessionEntry("old-worker", now - 40 * DAY_MS),
+    );
   });
 
   it("preserves active cron rows until their admission releases", async () => {
@@ -146,7 +188,7 @@ describe("runSessionRegistryMaintenanceForStore", () => {
         storePath,
       });
       expect(activeResult.pruned).toBe(0);
-      expect(loadSessionStore(storePath, { skipCache: true })).toHaveProperty(sessionKey);
+      expect(loadSessionEntry({ sessionKey, storePath })).toBeDefined();
     } finally {
       admission.release();
     }
@@ -158,6 +200,6 @@ describe("runSessionRegistryMaintenanceForStore", () => {
       storePath,
     });
     expect(releasedResult.pruned).toBe(1);
-    expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toBeUndefined();
+    expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
   });
 });

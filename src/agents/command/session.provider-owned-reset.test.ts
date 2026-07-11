@@ -7,8 +7,12 @@ const hoisted = vi.hoisted(() => ({
   terminalTranscriptNewer: false,
 }));
 
-vi.mock("../../config/sessions/store-load.js", () => ({
-  loadSessionStore: () => hoisted.store,
+vi.mock("../../config/sessions/session-accessor.js", () => ({
+  listSessionEntries: () =>
+    Object.entries(hoisted.store).map(([sessionKey, entry]) => ({
+      sessionKey,
+      entry,
+    })),
 }));
 
 vi.mock("../../config/sessions/paths.js", () => ({

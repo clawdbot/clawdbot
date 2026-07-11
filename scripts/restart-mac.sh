@@ -246,6 +246,77 @@ managed_openclaw_process_pids() {
   } | sort -u
 }
 
+launch_domain_jobs() {
+  local domain="$1"
+  local snapshot=""
+  if ! snapshot="$(/bin/launchctl print "${domain}" 2>/dev/null)"; then
+    return 1
+  fi
+  printf '%s\n' "${snapshot}" | /usr/bin/awk -v domain="${domain}" '
+    /^[[:space:]]*services = \{$/ { services = 1; next }
+    services && /^[[:space:]]*\}$/ { services = 0; next }
+    services && NF >= 3 { print domain "|" $NF }
+  '
+}
+
+loaded_launch_jobs() {
+  local uid=""
+  uid="$(/usr/bin/id -u)"
+  local domain=""
+  for domain in "gui/${uid}" "user/${uid}" system; do
+    launch_domain_jobs "${domain}" || return 1
+  done
+}
+
+launch_job_snapshot() {
+  local domain="$1"
+  local label="$2"
+  /bin/launchctl print "${domain}/${label}" 2>/dev/null
+}
+
+# A launchd-owned app will immediately respawn after target-only cleanup. Find
+# exact managed executables before the expensive Swift build so the operator
+# can stop the owning job instead of waiting for an inevitable switch failure.
+print_managed_openclaw_supervisor_label() {
+  local domain="$1"
+  local label="$2"
+  local job=""
+  if ! job="$(launch_job_snapshot "${domain}" "${label}")"; then
+    return 0
+  fi
+  local executable=""
+  executable="$(printf '%s\n' "${job}" | /usr/bin/awk -F ' = ' '/^[[:space:]]*program = / { print $2; exit }')"
+  local properties=""
+  properties="$(printf '%s\n' "${job}" | /usr/bin/awk -F ' = ' '/^[[:space:]]*properties = / { print $2; exit }')"
+  local is_managed_executable=0
+  if [[ "${executable}" == "${TARGET_EXECUTABLE}" || "${executable}" == "${INSTALLED_EXECUTABLE}" ]]; then
+    is_managed_executable=1
+  fi
+  if [[ "${is_managed_executable}" -eq 1 && " ${properties} " == *" keepalive "* ]]; then
+    printf '%s\n' "${label}"
+  fi
+}
+
+managed_openclaw_supervisor_labels() {
+  local jobs=""
+  if ! jobs="$(loaded_launch_jobs)"; then
+    return 1
+  fi
+  local batch_size=0
+  local domain=""
+  local label=""
+  while IFS='|' read -r domain label; do
+    [[ -n "${domain}" && -n "${label}" ]] || continue
+    print_managed_openclaw_supervisor_label "${domain}" "${label}" &
+    batch_size=$((batch_size + 1))
+    if [[ "${batch_size}" -ge 16 ]]; then
+      wait
+      batch_size=0
+    fi
+  done <<< "${jobs}"
+  wait
+}
+
 kill_managed_openclaw() {
   for _ in {1..10}; do
     local pids=""
@@ -277,6 +348,12 @@ stop_launch_agent() {
 # 1) Validate the process set selected by the requested mode. Target-only keeps
 # the current managed app alive while the replacement builds and signs.
 if [[ "$TARGET_ONLY" -eq 1 ]]; then
+  if ! managed_supervisors="$(managed_openclaw_supervisor_labels | sort -u | /usr/bin/paste -sd, -)"; then
+    fail "Unable to inspect loaded launchd jobs before target-only restart"
+  fi
+  if [[ -n "${managed_supervisors}" ]]; then
+    fail "Managed OpenClaw app is supervised by launchd job(s): ${managed_supervisors}; stop those jobs before a target-only restart"
+  fi
   if [[ -n "$(foreign_openclaw_process_pids)" ]]; then
     fail "Another OpenClaw app or test process is active; target-only restart deferred"
   fi
@@ -291,10 +368,6 @@ fi
 
 # Bundle Gateway-hosted plugin assets.
 run_step "bundle plugin assets" bash -lc "cd '${ROOT_DIR}' && pnpm plugins:assets:build"
-
-# 2) Rebuild into the same path the packager consumes (.build).
-run_step "clean build cache" bash -lc "cd '${ROOT_DIR}/apps/macos' && rm -rf .build .build-swift .swiftpm 2>/dev/null || true"
-run_step "swift build" bash -lc "cd '${ROOT_DIR}/apps/macos' && swift build -q --product OpenClaw"
 
 if [ "$AUTO_DETECT_SIGNING" -eq 1 ]; then
   if check_signing_keys; then

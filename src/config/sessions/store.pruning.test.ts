@@ -807,6 +807,32 @@ describe("resolveMaintenanceConfigFromInput", () => {
     expect(resolveMaintenanceConfigFromInput().modelRunPruneAfterMs).toBe(DAY_MS);
   });
 
+  it("keeps archived transcripts by default and bounds growth with a disk budget", () => {
+    const maintenance = resolveMaintenanceConfigFromInput();
+
+    expect(maintenance.resetArchiveRetentionMs).toBeNull();
+    expect(maintenance.maxDiskBytes).toBe(2 * 1024 * 1024 * 1024);
+    expect(maintenance.highWaterBytes).toBe(Math.floor(2 * 1024 * 1024 * 1024 * 0.8));
+  });
+
+  it("honors explicit archive retention and disk budget opt-outs", () => {
+    const maintenance = resolveMaintenanceConfigFromInput({
+      resetArchiveRetention: "7d",
+      maxDiskBytes: false,
+    });
+
+    expect(maintenance.resetArchiveRetentionMs).toBe(7 * DAY_MS);
+    expect(maintenance.maxDiskBytes).toBeNull();
+    expect(maintenance.highWaterBytes).toBeNull();
+  });
+
+  it("disables the disk budget when an explicit maxDiskBytes fails to parse", () => {
+    const maintenance = resolveMaintenanceConfigFromInput({ maxDiskBytes: "lots" });
+
+    expect(maintenance.maxDiskBytes).toBeNull();
+    expect(maintenance.highWaterBytes).toBeNull();
+  });
+
   it("force-gates the unset model-run prune default to the cap-eviction threshold", () => {
     const defaultMaintenance = resolveMaintenanceConfigFromInput({ maxEntries: 50 });
     expect(resolveSessionEntryMaintenanceHighWater(50)).toBe(75);

@@ -7,7 +7,6 @@
 export {
   getSessionEntry,
   listSessionEntries,
-  loadSessionStore,
   patchSessionEntry,
   readSessionUpdatedAt,
   updateSessionStoreEntry,
@@ -140,22 +139,7 @@ export type {
   TtsPersonaPromptConfig,
   TtsProvider,
 } from "../config/types.js";
-export {
-  clearSessionStoreCacheForTest,
-  /**
-   * @deprecated Use patchSessionEntry/upsertSessionEntry for writes. This
-   * whole-store helper is kept only during the transition before SQLite
-   * migration. Callers must migrate away from writing sessions.json directly.
-   */
-  saveSessionStore,
-  /**
-   * @deprecated Use patchSessionEntry/upsertSessionEntry for writes. This
-   * whole-store helper is kept only during the transition before SQLite
-   * migration. Callers must migrate away from updating sessions.json directly.
-   */
-  updateSessionStore,
-  resolveSessionStoreEntry,
-} from "../config/sessions/store.js";
+export { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
 // SDK-facing names are a shipped plugin contract; internals route through the
 // session accessor so the storage backend can change beneath them.
 export {

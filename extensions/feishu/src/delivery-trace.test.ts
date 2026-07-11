@@ -398,6 +398,9 @@ function setupFeishuTrace(recorder: WireRecorder, scenario: DeliveryTraceScenari
         options.onCleanup?.();
         break;
       case "wire-fault":
+        if (step.fault !== "rate-limit") {
+          throw new Error("feishu trace scenarios script only rate-limit wire faults");
+        }
         traceState.wireFaults.push({ fault: step.fault, retryAfterMs: step.retryAfterMs });
         break;
     }

@@ -3359,6 +3359,7 @@ describe("buildAfterTurnRuntimeContext", () => {
       expect(activeProcessSessions?.some((session) => session.sessionId === "sess-other")).toBe(
         false,
       );
+      expect(legacy.transcriptStorage).toEqual({ kind: "sqlite" });
     } finally {
       resetProcessRegistryForTests();
     }
@@ -3413,6 +3414,35 @@ describe("buildAfterTurnRuntimeContext", () => {
     expect(runtimeContext.model).toBe("gpt-5.5");
   });
 
+  it("publishes the storage-neutral session target in runtime context", () => {
+    const sessionTarget = {
+      agentId: "main",
+      sessionId: "session-abc",
+      sessionKey: "agent:main:session:abc",
+      storePath: "/tmp/state/agents/main/sessions/sessions.json",
+      threadId: 42,
+    };
+
+    const runtimeContext = buildAfterTurnRuntimeContext({
+      attempt: {
+        sessionId: "ignored-session-id",
+        sessionKey: "agent:main:fallback",
+        sessionTarget,
+        config: {} as OpenClawConfig,
+        skillsSnapshot: undefined,
+        provider: "openai",
+        modelId: "gpt-5.4",
+        thinkLevel: "off",
+        reasoningLevel: "on",
+      },
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      activeAgentId: "main",
+    });
+
+    expect(runtimeContext.transcriptStorage).toEqual({ kind: "sqlite" });
+    expect(runtimeContext.sessionTarget).toEqual(sessionTarget);
+  });
   it("resolves compaction.model override in runtime context so all context engines use the correct model", () => {
     const legacy = buildAfterTurnRuntimeContext({
       attempt: {

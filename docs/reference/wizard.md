@@ -254,7 +254,10 @@ Typical fields in `~/.openclaw/openclaw.json`:
 `openclaw agents add` writes `agents.list[]` and optional `bindings`.
 
 WhatsApp credentials go under `~/.openclaw/credentials/whatsapp/<accountId>/`.
-Sessions are stored under `~/.openclaw/agents/<agentId>/sessions/`.
+Active sessions and transcripts are stored in
+`~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`. The
+`~/.openclaw/agents/<agentId>/sessions/` directory is used for legacy migration
+inputs and archive/support artifacts.
 
 Some channels are delivered as plugins. When you pick one during setup, onboarding
 will prompt to install it (npm or a local path) before it can be configured.

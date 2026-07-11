@@ -15,6 +15,7 @@ import {
   attachRuntimeUserTurnTranscriptContext,
   createUserTurnTranscriptRecorder,
 } from "../sessions/user-turn-transcript.js";
+import { createTestUserTurnTranscriptTarget } from "../sessions/user-turn-transcript.test-support.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 import { sanitizeToolUseResultPairing } from "./session-transcript-repair.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
@@ -216,7 +217,7 @@ describe("guardSessionManager integration", () => {
         text: "visible group prompt",
         sender: { id: "user-42", name: "Ada", username: "ada42" },
       },
-      target: { transcriptPath: sessionFile },
+      target: createTestUserTurnTranscriptTarget(),
     });
     const preparedMessage = recorder.message;
     if (!preparedMessage) {

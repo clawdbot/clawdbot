@@ -208,13 +208,20 @@ export function scanSessionTranscriptTree<T>(entries: readonly T[]): SessionTran
     let treeEntry: SessionTranscriptTreeEntry | undefined =
       explicitTreeEntry ?? parseParentlessCanonicalEntry(entry, leafId);
     if (treeEntry && isCanonicalSessionTranscriptEntry(entry)) {
-      const logicalParentId =
+      const canonicalParentIsStale =
         explicitTreeEntry &&
-        treeEntry.appendMode !== "side" &&
-        treeEntry.parentId === appendParentId &&
-        leafId !== appendParentId
+        treeEntry.parentId !== null &&
+        !byId.has(treeEntry.parentId) &&
+        leafId !== null;
+      const logicalParentId =
+        treeEntry.appendMode !== "side" && canonicalParentIsStale
           ? leafId
-          : treeEntry.parentId;
+          : explicitTreeEntry &&
+              treeEntry.appendMode !== "side" &&
+              treeEntry.parentId === appendParentId &&
+              leafId !== appendParentId
+            ? leafId
+            : treeEntry.parentId;
       const normalizedParentId = resolveCanonicalParentId(logicalParentId, byId);
       if (normalizedParentId !== treeEntry.parentId) {
         // The raw cursor can belong to plugin metadata, an inactive branch, or

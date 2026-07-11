@@ -36,7 +36,7 @@ Session write locks are non-reentrant by default. A helper that intentionally ne
 - Workspace is resolved and created; sandboxed runs may redirect to a sandbox workspace root.
 - Skills are loaded (or reused from a snapshot) and injected into env and prompt.
 - Bootstrap/context files are resolved and injected into the system prompt.
-- A session write lock is acquired and `SessionManager` is opened and prepared before streaming starts. Any later transcript rewrite, compaction, or truncation path must take the same lock before opening or mutating the transcript file.
+- A session write lock is acquired and the session transcript target is prepared before streaming starts. Any later transcript rewrite, compaction, or truncation path must take the same lock before mutating the SQLite transcript rows.
 
 ## Prompt assembly
 

@@ -8,6 +8,14 @@ import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveConversationLabel } from "../../channels/conversation-label.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import {
+  deliveryContextFromChannelRoute,
+  deliveryContextFromSession,
+  mergeDeliveryContext,
+  normalizeDeliveryContext,
+  normalizeSessionDeliveryFields,
+} from "../../utils/delivery-context.shared.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import {
   INTERNAL_MESSAGE_CHANNEL,
   isInternalNonDeliveryChannel,
   normalizeMessageChannel,
@@ -235,4 +243,93 @@ export function deriveSessionMetaPatch(params: {
   }
 
   return Object.keys(patch).length > 0 ? patch : null;
+}
+
+function removeThreadFromDeliveryContext(context?: DeliveryContext): DeliveryContext | undefined {
+  if (!context || context.threadId == null) {
+    return context;
+  }
+  const next: DeliveryContext = { ...context };
+  delete next.threadId;
+  return next;
+}
+
+/**
+ * Derives the last-route/delivery patch for an inbound routing update. Route
+ * updates must not refresh activity timestamps; idle/daily reset evaluation
+ * relies on updatedAt from actual session turns (#49515). Shared by the file
+ * store and the SQLite accessor so both backends apply one routing policy.
+ */
+export function deriveLastRoutePatch(params: {
+  channel?: SessionEntry["lastChannel"];
+  to?: string;
+  accountId?: string;
+  threadId?: string | number;
+  route?: SessionEntry["route"];
+  deliveryContext?: DeliveryContext;
+  ctx?: MsgContext;
+  groupResolution?: GroupKeyResolution | null;
+  existing: SessionEntry | undefined;
+  sessionKey: string;
+}): Partial<SessionEntry> {
+  const { channel, to, accountId, threadId, ctx, existing } = params;
+  const explicitContext = normalizeDeliveryContext(params.deliveryContext);
+  const inlineContext = normalizeDeliveryContext({
+    channel,
+    to,
+    accountId,
+    threadId,
+  });
+  const routeContext = deliveryContextFromChannelRoute(params.route);
+  const mergedInput = mergeDeliveryContext(
+    routeContext,
+    mergeDeliveryContext(explicitContext, inlineContext),
+  );
+  const explicitDeliveryContext = params.deliveryContext;
+  const explicitThreadFromDeliveryContext =
+    explicitDeliveryContext != null && Object.hasOwn(explicitDeliveryContext, "threadId")
+      ? explicitDeliveryContext.threadId
+      : undefined;
+  const explicitThreadValue =
+    explicitThreadFromDeliveryContext ??
+    (threadId != null && threadId !== "" ? threadId : undefined);
+  const explicitRouteProvided = Boolean(
+    routeContext?.channel ||
+    routeContext?.to ||
+    explicitContext?.channel ||
+    explicitContext?.to ||
+    inlineContext?.channel ||
+    inlineContext?.to,
+  );
+  const clearThreadFromFallback = explicitRouteProvided && explicitThreadValue == null;
+  const fallbackContext = clearThreadFromFallback
+    ? removeThreadFromDeliveryContext(deliveryContextFromSession(existing))
+    : deliveryContextFromSession(existing);
+  const merged = mergeDeliveryContext(mergedInput, fallbackContext);
+  const normalized = normalizeSessionDeliveryFields({
+    route: params.route,
+    deliveryContext: {
+      channel: merged?.channel,
+      to: merged?.to,
+      accountId: merged?.accountId,
+      threadId: merged?.threadId,
+    },
+  });
+  const metaPatch = ctx
+    ? deriveSessionMetaPatch({
+        ctx,
+        sessionKey: params.sessionKey,
+        existing,
+        groupResolution: params.groupResolution,
+      })
+    : null;
+  const basePatch: Partial<SessionEntry> = {
+    route: normalized.route,
+    deliveryContext: normalized.deliveryContext,
+    lastChannel: normalized.lastChannel,
+    lastTo: normalized.lastTo,
+    lastAccountId: normalized.lastAccountId,
+    lastThreadId: normalized.lastThreadId,
+  };
+  return metaPatch ? { ...basePatch, ...metaPatch } : basePatch;
 }

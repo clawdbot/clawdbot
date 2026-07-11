@@ -289,6 +289,28 @@ describe("session transcript tree helpers", () => {
     ]);
   });
 
+  it("normalizes canonical rows with stale parents onto the active leaf", () => {
+    const entries = [
+      { type: "message", id: "user", parentId: null },
+      { type: "message", id: "assistant", parentId: "user" },
+      {
+        type: "custom",
+        id: "bootstrap-context",
+        parentId: "missing-stale-parent",
+        customType: "openclaw:bootstrap-context:full",
+      },
+    ];
+
+    const tree = scanSessionTranscriptTree(entries);
+
+    expect(tree.byId.get("bootstrap-context")?.parentId).toBe("assistant");
+    expect(selectSessionTranscriptTreePathNodes(tree, tree.leafId).map((node) => node.id)).toEqual([
+      "user",
+      "assistant",
+      "bootstrap-context",
+    ]);
+  });
+
   it("preserves side ancestry after an explicit side append leaf", () => {
     const entries = [
       { type: "custom", id: "visible", parentId: null },

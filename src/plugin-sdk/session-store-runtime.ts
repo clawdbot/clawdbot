@@ -1,5 +1,6 @@
 // Narrow session-store helpers for channel hot paths.
 
+import path from "node:path";
 import {
   readAmbientTranscriptWatermark as readAmbientTranscriptWatermarkFromEntry,
   resolveAmbientTranscriptWatermarkKey,
@@ -9,21 +10,25 @@ import {
 import { resolveStorePath as resolveSessionStorePath } from "../config/sessions/paths.js";
 import {
   cleanupSessionLifecycleArtifacts as cleanupAccessorSessionLifecycleArtifacts,
+  deleteSessionEntryLifecycle as deleteAccessorSessionEntryLifecycle,
+  loadTranscriptEventsSync as loadAccessorTranscriptEventsSync,
   listSessionEntries as listAccessorSessionEntries,
   loadSessionEntry,
   patchSessionEntry as patchAccessorSessionEntry,
   readSessionUpdatedAt as readAccessorSessionUpdatedAt,
+  readTranscriptStatsSync as readAccessorTranscriptStatsSync,
   replaceSessionEntry,
+  resolveTranscriptSessionKeyBySessionId as resolveAccessorTranscriptSessionKeyBySessionId,
   type SessionAccessScope,
   updateSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import {
-  loadSessionStore as loadSessionStoreImpl,
-  type LoadSessionStoreOptions,
-} from "../config/sessions/store-load.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { normalizeResolvedMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
 import type { ResolvedSessionMaintenanceConfigInput } from "../config/sessions/store.js";
 import type { AmbientTranscriptWatermark, SessionEntry } from "../config/sessions/types.js";
+import type { SessionTranscriptEvent } from "./session-transcript-runtime.js";
+
+const SQLITE_SESSION_STORE_BACKUP_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
 
 type SessionStoreReadParams = {
   agentId?: string;
@@ -40,6 +45,8 @@ type SessionStoreEntrySummary = {
   sessionKey: string;
   entry: SessionEntry;
 };
+
+export type SessionStoreTranscriptEvent = SessionTranscriptEvent;
 
 type SessionStoreEntryUpdate = (
   entry: SessionEntry,
@@ -75,6 +82,10 @@ type UpsertSessionEntryParams = SessionStoreReadParams & {
   entry: SessionEntry;
 };
 
+type DeleteSessionEntryParams = SessionStoreReadParams & {
+  archiveTranscript?: boolean;
+};
+
 type SessionLifecycleArtifactsCleanupParams = {
   agentId?: string;
   archiveRemovedEntryTranscripts?: boolean;
@@ -107,21 +118,6 @@ function toSessionAccessScope(params: SessionStoreReadParams): SessionAccessScop
   };
 }
 
-/**
- * @deprecated Use getSessionEntry/listSessionEntries for reads and
- * patchSessionEntry/upsertSessionEntry for writes. This whole-store helper is
- * kept only during the transition before SQLite migration. Callers must
- * migrate away from reading sessions.json directly.
- */
-export function loadSessionStore(
-  storePath: string,
-  options: LoadSessionStoreOptions = {},
-): Record<string, SessionEntry> {
-  // SDK callers never receive the writer-owned cache object. Returning it lets
-  // a read mutate the baseline that protects locked harness session rows.
-  return loadSessionStoreImpl(storePath, { ...options, clone: true });
-}
-
 /** Loads one session entry by agent/session identity. */
 export function getSessionEntry(params: SessionStoreReadParams): SessionEntry | undefined {
   return loadSessionEntry(toSessionAccessScope(params));
@@ -139,6 +135,38 @@ export function listSessionEntries(
       : {}),
     ...(params.storePath !== undefined ? { storePath: params.storePath } : {}),
   });
+}
+
+/** Reads transcript events for a live SQLite-backed session identity. */
+export function loadTranscriptEventsSync(params: {
+  agentId?: string;
+  env?: NodeJS.ProcessEnv;
+  sessionId: string;
+  sessionKey?: string;
+  storePath?: string;
+}): SessionStoreTranscriptEvent[] {
+  return loadAccessorTranscriptEventsSync(params);
+}
+
+/** Reads transcript freshness and byte size without materializing event rows. */
+export function readTranscriptStatsSync(params: {
+  agentId?: string;
+  env?: NodeJS.ProcessEnv;
+  sessionId: string;
+  sessionKey?: string;
+  storePath?: string;
+}): { eventCount: number; maxSeq: number; sizeBytes: number } {
+  return readAccessorTranscriptStatsSync(params);
+}
+
+/** Resolves the persisted session key for one SQLite transcript identity. */
+export function resolveTranscriptSessionKeyBySessionId(params: {
+  agentId?: string;
+  env?: NodeJS.ProcessEnv;
+  sessionId: string;
+  storePath?: string;
+}): string | undefined {
+  return resolveAccessorTranscriptSessionKeyBySessionId(params);
 }
 
 /** Patches one session entry by agent/session identity. */
@@ -193,6 +221,46 @@ export async function upsertSessionEntry(params: UpsertSessionEntryParams): Prom
   await replaceSessionEntry(toSessionAccessScope(params), params.entry);
 }
 
+/** Deletes one session entry by agent/session identity. */
+export async function deleteSessionEntry(params: DeleteSessionEntryParams): Promise<boolean> {
+  const storePath =
+    params.storePath ??
+    resolveSessionStorePath(undefined, {
+      agentId: params.agentId,
+      env: params.env,
+    });
+  const result = await deleteAccessorSessionEntryLifecycle({
+    ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
+    archiveTranscript: params.archiveTranscript ?? false,
+    storePath,
+    target: {
+      canonicalKey: params.sessionKey,
+      storeKeys: [params.sessionKey],
+    },
+  });
+  return result.deleted;
+}
+
+/** Resolves the file artifacts that should be backed up before mutating a session store. */
+export function resolveSessionStoreBackupPaths(params: {
+  agentId?: string;
+  storePath: string;
+}): string[] {
+  const backupPaths = new Set<string>();
+  backupPaths.add(path.resolve(params.storePath));
+
+  const sqlitePath = resolveSqliteTargetFromSessionStorePath(params.storePath, {
+    agentId: params.agentId,
+  }).path;
+  if (sqlitePath) {
+    for (const suffix of SQLITE_SESSION_STORE_BACKUP_SUFFIXES) {
+      backupPaths.add(`${sqlitePath}${suffix}`);
+    }
+  }
+
+  return [...backupPaths];
+}
+
 /** Cleans stale lifecycle-owned session entries and orphan transcripts for one agent store. */
 export async function cleanupSessionLifecycleArtifacts(
   params: SessionLifecycleArtifactsCleanupParams,
@@ -205,6 +273,7 @@ export async function cleanupSessionLifecycleArtifacts(
     });
   return await cleanupAccessorSessionLifecycleArtifacts({
     storePath,
+    ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
     archiveRemovedEntryTranscripts: params.archiveRemovedEntryTranscripts,
     sessionKeySegmentPrefix: params.sessionKeySegmentPrefix,
     transcriptContentMarker: params.transcriptContentMarker,
@@ -213,24 +282,14 @@ export async function cleanupSessionLifecycleArtifacts(
   });
 }
 
-export { resolveSessionStoreEntry } from "../config/sessions/store-entry.js";
-export { resolveSessionTranscriptPathInDir, resolveStorePath } from "../config/sessions/paths.js";
-/**
- * @deprecated Use getSessionEntry to read session metadata by agent/session
- * identity instead of resolving transcript file paths. This file-path helper
- * is kept only during the transition before SQLite migration. Callers must
- * migrate away from resolving transcript file paths directly.
- */
-export { resolveSessionFilePath } from "../config/sessions/paths.js";
-/**
- * @deprecated Use patchSessionEntry/upsertSessionEntry to persist session
- * metadata by agent/session identity. This file-path helper is kept only during
- * the transition before SQLite migration. Callers must migrate away from
- * persisting transcript file paths directly.
- */
-export { resolveAndPersistSessionFile } from "../config/sessions/session-file.js";
+export { resolveStorePath } from "../config/sessions/paths.js";
 export {
-  readLatestAssistantTextFromSessionTranscript,
+  formatSqliteSessionFileMarker,
+  parseSqliteSessionFileMarker,
+  sqliteSessionFileMarkerMatchesSession,
+  type SqliteSessionFileMarker,
+} from "../config/sessions/sqlite-marker.js";
+export {
   readRecentUserAssistantTextForSession,
   type SessionRecentConversationText,
 } from "../config/sessions/transcript.js";
@@ -245,15 +304,6 @@ export {
   recordInboundSessionMeta as recordSessionMetaFromInbound,
   updateSessionLastRoute as updateLastRoute,
 } from "../config/sessions/session-accessor.js";
-/**
- * @deprecated Use patchSessionEntry/upsertSessionEntry for writes. These
- * whole-store helpers are kept only during the transition before SQLite
- * migration. Callers must migrate away from reading or writing sessions.json.
- */
-export { saveSessionStore, updateSessionStore } from "../config/sessions/store.js";
-// Maintainer note: keep saveSessionStore/updateSessionStore grouped as one
-// compatibility operation. A SQLite bridge must diff before/after store shapes,
-// apply changed/deleted rows in one write transaction, and publish after commit.
 export {
   evaluateSessionFreshness,
   resolveChannelResetConfig,

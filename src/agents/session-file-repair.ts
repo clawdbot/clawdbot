@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sanitizeInlineImageBase64 } from "@openclaw/media-core/inline-image-data-url";
+import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { replaceFileAtomic } from "../infra/replace-file.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { makeMissingToolResult } from "./session-transcript-repair.js";
@@ -57,6 +58,10 @@ const sessionRepairCache = new Map<string, SessionRepairCacheEntry>();
 export function invalidateSessionFileRepairCache(sessionFile: string): void {
   const trimmed = sessionFile.trim();
   if (trimmed) {
+    if (parseSqliteSessionFileMarker(trimmed)) {
+      sessionRepairCache.delete(trimmed);
+      return;
+    }
     sessionRepairCache.delete(path.resolve(trimmed));
   }
 }
@@ -69,6 +74,9 @@ type SessionMessageEntry = {
 async function readSessionRepairSnapshot(
   sessionFile: string,
 ): Promise<SessionRepairFileSnapshot | undefined> {
+  if (parseSqliteSessionFileMarker(sessionFile)) {
+    return undefined;
+  }
   try {
     const stat = await fs.stat(sessionFile, { bigint: true });
     return {
@@ -791,6 +799,9 @@ export async function repairSessionFileIfNeeded(params: {
   const sessionFileInput = params.sessionFile.trim();
   if (!sessionFileInput) {
     return { repaired: false, droppedLines: 0, reason: "missing session file" };
+  }
+  if (parseSqliteSessionFileMarker(sessionFileInput)) {
+    return { repaired: false, droppedLines: 0, reason: "sqlite transcript" };
   }
   const sessionFile = path.resolve(sessionFileInput);
   const beforeReadSnapshot = await readSessionRepairSnapshot(sessionFile);

@@ -459,7 +459,7 @@ SDK.
   | `plugin-sdk/reply-history` | Reply-history helpers | `createChannelHistoryWindow`; deprecated map-helper compatibility exports such as `buildPendingHistoryContextFromMap`, `recordPendingHistoryEntry`, and `clearHistoryEntriesIfEnabled` |
   | `plugin-sdk/reply-reference` | Reply reference planning | `createReplyReferencePlanner` |
   | `plugin-sdk/reply-chunking` | Reply chunk helpers | Text/markdown chunking helpers |
-  | `plugin-sdk/session-store-runtime` | Session store helpers | Store path + updated-at helpers |
+  | `plugin-sdk/session-store-runtime` | Session store helpers | Scoped session row helpers, store path helpers, and updated-at reads |
   | `plugin-sdk/state-paths` | State path helpers | State and OAuth dir helpers |
   | `plugin-sdk/routing` | Routing/session-key helpers | `resolveAgentRoute`, `buildAgentSessionKey`, `resolveDefaultAgentBoundAccountId`, session-key normalization helpers |
   | `plugin-sdk/status-helpers` | Channel status helpers | Channel/account status summary builders, runtime-state defaults, issue metadata helpers |
@@ -800,6 +800,34 @@ major release. Every entry maps the old API to its canonical replacement.
     The runtime method `readSession` is deprecated in favor of
     `getSessionMessages`. Same signature; the old method calls through to the
     new one.
+
+  </Accordion>
+
+  <Accordion title="Removed session and transcript file APIs">
+    The SQLite session/transcript flip removes plugin-facing APIs that exposed
+    active `sessions.json` stores, JSONL transcript paths, or lists of session
+    files. Runtime plugins should use session identity and SDK runtime helpers
+    instead of resolving or mutating active files.
+
+    | Removed surface | Replacement |
+    | ---------------- | ----------- |
+    | `loadSessionStore(...)`, `saveSessionStore(...)`, `updateSessionStore(...)` | Gateway-owned session runtime APIs; plugin code should request session state through documented runtime/context helpers instead of reading the active store file. |
+    | `resolveSessionFilePath(...)`, `resolveSessionTranscriptPathInDir(...)`, `resolveAndPersistSessionFile(...)` | Session identity (`sessionKey`, `sessionId`, and SDK runtime target helpers) plus Gateway methods that operate on the current session. |
+    | `readLatestAssistantTextFromSessionTranscript(...)` | Identity-backed transcript readers exposed by the current runtime context, or Gateway history/session methods when the plugin is outside the transcript owner path. |
+    | `SessionTranscriptUpdate.sessionFile` | `SessionTranscriptUpdate.target` with `agentId`, `sessionKey`, and `sessionId`. |
+    | Memory sync inputs such as `sessionFiles` | Identity-backed transcript/session sources provided by the host; do not crawl active JSONL files for live sessions. |
+    | Runtime options named `transcriptPath` or `sessionFile` for active sessions | `sessionTarget`/runtime target objects that carry storage-neutral session identity. |
+
+    Legacy JSONL transcript files remain valid as import, archive, export, and
+    support artifacts. They are no longer the steady-state runtime contract for
+    active sessions.
+
+    `openclaw plugins inspect --all --runtime` reports non-bundled plugins whose
+    load errors or diagnostics still reference these removed file APIs. The
+    `@openclaw/plugin-inspector` advisory sweep must use version `0.3.17` or
+    newer so external package scans also flag whole-store session helpers,
+    session file-path helpers, legacy transcript file targets, and low-level
+    transcript helpers before release.
 
   </Accordion>
 

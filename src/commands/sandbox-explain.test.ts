@@ -3,6 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { sandboxExplainCommand } from "./sandbox-explain.js";
 
 const SANDBOX_EXPLAIN_TEST_TIMEOUT_MS = process.platform === "win32" ? 45_000 : 30_000;
@@ -246,18 +248,13 @@ describe("sandbox explain command", () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sandbox-explain-"));
     const storePath = path.join(tempDir, "sessions.json");
     const sessionKey = "agent:builder:subagent:child";
-    await fs.writeFile(
-      storePath,
-      JSON.stringify({
-        [sessionKey]: {
-          sessionId: "child-session",
-          updatedAt: Date.now(),
-          spawnedBy: "agent:builder:main",
-          spawnedWorkspaceDir: "/tmp/openclaw-child-workspace",
-          spawnedCwd: "/tmp/openclaw-child-workspace/task",
-        },
-      }),
-    );
+    await replaceSessionEntry({ storePath, sessionKey }, {
+      sessionId: "child-session",
+      updatedAt: Date.now(),
+      spawnedBy: "agent:builder:main",
+      spawnedWorkspaceDir: "/tmp/openclaw-child-workspace",
+      spawnedCwd: "/tmp/openclaw-child-workspace/task",
+    } as SessionEntry);
     mockCfg = {
       agents: {
         defaults: { sandbox: { mode: "off" } },
@@ -289,17 +286,12 @@ describe("sandbox explain command", () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sandbox-explain-"));
     const storePath = path.join(tempDir, "sessions.json");
     const sessionKey = "agent:builder:subagent:child";
-    await fs.writeFile(
-      storePath,
-      JSON.stringify({
-        [sessionKey]: {
-          sessionId: "child-session",
-          updatedAt: Date.now(),
-          spawnedBy: "agent:builder:main",
-          spawnedWorkspaceDir: "/tmp/openclaw-child-workspace",
-        },
-      }),
-    );
+    await replaceSessionEntry({ storePath, sessionKey }, {
+      sessionId: "child-session",
+      updatedAt: Date.now(),
+      spawnedBy: "agent:builder:main",
+      spawnedWorkspaceDir: "/tmp/openclaw-child-workspace",
+    } as SessionEntry);
     mockCfg = {
       agents: {
         defaults: {

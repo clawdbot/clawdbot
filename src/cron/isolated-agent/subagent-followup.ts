@@ -54,7 +54,7 @@ export async function readDescendantSubagentFallbackReply(params: {
       typeof frozenResultText === "string" && frozenResultText.trim()
         ? frozenResultText.trim()
         : undefined;
-    const usesInternalTranscript = typeof entry.execution?.transcriptFile === "string";
+    const usesInternalTranscript = entry.execution?.transcriptTarget !== undefined;
     let reply = usesInternalTranscript ? frozenReply : undefined;
     if (!reply && !usesInternalTranscript) {
       reply = (await readLatestAssistantReply({ sessionKey: entry.childSessionKey }))?.trim();

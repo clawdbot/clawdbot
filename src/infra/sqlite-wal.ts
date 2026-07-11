@@ -14,6 +14,9 @@ export const DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS = 30 * 60 * 1000;
  * Periodic checkpoints default to PASSIVE.
  */
 export const DEFAULT_SQLITE_WAL_TRUNCATE_INTERVAL_MS = DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS;
+// 512 pages (~2MB at 4KB pages) per periodic pass keeps page release strictly
+// bounded so maintenance can never behave like a blocking full VACUUM.
+const INCREMENTAL_VACUUM_MAX_PAGES_PER_PASS = 512;
 const LINUX_NFS_SUPER_MAGIC = 0x6969;
 const LINUX_SMB_SUPER_MAGIC = 0x517b;
 const LINUX_CIFS_SUPER_MAGIC = 0xff534d42;
@@ -338,14 +341,25 @@ export function configureSqliteWalMaintenance(
     }
   };
 
+  // Bounded page release for databases opened with auto_vacuum=INCREMENTAL.
+  // A no-op elsewhere, and never a blocking full VACUUM: unbounded vacuums on
+  // the event loop have starved channel sockets in production (#83712).
+  const runIncrementalVacuum = (): void => {
+    try {
+      db.exec(`PRAGMA incremental_vacuum(${INCREMENTAL_VACUUM_MAX_PAGES_PER_PASS});`);
+    } catch (error) {
+      options.onCheckpointError?.(error);
+    }
+  };
+
   const checkpoint = (): boolean => runCheckpoint(checkpointMode);
 
   let timer: IntervalHandle | null = null;
   if (timerIntervalMs > 0) {
-    timer = setInterval(
-      () => runCheckpoint(periodicCheckpointMode),
-      timerIntervalMs,
-    ) as IntervalHandle;
+    timer = setInterval(() => {
+      runCheckpoint(periodicCheckpointMode);
+      runIncrementalVacuum();
+    }, timerIntervalMs) as IntervalHandle;
     timer.unref?.();
   }
 

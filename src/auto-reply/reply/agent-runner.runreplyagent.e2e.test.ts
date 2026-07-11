@@ -3,14 +3,15 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { saveSessionStore, type SessionEntry } from "../../config/sessions.js";
-import { readSessionStoreForTest } from "../../config/sessions/test-helpers.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { TypingMode } from "../../config/types.js";
 import {
   HEARTBEAT_RUN_SCOPE,
   type ReplyOptionsWithHeartbeatRunScope,
 } from "../../infra/heartbeat-run-scope.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import {
@@ -86,7 +87,7 @@ function mockCallArgs(mock: ReturnType<typeof vi.fn>, label: string, callIndex =
 }
 
 function requireStoredSessionEntry(storePath: string, sessionKey = "main"): SessionEntry {
-  const entry = readSessionStoreForTest(storePath)[sessionKey];
+  const entry = loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" });
   if (!entry) {
     throw new Error(`expected stored session entry for ${sessionKey}`);
   }
@@ -301,7 +302,7 @@ describe("runReplyAgent active steering", () => {
         text: "visible group prompt",
         sender: { id: "user-42", name: "Ada" },
       },
-      target: { transcriptPath: "/tmp/unused-session.jsonl" },
+      target: createTestUserTurnTranscriptTarget(),
     });
     const { followupRun, run } = createMinimalRun({
       isActive: true,
@@ -666,7 +667,7 @@ describe("runReplyAgent pending final delivery capture", () => {
   async function createSessionStoreFile(entry: SessionEntry) {
     const dir = await mkdtemp(join(tmpdir(), "openclaw-agent-runner-pending-"));
     const storePath = join(dir, "sessions.json");
-    await saveSessionStore(storePath, { main: entry }, { skipMaintenance: true });
+    await replaceSessionEntry({ storePath, sessionKey: "main" }, entry);
     return storePath;
   }
 
@@ -1003,10 +1004,9 @@ describe("runReplyAgent typing (heartbeat)", () => {
   it("does not persist heartbeat ack text as pending final delivery", async () => {
     const dir = await mkdtemp(join(tmpdir(), "openclaw-heartbeat-pending-"));
     const storePath = join(dir, "sessions.json");
-    await saveSessionStore(
-      storePath,
-      { main: { sessionId: "session", updatedAt: 1 } },
-      { skipMaintenance: true },
+    await replaceSessionEntry(
+      { storePath, sessionKey: "main" },
+      { sessionId: "session", updatedAt: 1 },
     );
     try {
       state.runEmbeddedAgentMock.mockResolvedValueOnce({
@@ -1453,7 +1453,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
         modelOverride: "gpt-5.6-luna",
         modelOverrideSource: "user",
       };
-      await saveSessionStore(storePath, { main: sessionEntry }, { skipMaintenance: true });
+      await replaceSessionEntry({ storePath, sessionKey: "main" }, sessionEntry);
       const sessionStore = { main: sessionEntry };
       state.runEmbeddedAgentMock.mockResolvedValueOnce({
         payloads: [{ text: "final" }],
@@ -1538,7 +1538,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       updatedAt: Date.now(),
       traceLevel: "raw",
     };
-    await saveSessionStore(storePath, { main: sessionEntry }, { skipMaintenance: true });
+    await replaceSessionEntry({ storePath, sessionKey: "main" }, sessionEntry);
     try {
       state.runEmbeddedAgentMock.mockResolvedValueOnce({
         payloads: [{ text: "Terminal tool summary", isError: true }],
@@ -1845,7 +1845,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const sessionStore = { main: sessionEntry };
     const storeRoot = await mkdtemp(join(tmpdir(), "openclaw-internal-fallback-"));
     const storePath = join(storeRoot, "sessions.json");
-    await saveSessionStore(storePath, sessionStore, { skipMaintenance: true });
+    await replaceSessionEntry({ storePath, sessionKey: "main" }, sessionStore.main);
     try {
       state.runEmbeddedAgentMock.mockResolvedValueOnce({
         payloads: [{ text: "subagent timed out" }],
@@ -2989,7 +2989,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const sessionStore = { main: sessionEntry };
     const dir = await mkdtemp(join(tmpdir(), "openclaw-agent-runner-cli-alias-"));
     const storePath = join(dir, "sessions.json");
-    await saveSessionStore(storePath, { main: sessionEntry }, { skipMaintenance: true });
+    await replaceSessionEntry({ storePath, sessionKey: "main" }, sessionEntry);
 
     state.runEmbeddedAgentMock.mockResolvedValue({
       payloads: [{ text: "final" }],

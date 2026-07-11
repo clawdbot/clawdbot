@@ -7,7 +7,11 @@ import {
 } from "../../context-engine/host-compat.js";
 import { registerContextEngine, resolveContextEngine } from "../../context-engine/registry.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
-import type { ContextEngine, ContextEngineRuntimeSettings } from "../../context-engine/types.js";
+import type {
+  ContextEngine,
+  ContextEngineRuntimeContext,
+  ContextEngineRuntimeSettings,
+} from "../../context-engine/types.js";
 import { compactContextEngineWithSafetyTimeout } from "../embedded-agent-runner/compaction-safety-timeout.js";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../internal-runtime-context.js";
 import {
@@ -131,12 +135,29 @@ describe("harness context engine lifecycle", () => {
     const engineId = uniqueConfiguredProofEngineId();
     const captured: Array<{
       hook: "bootstrap" | "assemble" | "afterTurn" | "maintain" | "compact";
+      runtimeContext?: ContextEngineRuntimeContext;
       runtimeSettings?: ContextEngineRuntimeSettings;
+      sessionTarget?: ContextEngineRuntimeContext["sessionTarget"];
     }> = [];
+    const sessionTarget = {
+      agentId: "main",
+      sessionId: sessionParams.sessionId,
+      sessionKey: sessionParams.sessionKey,
+      storePath: "/tmp/state/openclaw.sqlite",
+    };
+    const bootstrapRuntimeContext = {
+      transcriptStorage: { kind: "sqlite" as const },
+      sessionTarget,
+    };
     const engine = createContextEngine({
       info: { id: engineId, name: "Configured runtime settings proof engine" },
       bootstrap: vi.fn(async (params) => {
-        captured.push({ hook: "bootstrap", runtimeSettings: params.runtimeSettings });
+        captured.push({
+          hook: "bootstrap",
+          runtimeContext: params.runtimeContext,
+          runtimeSettings: params.runtimeSettings,
+          sessionTarget: params.sessionTarget,
+        });
         return { bootstrapped: true };
       }),
       assemble: vi.fn(async (params) => {
@@ -147,10 +168,19 @@ describe("harness context engine lifecycle", () => {
         };
       }),
       afterTurn: vi.fn(async (params) => {
-        captured.push({ hook: "afterTurn", runtimeSettings: params.runtimeSettings });
+        captured.push({
+          hook: "afterTurn",
+          runtimeSettings: params.runtimeSettings,
+          sessionTarget: params.sessionTarget,
+        });
       }),
       maintain: vi.fn(async (params) => {
-        captured.push({ hook: "maintain", runtimeSettings: params.runtimeSettings });
+        captured.push({
+          hook: "maintain",
+          runtimeContext: params.runtimeContext,
+          runtimeSettings: params.runtimeSettings,
+          sessionTarget: params.sessionTarget,
+        });
         return { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
       }),
       compact: vi.fn(async (params) => {
@@ -168,11 +198,13 @@ describe("harness context engine lifecycle", () => {
       contextEngine: configuredEngine,
       sessionId: sessionParams.sessionId,
       sessionKey: sessionParams.sessionKey,
+      sessionTarget,
       sessionFile: sessionParams.sessionFile,
       providerId: "openai",
       requestedModelId: "openai/gpt-5.5",
       modelId: "anthropic/claude-sonnet-4-6",
       fallbackReason: "primary_provider_5xx",
+      runtimeContext: bootstrapRuntimeContext,
       warn: () => {},
     });
 
@@ -195,6 +227,7 @@ describe("harness context engine lifecycle", () => {
       yieldAborted: false,
       sessionIdUsed: sessionParams.sessionIdUsed,
       sessionKey: sessionParams.sessionKey,
+      sessionTarget,
       sessionFile: sessionParams.sessionFile,
       messagesSnapshot: [
         textMessage("user", "old ask", 1),
@@ -226,7 +259,10 @@ describe("harness context engine lifecycle", () => {
       {
         sessionId: sessionParams.sessionId,
         sessionKey: sessionParams.sessionKey,
-        sessionFile: sessionParams.sessionFile,
+        sessionTarget: {
+          sessionId: sessionParams.sessionId,
+          sessionKey: sessionParams.sessionKey,
+        },
         tokenBudget: 2048,
         runtimeSettings: compactRuntimeSettings,
       },
@@ -236,6 +272,21 @@ describe("harness context engine lifecycle", () => {
     expect(new Set(captured.map((entry) => entry.hook))).toEqual(
       new Set(["bootstrap", "assemble", "afterTurn", "maintain", "compact"]),
     );
+    expect(captured.find((entry) => entry.hook === "bootstrap")?.runtimeContext).toEqual(
+      bootstrapRuntimeContext,
+    );
+    expect(captured.find((entry) => entry.hook === "bootstrap")?.sessionTarget).toEqual(
+      sessionTarget,
+    );
+    expect(captured.find((entry) => entry.hook === "afterTurn")?.sessionTarget).toEqual(
+      sessionTarget,
+    );
+    expect(captured.find((entry) => entry.hook === "maintain")?.sessionTarget).toEqual(
+      sessionTarget,
+    );
+    expect(
+      captured.find((entry) => entry.hook === "maintain")?.runtimeContext?.sessionTarget,
+    ).toEqual(sessionTarget);
     for (const entry of captured) {
       expect(entry.runtimeSettings).toMatchObject({
         schemaVersion: 1,

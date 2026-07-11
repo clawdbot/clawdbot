@@ -118,10 +118,12 @@ function collectCodeFiles(relativeDir: string): string[] {
 }
 
 function collectCoreReferenceFiles(relativeDir: string): string[] {
-  return collectCodeFiles(relativeDir).filter((file) => {
-    const source = fs.readFileSync(resolve(REPO_ROOT, file), "utf8");
-    return source.includes("../../../../src/") || source.includes("../../../src/");
-  });
+  return collectCodeFiles(relativeDir)
+    .filter((file) => !file.endsWith(".test.ts"))
+    .filter((file) => {
+      const source = fs.readFileSync(resolve(REPO_ROOT, file), "utf8");
+      return source.includes("../../../../src/") || source.includes("../../../src/");
+    });
 }
 
 function collectOpenClawRuntimeDirectImportFiles(relativeDir: string): string[] {

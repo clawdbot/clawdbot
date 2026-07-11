@@ -1322,6 +1322,11 @@ describe("ci workflow guards", () => {
       group: "session-accessor-boundary",
       runner: "blacksmith-4vcpu-ubuntu-2404",
     });
+    expect(workflow.jobs["check-additional-shard"].strategy.matrix.include).toContainEqual({
+      check_name: "check-sqlite-session-schema-baseline",
+      group: "sqlite-session-schema-baseline",
+      runner: "blacksmith-4vcpu-ubuntu-2404",
+    });
     expect(workflow.jobs["checks-windows"]["runs-on"]).toContain("matrix.runner");
     expect(source).toContain("blacksmith-8vcpu-windows-2025");
   });
@@ -1361,6 +1366,25 @@ describe("ci workflow guards", () => {
     expect(runStep.run).toContain("session-transcript-reader-boundary)");
     expect(runStep.run).toContain(
       'run_check "lint:tmp:session-transcript-reader-boundary" pnpm run lint:tmp:session-transcript-reader-boundary',
+    );
+  });
+
+  it("runs the SQLite transaction ratchet in the session boundary check", () => {
+    const workflow = readCiWorkflow();
+    const additionalJob = workflow.jobs["check-additional-shard"];
+    const matrixRows = additionalJob.strategy.matrix.include;
+    expect(matrixRows).toContainEqual({
+      check_name: "check-session-accessor-boundary",
+      group: "session-accessor-boundary",
+      runner: "blacksmith-4vcpu-ubuntu-2404",
+    });
+
+    const runStep = additionalJob.steps.find(
+      (step: WorkflowStep) => step.name === "Run additional check shard",
+    );
+    expect(runStep.run).toContain("session-accessor-boundary)");
+    expect(runStep.run).toContain(
+      'run_check "lint:tmp:sqlite-transaction-boundary" pnpm run lint:tmp:sqlite-transaction-boundary',
     );
   });
 
@@ -1454,16 +1478,26 @@ describe("ci workflow guards", () => {
     }
   });
 
-  it("runs plugin SDK API and surface drift checks in workflow sanity", () => {
+  it("runs generated baseline drift checks in workflow sanity", () => {
     const workflow = readWorkflowSanityWorkflow();
     const steps = workflow.jobs["generated-doc-baselines"].steps;
     const stepNames = steps.map((step: WorkflowStep) => step.name);
 
     expect(stepNames).toContain("Check plugin SDK API baseline drift");
+    expect(stepNames).toContain("Check SQLite sessions/transcripts schema baseline drift");
     expect(stepNames).toContain("Check plugin SDK surface budget");
     expect(stepNames.indexOf("Check plugin SDK API baseline drift")).toBeLessThan(
-      stepNames.indexOf("Check plugin SDK surface budget"),
+      stepNames.indexOf("Check SQLite sessions/transcripts schema baseline drift"),
     );
+    expect(
+      stepNames.indexOf("Check SQLite sessions/transcripts schema baseline drift"),
+    ).toBeLessThan(stepNames.indexOf("Check plugin SDK surface budget"));
+    expect(
+      steps.find(
+        (step: WorkflowStep) =>
+          step.name === "Check SQLite sessions/transcripts schema baseline drift",
+      ).run,
+    ).toBe("pnpm sqlite:sessions-schema:check");
     expect(
       steps.find((step: WorkflowStep) => step.name === "Check plugin SDK surface budget").run,
     ).toBe("pnpm plugin-sdk:surface:check");
@@ -1525,8 +1559,10 @@ describe("ci workflow guards", () => {
 
     for (const installStep of [macosInstallStep, iosInstallStep]) {
       expect(installStep.run).toContain("if [[ -x ./scripts/install-swift-tools.sh ]]; then");
-      expect(installStep.run).toContain("brew install xcodegen swiftlint swiftformat");
     }
+    expect(macosInstallStep.run).toContain("brew install xcodegen swiftlint");
+    expect(macosInstallStep.run).not.toContain("brew install xcodegen swiftlint swiftformat");
+    expect(iosInstallStep.run).toContain("brew install xcodegen swiftlint swiftformat");
     for (const lintStep of [macosLintStep, iosLintStep]) {
       expect(lintStep.run).toContain(
         "if [[ -x ./scripts/lint-swift.sh && -x ./scripts/format-swift.sh ]]; then",
@@ -1794,7 +1830,18 @@ describe("ci workflow guards", () => {
     const swiftLint = workflow.jobs["macos-swift"].steps.find(
       (step: { name?: string }) => step.name === "Swift lint",
     );
-    expect(swiftInstall.run).toContain("brew install xcodegen swiftlint swiftformat");
+    expect(swiftInstall.run).toContain("brew install xcodegen swiftlint");
+    expect(swiftInstall.run).not.toContain("brew install xcodegen swiftlint swiftformat");
+    expect(swiftInstall.run).toContain(
+      "https://github.com/nicklockwood/SwiftFormat/releases/download/$swiftformat_version/swiftformat.zip",
+    );
+    expect(swiftInstall.run).toContain(
+      'swiftformat_checksum="b990400779aceb7d7020796eb9ba814d4480543f671d38fc0ff48cb72f04c584"',
+    );
+    expect(swiftInstall.run).toContain('echo "$swift_tools_dir" >> "$GITHUB_PATH"');
+    expect(swiftInstall.run).toContain(
+      '[[ "$("$swift_tools_dir/swiftformat" --version)" == "$swiftformat_version" ]]',
+    );
     expect(workflow.jobs["macos-swift"].env.HISTORICAL_TARGET).toBe(
       "${{ needs.preflight.outputs.compatibility_target }}",
     );
@@ -1811,6 +1858,16 @@ describe("ci workflow guards", () => {
     expect(checkShard.run).toContain("pnpm tsgo:scripts");
     expect(checkShard.run).toContain("pnpm tsgo:strict-ratchet");
     expect(checkShard.run).toContain('elif [[ "$HISTORICAL_TARGET" != "true" ]]');
+
+    const uiTest = workflow.jobs["checks-ui"].steps.find(
+      (step: { name?: string }) => step.name === "Test Control UI",
+    );
+    expect(workflow.jobs["checks-ui"].env.COMPATIBILITY_TARGET).toBe(
+      "${{ needs.preflight.outputs.compatibility_target }}",
+    );
+    expect(uiTest.run).toContain('if [[ "$COMPATIBILITY_TARGET" == "true" ]]');
+    expect(uiTest.run).toContain("pnpm --dir ui test -- --retry=1");
+    expect(uiTest.run).toContain("pnpm --dir ui test");
   });
 
   it("does not rebuild Control UI after build:ci-artifacts", () => {

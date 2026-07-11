@@ -167,7 +167,9 @@ async function cleanupRemovedSessionArtifacts(params: {
       restrictToStoreDir: true,
     });
   }
-  if (archivedDirs.size === 0 && params.maintenance.resetArchiveRetentionMs == null) {
+  // null retention keeps archived transcripts: they are conversation history,
+  // and the disk budget (not a wall-clock timer) is the only eviction path.
+  if (params.maintenance.resetArchiveRetentionMs == null) {
     return;
   }
   const targetDirs =
@@ -175,17 +177,13 @@ async function cleanupRemovedSessionArtifacts(params: {
       ? [...archivedDirs]
       : [path.dirname(path.resolve(params.operation.storePath))];
   // Both retention reasons ride one cleanup call so each save enumerates the
-  // sessions dir at most once; reset retention defaults on, so a listing per
-  // reason would scan twice per save.
+  // sessions dir at most once; a listing per reason would scan twice per save.
   await params.operation.artifacts.cleanupArchivedSessionTranscripts({
     directories: targetDirs,
-    rules:
-      params.maintenance.resetArchiveRetentionMs != null
-        ? [
-            { reason: "deleted", olderThanMs: params.maintenance.pruneAfterMs },
-            { reason: "reset", olderThanMs: params.maintenance.resetArchiveRetentionMs },
-          ]
-        : [{ reason: "deleted", olderThanMs: params.maintenance.pruneAfterMs }],
+    rules: [
+      { reason: "deleted", olderThanMs: params.maintenance.resetArchiveRetentionMs },
+      { reason: "reset", olderThanMs: params.maintenance.resetArchiveRetentionMs },
+    ],
   });
 }
 

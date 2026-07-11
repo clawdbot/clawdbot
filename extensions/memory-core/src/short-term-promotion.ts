@@ -414,7 +414,10 @@ function hasDreamingNarrativeLead(snippet: string): boolean {
   return /\b(?:Candidate|Reflections?):/i.test(head);
 }
 
-function isContaminatedDreamingSnippet(raw: string): boolean {
+function isContaminatedDreamingSnippet(
+  raw: string,
+  opts: { allowTranscriptTurnSnippet?: boolean } = {},
+): boolean {
   const snippet = normalizeSnippet(raw);
   if (!snippet) {
     return false;
@@ -424,7 +427,7 @@ function isContaminatedDreamingSnippet(raw: string): boolean {
     DREAMING_TRANSCRIPT_PROMPT_LINE_RE.test(snippet) ||
     RAW_SESSION_METADATA_RE.test(snippet) ||
     RAW_CONVERSATION_SUMMARY_RE.test(snippet) ||
-    RAW_TRANSCRIPT_TURN_RE.test(snippet) ||
+    (!opts.allowTranscriptTurnSnippet && RAW_TRANSCRIPT_TURN_RE.test(snippet)) ||
     MEMORY_FLUSH_PROMPT_RE.test(snippet) ||
     PROMOTION_SCORE_METADATA_RE.test(snippet)
   ) {
@@ -615,7 +618,12 @@ export function normalizeShortTermRecallStore(raw: unknown, nowIso: string): Sho
           ? entry.claimHash.trim()
           : undefined;
       const fullSnippet = typeof entry.snippet === "string" ? normalizeSnippet(entry.snippet) : "";
-      if (fullSnippet && isContaminatedDreamingSnippet(fullSnippet)) {
+      if (
+        fullSnippet &&
+        isContaminatedDreamingSnippet(fullSnippet, {
+          allowTranscriptTurnSnippet: isShortTermSessionCorpusPath(entryPath),
+        })
+      ) {
         continue;
       }
       const snippet = truncateShortTermSnippet(fullSnippet);
@@ -1063,6 +1071,10 @@ export function isShortTermMemoryPath(filePath: string): boolean {
   return SHORT_TERM_BASENAME_RE.test(normalized);
 }
 
+function isShortTermSessionCorpusPath(filePath: string): boolean {
+  return SHORT_TERM_SESSION_CORPUS_RE.test(normalizeMemoryPath(filePath));
+}
+
 function normalizeMemoryPathForWorkspace(workspaceDir: string, rawPath: string): string {
   const normalized = normalizeMemoryPath(rawPath);
   const workspaceNormalized = normalizeMemoryPath(workspaceDir);
@@ -1415,7 +1427,12 @@ export async function recordShortTermRecalls(params: {
       const normalizedPath = normalizeMemoryPath(result.path);
       const rawSnippet = normalizeSnippet(result.snippet);
       const snippet = truncateShortTermSnippet(rawSnippet);
-      if (!rawSnippet || isContaminatedDreamingSnippet(rawSnippet)) {
+      if (
+        !rawSnippet ||
+        isContaminatedDreamingSnippet(rawSnippet, {
+          allowTranscriptTurnSnippet: isShortTermSessionCorpusPath(normalizedPath),
+        })
+      ) {
         continue;
       }
       const claimHash = buildClaimHash(rawSnippet);
@@ -1841,7 +1858,11 @@ export async function rankShortTermPromotionCandidates(
     if (!entry || entry.source !== "memory" || !isShortTermMemoryPath(entry.path)) {
       continue;
     }
-    if (isContaminatedDreamingSnippet(entry.snippet)) {
+    if (
+      isContaminatedDreamingSnippet(entry.snippet, {
+        allowTranscriptTurnSnippet: isShortTermSessionCorpusPath(entry.path),
+      })
+    ) {
       continue;
     }
     if (!includePromoted && entry.promotedAt) {

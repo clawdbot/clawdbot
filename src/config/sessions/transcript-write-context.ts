@@ -1,6 +1,7 @@
 // Transcript write contexts let nested append paths reuse an already-owned session write lock.
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
+import { parseSqliteSessionFileMarker } from "./sqlite-marker.js";
 
 type OwnedSessionTranscriptWriteContext = {
   sessionFile?: string;
@@ -34,10 +35,14 @@ export type OwnedSessionTranscriptCacheSnapshot = {
 
 const ownedTranscriptWriteContext = new AsyncLocalStorage<OwnedSessionTranscriptWriteContext>();
 
-// Compare resolved paths when available; fall back to session keys for lock reuse.
-function normalizePathForCompare(value: string | undefined): string | undefined {
+// Compare concrete files when available; SQLite markers fall back to session
+// identity because they are storage references rather than lockable paths.
+function normalizeConcretePathForCompare(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
-  return trimmed ? path.resolve(trimmed) : undefined;
+  if (!trimmed || parseSqliteSessionFileMarker(trimmed)) {
+    return undefined;
+  }
+  return path.resolve(trimmed);
 }
 
 function contextMatches(params: {
@@ -45,8 +50,8 @@ function contextMatches(params: {
   sessionFile?: string;
   sessionKey?: string;
 }): boolean {
-  const contextSessionFile = normalizePathForCompare(params.context.sessionFile);
-  const sessionFile = normalizePathForCompare(params.sessionFile);
+  const contextSessionFile = normalizeConcretePathForCompare(params.context.sessionFile);
+  const sessionFile = normalizeConcretePathForCompare(params.sessionFile);
   if (contextSessionFile && sessionFile) {
     return contextSessionFile === sessionFile;
   }

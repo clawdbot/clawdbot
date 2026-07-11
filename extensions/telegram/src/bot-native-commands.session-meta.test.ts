@@ -56,7 +56,6 @@ const sessionMocks = vi.hoisted(() => ({
   getSessionEntry: vi.fn(),
   loadSessionStore: vi.fn(),
   recordSessionMetaFromInbound: vi.fn(),
-  resolveSessionTranscriptLegacyFileTarget: vi.fn(),
   resolveStorePath: vi.fn(),
 }));
 const commandAuthMocks = vi.hoisted(() => ({
@@ -177,15 +176,6 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
     getSessionEntry: sessionMocks.getSessionEntry,
     loadSessionStore: sessionMocks.loadSessionStore,
     resolveStorePath: sessionMocks.resolveStorePath,
-  };
-});
-vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async () => {
-  const actual = await vi.importActual<
-    typeof import("openclaw/plugin-sdk/session-transcript-runtime")
-  >("openclaw/plugin-sdk/session-transcript-runtime");
-  return {
-    ...actual,
-    resolveSessionTranscriptLegacyFileTarget: sessionMocks.resolveSessionTranscriptLegacyFileTarget,
   };
 });
 vi.mock("openclaw/plugin-sdk/command-auth-native", async () => {
@@ -651,14 +641,6 @@ function resetSessionMetaMocks() {
       sessionMocks.loadSessionStore(storePath)[sessionKey],
   );
   sessionMocks.recordSessionMetaFromInbound.mockClear().mockResolvedValue(undefined);
-  sessionMocks.resolveSessionTranscriptLegacyFileTarget.mockClear().mockResolvedValue({
-    agentId: "main",
-    memoryKey: "transcript:main:sess-topic",
-    sessionId: "sess-topic",
-    sessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
-    sessionFile: "/tmp/openclaw-sessions/sess-topic-topic-42.jsonl",
-    targetKind: "runtime-session",
-  });
   sessionMocks.resolveStorePath.mockClear().mockReturnValue("/tmp/openclaw-sessions.json");
   pluginRuntimeMocks.executePluginCommand.mockClear().mockResolvedValue({ text: "ok" });
   pluginRuntimeMocks.matchPluginCommand.mockClear().mockReturnValue(null);
@@ -1579,11 +1561,10 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     expectUnauthorizedNewCommandBlocked(sendMessage);
   });
 
-  it("passes a persisted topic session file to plugin commands", async () => {
+  it("passes persisted topic session identity to plugin commands", async () => {
     sessionMocks.resolveStorePath.mockReturnValue("/tmp/openclaw-sessions/sessions.json");
     sessionMocks.getSessionEntry.mockReturnValue({
       authProfileOverride: "openai:owner@example.com",
-      sessionFile: "/tmp/openclaw-sessions/sess-topic-topic-42.jsonl",
       sessionId: "sess-topic",
       updatedAt: 1,
     });
@@ -1625,25 +1606,10 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     );
 
     expectRecordFields(
-      firstMockArg(
-        sessionMocks.resolveSessionTranscriptLegacyFileTarget,
-        "resolveSessionTranscriptLegacyFileTarget",
-      ),
-      {
-        agentId: "main",
-        sessionId: "sess-topic",
-        sessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
-        storePath: "/tmp/openclaw-sessions/sessions.json",
-        threadId: 42,
-      },
-      "resolved transcript target params",
-    );
-    expectRecordFields(
       (pluginRuntimeMocks.executePluginCommand.mock.calls as unknown as Array<[unknown]>)[0]?.[0],
       {
         sessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
         sessionId: "sess-topic",
-        sessionFile: "/tmp/openclaw-sessions/sess-topic-topic-42.jsonl",
         authProfileId: "openai:owner@example.com",
         messageThreadId: 42,
       },
@@ -1692,19 +1658,11 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     );
   });
 
-  it("passes a resolved transcript file to plugin commands when the entry has no file", async () => {
+  it("passes session identity to plugin commands when the entry has no file", async () => {
     sessionMocks.resolveStorePath.mockReturnValue("/tmp/openclaw-sessions/sessions.json");
     sessionMocks.getSessionEntry.mockReturnValue({
       sessionId: "sess-main",
       updatedAt: 1,
-    });
-    sessionMocks.resolveSessionTranscriptLegacyFileTarget.mockResolvedValue({
-      agentId: "main",
-      memoryKey: "transcript:main:sess-main",
-      sessionFile: "/tmp/openclaw-sessions/sess-main.jsonl",
-      sessionId: "sess-main",
-      sessionKey: "agent:main:main",
-      targetKind: "runtime-session",
     });
 
     const { handler } = registerAndResolveCommandHandler({
@@ -1734,24 +1692,105 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     await handler(createTelegramPrivateCommandContext({ match: "status" }));
 
     expectRecordFields(
-      firstMockArg(
-        sessionMocks.resolveSessionTranscriptLegacyFileTarget,
-        "resolveSessionTranscriptLegacyFileTarget",
-      ),
+      (pluginRuntimeMocks.executePluginCommand.mock.calls as unknown as Array<[unknown]>)[0]?.[0],
       {
-        agentId: "main",
-        sessionId: "sess-main",
         sessionKey: "agent:main:main",
-        storePath: "/tmp/openclaw-sessions/sessions.json",
+        sessionId: "sess-main",
+        sessionFile: "sqlite:main:sess-main:/tmp/openclaw-sessions/sessions.json",
       },
-      "resolved transcript target params",
+      "plugin command params",
     );
+  });
+
+  it("passes SQLite transcript markers to plugin commands without path resolution", async () => {
+    const storePath = "/tmp/openclaw-sessions/sessions.json";
+    const marker = `sqlite:main:sess-main:${storePath}`;
+    sessionMocks.resolveStorePath.mockReturnValue(storePath);
+    sessionMocks.getSessionEntry.mockReturnValue({
+      sessionId: "sess-main",
+      sessionFile: marker,
+      updatedAt: 1,
+    });
+
+    const { handler } = registerAndResolveCommandHandler({
+      commandName: "codex",
+      cfg: { commands: { allowFrom: { telegram: ["200"] } } } as OpenClawConfig,
+      useAccessGroups: false,
+      pluginCommandSpecs: [
+        {
+          name: "codex",
+          description: "Codex",
+          acceptsArgs: true,
+        },
+      ] as TelegramPluginCommandSpecs,
+    });
+    pluginRuntimeMocks.matchPluginCommand.mockReturnValue({
+      command: {
+        name: "codex",
+        description: "Codex",
+        handler: vi.fn(),
+        pluginId: "openclaw-codex-app-server",
+        pluginName: "Codex",
+        requireAuth: true,
+      },
+      args: "status",
+    });
+
+    await handler(createTelegramPrivateCommandContext({ match: "status" }));
+
     expectRecordFields(
       (pluginRuntimeMocks.executePluginCommand.mock.calls as unknown as Array<[unknown]>)[0]?.[0],
       {
         sessionKey: "agent:main:main",
         sessionId: "sess-main",
-        sessionFile: "/tmp/openclaw-sessions/sess-main.jsonl",
+        sessionFile: marker,
+      },
+      "plugin command params",
+    );
+  });
+
+  it("replaces stale legacy transcript paths for plugin commands", async () => {
+    const storePath = "/tmp/openclaw-sessions/sessions.json";
+    const marker = `sqlite:main:sess-main:${storePath}`;
+    sessionMocks.resolveStorePath.mockReturnValue(storePath);
+    sessionMocks.getSessionEntry.mockReturnValue({
+      sessionId: "sess-main",
+      sessionFile: "sess-main.jsonl",
+      updatedAt: 1,
+    });
+
+    const { handler } = registerAndResolveCommandHandler({
+      commandName: "codex",
+      cfg: { commands: { allowFrom: { telegram: ["200"] } } } as OpenClawConfig,
+      useAccessGroups: false,
+      pluginCommandSpecs: [
+        {
+          name: "codex",
+          description: "Codex",
+          acceptsArgs: true,
+        },
+      ] as TelegramPluginCommandSpecs,
+    });
+    pluginRuntimeMocks.matchPluginCommand.mockReturnValue({
+      command: {
+        name: "codex",
+        description: "Codex",
+        handler: vi.fn(),
+        pluginId: "openclaw-codex-app-server",
+        pluginName: "Codex",
+        requireAuth: true,
+      },
+      args: "status",
+    });
+
+    await handler(createTelegramPrivateCommandContext({ match: "status" }));
+
+    expectRecordFields(
+      (pluginRuntimeMocks.executePluginCommand.mock.calls as unknown as Array<[unknown]>)[0]?.[0],
+      {
+        sessionKey: "agent:main:main",
+        sessionId: "sess-main",
+        sessionFile: marker,
       },
       "plugin command params",
     );

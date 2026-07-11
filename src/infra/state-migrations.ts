@@ -21,10 +21,12 @@ import {
 import type { SessionEntry } from "../config/sessions.js";
 import { saveSessionStore } from "../config/sessions.js";
 import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
+import { resolveAgentsDirFromSessionStorePath } from "../config/sessions/paths.js";
 import { normalizePersistedSessionEntryShape } from "../config/sessions/store-entry-shape.js";
 import {
   listConfiguredSessionStoreAgentIds,
   resolveAllAgentSessionStoreTargetsSync,
+  resolveSessionStoreTargets,
 } from "../config/sessions/targets.js";
 import type { SessionScope } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -5541,7 +5543,7 @@ async function migrateLegacyAcpSessionMetadata(params: {
     : params.cfg;
   // Reuse the validated resolver for every declared owner. Owner multiplicity
   // is restored below as metadata without re-adding rejected raw paths.
-  const targets = resolveAllAgentSessionStoreTargetsSync(discoveryCfg, { env });
+  const targets = resolveLegacyAcpMetadataSessionStoreTargets(discoveryCfg, env);
   const mainKey = normalizeMainKey(params.cfg.session?.mainKey);
   const scope = params.cfg.session?.scope as SessionScope | undefined;
   const storeGroups: Array<{
@@ -5687,6 +5689,78 @@ async function migrateLegacyAcpSessionMetadata(params: {
   }
 
   return { changes, warnings };
+}
+
+// Doctor migration must read legacy session stores even before a per-agent
+// SQLite DB exists; active runtime discovery remains SQLite-validated.
+function resolveLegacyAcpMetadataSessionStoreTargets(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): Array<{ agentId: string; storePath: string }> {
+  const stateDir = resolveStateDir(env);
+  const agentsDirs = new Set<string>([path.join(stateDir, "agents")]);
+  const targets = new Map<string, { agentId: string; storePath: string }>();
+  const addTarget = (agentId: string, storePath: string) => {
+    if (!isManagedLegacySessionStorePathSafe(storePath)) {
+      return;
+    }
+    const agentsDir = resolveAgentsDirFromSessionStorePath(storePath);
+    if (agentsDir) {
+      agentsDirs.add(agentsDir);
+    }
+    if (!targets.has(storePath)) {
+      targets.set(storePath, { agentId, storePath });
+    }
+  };
+
+  for (const target of resolveAllAgentSessionStoreTargetsSync(cfg, { env })) {
+    addTarget(target.agentId, target.storePath);
+  }
+  for (const target of resolveSessionStoreTargets(cfg, { allAgents: true }, { env })) {
+    addTarget(target.agentId, target.storePath);
+  }
+
+  for (const agentsDir of agentsDirs) {
+    if (!existsDir(agentsDir)) {
+      continue;
+    }
+    for (const entry of safeReadDir(agentsDir)) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      const agentId = normalizeAgentId(entry.name);
+      const normalizedDirName = normalizeLowercaseStringOrEmpty(entry.name);
+      if (agentId === DEFAULT_AGENT_ID && normalizedDirName !== agentId) {
+        continue;
+      }
+      addTarget(agentId, path.join(agentsDir, entry.name, "sessions", "sessions.json"));
+    }
+  }
+  return [...targets.values()];
+}
+
+function isManagedLegacySessionStorePathSafe(storePath: string): boolean {
+  const resolvedStorePath = path.resolve(storePath);
+  const agentsDir = resolveAgentsDirFromSessionStorePath(resolvedStorePath);
+  if (!agentsDir) {
+    return true;
+  }
+  if (!fileExists(resolvedStorePath)) {
+    return true;
+  }
+
+  try {
+    const stat = fs.lstatSync(resolvedStorePath);
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      return false;
+    }
+    const resolvedAgentsDir = path.resolve(agentsDir);
+    const realStorePath = fs.realpathSync.native(resolvedStorePath);
+    const realAgentsDir = fs.realpathSync.native(resolvedAgentsDir);
+    return isWithinDir(realAgentsDir, realStorePath);
+  } catch {
+    return false;
+  }
 }
 
 function resolveStorePathFromTemplate(

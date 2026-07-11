@@ -7,11 +7,16 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { loadSessionStore, type SessionEntry } from "../config/sessions.js";
-import { writeSessionStoreForTest } from "../config/sessions/test-helpers.js";
+import type { SessionEntry } from "../config/sessions.js";
+import {
+  appendTranscriptMessageSync,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { withStateDirEnv as withRawStateDirEnv } from "../test-helpers/state-dir-env.js";
 import {
   canonicalizeSpawnedByForAgent,
   buildGatewaySessionRow,
@@ -47,8 +52,51 @@ vi.mock("../plugins/provider-public-artifacts.js", () => ({
   resolveBundledProviderPolicySurface: providerArtifactMocks.resolveBundledProviderPolicySurface,
 }));
 
-function resolveSyncRealpath(filePath: string): string {
-  return fs.realpathSync.native(filePath);
+function closeSessionSqliteDatabasesForTest(): void {
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
+}
+
+async function withStateDirEnv<T>(
+  prefix: string,
+  fn: (ctx: { tempRoot: string; stateDir: string }) => Promise<T>,
+): Promise<T> {
+  return withRawStateDirEnv(prefix, async (ctx) => {
+    try {
+      return await fn(ctx);
+    } finally {
+      closeSessionSqliteDatabasesForTest();
+    }
+  });
+}
+
+async function seedSessionEntries(
+  storePath: string,
+  entries: Record<string, SessionEntry>,
+): Promise<void> {
+  for (const [sessionKey, entry] of Object.entries(entries)) {
+    await replaceSessionEntry({ sessionKey, storePath }, entry);
+  }
+}
+
+function appendTranscriptMessages(params: {
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+  messages: unknown[];
+  agentId?: string;
+}) {
+  for (const message of params.messages) {
+    appendTranscriptMessageSync(
+      {
+        agentId: params.agentId ?? "main",
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+      },
+      { message },
+    );
+  }
 }
 
 function createSymlinkOrSkip(targetPath: string, linkPath: string): boolean {
@@ -120,6 +168,7 @@ describe("gateway session utils", () => {
   afterEach(() => {
     resetConfigRuntimeState();
     resetPluginRuntimeStateForTest();
+    closeSessionSqliteDatabasesForTest();
   });
 
   test("capArrayByJsonBytes trims from the front", () => {
@@ -813,22 +862,23 @@ describe("gateway session utils", () => {
         ["main", 10],
         ["work", 40],
       ] as const) {
-        const sessionsDir = path.join(stateDir, "agents", agentId, "sessions");
-        fs.mkdirSync(sessionsDir, { recursive: true });
-        fs.writeFileSync(
-          path.join(sessionsDir, `${sessionId}.jsonl`),
-          [
-            JSON.stringify({ type: "session", version: 1, id: sessionId }),
-            JSON.stringify({
-              message: {
-                role: "assistant",
-                content: "done",
-                usage: { input, output: 2 },
-              },
-            }),
-          ].join("\n"),
-          "utf-8",
-        );
+        const storePath = path.join(stateDir, "agents", agentId, "sessions", "sessions.json");
+        await seedSessionEntries(storePath, {
+          global: { sessionId, updatedAt: 1 },
+        });
+        appendTranscriptMessages({
+          agentId,
+          sessionId,
+          sessionKey: "global",
+          storePath,
+          messages: [
+            {
+              role: "assistant",
+              content: "done",
+              usage: { input, output: 2 },
+            },
+          ],
+        });
       }
 
       const row = buildGatewaySessionRow({
@@ -1206,7 +1256,7 @@ describe("gateway session utils", () => {
         sessionId: "sess-acp-repair",
         updatedAt: 1,
       } satisfies SessionEntry;
-      writeSessionStoreForTest(storePath, {
+      await seedSessionEntries(storePath, {
         [acpKey]: entry,
       });
       writeAcpSessionMetaForMigration({
@@ -1378,13 +1428,9 @@ describe("gateway session utils", () => {
       const retiredSessionsDir = path.join(stateDir, "agents", "Retired Agent", "sessions");
       fs.mkdirSync(retiredSessionsDir, { recursive: true });
       const retiredStorePath = path.join(retiredSessionsDir, "sessions.json");
-      fs.writeFileSync(
-        retiredStorePath,
-        JSON.stringify({
-          "agent:retired-agent:main": { sessionId: "sess-retired", updatedAt: 1 },
-        }),
-        "utf8",
-      );
+      await seedSessionEntries(retiredStorePath, {
+        "agent:retired-agent:main": { sessionId: "sess-retired", updatedAt: 1 },
+      });
 
       const cfg = {
         session: {
@@ -1396,7 +1442,7 @@ describe("gateway session utils", () => {
 
       const target = resolveGatewaySessionStoreTarget({ cfg, key: "agent:retired-agent:main" });
 
-      expect(target.storePath).toBe(resolveSyncRealpath(retiredStorePath));
+      expect(target.storePath).toBe(path.resolve(retiredStorePath));
     });
   });
 
@@ -1407,13 +1453,9 @@ describe("gateway session utils", () => {
         const retiredSessionsDir = path.join(stateDir, "agents", "Retired Agent", "sessions");
         fs.mkdirSync(retiredSessionsDir, { recursive: true });
         const retiredStorePath = path.join(retiredSessionsDir, "sessions.json");
-        fs.writeFileSync(
-          retiredStorePath,
-          JSON.stringify({
-            "agent:retired-agent:main": { sessionId: "sess-retired", updatedAt: 7 },
-          }),
-          "utf8",
-        );
+        await seedSessionEntries(retiredStorePath, {
+          "agent:retired-agent:main": { sessionId: "sess-retired", updatedAt: 7 },
+        });
         const cfg = {
           session: {
             mainKey: "main",
@@ -1425,7 +1467,7 @@ describe("gateway session utils", () => {
 
         const loaded = loadSessionEntry("agent:retired-agent:main");
 
-        expect(loaded.storePath).toBe(resolveSyncRealpath(retiredStorePath));
+        expect(loaded.storePath).toBe(path.resolve(retiredStorePath));
         expect(loaded.entry?.sessionId).toBe("sess-retired");
       });
     } finally {
@@ -1440,13 +1482,9 @@ describe("gateway session utils", () => {
         const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
         fs.mkdirSync(sessionsDir, { recursive: true });
         const storePath = path.join(sessionsDir, "sessions.json");
-        fs.writeFileSync(
-          storePath,
-          JSON.stringify({
-            "agent:main:main": { sessionId: "sess-main", updatedAt: 7 },
-          }),
-          "utf8",
-        );
+        await seedSessionEntries(storePath, {
+          "agent:main:main": { sessionId: "sess-main", updatedAt: 7 },
+        });
         const cfg = {
           session: {
             mainKey: "main",
@@ -1457,9 +1495,8 @@ describe("gateway session utils", () => {
         setRuntimeConfigSnapshot(cfg, cfg);
 
         const loaded = loadSessionEntry("agent:main:main", { clone: false });
-        const borrowedStore = loadSessionStore(loaded.storePath, { clone: false });
 
-        expect(loaded.entry).toBe(borrowedStore["agent:main:main"]);
+        expect(loaded.entry).toEqual({ sessionId: "sess-main", updatedAt: 7 });
       });
     } finally {
       resetConfigRuntimeState();
@@ -1512,20 +1549,12 @@ describe("gateway session utils", () => {
         fs.mkdirSync(deletedSessionsDir, { recursive: true });
         const liveStorePath = path.join(liveSessionsDir, "sessions.json");
         const deletedStorePath = path.join(deletedSessionsDir, "sessions.json");
-        fs.writeFileSync(
-          liveStorePath,
-          JSON.stringify({
-            "agent:ops:main": { sessionId: "sess-live-default", updatedAt: 10 },
-          }),
-          "utf8",
-        );
-        fs.writeFileSync(
-          deletedStorePath,
-          JSON.stringify({
-            "agent:main:main": { sessionId: "sess-deleted-main", updatedAt: 20 },
-          }),
-          "utf8",
-        );
+        await seedSessionEntries(liveStorePath, {
+          "agent:ops:main": { sessionId: "sess-live-default", updatedAt: 10 },
+        });
+        await seedSessionEntries(deletedStorePath, {
+          "agent:main:main": { sessionId: "sess-deleted-main", updatedAt: 20 },
+        });
         const cfg = {
           session: { mainKey: "main", store: storeTemplate },
           agents: { list: [{ id: "ops", default: true }] },
@@ -1537,9 +1566,9 @@ describe("gateway session utils", () => {
 
         expect(target.canonicalKey).toBe("agent:main:main");
         expect(target.agentId).toBe("main");
-        expect(target.storePath).toBe(resolveSyncRealpath(deletedStorePath));
+        expect(target.storePath).toBe(path.resolve(deletedStorePath));
         expect(loaded.canonicalKey).toBe("agent:main:main");
-        expect(loaded.storePath).toBe(resolveSyncRealpath(deletedStorePath));
+        expect(loaded.storePath).toBe(path.resolve(deletedStorePath));
         expect(loaded.entry?.sessionId).toBe("sess-deleted-main");
       });
     } finally {
@@ -1562,21 +1591,13 @@ describe("gateway session utils", () => {
         const deletedSessionsDir = path.join(stateDir, "agents", "main", "sessions");
         fs.mkdirSync(liveSessionsDir, { recursive: true });
         fs.mkdirSync(deletedSessionsDir, { recursive: true });
-        fs.writeFileSync(
-          path.join(liveSessionsDir, "sessions.json"),
-          JSON.stringify({
-            "agent:ops:work": { sessionId: "sess-live-default", updatedAt: 10 },
-          }),
-          "utf8",
-        );
+        await seedSessionEntries(path.join(liveSessionsDir, "sessions.json"), {
+          "agent:ops:work": { sessionId: "sess-live-default", updatedAt: 10 },
+        });
         const deletedStorePath = path.join(deletedSessionsDir, "sessions.json");
-        fs.writeFileSync(
-          deletedStorePath,
-          JSON.stringify({
-            "agent:main:main": { sessionId: "sess-deleted-main", updatedAt: 20 },
-          }),
-          "utf8",
-        );
+        await seedSessionEntries(deletedStorePath, {
+          "agent:main:main": { sessionId: "sess-deleted-main", updatedAt: 20 },
+        });
         const cfg = {
           session: { mainKey: "work", store: storeTemplate },
           agents: { list: [{ id: "ops", default: true }] },
@@ -1586,7 +1607,7 @@ describe("gateway session utils", () => {
         const loaded = loadSessionEntry("agent:main:work");
 
         expect(loaded.canonicalKey).toBe("agent:main:work");
-        expect(loaded.storePath).toBe(resolveSyncRealpath(deletedStorePath));
+        expect(loaded.storePath).toBe(path.resolve(deletedStorePath));
         expect(loaded.entry?.sessionId).toBe("sess-deleted-main");
       });
     } finally {
@@ -1600,31 +1621,15 @@ describe("gateway session utils", () => {
       await withStateDirEnv("session-utils-load-entry-cross-store-", async ({ stateDir }) => {
         const canonicalSessionsDir = path.join(stateDir, "agents", "main", "sessions");
         fs.mkdirSync(canonicalSessionsDir, { recursive: true });
-        fs.writeFileSync(
-          path.join(canonicalSessionsDir, "sessions.json"),
-          JSON.stringify(
-            {
-              "agent:main:main": { sessionId: "sess-canonical-fresh", updatedAt: 1000 },
-            },
-            null,
-            2,
-          ),
-          "utf8",
-        );
+        await seedSessionEntries(path.join(canonicalSessionsDir, "sessions.json"), {
+          "agent:main:main": { sessionId: "sess-canonical-fresh", updatedAt: 1000 },
+        });
 
         const discoveredSessionsDir = path.join(stateDir, "agents", "main ", "sessions");
         fs.mkdirSync(discoveredSessionsDir, { recursive: true });
-        fs.writeFileSync(
-          path.join(discoveredSessionsDir, "sessions.json"),
-          JSON.stringify(
-            {
-              "agent:main:main": { sessionId: "sess-discovered-mid", updatedAt: 500 },
-            },
-            null,
-            2,
-          ),
-          "utf8",
-        );
+        await seedSessionEntries(path.join(discoveredSessionsDir, "sessions.json"), {
+          "agent:main:main": { sessionId: "sess-discovered-mid", updatedAt: 500 },
+        });
 
         const cfg = {
           session: {
@@ -2147,7 +2152,8 @@ describe("listSessionsFromStore selected model display", () => {
       const now = Date.now();
       for (let i = 0; i < 11; i += 1) {
         const sessionId = `sess-yield-${i}`;
-        store[`agent:main:${sessionId}`] = {
+        const sessionKey = `agent:main:${sessionId}`;
+        const entry = {
           sessionId,
           updatedAt: now - i,
           modelProvider: "openai",
@@ -2157,15 +2163,19 @@ describe("listSessionsFromStore selected model display", () => {
           contextTokens: 1,
           estimatedCostUsd: 0,
         } as SessionEntry;
-        fs.writeFileSync(
-          path.join(tmpDir, `${sessionId}.jsonl`),
-          [
-            JSON.stringify({ type: "session", version: 1, id: sessionId }),
-            JSON.stringify({ message: { role: "user", content: `title ${i}` } }),
-            JSON.stringify({ message: { role: "assistant", content: `last ${i}` } }),
-          ].join("\n"),
-          "utf-8",
-        );
+        store[sessionKey] = entry;
+        await seedSessionEntries(storePath, {
+          [sessionKey]: entry,
+        });
+        appendTranscriptMessages({
+          sessionId,
+          sessionKey,
+          storePath,
+          messages: [
+            { role: "user", content: `title ${i}` },
+            { role: "assistant", content: `last ${i}` },
+          ],
+        });
       }
 
       const params = {
@@ -2200,6 +2210,7 @@ describe("listSessionsFromStore selected model display", () => {
       expect(listed.sessions[0]?.thinkingOptions?.length).toBeGreaterThan(0);
       expect(listed.sessions[0]?.thinkingDefault).toBe("off");
     } finally {
+      closeSessionSqliteDatabasesForTest();
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
@@ -2212,22 +2223,27 @@ describe("listSessionsFromStore selected model display", () => {
       const now = Date.now();
       for (let i = 0; i < 101; i += 1) {
         const sessionId = `sess-${i}`;
-        store[`agent:main:${sessionId}`] = {
+        const sessionKey = `agent:main:${sessionId}`;
+        const entry = {
           sessionId,
           updatedAt: now - i,
           modelProvider: "openai",
           model: "gpt-5.4",
         } as SessionEntry;
+        store[sessionKey] = entry;
+        await seedSessionEntries(storePath, {
+          [sessionKey]: entry,
+        });
         if (i === 0 || i === 99 || i === 100) {
-          fs.writeFileSync(
-            path.join(tmpDir, `${sessionId}.jsonl`),
-            [
-              JSON.stringify({ type: "session", version: 1, id: sessionId }),
-              JSON.stringify({ message: { role: "user", content: `title ${i}` } }),
-              JSON.stringify({ message: { role: "assistant", content: `last ${i}` } }),
-            ].join("\n"),
-            "utf-8",
-          );
+          appendTranscriptMessages({
+            sessionId,
+            sessionKey,
+            storePath,
+            messages: [
+              { role: "user", content: `title ${i}` },
+              { role: "assistant", content: `last ${i}` },
+            ],
+          });
         }
       }
 
@@ -2246,6 +2262,7 @@ describe("listSessionsFromStore selected model display", () => {
       expect(result.sessions[100]?.derivedTitle).toBeUndefined();
       expect(result.sessions[100]?.lastMessagePreview).toBeUndefined();
     } finally {
+      closeSessionSqliteDatabasesForTest();
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });

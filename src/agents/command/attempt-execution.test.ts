@@ -200,6 +200,18 @@ describe("formatClaudeCliFallbackPrelude", () => {
     expect(out).toMatch(/…$/);
   });
 
+  it.each([
+    ["a surrogate boundary", `${"x".repeat(21)}😀${"y".repeat(100)}`, "x".repeat(21)],
+    ["the ASCII budget", "x".repeat(100), "x".repeat(22)],
+  ])("preserves %s when truncating an oversized summary", (_label, summaryText, expected) => {
+    const out = formatClaudeCliFallbackPrelude(
+      { summaryText, recentTurns: [] },
+      { charBudget: 128 },
+    );
+
+    expect(out).toContain(`Summary of earlier conversation (truncated):\n${expected} …`);
+  });
+
   it("drops oldest turns first when the budget cannot fit all of them", () => {
     const turns = Array.from({ length: 10 }, (_, i) => ({
       role: "user" as const,

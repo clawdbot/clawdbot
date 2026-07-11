@@ -225,7 +225,7 @@ and troubleshooting see the main [FAQ](/help/faq).
 
     **Important:** if you only commit/push your workspace to GitHub, you back up
     **memory + bootstrap files**, but not session history or auth. Those live under
-    `~/.openclaw/` (for example `~/.openclaw/agents/<agentId>/sessions/`).
+    `~/.openclaw/` (for example `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`).
 
     Related: [Migrating](/install/migrating), [Where things live on disk](/help/faq#where-things-live-on-disk),
     [Agent workspace](/concepts/agent-workspace), [Doctor](/gateway/doctor),

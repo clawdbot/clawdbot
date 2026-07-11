@@ -38,8 +38,9 @@ export type UserTurnBeforeMessageWrite = (params: {
   sessionKey?: string;
 }) => AgentMessage | null;
 
-type UserTurnTranscriptPersistenceTarget = {
+export type UserTurnTranscriptPersistenceTarget = {
   sessionId: string;
+  expectedSessionId?: string;
   sessionKey: string;
   sessionEntry: UserTurnSessionEntry | undefined;
   sessionStore?: Record<string, UserTurnSessionEntry>;
@@ -51,18 +52,7 @@ type UserTurnTranscriptPersistenceTarget = {
   beforeMessageWrite?: UserTurnBeforeMessageWrite;
 };
 
-export type UserTurnTranscriptFileTarget = {
-  transcriptPath: string;
-  sessionId?: string;
-  agentId?: string;
-  sessionKey?: string;
-  cwd?: string;
-  config?: unknown;
-};
-
-export type UserTurnTranscriptTarget =
-  | UserTurnTranscriptPersistenceTarget
-  | UserTurnTranscriptFileTarget;
+export type UserTurnTranscriptTarget = UserTurnTranscriptPersistenceTarget;
 
 export type UserTurnTranscriptPersistResult = {
   sessionFile: string;
@@ -89,9 +79,19 @@ export type UserTurnTranscriptRecorder = {
   persistApproved: (params?: {
     target?: UserTurnTranscriptTargetResolver;
     updateMode?: UserTurnTranscriptUpdateMode;
+    cwd?: string;
   }) => Promise<UserTurnTranscriptPersistResult | undefined>;
+  persistBlocked: (
+    message: PersistedUserTurnMessage,
+    params?: {
+      target?: UserTurnTranscriptTargetResolver;
+      updateMode?: UserTurnTranscriptUpdateMode;
+      cwd?: string;
+    },
+  ) => Promise<UserTurnTranscriptPersistResult | undefined>;
   persistFallback: (params?: {
     target?: UserTurnTranscriptTargetResolver;
     updateMode?: UserTurnTranscriptUpdateMode;
+    cwd?: string;
   }) => Promise<UserTurnTranscriptPersistResult | undefined>;
 };

@@ -6,6 +6,7 @@ import type {
   ContextEngine,
   ContextEngineRuntimeContext,
   ContextEngineRuntimeSettings,
+  ContextEngineSessionTarget,
 } from "../../context-engine/types.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
@@ -329,6 +330,7 @@ export function installContextEngineLoopHook(params: {
   contextEngine: ContextEngine;
   sessionId: string;
   sessionKey?: string;
+  sessionTarget?: ContextEngineSessionTarget;
   sessionFile: string;
   tokenBudget?: number;
   modelId: string;
@@ -398,6 +400,7 @@ export function installContextEngineLoopHook(params: {
         await contextEngine.afterTurn({
           sessionId,
           sessionKey,
+          sessionTarget: params.sessionTarget,
           sessionFile,
           messages: transcriptMessages,
           prePromptMessageCount,

@@ -1,8 +1,5 @@
 // Reconciles stale or lost task registry records during maintenance passes.
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isAcpTurnActive } from "../acp/control-plane/active-turns.js";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import {
@@ -14,8 +11,12 @@ import {
   formatSubagentRecoveryWedgedReason,
   isSubagentRecoveryWedgedEntry,
 } from "../agents/subagent-recovery-state.js";
-import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
+import { resolveStorePath } from "../config/sessions.js";
 import type { SessionEntry } from "../config/sessions.js";
+import {
+  listSessionEntries,
+  type SessionEntrySummary,
+} from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isCronJobActive } from "../cron/active-jobs.js";
 import { readCronRunLogEntriesSync } from "../cron/run-log.js";
@@ -100,7 +101,7 @@ type TaskRegistryMaintenanceRuntime = {
   }) => Promise<void>;
   listSessionBindingsBySession?: ReturnType<typeof getSessionBindingService>["listBySession"];
   unbindSessionBindings?: ReturnType<typeof getSessionBindingService>["unbind"];
-  loadSessionStore: typeof loadSessionStore;
+  listSessionEntries: typeof listSessionEntries;
   resolveStorePath: typeof resolveStorePath;
   deriveSessionChatTypeFromKey?: typeof deriveSessionChatTypeFromKey;
   isCronJobActive: typeof isCronJobActive;
@@ -140,7 +141,7 @@ const defaultTaskRegistryMaintenanceRuntime: TaskRegistryMaintenanceRuntime = {
   listSessionBindingsBySession: (sessionKey) =>
     getSessionBindingService().listBySession(sessionKey),
   unbindSessionBindings: (input) => getSessionBindingService().unbind(input),
-  loadSessionStore,
+  listSessionEntries,
   resolveStorePath,
   deriveSessionChatTypeFromKey,
   isCronJobActive,
@@ -215,13 +216,12 @@ type CronRecoveryContext = {
   runLogsByJobId: Map<string, CronRunLogEntry[]>;
 };
 
-type SessionStoreLookup = {
-  store: Record<string, SessionEntry>;
-  normalizedEntries?: Map<string, SessionEntry>;
+type SessionEntryLookup = {
+  entriesByKey: Map<string, SessionEntry>;
 };
 
 type BackingSessionLookupContext = {
-  sessionStoresByPath: Map<string, SessionStoreLookup>;
+  sessionEntriesByPath: Map<string, SessionEntryLookup>;
   sessionChatTypesByKey: Map<string, SessionKeyChatType>;
 };
 
@@ -234,58 +234,42 @@ function createCronRecoveryContext(): CronRecoveryContext {
 
 function createBackingSessionLookupContext(): BackingSessionLookupContext {
   return {
-    sessionStoresByPath: new Map<string, SessionStoreLookup>(),
+    sessionEntriesByPath: new Map<string, SessionEntryLookup>(),
     sessionChatTypesByKey: new Map<string, SessionKeyChatType>(),
   };
 }
 
-function getSessionStoreLookup(
+function buildSessionEntryLookup(entries: SessionEntrySummary[]): SessionEntryLookup {
+  return {
+    entriesByKey: new Map(entries.map(({ sessionKey, entry }) => [sessionKey, entry])),
+  };
+}
+
+function getSessionEntryLookup(
   storePath: string,
   context?: BackingSessionLookupContext,
-): SessionStoreLookup {
+): SessionEntryLookup {
   if (!context) {
-    return {
-      store: taskRegistryMaintenanceRuntime.loadSessionStore(storePath, { clone: false }),
-    };
+    return buildSessionEntryLookup(
+      taskRegistryMaintenanceRuntime.listSessionEntries({ storePath }),
+    );
   }
-  const cached = context.sessionStoresByPath.get(storePath);
+  const cached = context.sessionEntriesByPath.get(storePath);
   if (cached) {
     return cached;
   }
-  const lookup = {
-    store: taskRegistryMaintenanceRuntime.loadSessionStore(storePath, { clone: false }),
-  };
-  context.sessionStoresByPath.set(storePath, lookup);
+  const lookup = buildSessionEntryLookup(
+    taskRegistryMaintenanceRuntime.listSessionEntries({ storePath }),
+  );
+  context.sessionEntriesByPath.set(storePath, lookup);
   return lookup;
 }
 
-function getNormalizedSessionEntries(lookup: SessionStoreLookup): Map<string, SessionEntry> {
-  if (lookup.normalizedEntries) {
-    return lookup.normalizedEntries;
-  }
-  const entries = new Map<string, SessionEntry>();
-  for (const [key, entry] of Object.entries(lookup.store)) {
-    if (entry) {
-      entries.set(normalizeLowercaseStringOrEmpty(key), entry);
-    }
-  }
-  lookup.normalizedEntries = entries;
-  return entries;
-}
-
 function findSessionEntryByKey(
-  lookup: SessionStoreLookup,
+  lookup: SessionEntryLookup,
   sessionKey: string,
 ): SessionEntry | undefined {
-  const direct = lookup.store[sessionKey];
-  if (direct) {
-    return direct;
-  }
-  const normalized = normalizeLowercaseStringOrEmpty(sessionKey);
-  if (!normalized) {
-    return undefined;
-  }
-  return getNormalizedSessionEntries(lookup).get(normalized);
+  return lookup.entriesByKey.get(sessionKey);
 }
 
 function resolveSessionChatType(
@@ -316,7 +300,7 @@ function findTaskSessionEntry(
   }
   const agentId = taskRegistryMaintenanceRuntime.parseAgentSessionKey(childSessionKey)?.agentId;
   const storePath = taskRegistryMaintenanceRuntime.resolveStorePath(undefined, { agentId });
-  return findSessionEntryByKey(getSessionStoreLookup(storePath, context), childSessionKey);
+  return findSessionEntryByKey(getSessionEntryLookup(storePath, context), childSessionKey);
 }
 
 function isActiveTask(task: TaskRecord): boolean {

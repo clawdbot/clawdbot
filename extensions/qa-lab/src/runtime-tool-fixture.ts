@@ -1,6 +1,7 @@
 // Qa Lab plugin module implements runtime tool fixture behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { loadTranscriptEventsSync } from "openclaw/plugin-sdk/session-store-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   type QaRuntimeToolCoverageMetadata,
@@ -415,14 +416,17 @@ async function readSessionTranscriptBytes(
   if (!sessionId) {
     throw new Error(`session transcript entry not found for ${sessionKey}`);
   }
-  const sessionsDir = path.join(env.gateway.tempRoot, "state", "agents", "qa", "sessions");
-  const sessionFile = readNonEmptyString(entry?.sessionFile);
-  const transcriptPath = sessionFile
-    ? path.isAbsolute(sessionFile)
-      ? sessionFile
-      : path.join(sessionsDir, sessionFile)
-    : path.join(sessionsDir, `${sessionId}.jsonl`);
-  const transcriptBytes = await fs.readFile(transcriptPath, "utf8");
+  const transcriptBytes = loadTranscriptEventsSync({
+    agentId: "qa",
+    env: {
+      ...process.env,
+      OPENCLAW_STATE_DIR: path.join(env.gateway.tempRoot, "state"),
+    },
+    sessionId,
+    sessionKey,
+  })
+    .map((event) => JSON.stringify(event))
+    .join("\n");
   if (!transcriptBytes.trim()) {
     throw new Error(`session transcript is empty for ${sessionKey}`);
   }

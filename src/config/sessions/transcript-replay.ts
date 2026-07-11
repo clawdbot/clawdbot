@@ -15,6 +15,7 @@ type SessionRecord = {
   message?: { role?: unknown };
 };
 type KeptRecord = { role: "user" | "assistant"; line: string };
+type KeptParsedRecord = { role: "user" | "assistant"; record: unknown };
 
 function isValidReplayTimestamp(value: unknown): boolean {
   if (typeof value === "number") {
@@ -62,33 +63,13 @@ export async function replayRecentUserAssistantMessages(params: {
     return 0;
   }
   try {
-    const kept: KeptRecord[] = [];
-    for (const line of (await fsp.readFile(src, "utf-8")).split(/\r?\n/)) {
-      if (!line.trim()) {
-        continue;
-      }
-      try {
-        const role = replayableRole(JSON.parse(line) as SessionRecord | null);
-        if (role) {
-          kept.push({ role, line });
-        }
-      } catch {
-        // Skip malformed lines.
-      }
-    }
-    if (kept.length === 0) {
+    const tail = await readRecentUserAssistantReplayLines({
+      sourceTranscript: src,
+      maxMessages: max,
+    });
+    if (tail.length === 0) {
       return 0;
     }
-    let startIdx = Math.max(0, kept.length - max);
-    while (startIdx < kept.length && kept[startIdx].role === "assistant") {
-      startIdx += 1;
-    }
-    if (startIdx === kept.length) {
-      // Retained window is assistant-only; replaying would re-create the same
-      // role-ordering hazard this reset path is recovering from.
-      return 0;
-    }
-    const tail = coalesceAlternatingReplayTail(kept.slice(startIdx)).map((entry) => entry.line);
     if (!fs.existsSync(params.targetTranscript)) {
       await fsp.mkdir(path.dirname(params.targetTranscript), { recursive: true });
       const header = JSON.stringify({
@@ -110,10 +91,94 @@ export async function replayRecentUserAssistantMessages(params: {
   }
 }
 
+export async function readRecentUserAssistantReplayRecordsFromJsonl(params: {
+  sourceTranscript?: string;
+  maxMessages?: number;
+}): Promise<unknown[]> {
+  const max = Math.max(0, params.maxMessages ?? DEFAULT_REPLAY_MAX_MESSAGES);
+  const src = params.sourceTranscript;
+  if (max === 0 || !src || !fs.existsSync(src)) {
+    return [];
+  }
+  const records: unknown[] = [];
+  for (const line of (await fsp.readFile(src, "utf-8")).split(/\r?\n/)) {
+    if (!line.trim()) {
+      continue;
+    }
+    try {
+      records.push(JSON.parse(line) as unknown);
+    } catch {
+      // Skip malformed lines.
+    }
+  }
+  return selectRecentUserAssistantReplayRecords(records, max);
+}
+
+export function selectRecentUserAssistantReplayRecords(
+  records: readonly unknown[],
+  maxMessages = DEFAULT_REPLAY_MAX_MESSAGES,
+): unknown[] {
+  const max = Math.max(0, maxMessages);
+  if (max === 0) {
+    return [];
+  }
+  const kept: KeptParsedRecord[] = [];
+  for (const record of records) {
+    const role = replayableRole(record as SessionRecord | null);
+    if (role) {
+      kept.push({ role, record });
+    }
+  }
+  const tail = selectAlternatingReplayTail(kept, max);
+  return tail.map((entry) => entry.record);
+}
+
+async function readRecentUserAssistantReplayLines(params: {
+  sourceTranscript: string;
+  maxMessages: number;
+}): Promise<string[]> {
+  const kept: KeptRecord[] = [];
+  for (const line of (await fsp.readFile(params.sourceTranscript, "utf-8")).split(/\r?\n/)) {
+    if (!line.trim()) {
+      continue;
+    }
+    try {
+      const role = replayableRole(JSON.parse(line) as SessionRecord | null);
+      if (role) {
+        kept.push({ role, line });
+      }
+    } catch {
+      // Skip malformed lines.
+    }
+  }
+  return selectAlternatingReplayTail(kept, params.maxMessages).map((entry) => entry.line);
+}
+
+function selectAlternatingReplayTail<T extends { role: "user" | "assistant" }>(
+  kept: T[],
+  max: number,
+): T[] {
+  if (kept.length === 0) {
+    return [];
+  }
+  let startIdx = Math.max(0, kept.length - max);
+  while (startIdx < kept.length && kept[startIdx]?.role === "assistant") {
+    startIdx += 1;
+  }
+  if (startIdx === kept.length) {
+    // Retained window is assistant-only; replaying would re-create the same
+    // role-ordering hazard this reset path is recovering from.
+    return [];
+  }
+  return coalesceAlternatingReplayTail(kept.slice(startIdx));
+}
+
 // Keep the newest record from each same-role run, preserving original JSONL bytes
 // for replay while ensuring strict provider alternation.
-function coalesceAlternatingReplayTail(entries: KeptRecord[]): KeptRecord[] {
-  const tail: KeptRecord[] = [];
+function coalesceAlternatingReplayTail<T extends { role: "user" | "assistant" }>(
+  entries: T[],
+): T[] {
+  const tail: T[] = [];
   for (const entry of entries) {
     const lastIdx = tail.length - 1;
     if (lastIdx >= 0 && tail[lastIdx]?.role === entry.role) {

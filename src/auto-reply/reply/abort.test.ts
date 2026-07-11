@@ -1,10 +1,13 @@
 // Tests abort request handling, cutoff persistence, and active run cleanup.
-import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { SessionAbortTargetResult } from "../../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  replaceSessionEntry,
+  type SessionAbortTargetResult,
+} from "../../config/sessions/session-accessor.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import {
   testing as abortTesting,
@@ -100,13 +103,15 @@ describe("abort detection", () => {
     sessionIdsByKey: Record<string, string>,
     nowMs = Date.now(),
   ) {
-    const storeEntries = Object.fromEntries(
-      Object.entries(sessionIdsByKey).map(([key, sessionId]) => [
-        key,
-        { sessionId, updatedAt: nowMs },
-      ]),
+    await Promise.all(
+      Object.entries(sessionIdsByKey).map(([sessionKey, sessionId]) =>
+        replaceSessionEntry({ storePath, sessionKey }, { sessionId, updatedAt: nowMs }),
+      ),
     );
-    await fs.writeFile(storePath, JSON.stringify(storeEntries, null, 2));
+  }
+
+  function readAbortSessionEntry(storePath: string, sessionKey: string) {
+    return loadSessionEntry({ storePath, sessionKey });
   }
 
   async function createAbortConfig(params?: {
@@ -1075,17 +1080,12 @@ describe("abort detection", () => {
       sessionKey: acpSessionKey,
       reason: "fast-abort",
     });
-    const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
-      string,
-      {
-        abortCutoffMessageSid?: string;
-        abortCutoffTimestamp?: number;
-      }
-    >;
-    expect(store[sourceSessionKey]?.abortCutoffMessageSid).toBe("77");
-    expect(store[sourceSessionKey]?.abortCutoffTimestamp).toBe(1234567890000);
-    expect(store[acpSessionKey]?.abortCutoffMessageSid).toBeUndefined();
-    expect(store[acpSessionKey]?.abortCutoffTimestamp).toBeUndefined();
+    const sourceEntry = readAbortSessionEntry(storePath, sourceSessionKey);
+    const acpEntry = readAbortSessionEntry(storePath, acpSessionKey);
+    expect(sourceEntry?.abortCutoffMessageSid).toBe("77");
+    expect(sourceEntry?.abortCutoffTimestamp).toBe(1234567890000);
+    expect(acpEntry?.abortCutoffMessageSid).toBeUndefined();
+    expect(acpEntry?.abortCutoffTimestamp).toBeUndefined();
   });
 
   it("persists abort cutoff metadata on /stop when command and target session match", async () => {
@@ -1105,15 +1105,10 @@ describe("abort detection", () => {
     });
 
     expect(result.handled).toBe(true);
-    const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, unknown>;
-    const entry = store[sessionKey] as {
-      abortedLastRun?: boolean;
-      abortCutoffMessageSid?: string;
-      abortCutoffTimestamp?: number;
-    };
-    expect(entry.abortedLastRun).toBe(true);
-    expect(entry.abortCutoffMessageSid).toBe("55");
-    expect(entry.abortCutoffTimestamp).toBe(1234567890000);
+    const entry = readAbortSessionEntry(storePath, sessionKey);
+    expect(entry?.abortedLastRun).toBe(true);
+    expect(entry?.abortCutoffMessageSid).toBe("55");
+    expect(entry?.abortCutoffTimestamp).toBe(1234567890000);
   });
 
   it("persists abort cutoff metadata when only ParentSessionKey identifies the command session", async () => {
@@ -1133,15 +1128,10 @@ describe("abort detection", () => {
     });
 
     expect(result.handled).toBe(true);
-    const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, unknown>;
-    const entry = store[sessionKey] as {
-      abortedLastRun?: boolean;
-      abortCutoffMessageSid?: string;
-      abortCutoffTimestamp?: number;
-    };
-    expect(entry.abortedLastRun).toBe(true);
-    expect(entry.abortCutoffMessageSid).toBe("56");
-    expect(entry.abortCutoffTimestamp).toBe(1234567890001);
+    const entry = readAbortSessionEntry(storePath, sessionKey);
+    expect(entry?.abortedLastRun).toBe(true);
+    expect(entry?.abortCutoffMessageSid).toBe("56");
+    expect(entry?.abortCutoffTimestamp).toBe(1234567890001);
   });
 
   it("does not persist cutoff metadata when native /stop targets a different session", async () => {
@@ -1163,15 +1153,10 @@ describe("abort detection", () => {
     });
 
     expect(result.handled).toBe(true);
-    const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, unknown>;
-    const entry = store[targetSessionKey] as {
-      abortedLastRun?: boolean;
-      abortCutoffMessageSid?: string;
-      abortCutoffTimestamp?: number;
-    };
-    expect(entry.abortedLastRun).toBe(true);
-    expect(entry.abortCutoffMessageSid).toBeUndefined();
-    expect(entry.abortCutoffTimestamp).toBeUndefined();
+    const entry = readAbortSessionEntry(storePath, targetSessionKey);
+    expect(entry?.abortedLastRun).toBe(true);
+    expect(entry?.abortCutoffMessageSid).toBeUndefined();
+    expect(entry?.abortCutoffTimestamp).toBeUndefined();
   });
 
   it("fast-abort stops active subagent runs for requester session", async () => {

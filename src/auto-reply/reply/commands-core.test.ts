@@ -3,27 +3,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HookRunner } from "../../plugins/hooks.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
-const fsMocks = vi.hoisted(() => ({
-  readFile: vi.fn(),
-  readdir: vi.fn(),
-}));
-
 const hookRunnerMocks = vi.hoisted(() => ({
   hasHooks: vi.fn<HookRunner["hasHooks"]>(),
   runBeforeReset: vi.fn<HookRunner["runBeforeReset"]>(),
+  loadTranscriptEvents: vi.fn(async (): Promise<unknown[]> => []),
 }));
 
-vi.mock("node:fs/promises", async () => {
-  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+vi.mock("../../config/sessions/session-accessor.js", () => {
   return {
-    ...actual,
-    default: {
-      ...actual,
-      readFile: fsMocks.readFile,
-      readdir: fsMocks.readdir,
-    },
-    readFile: fsMocks.readFile,
-    readdir: fsMocks.readdir,
+    loadTranscriptEvents: hookRunnerMocks.loadTranscriptEvents,
   };
 });
 
@@ -67,6 +55,7 @@ describe("emitResetCommandHooks", () => {
       previousSessionEntry: {
         sessionId: "prev-session",
       } as HandleCommandsParams["previousSessionEntry"],
+      storePath: "/tmp/openclaw-agent.sqlite",
       workspaceDir: "/tmp/openclaw-workspace",
     });
 
@@ -76,14 +65,12 @@ describe("emitResetCommandHooks", () => {
   }
 
   beforeEach(() => {
-    fsMocks.readFile.mockReset();
-    fsMocks.readdir.mockReset();
     hookRunnerMocks.hasHooks.mockReset();
     hookRunnerMocks.runBeforeReset.mockReset();
+    hookRunnerMocks.loadTranscriptEvents.mockReset();
     hookRunnerMocks.hasHooks.mockImplementation((hookName) => hookName === "before_reset");
     hookRunnerMocks.runBeforeReset.mockResolvedValue(undefined);
-    fsMocks.readFile.mockResolvedValue("");
-    fsMocks.readdir.mockResolvedValue([]);
+    hookRunnerMocks.loadTranscriptEvents.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -114,16 +101,14 @@ describe("emitResetCommandHooks", () => {
     expect(ctx?.workspaceDir).toBe("/tmp/openclaw-workspace");
   });
 
-  it("recovers the archived transcript when the original reset transcript path is gone", async () => {
-    fsMocks.readFile.mockRejectedValueOnce(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
-    fsMocks.readdir.mockResolvedValueOnce(["prev-session.jsonl.reset.2026-02-16T22-26-33.000Z"]);
-    fsMocks.readFile.mockResolvedValueOnce(
-      `${JSON.stringify({
+  it("loads marker-backed before_reset transcripts by session identity", async () => {
+    hookRunnerMocks.loadTranscriptEvents.mockResolvedValueOnce([
+      {
         type: "message",
         id: "m1",
         message: { role: "user", content: "Recovered from archive" },
-      })}\n`,
-    );
+      },
+    ]);
     const command = {
       surface: "telegram",
       senderId: "vac",
@@ -139,57 +124,60 @@ describe("emitResetCommandHooks", () => {
       cfg: {} as HandleCommandsParams["cfg"],
       command,
       sessionKey: "agent:main:telegram:group:-1003826723328:topic:8428",
+      storePath: "/tmp/openclaw-agent.sqlite",
       previousSessionEntry: {
         sessionId: "prev-session",
-        sessionFile: "/tmp/prev-session.jsonl",
+        sessionFile: "sqlite:main:prev-session:/tmp/openclaw-agent.sqlite",
       } as HandleCommandsParams["previousSessionEntry"],
       workspaceDir: "/tmp/openclaw-workspace",
     });
 
     await vi.waitFor(() => expect(hookRunnerMocks.runBeforeReset).toHaveBeenCalledTimes(1));
     const [event, ctx] = firstBeforeResetCall();
-    expect(event.sessionFile).toBe("/tmp/prev-session.jsonl.reset.2026-02-16T22-26-33.000Z");
+    expect(hookRunnerMocks.loadTranscriptEvents).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionId: "prev-session",
+      sessionKey: "agent:main:telegram:group:-1003826723328:topic:8428",
+      storePath: "/tmp/openclaw-agent.sqlite",
+    });
+    expect(event.sessionFile).toBe("sqlite:main:prev-session:/tmp/openclaw-agent.sqlite");
     expect(event.messages).toEqual([{ role: "user", content: "Recovered from archive" }]);
     expect(event.reason).toBe("new");
     expect(ctx.sessionId).toBe("prev-session");
   });
 
   it("keeps leaf-controlled side branches out of before_reset hooks", async () => {
-    fsMocks.readFile.mockResolvedValueOnce(
-      [
-        {
-          type: "message",
-          id: "active-root",
-          parentId: null,
-          message: { role: "user", content: "active root" },
-        },
-        {
-          type: "message",
-          id: "side-entry",
-          parentId: "active-root",
-          message: { role: "assistant", content: "side delivery" },
-        },
-        {
-          type: "leaf",
-          id: "active-leaf",
-          parentId: "side-entry",
-          targetId: "active-root",
-        },
-        {
-          type: "message",
-          id: "active-tail",
-          parentId: "active-root",
-          message: { role: "assistant", content: "active tail" },
-        },
-        {
-          type: "metadata",
-          id: "opaque-after-active-tail",
-          parentId: "side-entry",
-        },
-      ]
-        .map((entry) => JSON.stringify(entry))
-        .join("\n"),
-    );
+    hookRunnerMocks.loadTranscriptEvents.mockResolvedValueOnce([
+      {
+        type: "message",
+        id: "active-root",
+        parentId: null,
+        message: { role: "user", content: "active root" },
+      },
+      {
+        type: "message",
+        id: "side-entry",
+        parentId: "active-root",
+        message: { role: "assistant", content: "side delivery" },
+      },
+      {
+        type: "leaf",
+        id: "active-leaf",
+        parentId: "side-entry",
+        targetId: "active-root",
+      },
+      {
+        type: "message",
+        id: "active-tail",
+        parentId: "active-root",
+        message: { role: "assistant", content: "active tail" },
+      },
+      {
+        type: "metadata",
+        id: "opaque-after-active-tail",
+        parentId: "side-entry",
+      },
+    ]);
 
     await emitResetCommandHooks({
       action: "new",
@@ -204,9 +192,10 @@ describe("emitResetCommandHooks", () => {
         resetHookTriggered: false,
       } as HandleCommandsParams["command"],
       sessionKey: "agent:main:main",
+      storePath: "/tmp/openclaw-agent.sqlite",
       previousSessionEntry: {
         sessionId: "prev-session",
-        sessionFile: "/tmp/prev-session.jsonl",
+        sessionFile: "sqlite:main:prev-session:/tmp/openclaw-agent.sqlite",
       } as HandleCommandsParams["previousSessionEntry"],
       workspaceDir: "/tmp/openclaw-workspace",
     });

@@ -2,12 +2,12 @@
 import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import { getRuntimeConfig } from "../config/config.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
 import {
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
-  resolveStorePath,
-} from "../config/sessions/paths.js";
-import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+  loadSessionEntry,
+  resolveSessionTranscriptReadTarget,
+} from "../config/sessions/session-accessor.js";
+import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
@@ -134,17 +134,19 @@ export async function exportTrajectoryCommand(
 
   let sessionFile: string;
   try {
-    sessionFile = resolveSessionFilePath(
-      entry.sessionId,
-      entry,
-      resolveSessionFilePathOptions({ agentId: targetAgentId, storePath }),
-    );
+    sessionFile = resolveSessionTranscriptReadTarget({
+      agentId: targetAgentId,
+      sessionEntry: entry,
+      sessionId: entry.sessionId,
+      sessionKey,
+      storePath,
+    }).sessionFile;
   } catch (error) {
     runtime.error(`Failed to resolve session file: ${formatErrorMessage(error)}`);
     runtime.exit(1);
     return;
   }
-  if (!(await pathExists(sessionFile))) {
+  if (!parseSqliteSessionFileMarker(sessionFile) && !(await pathExists(sessionFile))) {
     runtime.error(
       `Session file not found for ${sessionKey}. Run ${formatCliCommand("openclaw doctor")} to inspect session storage.`,
     );

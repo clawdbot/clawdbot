@@ -7,9 +7,10 @@ import {
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
-import { resolveSessionTranscriptPath, resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveStorePath } from "../../config/sessions/paths.js";
+import { loadSessionEntry, listSessionEntries } from "../../config/sessions/session-accessor.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
-import { loadSessionStore, resolveSessionStoreEntry } from "../../config/sessions/store.js";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -200,14 +201,10 @@ export function initFastReplySessionState(params: {
     mainKey: cfg.session?.mainKey,
   });
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
-  const sessionStore: Record<string, SessionEntry> = loadSessionStore(storePath, {
-    skipCache: true,
-    clone: false,
-  });
-  const existingEntry = resolveSessionStoreEntry({
-    store: sessionStore,
-    sessionKey,
-  }).existing;
+  const sessionStore: Record<string, SessionEntry> = Object.fromEntries(
+    listSessionEntries({ storePath }).map(({ sessionKey: entryKey, entry }) => [entryKey, entry]),
+  );
+  const existingEntry = loadSessionEntry({ storePath, sessionKey });
   const commandSource = ctx.BodyForCommands ?? ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "";
   const triggerBodyNormalized = isFormattedGoalContinuationPrompt(commandSource)
     ? commandSource.trim()
@@ -236,7 +233,7 @@ export function initFastReplySessionState(params: {
   const sessionFile =
     !resetTriggered && existingEntry?.sessionFile
       ? existingEntry.sessionFile
-      : resolveSessionTranscriptPath(sessionId, agentId);
+      : formatSqliteSessionFileMarker({ agentId, sessionId, storePath });
   const sessionEntry: SessionEntry = {
     ...(!resetTriggered ? existingEntry : undefined),
     sessionId,

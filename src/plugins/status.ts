@@ -44,7 +44,11 @@ export type { PluginCapabilityKind, PluginInspectShape } from "./inspect-shape.j
 
 export type PluginCompatibilityNotice = {
   pluginId: string;
-  code: "legacy-before-agent-start" | "hook-only" | "deprecated-memory-embedding-provider-api";
+  code:
+    | "legacy-before-agent-start"
+    | "hook-only"
+    | "deprecated-memory-embedding-provider-api"
+    | "removed-session-transcript-file-api";
   compatCode: PluginCompatCode;
   severity: "warn" | "info";
   message: string;
@@ -105,6 +109,7 @@ export type PluginInspectReport = {
 
 function buildCompatibilityNoticesForInspect(
   inspect: Pick<PluginInspectReport, "plugin" | "shape" | "usesLegacyBeforeAgentStart"> & {
+    diagnostics: readonly PluginDiagnostic[];
     hasRuntimeMemoryEmbeddingProviderRegistration: boolean;
   },
 ): PluginCompatibilityNotice[] {
@@ -143,7 +148,46 @@ function buildCompatibilityNoticesForInspect(
         "uses deprecated memory-specific embedding provider API; use api.registerEmbeddingProvider and contracts.embeddingProviders for new embedding providers.",
     });
   }
+  if (usesRemovedSessionTranscriptFileApi(inspect)) {
+    warnings.push({
+      pluginId: inspect.plugin.id,
+      code: "removed-session-transcript-file-api",
+      compatCode: "removed-session-transcript-file-api",
+      severity: "warn",
+      message:
+        "references removed session/transcript file APIs; migrate to session identity, SessionTranscriptUpdate.target, and Gateway/runtime session helpers.",
+    });
+  }
   return warnings;
+}
+
+const removedSessionTranscriptFileApiMarkers = [
+  "loadSessionStore",
+  "saveSessionStore",
+  "updateSessionStore",
+  "resolveSessionFilePath",
+  "resolveSessionTranscriptPathInDir",
+  "resolveAndPersistSessionFile",
+  "readLatestAssistantTextFromSessionTranscript",
+  "SessionTranscriptUpdate.sessionFile",
+  "sessionFiles",
+  "transcriptPath",
+  "sessionFile",
+] as const;
+
+function usesRemovedSessionTranscriptFileApi(
+  inspect: Pick<PluginInspectReport, "plugin"> & { diagnostics: readonly PluginDiagnostic[] },
+): boolean {
+  if (inspect.plugin.origin === "bundled") {
+    return false;
+  }
+  const messages = [
+    inspect.plugin.error,
+    ...inspect.diagnostics.map((diagnostic) => diagnostic.message),
+  ].filter((message): message is string => typeof message === "string" && message.length > 0);
+  return messages.some((message) =>
+    removedSessionTranscriptFileApiMarkers.some((marker) => message.includes(marker)),
+  );
 }
 
 function resolveReportedPluginVersion(
@@ -408,6 +452,7 @@ export function buildPluginInspectReport(params: {
     plugin,
     shape,
     usesLegacyBeforeAgentStart,
+    diagnostics,
     hasRuntimeMemoryEmbeddingProviderRegistration,
   });
   return {

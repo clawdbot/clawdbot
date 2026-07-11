@@ -28,8 +28,8 @@ export function serializeJsonlLine(entry: unknown): string {
   return serialized;
 }
 
-function serializeJsonlEntries(entries: readonly unknown[]): string {
-  return serializeJsonlLines(entries.map(serializeJsonlLine));
+export function serializeJsonlEntries(jsonlEntries: readonly unknown[]): string {
+  return serializeJsonlLines(jsonlEntries.map(serializeJsonlLine));
 }
 
 export function serializeJsonlLines(lines: readonly string[]): string {

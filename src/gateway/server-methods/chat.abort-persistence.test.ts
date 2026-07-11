@@ -2,12 +2,18 @@
  * Tests persistence effects when chat abort requests complete.
  */
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
-import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  appendTranscriptMessageSync,
+  loadTranscriptEvents,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { onAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
   createActiveRun,
   createChatAbortContext,
@@ -20,6 +26,7 @@ type TranscriptLine = {
 
 const sessionEntryState = vi.hoisted(() => ({
   transcriptPath: "",
+  storePath: "",
   sessionId: "",
   hasEntry: true,
   canonicalKey: "main",
@@ -36,7 +43,7 @@ vi.mock("../session-utils.js", async () => {
       sessionEntryState.loadCalls.push({ sessionKey, opts });
       return {
         cfg: sessionEntryState.cfg,
-        storePath: path.join(path.dirname(sessionEntryState.transcriptPath), "sessions.json"),
+        storePath: sessionEntryState.storePath,
         entry: sessionEntryState.hasEntry
           ? {
               sessionId: sessionEntryState.sessionId,
@@ -51,31 +58,20 @@ vi.mock("../session-utils.js", async () => {
 
 const { chatHandlers } = await import("./chat.js");
 
-async function writeTranscriptHeader(transcriptPath: string, sessionId: string) {
-  const header = {
-    type: "session",
-    version: CURRENT_SESSION_VERSION,
-    id: sessionId,
-    timestamp: new Date(0).toISOString(),
-    cwd: "/tmp",
-  };
-  await fs.writeFile(transcriptPath, `${JSON.stringify(header)}\n`, "utf-8");
-}
+const transcriptFixtures = new Map<string, { sessionId: string; storePath: string }>();
+const fixtureDirs = new Set<string>();
 
 async function readTranscriptLines(transcriptPath: string): Promise<TranscriptLine[]> {
-  const raw = await fs.readFile(transcriptPath, "utf-8");
-  const lines: TranscriptLine[] = [];
-  for (const line of raw.split(/\r?\n/)) {
-    if (line.trim().length === 0) {
-      continue;
-    }
-    try {
-      lines.push(JSON.parse(line) as TranscriptLine);
-    } catch {
-      lines.push({});
-    }
+  const fixture = transcriptFixtures.get(transcriptPath);
+  if (!fixture) {
+    throw new Error(`unknown transcript fixture: ${transcriptPath}`);
   }
-  return lines;
+  return (await loadTranscriptEvents({
+    agentId: "main",
+    sessionId: fixture.sessionId,
+    sessionKey: "main",
+    storePath: fixture.storePath,
+  })) as TranscriptLine[];
 }
 
 function collectMessagesWithIdempotencyKey(
@@ -156,47 +152,90 @@ function expectPersistedAbortMessage(
   expect(abort.runId).toBe(expected.runId);
 }
 
-function setMockSessionEntry(transcriptPath: string, sessionId: string, hasEntry = true) {
-  sessionEntryState.transcriptPath = transcriptPath;
-  sessionEntryState.sessionId = sessionId;
-  sessionEntryState.hasEntry = hasEntry;
+function setMockSessionEntry(params: {
+  sessionId: string;
+  storePath: string;
+  transcriptPath: string;
+  hasEntry?: boolean;
+}) {
+  sessionEntryState.transcriptPath = params.transcriptPath;
+  sessionEntryState.storePath = params.storePath;
+  sessionEntryState.sessionId = params.sessionId;
+  sessionEntryState.hasEntry = params.hasEntry ?? true;
   sessionEntryState.canonicalKey = "main";
   sessionEntryState.cfg = {};
   sessionEntryState.loadCalls = [];
 }
 
-const abortTempDirs: string[] = [];
-
 async function createTranscriptFixture(prefix: string) {
-  const dir = makeTempDir(abortTempDirs, prefix);
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  fixtureDirs.add(dir);
   const sessionId = "sess-main";
-  const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
-  await writeTranscriptHeader(transcriptPath, sessionId);
+  const storePath = path.join(dir, "sessions.json");
+  const transcriptPath = formatSqliteSessionFileMarker({
+    agentId: "main",
+    sessionId,
+    storePath,
+  });
   // The accessor resolves transcript targets from the persisted store, so the
   // fixture seeds a real entry instead of relying on the mocked gateway wrapper.
   await replaceSessionEntry(
-    { agentId: "main", sessionKey: "main", storePath: path.join(dir, "sessions.json") },
+    { agentId: "main", sessionKey: "main", storePath },
     { sessionId, sessionFile: transcriptPath, updatedAt: Date.now() },
   );
-  setMockSessionEntry(transcriptPath, sessionId);
-  return { transcriptPath, sessionId };
+  transcriptFixtures.set(transcriptPath, { sessionId, storePath });
+  setMockSessionEntry({ transcriptPath, storePath, sessionId });
+  return { transcriptPath, sessionId, storePath };
+}
+
+function appendTranscriptMessage(params: {
+  idempotencyKey: string;
+  message: Record<string, unknown>;
+  sessionId: string;
+  storePath: string;
+}) {
+  appendTranscriptMessageSync(
+    {
+      agentId: "main",
+      sessionId: params.sessionId,
+      sessionKey: "main",
+      storePath: params.storePath,
+    },
+    {
+      idempotencyLookup: "caller-checked",
+      message: {
+        ...params.message,
+        idempotencyKey: params.idempotencyKey,
+      },
+      now: 1,
+    },
+  );
 }
 
 async function createMissingEntryFixture(prefix: string) {
-  const dir = makeTempDir(abortTempDirs, prefix);
-  const transcriptPath = path.join(dir, "missing.jsonl");
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  fixtureDirs.add(dir);
+  const storePath = path.join(dir, "sessions.json");
   const sessionId = "client-supplied-session";
-  setMockSessionEntry(transcriptPath, sessionId, false);
+  const transcriptPath = formatSqliteSessionFileMarker({
+    agentId: "main",
+    sessionId,
+    storePath,
+  });
+  transcriptFixtures.set(transcriptPath, { sessionId, storePath });
+  setMockSessionEntry({ transcriptPath, storePath, sessionId, hasEntry: false });
   return { sessionId };
 }
 
-afterAll(() => {
-  cleanupTempDirs(abortTempDirs);
-});
-
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
   resetAgentEventsForTest();
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
+  transcriptFixtures.clear();
+  const dirs = [...fixtureDirs];
+  fixtureDirs.clear();
+  await Promise.all(dirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
 describe("chat abort transcript persistence", () => {
@@ -255,91 +294,26 @@ describe("chat abort transcript persistence", () => {
   });
 
   it("does not let non-assistant idempotency collisions suppress abort partial persistence", async () => {
-    const { transcriptPath, sessionId } = await createTranscriptFixture(
+    const { transcriptPath, sessionId, storePath } = await createTranscriptFixture(
       "openclaw-chat-abort-idempotency-collision-",
     );
     const runId = "idem-abort-collision";
     const idempotencyKey = `${runId}:assistant`;
-    await fs.appendFile(
-      transcriptPath,
-      `${JSON.stringify({
-        type: "message",
-        id: "user-message-with-colliding-key",
-        parentId: null,
-        timestamp: new Date(0).toISOString(),
-        message: {
-          role: "user",
-          content: "colliding user key",
-          timestamp: 1,
-          idempotencyKey,
-        },
-      })}\n`,
-      "utf-8",
-    );
+    appendTranscriptMessage({
+      idempotencyKey,
+      sessionId,
+      storePath,
+      message: {
+        role: "user",
+        content: "colliding user key",
+        timestamp: 1,
+      },
+    });
 
     const respond = vi.fn();
     const context = createChatAbortContext({
       chatAbortControllers: new Map([[runId, createActiveRun("main", { sessionId })]]),
       chatRunBuffers: new Map([[runId, "Partial after collision"]]),
-      chatDeltaSentAt: new Map([[runId, Date.now()]]),
-      logGateway: { warn: vi.fn() },
-    });
-
-    await invokeChatAbortHandler({
-      handler: chatHandlers["chat.abort"],
-      context,
-      request: { sessionKey: "main", runId },
-      respond,
-    });
-
-    const lines = await readTranscriptLines(transcriptPath);
-    const assistantMessages = collectMessagesWithIdempotencyKey(lines, idempotencyKey).filter(
-      (message) => message.role === "assistant",
-    );
-
-    expect(assistantMessages).toHaveLength(1);
-    expectPersistedAbortMessage(assistantMessages[0], {
-      idempotencyKey,
-      origin: "rpc",
-      runId,
-      stopReason: "stop",
-    });
-  });
-
-  it("dedupes legacy assistant transcript entries without top-level ids", async () => {
-    const { transcriptPath, sessionId } = await createTranscriptFixture(
-      "openclaw-chat-abort-legacy-idempotency-",
-    );
-    const runId = "idem-abort-legacy";
-    const idempotencyKey = `${runId}:assistant`;
-    await fs.appendFile(
-      transcriptPath,
-      `${JSON.stringify({
-        type: "message",
-        timestamp: new Date(0).toISOString(),
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "legacy partial" }],
-          timestamp: 1,
-          stopReason: "stop",
-          api: "openai-responses",
-          provider: "openclaw",
-          model: "gateway-injected",
-          idempotencyKey,
-          openclawAbort: {
-            aborted: true,
-            origin: "rpc",
-            runId,
-          },
-        },
-      })}\n`,
-      "utf-8",
-    );
-
-    const respond = vi.fn();
-    const context = createChatAbortContext({
-      chatAbortControllers: new Map([[runId, createActiveRun("main", { sessionId })]]),
-      chatRunBuffers: new Map([[runId, "Duplicate partial"]]),
       chatDeltaSentAt: new Map([[runId, Date.now()]]),
       logGateway: { warn: vi.fn() },
     });
@@ -1267,7 +1241,7 @@ describe("chat abort transcript persistence", () => {
 describe("chat.abort session identity matching", () => {
   it("matches an active run by stored sessionId when sessionKey differs", async () => {
     const storedSessionId = "sess-stored-abc";
-    setMockSessionEntry("", storedSessionId);
+    setMockSessionEntry({ transcriptPath: "", storePath: "", sessionId: storedSessionId });
     const runId = "embedded-run-1";
     const active = createActiveRun("agent:main:embedded-key", { sessionId: storedSessionId });
     const context = createChatAbortContext({
@@ -1290,7 +1264,7 @@ describe("chat.abort session identity matching", () => {
   });
 
   it("does not match a run whose sessionId differs from the stored entry", async () => {
-    setMockSessionEntry("", "sess-stored-xyz");
+    setMockSessionEntry({ transcriptPath: "", storePath: "", sessionId: "sess-stored-xyz" });
     const runId = "embedded-run-2";
     const active = createActiveRun("agent:main:other-key", { sessionId: "sess-different" });
     const context = createChatAbortContext({

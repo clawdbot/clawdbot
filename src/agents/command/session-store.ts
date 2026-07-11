@@ -112,6 +112,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
 
   const preserveUserFacingRunState = params.preserveUserFacingSessionModelState === true;
   const preserveRuntimeModel = params.preserveRuntimeModel === true || preserveUserFacingRunState;
+  const hadPreExistingEntry = sessionStore[sessionKey] !== undefined;
   const entry = sessionStore[sessionKey] ?? {
     sessionId,
     updatedAt: now,
@@ -293,13 +294,13 @@ export async function updateSessionStoreAfterAgentRun(params: {
     },
     (currentEntry, context) => {
       if (
+        (!context.existingEntry && hadPreExistingEntry) ||
         (!preserveUserFacingRunState &&
           context.existingEntry &&
-          context.existingEntry.sessionId !== entry.sessionId) ||
-        (!context.existingEntry && sessionStore[sessionKey])
+          context.existingEntry.sessionId !== entry.sessionId)
       ) {
-        // A normal run may rotate its session id, so compare to the pre-run entry.
-        // Do not merge stale finalizer metadata after a delete or a competing reset.
+        // Normal runs may rotate session ids, but stale finalizers must not
+        // recreate rows that were reset/deleted while the run was active.
         return null;
       }
       return preserveUserFacingRunState

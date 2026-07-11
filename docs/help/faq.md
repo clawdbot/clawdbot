@@ -454,7 +454,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
   <Accordion title="Where does OpenClaw store its data?">
     Everything lives under `$OPENCLAW_STATE_DIR` (default: `~/.openclaw`):
 
-    | Path                                                             | Purpose                                                            |
+    | Path                                                               | Purpose                                                            |
     | ------------------------------------------------------------------ | ------------------------------------------------------------------ |
     | `$OPENCLAW_STATE_DIR/openclaw.json`                                 | Main config (JSON5)                                                 |
     | `$OPENCLAW_STATE_DIR/credentials/oauth.json`                        | Legacy OAuth import (copied into auth profiles on first use)        |
@@ -462,9 +462,9 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     | `$OPENCLAW_STATE_DIR/secrets.json`                                  | Optional file-backed secret payload for `file` SecretRef providers   |
     | `$OPENCLAW_STATE_DIR/agents/<agentId>/agent/auth.json`              | Legacy compatibility file (static `api_key` entries scrubbed)        |
     | `$OPENCLAW_STATE_DIR/credentials/`                                  | Provider state (for example `whatsapp/<accountId>/creds.json`)      |
-    | `$OPENCLAW_STATE_DIR/agents/`                                       | Per-agent state (agentDir + sessions)                                |
-    | `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`                    | Conversation history and state (per agent)                          |
-    | `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/sessions.json`       | Session metadata (per agent)                                        |
+    | `$OPENCLAW_STATE_DIR/agents/`                                       | Per-agent state (agentDir + legacy/archive session artifacts)        |
+    | `$OPENCLAW_STATE_DIR/agents/<agentId>/agent/openclaw-agent.sqlite`  | Per-agent SQLite state, including session rows and transcripts      |
+    | `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`                    | Legacy session migration sources and archive/support artifacts      |
 
     Legacy single-agent path `~/.openclaw/agent/*` is migrated by `openclaw doctor`.
 
@@ -1111,11 +1111,11 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
   <Accordion title="How many workspaces and agents can I create?">
     No hard limits - dozens or even hundreds are fine, but watch:
 
-    - **Disk growth**: sessions and transcripts live under `~/.openclaw/agents/<agentId>/sessions/`.
+    - **Disk growth**: active sessions and transcripts live in the per-agent SQLite database; legacy/archive artifacts can still accumulate under `~/.openclaw/agents/<agentId>/sessions/`.
     - **Token cost**: more agents means more concurrent model usage.
     - **Ops overhead**: per-agent auth profiles, workspaces, and channel routing.
 
-    Keep one **active** workspace per agent (`agents.defaults.workspace`), prune old sessions if disk grows, and use `openclaw doctor` to spot stray workspaces and profile mismatches.
+    Keep one **active** workspace per agent (`agents.defaults.workspace`), prune old sessions with `openclaw sessions cleanup` if disk grows (do not edit active SQLite state by hand), and use `openclaw doctor` to spot stray workspaces and profile mismatches.
 
   </Accordion>
 

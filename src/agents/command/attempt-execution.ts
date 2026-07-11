@@ -70,6 +70,7 @@ import { resolveAvailableAgentHarnessPolicy } from "../harness/selection.js";
 import { resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
 import { isCliProvider } from "../model-selection.js";
 import { resolveOpenAIRuntimeProvider } from "../openai-routing.js";
+import type { AgentRunSessionTarget } from "../run-session-target.js";
 import { resolveAgentRunAbortLifecycleFields } from "../run-termination.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import type { AgentMessage } from "../runtime/index.js";
@@ -313,7 +314,9 @@ async function persistTextTurnTranscript(
         if (!params.embeddedAssistantGapFill) {
           return true;
         }
-        const latest = await readTailAssistantTextFromSessionTranscript(sessionFile);
+        const latest = await readTailAssistantTextFromSessionTranscript(sessionFile, {
+          excludeTranscriptOnlyOpenClawAssistant: true,
+        });
         const normalizedReply = normalizeTranscriptMirrorText(replyText);
         const normalizedLatest = latest?.text ? normalizeTranscriptMirrorText(latest.text) : "";
         return !normalizedLatest || normalizedLatest !== normalizedReply;
@@ -451,6 +454,7 @@ export async function runAgentAttempt(params: {
   agentHarnessRuntimeOverride?: string;
   sessionId: string;
   sessionKey: string | undefined;
+  sessionTarget?: AgentRunSessionTarget;
   sessionAgentId: string;
   sessionFile: string;
   workspaceDir: string;
@@ -709,6 +713,7 @@ export async function runAgentAttempt(params: {
           agentId: params.sessionAgentId,
           trigger: "user",
           sessionFile: params.sessionFile,
+          storePath: params.storePath,
           workspaceDir: params.workspaceDir,
           cwd: params.cwd,
           config: params.cfg,
@@ -951,6 +956,8 @@ export async function runAgentAttempt(params: {
     runEmbeddedAgent({
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
+      sessionTarget: params.sessionTarget,
+      sandboxSessionKey: params.sessionKey,
       agentId: params.sessionAgentId,
       trigger: "user",
       messageChannel: params.messageChannel,

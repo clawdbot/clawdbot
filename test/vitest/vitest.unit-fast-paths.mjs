@@ -228,6 +228,7 @@ const broadUnitFastCandidateSkipGlobs = [
   "test/fixtures/**/*.test.ts",
   "test/setup-home-isolation.test.ts",
   "src/agents/sandbox.resolveSandboxContext.test.ts",
+  "src/acp/runtime/session-meta.test.ts",
   "src/channels/plugins/contracts/**/*.test.ts",
   "src/config/**/*.test.ts",
   "src/gateway/**/*.test.ts",

@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { HookRunner } from "../../plugins/hooks.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -79,7 +80,12 @@ async function writeStore(
   store: Record<string, SessionEntry | Record<string, unknown>>,
 ): Promise<void> {
   await fs.mkdir(path.dirname(storePath), { recursive: true });
-  await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
+  for (const [sessionKey, entry] of Object.entries(store)) {
+    const sessionEntry = entry as Partial<SessionEntry>;
+    if (typeof sessionEntry.sessionId === "string" && sessionEntry.sessionId.trim()) {
+      await replaceSessionEntry({ storePath, sessionKey }, sessionEntry as SessionEntry);
+    }
+  }
 }
 
 async function writeTranscript(

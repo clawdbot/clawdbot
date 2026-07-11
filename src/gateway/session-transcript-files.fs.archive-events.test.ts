@@ -1,12 +1,12 @@
 // Transcript archive event tests ensure file archive/delete operations emit
-// path-only transcript update notifications for UI and index listeners.
+// path-only internal transcript update notifications.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  onSessionTranscriptUpdate,
-  type SessionTranscriptUpdate,
+  onInternalSessionTranscriptUpdate,
+  type InternalSessionTranscriptUpdate,
 } from "../sessions/transcript-events.js";
 import {
   archiveFileOnDisk,
@@ -24,8 +24,8 @@ afterEach(() => {
 
 describe("archiveFileOnDisk transcript updates", () => {
   it("emits a session transcript update for the archived path on reset", () => {
-    const updates: SessionTranscriptUpdate[] = [];
-    subscriptions.push(onSessionTranscriptUpdate((update) => updates.push(update)));
+    const updates: InternalSessionTranscriptUpdate[] = [];
+    subscriptions.push(onInternalSessionTranscriptUpdate((update) => updates.push(update)));
 
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-archive-events-reset-"));
     try {
@@ -50,8 +50,8 @@ describe("archiveFileOnDisk transcript updates", () => {
   });
 
   it("also emits for deleted and bak archive reasons", () => {
-    const updates: SessionTranscriptUpdate[] = [];
-    subscriptions.push(onSessionTranscriptUpdate((update) => updates.push(update)));
+    const updates: InternalSessionTranscriptUpdate[] = [];
+    subscriptions.push(onInternalSessionTranscriptUpdate((update) => updates.push(update)));
 
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-archive-events-mixed-"));
     try {

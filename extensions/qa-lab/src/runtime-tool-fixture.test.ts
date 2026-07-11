@@ -2,8 +2,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runRuntimeToolFixture } from "./runtime-tool-fixture.js";
+import { readRawQaSessionStore } from "./suite-runtime-agent-session.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 
 const tempRoots: string[] = [];
@@ -35,25 +38,26 @@ async function writeQaSessionTranscript(
   sessionKey: string,
   messages: Array<Record<string, unknown>>,
 ) {
-  const sessionsDir = path.join(env.gateway.tempRoot, "state", "agents", "qa", "sessions");
-  await fs.mkdir(sessionsDir, { recursive: true });
   const sessionId = sessionKey.replace(/[^a-z0-9]+/giu, "-");
-  const storePath = path.join(sessionsDir, "sessions.json");
-  let store: Record<string, unknown> = {};
-  try {
-    store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, unknown>;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw error;
-    }
+  const sessionEnv = {
+    ...process.env,
+    OPENCLAW_STATE_DIR: path.join(env.gateway.tempRoot, "state"),
+  };
+  await upsertSessionEntry({
+    agentId: "qa",
+    env: sessionEnv,
+    sessionKey,
+    entry: { sessionId, updatedAt: Date.now() },
+  });
+  for (const message of messages) {
+    await appendSessionTranscriptMessageByIdentity({
+      agentId: "qa",
+      env: sessionEnv,
+      sessionId,
+      sessionKey,
+      message,
+    });
   }
-  store[sessionKey] = { sessionId, sessionFile: `${sessionId}.jsonl` };
-  await fs.writeFile(storePath, JSON.stringify(store), "utf8");
-  await fs.writeFile(
-    path.join(sessionsDir, `${sessionId}.jsonl`),
-    messages.map((message) => JSON.stringify({ message })).join("\n"),
-    "utf8",
-  );
 }
 
 async function writeLiveRuntimeToolEvidence(env: QaSuiteRuntimeEnv, toolName = "read") {
@@ -171,6 +175,9 @@ describe("runtime tool fixture", () => {
   it("checks effective tools on the same session used for the happy prompt", async () => {
     const env = await makeEnv();
     await writeLiveRuntimeToolEvidence(env);
+    await expect(readRawQaSessionStore(env)).resolves.toHaveProperty(
+      "agent:qa:runtime-tool:read:happy",
+    );
     const createdKeys: string[] = [];
     const promptKeys: string[] = [];
     const readEffectiveTools = vi.fn(async (_env, sessionKey: string) => {

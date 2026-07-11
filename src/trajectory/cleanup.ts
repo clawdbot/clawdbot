@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveSessionFilePath } from "../config/sessions/paths.js";
+import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { isPathInside } from "../infra/path-guards.js";
 import {
   resolveTrajectoryFilePath,
@@ -186,8 +187,16 @@ export async function removeSessionTrajectoryArtifacts(params: {
   const storeDir = path.dirname(path.resolve(params.storePath));
   const restrictToStoreDir = params.restrictToStoreDir === true;
   const removed: RemovedTrajectoryArtifact[] = [];
-  const pointerPath = resolveTrajectoryPointerFilePath(sessionFile);
-  const pointer = readTrajectoryPointerFile(pointerPath, params.sessionId);
+  const sqliteMarker = parseSqliteSessionFileMarker(sessionFile);
+  if (
+    sqliteMarker &&
+    (sqliteMarker.sessionId !== params.sessionId ||
+      path.resolve(sqliteMarker.storePath) !== path.resolve(params.storePath))
+  ) {
+    return [];
+  }
+  const pointerPath = sqliteMarker ? undefined : resolveTrajectoryPointerFilePath(sessionFile);
+  const pointer = pointerPath ? readTrajectoryPointerFile(pointerPath, params.sessionId) : null;
   const defaultRuntimePath = resolveTrajectoryFilePath({
     env: {},
     sessionFile,
@@ -216,7 +225,7 @@ export async function removeSessionTrajectoryArtifacts(params: {
     }
   }
 
-  if (!restrictToStoreDir || isPathWithinDir(storeDir, pointerPath)) {
+  if (pointerPath && (!restrictToStoreDir || isPathWithinDir(storeDir, pointerPath))) {
     const deletedPointer = await removeRegularFile(pointerPath, "pointer");
     if (deletedPointer) {
       removed.push(deletedPointer);

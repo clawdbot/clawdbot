@@ -15,13 +15,13 @@ type GetRuntimeConfigFn =
 type GetSessionEntryFn = typeof import("openclaw/plugin-sdk/session-store-runtime").getSessionEntry;
 type ListSessionEntriesFn =
   typeof import("openclaw/plugin-sdk/session-store-runtime").listSessionEntries;
-type LoadSessionStoreFn =
-  typeof import("openclaw/plugin-sdk/session-store-runtime").loadSessionStore;
 type ResolveStorePathFn =
   typeof import("openclaw/plugin-sdk/session-store-runtime").resolveStorePath;
 type ReadSessionUpdatedAtFn =
   typeof import("openclaw/plugin-sdk/session-store-runtime").readSessionUpdatedAt;
-type SessionStore = ReturnType<LoadSessionStoreFn>;
+type SessionEntry = import("openclaw/plugin-sdk/session-store-runtime").SessionEntry;
+type SessionStore = Record<string, SessionEntry>;
+type LoadSessionStoreFn = (storePath?: string, opts?: unknown) => SessionStore;
 type TelegramBotRuntimeForTest = NonNullable<
   Parameters<typeof import("./bot.js").setTelegramBotRuntimeForTest>[0]
 >;
@@ -464,7 +464,6 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
   getRuntimeConfig,
   getSessionEntry: getSessionEntryMock,
   listSessionEntries: listSessionEntriesMock,
-  loadSessionStore: loadSessionStoreMock as TelegramBotDeps["loadSessionStore"],
   resolveStorePath: resolveStorePathMock,
   readSessionUpdatedAt: readSessionUpdatedAtMock,
   recordInboundSession: recordInboundSessionMock as TelegramBotDeps["recordInboundSession"],

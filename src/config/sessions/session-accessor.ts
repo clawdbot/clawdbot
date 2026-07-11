@@ -1,70 +1,89 @@
-import { randomUUID } from "node:crypto";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import {
-  acquireSessionWriteLock,
-  resolveSessionWriteLockOptions,
-} from "../../agents/session-write-lock.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import {
   resolveSessionStoreAgentId,
   resolveSessionStoreKey,
 } from "../../gateway/session-store-key.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
-import type {
-  SessionTranscriptUpdate,
-  SessionTranscriptUpdateTarget,
-} from "../../sessions/transcript-events.js";
+import type { SessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import { getRuntimeConfig } from "../io.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { formatSessionArchiveTimestamp } from "./artifacts.js";
-import { extractGeneratedTranscriptSessionId } from "./generated-transcript-session-id.js";
 import { resolveAgentMainSessionKey } from "./main-session.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
-  resolveSessionTranscriptPath,
-  resolveSessionTranscriptPathInDir,
   resolveStorePath,
 } from "./paths.js";
 import {
-  cleanupPluginHostSessionStore as cleanupFilePluginHostSessionStore,
+  clearPluginHostCleanupTarget,
   clearPluginOwnedSessionState,
+  hasPluginHostCleanupTarget,
+  isLockedHarnessSessionOwnedByPlugin,
+  matchesPluginHostCleanupSession,
+  shouldSkipPluginHostCleanupStore,
   type PluginHostSessionCleanupStoreParams,
 } from "./plugin-host-cleanup.js";
-import { resolveAndPersistSessionFile } from "./session-file.js";
-import { resolveSessionStorePathForScope } from "./session-store-path.js";
+import {
+  appendSqliteTranscriptEvent,
+  appendSqliteTranscriptEventSync,
+  appendSqliteTranscriptMessage,
+  applySqliteSessionEntryLifecycleMutation,
+  applySqliteSessionEntryReplacements,
+  appendSqliteExpectedSessionTranscriptTurn,
+  cleanupSqliteSessionLifecycleArtifacts,
+  deleteSqliteSessionEntryLifecycle,
+  listSqliteSessionEntries,
+  appendSqliteTranscriptMessageSync,
+  findSqliteTranscriptEvent,
+  forkSqliteSessionEntryFromParentTarget,
+  forkSqliteSessionTranscriptFromParent,
+  recordSqliteInboundSessionMeta,
+  updateSqliteSessionLastRoute,
+  loadExactSqliteSessionEntry,
+  loadLatestSqliteAssistantText,
+  loadLatestSqliteAssistantMessage,
+  loadLatestSqliteMessage,
+  loadSqliteSessionEntry,
+  loadSqliteTranscriptEvents,
+  loadSqliteTranscriptEventsSync,
+  readSqliteTranscriptStatsSync,
+  patchSqliteSessionEntry,
+  patchSqliteSessionEntryTarget,
+  previewSqliteSessionDiskBudget,
+  publishSqliteTranscriptUpdate,
+  purgeSqliteDeletedAgentSessionEntries,
+  readSqliteSessionUpdatedAt,
+  replaceSqliteTranscriptEvents,
+  replaceSqliteTranscriptEventsSync,
+  replaceSqliteSessionEntry,
+  replaceSqliteSessionEntrySync,
+  resolveSqliteSessionKeyBySessionId,
+  resolveSqliteSessionParentForkDecision,
+  rollbackSqliteAgentHarnessSessionEntryLifecycle,
+  resetSqliteSessionEntryLifecycle,
+  updateSqliteSessionEntry,
+  upsertSqliteSessionEntry,
+  withSqliteTranscriptWriteLock,
+} from "./session-accessor.sqlite.js";
+import {
+  formatSqliteSessionFileMarker,
+  parseSqliteSessionFileMarker,
+  sqliteSessionFileMarkerMatchesSession,
+} from "./sqlite-marker.js";
+import { normalizeStoreSessionKey } from "./store-entry.js";
 import type {
   ResolvedSessionMaintenanceConfig,
   SessionMaintenanceWarning,
 } from "./store-maintenance.js";
 import {
-  getSessionEntry,
-  cleanupSessionLifecycleArtifacts as cleanupFileSessionLifecycleArtifacts,
-  deleteSessionEntryLifecycle as deleteFileSessionEntryLifecycle,
-  applySessionEntryLifecycleMutation as applyFileSessionEntryLifecycleMutation,
-  listSessionEntries as listFileSessionEntries,
-  loadSessionStore,
-  applySessionEntryPatchProjection as applyFileSessionEntryPatchProjection,
-  patchSessionEntry as patchFileSessionEntry,
-  patchSessionEntryWithKey as patchFileSessionEntryWithKey,
-  purgeDeletedAgentSessionEntries as purgeFileDeletedAgentSessionEntries,
   projectSessionEntryForPersistenceRevision,
-  readSessionUpdatedAt as readFileSessionUpdatedAt,
-  recordSessionMetaFromInbound as recordFileSessionMetaFromInbound,
   resolveSessionStoreEntry,
-  resetSessionEntryLifecycle as resetFileSessionEntryLifecycle,
-  rollbackAgentHarnessSessionEntryLifecycle as rollbackFileAgentHarnessSessionEntryLifecycle,
-  updateLastRoute as updateFileSessionLastRoute,
-  updateSessionStore,
-  updateSessionStoreEntry as updateFileSessionStoreEntry,
   type DeleteSessionEntryLifecycleResult,
   type ResetSessionEntryLifecycleMutation,
   type ResetSessionEntryLifecycleResult,
@@ -84,38 +103,18 @@ import {
   type SessionLifecycleStoreTarget,
 } from "./store.js";
 import { resolveAllAgentSessionStoreTargetsSync, type SessionStoreTarget } from "./targets.js";
-import { parseSessionThreadInfo } from "./thread-info.js";
-import {
-  type AppendSessionTranscriptMessageParams,
-  type AppendSessionTranscriptMessageResult,
-  appendSessionTranscriptEvent,
-  appendSessionTranscriptMessage,
-  appendSessionTranscriptMessageWithOwnedWriteLock,
-  withSessionTranscriptAppendQueue,
-} from "./transcript-append.js";
-import { resolveSessionTranscriptFile } from "./transcript-file-resolve.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
-import { serializeJsonlLine, writeJsonlLines } from "./transcript-jsonl.js";
-import { replayRecentUserAssistantMessages } from "./transcript-replay.js";
 import {
-  streamSessionTranscriptLines,
-  streamSessionTranscriptLinesReverse,
-} from "./transcript-stream.js";
+  readRecentUserAssistantReplayRecordsFromJsonl,
+  replayRecentUserAssistantMessages,
+  selectRecentUserAssistantReplayRecords,
+} from "./transcript-replay.js";
 import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
 } from "./transcript-tree.js";
-import {
-  type OwnedSessionTranscriptPublishedEntry,
-  resolveOwnedSessionTranscriptWriteLockRunner,
-  withOwnedSessionTranscriptWrites,
-} from "./transcript-write-context.js";
-import {
-  mergeSessionEntry,
-  type GroupKeyResolution,
-  type SessionCompactionCheckpoint,
-  type SessionEntry,
-} from "./types.js";
+import { runWithOwnedSessionTranscriptWriteLock } from "./transcript-write-context.js";
+import type { GroupKeyResolution, SessionCompactionCheckpoint, SessionEntry } from "./types.js";
 
 /**
  * Session access API for callers that need entries or transcripts without
@@ -226,18 +225,18 @@ export type ResolvedSessionEntryUpdateResult<T> =
     };
 
 export type SessionTranscriptAccessScope = Omit<SessionAccessScope, "sessionKey"> & {
-  /** Explicit transcript file path; bypasses store lookup when already known. */
+  /** Deprecated transcript locator from older file-backed call sites. */
   sessionFile?: string;
-  /** Runtime session id used to derive a transcript file when no explicit file is provided. */
+  /** Runtime session id used to resolve the transcript identity. */
   sessionId: string;
-  /** Required when resolving through session metadata; optional for explicit transcript artifacts. */
+  /** Required when resolving through session metadata; optional for legacy locators. */
   sessionKey?: string;
   /** Channel thread suffix used when deriving topic transcript paths. */
   threadId?: string | number;
 };
 
 export type SessionTranscriptRuntimeScope = SessionAccessScope & {
-  /** Resolved file-backed artifact for the current runtime target. */
+  /** Deprecated transcript locator from older file-backed call sites. */
   sessionFile?: string;
   sessionId: string;
   threadId?: string | number;
@@ -259,7 +258,7 @@ export type SessionTranscriptReadTarget = Omit<
 };
 
 export type SessionTranscriptWriteScope = Omit<SessionTranscriptAccessScope, "sessionId"> & {
-  /** Optional for appenders that can operate on an existing explicit transcript target. */
+  /** Optional for appenders that resolve it from the session entry. */
   sessionId?: string;
 };
 
@@ -277,8 +276,20 @@ export type SessionEntryReadView = {
   entries(): SessionEntrySummary[];
 };
 
+/** Session entry read by the exact persisted session key, without alias resolution. */
+export type ExactSessionEntry = {
+  sessionKey: string;
+  entry: SessionEntry;
+};
+
 /** Raw transcript record for non-message events; message records use appendTranscriptMessage. */
 export type TranscriptEvent = unknown;
+
+export type SessionTranscriptStats = {
+  eventCount: number;
+  maxSeq: number;
+  sizeBytes: number;
+};
 
 export type TranscriptMessageAppendOptions<TMessage> = {
   /** Runtime config used for message redaction and transcript header metadata. */
@@ -286,11 +297,15 @@ export type TranscriptMessageAppendOptions<TMessage> = {
   /** Working directory recorded in a newly created transcript header. */
   cwd?: string;
   /** How duplicate message idempotency keys are detected before append. */
-  idempotencyLookup?: "scan" | "caller-checked";
+  idempotencyLookup?: "scan" | "scan-assistant" | "caller-checked";
   /** Provider/channel message payload to persist. */
   message: TMessage;
   /** Testable timestamp override for the generated transcript entry. */
   now?: number;
+  /** Existing transcript event id owned by a caller with its own session tree. */
+  eventId?: string;
+  /** Existing parent id owned by a caller with its own session tree. */
+  parentId?: string | null;
   /** Optional finalizer that runs after duplicate detection but before persistence. */
   prepareMessageAfterIdempotencyCheck?: (message: TMessage) => TMessage | undefined;
   /** Allow append without parent-link migration for large legacy linear transcripts. */
@@ -306,16 +321,40 @@ export type TranscriptMessageAppendResult<TMessage> = {
   messageId: string;
 };
 
-/** Transcript update fields supplied by callers; sessionFile is resolved here. */
-export type TranscriptUpdatePayload = Omit<SessionTranscriptUpdate, "sessionFile">;
+/** Transcript update fields supplied by callers; the target is resolved here. */
+export type TranscriptUpdatePayload = Partial<SessionTranscriptUpdate>;
+
+export type LatestTranscriptAssistantText = {
+  id?: string;
+  text: string;
+  timestamp?: number;
+};
+
+export type LatestTranscriptAssistantMessage = {
+  id?: string;
+  message: unknown;
+};
+
+export type LatestTranscriptMessage = {
+  id?: string;
+  message: unknown;
+};
+
+export type SessionTranscriptWriteLockAccessorContext = {
+  appendMessage: <TMessage>(
+    options: TranscriptMessageAppendOptions<TMessage>,
+  ) => Promise<TranscriptMessageAppendResult<TMessage> | undefined>;
+  readEvents: () => Promise<TranscriptEvent[]>;
+  replaceEvents: (events: readonly TranscriptEvent[]) => Promise<void>;
+};
 
 export type SessionTranscriptTurnUpdateMode = "inline" | "file-only" | "none";
 
 export type SessionTranscriptTurnMessageAppend = TranscriptMessageAppendOptions<unknown> & {
   /**
-   * Runs inside the file-backed write lock before this message is appended.
-   * SQLite implementation note: duplicate/skip decisions should be evaluated
-   * inside the same write transaction as the transcript row append.
+   * Runs inside the session writer queue before the SQLite transaction begins.
+   * The commit phase revalidates session ownership and database idempotency
+   * after asynchronous predicate work finishes.
    */
   shouldAppend?: (context: SessionTranscriptTurnWriteContext) => Promise<boolean> | boolean;
 };
@@ -325,6 +364,7 @@ export type SessionTranscriptTurnWriteContext = {
   sessionFile: string;
   sessionId?: string;
   sessionKey?: string;
+  storePath?: string;
 };
 
 export type SessionTranscriptTurnPersistOptions = {
@@ -334,8 +374,8 @@ export type SessionTranscriptTurnPersistOptions = {
   cwd?: string;
   /**
    * Rejects the turn when the persisted session key no longer points at this
-   * runtime session id. SQLite implementations must evaluate this guard inside
-   * the same write transaction as the transcript append and metadata touch.
+   * runtime session id. SQLite evaluates this guard inside the same queued
+   * write as the transcript append and metadata touch.
    */
   expectedSessionId?: string;
   /** Rejects the turn when lifecycle ownership changed without rotating the session id. */
@@ -362,10 +402,6 @@ export type SessionTranscriptTurnPersistResult = {
   sessionEntry: SessionEntry | undefined;
   sessionFile: string;
 };
-
-type SessionTranscriptTurnAppendRunner = <TMessage>(
-  params: AppendSessionTranscriptMessageParams<TMessage>,
-) => Promise<AppendSessionTranscriptMessageResult<TMessage> | undefined>;
 
 export type SessionTranscriptRuntimeTarget = {
   agentId: string;
@@ -463,13 +499,6 @@ const loadSessionArchiveRuntime = createLazyRuntimeModule(
   () => import("../../gateway/session-archive.runtime.js"),
 );
 
-// Fork-source reading parses legacy transcript versions through the agents
-// session-manager; load it lazily so accessor consumers do not pull that
-// runtime (and its module-init package metadata reads) at import time.
-const loadSessionForkTranscriptRuntime = createLazyRuntimeModule(
-  () => import("./session-fork-transcript.runtime.js"),
-);
-
 export type SessionEntryPatchOptions = {
   /** Entry to synthesize when a patch operation is allowed to create. */
   fallbackEntry?: SessionEntry;
@@ -497,6 +526,14 @@ export type SessionEntryPatchResult = {
   sessionKey: string;
   /** Persisted entry returned by the backing store. */
   entry: SessionEntry;
+};
+
+export type SessionEntryTargetPatchScope = {
+  /** Agent owner used when resolving custom/shared legacy store paths. */
+  agentId?: string;
+  storePath: string;
+  /** Canonical key plus aliases that identify the logical entry. */
+  target: SessionLifecycleStoreTarget;
 };
 
 export type SessionEntryReplacementSnapshot = {
@@ -533,6 +570,87 @@ export type SessionCompactionCheckpointTranscriptForkResult =
   | { status: "missing-boundary" }
   | { status: "failed" };
 
+/** Decision made before inheriting parent context into a child session. */
+export type SessionParentForkDecision =
+  | {
+      status: "fork";
+      maxTokens: number;
+      parentTokens?: number;
+    }
+  | {
+      status: "skip";
+      reason: "parent-too-large";
+      maxTokens: number;
+      parentTokens: number;
+      message: string;
+    };
+
+/** SQLite transcript identity created for a child fork. */
+export type ParentForkedSessionTranscript = {
+  sessionFile: string;
+  sessionId: string;
+};
+
+export type ForkSessionFromParentTranscriptResult =
+  | {
+      status: "created";
+      transcript: ParentForkedSessionTranscript;
+    }
+  | { status: "missing-parent" }
+  | { status: "failed" };
+
+export type ForkSessionFromParentTranscriptParams = {
+  agentId?: string;
+  parentEntry: SessionEntry;
+  parentSessionKey: string;
+  sessionKey: string;
+  storePath: string;
+  /** Stable target identity for lifecycle-owned hidden or resumable sessions. */
+  targetSessionId?: string;
+  /** Cross-agent forks land the child transcript in the target agent's store. */
+  targetStorePath?: string;
+};
+
+export type ForkSessionEntryFromParentTargetResult =
+  | {
+      status: "forked";
+      fork: ParentForkedSessionTranscript;
+      parentEntry: SessionEntry;
+      sessionEntry: SessionEntry;
+      decision: Extract<SessionParentForkDecision, { status: "fork" }>;
+    }
+  | {
+      status: "skipped";
+      reason: "existing-entry" | "decision-skip";
+      parentEntry?: SessionEntry;
+      sessionEntry: SessionEntry;
+      decision?: SessionParentForkDecision;
+    }
+  | { status: "missing-entry" }
+  | { status: "missing-parent" }
+  | { status: "failed" };
+
+export type ForkSessionEntryFromParentTargetParams = {
+  agentId?: string;
+  decisionSkipPatch?: (params: {
+    decision: Extract<SessionParentForkDecision, { status: "skip" }>;
+    entry: SessionEntry;
+    parentEntry: SessionEntry;
+  }) => Partial<SessionEntry> | null;
+  fallbackEntry?: SessionEntry;
+  parentTarget: SessionLifecycleStoreTarget;
+  patch?: (params: {
+    entry: SessionEntry;
+    parentEntry: SessionEntry;
+    fork: ParentForkedSessionTranscript;
+    decision: Extract<SessionParentForkDecision, { status: "fork" }>;
+  }) => Partial<SessionEntry>;
+  sessionTarget: SessionLifecycleStoreTarget;
+  skipForkWhen?: (entry: SessionEntry) => boolean;
+  skipPatch?: (entry: SessionEntry) => Partial<SessionEntry> | null;
+  storePath: string;
+};
+
 /** Result of applying a checkpoint branch or restore mutation to session storage. */
 export type SessionCompactionCheckpointMutationResult =
   | {
@@ -542,9 +660,9 @@ export type SessionCompactionCheckpointMutationResult =
       entry: SessionEntry;
     }
   | { status: "missing-session" }
-  | { status: "model-selection-locked" }
   | { status: "missing-checkpoint" }
   | { status: "missing-boundary" }
+  | { status: "model-selection-locked" }
   | { status: "failed" };
 
 export type SessionCompactionCheckpointEntryBuildContext = {
@@ -653,15 +771,11 @@ export type SessionEntryCreateWithTranscriptPrepareResult<TError = string> =
   | { ok: false; error: TError };
 
 export type SessionEntryCreateWithTranscriptOptions = {
-  /** Protect the newly created row from maintenance during its initial save. */
+  /** Protect the newly created row from maintenance during its initial write. */
   activeSessionKey?: string;
-  /** Throw unless the initial session row is durably persisted. */
+  /** SQLite commits are authoritative; retained for the shared caller contract. */
   requireWriteSuccess?: boolean;
 };
-
-type CreatedSessionTranscriptResult =
-  | { ok: true; created: boolean; sessionFile: string }
-  | { ok: false; error: string; phase: "transcript" };
 
 export type SessionPatchProjectionContext = SessionEntryPatchProjectionContext;
 export type SessionPatchProjectionFailure = SessionEntryPatchProjectionFailure;
@@ -688,7 +802,7 @@ export type {
 };
 
 export type ResetSessionEntryLifecycleParams = {
-  /** Runs after the persisted entry rotates and before transcript artifacts move. */
+  /** Runs after the persisted entry rotates and retired transcripts are archived. */
   afterEntryMutation?: (mutation: ResetSessionEntryLifecycleMutation) => Promise<void> | void;
   /** Agent owner used to resolve backend transcript artifacts. */
   agentId?: string;
@@ -827,7 +941,12 @@ export function resolveSessionEntryCandidateTarget(
     agentId: scope.agentId,
     env: scope.env,
   });
-  const store = loadSessionStore(storePath);
+  const store = Object.fromEntries(
+    listSessionEntries({ agentId: scope.agentId, storePath }).map(({ sessionKey, entry }) => [
+      sessionKey,
+      entry,
+    ]),
+  );
   for (const candidateKey of uniqueStrings(scope.candidateKeys.map((key) => key.trim()))) {
     if (!candidateKey) {
       continue;
@@ -880,7 +999,7 @@ function resolveSessionEntryStoreTarget(
   };
   let selectedStorePath = fallback.storePath;
   let selectedMatch = findFreshestSessionEntryMatch(
-    listSessionEntries({ storePath: fallback.storePath }),
+    listSessionEntries({ agentId, storePath: fallback.storePath }),
     scanTargets,
   );
   for (let index = 1; index < candidates.length; index += 1) {
@@ -889,7 +1008,7 @@ function resolveSessionEntryStoreTarget(
       continue;
     }
     const match = findFreshestSessionEntryMatch(
-      listSessionEntries({ storePath: candidate.storePath }),
+      listSessionEntries({ agentId, storePath: candidate.storePath }),
       scanTargets,
     );
     if (
@@ -922,40 +1041,49 @@ export async function updateResolvedSessionEntry<T>(
   if (!target.entry) {
     return { canonicalKey: target.canonicalKey, found: false };
   }
-  return await updateSessionStore(target.storePath, async (store) => {
-    const entry = store[target.storeKey];
-    if (!entry) {
-      return { canonicalKey: target.canonicalKey, found: false };
-    }
-    const context: ResolvedSessionEntryUpdateContext = {
-      agentId: target.agentId,
-      canonicalKey: target.canonicalKey,
-      entry,
-      requestedKey: target.requestedKey,
-      storeKey: target.storeKey,
-    };
-    const result = await update(entry, context);
-    return {
-      canonicalKey: target.canonicalKey,
-      entry: structuredClone(entry),
-      found: true,
-      result,
-      storeKey: target.storeKey,
-    };
-  });
+  let updateResult: T | undefined;
+  const updated = await patchSessionEntry(
+    { sessionKey: target.storeKey, storePath: target.storePath },
+    async (entry) => {
+      const context: ResolvedSessionEntryUpdateContext = {
+        agentId: target.agentId,
+        canonicalKey: target.canonicalKey,
+        entry,
+        requestedKey: target.requestedKey,
+        storeKey: target.storeKey,
+      };
+      updateResult = await update(entry, context);
+      return entry;
+    },
+    {
+      replaceEntry: true,
+      skipMaintenance: true,
+    },
+  );
+  if (!updated) {
+    return { canonicalKey: target.canonicalKey, found: false };
+  }
+  return {
+    canonicalKey: target.canonicalKey,
+    entry: structuredClone(updated),
+    found: true,
+    result: updateResult as T,
+    storeKey: target.storeKey,
+  };
 }
 
 /** Returns the entry for a canonical or alias session key, if one exists. */
 export function loadSessionEntry(scope: SessionAccessScope): SessionEntry | undefined {
-  if (scope.clone === false || scope.readConsistency === "latest") {
-    const store = loadSessionStore(resolveSessionStorePathForScope(scope), {
-      ...(scope.clone === false ? { clone: false } : {}),
-      ...(scope.readConsistency === "latest" ? { skipCache: true } : {}),
-      ...(scope.hydrateSkillPromptRefs === false ? { hydrateSkillPromptRefs: false } : {}),
-    });
-    return resolveSessionStoreEntry({ store, sessionKey: scope.sessionKey }).existing;
-  }
-  return getSessionEntry(scope);
+  return loadSqliteSessionEntry(scope);
+}
+
+/**
+ * Returns only the row persisted under the exact key provided.
+ * Use this for authorization-sensitive routing where alias canonicalization
+ * could cross an account or agent boundary.
+ */
+export function loadExactSessionEntry(scope: SessionAccessScope): ExactSessionEntry | undefined {
+  return loadExactSqliteSessionEntry(scope);
 }
 
 /** Lists entries from the resolved store, preserving the persisted key for each row. */
@@ -963,7 +1091,7 @@ export function listSessionEntries(scope: SessionEntryListScope = {}): SessionEn
   if (scope.clone === false) {
     return openSessionEntryReadView(scope).entries();
   }
-  return listFileSessionEntries(scope);
+  return listSqliteSessionEntries(scope);
 }
 
 /**
@@ -976,25 +1104,17 @@ export function listSessionEntries(scope: SessionEntryListScope = {}): SessionEn
 export function openSessionEntryReadView(
   scope: Omit<SessionEntryListScope, "clone" | "readConsistency"> = {},
 ): SessionEntryReadView {
-  const store = loadSessionStore(resolveSessionStorePathForScope({ ...scope, sessionKey: "" }), {
-    clone: false,
-    ...(scope.hydrateSkillPromptRefs === false ? { hydrateSkillPromptRefs: false } : {}),
-  });
+  // Exact-key probes read single SQLite rows; entries() materializes the full
+  // list only when raw probes cannot settle the caller's lookup.
   return {
-    get: (sessionKey) => (Object.hasOwn(store, sessionKey) ? store[sessionKey] : undefined),
-    entries: () => Object.entries(store).map(([sessionKey, entry]) => ({ sessionKey, entry })),
+    get: (sessionKey) => loadExactSqliteSessionEntry({ ...scope, sessionKey })?.entry,
+    entries: () => listSqliteSessionEntries(scope),
   };
 }
 
 /** Reads the last activity timestamp for one session entry, or undefined when absent. */
 export function readSessionUpdatedAt(scope: SessionAccessScope): number | undefined {
-  if (scope.storePath) {
-    return readFileSessionUpdatedAt({
-      storePath: scope.storePath,
-      sessionKey: scope.sessionKey,
-    });
-  }
-  return loadSessionEntry(scope)?.updatedAt;
+  return readSqliteSessionUpdatedAt(scope);
 }
 
 /** Creates or updates one entry from a partial patch and returns the persisted entry. */
@@ -1002,11 +1122,7 @@ export async function upsertSessionEntry(
   scope: SessionAccessScope,
   patch: Partial<SessionEntry>,
 ): Promise<SessionEntry | null> {
-  return await patchFileSessionEntry({
-    ...scope,
-    fallbackEntry: createFallbackSessionEntry(patch),
-    update: () => patch,
-  });
+  return await upsertSqliteSessionEntry(scope, patch);
 }
 
 /** Replaces one entry with the supplied value and returns the persisted entry. */
@@ -1014,12 +1130,12 @@ export async function replaceSessionEntry(
   scope: SessionAccessScope,
   entry: SessionEntry,
 ): Promise<SessionEntry | null> {
-  return await patchFileSessionEntry({
-    ...scope,
-    fallbackEntry: entry,
-    replaceEntry: true,
-    update: () => entry,
-  });
+  return await replaceSqliteSessionEntry(scope, entry);
+}
+
+/** Replaces one entry synchronously for sync session runtimes. */
+export function replaceSessionEntrySync(scope: SessionAccessScope, entry: SessionEntry): void {
+  replaceSqliteSessionEntrySync(scope, entry);
 }
 
 /**
@@ -1035,17 +1151,22 @@ export async function patchSessionEntry(
   ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null,
   options: SessionEntryPatchOptions = {},
 ): Promise<SessionEntry | null> {
-  return await patchFileSessionEntry({
-    ...scope,
-    fallbackEntry: options.fallbackEntry,
-    maintenanceConfig: options.maintenanceConfig,
-    preserveActivity: options.preserveActivity,
-    requireWriteSuccess: options.requireWriteSuccess,
-    replaceEntry: options.replaceEntry,
-    skipMaintenance: options.skipMaintenance,
-    takeCacheOwnership: options.takeCacheOwnership,
-    update,
-  });
+  return await patchSqliteSessionEntry(scope, update, options);
+}
+
+/**
+ * Applies an atomic patch to the freshest entry selected from a canonical key
+ * plus its known aliases, then persists the result under the canonical key.
+ */
+export async function patchSessionEntryTarget(
+  scope: SessionEntryTargetPatchScope,
+  update: (
+    entry: SessionEntry,
+    context: SessionEntryPatchContext,
+  ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null,
+  options: SessionEntryPatchOptions = {},
+): Promise<SessionEntry | null> {
+  return await patchSqliteSessionEntryTarget(scope, update, options);
 }
 
 /**
@@ -1060,17 +1181,36 @@ export async function patchSessionEntryWithKey(
   ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null,
   options: SessionEntryPatchOptions = {},
 ): Promise<SessionEntryPatchResult | null> {
-  return await patchFileSessionEntryWithKey({
-    ...scope,
-    fallbackEntry: options.fallbackEntry,
-    maintenanceConfig: options.maintenanceConfig,
-    preserveActivity: options.preserveActivity,
-    requireWriteSuccess: options.requireWriteSuccess,
-    replaceEntry: options.replaceEntry,
-    skipMaintenance: options.skipMaintenance,
-    takeCacheOwnership: options.takeCacheOwnership,
-    update,
-  });
+  const entry = await patchSqliteSessionEntry(scope, update, options);
+  return entry ? { sessionKey: normalizeStoreSessionKey(scope.sessionKey), entry } : null;
+}
+
+/**
+ * Copies one parent transcript into a new child transcript target.
+ * This is for guarded callers that already own the eventual entry commit.
+ */
+export async function forkSessionFromParentTranscript(
+  params: ForkSessionFromParentTranscriptParams,
+): Promise<ForkSessionFromParentTranscriptResult> {
+  return await forkSqliteSessionTranscriptFromParent(params);
+}
+
+/**
+ * Forks parent transcript content and persists the child entry/alias cleanup in
+ * one storage-owned operation.
+ */
+export async function forkSessionEntryFromParentTarget(
+  params: ForkSessionEntryFromParentTargetParams,
+): Promise<ForkSessionEntryFromParentTargetResult> {
+  return await forkSqliteSessionEntryFromParentTarget(params);
+}
+
+/** Resolves whether a parent session is small enough to fork through the active store. */
+export async function resolveSessionParentForkDecision(params: {
+  parentEntry: SessionEntry;
+  storePath: string;
+}): Promise<SessionParentForkDecision> {
+  return await resolveSqliteSessionParentForkDecision(params);
 }
 
 /**
@@ -1078,42 +1218,40 @@ export async function patchSessionEntryWithKey(
  * and optionally patches the canonical entry under one accessor operation.
  */
 export async function canonicalizeSessionEntryAliases(params: {
+  agentId?: string;
   storePath: string;
   target: SessionLifecycleStoreTarget;
   update?: (
     entry: SessionEntry | undefined,
   ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null;
 }): Promise<CanonicalizeSessionEntryAliasesResult> {
-  return await updateSessionStore(params.storePath, async (store) => {
-    const targetKeys = normalizeTargetStoreKeys(params.target);
-    const freshest = resolveFreshestTargetEntry(store, targetKeys);
-    if (freshest) {
-      const current = store[params.target.canonicalKey];
-      if (!current || (freshest.entry.updatedAt ?? 0) > (current.updatedAt ?? 0)) {
-        store[params.target.canonicalKey] = freshest.entry;
-      }
-    }
-
-    const currentEntry = store[params.target.canonicalKey];
-    const patch = params.update ? await params.update(cloneOptionalEntry(currentEntry)) : null;
-    if (patch) {
-      store[params.target.canonicalKey] = {
-        ...currentEntry,
+  const store = Object.fromEntries(
+    listSessionEntries({ agentId: params.agentId, storePath: params.storePath }).map(
+      ({ sessionKey, entry }) => [sessionKey, entry],
+    ),
+  );
+  const targetKeys = normalizeTargetStoreKeys(params.target);
+  const freshest = resolveFreshestTargetEntry(store, targetKeys);
+  const patch = params.update ? await params.update(cloneOptionalEntry(freshest?.entry)) : null;
+  const entry = patch
+    ? ({
+        ...freshest?.entry,
         ...patch,
-      } as SessionEntry;
-    }
-
-    for (const key of targetKeys) {
-      if (key !== params.target.canonicalKey) {
-        delete store[key];
-      }
-    }
-    const entry = cloneOptionalEntry(store[params.target.canonicalKey]);
-    return {
-      canonicalKey: params.target.canonicalKey,
-      ...(entry ? { entry } : {}),
-    };
+      } as SessionEntry)
+    : cloneOptionalEntry(freshest?.entry);
+  await applySessionEntryLifecycleMutation({
+    agentId: params.agentId,
+    storePath: params.storePath,
+    removals: targetKeys
+      .filter((key) => key !== params.target.canonicalKey)
+      .map((sessionKey) => ({ sessionKey })),
+    upserts: entry ? [{ sessionKey: params.target.canonicalKey, entry }] : undefined,
+    skipMaintenance: true,
   });
+  return {
+    canonicalKey: params.target.canonicalKey,
+    ...(entry ? { entry: cloneOptionalEntry(entry) } : {}),
+  };
 }
 
 // Normalizes caller-supplied alias sets while always preserving the canonical key.
@@ -1156,9 +1294,8 @@ function cloneOptionalEntry(entry: SessionEntry | undefined): SessionEntry | und
 
 /**
  * Creates or updates one session entry and initializes its transcript header as
- * one storage-sized lifecycle operation. File-backed storage still writes JSON
- * plus JSONL, but callers no longer compose entry write, header creation,
- * rollback, and normalized sessionFile persistence themselves.
+ * one SQLite-backed lifecycle operation. Callers do not compose row creation,
+ * transcript initialization, rollback, and normalized session identity.
  */
 export async function createSessionEntryWithTranscript<TError = string>(
   scope: SessionAccessScope,
@@ -1167,71 +1304,60 @@ export async function createSessionEntryWithTranscript<TError = string>(
   ) =>
     | Promise<SessionEntryCreateWithTranscriptPrepareResult<TError>>
     | SessionEntryCreateWithTranscriptPrepareResult<TError>,
-  options: SessionEntryCreateWithTranscriptOptions = {},
+  _options: SessionEntryCreateWithTranscriptOptions = {},
 ): Promise<SessionEntryCreateWithTranscriptResult<TError>> {
-  const storePath = resolveSessionStorePathForScope(scope);
-  let createdTranscriptFile: string | undefined;
-  try {
-    return await updateSessionStore(
-      storePath,
-      async (store) => {
-        const resolved = resolveSessionStoreEntry({ store, sessionKey: scope.sessionKey });
-        const created = await createEntry({
-          existingEntry: resolved.existing ? { ...resolved.existing } : undefined,
-          sessionEntries: cloneSessionEntries(store),
-        });
-        if (!created.ok) {
-          return { ok: false, error: created.error, phase: "entry" };
-        }
-
-        const ensured = ensureCreatedSessionTranscript({
-          agentId: scope.agentId,
-          entry: created.entry,
-          storePath,
-        });
-        if (!ensured.ok) {
-          delete store[resolved.normalizedKey];
-          return ensured;
-        }
-        if (ensured.created) {
-          createdTranscriptFile = ensured.sessionFile;
-        }
-
-        const entry =
-          created.entry.sessionFile === ensured.sessionFile
-            ? created.entry
-            : {
-                ...created.entry,
-                sessionFile: ensured.sessionFile,
-              };
-        store[resolved.normalizedKey] = entry;
-        for (const legacyKey of resolved.legacyKeys) {
-          delete store[legacyKey];
-        }
-        return { ok: true, entry, sessionFile: ensured.sessionFile };
-      },
-      {
-        activeSessionKey: options.activeSessionKey,
-        requireWriteSuccess: options.requireWriteSuccess,
-        // Entry rejection is side-effect free; transcript failure deletes the target row
-        // and must persist that rollback instead of restoring the writer snapshot.
-        skipSaveWhenResult: (result) => !result.ok && result.phase === "entry",
-      },
-    );
-  } catch (error) {
-    if (!createdTranscriptFile) {
-      throw error;
-    }
-    try {
-      fs.rmSync(createdTranscriptFile, { force: true });
-    } catch (cleanupError) {
-      throw new Error(
-        `Session entry persistence failed (${formatErrorMessage(error)}) and transcript cleanup did not complete: ${createdTranscriptFile}`,
-        { cause: cleanupError },
-      );
-    }
-    throw error;
+  const storePath = resolveAccessStorePath(scope);
+  const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
+  const store = Object.fromEntries(
+    listSessionEntries({ agentId, storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+  );
+  const resolved = resolveSessionStoreEntry({ store, sessionKey: scope.sessionKey });
+  const created = await createEntry({
+    existingEntry: resolved.existing ? { ...resolved.existing } : undefined,
+    sessionEntries: cloneSessionEntries(store),
+  });
+  if (!created.ok) {
+    return { ok: false, error: created.error, phase: "entry" };
   }
+
+  const sessionFile = formatSqliteSessionFileMarker({
+    agentId,
+    sessionId: created.entry.sessionId,
+    storePath,
+  });
+  try {
+    await appendSqliteTranscriptEvent(
+      {
+        agentId,
+        sessionId: created.entry.sessionId,
+        sessionKey: resolved.normalizedKey,
+        storePath,
+      },
+      createSessionTranscriptHeader({ sessionId: created.entry.sessionId }),
+    );
+  } catch (err) {
+    return {
+      ok: false,
+      error: formatErrorMessage(err),
+      phase: "transcript",
+    };
+  }
+
+  const entry =
+    created.entry.sessionFile === sessionFile
+      ? created.entry
+      : {
+          ...created.entry,
+          sessionFile,
+        };
+  await applySessionEntryLifecycleMutation({
+    agentId,
+    storePath,
+    removals: resolved.legacyKeys.map((sessionKey) => ({ sessionKey })),
+    upserts: [{ sessionKey: resolved.normalizedKey, entry }],
+    skipMaintenance: true,
+  });
+  return { ok: true, entry, sessionFile };
 }
 
 function cloneSessionEntries(store: Record<string, SessionEntry>): Record<string, SessionEntry> {
@@ -1352,385 +1478,18 @@ function createReplySessionInitializationRevision(params: {
 function resolveInitializedReplySessionEntry(params: {
   agentId: string;
   currentEntry?: SessionEntry;
-  fallbackSessionFile?: string;
   sessionEntry: SessionEntry;
   storePath: string;
 }): SessionEntry {
-  const fallbackSessionFile = params.fallbackSessionFile?.trim();
-  const currentSessionFile = params.currentEntry?.sessionFile;
-  const inheritedPreviousSessionFile =
-    Boolean(currentSessionFile) &&
-    params.currentEntry?.sessionId !== params.sessionEntry.sessionId &&
-    currentSessionFile === params.sessionEntry.sessionFile;
-  const entryForResolve =
-    fallbackSessionFile && (inheritedPreviousSessionFile || !params.sessionEntry.sessionFile)
-      ? { ...params.sessionEntry, sessionFile: fallbackSessionFile }
-      : inheritedPreviousSessionFile
-        ? { ...params.sessionEntry, sessionFile: undefined }
-        : params.sessionEntry;
-  const sessionFile = resolveSessionFilePath(params.sessionEntry.sessionId, entryForResolve, {
+  const sessionFile = formatSqliteSessionFileMarker({
     agentId: params.agentId,
-    sessionsDir: path.dirname(path.resolve(params.storePath)),
+    sessionId: params.sessionEntry.sessionId,
+    storePath: params.storePath,
   });
   return {
     ...params.sessionEntry,
     sessionFile,
   };
-}
-
-// File-backed creation resolves the concrete transcript artifact and writes the
-// header before the store mutation is saved; SQLite adapters implement this as
-// the same lifecycle operation without exposing rollback details to callers.
-function ensureCreatedSessionTranscript(params: {
-  agentId?: string;
-  entry: SessionEntry;
-  storePath: string;
-}): CreatedSessionTranscriptResult {
-  try {
-    const sessionFile = resolveSessionFilePath(
-      params.entry.sessionId,
-      params.entry.sessionFile ? { sessionFile: params.entry.sessionFile } : undefined,
-      {
-        agentId: params.agentId,
-        sessionsDir: path.dirname(path.resolve(params.storePath)),
-      },
-    );
-    const created = !fs.existsSync(sessionFile);
-    if (created) {
-      fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
-      fs.writeFileSync(
-        sessionFile,
-        `${JSON.stringify(createSessionTranscriptHeader({ sessionId: params.entry.sessionId }))}\n`,
-        {
-          encoding: "utf-8",
-          mode: 0o600,
-        },
-      );
-    }
-    return { ok: true, created, sessionFile };
-  } catch (err) {
-    return {
-      ok: false,
-      error: formatErrorMessage(err),
-      phase: "transcript",
-    };
-  }
-}
-
-/** Fork target identity generated by createForkedSessionTranscript. */
-export type ForkedSessionTranscriptTarget = {
-  sessionFile: string;
-  sessionId: string;
-};
-
-/** Decision made before inheriting parent context into a child session. */
-export type SessionParentForkDecision =
-  | {
-      status: "fork";
-      maxTokens: number;
-      parentTokens?: number;
-    }
-  | {
-      status: "skip";
-      reason: "parent-too-large";
-      maxTokens: number;
-      parentTokens: number;
-      message: string;
-    };
-
-/** Transcript identity created for a child fork. */
-export type ParentForkedSessionTranscript = {
-  sessionFile: string;
-  sessionId: string;
-};
-
-export type ForkSessionFromParentTranscriptResult =
-  | {
-      status: "created";
-      transcript: ParentForkedSessionTranscript;
-    }
-  | { status: "missing-parent" }
-  | { status: "failed" };
-
-export type ForkSessionFromParentTranscriptParams = {
-  agentId?: string;
-  parentEntry: SessionEntry;
-  parentSessionKey: string;
-  sessionKey: string;
-  storePath: string;
-  /** Cross-agent forks land the child transcript beside the child's store. */
-  targetStorePath?: string;
-};
-
-export type ForkSessionEntryFromParentTargetResult =
-  | {
-      status: "forked";
-      fork: ParentForkedSessionTranscript;
-      parentEntry: SessionEntry;
-      sessionEntry: SessionEntry;
-      decision: Extract<SessionParentForkDecision, { status: "fork" }>;
-    }
-  | {
-      status: "skipped";
-      reason: "existing-entry" | "decision-skip";
-      parentEntry?: SessionEntry;
-      sessionEntry: SessionEntry;
-      decision?: SessionParentForkDecision;
-    }
-  | { status: "missing-entry" }
-  | { status: "missing-parent" }
-  | { status: "failed" };
-
-export type ForkSessionEntryFromParentTargetParams = {
-  agentId?: string;
-  decisionSkipPatch?: (params: {
-    decision: Extract<SessionParentForkDecision, { status: "skip" }>;
-    entry: SessionEntry;
-    parentEntry: SessionEntry;
-  }) => Partial<SessionEntry> | null;
-  fallbackEntry?: SessionEntry;
-  parentTarget: SessionLifecycleStoreTarget;
-  patch?: (params: {
-    entry: SessionEntry;
-    parentEntry: SessionEntry;
-    fork: ParentForkedSessionTranscript;
-    decision: Extract<SessionParentForkDecision, { status: "fork" }>;
-  }) => Partial<SessionEntry>;
-  /**
-   * File-era seam: token counting for the fork decision still reads transcript
-   * tails through gateway helpers, so the caller supplies the decision. The
-   * SQLite flip resolves the decision inside the storage boundary instead.
-   */
-  resolveDecision: (parentEntry: SessionEntry) => Promise<SessionParentForkDecision>;
-  sessionTarget: SessionLifecycleStoreTarget;
-  skipForkWhen?: (entry: SessionEntry) => boolean;
-  skipPatch?: (entry: SessionEntry) => Partial<SessionEntry> | null;
-  storePath: string;
-};
-
-export type CreateForkedSessionTranscriptParams = {
-  /** Working directory recorded in the forked transcript header. */
-  cwd: string;
-  /** Source transcript recorded as the fork's parentSession lineage. */
-  parentSessionFile: string;
-  /** Directory that owns the forked transcript artifact. */
-  sessionsDir: string;
-  /**
-   * Builds the non-header records copied into the fork, in transcript order.
-   * Receives the generated fork identity so records can share its timestamp.
-   */
-  buildEntries?: (fork: { sessionId: string; timestamp: string }) => readonly unknown[];
-};
-
-/**
- * Creates a forked transcript artifact under a fresh session id as one storage
- * operation. File-backed storage writes header plus copied records as a new
- * JSONL artifact; SQLite implements the same fork as transcript row copies
- * inside one write transaction (#88838).
- */
-export async function createForkedSessionTranscript(
-  params: CreateForkedSessionTranscriptParams,
-): Promise<ForkedSessionTranscriptTarget> {
-  const sessionId = randomUUID();
-  const timestamp = new Date().toISOString();
-  // Fork artifacts keep the timestamp-prefixed file name so sibling transcripts
-  // in one sessions dir sort by creation time.
-  const fileTimestamp = timestamp.replace(/[:.]/g, "-");
-  const sessionFile = path.join(params.sessionsDir, `${fileTimestamp}_${sessionId}.jsonl`);
-  const header = createSessionTranscriptHeader({
-    sessionId,
-    cwd: params.cwd,
-    parentSession: params.parentSessionFile,
-    timestamp,
-  });
-  const entries = params.buildEntries?.({ sessionId, timestamp }) ?? [];
-  fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
-  // "wx" keeps create-only semantics: a fork must never clobber an existing transcript.
-  await writeJsonlLines(sessionFile, [header, ...entries].map(serializeJsonlLine), {
-    flag: "wx",
-    mode: 0o600,
-  });
-  return { sessionFile, sessionId };
-}
-
-/**
- * Forks the active branch of a parent transcript into a fresh child transcript.
- * This is for guarded callers that already own the eventual entry commit.
- */
-export async function forkSessionFromParentTranscript(
-  params: ForkSessionFromParentTranscriptParams,
-): Promise<ForkSessionFromParentTranscriptResult> {
-  let parentSessionFile: string;
-  try {
-    parentSessionFile = resolveSessionFilePath(
-      params.parentEntry.sessionId,
-      params.parentEntry,
-      resolveSessionFilePathOptions({
-        ...(params.agentId ? { agentId: params.agentId } : {}),
-        storePath: params.storePath,
-      }),
-    );
-  } catch {
-    return { status: "missing-parent" };
-  }
-  if (!parentSessionFile) {
-    return { status: "missing-parent" };
-  }
-  try {
-    const { buildForkedBranchEntries, forkSourceHasAssistantEntry, readForkSourceTranscript } =
-      await loadSessionForkTranscriptRuntime();
-    const source = await readForkSourceTranscript(parentSessionFile);
-    if (!source) {
-      return { status: "failed" };
-    }
-    const shouldPersistBranch =
-      source.preserveLeafControl || forkSourceHasAssistantEntry(source.branchEntries);
-    // Cross-agent forks land beside the child's store; same-store forks stay
-    // beside the parent transcript so sibling artifacts sort together.
-    const targetSessionsDir = params.targetStorePath
-      ? path.dirname(params.targetStorePath)
-      : source.sessionDir;
-    const transcript = shouldPersistBranch
-      ? await createForkedSessionTranscript({
-          cwd: source.cwd,
-          parentSessionFile,
-          sessionsDir: targetSessionsDir,
-          buildEntries: ({ timestamp }) => buildForkedBranchEntries({ source, timestamp }),
-        })
-      : // Header-only fork: nothing on the active branch is worth copying.
-        await createForkedSessionTranscript({
-          cwd: source.cwd,
-          parentSessionFile,
-          sessionsDir: targetSessionsDir,
-        });
-    return { status: "created", transcript };
-  } catch {
-    return { status: "failed" };
-  }
-}
-
-function resolveEntryFromStoreKeys(params: {
-  store: Record<string, SessionEntry>;
-  keys: readonly string[];
-}): SessionEntry | undefined {
-  // Alias migration can leave multiple logical rows. Fork policy must inspect
-  // the freshest row or a stale canonical entry can shadow a newer lock.
-  return resolveFreshestTargetEntry(params.store, params.keys)?.entry;
-}
-
-function persistForkedSessionEntry(params: {
-  store: Record<string, SessionEntry>;
-  target: SessionLifecycleStoreTarget;
-  existing: SessionEntry;
-  patch: Partial<SessionEntry>;
-}): SessionEntry {
-  const next = mergeSessionEntry(params.existing, params.patch);
-  params.store[params.target.canonicalKey] = next;
-  // Alias rows collapse onto the canonical key so the forked identity has one owner row.
-  for (const key of params.target.storeKeys) {
-    if (key !== params.target.canonicalKey) {
-      delete params.store[key];
-    }
-  }
-  return next;
-}
-
-/**
- * Forks parent transcript content and persists the child entry/alias cleanup in
- * one storage-owned operation.
- */
-export async function forkSessionEntryFromParentTarget(
-  params: ForkSessionEntryFromParentTargetParams,
-): Promise<ForkSessionEntryFromParentTargetResult> {
-  return await updateSessionStore(
-    params.storePath,
-    async (store) => {
-      const parentEntry = resolveEntryFromStoreKeys({
-        store,
-        keys: params.parentTarget.storeKeys,
-      });
-      if (!parentEntry?.sessionId) {
-        return { status: "missing-parent" };
-      }
-
-      const entry =
-        resolveEntryFromStoreKeys({ store, keys: params.sessionTarget.storeKeys }) ??
-        params.fallbackEntry;
-      if (!entry) {
-        return { status: "missing-entry" };
-      }
-
-      if (params.skipForkWhen?.(entry)) {
-        const patch = params.skipPatch?.(entry);
-        const sessionEntry = patch
-          ? persistForkedSessionEntry({
-              store,
-              target: params.sessionTarget,
-              existing: entry,
-              patch,
-            })
-          : entry;
-        return { status: "skipped", reason: "existing-entry", parentEntry, sessionEntry };
-      }
-
-      const decision = await params.resolveDecision(parentEntry);
-      if (decision.status === "skip") {
-        const patch = params.decisionSkipPatch?.({ decision, entry, parentEntry });
-        const sessionEntry = patch
-          ? persistForkedSessionEntry({
-              store,
-              target: params.sessionTarget,
-              existing: entry,
-              patch,
-            })
-          : entry;
-        return {
-          status: "skipped",
-          reason: "decision-skip",
-          parentEntry,
-          sessionEntry,
-          decision,
-        };
-      }
-
-      const forked = await forkSessionFromParentTranscript({
-        ...(params.agentId ? { agentId: params.agentId } : {}),
-        parentEntry,
-        parentSessionKey: params.parentTarget.canonicalKey,
-        sessionKey: params.sessionTarget.canonicalKey,
-        storePath: params.storePath,
-      });
-      if (forked.status !== "created") {
-        return { status: "failed" };
-      }
-      const fork = forked.transcript;
-      const sessionEntry = persistForkedSessionEntry({
-        store,
-        target: params.sessionTarget,
-        existing: entry,
-        patch: {
-          ...params.patch?.({ entry, parentEntry, fork, decision }),
-          sessionId: fork.sessionId,
-          sessionFile: fork.sessionFile,
-          forkedFromParent: true,
-        },
-      });
-      return {
-        status: "forked",
-        fork,
-        parentEntry,
-        sessionEntry,
-        decision,
-      };
-    },
-    {
-      skipSaveWhenResult: (result) =>
-        result.status === "missing-entry" ||
-        result.status === "missing-parent" ||
-        result.status === "failed" ||
-        (result.status === "skipped" && result.sessionEntry === params.fallbackEntry),
-    },
-  );
 }
 
 /** Updates an existing entry only; returns null when the session is absent. */
@@ -1741,14 +1500,7 @@ export async function updateSessionEntry(
   ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null,
   options: SessionEntryUpdateOptions = {},
 ): Promise<SessionEntry | null> {
-  return await updateFileSessionStoreEntry({
-    storePath: resolveSessionStorePathForScope(scope),
-    sessionKey: scope.sessionKey,
-    skipMaintenance: options.skipMaintenance,
-    takeCacheOwnership: options.takeCacheOwnership,
-    requireWriteSuccess: options.requireWriteSuccess,
-    update,
-  });
+  return await updateSqliteSessionEntry(scope, update, options);
 }
 
 export type RecordInboundSessionMetaParams = {
@@ -1799,7 +1551,7 @@ export type UpdateSessionLastRouteParams = {
 export async function recordInboundSessionMeta(
   params: RecordInboundSessionMetaParams,
 ): Promise<SessionEntry | null> {
-  return await recordFileSessionMetaFromInbound(params);
+  return await recordSqliteInboundSessionMeta(params);
 }
 
 /**
@@ -1811,22 +1563,21 @@ export async function recordInboundSessionMeta(
 export async function updateSessionLastRoute(
   params: UpdateSessionLastRouteParams,
 ): Promise<SessionEntry | null> {
-  return await updateFileSessionLastRoute(params);
+  return await updateSqliteSessionLastRoute(params);
 }
 
 /** Resolves one abort target identity without exposing the mutable store. */
 export function resolveSessionAbortTarget(
   scope: SessionAccessScope,
 ): SessionAbortTargetIdentity | null {
-  const store = loadSessionStore(resolveSessionStorePathForScope(scope));
-  const resolved = resolveSessionStoreEntry({ store, sessionKey: scope.sessionKey });
-  if (!resolved.existing) {
+  const entry = loadSessionEntry(scope);
+  if (!entry) {
     return null;
   }
   return {
-    entry: { ...resolved.existing },
-    sessionId: resolved.existing.sessionId,
-    sessionKey: resolved.normalizedKey,
+    entry: { ...entry },
+    sessionId: entry.sessionId,
+    sessionKey: normalizeStoreSessionKey(scope.sessionKey),
   };
 }
 
@@ -1839,61 +1590,45 @@ export async function markSessionAbortTarget(params: {
   scope: SessionAccessScope;
   now?: () => number;
 }): Promise<SessionAbortTargetResult | null> {
-  const storePath = resolveSessionStorePathForScope(params.scope);
-  let canPersistSingleEntry = false;
   let resolvedTarget: SessionAbortTargetResult | null = null;
   try {
-    return await updateSessionStore(
-      storePath,
-      (store) => {
-        const resolved = resolveSessionStoreEntry({
-          store,
-          sessionKey: params.scope.sessionKey,
-        });
-        if (!resolved.existing) {
-          return null;
-        }
-        const sessionKey = resolved.normalizedKey;
+    const sessionKey = normalizeStoreSessionKey(params.scope.sessionKey);
+    const updated = await patchSessionEntry(
+      params.scope,
+      (currentEntry) => {
         resolvedTarget = {
-          entry: { ...resolved.existing },
+          entry: { ...currentEntry },
           persisted: false,
-          sessionId: resolved.existing.sessionId,
+          sessionId: currentEntry.sessionId,
           sessionKey,
         };
         const entry = {
-          ...resolved.existing,
+          ...currentEntry,
           abortedLastRun: true,
           updatedAt: params.now?.() ?? Date.now(),
         };
         applySessionAbortCutoff(
           entry,
           params.resolveAbortCutoff?.({
-            entry: { ...resolved.existing },
+            entry: { ...currentEntry },
             sessionKey,
           }),
         );
-        store[sessionKey] = entry;
-        canPersistSingleEntry = resolved.legacyKeys.length === 0;
-        for (const legacyKey of resolved.legacyKeys) {
-          if (legacyKey !== sessionKey) {
-            delete store[legacyKey];
-          }
-        }
-        return {
-          entry: { ...entry },
-          persisted: true,
-          sessionId: entry.sessionId,
-          sessionKey,
-        };
+        return entry;
       },
       {
-        resolveSingleEntryPersistence: (result) =>
-          result && result.sessionKey && canPersistSingleEntry
-            ? { sessionKey: result.sessionKey, entry: result.entry }
-            : null,
-        skipSaveWhenResult: (result) => result === null,
+        replaceEntry: true,
+        skipMaintenance: true,
       },
     );
+    return updated
+      ? {
+          entry: { ...updated },
+          persisted: true,
+          sessionId: updated.sessionId,
+          sessionKey,
+        }
+      : null;
   } catch (error) {
     const fallbackTarget = resolvedTarget as unknown as SessionAbortTargetResult | null;
     if (fallbackTarget) {
@@ -1949,45 +1684,43 @@ type ApplySessionCompactionCheckpointMutationParams = {
 async function applySessionCompactionCheckpointMutation(
   params: ApplySessionCompactionCheckpointMutationParams,
 ): Promise<SessionCompactionCheckpointMutationResult> {
-  return await updateSessionStore(
-    params.storePath,
-    async (store) => {
-      const currentEntry = store[params.readKey];
-      if (!currentEntry?.sessionId) {
-        return { status: "missing-session" };
-      }
-      // A native harness owns the locked transcript identity. Rotating or
-      // cloning it here would strand that binding on the old session id.
-      if (currentEntry.modelSelectionLocked === true) {
-        return { status: "model-selection-locked" };
-      }
-      const checkpoint = findSessionCompactionCheckpoint({
-        entry: currentEntry,
-        checkpointId: params.checkpointId,
-      });
-      if (!checkpoint) {
-        return { status: "missing-checkpoint" };
-      }
-      const forkedSession = await params.forkTranscriptFromCheckpoint(checkpoint);
-      if (forkedSession.status !== "created") {
-        return forkedSession;
-      }
+  const currentEntry = loadSessionEntry({
+    sessionKey: params.readKey,
+    storePath: params.storePath,
+  });
+  if (!currentEntry?.sessionId) {
+    return { status: "missing-session" };
+  }
+  if (currentEntry.modelSelectionLocked === true) {
+    return { status: "model-selection-locked" };
+  }
+  const checkpoint = findSessionCompactionCheckpoint({
+    entry: currentEntry,
+    checkpointId: params.checkpointId,
+  });
+  if (!checkpoint) {
+    return { status: "missing-checkpoint" };
+  }
+  const forkedSession = await params.forkTranscriptFromCheckpoint(checkpoint);
+  if (forkedSession.status !== "created") {
+    return forkedSession;
+  }
 
-      const nextEntry = await params.buildEntry({
-        checkpoint,
-        currentEntry,
-        forkedTranscript: forkedSession.transcript,
-      });
-      store[params.writeKey] = nextEntry;
-      return {
-        status: "created",
-        key: params.writeKey,
-        checkpoint,
-        entry: nextEntry,
-      };
-    },
-    { skipSaveWhenResult: (result) => result.status !== "created" },
+  const nextEntry = await params.buildEntry({
+    checkpoint,
+    currentEntry,
+    forkedTranscript: forkedSession.transcript,
+  });
+  await replaceSessionEntry(
+    { sessionKey: params.writeKey, storePath: params.storePath },
+    nextEntry,
   );
+  return {
+    status: "created",
+    key: params.writeKey,
+    checkpoint,
+    entry: nextEntry,
+  };
 }
 
 /**
@@ -2033,12 +1766,20 @@ export async function restoreSessionFromCompactionCheckpoint(
  * writer's normalized-key rules so stale aliases cannot resurrect the entry.
  */
 export async function removeSessionEntry(scope: SessionAccessScope): Promise<void> {
-  await updateSessionStore(resolveSessionStorePathForScope(scope), (store) => {
-    const resolved = resolveSessionStoreEntry({ store, sessionKey: scope.sessionKey });
-    delete store[resolved.normalizedKey];
-    for (const legacyKey of resolved.legacyKeys) {
-      delete store[legacyKey];
-    }
+  const storePath = resolveAccessStorePath(scope);
+  const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
+  const store = Object.fromEntries(
+    listSessionEntries({ agentId, storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+  );
+  const resolved = resolveSessionStoreEntry({ store, sessionKey: scope.sessionKey });
+  await deleteSessionEntryLifecycle({
+    agentId,
+    archiveTranscript: false,
+    storePath,
+    target: {
+      canonicalKey: resolved.normalizedKey,
+      storeKeys: [resolved.normalizedKey, ...resolved.legacyKeys],
+    },
   });
 }
 
@@ -2050,13 +1791,60 @@ export async function removeSessionEntry(scope: SessionAccessScope): Promise<voi
 export async function applySessionPatchProjection<
   TFailure extends SessionPatchProjectionFailure,
 >(params: {
+  agentId?: string;
   storePath: string;
   resolveTarget: (snapshot: SessionPatchProjectionSnapshot) => SessionPatchProjectionTarget;
   project: (
     context: SessionPatchProjectionContext,
   ) => Promise<SessionPatchProjectionResult<TFailure>> | SessionPatchProjectionResult<TFailure>;
 }): Promise<SessionPatchProjectionResult<TFailure>> {
-  return await applyFileSessionEntryPatchProjection(params);
+  const entries = listSessionEntries({ agentId: params.agentId, storePath: params.storePath }).map(
+    ({ sessionKey, entry }) => ({
+      entry: structuredClone(entry),
+      sessionKey,
+    }),
+  );
+  const target = params.resolveTarget({ entries });
+  const existingEntry = resolveProjectionExistingEntry(entries, target);
+  const projected = await params.project({
+    ...target,
+    entries,
+    ...(existingEntry ? { existingEntry } : {}),
+  });
+  if (!projected.ok) {
+    return projected;
+  }
+  const candidateKeys = uniqueStrings(
+    (target.candidateKeys ?? [target.primaryKey]).map((key) => key.trim()).filter(Boolean),
+  );
+  await applySessionEntryLifecycleMutation({
+    agentId: params.agentId,
+    storePath: params.storePath,
+    removals: candidateKeys
+      .filter((sessionKey) => sessionKey !== target.primaryKey)
+      .map((sessionKey) => ({ sessionKey })),
+    upserts: [{ sessionKey: target.primaryKey, entry: projected.entry }],
+    skipMaintenance: true,
+  });
+  return { ...projected, entry: structuredClone(projected.entry) };
+}
+
+function resolveProjectionExistingEntry(
+  entries: readonly { sessionKey: string; entry: SessionEntry }[],
+  target: SessionPatchProjectionTarget,
+): SessionEntry | undefined {
+  const candidateKeys = target.candidateKeys ?? [target.primaryKey];
+  let freshest: SessionEntry | undefined;
+  for (const candidateKey of candidateKeys) {
+    const entry = entries.find((candidate) => candidate.sessionKey === candidateKey)?.entry;
+    if (!entry) {
+      continue;
+    }
+    if (!freshest || (entry.updatedAt ?? 0) > (freshest.updatedAt ?? 0)) {
+      freshest = entry;
+    }
+  }
+  return freshest ? structuredClone(freshest) : undefined;
 }
 
 /**
@@ -2075,43 +1863,7 @@ export async function applySessionEntryReplacements<T>(params: {
   requireWriteSuccess?: boolean;
   skipMaintenance?: boolean;
 }): Promise<T> {
-  const writerResult = await updateSessionStore(
-    params.storePath,
-    async (store) => {
-      const selectedKeys = params.sessionKeys ? new Set(params.sessionKeys) : undefined;
-      const entries = selectedKeys
-        ? [...selectedKeys].flatMap((sessionKey) => {
-            const entry = store[sessionKey];
-            return entry ? [{ sessionKey, entry: structuredClone(entry) }] : [];
-          })
-        : Object.entries(store).map(([sessionKey, entry]) => ({
-            sessionKey,
-            entry: structuredClone(entry),
-          }));
-      const operation = await params.update(entries);
-      let changed = false;
-      for (const replacement of operation.replacements ?? []) {
-        if (selectedKeys && !selectedKeys.has(replacement.sessionKey)) {
-          throw new Error(
-            `Session entry replacement is outside the selected key set: ${replacement.sessionKey}`,
-          );
-        }
-        if (!Object.hasOwn(store, replacement.sessionKey)) {
-          continue;
-        }
-        store[replacement.sessionKey] = structuredClone(replacement.entry);
-        changed = true;
-      }
-      return { changed, result: operation.result };
-    },
-    {
-      activeSessionKey: params.activeSessionKey,
-      requireWriteSuccess: params.requireWriteSuccess,
-      skipMaintenance: params.skipMaintenance ?? true,
-      skipSaveWhenResult: (result) => !result.changed,
-    },
-  );
-  return writerResult.result;
+  return await applySqliteSessionEntryReplacements(params);
 }
 
 /**
@@ -2149,32 +1901,33 @@ export async function preserveTemporarySessionMapping<T>(
 export async function cleanupSessionLifecycleArtifacts(
   params: SessionLifecycleArtifactCleanupParams,
 ): Promise<SessionLifecycleArtifactCleanupResult> {
-  return await cleanupFileSessionLifecycleArtifacts(params);
+  return await cleanupSqliteSessionLifecycleArtifacts(params);
 }
 
 /** Resets one persisted session entry and transitions its transcript state. */
 export async function resetSessionEntryLifecycle(
   params: ResetSessionEntryLifecycleParams,
 ): Promise<ResetSessionEntryLifecycleResult> {
-  return await resetFileSessionEntryLifecycle(params);
+  return await resetSqliteSessionEntryLifecycle(params);
 }
 
 /** Deletes one persisted session entry and transitions its transcript state. */
 export async function deleteSessionEntryLifecycle(
   params: DeleteSessionEntryLifecycleParams,
 ): Promise<DeleteSessionEntryLifecycleResult> {
-  return await deleteFileSessionEntryLifecycle(params);
+  return await deleteSqliteSessionEntryLifecycle(params);
 }
 
 /** Internal exact-row rollback for failed trusted agent-harness initialization. */
 export async function rollbackAgentHarnessSessionEntryLifecycle(
   params: DeleteSessionEntryLifecycleParams & { expectedEntry: SessionEntry },
 ): Promise<DeleteSessionEntryLifecycleResult> {
-  return await rollbackFileAgentHarnessSessionEntryLifecycle(params);
+  return await rollbackSqliteAgentHarnessSessionEntryLifecycle(params);
 }
 
 /** Applies exact entry lifecycle mutations and artifact cleanup at the storage boundary. */
 export async function applySessionEntryLifecycleMutation(params: {
+  agentId?: string;
   storePath: string;
   removals?: Iterable<SessionEntryLifecycleRemoval>;
   upserts?: Iterable<SessionEntryLifecycleUpsert>;
@@ -2194,14 +1947,21 @@ export async function applySessionEntryLifecycleMutation(params: {
   };
   captureArtifactCleanupError?: boolean;
 }): Promise<SessionEntryLifecycleMutationResult> {
-  return await applyFileSessionEntryLifecycleMutation(params);
+  return await applySqliteSessionEntryLifecycleMutation(params);
+}
+
+/** Previews SQLite row-byte disk-budget cleanup without mutating persisted rows. */
+export function previewSessionDiskBudget(
+  params: Parameters<typeof previewSqliteSessionDiskBudget>[0],
+) {
+  return previewSqliteSessionDiskBudget(params);
 }
 
 /** Purges session entries owned by a deleted agent at the storage boundary. */
 export async function purgeDeletedAgentSessionEntries(
   params: DeletedAgentSessionEntryPurgeParams,
 ): Promise<SessionEntryLifecycleMutationResult> {
-  return await purgeFileDeletedAgentSessionEntries(params);
+  return await purgeSqliteDeletedAgentSessionEntries(params);
 }
 
 /**
@@ -2212,7 +1972,50 @@ export async function purgeDeletedAgentSessionEntries(
 export async function cleanupPluginHostSessionStore(
   params: PluginHostSessionCleanupStoreParams,
 ): Promise<number> {
-  return await cleanupFilePluginHostSessionStore(params);
+  if (
+    shouldSkipPluginHostCleanupStore(params) ||
+    (params.shouldCleanup && !params.shouldCleanup())
+  ) {
+    return 0;
+  }
+  const now = Date.now();
+  let cleared = 0;
+  for (const { entry, sessionKey } of listSessionEntries({
+    agentId: params.agentId,
+    storePath: params.storePath,
+  })) {
+    if (isLockedHarnessSessionOwnedByPlugin(entry, params.preserveLockedHarnessIds)) {
+      continue;
+    }
+    if (
+      !matchesPluginHostCleanupSession(sessionKey, entry, params.sessionKey) ||
+      !hasPluginHostCleanupTarget(entry, params)
+    ) {
+      continue;
+    }
+    const updated = await patchSessionEntry(
+      { agentId: params.agentId, sessionKey, storePath: params.storePath },
+      (currentEntry) => {
+        if (isLockedHarnessSessionOwnedByPlugin(currentEntry, params.preserveLockedHarnessIds)) {
+          return null;
+        }
+        if (!hasPluginHostCleanupTarget(currentEntry, params)) {
+          return null;
+        }
+        clearPluginHostCleanupTarget(currentEntry, params);
+        currentEntry.updatedAt = now;
+        return currentEntry;
+      },
+      {
+        replaceEntry: true,
+        skipMaintenance: true,
+      },
+    );
+    if (updated) {
+      cleared += 1;
+    }
+  }
+  return cleared;
 }
 
 /**
@@ -2232,18 +2035,22 @@ export async function persistSessionResetLifecycle(params: {
 }): Promise<{ replayedMessages: number }> {
   let persistError: Error | undefined;
   try {
-    await updateSessionStore(params.storePath, (store) => {
-      store[params.sessionKey] = params.nextEntry;
-    });
+    await replaceSessionEntry(
+      { sessionKey: params.sessionKey, storePath: params.storePath },
+      params.nextEntry,
+    );
   } catch (err) {
     persistError = err instanceof Error ? err : new Error(String(err));
   }
 
-  const replayedMessages = await replayRecentUserAssistantMessages({
-    sourceTranscript: params.previousEntry.sessionFile,
-    targetTranscript: params.nextSessionFile,
-    newSessionId: params.nextEntry.sessionId,
-  });
+  const sqliteReplayedMessages = await replayRecentUserAssistantMessagesToSqlite(params);
+  const replayedMessages =
+    sqliteReplayedMessages ??
+    (await replayRecentUserAssistantMessages({
+      sourceTranscript: params.previousEntry.sessionFile,
+      targetTranscript: params.nextSessionFile,
+      newSessionId: params.nextEntry.sessionId,
+    }));
 
   if (params.cleanupPreviousTranscript && params.previousSessionId) {
     await archivePreviousSessionTranscript({
@@ -2262,12 +2069,81 @@ export async function persistSessionResetLifecycle(params: {
   return { replayedMessages };
 }
 
+async function replayRecentUserAssistantMessagesToSqlite(params: {
+  agentId?: string;
+  nextEntry: SessionEntry;
+  nextSessionFile: string;
+  previousEntry: SessionEntry;
+  previousSessionId?: string;
+  sessionKey: string;
+  storePath: string;
+}): Promise<number | undefined> {
+  const targetMarker = parseSqliteSessionFileMarker(params.nextSessionFile);
+  if (!targetMarker) {
+    return undefined;
+  }
+
+  try {
+    const sourceMarker = parseSqliteSessionFileMarker(params.previousEntry.sessionFile);
+    const sourceRecords = sourceMarker
+      ? selectRecentUserAssistantReplayRecords(
+          await loadTranscriptEvents({
+            agentId: sourceMarker.agentId,
+            sessionId: params.previousSessionId ?? sourceMarker.sessionId,
+            sessionKey: params.sessionKey,
+            storePath: sourceMarker.storePath,
+          }),
+        )
+      : await readRecentUserAssistantReplayRecordsFromJsonl({
+          sourceTranscript: params.previousEntry.sessionFile,
+        });
+    if (sourceRecords.length === 0) {
+      return 0;
+    }
+
+    for (const record of sourceRecords) {
+      const replayMessage = extractReplayMessage(record);
+      if (replayMessage === undefined) {
+        continue;
+      }
+      await appendTranscriptMessage(
+        {
+          agentId: targetMarker.agentId,
+          sessionId: targetMarker.sessionId,
+          sessionKey: params.sessionKey,
+          storePath: targetMarker.storePath,
+        },
+        { message: replayMessage },
+      );
+    }
+    return sourceRecords.length;
+  } catch {
+    return 0;
+  }
+}
+
+function extractReplayMessage(record: unknown): unknown {
+  if (!record || typeof record !== "object" || Array.isArray(record)) {
+    return undefined;
+  }
+  const candidate = record as { message?: unknown; type?: unknown };
+  if (candidate.type !== "message") {
+    return undefined;
+  }
+  return candidate.message && typeof candidate.message === "object" ? candidate.message : undefined;
+}
+
 /** Loads the reply-session initialization rows without exposing a mutable store. */
 export function loadReplySessionInitializationSnapshot(params: {
   storePath: string;
   sessionKey: string;
 }): ReplySessionInitializationSnapshot {
-  const store = loadSessionStore(params.storePath, { skipCache: true, clone: false });
+  const store = Object.fromEntries(
+    listSessionEntries({ storePath: params.storePath }).map(({ sessionKey, entry }) => [
+      sessionKey,
+      entry,
+    ]),
+  );
   const resolved = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey });
   const currentEntry = resolved.existing ? { ...resolved.existing } : undefined;
   const entries = cloneSessionEntries(store);
@@ -2293,7 +2169,6 @@ export async function commitReplySessionInitialization(params: {
   activeSessionKey: string;
   agentId: string;
   expectedRevision: string;
-  fallbackSessionFile?: string;
   maintenanceConfig?: ResolvedSessionMaintenanceConfig;
   onArchiveError?: (error: unknown, sourcePath: string) => void;
   onMaintenanceWarning?: (warning: SessionMaintenanceWarning) => void | Promise<void>;
@@ -2307,75 +2182,117 @@ export async function commitReplySessionInitialization(params: {
   snapshotEntry?: SessionEntry;
   storePath: string;
 }): Promise<ReplySessionInitializationCommitResult> {
-  const committed = await updateSessionStore(
-    params.storePath,
-    async (store): Promise<ReplySessionInitializationCommitResult> => {
-      const resolved = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey });
-      const currentEntry = resolved.existing ? { ...resolved.existing } : undefined;
-      const revision = createReplySessionInitializationRevision({
-        entry: currentEntry,
-        storePath: params.storePath,
-      });
-      if (revision !== params.expectedRevision) {
-        return {
-          ok: false,
-          ...(currentEntry ? { currentEntry } : {}),
-          reason: "stale-snapshot",
-          revision,
-        };
-      }
-
-      const readEntry = (sessionKey: string) => {
-        const entry = resolveSessionStoreEntry({ store, sessionKey }).existing;
-        return entry ? { ...entry } : undefined;
-      };
-      const preparedSessionEntry = params.prepareSessionEntry
-        ? await params.prepareSessionEntry({
-            ...(currentEntry ? { currentEntry } : {}),
-            readEntry,
-            sessionEntry: params.sessionEntry,
-          })
-        : params.sessionEntry;
-      const sessionEntry = resolveInitializedReplySessionEntry({
-        agentId: params.agentId,
-        ...(currentEntry ? { currentEntry } : {}),
-        fallbackSessionFile: params.fallbackSessionFile,
-        sessionEntry: preparedSessionEntry,
-        storePath: params.storePath,
-      });
-      // The identity-only guard allows commits when background activity touched
-      // non-identity metadata after the snapshot. Merge only the fields that
-      // actually changed since the snapshot so heartbeat/delivery/context
-      // metadata is not rolled back, while reset-cleared fields (e.g. provider
-      // or model overrides on /new) stay cleared.
-      store[resolved.normalizedKey] = currentEntry
-        ? mergeConcurrentReplySessionMetadata({
-            currentEntry,
-            preparedEntry: sessionEntry,
-            snapshotEntry: params.snapshotEntry ?? params.previousEntry,
-          })
-        : sessionEntry;
-      if (params.retiredEntry) {
-        store[params.retiredEntry.key] = params.retiredEntry.entry;
-      }
-      return {
-        ok: true,
-        previousSessionTranscript: {},
-        sessionEntry: { ...(store[resolved.normalizedKey] ?? sessionEntry) },
-        sessionStoreView: cloneSessionEntries(store),
-      };
-    },
-    {
-      activeSessionKey: params.activeSessionKey,
-      maintenanceConfig: params.maintenanceConfig,
-      onWarn: params.onMaintenanceWarning,
-      reentrant: true,
-      skipSaveWhenResult: (result) => !result.ok,
-    },
+  const store = Object.fromEntries(
+    listSessionEntries({ storePath: params.storePath }).map(({ sessionKey, entry }) => [
+      sessionKey,
+      entry,
+    ]),
   );
-  if (!committed.ok) {
-    return committed;
+  const resolved = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey });
+  const currentEntry = resolved.existing ? { ...resolved.existing } : undefined;
+  const revision = createReplySessionInitializationRevision({
+    entry: currentEntry,
+    storePath: params.storePath,
+  });
+  if (revision !== params.expectedRevision) {
+    return {
+      ok: false,
+      ...(currentEntry ? { currentEntry } : {}),
+      reason: "stale-snapshot",
+      revision,
+    };
   }
+
+  const readEntry = (sessionKey: string) => {
+    const entry = resolveSessionStoreEntry({ store, sessionKey }).existing;
+    return entry ? { ...entry } : undefined;
+  };
+  const preparedSessionEntry = params.prepareSessionEntry
+    ? await params.prepareSessionEntry({
+        ...(currentEntry ? { currentEntry } : {}),
+        readEntry,
+        sessionEntry: params.sessionEntry,
+      })
+    : params.sessionEntry;
+  const sessionEntry = resolveInitializedReplySessionEntry({
+    agentId: params.agentId,
+    ...(currentEntry ? { currentEntry } : {}),
+    sessionEntry: preparedSessionEntry,
+    storePath: params.storePath,
+  });
+  let staleCommit:
+    | {
+        currentEntry?: SessionEntry;
+        revision: string;
+      }
+    | undefined;
+  let committedSessionEntry = sessionEntry;
+  const upserts: SessionEntryLifecycleUpsert[] = [
+    {
+      sessionKey: resolved.normalizedKey,
+      buildEntry: ({ store: currentStore }) => {
+        const commitResolved = resolveSessionStoreEntry({
+          store: currentStore,
+          sessionKey: params.sessionKey,
+        });
+        const commitEntry = commitResolved.existing;
+        const commitRevision = createReplySessionInitializationRevision({
+          entry: commitEntry,
+          storePath: params.storePath,
+        });
+        if (commitRevision !== params.expectedRevision) {
+          staleCommit = {
+            ...(commitEntry ? { currentEntry: { ...commitEntry } } : {}),
+            revision: commitRevision,
+          };
+          return null;
+        }
+        // The identity-only guard allows commits when background activity
+        // touched non-identity metadata after the snapshot. Merge only fields
+        // that changed since the snapshot so delivery/context metadata is not
+        // rolled back, while reset-cleared fields stay cleared.
+        committedSessionEntry = commitEntry
+          ? mergeConcurrentReplySessionMetadata({
+              currentEntry: commitEntry,
+              preparedEntry: sessionEntry,
+              snapshotEntry: params.snapshotEntry ?? params.previousEntry,
+            })
+          : sessionEntry;
+        return committedSessionEntry;
+      },
+    },
+  ];
+  if (params.retiredEntry) {
+    const retiredEntry = params.retiredEntry;
+    upserts.push({
+      sessionKey: retiredEntry.key,
+      buildEntry: () => (staleCommit ? null : retiredEntry.entry),
+    });
+  }
+  await applySessionEntryLifecycleMutation({
+    activeSessionKey: params.activeSessionKey,
+    maintenanceOverride: params.maintenanceConfig,
+    storePath: params.storePath,
+    upserts,
+  });
+  if (staleCommit) {
+    return {
+      ok: false,
+      ...(staleCommit.currentEntry ? { currentEntry: staleCommit.currentEntry } : {}),
+      reason: "stale-snapshot",
+      revision: staleCommit.revision,
+    };
+  }
+  store[resolved.normalizedKey] = committedSessionEntry;
+  if (params.retiredEntry) {
+    store[params.retiredEntry.key] = params.retiredEntry.entry;
+  }
+  const committed: ReplySessionInitializationCommitResult = {
+    ok: true,
+    previousSessionTranscript: {},
+    sessionEntry: { ...committedSessionEntry },
+    sessionStoreView: cloneSessionEntries(store),
+  };
 
   const previousSessionTranscript = await archivePreviousSessionTranscript({
     agentId: params.agentId,
@@ -2398,25 +2315,72 @@ export async function appendTranscriptEvent(
   scope: SessionTranscriptAccessScope,
   event: TranscriptEvent,
 ): Promise<void> {
-  assertNonMessageTranscriptEvent(event);
-  const transcript = await resolveTranscriptAccess(scope);
-  await appendSessionTranscriptEvent({
-    event,
-    transcriptPath: transcript.sessionFile,
-  });
+  await appendSqliteTranscriptEvent(scope, event);
 }
 
-function assertNonMessageTranscriptEvent(event: TranscriptEvent): void {
-  if (!event || typeof event !== "object" || Array.isArray(event)) {
-    return;
-  }
-  // Message records require parent-link, idempotency, and redaction handling
-  // from appendTranscriptMessage; raw event writes would bypass those invariants.
-  if ((event as { type?: unknown }).type === "message") {
-    throw new Error(
-      "appendTranscriptEvent cannot write message transcript records; use appendTranscriptMessage instead.",
-    );
-  }
+/** Appends a non-message transcript record synchronously for sync session runtimes. */
+export function appendTranscriptEventSync(
+  scope: SessionTranscriptAccessScope,
+  event: TranscriptEvent,
+): void {
+  appendSqliteTranscriptEventSync(scope, event);
+}
+
+/** Reads parsed transcript records from an explicit or derived transcript target. */
+export async function loadTranscriptEvents(
+  scope: SessionTranscriptReadScope,
+): Promise<TranscriptEvent[]> {
+  return await loadSqliteTranscriptEvents(scope);
+}
+
+/** Replaces all transcript records for one SQLite-backed transcript. */
+export async function replaceTranscriptEvents(
+  scope: SessionTranscriptAccessScope,
+  events: TranscriptEvent[],
+): Promise<void> {
+  await replaceSqliteTranscriptEvents(scope, events);
+}
+
+/** Replaces all transcript records synchronously for sync session runtimes. */
+export function replaceTranscriptEventsSync(
+  scope: SessionTranscriptAccessScope,
+  events: TranscriptEvent[],
+): boolean {
+  return replaceSqliteTranscriptEventsSync(scope, events);
+}
+
+/** Reads parsed transcript records synchronously from the SQLite transcript store. */
+export function loadTranscriptEventsSync(scope: SessionTranscriptReadScope): TranscriptEvent[] {
+  return loadSqliteTranscriptEventsSync(scope);
+}
+
+/** Reads transcript freshness and byte size without materializing event rows. */
+export function readTranscriptStatsSync(scope: SessionTranscriptReadScope): SessionTranscriptStats {
+  return readSqliteTranscriptStatsSync(scope);
+}
+
+/** Reads the latest visible assistant text without materializing the whole transcript. */
+export function readLatestTranscriptAssistantText(
+  scope: SessionTranscriptReadScope,
+  options: { includeTranscriptOnlyOpenClawAssistant?: boolean } = {},
+): LatestTranscriptAssistantText | undefined {
+  return loadLatestSqliteAssistantText(scope, options);
+}
+
+/** Reads the latest assistant message payload without materializing the whole transcript. */
+export function readLatestTranscriptAssistantMessage(
+  scope: SessionTranscriptReadScope,
+  options: { includeTranscriptOnlyOpenClawAssistant?: boolean } = {},
+): LatestTranscriptAssistantMessage | undefined {
+  return loadLatestSqliteAssistantMessage(scope, options);
+}
+
+/** Reads the latest transcript message payload without materializing the whole transcript. */
+export function readLatestTranscriptMessage(
+  scope: SessionTranscriptReadScope,
+  options: { includeTranscriptOnlyOpenClawAssistant?: boolean } = {},
+): LatestTranscriptMessage | undefined {
+  return loadLatestSqliteMessage(scope, options);
 }
 
 /**
@@ -2437,64 +2401,35 @@ export async function appendTranscriptMessage<TMessage>(
   scope: SessionTranscriptWriteScope,
   options: TranscriptMessageAppendOptions<TMessage>,
 ): Promise<TranscriptMessageAppendResult<TMessage> | undefined> {
-  const transcript = await resolveTranscriptAccess(scope);
-  return await appendSessionTranscriptMessage({
-    transcriptPath: transcript.sessionFile,
-    message: options.message,
-    ...(scope.sessionId ? { sessionId: scope.sessionId } : {}),
-    ...(options.cwd ? { cwd: options.cwd } : {}),
-    ...(options.config ? { config: options.config } : {}),
-    ...(options.idempotencyLookup ? { idempotencyLookup: options.idempotencyLookup } : {}),
-    ...(options.now !== undefined ? { now: options.now } : {}),
-    ...(options.prepareMessageAfterIdempotencyCheck
-      ? { prepareMessageAfterIdempotencyCheck: options.prepareMessageAfterIdempotencyCheck }
-      : {}),
-    ...(options.useRawWhenLinear !== undefined
-      ? { useRawWhenLinear: options.useRawWhenLinear }
-      : {}),
-  });
+  return await appendSqliteTranscriptMessage(scope, options);
+}
+
+/** Appends one transcript message synchronously for sync session runtimes. */
+export function appendTranscriptMessageSync<TMessage>(
+  scope: SessionTranscriptWriteScope,
+  options: TranscriptMessageAppendOptions<TMessage>,
+): TranscriptMessageAppendResult<TMessage> | undefined {
+  return appendSqliteTranscriptMessageSync(scope, options);
+}
+
+/** Resolves the persisted key for a SQLite transcript session id. */
+export function resolveTranscriptSessionKeyBySessionId(
+  scope: Pick<SessionTranscriptReadScope, "agentId" | "env" | "sessionId" | "storePath">,
+): string | undefined {
+  return resolveSqliteSessionKeyBySessionId(scope);
 }
 
 /**
- * Finds the newest transcript record accepted by the matcher. Reads newest-first
- * with early exit so hot append-path lookups never materialize the whole
- * transcript; missing transcripts match nothing. The match is wrapped so parsed
- * falsy records stay distinguishable from "no match".
+ * Finds the newest transcript record accepted by the matcher. Reads rows
+ * newest-first with early exit so hot append-path lookups never parse the
+ * whole transcript; missing transcripts match nothing. The match is wrapped
+ * so parsed falsy records stay distinguishable from "no match".
  */
 export async function findTranscriptEvent(
   scope: SessionTranscriptReadScope,
   match: (event: TranscriptEvent) => boolean,
 ): Promise<{ event: TranscriptEvent } | undefined> {
-  const target = resolveSessionTranscriptReadTarget(scope);
-  for await (const line of streamSessionTranscriptLinesReverse(target.sessionFile)) {
-    try {
-      const event = JSON.parse(line) as TranscriptEvent;
-      if (match(event)) {
-        return { event };
-      }
-    } catch {
-      // Malformed lines are skipped, matching transcript index tolerance.
-    }
-  }
-  return undefined;
-}
-
-/** Reads parsed transcript records from an explicit or derived transcript target. */
-export async function loadTranscriptEvents(
-  scope: SessionTranscriptReadScope,
-): Promise<TranscriptEvent[]> {
-  const target = resolveSessionTranscriptReadTarget(scope);
-  const events: TranscriptEvent[] = [];
-  // Missing transcripts stream zero lines, so readers get an empty event list
-  // instead of a filesystem error; that keeps the read contract storage-neutral.
-  for await (const line of streamSessionTranscriptLines(target.sessionFile)) {
-    try {
-      events.push(JSON.parse(line) as TranscriptEvent);
-    } catch {
-      // Malformed lines are skipped, matching transcript index tolerance.
-    }
-  }
-  return events;
+  return findSqliteTranscriptEvent(scope, match);
 }
 
 /** Emits a transcript update after resolving the current transcript target. */
@@ -2502,12 +2437,15 @@ export async function publishTranscriptUpdate(
   scope: SessionTranscriptWriteScope,
   update: TranscriptUpdatePayload = {},
 ): Promise<void> {
-  const transcript = await resolveTranscriptAccess(scope);
-  emitSessionTranscriptUpdate({
-    ...update,
-    sessionFile: transcript.sessionFile,
-    ...(transcript.target ? { target: transcript.target } : {}),
-  });
+  await publishSqliteTranscriptUpdate(scope, update);
+}
+
+/** Runs transcript read/append work under the backing store writer lock. */
+export async function withTranscriptWriteLock<T>(
+  scope: SessionTranscriptWriteScope,
+  run: (context: SessionTranscriptWriteLockAccessorContext) => Promise<T> | T,
+): Promise<T> {
+  return await withSqliteTranscriptWriteLock(scope, run);
 }
 
 /**
@@ -2519,71 +2457,54 @@ export async function preflightSessionTranscriptForManualCompact(
   scope: SessionTranscriptRuntimeScope,
   params: { maxLines: number; sessionFile?: string },
 ): Promise<SessionTranscriptManualTrimPreflightResult> {
-  const transcript = await resolveManualCompactTranscriptTarget(scope, params.sessionFile);
-  if (!transcript) {
+  const events = await loadTranscriptEvents(scope).catch(() => []);
+  if (events.length === 0) {
     return { compacted: false, reason: "no transcript" };
   }
 
   const maxLines = Math.max(1, Math.floor(params.maxLines));
-  let totalLines = 0;
-  try {
-    for await (const line of streamSessionTranscriptLines(transcript.sessionFile)) {
-      if (!line) {
-        continue;
-      }
-      totalLines += 1;
-      if (totalLines > maxLines) {
-        return { compacted: true };
-      }
-    }
-  } catch {
-    return { compacted: false, kept: 0 };
-  }
-  return { compacted: false, kept: totalLines };
+  return events.length > maxLines ? { compacted: true } : { compacted: false, kept: events.length };
 }
 
 export async function trimSessionTranscriptForManualCompact(
   scope: SessionTranscriptRuntimeScope,
   params: { maxLines: number; nowMs?: number; sessionFile?: string },
 ): Promise<SessionTranscriptManualTrimResult> {
-  const transcript = await resolveManualCompactTranscriptTarget(scope, params.sessionFile);
-  if (!transcript) {
+  const events = await loadTranscriptEvents(scope).catch(() => []);
+  if (events.length === 0) {
     return { compacted: false, reason: "no transcript" };
   }
 
   const maxLines = Math.max(1, Math.floor(params.maxLines));
-  let headerLine: string | undefined;
-  const tailLines: string[] = [];
+  const headerLine = JSON.stringify(events[0]);
+  const tailLines = events.slice(1).map((event) => JSON.stringify(event));
   const maxTailLines = Math.max(0, maxLines - 1);
-  let totalLines = 0;
-  try {
-    for await (const line of streamSessionTranscriptLines(transcript.sessionFile)) {
-      totalLines += 1;
-      if (totalLines === 1) {
-        headerLine = line;
-        continue;
-      }
-      tailLines.push(line);
-      if (tailLines.length > maxTailLines) {
-        tailLines.shift();
-      }
-    }
-  } catch {
-    return { compacted: false, kept: 0 };
-  }
-  if (totalLines <= maxLines) {
-    return { compacted: false, kept: totalLines };
+  if (events.length <= maxLines) {
+    return { compacted: false, kept: events.length };
   }
 
-  const lines = normalizeManualCompactTranscriptLines(headerLine, tailLines);
+  const lines = normalizeManualCompactTranscriptLines(
+    headerLine,
+    maxTailLines > 0 ? tailLines.slice(-maxTailLines) : [],
+  );
   if (!lines) {
     return { compacted: false, kept: 0 };
   }
-  const archived = await replaceTranscriptForManualCompact(transcript.sessionFile, lines);
+  const retainedEvents = lines.map((line) => JSON.parse(line) as TranscriptEvent);
+  await replaceSqliteTranscriptEvents(scope, retainedEvents);
+  const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
+  if (!agentId) {
+    throw new Error(`Cannot resolve manual compact transcript scope: ${scope.sessionKey}`);
+  }
+  const archived = `${formatSqliteSessionFileMarker({
+    agentId,
+    sessionId: scope.sessionId,
+    storePath: scope.storePath ?? "",
+  })}.bak.${formatSessionArchiveTimestamp()}`;
   await patchSessionEntry(
     {
       ...scope,
-      sessionKey: transcript.sessionKey,
+      sessionKey: scope.sessionKey,
       storePath: scope.storePath,
     },
     (entry) => {
@@ -2689,162 +2610,10 @@ function normalizeManualCompactTranscriptLines(
   return [JSON.stringify(header), ...normalizedRecords.map((record) => JSON.stringify(record))];
 }
 
-async function replaceTranscriptForManualCompact(
-  filePath: string,
-  lines: readonly string[],
-): Promise<string> {
-  const archived = `${filePath}.bak.${formatSessionArchiveTimestamp()}`;
-  const replacement = `${filePath}.compact.${randomUUID()}.tmp`;
-  try {
-    await writeJsonlLines(replacement, lines, { flag: "wx", mode: 0o600 });
-    await fs.promises.rename(filePath, archived);
-    try {
-      await fs.promises.rename(replacement, filePath);
-    } catch (err) {
-      await fs.promises.rename(archived, filePath).catch(() => undefined);
-      throw err;
-    }
-  } catch (err) {
-    await fs.promises.unlink(replacement).catch(() => undefined);
-    throw err;
-  }
-  emitSessionTranscriptUpdate({ sessionFile: archived });
-  emitSessionTranscriptUpdate({ sessionFile: filePath });
-  return archived;
-}
-
-async function resolveManualCompactTranscriptTarget(
-  scope: SessionTranscriptRuntimeScope,
-  sessionFile?: string,
-): Promise<SessionTranscriptRuntimeTarget | null> {
-  const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
-  if (!agentId) {
-    throw new Error(`Cannot resolve transcript scope without an agent id: ${scope.sessionKey}`);
-  }
-  const candidates = resolveManualCompactTranscriptCandidates({
-    agentId,
-    sessionFile,
-    sessionId: scope.sessionId,
-    storePath: scope.storePath,
-  });
-  for (const candidate of candidates) {
-    const stat = await fs.promises.stat(candidate).catch(() => null);
-    if (stat?.isFile()) {
-      return {
-        agentId,
-        sessionFile: candidate,
-        sessionId: scope.sessionId,
-        sessionKey: scope.sessionKey,
-      };
-    }
-  }
-  return null;
-}
-
-function resolveManualCompactTranscriptCandidates(params: {
-  agentId?: string;
-  sessionFile?: string;
-  sessionId: string;
-  storePath?: string;
-}): string[] {
-  const candidates: string[] = [];
-  const sessionFileState = classifyGeneratedTranscriptCandidate(
-    params.sessionId,
-    params.sessionFile,
-  );
-  const pushCandidate = (resolve: () => string): void => {
-    try {
-      const candidate = resolve();
-      if (!candidates.includes(candidate)) {
-        candidates.push(candidate);
-      }
-    } catch {
-      // Keep scanning the remaining file-backed candidates.
-    }
-  };
-
-  if (params.storePath) {
-    const sessionsDir = path.dirname(params.storePath);
-    if (params.sessionFile && sessionFileState !== "stale") {
-      pushCandidate(() =>
-        resolveSessionFilePath(
-          params.sessionId,
-          { sessionFile: params.sessionFile },
-          { sessionsDir, agentId: params.agentId },
-        ),
-      );
-    }
-    pushCandidate(() => resolveSessionTranscriptPathInDir(params.sessionId, sessionsDir));
-    if (params.sessionFile && sessionFileState === "stale") {
-      pushCandidate(() =>
-        resolveSessionFilePath(
-          params.sessionId,
-          { sessionFile: params.sessionFile },
-          { sessionsDir, agentId: params.agentId },
-        ),
-      );
-    }
-  } else if (params.sessionFile) {
-    if (params.agentId) {
-      if (sessionFileState !== "stale") {
-        pushCandidate(() =>
-          resolveSessionFilePath(
-            params.sessionId,
-            { sessionFile: params.sessionFile },
-            { agentId: params.agentId },
-          ),
-        );
-      }
-    } else {
-      const trimmed = params.sessionFile.trim();
-      if (trimmed) {
-        candidates.push(path.resolve(trimmed));
-      }
-    }
-  }
-
-  if (params.agentId) {
-    pushCandidate(() => resolveSessionTranscriptPath(params.sessionId, params.agentId));
-    if (params.sessionFile && sessionFileState === "stale") {
-      pushCandidate(() =>
-        resolveSessionFilePath(
-          params.sessionId,
-          { sessionFile: params.sessionFile },
-          { agentId: params.agentId },
-        ),
-      );
-    }
-  }
-
-  const legacyDir = path.join(
-    resolveRequiredHomeDir(process.env, os.homedir),
-    ".openclaw",
-    "sessions",
-  );
-  pushCandidate(() => resolveSessionTranscriptPathInDir(params.sessionId, legacyDir));
-  return candidates;
-}
-
-function classifyGeneratedTranscriptCandidate(
-  sessionId: string,
-  sessionFile?: string,
-): "current" | "stale" | "custom" {
-  const transcriptSessionId = extractGeneratedTranscriptSessionId(sessionFile);
-  if (!transcriptSessionId) {
-    return "custom";
-  }
-  return transcriptSessionId === sessionId ? "current" : "stale";
-}
-
 /**
- * Persists one logical transcript turn through the current file-backed writer.
- * The file implementation resolves/rebinds the transcript file, holds one
- * session write lock across all message appends, optionally touches session
- * metadata, then publishes after the write has completed.
- *
- * SQLite implementation note: the transcript row append(s), sessionFile marker,
- * and requested updatedAt touch become one SQLite write transaction; transcript
- * update delivery must run only after commit.
+ * Persists one logical transcript turn through the SQLite-backed session target.
+ * Transcript row append(s), the synthetic sessionFile marker, and the requested
+ * updatedAt touch happen before transcript update delivery is published.
  */
 export async function persistSessionTranscriptTurn(
   scope: SessionTranscriptWriteScope & {
@@ -2858,7 +2627,13 @@ export async function persistSessionTranscriptTurn(
     return await persistExpectedSessionTranscriptTurn(scope, { ...options, expectedSessionId });
   }
   const target = await resolveTranscriptTurnTarget(scope);
-  const appendedMessages = await appendTranscriptTurnMessages(target, options);
+  const appendedMessages = await runWithOwnedSessionTranscriptWriteLock(
+    {
+      sessionFile: target.sessionFile,
+      sessionKey: target.sessionKey,
+    },
+    () => appendTranscriptTurnMessages(target, options),
+  );
   const appendedCount = countAppendedTranscriptMessages(appendedMessages);
   const sessionEntry = await touchTranscriptTurnSessionEntry({
     scope,
@@ -2884,84 +2659,51 @@ async function appendTranscriptTurnMessages(
   target: SessionTranscriptTurnWriteContext,
   options: SessionTranscriptTurnPersistOptions,
 ): Promise<TranscriptMessageAppendResult<unknown>[]> {
+  const selectedMessages = await selectAppendableTranscriptTurnMessages(target, options);
   const appendedMessages: TranscriptMessageAppendResult<unknown>[] = [];
-  const publishedEntries: OwnedSessionTranscriptPublishedEntry[] = [];
-  const appendMessages = async (appendMessage: SessionTranscriptTurnAppendRunner) => {
-    for (const append of options.messages) {
-      const shouldAppend = append.shouldAppend
-        ? await append.shouldAppend({
-            ...(target.agentId ? { agentId: target.agentId } : {}),
-            sessionFile: target.sessionFile,
-            ...(target.sessionId ? { sessionId: target.sessionId } : {}),
-            ...(target.sessionKey ? { sessionKey: target.sessionKey } : {}),
-          })
-        : true;
-      if (!shouldAppend) {
-        continue;
-      }
-      const result = await appendMessage({
-        transcriptPath: target.sessionFile,
-        message: append.message,
+  for (const append of selectedMessages) {
+    const { shouldAppend: _shouldAppend, ...appendOptions } = append;
+    const result = await appendTranscriptMessage(
+      {
+        ...(target.agentId ? { agentId: target.agentId } : {}),
         ...(target.sessionId ? { sessionId: target.sessionId } : {}),
+        ...(target.sessionKey ? { sessionKey: target.sessionKey } : {}),
+        ...(target.storePath ? { storePath: target.storePath } : {}),
+      },
+      {
+        ...appendOptions,
         ...((append.cwd ?? options.cwd) ? { cwd: append.cwd ?? options.cwd } : {}),
         ...((append.config ?? options.config) ? { config: append.config ?? options.config } : {}),
-        ...(append.idempotencyLookup ? { idempotencyLookup: append.idempotencyLookup } : {}),
-        ...(append.now !== undefined ? { now: append.now } : {}),
-        ...(append.prepareMessageAfterIdempotencyCheck
-          ? { prepareMessageAfterIdempotencyCheck: append.prepareMessageAfterIdempotencyCheck }
-          : {}),
-        onHeaderCreated: (header) => {
-          publishedEntries.push({ kind: "header", serialized: header });
-        },
-        ...(append.useRawWhenLinear !== undefined
-          ? { useRawWhenLinear: append.useRawWhenLinear }
-          : {}),
-      });
-      if (result) {
-        appendedMessages.push(result);
-        if (result.appended) {
-          publishedEntries.push({ kind: "id", id: result.messageId });
-        }
-      }
+      },
+    );
+    if (result) {
+      appendedMessages.push(result);
     }
-  };
-  const activeLockRunner = resolveOwnedSessionTranscriptWriteLockRunner({
-    sessionFile: target.sessionFile,
-    sessionKey: target.sessionKey,
-  });
-  const runBatchWithOwnedLock = async () =>
-    await withOwnedSessionTranscriptWrites(
-      {
-        sessionFile: target.sessionFile,
-        sessionKey: target.sessionKey,
-        withSessionWriteLock: async (run) => await run(),
-      },
-      async () => await appendMessages(appendSessionTranscriptMessageWithOwnedWriteLock),
-    );
-  if (activeLockRunner) {
-    await activeLockRunner(
-      () => withSessionTranscriptAppendQueue(target.sessionFile, runBatchWithOwnedLock),
-      {
-        publishOwnedWrite: true,
-        resolvePublishedEntries: () => publishedEntries,
-        resolvePublishedEntriesAfterFailure: () => publishedEntries,
-      },
-    );
-  } else {
-    await withSessionTranscriptAppendQueue(target.sessionFile, async () => {
-      const lock = await acquireSessionWriteLock({
-        sessionFile: target.sessionFile,
-        ...resolveSessionWriteLockOptions(options.config),
-        allowReentrant: true,
-      });
-      try {
-        await runBatchWithOwnedLock();
-      } finally {
-        await lock.release();
-      }
-    });
   }
   return appendedMessages;
+}
+
+async function selectAppendableTranscriptTurnMessages(
+  target: SessionTranscriptTurnWriteContext,
+  options: SessionTranscriptTurnPersistOptions,
+): Promise<SessionTranscriptTurnMessageAppend[]> {
+  const selectedMessages: SessionTranscriptTurnMessageAppend[] = [];
+  for (const append of options.messages) {
+    const shouldAppend = append.shouldAppend
+      ? await append.shouldAppend({
+          ...(target.agentId ? { agentId: target.agentId } : {}),
+          sessionFile: target.sessionFile,
+          ...(target.sessionId ? { sessionId: target.sessionId } : {}),
+          ...(target.sessionKey ? { sessionKey: target.sessionKey } : {}),
+          ...(target.storePath ? { storePath: target.storePath } : {}),
+        })
+      : true;
+    if (!shouldAppend) {
+      continue;
+    }
+    selectedMessages.push(append);
+  }
+  return selectedMessages;
 }
 
 function countAppendedTranscriptMessages(
@@ -2981,84 +2723,61 @@ async function persistExpectedSessionTranscriptTurn(
   if (!scope.storePath || !sessionKey) {
     throw new Error("Cannot guard a transcript turn without a session store and key");
   }
+  const storePath = scope.storePath;
   const expectedSessionId = options.expectedSessionId;
   const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(sessionKey);
   if (!agentId) {
     throw new Error(`Cannot resolve transcript turn without an agent id: ${sessionKey}`);
   }
   const store =
-    scope.sessionStore ?? loadSessionStore(scope.storePath, { skipCache: true, clone: false });
+    scope.sessionStore ??
+    Object.fromEntries(
+      listSessionEntries({ storePath }).map(({ sessionKey: entryKey, entry }) => [entryKey, entry]),
+    );
   const resolved = resolveSessionStoreEntry({ store, sessionKey });
-  let appendedMessages: TranscriptMessageAppendResult<unknown>[] = [];
-  let target: SessionTranscriptTurnWriteContext = {
+  const sessionFile = formatSqliteSessionFileMarker({
     agentId,
-    sessionFile:
-      scope.sessionFile ??
-      resolveSessionTranscriptPathInDir(expectedSessionId, path.dirname(scope.storePath)),
+    sessionId: expectedSessionId,
+    storePath,
+  });
+  const target: SessionTranscriptTurnWriteContext = {
+    agentId,
+    sessionFile,
     sessionId: expectedSessionId,
     sessionKey: resolved.normalizedKey,
+    storePath,
   };
-  let rejectedEntry: SessionEntry | undefined;
-  let touchUpdatedAt: number | undefined;
-
-  const updated = await updateSessionEntry(
+  const turn = await runWithOwnedSessionTranscriptWriteLock(
     {
-      sessionKey: resolved.normalizedKey,
-      storePath: scope.storePath,
+      sessionFile: target.sessionFile,
+      sessionKey: target.sessionKey,
     },
-    async (currentEntry) => {
-      if (
-        currentEntry.sessionId !== expectedSessionId ||
-        (options.expectedLifecycleRevision !== undefined &&
-          currentEntry.lifecycleRevision !== options.expectedLifecycleRevision)
-      ) {
-        rejectedEntry = currentEntry;
-        return null;
-      }
-      const sessionFile =
-        scope.sessionFile ??
-        resolveSessionFilePath(
-          currentEntry.sessionId,
-          currentEntry,
-          resolveSessionFilePathOptions({
-            agentId,
-            storePath: scope.storePath,
-          }),
-        );
-      target = {
-        agentId,
-        sessionFile,
-        sessionId: currentEntry.sessionId,
-        sessionKey: resolved.normalizedKey,
-      };
-      appendedMessages = await appendTranscriptTurnMessages(target, options);
-      const appendedCount = countAppendedTranscriptMessages(appendedMessages);
-      if (options.touchSessionEntry === true && appendedCount > 0) {
-        touchUpdatedAt = Date.now();
-      }
-      const patch = {
-        ...(currentEntry.sessionFile === sessionFile ? {} : { sessionFile }),
-        ...(touchUpdatedAt !== undefined
-          ? { updatedAt: Math.max(currentEntry.updatedAt ?? 0, touchUpdatedAt) }
-          : {}),
-      };
-      return Object.keys(patch).length > 0 ? patch : null;
-    },
-    { skipMaintenance: true },
+    () =>
+      appendSqliteExpectedSessionTranscriptTurn(
+        {
+          sessionKey: resolved.normalizedKey,
+          sessionId: expectedSessionId,
+          storePath,
+        },
+        {
+          config: options.config,
+          cwd: options.cwd,
+          expectedLifecycleRevision: options.expectedLifecycleRevision,
+          expectedSessionId,
+          messages: options.messages,
+          sessionFile: target.sessionFile,
+          touchSessionEntry: options.touchSessionEntry,
+        },
+      ),
   );
 
-  if (
-    rejectedEntry ||
-    updated?.sessionId !== expectedSessionId ||
-    (options.expectedLifecycleRevision !== undefined &&
-      updated.lifecycleRevision !== options.expectedLifecycleRevision)
-  ) {
+  if (turn.rejectedReason === "session-rebound") {
     return {
       appendedCount: 0,
       messages: [],
       rejectedReason: "session-rebound",
-      sessionEntry: rejectedEntry ?? updated ?? undefined,
-      sessionFile: target.sessionFile,
+      sessionEntry: turn.sessionEntry,
+      sessionFile: turn.sessionFile,
     };
   }
 
@@ -3066,122 +2785,101 @@ async function persistExpectedSessionTranscriptTurn(
     target,
     updateMode: options.updateMode ?? "inline",
     publishWhen: options.publishWhen ?? "when-appended",
-    appendedMessages,
+    appendedMessages: turn.appendedMessages,
   });
 
-  if (updated && scope.sessionStore) {
-    scope.sessionStore[resolved.normalizedKey] = updated;
+  if (turn.sessionEntry && scope.sessionStore) {
+    scope.sessionStore[resolved.normalizedKey] = turn.sessionEntry;
   }
   return {
-    appendedCount: countAppendedTranscriptMessages(appendedMessages),
-    messages: appendedMessages,
-    sessionEntry: updated ?? scope.sessionEntry,
-    sessionFile: target.sessionFile,
+    appendedCount: countAppendedTranscriptMessages(turn.appendedMessages),
+    messages: turn.appendedMessages,
+    sessionEntry: turn.sessionEntry ?? scope.sessionEntry,
+    sessionFile: turn.sessionFile,
   };
 }
 
 /**
- * Resolves the current file-backed target for a storage-neutral runtime
- * transcript scope. Callers use the scope as identity; sessionFile is returned
- * only for current file-backed implementation details such as locks/events.
+ * Resolves the current storage-neutral runtime transcript target. SQLite-backed
+ * rows return their marker so transcript readers/writers stay on the accessor
+ * path instead of reopening legacy JSONL artifacts.
  */
 export async function resolveSessionTranscriptRuntimeTarget(
   scope: SessionTranscriptRuntimeScope,
 ): Promise<SessionTranscriptRuntimeTarget> {
   const { agentId, sessionEntry, sessionKey, sessionStore } =
     resolveSessionTranscriptRuntimeContext(scope);
-  if (scope.sessionFile?.trim()) {
+  if (shouldUseExplicitTranscriptFile(scope)) {
     return {
       agentId,
-      sessionFile: path.resolve(scope.sessionFile),
+      sessionFile: scope.sessionFile.trim(),
       sessionId: scope.sessionId,
       sessionKey,
     };
   }
-  if (sessionStore && scope.storePath) {
-    const sessionsDir = path.dirname(path.resolve(scope.storePath));
-    const threadId = scope.threadId ?? parseSessionThreadInfo(scope.sessionKey).threadId;
-    const shouldUseDerivedSessionFile =
-      !sessionEntry?.sessionFile || sessionEntry.sessionId !== scope.sessionId;
-    const fallbackSessionFile =
-      shouldUseDerivedSessionFile && threadId !== undefined
-        ? resolveSessionTranscriptPathInDir(scope.sessionId, sessionsDir, threadId)
-        : undefined;
-    const resolved = await resolveAndPersistSessionFile({
-      agentId,
-      fallbackSessionFile,
-      sessionEntry,
-      sessionId: scope.sessionId,
-      sessionKey,
-      sessionStore,
-      sessionsDir,
-      storePath: scope.storePath,
-    });
-    return {
-      agentId,
-      sessionFile: resolved.sessionFile,
-      sessionId: scope.sessionId,
-      sessionKey,
-    };
-  }
-  const resolved = await resolveSessionTranscriptFile({
-    agentId,
-    sessionEntry,
-    sessionId: scope.sessionId,
-    sessionKey: scope.sessionKey,
-    ...(sessionStore ? { sessionStore } : {}),
-    ...(scope.storePath ? { storePath: scope.storePath } : {}),
-    ...(scope.threadId !== undefined ? { threadId: scope.threadId } : {}),
-  });
+  void sessionStore;
   return {
     agentId,
-    sessionFile: resolved.sessionFile,
+    sessionFile: resolveRuntimeSessionFile(scope, agentId, sessionEntry),
     sessionId: scope.sessionId,
     sessionKey,
   };
 }
 
 /**
- * Resolves the file-backed runtime transcript target for read/delete probes
- * without persisting missing sessionFile metadata into the session store.
+ * Resolves the runtime transcript target for read/delete probes without
+ * persisting missing sessionFile metadata into the session store.
  */
 export async function resolveSessionTranscriptRuntimeReadTarget(
   scope: SessionTranscriptRuntimeScope,
 ): Promise<SessionTranscriptRuntimeTarget> {
   const { agentId, sessionEntry, sessionKey } = resolveSessionTranscriptRuntimeContext(scope);
-  if (scope.sessionFile?.trim()) {
+  if (shouldUseExplicitTranscriptFile(scope)) {
     return {
       agentId,
-      sessionFile: path.resolve(scope.sessionFile),
+      sessionFile: scope.sessionFile.trim(),
       sessionId: scope.sessionId,
       sessionKey,
     };
   }
-  const matchingSessionEntry =
-    sessionEntry?.sessionId === scope.sessionId ? sessionEntry : undefined;
-  if (scope.storePath) {
-    const sessionsDir = path.dirname(path.resolve(scope.storePath));
-    const threadId = scope.threadId ?? parseSessionThreadInfo(sessionKey).threadId;
-    const sessionFile = matchingSessionEntry?.sessionFile
-      ? resolveSessionFilePath(scope.sessionId, matchingSessionEntry, { agentId, sessionsDir })
-      : resolveSessionTranscriptPathInDir(scope.sessionId, sessionsDir, threadId);
-    return {
-      agentId,
-      sessionFile,
-      sessionId: scope.sessionId,
-      sessionKey,
-    };
-  }
-  const threadId = scope.threadId ?? parseSessionThreadInfo(sessionKey).threadId;
-  const sessionFile = matchingSessionEntry?.sessionFile
-    ? resolveSessionFilePath(scope.sessionId, matchingSessionEntry, { agentId })
-    : resolveSessionTranscriptPath(scope.sessionId, agentId, threadId);
   return {
     agentId,
-    sessionFile,
+    sessionFile: resolveRuntimeSessionFile(scope, agentId, sessionEntry),
     sessionId: scope.sessionId,
     sessionKey,
   };
+}
+
+function resolveRuntimeSessionFile(
+  scope: SessionTranscriptRuntimeScope,
+  agentId: string,
+  sessionEntry: SessionEntry | undefined,
+): string {
+  const matchingSessionEntry =
+    sessionEntry?.sessionId === undefined || sessionEntry.sessionId === scope.sessionId
+      ? sessionEntry
+      : undefined;
+  if (
+    sqliteSessionFileMarkerMatchesSession(matchingSessionEntry?.sessionFile, scope.sessionId) &&
+    matchingSessionEntry?.sessionFile
+  ) {
+    return matchingSessionEntry.sessionFile;
+  }
+  if (scope.storePath) {
+    return formatSqliteSessionFileMarker({
+      agentId,
+      sessionId: scope.sessionId,
+      storePath: scope.storePath,
+    });
+  }
+  return resolveSessionFilePath(
+    scope.sessionId,
+    matchingSessionEntry,
+    resolveSessionFilePathOptions({
+      agentId,
+      storePath: scope.storePath,
+    }),
+  );
 }
 
 type SessionTranscriptRuntimeContext = {
@@ -3199,7 +2897,12 @@ function resolveSessionTranscriptRuntimeContext(
     throw new Error(`Cannot resolve transcript scope without an agent id: ${scope.sessionKey}`);
   }
   const sessionStore = scope.storePath
-    ? loadSessionStore(scope.storePath, { skipCache: true })
+    ? Object.fromEntries(
+        listSessionEntries({ agentId, storePath: scope.storePath }).map(({ sessionKey, entry }) => [
+          sessionKey,
+          entry,
+        ]),
+      )
     : undefined;
   const resolvedStoreEntry = sessionStore
     ? resolveSessionStoreEntry({ store: sessionStore, sessionKey: scope.sessionKey })
@@ -3215,7 +2918,7 @@ function resolveSessionTranscriptRuntimeContext(
 }
 
 /**
- * Resolves the current file-backed target for read-only transcript callers.
+ * Resolves the current storage-neutral target for read-only transcript callers.
  * Unlike writer/runtime resolution, this does not persist missing sessionFile
  * metadata; reader projections must not mutate session metadata.
  */
@@ -3231,49 +2934,57 @@ export function resolveSessionTranscriptReadTarget(
       ...(scope.sessionKey ? { sessionKey: scope.sessionKey } : {}),
     };
   }
+  const entrySessionFile = scope.sessionEntry?.sessionFile?.trim();
+  const entryMarker = parseSqliteSessionFileMarker(entrySessionFile);
+  if (entrySessionFile && entryMarker && entryMarker.sessionId === scope.sessionId) {
+    return {
+      agentId: scope.agentId ?? entryMarker.agentId,
+      sessionFile: entrySessionFile,
+      sessionId: scope.sessionId,
+      ...(scope.sessionKey ? { sessionKey: scope.sessionKey } : {}),
+    };
+  }
   const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
   if (!agentId) {
     throw new Error(`Cannot resolve transcript scope without an agent id: ${scope.sessionKey}`);
   }
   const storePath = resolveConcreteReadStorePath(scope.storePath);
+  if (!storePath) {
+    const resolvedStorePath = resolveStorePath(getRuntimeConfig().session?.store, {
+      agentId,
+      env: scope.env,
+    });
+    return {
+      agentId,
+      sessionFile: formatSqliteSessionFileMarker({
+        agentId,
+        sessionId: scope.sessionId,
+        storePath: resolvedStorePath,
+      }),
+      sessionId: scope.sessionId,
+      ...(scope.sessionKey ? { sessionKey: scope.sessionKey } : {}),
+    };
+  }
   const resolvedStoreEntry =
     scope.sessionEntry || !scope.sessionKey
       ? undefined
       : storePath
         ? resolveSessionStoreEntry({
-            store: loadSessionStore(storePath, { skipCache: true }),
+            store: Object.fromEntries(
+              listSessionEntries({ agentId, storePath }).map(({ sessionKey, entry }) => [
+                sessionKey,
+                entry,
+              ]),
+            ),
             sessionKey: scope.sessionKey,
           })
         : undefined;
-  const sessionEntry =
-    scope.sessionEntry ??
-    resolvedStoreEntry?.existing ??
-    (scope.sessionKey ? loadSessionEntry({ ...scope, sessionKey: scope.sessionKey }) : undefined);
   const sessionKey = resolvedStoreEntry?.normalizedKey ?? scope.sessionKey;
-  const matchingSessionEntry =
-    sessionEntry?.sessionId === undefined || sessionEntry.sessionId === scope.sessionId
-      ? sessionEntry
-      : undefined;
-  const threadId =
-    scope.threadId ?? (sessionKey ? parseSessionThreadInfo(sessionKey).threadId : undefined);
-  const sessionFile = matchingSessionEntry?.sessionFile
-    ? resolveSessionFilePath(
-        scope.sessionId,
-        matchingSessionEntry,
-        resolveSessionFilePathOptions({
-          agentId,
-          ...(storePath ? { storePath } : {}),
-        }),
-      )
-    : storePath
-      ? resolveSessionTranscriptPathInDir(
-          // File-backed readers derive beside sessions.json only for the JSON-store
-          // deprecation window; the SQLite flip resolves from canonical metadata.
-          scope.sessionId,
-          path.dirname(path.resolve(storePath)),
-          threadId,
-        )
-      : resolveSessionTranscriptPath(scope.sessionId, agentId, threadId);
+  const sessionFile = formatSqliteSessionFileMarker({
+    agentId,
+    sessionId: scope.sessionId,
+    storePath: storePath ?? "",
+  });
   return {
     agentId,
     sessionFile,
@@ -3292,7 +3003,12 @@ export function loadSessionStoreEntrySnapshot(params: {
   sessionKey: string;
   storePath: string;
 }): SessionStoreEntrySnapshot {
-  const store = loadSessionStore(params.storePath, { skipCache: true });
+  const store = Object.fromEntries(
+    listSessionEntries({ storePath: params.storePath }).map(({ sessionKey, entry }) => [
+      sessionKey,
+      entry,
+    ]),
+  );
   const resolved = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey });
   return {
     ...(resolved.existing ? { entry: resolved.existing } : {}),
@@ -3308,25 +3024,18 @@ function resolveConcreteReadStorePath(storePath: string | undefined): string | u
   return trimmed;
 }
 
-function createFallbackSessionEntry(patch: Partial<SessionEntry>): SessionEntry {
-  const now = Date.now();
-  return {
-    sessionId: patch.sessionId ?? randomUUID(),
-    updatedAt: patch.updatedAt ?? now,
-    ...patch,
-  };
-}
-
 function snapshotTemporarySessionMapping(
   scope: SessionAccessScope,
 ): TemporarySessionMappingSnapshot {
-  const storePath = resolveSessionStorePathForScope(scope);
+  const storePath = resolveAccessStorePath(scope);
   try {
-    const store = loadSessionStore(storePath, { skipCache: true });
-    const entry = store[scope.sessionKey];
+    const exact = loadExactSessionEntry({
+      ...scope,
+      storePath,
+    });
     return {
       canRestore: true,
-      ...(entry ? { entry: structuredClone(entry), hadEntry: true } : { hadEntry: false }),
+      ...(exact ? { entry: structuredClone(exact.entry), hadEntry: true } : { hadEntry: false }),
       sessionKey: scope.sessionKey,
       storePath,
     };
@@ -3347,17 +3056,19 @@ async function restoreTemporarySessionMapping(
     return undefined;
   }
   try {
-    await updateSessionStore(
-      snapshot.storePath,
-      (store) => {
-        if (snapshot.hadEntry) {
-          store[snapshot.sessionKey] = structuredClone(snapshot.entry);
-          return;
-        }
-        delete store[snapshot.sessionKey];
-      },
-      { activeSessionKey: snapshot.sessionKey },
-    );
+    if (snapshot.hadEntry) {
+      await replaceSessionEntry(
+        { sessionKey: snapshot.sessionKey, storePath: snapshot.storePath },
+        structuredClone(snapshot.entry),
+      );
+    } else {
+      await applySessionEntryLifecycleMutation({
+        storePath: snapshot.storePath,
+        removals: [{ sessionKey: snapshot.sessionKey }],
+        activeSessionKey: snapshot.sessionKey,
+        skipMaintenance: true,
+      });
+    }
     return undefined;
   } catch (err) {
     return formatErrorMessage(err);
@@ -3392,66 +3103,15 @@ async function archivePreviousSessionTranscript(params: {
   });
 }
 
-type ResolvedTranscriptAccess = {
-  sessionFile: string;
-  target?: SessionTranscriptUpdateTarget;
-};
-
-function projectTranscriptUpdateTarget(
-  target: Pick<Partial<SessionTranscriptRuntimeTarget>, "agentId" | "sessionId" | "sessionKey">,
-): SessionTranscriptUpdateTarget | undefined {
-  if (!target.agentId || !target.sessionId || !target.sessionKey) {
-    return undefined;
+function resolveAccessStorePath(scope: SessionAccessScope): string {
+  if (scope.storePath) {
+    return scope.storePath;
   }
-  return {
-    agentId: target.agentId,
-    sessionId: target.sessionId,
-    sessionKey: target.sessionKey,
-  };
-}
-
-async function resolveTranscriptAccess(
-  scope: SessionTranscriptWriteScope,
-): Promise<ResolvedTranscriptAccess> {
-  if (scope.sessionFile?.trim()) {
-    const scopeSessionKey = scope.sessionKey?.trim();
-    const agentId = scopeSessionKey
-      ? (scope.agentId ?? resolveAgentIdFromSessionKey(scopeSessionKey))
-      : undefined;
-    return {
-      sessionFile: scope.sessionFile,
-      ...(agentId && scope.sessionId && scopeSessionKey
-        ? {
-            target: projectTranscriptUpdateTarget({
-              agentId,
-              sessionId: scope.sessionId,
-              sessionKey: scopeSessionKey,
-            }),
-          }
-        : {}),
-    };
-  }
-  if (!scope.sessionId) {
-    throw new Error(`Cannot resolve transcript scope without a session id: ${scope.sessionKey}`);
-  }
-  // Past this point resolution goes through the session entry, so the owning
-  // key is mandatory; explicit-artifact writes returned above never need it.
-  const scopeSessionKey = scope.sessionKey?.trim();
-  if (!scopeSessionKey) {
-    throw new Error(
-      "Cannot resolve a transcript write scope without a session key or explicit session file",
-    );
-  }
-  const target = await resolveSessionTranscriptRuntimeTarget({
-    ...scope,
-    sessionId: scope.sessionId,
-    sessionKey: scopeSessionKey,
+  const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
+  return resolveStorePath(getRuntimeConfig().session?.store, {
+    agentId,
+    env: scope.env,
   });
-  const updateTarget = projectTranscriptUpdateTarget(target);
-  return {
-    sessionFile: target.sessionFile,
-    ...(updateTarget ? { target: updateTarget } : {}),
-  };
 }
 
 async function resolveTranscriptTurnTarget(
@@ -3464,12 +3124,17 @@ async function resolveTranscriptTurnTarget(
     sessionEntry: SessionEntry | undefined;
   }
 > {
-  if (scope.sessionFile?.trim()) {
+  if (shouldUseExplicitTranscriptFile(scope)) {
+    const marker = parseSqliteSessionFileMarker(scope.sessionFile);
+    const agentId = scope.agentId ?? marker?.agentId;
+    const sessionId = scope.sessionId ?? marker?.sessionId;
+    const storePath = scope.storePath ?? marker?.storePath;
     return {
-      ...(scope.agentId ? { agentId: scope.agentId } : {}),
-      sessionFile: scope.sessionFile,
-      ...(scope.sessionId ? { sessionId: scope.sessionId } : {}),
+      ...(agentId ? { agentId } : {}),
+      sessionFile: scope.sessionFile.trim(),
+      ...(sessionId ? { sessionId } : {}),
       ...(scope.sessionKey ? { sessionKey: scope.sessionKey } : {}),
+      ...(storePath ? { storePath } : {}),
       sessionEntry: scope.sessionEntry,
     };
   }
@@ -3483,28 +3148,56 @@ async function resolveTranscriptTurnTarget(
   if (!agentId) {
     throw new Error(`Cannot resolve transcript turn without an agent id: ${sessionKey}`);
   }
+  const storePath =
+    scope.storePath ??
+    resolveStorePath(getRuntimeConfig().session?.store, {
+      agentId,
+      env: scope.env,
+    });
   const store =
     scope.sessionStore ??
-    (scope.storePath ? loadSessionStore(scope.storePath, { skipCache: true }) : undefined);
+    Object.fromEntries(
+      listSessionEntries({
+        agentId,
+        storePath,
+      }).map(({ sessionKey: entryKey, entry }) => [entryKey, entry]),
+    );
   const resolved = store ? resolveSessionStoreEntry({ store, sessionKey }) : undefined;
   const sessionEntry =
-    resolved?.existing ?? scope.sessionEntry ?? loadSessionEntry({ ...scope, sessionKey });
-  const resolvedFile = await resolveSessionTranscriptFile({
+    resolved?.existing ??
+    scope.sessionEntry ??
+    loadSessionEntry({ ...scope, agentId, sessionKey, storePath });
+  const sessionFile = formatSqliteSessionFileMarker({
     agentId,
-    sessionEntry,
     sessionId: scope.sessionId,
-    sessionKey,
-    ...(store ? { sessionStore: store } : {}),
-    ...(scope.storePath ? { storePath: scope.storePath } : {}),
-    ...(scope.threadId !== undefined ? { threadId: scope.threadId } : {}),
+    storePath,
   });
   return {
     agentId,
-    sessionFile: resolvedFile.sessionFile,
+    sessionFile,
     sessionId: scope.sessionId,
     sessionKey: resolved?.normalizedKey ?? sessionKey,
-    sessionEntry: resolvedFile.sessionEntry,
+    storePath,
+    sessionEntry,
   };
+}
+
+function shouldUseExplicitTranscriptFile<
+  TScope extends {
+    sessionFile?: string;
+    sessionId?: string;
+    sessionKey?: string;
+    storePath?: string;
+  },
+>(scope: TScope): scope is TScope & { sessionFile: string } {
+  const explicitSessionFile = scope.sessionFile?.trim();
+  if (!explicitSessionFile) {
+    return false;
+  }
+  const hasStoreIdentity = Boolean(
+    scope.storePath?.trim() && scope.sessionKey?.trim() && scope.sessionId?.trim(),
+  );
+  return !hasStoreIdentity;
 }
 
 async function touchTranscriptTurnSessionEntry(params: {
@@ -3519,7 +3212,7 @@ async function touchTranscriptTurnSessionEntry(params: {
 }): Promise<SessionEntry | undefined> {
   if (
     !params.shouldTouch ||
-    !params.scope.storePath ||
+    !params.target.storePath ||
     !params.target.sessionKey ||
     !params.target.sessionId
   ) {
@@ -3529,7 +3222,8 @@ async function touchTranscriptTurnSessionEntry(params: {
   const updated = await updateSessionEntry(
     {
       sessionKey: params.target.sessionKey,
-      storePath: params.scope.storePath,
+      storePath: params.target.storePath,
+      ...(params.target.agentId ? { agentId: params.target.agentId } : {}),
     },
     (current) =>
       current.sessionId === params.target.sessionId
@@ -3559,9 +3253,18 @@ async function publishTranscriptTurnUpdate(params: {
   if (params.publishWhen === "when-appended" && !lastAppended) {
     return;
   }
+  const target =
+    params.target.agentId && params.target.sessionId && params.target.sessionKey
+      ? {
+          agentId: params.target.agentId,
+          sessionId: params.target.sessionId,
+          sessionKey: params.target.sessionKey,
+        }
+      : undefined;
   emitSessionTranscriptUpdate({
     ...(params.target.sessionKey ? { sessionKey: params.target.sessionKey } : {}),
     ...(params.target.agentId ? { agentId: params.target.agentId } : {}),
+    ...(target ? { target } : {}),
     ...(params.updateMode === "inline" && lastAppended
       ? {
           message: lastAppended.message,

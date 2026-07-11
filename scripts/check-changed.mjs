@@ -38,6 +38,8 @@ const PROMPT_SNAPSHOT_OWNER_TEST_PATH_RE =
   /^(?:scripts\/(?:generate-prompt-snapshots\.ts|prompt-snapshot-files\.ts|sync-codex-model-prompt-fixture\.ts)|test\/helpers\/agents\/(?:happy-path-prompt-snapshots|prompt-snapshot-paths)\.ts|test\/fixtures\/agents\/prompt-snapshots\/codex-model-catalog\/.+)$/u;
 const RUNTIME_SIDECAR_BASELINE_PATH_RE =
   /^(?:scripts\/generate-runtime-sidecar-paths-baseline\.ts|scripts\/lib\/bundled-runtime-sidecar-paths\.json|src\/plugins\/runtime-sidecar-paths(?:-baseline)?\.ts)$/u;
+const SQLITE_SESSION_SCHEMA_BASELINE_PATH_RE =
+  /^(?:src\/state\/openclaw-agent-schema\.sql|scripts\/(?:generate-sqlite-session-schema-baseline\.ts|lib\/sqlite-session-schema-baseline\.ts)|test\/scripts\/sqlite-session-schema-baseline\.test\.ts|docs\/\.generated\/sqlite-session-transcript-schema-baseline\.sha256)$/u;
 const CANVAS_A2UI_NATIVE_RESOURCE_PATH_RE =
   /^(?:pnpm-lock\.yaml$|apps\/shared\/OpenClawKit\/Sources\/OpenClawKit\/Resources\/CanvasA2UI\/|extensions\/canvas\/(?:package\.json$|scripts\/bundle-a2ui\.mjs$|src\/host\/a2ui(?:\/(?:index\.html|a2ui\.bundle\.js|\.bundle\.hash)$|-app\/))|scripts\/(?:bundle-a2ui|sync-native-a2ui)\.mjs$)/u;
 const CORE_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.core.json";
@@ -200,6 +202,13 @@ export function shouldRunRuntimeSidecarBaselineCheck(paths) {
   return paths.some((changedPath) => RUNTIME_SIDECAR_BASELINE_PATH_RE.test(changedPath));
 }
 
+/** Returns whether changed files can affect the sessions/transcripts SQLite schema baseline. */
+export function shouldRunSqliteSessionSchemaBaselineCheck(paths) {
+  return paths.some((changedPath) =>
+    SQLITE_SESSION_SCHEMA_BASELINE_PATH_RE.test(normalizeChangedPath(changedPath)),
+  );
+}
+
 export function shouldRunCanvasA2uiNativeResourceCheck(paths) {
   return paths.some((changedPath) =>
     CANVAS_A2UI_NATIVE_RESOURCE_PATH_RE.test(normalizeChangedPath(changedPath)),
@@ -321,6 +330,9 @@ export function createChangedCheckPlan(result, options = {}) {
       ["test:serial", "src/plugins/bundled-plugin-metadata.test.ts"],
       baseEnv,
     );
+  }
+  if (shouldRunSqliteSessionSchemaBaselineCheck(result.paths)) {
+    add("SQLite sessions/transcripts schema baseline", ["sqlite:sessions-schema:check"]);
   }
   if (shouldRunCanvasA2uiNativeResourceCheck(result.paths)) {
     addCommand(

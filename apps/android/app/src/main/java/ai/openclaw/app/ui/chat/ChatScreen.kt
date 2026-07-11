@@ -981,6 +981,11 @@ private fun ChatBubble(
             when {
               part.type == "text" -> ChatText(text = part.text.orEmpty(), textColor = ClawTheme.colors.text, isStreaming = live)
               part.isAudioAttachment() -> VoiceNoteMessageRow(durationMs = part.durationMs)
+              part.type == "image" ->
+                ChatBase64Image(
+                  base64 = checkNotNull(part.base64),
+                  mimeType = part.mimeType,
+                )
               else -> Text(text = part.fileName ?: "Attachment", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
             }
           }

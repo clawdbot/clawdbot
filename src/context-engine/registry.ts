@@ -82,15 +82,21 @@ const SESSION_KEY_COMPAT_METHODS = [
   "assemble",
   "compact",
 ] as const;
-const LEGACY_COMPAT_PARAMS = ["sessionKey", "prompt", "runtimeSettings"] as const;
+const LEGACY_COMPAT_PARAMS = [
+  "sessionKey",
+  "prompt",
+  "runtimeSettings",
+  "sessionTarget",
+  "runtimeContext",
+] as const;
 const LEGACY_COMPAT_METHOD_KEYS = {
-  bootstrap: ["sessionKey", "runtimeSettings"],
-  maintain: ["sessionKey", "runtimeSettings"],
+  bootstrap: ["sessionKey", "runtimeSettings", "sessionTarget", "runtimeContext"],
+  maintain: ["sessionKey", "runtimeSettings", "sessionTarget", "runtimeContext"],
   ingest: ["sessionKey"],
   ingestBatch: ["sessionKey"],
-  afterTurn: ["sessionKey", "runtimeSettings"],
+  afterTurn: ["sessionKey", "runtimeSettings", "sessionTarget", "runtimeContext"],
   assemble: ["sessionKey", "prompt", "runtimeSettings"],
-  compact: ["sessionKey", "runtimeSettings"],
+  compact: ["sessionKey", "runtimeSettings", "sessionTarget", "runtimeContext"],
 } as const;
 
 type SessionKeyCompatMethodName = (typeof SESSION_KEY_COMPAT_METHODS)[number];
@@ -98,6 +104,8 @@ type SessionKeyCompatParams = {
   sessionKey?: string;
   prompt?: string;
   runtimeSettings?: unknown;
+  sessionTarget?: unknown;
+  runtimeContext?: unknown;
 };
 type LegacyCompatKey = (typeof LEGACY_COMPAT_PARAMS)[number];
 type LegacyCompatParamMap = Partial<Record<LegacyCompatKey, unknown>>;
@@ -185,6 +193,24 @@ const LEGACY_UNKNOWN_FIELD_PATTERNS: Record<LegacyCompatKey, readonly RegExp[]> 
     /\b(?:unknown|invalid)\s+(?:property|properties|field|fields|key|keys)\b.*['"`]runtimeSettings['"`]/i,
     /['"`]runtimeSettings['"`].*\b(?:was|is)\s+not allowed\b/i,
     /"code"\s*:\s*"unrecognized_keys"[^]*"runtimeSettings"/i,
+  ],
+  sessionTarget: [
+    /\bunrecognized key(?:\(s\)|s)? in object:.*['"`]sessionTarget['"`]/i,
+    /\badditional propert(?:y|ies)\b.*['"`]sessionTarget['"`]/i,
+    /\bmust not have additional propert(?:y|ies)\b.*['"`]sessionTarget['"`]/i,
+    /\b(?:unexpected|extraneous)\s+(?:property|properties|field|fields|key|keys)\b.*['"`]sessionTarget['"`]/i,
+    /\b(?:unknown|invalid)\s+(?:property|properties|field|fields|key|keys)\b.*['"`]sessionTarget['"`]/i,
+    /['"`]sessionTarget['"`].*\b(?:was|is)\s+not allowed\b/i,
+    /"code"\s*:\s*"unrecognized_keys"[^]*"sessionTarget"/i,
+  ],
+  runtimeContext: [
+    /\bunrecognized key(?:\(s\)|s)? in object:.*['"`]runtimeContext['"`]/i,
+    /\badditional propert(?:y|ies)\b.*['"`]runtimeContext['"`]/i,
+    /\bmust not have additional propert(?:y|ies)\b.*['"`]runtimeContext['"`]/i,
+    /\b(?:unexpected|extraneous)\s+(?:property|properties|field|fields|key|keys)\b.*['"`]runtimeContext['"`]/i,
+    /\b(?:unknown|invalid)\s+(?:property|properties|field|fields|key|keys)\b.*['"`]runtimeContext['"`]/i,
+    /['"`]runtimeContext['"`].*\b(?:was|is)\s+not allowed\b/i,
+    /"code"\s*:\s*"unrecognized_keys"[^]*"runtimeContext"/i,
   ],
 } as const;
 

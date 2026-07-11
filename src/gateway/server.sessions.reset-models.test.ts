@@ -4,6 +4,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test } from "vitest";
+import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { MODEL_SELECTION_LOCKED_RESET_MESSAGE } from "../sessions/model-overrides.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
@@ -15,6 +16,7 @@ import {
 const { createSessionStoreDir } = setupGatewaySessionsTestHarness();
 
 type ResetSessionEntry = {
+  sessionId?: string;
   sessionFile?: string;
   chatType?: string;
   channel?: string;
@@ -137,9 +139,13 @@ const ownedChildMetadata = {
   label: "owned child",
 } satisfies SessionEntryOverrides & ResetSessionEntry;
 
-function expectOwnedChildMetadata(entry: ResetSessionEntry | undefined, sessionFile: string) {
+function expectSqliteSessionFile(entry: ResetSessionEntry | undefined) {
+  expect(entry?.sessionFile).toContain(`sqlite:main:${entry?.sessionId}:`);
+}
+
+function expectOwnedChildMetadata(entry: ResetSessionEntry | undefined) {
+  expectSqliteSessionFile(entry);
   expect(entry).toMatchObject({
-    sessionFile,
     ...ownedChildMetadata,
   });
 }
@@ -182,15 +188,14 @@ async function expectMainResetModelFields(params: {
   expect(reset.payload?.entry.modelProvider).toBe(params.expectedResolved.modelProvider);
   expect(reset.payload?.entry.model).toBe(params.expectedResolved.model);
 
-  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-    string,
-    ModelResetEntry
-  >;
+  const stored = loadSessionEntry({ sessionKey: "agent:main:main", storePath }) as
+    | ModelResetEntry
+    | undefined;
   for (const key of selectionKeys) {
-    expect(store["agent:main:main"]?.[key]).toBe(params.expected[key]);
+    expect(stored?.[key]).toBe(params.expected[key]);
   }
-  expect(store["agent:main:main"]?.modelProvider).toBeUndefined();
-  expect(store["agent:main:main"]?.model).toBeUndefined();
+  expect(stored?.modelProvider).toBeUndefined();
+  expect(stored?.model).toBeUndefined();
 }
 
 test("sessions.reset rejects a model-locked session without replacing native state", async () => {
@@ -206,7 +211,7 @@ test("sessions.reset rejects a model-locked session without replacing native sta
       }),
     },
   });
-  const before = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, unknown>;
+  const before = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
 
   const reset = await directSessionReq("sessions.reset", { key: "main" });
 
@@ -214,7 +219,7 @@ test("sessions.reset rejects a model-locked session without replacing native sta
     ok: false,
     error: { message: MODEL_SELECTION_LOCKED_RESET_MESSAGE },
   });
-  const after = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, unknown>;
+  const after = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
   expect(after).toEqual(before);
 });
 
@@ -263,7 +268,7 @@ test("sessions.reset recomputes model from defaults instead of stale runtime mod
   expect(reset.payload?.entry.modelProvider).toBe("openai");
   expect(reset.payload?.entry.model).toBe("gpt-test-a");
   expect(reset.payload?.entry.contextTokens).toBeUndefined();
-  expect((await fs.stat(sessionFile)).isFile()).toBe(true);
+  expect(sessionFile).toContain(`sqlite:main:${reset.payload?.entry.sessionId}:`);
 });
 
 test("sessions.reset clears stale estimated context budget status", async () => {
@@ -318,12 +323,11 @@ test("sessions.reset clears stale estimated context budget status", async () => 
   expect(reset.payload?.entry.contextBudgetStatus).toBeUndefined();
   expect(reset.payload?.entry.contextTokens).toBeUndefined();
 
-  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-    string,
-    { contextBudgetStatus?: unknown; contextTokens?: number }
-  >;
-  expect(store["agent:main:main"]?.contextBudgetStatus).toBeUndefined();
-  expect(store["agent:main:main"]?.contextTokens).toBeUndefined();
+  const stored = loadSessionEntry({ sessionKey: "agent:main:main", storePath }) as
+    | { contextBudgetStatus?: unknown; contextTokens?: number }
+    | undefined;
+  expect(stored?.contextBudgetStatus).toBeUndefined();
+  expect(stored?.contextTokens).toBeUndefined();
 });
 
 test("sessions.reset drops cached skills snapshot so /new rebuilds visible skills", async () => {
@@ -359,11 +363,10 @@ test("sessions.reset drops cached skills snapshot so /new rebuilds visible skill
   expect(reset.payload?.entry.sessionId).not.toBe("sess-stale-skills");
   expect(reset.payload?.entry.skillsSnapshot).toBeUndefined();
 
-  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-    string,
-    { skillsSnapshot?: unknown }
-  >;
-  expect(store["agent:main:main"]?.skillsSnapshot).toBeUndefined();
+  const stored = loadSessionEntry({ sessionKey: "agent:main:main", storePath }) as
+    | { skillsSnapshot?: unknown }
+    | undefined;
+  expect(stored?.skillsSnapshot).toBeUndefined();
 });
 
 test("sessions.reset rotates generated topic transcript files with the new session id", async () => {
@@ -398,18 +401,14 @@ test("sessions.reset rotates generated topic transcript files with the new sessi
     throw new Error("expected reset session id and file");
   }
   expect(nextSessionId).not.toBe(previousSessionId);
-  expect(path.basename(nextSessionFile)).toBe(`${nextSessionId}-topic-456.jsonl`);
+  expect(nextSessionFile).toContain(`sqlite:main:${nextSessionId}:`);
 
-  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-    string,
-    {
-      sessionId?: string;
-      sessionFile?: string;
-    }
-  >;
-  const persistedEntry = store["agent:main:telegram:group:123:topic:456"];
+  const persistedEntry = loadSessionEntry({
+    sessionKey: "agent:main:telegram:group:123:topic:456",
+    storePath,
+  });
   expect(persistedEntry?.sessionId).toBe(nextSessionId);
-  expect(path.basename(persistedEntry?.sessionFile ?? "")).toBe(`${nextSessionId}-topic-456.jsonl`);
+  expect(persistedEntry?.sessionFile).toBe(nextSessionFile);
 });
 
 test("sessions.reset rotates an already-stale generated transcript file to the new session id", async () => {
@@ -446,20 +445,12 @@ test("sessions.reset rotates an already-stale generated transcript file to the n
     throw new Error("expected reset session id and file");
   }
   expect(nextSessionId).not.toBe(currentSessionId);
-  // The new session must adopt the new session id, not keep the stale generated name.
-  expect(path.basename(nextSessionFile)).toBe(`${nextSessionId}.jsonl`);
-  expect(path.basename(nextSessionFile)).not.toBe(`${staleFileSessionId}.jsonl`);
+  expect(nextSessionFile).toContain(`sqlite:main:${nextSessionId}:`);
+  expect(nextSessionFile).not.toContain(staleFileSessionId);
 
-  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-    string,
-    {
-      sessionId?: string;
-      sessionFile?: string;
-    }
-  >;
-  const persistedEntry = store["agent:main:main"];
+  const persistedEntry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
   expect(persistedEntry?.sessionId).toBe(nextSessionId);
-  expect(path.basename(persistedEntry?.sessionFile ?? "")).toBe(`${nextSessionId}.jsonl`);
+  expect(persistedEntry?.sessionFile).toBe(nextSessionFile);
 });
 
 test("sessions.reset preserves legacy explicit model overrides without modelOverrideSource", async () => {
@@ -543,11 +534,10 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
   }>("sessions.reset", { key: "subagent:child" });
 
   expect(reset.ok).toBe(true);
-  expectOwnedChildMetadata(reset.payload?.entry, customSessionFile);
+  expectOwnedChildMetadata(reset.payload?.entry);
 
-  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-    string,
-    ResetSessionEntry
-  >;
-  expectOwnedChildMetadata(store["agent:main:subagent:child"], customSessionFile);
+  const stored = loadSessionEntry({ sessionKey: "agent:main:subagent:child", storePath }) as
+    | ResetSessionEntry
+    | undefined;
+  expectOwnedChildMetadata(stored);
 });

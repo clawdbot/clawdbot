@@ -12,6 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
 import type { WebSocket } from "ws";
+import { appendTranscriptMessageSync } from "../../config/sessions/session-accessor.js";
 import {
   onDiagnosticEvent,
   type DiagnosticPayloadLargeEvent,
@@ -30,11 +31,12 @@ installConnectedControlUiServerSuite((started) => {
 describe("chat.history request emits truncation diagnostic (real WS gateway)", () => {
   test("a real chat.history request logs payload.large when older history is omitted", async () => {
     const SESSION_ID = "sess-omission-proof";
+    const SESSION_KEY = "agent:main:main";
     const MESSAGE_COUNT = 12;
     const TEXT_BYTES = 2_000;
     // Budget far below the seeded transcript but well above one message, so the
     // front byte cap drops older messages without per-message placeholdering.
-    const BUDGET_BYTES = 8_000;
+    const BUDGET_BYTES = 20_000;
 
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-chat-history-omit-"));
     const captured: DiagnosticPayloadLargeEvent[] = [];
@@ -48,23 +50,33 @@ describe("chat.history request emits truncation diagnostic (real WS gateway)", (
     try {
       await writeSessionStore({
         entries: {
-          main: {
+          [SESSION_KEY]: {
             sessionId: SESSION_ID,
-            sessionFile: path.join(dir, `${SESSION_ID}.jsonl`),
             updatedAt: Date.now(),
           },
         },
       });
-      const messages = Array.from({ length: MESSAGE_COUNT }, (_, i) => ({
-        role: i % 2 === 0 ? "user" : "assistant",
-        content: [{ type: "text", text: `m${i} ${"x".repeat(TEXT_BYTES)}` }],
-        timestamp: i + 1,
-      }));
-      const lines = messages.map((message) => JSON.stringify({ message }));
-      await fs.writeFile(path.join(dir, `${SESSION_ID}.jsonl`), lines.join("\n"), "utf-8");
+      for (let i = 0; i < MESSAGE_COUNT; i += 1) {
+        appendTranscriptMessageSync(
+          {
+            agentId: "main",
+            sessionId: SESSION_ID,
+            sessionKey: SESSION_KEY,
+            storePath: testState.sessionStorePath,
+          },
+          {
+            message: {
+              role: i % 2 === 0 ? "user" : "assistant",
+              content: [{ type: "text", text: `m${i} ${"x".repeat(TEXT_BYTES)}` }],
+              timestamp: i + 1,
+            },
+            now: i + 1,
+          },
+        );
+      }
 
       const res = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
-        sessionKey: "main",
+        sessionKey: SESSION_KEY,
         limit: 1000,
       });
 

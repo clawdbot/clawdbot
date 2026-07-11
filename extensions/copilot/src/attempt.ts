@@ -1125,18 +1125,20 @@ export async function runCopilotAttempt(
     ...(taggedLastAssistant ? [taggedLastAssistant] : []),
   ];
 
-  // Best-effort dual-write: mirror this attempt's full message snapshot
-  // (user/assistant/toolResult) into the OpenClaw audit transcript at
-  // params.sessionFile, alongside the SDK's own session storage. The
-  // OpenClaw shell (attempt-execution.ts) writes only the user prompt
-  // and terminal assistant text; mirroring here captures intermediate
-  // tool calls/results for full audit/replay parity with the codex
-  // extension. Identity-tagged so re-emits dedupe. Errors are
-  // swallowed so a mirror failure cannot break the attempt.
-  const sessionFileForMirror = readString(input.sessionFile);
+  // Best-effort dual-write mirrors this attempt's full message snapshot into
+  // OpenClaw's runtime transcript store. The Copilot SDK may still maintain
+  // its own private files; OpenClaw-side audit state is addressed only by
+  // session identity so missing identity cannot silently recreate JSONL state.
   const openClawSessionIdForMirror = readString(input.sessionId);
+  const openClawSessionKeyForMirror = readString((input as { sessionKey?: unknown }).sessionKey);
+  const openClawStorePathForMirror = readString(input.sessionTarget?.storePath);
   const mirrorScopeSessionId = sessionIdUsed ?? openClawSessionIdForMirror;
-  if (sessionFileForMirror && openClawSessionIdForMirror && messagesSnapshot.length > 0) {
+  if (
+    openClawSessionIdForMirror &&
+    openClawSessionKeyForMirror &&
+    openClawStorePathForMirror &&
+    messagesSnapshot.length > 0
+  ) {
     const taggedMessages = messagesSnapshot.map((message, index) => {
       if (
         message.role !== "user" &&
@@ -1161,10 +1163,10 @@ export async function runCopilotAttempt(
       return attachCopilotMirrorIdentity(message, `${identityScope}:${message.role}:${index}`);
     });
     await dualWriteCopilotTranscriptBestEffort({
-      sessionFile: sessionFileForMirror,
       sessionId: openClawSessionIdForMirror,
-      sessionKey: readString((input as { sessionKey?: unknown }).sessionKey),
+      sessionKey: openClawSessionKeyForMirror,
       agentId: readString(input.agentId),
+      storePath: openClawStorePathForMirror,
       messages: taggedMessages,
       idempotencyScope: mirrorScopeSessionId ? `copilot:${mirrorScopeSessionId}` : undefined,
       config: (input as { config?: unknown }).config as never,

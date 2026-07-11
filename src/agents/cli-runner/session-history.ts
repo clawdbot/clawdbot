@@ -10,6 +10,7 @@ import {
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
 import {
+  parseSessionTranscriptTreeEntry,
   scanSessionTranscriptTree,
   selectSessionTranscriptLeafControlledPath,
 } from "../../config/sessions/transcript-tree.js";
@@ -346,26 +347,34 @@ function isSafeTruncatedCliSessionTail(entries: readonly unknown[]): boolean {
   if (tree.hasLeafControl) {
     return !tree.hasInvalidLeafControl;
   }
+  const rawIds = new Set<string>();
   const childParentIds = new Set<string>();
   let truncatedRootParentId: string | undefined;
-  for (const node of tree.nodes) {
+  for (const entry of entries) {
+    const node = parseSessionTranscriptTreeEntry(entry);
+    if (!node) {
+      continue;
+    }
     if (node.appendMode === "side") {
       return false;
     }
     if (node.parentId === null) {
+      rawIds.add(node.id);
       continue;
     }
-    if (!tree.byId.has(node.parentId)) {
+    if (!rawIds.has(node.parentId)) {
       if (truncatedRootParentId !== undefined || childParentIds.size > 0) {
         return false;
       }
       truncatedRootParentId = node.parentId;
+      rawIds.add(node.id);
       continue;
     }
     if (childParentIds.has(node.parentId)) {
       return false;
     }
     childParentIds.add(node.parentId);
+    rawIds.add(node.id);
   }
   return true;
 }
@@ -443,6 +452,13 @@ async function loadCliSessionEntries(params: {
     const transcript = await readBoundedCliSessionTranscript(realSessionFile, stat.size);
     const entries = parseCliSessionEntries(transcript.content);
     if (!entries) {
+      return [];
+    }
+    const rawSessionEntries = entries.filter((entry) => entry.type !== "session");
+    if (transcript.truncated && !isSafeTruncatedCliSessionTail(rawSessionEntries)) {
+      cliBackendLog.warn(
+        `cli session history truncated tail skipped because branch controls are incomplete: ${realSessionFile}`,
+      );
       return [];
     }
     migrateSessionEntries(entries);

@@ -6,11 +6,8 @@ import { describe, expect, it } from "vitest";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import {
-  clearSessionStoreCacheForTest,
-  loadSessionStore,
-  saveSessionStore,
-} from "../../config/sessions/store.js";
+import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { clearSessionStoreCacheForTest } from "../../config/sessions/store.js";
 import type { ModelAliasIndex } from "./model-selection-directive.js";
 import { applyResetModelOverride } from "./session-reset-model.js";
 
@@ -96,11 +93,7 @@ describe("applyResetModelOverride", () => {
       modelOverride: "gpt-4o-mini",
       modelOverrideSource: "user",
     };
-    await saveSessionStore(
-      storePath,
-      { "agent:main:dm:1": concurrentEntry },
-      { skipMaintenance: true },
-    );
+    await replaceSessionEntry({ sessionKey: "agent:main:dm:1", storePath }, concurrentEntry);
 
     try {
       const result = await applyResetModelOverride({
@@ -128,7 +121,7 @@ describe("applyResetModelOverride", () => {
       });
       expect(fixture.sessionEntry.updatedAt).toBeGreaterThanOrEqual(concurrentEntry.updatedAt);
       expect(fixture.sessionStore["agent:main:dm:1"]).toEqual(fixture.sessionEntry);
-      expect(loadSessionStore(storePath, { skipCache: true })["agent:main:dm:1"]).toEqual(
+      expect(loadSessionEntry({ sessionKey: "agent:main:dm:1", storePath })).toEqual(
         fixture.sessionEntry,
       );
     } finally {
@@ -151,11 +144,7 @@ describe("applyResetModelOverride", () => {
       providerOverride: "openai",
       modelOverride: "gpt-4o-mini",
     };
-    await saveSessionStore(
-      storePath,
-      { "agent:main:dm:1": concurrentEntry },
-      { skipMaintenance: true },
-    );
+    await replaceSessionEntry({ sessionKey: "agent:main:dm:1", storePath }, concurrentEntry);
 
     try {
       const result = await applyResetModelOverride({
@@ -197,11 +186,7 @@ describe("applyResetModelOverride", () => {
       modelOverride: "gpt-4o-mini",
       modelOverrideSource: "user",
     };
-    await saveSessionStore(
-      storePath,
-      { "agent:main:dm:1": rotatedEntry },
-      { skipMaintenance: true },
-    );
+    await replaceSessionEntry({ sessionKey: "agent:main:dm:1", storePath }, rotatedEntry);
 
     try {
       await expect(
@@ -225,9 +210,7 @@ describe("applyResetModelOverride", () => {
       expect(fixture.sessionEntry.sessionId).toBe("s1");
       expect(fixture.sessionEntry.modelOverride).toBeUndefined();
       expect(fixture.sessionStore["agent:main:dm:1"]).toBe(fixture.sessionEntry);
-      expect(loadSessionStore(storePath, { skipCache: true })["agent:main:dm:1"]).toEqual(
-        rotatedEntry,
-      );
+      expect(loadSessionEntry({ sessionKey: "agent:main:dm:1", storePath })).toEqual(rotatedEntry);
     } finally {
       clearSessionStoreCacheForTest();
       fs.rmSync(tempRoot, { recursive: true, force: true });

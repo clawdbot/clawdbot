@@ -1,18 +1,19 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as jsonFiles from "../infra/json-files.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { appendTranscriptEvent } from "../config/sessions/session-accessor.js";
 import {
   cleanupSessionLifecycleArtifacts,
+  deleteSessionEntry,
   getSessionEntry,
   listSessionEntries,
   patchSessionEntry,
   readSessionUpdatedAt,
-  saveSessionStore,
-  updateSessionStore,
+  resolveSessionStoreBackupPaths,
   updateSessionStoreEntry,
   upsertSessionEntry,
+  type SessionEntry,
 } from "./session-store-runtime.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -29,6 +30,15 @@ describe("session-store-runtime compatibility surface", () => {
   afterEach(() => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
+
+  async function seedSessionEntry(sessionKey: string, entry: SessionEntry): Promise<void> {
+    await upsertSessionEntry({
+      agentId: "main",
+      sessionKey,
+      storePath,
+      entry,
+    });
+  }
 
   it("keeps the public session read shape while using accessor-backed exports", async () => {
     const sessionKey = "agent:main:main";
@@ -123,20 +133,15 @@ describe("session-store-runtime compatibility surface", () => {
   it("preserves resolved maintenance settings through entry patches", async () => {
     const staleSessionKey = "agent:main:stale";
     const activeSessionKey = "agent:main:active";
-    await saveSessionStore(
-      storePath,
-      {
-        [staleSessionKey]: {
-          sessionId: "session-stale",
-          updatedAt: 10,
-        },
-        [activeSessionKey]: {
-          sessionId: "session-active",
-          updatedAt: 20,
-        },
-      },
-      { skipMaintenance: true },
-    );
+    const now = Date.now();
+    await seedSessionEntry(staleSessionKey, {
+      sessionId: "session-stale",
+      updatedAt: now - 8 * DAY_MS,
+    });
+    await seedSessionEntry(activeSessionKey, {
+      sessionId: "session-active",
+      updatedAt: now,
+    });
 
     await expect(
       patchSessionEntry({
@@ -169,20 +174,14 @@ describe("session-store-runtime compatibility surface", () => {
     const staleModelRunKey = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174000";
     const activeSessionKey = "agent:main:active";
     const now = Date.now();
-    await saveSessionStore(
-      storePath,
-      {
-        [staleModelRunKey]: {
-          sessionId: "session-probe",
-          updatedAt: now - 2 * DAY_MS,
-        },
-        [activeSessionKey]: {
-          sessionId: "session-active",
-          updatedAt: now,
-        },
-      },
-      { skipMaintenance: true },
-    );
+    await seedSessionEntry(staleModelRunKey, {
+      sessionId: "session-probe",
+      updatedAt: now - 2 * DAY_MS,
+    });
+    await seedSessionEntry(activeSessionKey, {
+      sessionId: "session-active",
+      updatedAt: now,
+    });
 
     const legacyMaintenanceConfig = {
       mode: "enforce" as const,
@@ -210,119 +209,52 @@ describe("session-store-runtime compatibility surface", () => {
     });
   });
 
-  it("keeps deprecated whole-store mutations grouped as one compatibility operation", async () => {
-    const firstSessionKey = "agent:main:first";
-    const secondSessionKey = "agent:main:second";
-    const deletedSessionKey = "agent:main:deleted";
-    await saveSessionStore(
-      storePath,
-      {
-        [firstSessionKey]: {
-          sessionId: "session-1",
-          updatedAt: 10,
-        },
-        [secondSessionKey]: {
-          sessionId: "session-2",
-          updatedAt: 10,
-        },
-        [deletedSessionKey]: {
-          sessionId: "session-3",
-          updatedAt: 10,
-        },
-      },
-      { skipMaintenance: true },
-    );
-
-    await expect(
-      updateSessionStore(
-        storePath,
-        (store) => {
-          const first = store[firstSessionKey];
-          const second = store[secondSessionKey];
-          if (!first || !second) {
-            throw new Error("seed session entries missing");
-          }
-          store[firstSessionKey] = {
-            ...first,
-            model: "gpt-5.5",
-            updatedAt: 20,
-          };
-          store[secondSessionKey] = {
-            ...second,
-            providerOverride: "openai",
-            updatedAt: 30,
-          };
-          delete store[deletedSessionKey];
-          return "whole-store-updated";
-        },
-        { skipMaintenance: true },
-      ),
-    ).resolves.toBe("whole-store-updated");
-
-    expect(getSessionEntry({ sessionKey: firstSessionKey, storePath })).toMatchObject({
-      model: "gpt-5.5",
-      sessionId: "session-1",
-      updatedAt: 20,
+  it("deletes entries by session identity", async () => {
+    const sessionKey = "agent:main:delete-me";
+    await seedSessionEntry(sessionKey, {
+      sessionId: "session-delete-me",
+      updatedAt: Date.now(),
     });
-    expect(getSessionEntry({ sessionKey: secondSessionKey, storePath })).toMatchObject({
-      providerOverride: "openai",
-      sessionId: "session-2",
-      updatedAt: 30,
-    });
-    expect(getSessionEntry({ sessionKey: deletedSessionKey, storePath })).toBeUndefined();
+
+    await expect(deleteSessionEntry({ sessionKey, storePath })).resolves.toBe(true);
+    await expect(deleteSessionEntry({ sessionKey, storePath })).resolves.toBe(false);
+    expect(getSessionEntry({ sessionKey, storePath })).toBeUndefined();
   });
 
-  it("preserves requireWriteSuccess for critical session entry updates", async () => {
-    const sessionKey = "agent:main:main";
-    await upsertSessionEntry({
-      sessionKey,
-      storePath,
-      entry: {
-        sessionId: "session-1",
-        updatedAt: 10,
-      },
-    });
-    const writeError = Object.assign(new Error("write failed"), { code: "ENOENT" });
-    const writeSpy = vi.spyOn(jsonFiles, "writeTextAtomic").mockRejectedValue(writeError);
+  it("resolves agent-scoped custom SQLite stores for backups", () => {
+    const customStorePath = path.join(tempDir, "custom", "sessions.json");
 
-    try {
-      await expect(
-        updateSessionStoreEntry({
-          sessionKey,
-          storePath,
-          requireWriteSuccess: true,
-          update: () => ({ model: "gpt-5.5" }),
-        }),
-      ).rejects.toBe(writeError);
-    } finally {
-      writeSpy.mockRestore();
-    }
+    expect(
+      resolveSessionStoreBackupPaths({
+        agentId: "support",
+        storePath: customStorePath,
+      }),
+    ).toContain(path.join(tempDir, "custom", "openclaw-agent.support.sqlite"));
   });
 
   it("cleans lifecycle artifacts through the accessor-backed SDK wrapper", async () => {
     const sessionKey = "agent:main:lifecycle-owned-old";
-    const transcriptPath = path.join(tempDir, "lifecycle-owned-old.jsonl");
-    await saveSessionStore(
-      storePath,
+    const oldTimestamp = Date.now() - 600_000;
+    await seedSessionEntry(sessionKey, {
+      sessionId: "lifecycle-owned-old",
+      updatedAt: oldTimestamp,
+    });
+    await seedSessionEntry("agent:main:regular", {
+      sessionId: "regular",
+      updatedAt: Date.now(),
+    });
+    await appendTranscriptEvent(
+      { agentId: "main", sessionKey, sessionId: "lifecycle-owned-old", storePath },
       {
-        [sessionKey]: {
-          sessionFile: transcriptPath,
-          sessionId: "lifecycle-owned-old",
-          updatedAt: 10,
-        },
-        "agent:main:regular": {
-          sessionId: "regular",
-          updatedAt: 20,
-        },
+        runId: "lifecycle-owned-old",
+        timestamp: new Date(oldTimestamp).toISOString(),
+        type: "metadata",
       },
-      { skipMaintenance: true },
     );
-    fs.writeFileSync(transcriptPath, '{"runId":"lifecycle-owned-old"}\n', "utf-8");
-    const oldDate = new Date(Date.now() - 600_000);
-    fs.utimesSync(transcriptPath, oldDate, oldDate);
 
     await expect(
       cleanupSessionLifecycleArtifacts({
+        agentId: "main",
         storePath,
         sessionKeySegmentPrefix: "lifecycle-owned-",
         transcriptContentMarker: '"runId":"lifecycle-owned-',
@@ -342,5 +274,43 @@ describe("session-store-runtime compatibility surface", () => {
         .readdirSync(tempDir)
         .filter((file) => file.startsWith("lifecycle-owned-old.jsonl.deleted.")),
     ).toHaveLength(1);
+  });
+
+  it("honors lifecycle cleanup without archiving removed entry transcripts", async () => {
+    const sessionKey = "agent:main:lifecycle-owned-discard";
+    const oldTimestamp = Date.now() - 600_000;
+    await seedSessionEntry(sessionKey, {
+      sessionId: "lifecycle-owned-discard",
+      updatedAt: oldTimestamp,
+    });
+    await appendTranscriptEvent(
+      { agentId: "main", sessionKey, sessionId: "lifecycle-owned-discard", storePath },
+      {
+        runId: "lifecycle-owned-discard",
+        timestamp: new Date(oldTimestamp).toISOString(),
+        type: "metadata",
+      },
+    );
+
+    await expect(
+      cleanupSessionLifecycleArtifacts({
+        agentId: "main",
+        archiveRemovedEntryTranscripts: false,
+        storePath,
+        sessionKeySegmentPrefix: "lifecycle-owned-",
+        transcriptContentMarker: '"runId":"lifecycle-owned-',
+        orphanTranscriptMinAgeMs: 300_000,
+      }),
+    ).resolves.toEqual({
+      archivedTranscriptArtifacts: 0,
+      removedEntries: 1,
+    });
+
+    expect(getSessionEntry({ sessionKey, storePath })).toBeUndefined();
+    expect(
+      fs
+        .readdirSync(tempDir)
+        .filter((file) => file.startsWith("lifecycle-owned-discard.jsonl.deleted.")),
+    ).toHaveLength(0);
   });
 });

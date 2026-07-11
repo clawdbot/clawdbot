@@ -29,9 +29,13 @@ import ai.openclaw.app.ui.mobileWarning
 import ai.openclaw.app.ui.mobileWarningSoft
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -40,8 +44,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.HourglassEmpty
+import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -68,6 +74,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import java.util.Locale
 
 private data class ChatBubbleStyle(
@@ -536,26 +544,77 @@ private fun roleLabel(role: String): String =
   }
 
 @Composable
-private fun ChatBase64Image(
+internal fun ChatBase64Image(
   base64: String,
   mimeType: String?,
 ) {
   val imageState = rememberBase64ImageState(base64)
+  var previewVisible by rememberSaveable(base64) { mutableStateOf(false) }
   val image = imageState.image
 
   if (image != null) {
     Surface(
+      onClick = { previewVisible = true },
       shape = RoundedCornerShape(10.dp),
       border = BorderStroke(1.dp, mobileBorder),
       color = mobileCardSurface,
       modifier = Modifier.fillMaxWidth(),
     ) {
-      Image(
-        bitmap = image,
-        contentDescription = mimeType ?: "attachment",
-        contentScale = ContentScale.Fit,
-        modifier = Modifier.fillMaxWidth(),
-      )
+      Box {
+        Image(
+          bitmap = image,
+          contentDescription = mimeType ?: "attachment",
+          contentScale = ContentScale.Fit,
+          modifier = Modifier.fillMaxWidth(),
+        )
+        Surface(
+          modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp).size(32.dp),
+          shape = CircleShape,
+          color = Color.Black.copy(alpha = 0.62f),
+          contentColor = Color.White,
+        ) {
+          Box(contentAlignment = Alignment.Center) {
+            Icon(
+              imageVector = Icons.Default.OpenInFull,
+              contentDescription = "Open image preview",
+              modifier = Modifier.size(17.dp),
+            )
+          }
+        }
+      }
+    }
+    if (previewVisible) {
+      Dialog(
+        onDismissRequest = { previewVisible = false },
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+      ) {
+        Box(
+          modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.96f)).clickable { previewVisible = false },
+          contentAlignment = Alignment.Center,
+        ) {
+          Image(
+            bitmap = image,
+            contentDescription = "Image preview",
+            contentScale = ContentScale.Fit,
+            modifier = Modifier.fillMaxSize().padding(20.dp),
+          )
+          Surface(
+            onClick = { previewVisible = false },
+            modifier = Modifier.align(Alignment.TopEnd).padding(16.dp).size(44.dp),
+            shape = CircleShape,
+            color = Color.Black.copy(alpha = 0.62f),
+            contentColor = Color.White,
+          ) {
+            Box(contentAlignment = Alignment.Center) {
+              Icon(
+                imageVector = Icons.Default.Close,
+                contentDescription = "Close image preview",
+                modifier = Modifier.size(22.dp),
+              )
+            }
+          }
+        }
+      }
     }
   } else if (imageState.failed) {
     Text("Unsupported attachment", style = mobileCaption1, color = mobileTextSecondary)

@@ -696,6 +696,32 @@ describe("installContextEngineLoopHook", () => {
     });
   });
 
+  it("passes sessionTarget through loop-hook afterTurn calls", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine();
+    const sessionTarget = {
+      agentId: "main",
+      sessionId,
+      sessionKey,
+      storePath: "/tmp/state/openclaw.sqlite",
+    };
+    installContextEngineLoopHook({
+      agent,
+      contextEngine: engine,
+      sessionId,
+      sessionKey,
+      sessionTarget,
+      sessionFile,
+      tokenBudget,
+      modelId,
+      getPrePromptMessageCount: () => 1,
+    });
+
+    await callTransform(agent, [makeUser("first"), makeToolResult("call_1", "result")]);
+
+    expect(recordMockArg(engine.afterTurn).sessionTarget).toEqual(sessionTarget);
+  });
+
   it("passes runtimeSettings through loop-hook afterTurn and assemble calls", async () => {
     const agent = makeGuardableAgent();
     const engine = makeMockEngine();

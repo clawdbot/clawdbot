@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { replaceTranscriptEvents } from "../../../config/sessions/session-accessor.js";
+import { formatSqliteSessionFileMarker } from "../../../config/sessions/sqlite-marker.js";
 import { writeWorkspaceFile } from "../../../test-helpers/workspace.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { createHookEvent } from "../../hooks.js";
@@ -280,6 +282,60 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("assistant: Hi! How can I help?");
     expect(memoryContent).toContain("user: What is 2+2?");
     expect(memoryContent).toContain("assistant: 2+2 equals 4");
+  });
+
+  it("creates memory file from SQLite transcript rows on /new command", async () => {
+    const tempDir = await createCaseWorkspace("workspace");
+    const sessionsDir = path.join(tempDir, "sessions");
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const sessionId = "sqlite-session-memory";
+    const sessionKey = "agent:main:main";
+    const sessionFile = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId,
+      storePath,
+    });
+
+    await replaceTranscriptEvents({ agentId: "main", sessionId, sessionKey, storePath }, [
+      {
+        type: "message",
+        id: "sqlite-user",
+        parentId: null,
+        message: { role: "user", content: "Stored in SQLite rows" },
+      },
+      {
+        type: "message",
+        id: "sqlite-inactive",
+        parentId: "sqlite-user",
+        message: { role: "assistant", content: "Inactive branch content" },
+      },
+      {
+        type: "message",
+        id: "sqlite-visible",
+        parentId: "sqlite-user",
+        message: { role: "assistant", content: "Loaded without JSONL fallback" },
+      },
+      {
+        type: "leaf",
+        id: "active-session-memory-leaf",
+        parentId: "sqlite-inactive",
+        targetId: "sqlite-visible",
+      },
+    ]);
+
+    const { files, memoryContent } = await runNewWithPreviousSessionEntry({
+      tempDir,
+      sessionKey,
+      previousSessionEntry: {
+        sessionId,
+        sessionFile,
+      },
+    });
+
+    expect(files.length).toBe(1);
+    expect(memoryContent).toContain("user: Stored in SQLite rows");
+    expect(memoryContent).toContain("assistant: Loaded without JSONL fallback");
+    expect(memoryContent).not.toContain("Inactive branch content");
   });
 
   it("sanitizes model artifacts before writing session memory", async () => {

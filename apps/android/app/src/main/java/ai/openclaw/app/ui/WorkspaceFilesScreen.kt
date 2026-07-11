@@ -262,7 +262,7 @@ private fun WorkspaceEntryRow(
       modifier = Modifier.size(20.dp),
     )
     Column(modifier = Modifier.weight(1f)) {
-      Text(text = entry.name, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1)
+      Text(text = entry.name, style = ClawTheme.type.body.copy(lineBreak = androidx.compose.ui.text.style.LineBreak.Heading), color = ClawTheme.colors.text)
       workspaceEntryDetail(context, entry)?.let { detail ->
         Text(text = detail, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1)
       }
@@ -316,9 +316,9 @@ private fun WorkspaceFilePreview(
         ClawPlainIconButton(icon = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", onClick = onBack)
         Text(
           text = path.substringAfterLast('/'),
-          style = ClawTheme.type.display.copy(fontSize = 20.sp, lineHeight = 24.sp),
+          style = ClawTheme.type.display.copy(fontSize = 20.sp, lineHeight = 24.sp, lineBreak = androidx.compose.ui.text.style.LineBreak.Heading),
           color = ClawTheme.colors.text,
-          maxLines = 1,
+          softWrap = true,
           modifier = Modifier.weight(1f),
         )
         file?.let { loaded ->

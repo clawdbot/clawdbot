@@ -5,6 +5,10 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelMessagingAdapter } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  appendTranscriptMessage,
+  upsertSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 
 const callGatewayMock = vi.fn();
@@ -560,23 +564,29 @@ describe("sessions tools", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-list-preview-"));
     const storePath = path.join(tmpDir, "sessions.json");
     try {
-      fs.writeFileSync(
-        path.join(tmpDir, "visible.jsonl"),
-        [
-          JSON.stringify({ type: "session", id: "visible" }),
-          JSON.stringify({ message: { role: "user", content: "Visible project kickoff" } }),
-          JSON.stringify({ message: { role: "assistant", content: "Visible latest reply" } }),
-        ].join("\n"),
-        "utf-8",
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey: "agent:main:main", storePath },
+        { sessionId: "visible", updatedAt: 20 },
       );
-      fs.writeFileSync(
-        path.join(tmpDir, "hidden.jsonl"),
-        [
-          JSON.stringify({ type: "session", id: "hidden" }),
-          JSON.stringify({ message: { role: "user", content: "Hidden cross-agent topic" } }),
-          JSON.stringify({ message: { role: "assistant", content: "Hidden latest reply" } }),
-        ].join("\n"),
-        "utf-8",
+      await appendTranscriptMessage(
+        { agentId: "main", sessionId: "visible", sessionKey: "agent:main:main", storePath },
+        { cwd: tmpDir, message: { role: "user", content: "Visible project kickoff" } },
+      );
+      await appendTranscriptMessage(
+        { agentId: "main", sessionId: "visible", sessionKey: "agent:main:main", storePath },
+        { cwd: tmpDir, message: { role: "assistant", content: "Visible latest reply" } },
+      );
+      await upsertSessionEntry(
+        { agentId: "other", sessionKey: "agent:other:main", storePath },
+        { sessionId: "hidden", updatedAt: 21 },
+      );
+      await appendTranscriptMessage(
+        { agentId: "other", sessionId: "hidden", sessionKey: "agent:other:main", storePath },
+        { cwd: tmpDir, message: { role: "user", content: "Hidden cross-agent topic" } },
+      );
+      await appendTranscriptMessage(
+        { agentId: "other", sessionId: "hidden", sessionKey: "agent:other:main", storePath },
+        { cwd: tmpDir, message: { role: "assistant", content: "Hidden latest reply" } },
       );
 
       callGatewayMock.mockImplementation(async (opts: unknown) => {

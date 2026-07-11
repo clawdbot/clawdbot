@@ -292,6 +292,9 @@ async function setupTelegramTrace(recorder: WireRecorder) {
         // An aborted run stops emitting payloads; teardown happens on idle.
         break;
       case "wire-fault":
+        if (step.fault !== "rate-limit") {
+          throw new Error("telegram trace scenarios script only rate-limit wire faults");
+        }
         state.wireFaults.push({ retryAfterMs: step.retryAfterMs });
         armedRetryAfterMs = step.retryAfterMs;
         break;

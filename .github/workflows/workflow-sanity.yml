@@ -212,5 +212,8 @@ jobs:
       - name: Check plugin SDK API baseline drift
         run: pnpm plugin-sdk:api:check
 
+      - name: Check SQLite sessions/transcripts schema baseline drift
+        run: pnpm sqlite:sessions-schema:check
+
       - name: Check plugin SDK surface budget
         run: pnpm plugin-sdk:surface:check

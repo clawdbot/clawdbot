@@ -99,6 +99,58 @@ function runCleanupFunction(fakePs: string) {
   return { killCalls, result };
 }
 
+function runManagedSupervisorClassifier(
+  records: Array<{ domain: string; label: string; program: string; properties?: string }>,
+  options: { failEnumeration?: boolean } = {},
+) {
+  const root = mkdtempSync(join(tmpdir(), "openclaw-restart-mac-supervisor-test-"));
+  tempRoots.push(root);
+  const recordsPath = join(root, "loaded-jobs.txt");
+  writeFileSync(
+    recordsPath,
+    records
+      .map(
+        (record) => `${record.domain}|${record.label}|${record.program}|${record.properties ?? ""}`,
+      )
+      .join("\n"),
+  );
+
+  const script = readFileSync(restartScriptPath, "utf8");
+  const classifierFunctions = script.slice(
+    script.indexOf("print_managed_openclaw_supervisor_label()"),
+    script.indexOf("kill_managed_openclaw()"),
+  );
+  const harnessPath = join(root, "supervisor-harness.sh");
+  writeFileSync(
+    harnessPath,
+    [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      classifierFunctions,
+      "loaded_launch_jobs() {",
+      '  [[ "${OPENCLAW_TEST_FAIL_ENUMERATION:-0}" != "1" ]] || return 1',
+      "  cut -d'|' -f1,2 \"$OPENCLAW_TEST_LOADED_JOBS\"",
+      "}",
+      "launch_job_snapshot() {",
+      '  grep "^$1|$2|" "$OPENCLAW_TEST_LOADED_JOBS" |',
+      "    awk -F'|' '{ print \"program = \" $3; print \"properties = \" $4 }'",
+      "}",
+      'TARGET_EXECUTABLE="/worktree/dist/OpenClaw.app/Contents/MacOS/OpenClaw"',
+      'INSTALLED_EXECUTABLE="/Applications/OpenClaw.app/Contents/MacOS/OpenClaw"',
+      "managed_openclaw_supervisor_labels",
+    ].join("\n"),
+  );
+  chmodSync(harnessPath, 0o755);
+  return spawnSync("bash", [harnessPath], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      OPENCLAW_TEST_FAIL_ENUMERATION: options.failEnumeration ? "1" : "0",
+      OPENCLAW_TEST_LOADED_JOBS: recordsPath,
+    },
+  });
+}
+
 function runCanonicalizeAppBundle(appBundle: string) {
   const root = mkdtempSync(join(tmpdir(), "openclaw-restart-mac-test-"));
   tempRoots.push(root);
@@ -250,6 +302,12 @@ describe("scripts/restart-mac.sh", () => {
     expect(result.stderr).toBe("");
   });
 
+  it("fails closed when loaded launchd jobs cannot be enumerated", () => {
+    const result = runManagedSupervisorClassifier([], { failEnumeration: true });
+
+    expect(result.status).toBe(1);
+  });
+
   it("fails the gateway verification when lsof finds no listener", () => {
     const result = runGatewayPortCheck("#!/usr/bin/env bash\nexit 1\n");
 
@@ -390,6 +448,62 @@ describe("scripts/restart-mac.sh", () => {
     expect(script).toContain('[[ "${executable}" == "${TARGET_EXECUTABLE}" ]] && continue');
     expect(script).toContain('process_pids_for_executable "${TARGET_EXECUTABLE}"');
     expect(script).toContain("target-only restart deferred");
+  });
+
+  it("finds persistent launchd supervisors across explicit domains", () => {
+    const result = runManagedSupervisorClassifier([
+      {
+        domain: "gui/501",
+        label: "ai.openclaw.mac.custom",
+        program: "/Applications/OpenClaw.app/Contents/MacOS/OpenClaw",
+        properties: "keepalive | runatload",
+      },
+      {
+        domain: "user/501",
+        label: "ai.openclaw.mac.target",
+        program: "/worktree/dist/OpenClaw.app/Contents/MacOS/OpenClaw",
+        properties: "keepalive",
+      },
+      {
+        domain: "gui/501",
+        label: "application.ai.openclaw.mac.123",
+        program: "/Applications/OpenClaw.app/Contents/MacOS/OpenClaw",
+      },
+      {
+        domain: "system",
+        label: "com.example.other",
+        program: "/Applications/Other.app/Contents/MacOS/Other",
+        properties: "keepalive",
+      },
+    ]);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim().split("\n").toSorted()).toEqual([
+      "ai.openclaw.mac.custom",
+      "ai.openclaw.mac.target",
+    ]);
+    expect(result.stderr).toBe("");
+  });
+
+  it("checks managed launchd supervisors before starting the Swift package build", () => {
+    const script = readFileSync(restartScriptPath, "utf8");
+    const supervisorIndex = script.indexOf(
+      'managed_supervisors="$(managed_openclaw_supervisor_labels',
+    );
+    const packageIndex = script.indexOf('run_step "package app"');
+
+    expect(supervisorIndex).toBeGreaterThan(-1);
+    expect(packageIndex).toBeGreaterThan(supervisorIndex);
+    expect(script).toContain("Unable to inspect loaded launchd jobs");
+    expect(script).toContain("stop those jobs before a target-only restart");
+  });
+
+  it("lets the packager own the single incremental Swift product build", () => {
+    const script = readFileSync(restartScriptPath, "utf8");
+
+    expect(script).not.toContain('run_step "clean build cache"');
+    expect(script).not.toContain('run_step "swift build"');
+    expect(script).toContain('run_step "package app"');
   });
 
   it("keeps the managed app alive until the signed replacement is ready", () => {

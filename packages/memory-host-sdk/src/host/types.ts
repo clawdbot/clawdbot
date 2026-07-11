@@ -46,11 +46,8 @@ export type MemorySyncParams = {
   force?: boolean;
   /** Storage-neutral session transcript targets to refresh. */
   sessions?: MemorySessionSyncTarget[];
-  /**
-   * @deprecated Use `sessions` with `{ agentId, sessionId, sessionKey? }`.
-   * During the deprecation window only canonical OpenClaw transcript paths are accepted.
-   */
-  sessionFiles?: string[];
+  /** Archive/support transcript files to refresh without treating paths as active session identity. */
+  archiveFiles?: string[];
   progress?: (update: MemorySyncProgressUpdate) => void;
 };
 

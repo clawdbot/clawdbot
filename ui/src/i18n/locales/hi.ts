@@ -2153,9 +2153,9 @@ export const hi: TranslationMap = {
       workSessions: "कार्य",
     },
     welcome: {
-      ready: "चैट के लिए तैयार",
       hintBeforeShortcut: "नीचे संदेश टाइप करें ·",
       hintAfterShortcut: "कमांड के लिए",
+      recentSessions: "हाल की चैट्स",
       suggestions: {
         whatCanYouDo: "आप क्या कर सकते हैं?",
         summarizeRecentSessions: "मेरे हाल के सेशन का सारांश दें",

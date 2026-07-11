@@ -4,6 +4,7 @@ import {
   abortAndDrainEmbeddedAgentRun,
   isEmbeddedAgentRunActive,
   isEmbeddedAgentRunHandleActive,
+  resolveEmbeddedAgentReplyRunPhase,
   resolveActiveEmbeddedRunSessionId,
   resolveActiveEmbeddedRunSessionIdBySessionFile,
   resolveActiveEmbeddedRunHandleSessionId,
@@ -205,6 +206,19 @@ export async function recoverStuckDiagnosticSession(
     }
 
     if (!activeSessionId && activeWorkSessionId && isEmbeddedAgentRunActive(activeWorkSessionId)) {
+      const activeReplyPhase = resolveEmbeddedAgentReplyRunPhase(activeWorkSessionId);
+      if (activeReplyPhase === "waiting_for_deferred_maintenance") {
+        const outcome: StuckSessionRecoveryOutcome = {
+          status: "skipped",
+          action: "keep_lane",
+          reason: "deferred_maintenance_wait",
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          activeSessionId: activeWorkSessionId,
+        };
+        diag.warn(`stuck session recovery outcome: ${formatRecoveryOutcome(outcome)}`);
+        return outcome;
+      }
       const reclaimStaleReplyWork =
         params.allowActiveAbort !== true &&
         isActiveRunProgressStale({

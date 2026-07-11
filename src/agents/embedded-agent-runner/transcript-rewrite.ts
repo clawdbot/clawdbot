@@ -1,3 +1,8 @@
+import {
+  loadTranscriptEvents,
+  replaceTranscriptEvents,
+} from "../../config/sessions/session-accessor.js";
+import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 /**
  * Rewrites transcript entries in session managers, states, and files.
  */
@@ -30,6 +35,91 @@ import {
 
 type SessionManagerLike = ReturnType<typeof SessionManager.open>;
 type SessionBranchEntry = ReturnType<SessionManagerLike["getBranch"]>[number];
+
+function isTranscriptEventRecord(event: unknown): event is {
+  id?: unknown;
+  message?: unknown;
+  type?: unknown;
+} {
+  return typeof event === "object" && event !== null && !Array.isArray(event);
+}
+
+async function rewriteSqliteRuntimeTranscript(params: {
+  target: Awaited<ReturnType<typeof resolveRuntimeTranscriptReadTarget>>;
+  request: TranscriptRewriteRequest;
+}): Promise<TranscriptRewriteResult> {
+  const marker = parseSqliteSessionFileMarker(params.target.sessionFile);
+  if (!marker) {
+    return {
+      changed: false,
+      bytesFreed: 0,
+      rewrittenEntries: 0,
+      reason: "not a SQLite transcript target",
+    };
+  }
+  const replacementsById = new Map(
+    params.request.replacements.map((replacement) => [replacement.entryId, replacement.message]),
+  );
+  let bytesFreed = 0;
+  let rewrittenEntries = 0;
+  const events = await loadTranscriptEvents({
+    agentId: marker.agentId,
+    sessionId: marker.sessionId,
+    sessionKey: params.target.sessionKey,
+    storePath: marker.storePath,
+  });
+  const nextEvents = events.map((event) => {
+    if (!isTranscriptEventRecord(event)) {
+      return event;
+    }
+    const eventId = typeof event.id === "string" ? event.id : undefined;
+    const replacement = eventId ? replacementsById.get(eventId) : undefined;
+    if (!replacement || event.type !== "message") {
+      return event;
+    }
+    bytesFreed += Math.max(
+      0,
+      Buffer.byteLength(JSON.stringify(event.message), "utf8") -
+        Buffer.byteLength(JSON.stringify(replacement), "utf8"),
+    );
+    rewrittenEntries += 1;
+    return Object.assign({}, event, {
+      message: replacement,
+    });
+  });
+  if (rewrittenEntries === 0) {
+    return {
+      changed: false,
+      bytesFreed: 0,
+      rewrittenEntries: 0,
+      reason: "no matching transcript entries",
+    };
+  }
+  await replaceTranscriptEvents(
+    {
+      agentId: marker.agentId,
+      sessionId: marker.sessionId,
+      sessionKey: params.target.sessionKey,
+      storePath: marker.storePath,
+    },
+    nextEvents,
+  );
+  emitSessionTranscriptUpdate({
+    sessionFile: params.target.sessionFile,
+    sessionKey: params.target.sessionKey,
+    agentId: params.target.agentId,
+    target: {
+      agentId: params.target.agentId,
+      sessionId: params.target.sessionId,
+      sessionKey: params.target.sessionKey,
+    },
+  });
+  return {
+    changed: true,
+    bytesFreed,
+    rewrittenEntries,
+  };
+}
 
 function estimateMessageBytes(message: AgentMessage): number {
   return Buffer.byteLength(JSON.stringify(message), "utf8");
@@ -438,6 +528,12 @@ export async function rewriteTranscriptEntriesInRuntimeTranscript(params: {
   let sessionLock: Awaited<ReturnType<typeof acquireSessionWriteLock>> | undefined;
   try {
     const target = await resolveRuntimeTranscriptReadTarget(params.scope);
+    if (parseSqliteSessionFileMarker(target.sessionFile)) {
+      return await rewriteSqliteRuntimeTranscript({
+        target,
+        request: params.request,
+      });
+    }
     sessionLock = await acquireSessionWriteLock({
       sessionFile: target.sessionFile,
       ...resolveSessionWriteLockOptions(params.config),

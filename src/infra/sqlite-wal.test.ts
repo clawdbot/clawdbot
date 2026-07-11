@@ -457,15 +457,16 @@ describe("sqlite WAL maintenance", () => {
     expect(db["exec"]).toHaveBeenCalledTimes(2);
 
     vi.advanceTimersByTime(100);
-    expect(db["exec"]).toHaveBeenLastCalledWith("PRAGMA wal_checkpoint(PASSIVE);");
-    expect(db["exec"]).toHaveBeenCalledTimes(3);
+    expect(db["exec"]).toHaveBeenNthCalledWith(3, "PRAGMA wal_checkpoint(PASSIVE);");
+    expect(db["exec"]).toHaveBeenNthCalledWith(4, "PRAGMA incremental_vacuum(512);");
+    expect(db["exec"]).toHaveBeenCalledTimes(4);
 
     expect(maintenance.close()).toBe(true);
     expect(db["exec"]).toHaveBeenLastCalledWith("PRAGMA wal_checkpoint(TRUNCATE);");
-    expect(db["exec"]).toHaveBeenCalledTimes(4);
+    expect(db["exec"]).toHaveBeenCalledTimes(5);
 
     vi.advanceTimersByTime(200);
-    expect(db["exec"]).toHaveBeenCalledTimes(4);
+    expect(db["exec"]).toHaveBeenCalledTimes(5);
   });
 
   it("clamps oversized checkpoint intervals before arming timers", () => {
@@ -493,7 +494,8 @@ describe("sqlite WAL maintenance", () => {
     });
 
     vi.advanceTimersByTime(100);
-    expect(db["exec"]).toHaveBeenLastCalledWith("PRAGMA wal_checkpoint(FULL);");
+    expect(db["exec"]).toHaveBeenNthCalledWith(3, "PRAGMA wal_checkpoint(FULL);");
+    expect(db["exec"]).toHaveBeenNthCalledWith(4, "PRAGMA incremental_vacuum(512);");
 
     expect(maintenance.close()).toBe(true);
     expect(db["exec"]).toHaveBeenLastCalledWith("PRAGMA wal_checkpoint(FULL);");

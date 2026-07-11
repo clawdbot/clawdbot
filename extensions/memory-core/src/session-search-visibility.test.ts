@@ -202,6 +202,37 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
     expect(filtered).toEqual([hit]);
   });
 
+  it("keeps built-in live SQLite session hits with agent-scoped logical paths", async () => {
+    combinedSessionStore = {
+      "agent:main:only": {
+        sessionId: "w1",
+        updatedAt: 1,
+        sessionFile: "sqlite-session://main/w1",
+      },
+    };
+    const hit: MemorySearchResult = {
+      path: "sessions/main/w1.jsonl",
+      source: "sessions",
+      score: 1,
+      snippet: "x",
+      startLine: 1,
+      endLine: 2,
+    };
+    const cfg = asOpenClawConfig({
+      tools: {
+        sessions: { visibility: "all" },
+        agentToAgent: { enabled: true, allow: ["*"] },
+      },
+    });
+    const filtered = await filterMemorySearchHitsBySessionVisibility({
+      cfg,
+      requesterSessionKey: "agent:main:main",
+      sandboxed: false,
+      hits: [hit],
+    });
+    expect(filtered).toEqual([hit]);
+  });
+
   it("keeps global-scope session hits for non-default agents", async () => {
     combinedSessionStore = {
       global: {

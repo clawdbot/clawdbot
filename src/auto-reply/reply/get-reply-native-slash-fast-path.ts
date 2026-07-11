@@ -322,6 +322,10 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     agentId: params.agentId,
     agentDir: params.agentDir,
     sessionEntry: sessionState.sessionEntry,
+    ...(sessionState.initialSessionEntry
+      ? { initialSessionEntry: sessionState.initialSessionEntry }
+      : {}),
+    allowCreateSessionEntry: sessionState.initialSessionEntry === undefined,
     previousSessionEntry: sessionState.previousSessionEntry,
     sessionStore: sessionState.sessionStore,
     sessionKey: sessionState.sessionKey,

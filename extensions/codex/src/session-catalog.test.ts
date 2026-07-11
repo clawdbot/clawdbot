@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexThread } from "./app-server/protocol.js";
 import { sessionBindingIdentity } from "./app-server/session-binding.js";
@@ -1400,7 +1401,7 @@ describe("Codex supervision actions", () => {
     );
     expect(transcriptMirrorMocks.importCodexThreadHistoryToTranscript).toHaveBeenCalledWith({
       thread: sourceThread,
-      sessionFile: "/tmp/openclaw-session-1.jsonl",
+      storePath: resolveStorePath(undefined, { agentId: "main" }),
       sessionId: "openclaw-session-1",
       sessionKey: first.sessionKey,
       agentId: "main",
@@ -1697,7 +1698,7 @@ describe("Codex supervision actions", () => {
     expect(entries[0]?.entry.initializationPending).toBeUndefined();
     expect(transcriptMirrorMocks.importCodexThreadHistoryToTranscript).toHaveBeenCalledWith(
       expect.objectContaining({
-        sessionFile: `/tmp/${sessionId}.jsonl`,
+        storePath: resolveStorePath(undefined, { agentId: "main" }),
         sessionId,
         sessionKey,
       }),

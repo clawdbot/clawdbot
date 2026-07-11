@@ -56,7 +56,7 @@ afterEach(() => {
 function createTaskRegistryMaintenanceHarness(params: {
   tasks: TaskRecord[];
   sessionStore?: Record<string, SessionEntry>;
-  loadSessionStore?: TaskRegistryMaintenanceRuntime["loadSessionStore"];
+  listSessionEntries?: TaskRegistryMaintenanceRuntime["listSessionEntries"];
   resolveStorePath?: TaskRegistryMaintenanceRuntime["resolveStorePath"];
   deriveSessionChatTypeFromKey?: TaskRegistryMaintenanceRuntime["deriveSessionChatTypeFromKey"];
   acpEntry?: AcpSessionStoreEntry["entry"];
@@ -95,7 +95,13 @@ function createTaskRegistryMaintenanceHarness(params: {
             entry: undefined,
             storeReadFailed: false,
           } satisfies AcpSessionStoreEntry),
-    loadSessionStore: params.loadSessionStore ?? (() => sessionStore),
+    listSessionEntries:
+      params.listSessionEntries ??
+      (() =>
+        Object.entries(sessionStore).map(([sessionKey, entry]) => ({
+          sessionKey,
+          entry,
+        }))),
     resolveStorePath: params.resolveStorePath ?? (() => ""),
     ...(params.deriveSessionChatTypeFromKey
       ? { deriveSessionChatTypeFromKey: params.deriveSessionChatTypeFromKey }
@@ -214,7 +220,7 @@ function expectTaskStatus(
 }
 
 describe("task-registry maintenance issue #60299", () => {
-  it("reuses session store reads across stale subagent task checks in one pass", async () => {
+  it("reuses session entry lists across stale subagent task checks in one pass", async () => {
     const tasks = Array.from({ length: 10 }, (_, index) =>
       makeStaleTask({
         runtime: "subagent",
@@ -222,16 +228,16 @@ describe("task-registry maintenance issue #60299", () => {
         childSessionKey: `agent:main:subagent:stale-${index}`,
       }),
     );
-    const loadSessionStoreMock = vi.fn(() => ({}));
+    const listSessionEntriesMock = vi.fn(() => []);
 
     createTaskRegistryMaintenanceHarness({
       tasks,
-      loadSessionStore: loadSessionStoreMock,
+      listSessionEntries: listSessionEntriesMock,
       resolveStorePath: () => "/tmp/openclaw-test-sessions-main.json",
     });
 
     expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: tasks.length });
-    expect(loadSessionStoreMock).toHaveBeenCalledTimes(1);
+    expect(listSessionEntriesMock).toHaveBeenCalledTimes(1);
   });
 
   it("reuses CLI channel session type derivation across duplicate stale task checks", async () => {

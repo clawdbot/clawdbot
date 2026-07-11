@@ -63,6 +63,9 @@ In Nix mode (`OPENCLAW_NIX_MODE=1`), mutating `openclaw update` runs are disable
 
 <Warning>
 Downgrades require confirmation because older versions can break configuration.
+If the install has already migrated sessions to SQLite, restore archived legacy
+transcript artifacts before starting an older file-backed version. See
+[Doctor: Downgrading after session SQLite migration](/cli/doctor#downgrading-after-session-sqlite-migration).
 </Warning>
 
 ## `update status`

@@ -6,9 +6,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 
 const note = vi.hoisted(() => vi.fn());
+const runDoctorSessionSqlite = vi.hoisted(() => vi.fn());
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note,
+}));
+
+vi.mock("./doctor-session-sqlite.js", () => ({
+  runDoctorSessionSqlite,
 }));
 
 import {
@@ -42,6 +47,7 @@ describe("doctor session transcript repair", () => {
 
   beforeEach(async () => {
     note.mockClear();
+    runDoctorSessionSqlite.mockReset();
     root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-transcripts-"));
   });
 
@@ -189,6 +195,45 @@ describe("doctor session transcript repair", () => {
       dryRunSafe: false,
     });
     expect(await fs.readFile(filePath, "utf-8")).toContain("openai-codex");
+  });
+
+  it("runs session SQLite import through the public doctor repair path", async () => {
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    runDoctorSessionSqlite.mockResolvedValueOnce({
+      totals: {
+        archivedTranscriptFiles: 2,
+        archivedUnreferencedJsonlFiles: 1,
+        importedTranscriptEvents: 2,
+        issues: 0,
+        legacyEntries: 1,
+        sqliteEntries: 1,
+        unreferencedJsonlFiles: 0,
+        validatedTranscriptEvents: 0,
+      },
+    });
+    const env = { ...process.env, OPENCLAW_STATE_DIR: root };
+
+    await noteSessionTranscriptHealth({
+      env,
+      sessionDirs: [sessionsDir],
+      sessionSqlite: true,
+      shouldRepair: true,
+    });
+
+    expect(runDoctorSessionSqlite).toHaveBeenCalledWith({
+      allAgents: true,
+      env,
+      mode: "import",
+    });
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("Legacy entries: 1"),
+      "Session SQLite",
+    );
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("Archived 2 legacy transcript artifact(s)."),
+      "Session SQLite",
+    );
   });
 
   it("repairs supported current-version linear transcripts", async () => {

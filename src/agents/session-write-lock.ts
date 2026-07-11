@@ -8,6 +8,7 @@ import type fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { createFileLockManager } from "../infra/file-lock-manager.js";
 import { readGatewayProcessArgsSync as readProcessArgsSync } from "../infra/gateway-processes.js";
 import { getProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
@@ -446,6 +447,20 @@ async function resolveNormalizedSessionFile(sessionFile: string): Promise<string
   } catch {
     return resolvedSessionFile;
   }
+}
+
+function resolveSessionWriteLockTarget(sessionFile: string): string {
+  const sqliteMarker = parseSqliteSessionFileMarker(sessionFile);
+  if (!sqliteMarker) {
+    return path.resolve(sessionFile);
+  }
+  const safeAgentId = sqliteMarker.agentId.replace(/[^a-zA-Z0-9._-]/g, "_") || "agent";
+  const safeSessionId = sqliteMarker.sessionId.replace(/[^a-zA-Z0-9._-]/g, "_") || "session";
+  return path.join(
+    path.dirname(path.resolve(sqliteMarker.storePath)),
+    "session-locks",
+    `${safeAgentId}-${safeSessionId}.sqlite-transcript`,
+  );
 }
 
 function normalizeOwnerProcessArg(arg: string): string {
@@ -914,7 +929,7 @@ export async function acquireSessionWriteLock(params: {
   const staleMs = resolvePositiveMs(params.staleMs, defaultOptions.staleMs);
   const maxHoldMs = resolvePositiveMs(params.maxHoldMs, defaultOptions.maxHoldMs);
   const orphanPayloadGraceMs = resolveOrphanLockPayloadGraceMs(timeoutMs);
-  const sessionFile = path.resolve(params.sessionFile);
+  const sessionFile = resolveSessionWriteLockTarget(params.sessionFile);
   const sessionDir = path.dirname(sessionFile);
   const normalizedSessionFile = await resolveNormalizedSessionFile(sessionFile);
   const lockPath = `${normalizedSessionFile}.lock`;

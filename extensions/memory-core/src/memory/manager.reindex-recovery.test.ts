@@ -12,26 +12,13 @@ import { acquireMemoryReindexLock } from "./manager-reindex-lock.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
 
 type SessionDeltaState = { lastSize: number; pendingBytes: number; pendingMessages: number };
-type SyncSessionParams = { needsFullReindex: boolean; targetSessionFiles?: string[] };
-const originalReindexStateDir = process.env.OPENCLAW_STATE_DIR;
-
-function setReindexStateDir(stateDir: string): void {
-  Reflect.set(process.env, "OPENCLAW_STATE_DIR", stateDir);
-}
-
-function restoreReindexStateDir(): void {
-  if (originalReindexStateDir === undefined) {
-    Reflect.deleteProperty(process.env, "OPENCLAW_STATE_DIR");
-  } else {
-    Reflect.set(process.env, "OPENCLAW_STATE_DIR", originalReindexStateDir);
-  }
-}
+type SyncArchiveParams = { needsFullReindex: boolean; targetArchiveFiles?: string[] };
 
 type ReindexHarness = {
   sync: (params: { reason?: string; force?: boolean }) => Promise<void>;
   runInPlaceReindex: (params: { reason?: string; force?: boolean }) => Promise<void>;
   syncMemoryFiles: (params: { needsFullReindex: boolean }) => Promise<unknown>;
-  syncSessionFiles: (params: SyncSessionParams) => Promise<unknown>;
+  syncArchiveFiles: (params: SyncArchiveParams) => Promise<unknown>;
   db: DatabaseSync;
   writeMeta: (meta: MemoryIndexMeta) => void;
   providerKey: string | null;
@@ -55,11 +42,11 @@ describe("memory manager reindex recovery", () => {
     workspaceDir = path.join(fixtureRoot, "workspace");
     memoryDir = path.join(workspaceDir, "memory");
     await fs.mkdir(memoryDir, { recursive: true });
-    setReindexStateDir(path.join(fixtureRoot, "state"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(fixtureRoot, "state"));
   });
 
   afterEach(async () => {
-    restoreReindexStateDir();
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
     if (manager) {
       await manager.close();
@@ -130,7 +117,7 @@ describe("memory manager reindex recovery", () => {
     harness.sessionsDirtyFiles.add(dirtySessionFile);
     harness.sessionDeltas.set(dirtySessionFile, { ...originalDelta });
     harness.syncMemoryFiles = async () => emptySyncPlan;
-    harness.syncSessionFiles = async () => {
+    harness.syncArchiveFiles = async () => {
       const delta = harness.sessionDeltas.get(dirtySessionFile);
       if (delta) {
         delta.lastSize = 500;
@@ -165,7 +152,7 @@ describe("memory manager reindex recovery", () => {
     const emptySyncPlan = { indexItems: [], finalize: () => undefined };
 
     harness.syncMemoryFiles = async () => emptySyncPlan;
-    harness.syncSessionFiles = async () => emptySyncPlan;
+    harness.syncArchiveFiles = async () => emptySyncPlan;
     harness.writeMeta = () => {
       throw new Error("late clean reindex failure");
     };
@@ -237,12 +224,12 @@ describe("memory manager reindex recovery", () => {
 
     const harness = memoryManager as unknown as ReindexHarness;
     const emptySyncPlan = { indexItems: [], finalize: () => undefined };
-    const sessionSyncCalls: SyncSessionParams[] = [];
+    const sessionSyncCalls: SyncArchiveParams[] = [];
 
     harness.sessionsDirty = true;
     harness.sessionsFullRetryDirty = true;
     harness.sessionsDirtyFiles.clear();
-    harness.syncSessionFiles = async (params) => {
+    harness.syncArchiveFiles = async (params) => {
       sessionSyncCalls.push(params);
       return emptySyncPlan;
     };
@@ -251,7 +238,7 @@ describe("memory manager reindex recovery", () => {
 
     expect(sessionSyncCalls).toHaveLength(1);
     expect(sessionSyncCalls[0]).toMatchObject({ needsFullReindex: true });
-    expect(sessionSyncCalls[0]?.targetSessionFiles).toBeUndefined();
+    expect(sessionSyncCalls[0]?.targetArchiveFiles).toBeUndefined();
     expect(harness.sessionsDirty).toBe(false);
     expect(harness.sessionsFullRetryDirty).toBe(false);
   });

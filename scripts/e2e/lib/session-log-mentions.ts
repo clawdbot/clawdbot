@@ -1,6 +1,7 @@
 // Session Log Mentions script supports OpenClaw repository automation.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { readPositiveIntEnv } from "./env-limits.mjs";
 
 type SessionLogMentionLimits = {
@@ -69,15 +70,40 @@ function recordRole(record: unknown): string | undefined {
   return typeof message.role === "string" ? message.role : undefined;
 }
 
-function shouldScanSessionLogLine(line: string): boolean {
+function collectStringLeaves(value: unknown, output: string[]) {
+  if (typeof value === "string") {
+    output.push(value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectStringLeaves(item, output);
+    }
+    return;
+  }
+  if (!value || typeof value !== "object") {
+    return;
+  }
+  for (const item of Object.values(value)) {
+    collectStringLeaves(item, output);
+  }
+}
+
+function sessionLogScanText(line: string): string | null {
   const trimmed = line.trim();
   if (!trimmed) {
-    return false;
+    return null;
   }
   try {
-    return recordRole(JSON.parse(trimmed)) !== "user";
+    const record = JSON.parse(trimmed) as unknown;
+    if (recordRole(record) === "user") {
+      return null;
+    }
+    const strings: string[] = [];
+    collectStringLeaves(record, strings);
+    return strings.join("\n");
   } catch {
-    return true;
+    return line;
   }
 }
 
@@ -104,11 +130,16 @@ export async function countSessionLogMentions(params: {
 }): Promise<Record<string, number>> {
   const limits = params.limits ?? readSessionLogMentionLimits();
   const counts = createCounts(params.needles);
+  const addCounts = (nextCounts: Record<string, number>) => {
+    for (const [key, count] of Object.entries(nextCounts)) {
+      counts[key] = (counts[key] ?? 0) + count;
+    }
+  };
   let files: string[];
   try {
     files = await fs.readdir(params.sessionsDir);
   } catch {
-    return counts;
+    files = [];
   }
 
   let totalBytes = 0;
@@ -140,13 +171,91 @@ export async function countSessionLogMentions(params: {
       limit: limits.fileMaxBytes,
     });
     for (const line of raw.split(/\r?\n/u)) {
-      if (!shouldScanSessionLogLine(line)) {
+      const scanText = sessionLogScanText(line);
+      if (scanText === null) {
         continue;
       }
       for (const [key, needle] of Object.entries(params.needles)) {
-        counts[key] += countOccurrences(line, needle);
+        counts[key] += countOccurrences(scanText, needle);
       }
     }
   }
+  addCounts(
+    await countSqliteTranscriptMentions({
+      limits,
+      needles: params.needles,
+      sessionsDir: params.sessionsDir,
+      startingBytes: totalBytes,
+    }),
+  );
   return counts;
+}
+
+function resolveAgentSqlitePathFromSessionsDir(sessionsDir: string): string | null {
+  if (path.basename(sessionsDir) !== "sessions") {
+    return null;
+  }
+  return path.join(path.dirname(sessionsDir), "agent", "openclaw-agent.sqlite");
+}
+
+async function countSqliteTranscriptMentions(params: {
+  limits: SessionLogMentionLimits;
+  needles: SessionLogNeedles;
+  sessionsDir: string;
+  startingBytes: number;
+}): Promise<Record<string, number>> {
+  const counts = createCounts(params.needles);
+  const sqlitePath = resolveAgentSqlitePathFromSessionsDir(params.sessionsDir);
+  if (!sqlitePath) {
+    return counts;
+  }
+  const stat = await fs.stat(sqlitePath).catch(() => null);
+  if (!stat?.isFile()) {
+    return counts;
+  }
+  let totalBytes = params.startingBytes;
+  let db: DatabaseSync | null = null;
+  try {
+    db = new DatabaseSync(sqlitePath, { readOnly: true });
+    const hasTranscriptEvents = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'transcript_events'")
+      .get();
+    if (!hasTranscriptEvents) {
+      return counts;
+    }
+    const rows = db.prepare("SELECT event_json FROM transcript_events ORDER BY session_id, seq");
+    for (const row of rows.iterate() as Iterable<{ event_json?: unknown }>) {
+      if (typeof row.event_json !== "string") {
+        continue;
+      }
+      const byteCount = Buffer.byteLength(row.event_json, "utf8");
+      assertWithinLimit({
+        byteCount,
+        filePath: sqlitePath,
+        label: "per-file",
+        limit: params.limits.fileMaxBytes,
+      });
+      totalBytes += byteCount;
+      assertWithinLimit({
+        byteCount: totalBytes,
+        label: "total",
+        limit: params.limits.totalMaxBytes,
+      });
+      const scanText = sessionLogScanText(row.event_json);
+      if (scanText === null) {
+        continue;
+      }
+      for (const [key, needle] of Object.entries(params.needles)) {
+        counts[key] += countOccurrences(scanText, needle);
+      }
+    }
+    return counts;
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error) {
+      throw error;
+    }
+    return counts;
+  } finally {
+    db?.close();
+  }
 }

@@ -1,6 +1,7 @@
 // Qa Lab plugin module provides reusable fixture utilities.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
 
 export type QaFixtureFetchJsonOptions = {
@@ -264,15 +265,40 @@ function recordRole(record: unknown): string | undefined {
   return typeof message.role === "string" ? message.role : undefined;
 }
 
-function shouldScanSessionLogLine(line: string): boolean {
+function collectStringLeaves(value: unknown, output: string[]) {
+  if (typeof value === "string") {
+    output.push(value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectStringLeaves(item, output);
+    }
+    return;
+  }
+  if (!value || typeof value !== "object") {
+    return;
+  }
+  for (const item of Object.values(value)) {
+    collectStringLeaves(item, output);
+  }
+}
+
+function sessionLogScanText(line: string): string | null {
   const trimmed = line.trim();
   if (!trimmed) {
-    return false;
+    return null;
   }
   try {
-    return recordRole(JSON.parse(trimmed)) !== "user";
+    const record = JSON.parse(trimmed) as unknown;
+    if (recordRole(record) === "user") {
+      return null;
+    }
+    const strings: string[] = [];
+    collectStringLeaves(record, strings);
+    return strings.join("\n");
   } catch {
-    return true;
+    return line;
   }
 }
 
@@ -280,14 +306,76 @@ async function countNeedlesInFile(filePath: string, needles: Record<string, stri
   const text = await fs.readFile(filePath, "utf8").catch(() => "");
   const counts = createCounts(needles);
   for (const line of text.split(/\r?\n/u)) {
-    if (!shouldScanSessionLogLine(line)) {
+    const scanText = sessionLogScanText(line);
+    if (scanText === null) {
       continue;
     }
     for (const [key, needle] of Object.entries(needles)) {
-      counts[key] += countOccurrences(line, needle);
+      counts[key] += countOccurrences(scanText, needle);
     }
   }
   return counts;
+}
+
+function resolveAgentSqlitePathFromSessionsDir(sessionsDir: string): string | null {
+  if (path.basename(sessionsDir) !== "sessions") {
+    return null;
+  }
+  return path.join(path.dirname(sessionsDir), "agent", "openclaw-agent.sqlite");
+}
+
+function countNeedlesInSqliteTranscriptEvents(
+  sqlitePath: string,
+  needles: Record<string, string>,
+): Record<string, number> {
+  const counts = createCounts(needles);
+  let db: DatabaseSync | null = null;
+  try {
+    db = new DatabaseSync(sqlitePath, { readOnly: true });
+    const hasTranscriptEvents = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'transcript_events'")
+      .get();
+    if (!hasTranscriptEvents) {
+      return counts;
+    }
+    const rows = db.prepare("SELECT event_json FROM transcript_events ORDER BY session_id, seq");
+    for (const row of rows.iterate() as Iterable<{ event_json?: unknown }>) {
+      if (typeof row.event_json !== "string") {
+        continue;
+      }
+      const scanText = sessionLogScanText(row.event_json);
+      if (scanText === null) {
+        continue;
+      }
+      for (const [key, needle] of Object.entries(needles)) {
+        counts[key] += countOccurrences(scanText, needle);
+      }
+    }
+    return counts;
+  } catch {
+    return counts;
+  } finally {
+    db?.close();
+  }
+}
+
+async function countNeedlesInSqliteTranscriptStore(
+  sessionsDir: string,
+  needles: Record<string, string>,
+): Promise<Record<string, number>> {
+  const sqlitePath = resolveAgentSqlitePathFromSessionsDir(sessionsDir);
+  if (!sqlitePath) {
+    return createCounts(needles);
+  }
+  try {
+    const stat = await fs.stat(sqlitePath);
+    if (!stat.isFile()) {
+      return createCounts(needles);
+    }
+  } catch {
+    return createCounts(needles);
+  }
+  return countNeedlesInSqliteTranscriptEvents(sqlitePath, needles);
 }
 
 export async function countSessionLogMentions(params: {
@@ -307,6 +395,13 @@ export async function countSessionLogMentions(params: {
     for (const [key, count] of Object.entries(fileCounts)) {
       counts[key] = (counts[key] ?? 0) + count;
     }
+  }
+  const sqliteCounts = await countNeedlesInSqliteTranscriptStore(
+    params.sessionsDir,
+    params.needles,
+  );
+  for (const [key, count] of Object.entries(sqliteCounts)) {
+    counts[key] = (counts[key] ?? 0) + count;
   }
   return counts;
 }

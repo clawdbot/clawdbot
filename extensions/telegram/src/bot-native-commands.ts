@@ -41,11 +41,11 @@ import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
+  formatSqliteSessionFileMarker,
   getSessionEntry,
   resolveStorePath,
   type SessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { resolveSessionTranscriptLegacyFileTarget } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -222,6 +222,24 @@ export { testing as __testing };
 
 type TelegramNativeCommandRuntime = Awaited<ReturnType<typeof loadTelegramNativeCommandRuntime>>;
 
+function resolveTelegramCommandSessionFile(params: {
+  agentId: string;
+  sessionFile?: string;
+  sessionId: string;
+  storePath: string;
+}): string {
+  const sqliteMarker = formatSqliteSessionFileMarker({
+    agentId: params.agentId,
+    sessionId: params.sessionId,
+    storePath: params.storePath,
+  });
+  const explicitSessionFile = params.sessionFile?.trim();
+  if (explicitSessionFile === sqliteMarker) {
+    return explicitSessionFile;
+  }
+  return sqliteMarker;
+}
+
 function resolveTelegramProgressPlaceholder(command: {
   nativeProgressMessages?: Partial<Record<string, string>> & { default?: string };
 }): string | null {
@@ -249,17 +267,16 @@ async function resolveTelegramCommandTranscriptContext(params: {
       storePath,
     });
     const sessionId = entry?.sessionId?.trim() || randomUUID();
-    const authProfileId = normalizeOptionalString(entry?.authProfileOverride);
-    const target = await resolveSessionTranscriptLegacyFileTarget({
+    const sessionFile = resolveTelegramCommandSessionFile({
       agentId: params.agentId,
+      sessionFile: entry?.sessionFile,
       sessionId,
-      sessionKey,
       storePath,
-      ...(params.threadId !== undefined ? { threadId: params.threadId } : {}),
     });
+    const authProfileId = normalizeOptionalString(entry?.authProfileOverride);
     return {
       sessionId,
-      sessionFile: target.sessionFile,
+      sessionFile,
       ...(authProfileId ? { authProfileId } : {}),
     };
   } catch {

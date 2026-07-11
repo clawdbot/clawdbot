@@ -234,6 +234,24 @@ describe("existing-session interaction navigation guard", () => {
     );
   });
 
+  it("forwards evaluate timeoutMs to Chrome MCP existing-session execution", async () => {
+    chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValueOnce(42 as never);
+
+    const response = await runAction(
+      { kind: "evaluate", fn: "() => 1 + 1", timeoutMs: 60_000 },
+      null,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledOnce();
+    expect(chromeMcpMocks.evaluateChromeMcpScript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fn: "() => 1 + 1",
+        timeoutMs: 60_000,
+      }),
+    );
+  });
+
   it("normalizes ref-scoped statement-body evaluate sources before Chrome MCP execution", async () => {
     chromeMcpMocks.evaluateChromeMcpScript.mockResolvedValueOnce("Ada" as never);
 

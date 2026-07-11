@@ -79,7 +79,7 @@ Use `profile="user"` only when existing cookies/login matter. This attaches to t
 
 On macOS, `action="importprofile"` is the alternative when the agent should use an isolated managed browser with cookies copied from a real Chrome-family profile. First use `action="profiles"` and inspect `systemProfiles`, then import into a fresh managed profile name. Import asks for one Keychain/Touch ID consent prompt. It copies cookies, not local storage or IndexedDB; device-bound session credentials (DBSC) mean some Google sessions may still require re-authentication.
 
-For `profile="user"` and other existing-session profiles, omit `timeoutMs` on `act:type`, `evaluate`, `hover`, `scrollIntoView`, `drag`, `select`, and `fill`; that driver rejects per-call timeout overrides for those actions.
+For `profile="user"` and other existing-session profiles, omit `timeoutMs` on `act:type`, `hover`, `scrollIntoView`, `drag`, `select`, and `fill`; that driver rejects per-call timeout overrides for those actions. `act:evaluate` accepts `timeoutMs`.
 
 ## Google Meet Notes
 

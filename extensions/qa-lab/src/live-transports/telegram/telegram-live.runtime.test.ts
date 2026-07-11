@@ -1365,4 +1365,10 @@ describe("telegram live qa runtime", () => {
     expect(message).toContain("Phase: unknown");
     expect(message).toContain("boom");
   });
+
+  it("keeps bounded telegram QA progress details on UTF-16 boundaries", () => {
+    const prefix = "a".repeat(236);
+    expect(testing.formatTelegramQaProgressDetails(`${prefix}😀after`)).toBe(`${prefix}...`);
+    expect(testing.formatTelegramQaProgressDetails("a".repeat(241))).toBe(`${"a".repeat(237)}...`);
+  });
 });

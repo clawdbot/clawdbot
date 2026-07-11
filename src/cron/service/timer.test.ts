@@ -1,7 +1,7 @@
 // Cron service timer tests cover timer scheduling, cancellation, and wakeups.
-import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../../cron/service.test-harness.js";
 import { createCronServiceState } from "../../cron/service/state.js";
 import { executeJobCore, onTimer } from "../../cron/service/timer.js";
@@ -81,16 +81,15 @@ describe("cron service timer seam coverage", () => {
     };
     const cronRunSessionKey = `agent:main-pr-router:cron:main-heartbeat-job:run:${now}`;
     const sessionStorePath = path.join(path.dirname(path.dirname(storePath)), "sessions.json");
-    await fs.writeFile(
-      sessionStorePath,
-      JSON.stringify({
-        "agent:main-pr-router:main": {
-          lastChannel: "discord",
-          lastTo: "channel-1",
-          lastAccountId: "default",
-        },
-      }),
-      "utf8",
+    await upsertSessionEntry(
+      { storePath: sessionStorePath, sessionKey: "agent:main-pr-router:main" },
+      {
+        sessionId: "main-pr-router-session",
+        updatedAt: now,
+        lastChannel: "discord",
+        lastTo: "channel-1",
+        lastAccountId: "default",
+      },
     );
 
     const state = createCronServiceState({
@@ -271,6 +270,46 @@ describe("cron service timer seam coverage", () => {
     expect(task.childSessionKey).toBe("agent:finn:cron:isolated-agent-job");
     expect(task.status).toBe("succeeded");
     expect(task.terminalSummary).toBe("done");
+  });
+
+  it("records current-bound cron task runs against the backing cron session", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+    const runIsolatedAgentJob = vi.fn(async () => ({
+      status: "ok" as const,
+      summary: "done",
+      sessionKey: "agent:finn:cron:isolated-agent-job:run:run-1",
+    }));
+
+    await writeCronStoreSnapshot({
+      storePath,
+      jobs: [
+        {
+          ...createDueIsolatedAgentJob({ now }),
+          sessionTarget: "current",
+          sessionKey: "agent:finn:telegram:direct:42",
+        },
+      ],
+    });
+
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    await onTimer(state);
+
+    const task = findTaskByRunId(`cron:isolated-agent-job:${now}`);
+    if (!task) {
+      throw new Error("expected current-bound cron task ledger record");
+    }
+    expect(task.childSessionKey).toBe("agent:finn:cron:isolated-agent-job");
+    expect(task.status).toBe("succeeded");
   });
 
   it("seeds active scheduled cron task progress for status surfaces", async () => {
