@@ -622,21 +622,23 @@ jobs:
           mkdir -p "$reports_root"
           git -C "$reports_root" init -b main
           git -C "$reports_root" remote add origin "https://github.com/openclaw/clawgrit-reports.git"
-          if ! git -C "$reports_root" fetch --depth=1 origin main; then
+          if ! git -C "$reports_root" fetch --filter=blob:none --depth=1 origin main; then
             echo "No previous source performance baseline could be fetched." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          git -C "$reports_root" checkout -B main FETCH_HEAD
           ref_slug="$(printf '%s' "${TESTED_REF}" | tr -c 'A-Za-z0-9._-' '-')"
-          pointer="${reports_root}/openclaw-performance/${ref_slug}/latest-mock-provider.json"
-          if [[ ! -f "$pointer" ]]; then
+          pointer="openclaw-performance/${ref_slug}/latest-mock-provider.json"
+          if ! git -C "$reports_root" cat-file -e "FETCH_HEAD:${pointer}"; then
             echo "No previous source performance baseline exists for ${TESTED_REF}." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          if ! latest_path="$(node -e "const fs=require('node:fs'); const data=JSON.parse(fs.readFileSync(process.argv[1],'utf8')); const value=String(data.path || ''); if (!/^openclaw-performance\\/[A-Za-z0-9._-]+\\/[0-9]+-[0-9]+\\/mock-provider$/u.test(value)) process.exit(1); process.stdout.write(value);" "$pointer")"; then
+          if ! latest_path="$(git -C "$reports_root" show "FETCH_HEAD:${pointer}" | node -e "const fs=require('node:fs'); const data=JSON.parse(fs.readFileSync(0,'utf8')); const value=String(data.path || ''); if (!/^openclaw-performance\\/[A-Za-z0-9._-]+\\/[0-9]+-[0-9]+\\/mock-provider$/u.test(value)) process.exit(1); process.stdout.write(value);")"; then
             echo "Previous source performance baseline pointer is invalid." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
+          git -C "$reports_root" sparse-checkout init --no-cone
+          printf '/%s/source/\n' "$latest_path" | git -C "$reports_root" sparse-checkout set --stdin
+          git -C "$reports_root" checkout --detach FETCH_HEAD
           baseline_source="${reports_root}/${latest_path}/source"
           if [[ -d "$baseline_source" ]]; then
             baseline_source="$(realpath "$baseline_source")"

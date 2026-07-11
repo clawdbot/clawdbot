@@ -446,15 +446,42 @@ describe("plugin npm package manifest staging", () => {
     });
 
     const nodeModulesPath = join(packageDir, "node_modules");
-    withAugmentedPluginNpmManifestForPackage(
-      { repoRoot: repoDir, packageDir, bundleDependencies: true },
-      () => {
-        expect(existsSync(join(nodeModulesPath, "local-runtime-dep", "package.json"))).toBe(true);
-        expect(existsSync(join(nodeModulesPath, "optional-platform-dep", "package.json"))).toBe(
-          true,
-        );
-      },
-    );
+    const manifestModuleUrl = new URL(
+      "../scripts/lib/plugin-npm-package-manifest.mjs",
+      import.meta.url,
+    ).href;
+    const childSource = `
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { withAugmentedPluginNpmManifestForPackage } from ${JSON.stringify(manifestModuleUrl)};
+
+const packageDir = ${JSON.stringify(packageDir)};
+const nodeModulesPath = ${JSON.stringify(nodeModulesPath)};
+withAugmentedPluginNpmManifestForPackage(
+  {
+    repoRoot: ${JSON.stringify(repoDir)},
+    packageDir,
+    bundleDependencies: true,
+  },
+  () => {
+    if (!existsSync(join(nodeModulesPath, "local-runtime-dep", "package.json"))) {
+      throw new Error("missing bundled runtime dependency");
+    }
+    if (!existsSync(join(nodeModulesPath, "optional-platform-dep", "package.json"))) {
+      throw new Error("missing portable optional bundled dependency");
+    }
+    process.stdout.write("pack-json\\n");
+  },
+);
+`;
+    const result = spawnSync(process.execPath, ["--input-type=module", "--eval", childSource], {
+      cwd: repoDir,
+      encoding: "utf8",
+      env: process.env,
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe("pack-json\n");
 
     expect(existsSync(nodeModulesPath)).toBe(false);
   });

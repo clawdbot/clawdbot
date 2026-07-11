@@ -146,15 +146,22 @@ describe("OpenClaw performance workflow", () => {
     );
   });
 
-  it("fetches the public clawgrit baseline without publisher credentials", () => {
+  it("sparse-fetches only the public source baseline without publisher credentials", () => {
     const workflowText = readFileSync(WORKFLOW, "utf8");
     const baseline = findStep("Fetch previous source performance baseline", "source_performance");
+    const run = baseline.run ?? "";
 
     expect(baseline.if).toBeUndefined();
     expect(baseline.env?.CLAWGRIT_REPORTS_TOKEN).toBeUndefined();
-    expect(baseline.run).toContain(
-      'remote add origin "https://github.com/openclaw/clawgrit-reports.git"',
-    );
+    expect(run).toContain('remote add origin "https://github.com/openclaw/clawgrit-reports.git"');
+    expect(run).toContain("fetch --filter=blob:none --depth=1 origin main");
+    expect(run).toContain('cat-file -e "FETCH_HEAD:${pointer}"');
+    expect(run).toContain('show "FETCH_HEAD:${pointer}"');
+    expect(run).toContain("sparse-checkout init --no-cone");
+    expect(run).toContain("printf '/%s/source/\\n'");
+    expect(run).toContain("sparse-checkout set --stdin");
+    expect(run).toContain("checkout --detach FETCH_HEAD");
+    expect(run).not.toContain("checkout -B main FETCH_HEAD");
     expect(workflowText).not.toContain("https://x-access-token:");
   });
 

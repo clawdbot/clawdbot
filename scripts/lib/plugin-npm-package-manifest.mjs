@@ -295,7 +295,7 @@ function installMissingOptionalBundledDependencies(params) {
       {
         cwd: params.packageDir,
         env: process.env,
-        stdio: ["ignore", "inherit", "inherit"],
+        stdio: ["ignore", "ignore", "inherit"],
       },
     );
     if (result.error) {
