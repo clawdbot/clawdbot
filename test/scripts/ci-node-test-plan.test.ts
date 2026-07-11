@@ -180,7 +180,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       compact: true,
     });
 
-    expect(compact).toHaveLength(19);
+    expect(compact).toHaveLength(20);
     expect(compact.every((shard) => Array.isArray(shard.groups))).toBe(true);
     expect(compact.some((shard) => shard.requiresDist)).toBe(true);
     expect(
@@ -233,7 +233,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     );
     expect(
       largeJobs.map((shard) => shard.groups.filter((group) => !group.includePatterns).length),
-    ).toEqual([2, 2, 2]);
+    ).toEqual([2, 2, 1, 1]);
     expect(
       compact.some((shard) => shard.checkName.startsWith("checks-node-compact-large-whole-")),
     ).toBe(false);
