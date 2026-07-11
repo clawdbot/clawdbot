@@ -137,6 +137,28 @@ import Testing
         #expect(cmd.suffix(2).elementsEqual(["--timeout", "5"]))
     }
 
+    @Test func `missing CLI explains install and source checkout paths`() throws {
+        let defaults = self.makeLocalDefaults()
+        let tmp = try makeTempDirForTests()
+        let binDir = tmp.appendingPathComponent("bin")
+        let nodePath = binDir.appendingPathComponent("node")
+        try makeExecutableForTests(at: nodePath)
+        try "#!/bin/sh\necho v22.19.0\n".write(to: nodePath, atomically: true, encoding: .utf8)
+        try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: nodePath.path)
+
+        let cmd = CommandResolver.openclawCommand(
+            subcommand: "status",
+            defaults: defaults,
+            configRoot: [:],
+            searchPaths: [binDir.path],
+            projectRoot: tmp)
+
+        #expect(cmd.first == "/bin/sh")
+        #expect(cmd.last?.contains("openclaw CLI not found") == true)
+        #expect(cmd.last?.contains("Install the CLI") == true)
+        #expect(cmd.last?.contains("run pnpm build in an OpenClaw source checkout") == true)
+    }
+
     @Test func `preferred paths start with project node bins`() throws {
         let tmp = try makeTempDirForTests()
 

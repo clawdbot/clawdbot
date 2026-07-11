@@ -404,7 +404,8 @@ extension OnboardingView {
                 Text(self.buttonTitle)
                     .frame(minWidth: 88)
             }
-            .keyboardShortcut(.return)
+            // KeyEquivalent.return defaults to Command-Return; defaultAction is plain Return.
+            .keyboardShortcut(.defaultAction)
             .buttonStyle(.borderedProminent)
             .disabled(!self.canAdvance)
         }

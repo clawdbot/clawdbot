@@ -317,7 +317,7 @@ enum CommandResolver {
         switch runtimeResult {
         case .success:
             let missingEntry = """
-            openclaw entrypoint missing (looked for dist/index.js or openclaw.mjs); run pnpm build.
+            openclaw CLI not found. Install the CLI, or run pnpm build in an OpenClaw source checkout.
             """
             return self.errorCommand(with: missingEntry)
         case let .failure(error):

@@ -1,6 +1,7 @@
 // Annotation model for the browser panel: freehand strokes drawn over a page
 // screenshot, plus the prepackaged prompt handed to the chat composer so the
 // agent knows what was marked up.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { t } from "../../i18n/index.ts";
 import type { BrowserInspectedNode } from "./browser-client.ts";
 
@@ -68,7 +69,7 @@ function percent(value: number): string {
  * prompt template additionally labels these values as page-reported.
  */
 function sanitizePageText(value: string, maxLength = 80): string {
-  return value.replace(/\s+/g, " ").trim().slice(0, maxLength);
+  return truncateUtf16Safe(value.replace(/\s+/g, " ").trim(), maxLength);
 }
 
 /** Selector fragments (tag/id/class) are page-controlled too: keep only
