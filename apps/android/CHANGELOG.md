@@ -8,6 +8,8 @@ Recovers Android permission prompts after timeouts or cancellation without exhau
 
 Requires a clear in-app disclosure and fresh consent before Installed Apps can share app names, package IDs, and status with a paired Gateway; existing opt-ins must consent again. Thanks @joshavant.
 
+Adds an Android system share target that stages bounded text and image shares for review without losing existing composer drafts. Thanks @NianJiuZst.
+
 ## 2026.7.1 - 2026-07-08
 
 Adds multi-gateway switching with isolated credentials, history, queues, and notification routing.

@@ -190,6 +190,7 @@
 }
 
 .chat-main {
+  /* Positioning context for floating overlays (scroll-to-bottom, side chat). */
   position: relative;
   min-width: 312px;
   display: flex;

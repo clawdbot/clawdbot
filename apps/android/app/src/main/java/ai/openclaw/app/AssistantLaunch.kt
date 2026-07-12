@@ -1,6 +1,9 @@
 package ai.openclaw.app
 
+import android.content.ContentResolver
 import android.content.Intent
+import android.net.Uri
+import androidx.core.content.IntentCompat
 
 /** Android Assistant entry point used by manifest-declared app actions. */
 const val actionAskOpenClaw = "ai.openclaw.app.action.ASK_OPENCLAW"
@@ -29,6 +32,18 @@ data class AssistantLaunchRequest(
   val source: String,
   val prompt: String?,
   val autoSend: Boolean,
+)
+
+/** Shared content staged in chat for user review before sending. */
+data class ShareLaunchRequest(
+  val text: String?,
+  val imageUris: List<Uri>,
+  val droppedImageCount: Int,
+)
+
+private data class SharedImageSelection(
+  val uris: List<Uri>,
+  val droppedCount: Int,
 )
 
 /**
@@ -68,3 +83,63 @@ fun parseAssistantLaunchIntent(intent: Intent?): AssistantLaunchRequest? {
     else -> null
   }
 }
+
+/** Parses Android Sharesheet content without reading external providers on the main thread. */
+fun parseShareLaunchIntent(intent: Intent?): ShareLaunchRequest? {
+  val action = intent?.action ?: return null
+  if (action != Intent.ACTION_SEND && action != Intent.ACTION_SEND_MULTIPLE) return null
+
+  val text =
+    listOf(intent.getStringExtra(Intent.EXTRA_SUBJECT), intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString())
+      .mapNotNull { value -> value?.trim()?.takeIf { it.isNotEmpty() } }
+      .distinct()
+      .joinToString(separator = "\n\n")
+      .ifEmpty { null }
+  val imageSelection =
+    if (intent.type?.startsWith("image/", ignoreCase = true) == true) {
+      sharedImageUris(intent, action)
+    } else {
+      SharedImageSelection(uris = emptyList(), droppedCount = 0)
+    }
+
+  if (text == null && imageSelection.uris.isEmpty()) return null
+  return ShareLaunchRequest(
+    text = text,
+    imageUris = imageSelection.uris,
+    droppedImageCount = imageSelection.droppedCount,
+  )
+}
+
+private fun sharedImageUris(
+  intent: Intent,
+  action: String,
+): SharedImageSelection {
+  val streamUris =
+    when (action) {
+      Intent.ACTION_SEND ->
+        listOfNotNull(IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java))
+
+      Intent.ACTION_SEND_MULTIPLE ->
+        IntentCompat.getParcelableArrayListExtra(intent, Intent.EXTRA_STREAM, Uri::class.java).orEmpty()
+
+      else -> emptyList()
+    }
+  val clipUris =
+    intent.clipData
+      ?.let { clip ->
+        (0 until clip.itemCount).mapNotNull { index -> clip.getItemAt(index).uri }
+      }.orEmpty()
+
+  // Only provider-backed content URIs use the sender's temporary read grant. Rejecting file://
+  // prevents an external intent from turning OpenClaw into a reader for its own private files.
+  val validUris =
+    (streamUris + clipUris)
+      .filter { uri -> uri.scheme.equals(ContentResolver.SCHEME_CONTENT, ignoreCase = true) }
+      .distinct()
+  return SharedImageSelection(
+    uris = validUris.take(MAX_SHARED_IMAGE_COUNT),
+    droppedCount = (validUris.size - MAX_SHARED_IMAGE_COUNT).coerceAtLeast(0),
+  )
+}
+
+private const val MAX_SHARED_IMAGE_COUNT = 8

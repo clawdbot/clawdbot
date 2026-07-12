@@ -760,6 +760,30 @@ describe("memory index", () => {
     }
   });
 
+  it("disables batch immediately when the provider reports it unavailable", async () => {
+    providerRuntimeBatchErrors = [
+      Object.assign(new Error("provider batch unavailable"), {
+        code: "embedding_batch_unavailable",
+      }),
+    ];
+    const manager = await getFreshManager(
+      createCfg({ provider: "batch-wide-test", batchEnabled: true }),
+    );
+    try {
+      await manager.sync({ reason: "test" });
+
+      expect(providerRuntimeBatchCalls).toHaveLength(1);
+      expect(embedBatchCalls).toBe(1);
+      expect(manager.status().batch).toMatchObject({
+        enabled: false,
+        failures: 2,
+        lastError: "provider batch unavailable",
+      });
+    } finally {
+      await manager.close?.();
+    }
+  });
+
   it.each([
     ["frozen errors", Object.freeze(new Error("provider runtime retry failed"))],
     ["primitive rejections", "provider runtime retry failed"],

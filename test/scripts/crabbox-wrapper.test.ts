@@ -798,6 +798,42 @@ describe("scripts/crabbox-wrapper", () => {
     ]);
   });
 
+  it("fails before reuse when a Blacksmith Testbox is claimed by another repo", () => {
+    const home = mkdtempSync(path.join(tmpdir(), "openclaw-crabbox-home-"));
+    tempDirs.push(home);
+    const id = "tbx_claimed";
+    const keyPath = path.join(testCrabboxConfigDir(home), "testboxes", id, "id_ed25519");
+    mkdirSync(path.dirname(keyPath), { recursive: true });
+    writeFileSync(keyPath, "fake test key\n", "utf8");
+    const stateRoot = path.join(home, ".local", "state");
+    const claimPath = path.join(stateRoot, "crabbox", "claims", `${id}.json`);
+    mkdirSync(path.dirname(claimPath), { recursive: true });
+    writeFileSync(
+      claimPath,
+      `${JSON.stringify({ leaseID: id, repoRoot: "/tmp/other-repo" })}\n`,
+      "utf8",
+    );
+
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "blacksmith-testbox", "--id", id, "--", "echo ok"],
+      { env: { ...testHomeEnv(home), XDG_STATE_HOME: stateRoot } },
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain(`lease ${id} is claimed by repo /tmp/other-repo`);
+    expect(result.stderr).toContain(`use --reclaim to claim it for ${repoRoot}`);
+
+    const reclaimed = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "blacksmith-testbox", "--id", id, "--reclaim", "--", "echo ok"],
+      { env: { ...testHomeEnv(home), XDG_STATE_HOME: stateRoot } },
+    );
+    expect(reclaimed.status).toBe(0);
+    expect(parseFakeCrabboxOutput(reclaimed).args).toContain("--reclaim");
+  });
+
   it("lets Crabbox resolve reusable Testbox slugs", () => {
     const home = mkdtempSync(path.join(tmpdir(), "openclaw-crabbox-home-"));
     tempDirs.push(home);

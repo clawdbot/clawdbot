@@ -42,6 +42,20 @@ class MainActivityLifecycleTest {
   }
 
   @Test
+  fun pendingIntentRouterQueuesRapidColdStartShares() {
+    val router = MainActivityPendingIntentRouter()
+    val first = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, "first")
+    val second = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, "second")
+    val routed = mutableListOf<Intent>()
+
+    router.setInitialIntent(first)
+    assertTrue(router.onNewIntent(second, routed::add))
+
+    assertTrue(router.activate(routed::add))
+    assertEquals(listOf(first, second), routed)
+  }
+
+  @Test
   fun pendingIntentRouterDiscardsOnlyRecreatedInitialIntent() {
     val router = MainActivityPendingIntentRouter()
     val routed = mutableListOf<Intent>()

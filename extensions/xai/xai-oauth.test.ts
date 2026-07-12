@@ -457,7 +457,7 @@ describe("xAI OAuth", () => {
         }),
       );
     vi.stubGlobal("fetch", fetchImpl);
-    const note = vi.fn<(message: string, title?: string) => Promise<void>>(async () => {});
+    const deviceCode = vi.fn(async () => {});
     const openUrl = vi.fn(async () => {});
     const log = vi.fn();
     const runtime = { ...createRuntimeEnv(), log };
@@ -467,7 +467,7 @@ describe("xAI OAuth", () => {
       openUrl,
       prompter: createTestWizardPrompter({
         progress: vi.fn(() => progress),
-        note,
+        deviceCode,
       }),
       runtime,
       oauth: {
@@ -480,7 +480,15 @@ describe("xAI OAuth", () => {
     const result = await loginXaiDeviceCode(ctx);
 
     expect(openUrl).toHaveBeenCalledWith("https://accounts.x.ai/oauth2/device?user_code=ABCD-1234");
-    expect(note).toHaveBeenCalledWith(expect.stringContaining("ABCD-1234"), "xAI OAuth");
+    expect(deviceCode).toHaveBeenCalledWith({
+      title: "xAI OAuth",
+      code: "ABCD-1234",
+      expiresInMinutes: 15,
+      message: "Enter this one-time code on the xAI sign-in page.",
+    });
+    expect(openUrl.mock.invocationCallOrder[0]).toBeLessThan(
+      deviceCode.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER,
+    );
     const remoteLog = log.mock.calls[0]?.[0];
     expect(remoteLog).toContain("https://accounts.x.ai/oauth2/device");
     expect(remoteLog).not.toContain("ABCD-1234");

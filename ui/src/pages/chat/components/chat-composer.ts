@@ -3,13 +3,11 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, type TemplateResult } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { ref } from "lit/directives/ref.js";
-import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { GatewaySessionRow, SessionGoal, SessionsListResult } from "../../../api/types.ts";
 import { normalizeBasePath } from "../../../app-route-paths.ts";
 import { normalizeChatSendShortcut, type ChatSendShortcut } from "../../../app/settings.ts";
 import { icons, type IconName } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
-import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../../lib/chat/chat-types.ts";
 import {
@@ -20,7 +18,6 @@ import {
   type SlashCommandCategory,
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
-import type { ChatSideResult, ChatSideResultPending } from "../../../lib/chat/side-result.ts";
 import { formatCompactTokenCount, formatCost } from "../../../lib/format.ts";
 import { isMonitoredAuthProvider } from "../../../lib/model-auth.ts";
 import {
@@ -91,8 +88,6 @@ type ChatComposerProps = {
   fallbackStatus?: FallbackStatus | null;
   messages: unknown[];
   stream: string | null;
-  sideResult?: ChatSideResult | null;
-  sideResultPending?: ChatSideResultPending | null;
   queue: ChatQueueItem[];
   draft: string;
   sessions: SessionsListResult | null;
@@ -120,7 +115,6 @@ type ChatComposerProps = {
   onQueueRemove: (id: string) => void;
   onQueueRetry?: (id: string) => void;
   onQueueSteer?: (id: string) => void;
-  onDismissSideResult?: () => void;
   onNewSession: () => void;
   onClearReply?: () => void;
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
@@ -1025,75 +1019,6 @@ function renderChatQueueItem(item: ChatQueueItem, props: ChatQueueProps) {
       </span>
       ${item.sendError ? html`<span class="chat-queue__error">${item.sendError}</span>` : nothing}
     </div>
-  `;
-}
-
-export function renderSideResult(
-  sideResult: ChatSideResult | null | undefined,
-  pending?: ChatSideResultPending | null,
-  onDismiss?: () => void,
-): TemplateResult | typeof nothing {
-  if (!sideResult) {
-    // A fresh side result always supersedes the pending placeholder; the
-    // pending card only bridges the gap until chat.side_result arrives.
-    if (!pending) {
-      return nothing;
-    }
-    return html`
-      <section
-        class="chat-side-result chat-side-result--pending"
-        role="status"
-        aria-live="polite"
-        aria-label="BTW side question pending"
-      >
-        <div class="chat-side-result__header">
-          <div class="chat-side-result__label-row">
-            <span class="chat-side-result__label">BTW</span>
-            <span class="chat-side-result__meta">Thinking…</span>
-          </div>
-          <openclaw-tooltip content="Dismiss">
-            <button
-              class="btn chat-side-result__dismiss"
-              type="button"
-              aria-label="Dismiss BTW question"
-              @click=${() => onDismiss?.()}
-            >
-              ${icons.x}
-            </button>
-          </openclaw-tooltip>
-        </div>
-        <div class="chat-side-result__question">${pending.question}</div>
-      </section>
-    `;
-  }
-  return html`
-    <section
-      class=${`chat-side-result ${sideResult.isError ? "chat-side-result--error" : ""}`}
-      role="status"
-      aria-live="polite"
-      aria-label="BTW side result"
-    >
-      <div class="chat-side-result__header">
-        <div class="chat-side-result__label-row">
-          <span class="chat-side-result__label">BTW</span>
-          <span class="chat-side-result__meta">Not saved to chat history</span>
-        </div>
-        <openclaw-tooltip content="Dismiss">
-          <button
-            class="btn chat-side-result__dismiss"
-            type="button"
-            aria-label="Dismiss BTW result"
-            @click=${() => onDismiss?.()}
-          >
-            ${icons.x}
-          </button>
-        </openclaw-tooltip>
-      </div>
-      <div class="chat-side-result__question">${sideResult.question}</div>
-      <div class="chat-side-result__body" dir=${detectTextDirection(sideResult.text)}>
-        ${unsafeHTML(toSanitizedMarkdownHtml(sideResult.text))}
-      </div>
-    </section>
   `;
 }
 
@@ -2442,7 +2367,6 @@ export function renderChatComposer(props: ChatComposerProps) {
       onQueueSteer: props.connected && canCompose ? props.onQueueSteer : undefined,
       onQueueRemove: props.onQueueRemove,
     })}
-    ${renderSideResult(props.sideResult, props.sideResultPending, props.onDismissSideResult)}
     <div class="agent-chat__composer-shell">
       ${mobileRunStatusIndicator !== nothing && composerRunStatus
         ? html`

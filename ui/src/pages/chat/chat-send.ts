@@ -134,6 +134,8 @@ export type ChatHost = ChatInputHistoryState &
     chatSideResultPending?: ChatSideResultPending | null;
     /** Retired/handled BTW run ids whose late events must not reach the transcript. */
     chatSideResultTerminalRuns?: Set<string>;
+    /** Side-chat panel closed via X/Escape; a new question reopens it. */
+    chatSideChatHidden?: boolean;
   };
 
 type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
@@ -195,6 +197,12 @@ type ChatSendOptions = {
   confirmReset?: boolean;
   restoreDraft?: boolean;
   skillWorkshopRevision?: ChatQueueSkillWorkshopRevision;
+  /** Side-chat follow-ups embed prior-turn context in the /btw command; the
+   * pending turn must display the user's typed question instead. */
+  sideQuestionDisplayText?: string;
+  /** Lets the side-chat panel restore its typed follow-up when the detached
+   * send is not accepted (the panel input is not a managed draft). */
+  onSideQuestionSendRejected?: () => void;
 };
 
 function dataUrlToBase64(dataUrl: string): { content: string; mimeType: string } | null {
@@ -2170,6 +2178,10 @@ export async function handleSendChat(
       isBtwCommand(message) || (parsed?.command.key === "approve" && isChatBusy(host));
     if (shouldSendDetachedCommand) {
       const submitKey = chatSubmitKey(host, "detached", message, attachmentsToSend);
+      // Covers every non-accepted path — early exits, guard dedupe, and
+      // rejected acks — so the side-chat panel can restore its typed
+      // follow-up even when no request was sent.
+      let detachedSendAccepted = false;
       await withChatSubmitGuard(host, submitKey, async () => {
         const pendingSettings = getPendingChatPickerPatch(host, submittedSessionKey);
         if (
@@ -2189,25 +2201,23 @@ export async function handleSendChat(
           recordNonTranscriptInputHistory(host, message);
         }
         // BTW runs detached and delivers via chat.side_result only; show a
-        // pending card immediately so the send has visible feedback. The run
-        // id is generated upfront so the card is correlatable before the ack
-        // returns. A new question also supersedes any still-displayed
-        // previous answer — renderSideResult prefers results, so a stale one
-        // would hide the card.
+        // pending turn immediately so the send has visible feedback. The run
+        // id is generated upfront so the turn is correlatable before the ack
+        // returns.
         const btwPending = isBtwCommand(message)
           ? {
-              question: extractSideQuestionDisplayText(message),
+              question: opts?.sideQuestionDisplayText ?? extractSideQuestionDisplayText(message),
               ts: Date.now(),
               runId: generateUUID(),
             }
           : null;
         if (btwPending) {
           // The superseded run loses its pending record; retire it so its
-          // late side_result/terminal events cannot reach the card or the
-          // transcript.
+          // late side_result/terminal events cannot reach the panel or the
+          // transcript. Completed turns stay: the panel is a conversation.
           retirePendingChatSideQuestion(host);
-          host.chatSideResult = null;
           host.chatSideResultPending = btwPending;
+          host.chatSideChatHidden = false;
           host.requestUpdate?.();
         }
         const ack = await sendDetachedCommandMessage(host, message, {
@@ -2216,17 +2226,17 @@ export async function handleSendChat(
           previousAttachments: cleared.previousAttachments,
           runId: btwPending?.runId,
         });
+        detachedSendAccepted = isAcceptedChatSendAck(ack);
         // Touch only this send's card: a side_result (or a newer question)
         // may already have replaced it while the ack was in flight.
-        if (
-          btwPending &&
-          host.chatSideResultPending === btwPending &&
-          !isAcceptedChatSendAck(ack)
-        ) {
+        if (btwPending && host.chatSideResultPending === btwPending && !detachedSendAccepted) {
           host.chatSideResultPending = null;
           host.requestUpdate?.();
         }
       });
+      if (!detachedSendAccepted) {
+        opts?.onSideQuestionSendRejected?.();
+      }
       return;
     }
 

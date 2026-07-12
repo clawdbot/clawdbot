@@ -45,6 +45,7 @@ import {
   getSessionEntry,
   resolveStorePath,
   type SessionEntry,
+  updateSessionStoreEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -1338,21 +1339,88 @@ export const registerTelegramNativeCommands = ({
               agentId: route.agentId,
               sessionKey: targetSessionKey,
             });
-            const profileId = codexChannelLoginRuntime.resolveProviderScopedProfileId(
-              targetSessionEntry?.authProfileOverride,
-              loginProvider,
-            );
-            await codexChannelLoginRuntime.runDeviceLoginFlow({
+            const loginResult = await codexChannelLoginRuntime.runDeviceLoginFlow({
               runLoginFlow: loginFlow,
               provider: loginProvider,
               agentId: route.agentId,
-              ...(profileId ? { profileId } : {}),
               config: runtimeCfg,
               runtime,
               sendMessage: sendLoginMessage,
               unsupportedPromptMessage:
                 "Telegram /login supports only fixed Codex device-code auth.",
             });
+            const nextProfileId = loginResult.profiles.find(
+              (profile) => profile.provider === loginProvider,
+            )?.profileId;
+            if (!nextProfileId) {
+              await sendLoginMessage(
+                "Codex login completed, but this Telegram session could not switch to the newly authenticated profile. Retry `/login codex`, or select the profile manually.",
+              );
+              return;
+            }
+            const needsSessionUpdate =
+              targetSessionEntry &&
+              (targetSessionEntry.authProfileOverride !== nextProfileId ||
+                targetSessionEntry.authProfileOverrideSource !== "user" ||
+                targetSessionEntry.authProfileOverrideCompactionCount !== undefined);
+            if (targetSessionEntry) {
+              try {
+                const storePath = resolveStorePath(runtimeCfg.session?.store, {
+                  agentId: route.agentId,
+                });
+                let snapshotMatched = false;
+                const persisted = await updateSessionStoreEntry({
+                  sessionKey: targetSessionKey,
+                  storePath,
+                  requireWriteSuccess: true,
+                  skipMaintenance: true,
+                  update: (entry) => {
+                    if (
+                      entry.sessionId !== targetSessionEntry.sessionId ||
+                      entry.authProfileOverride !== targetSessionEntry.authProfileOverride ||
+                      entry.authProfileOverrideSource !==
+                        targetSessionEntry.authProfileOverrideSource ||
+                      entry.authProfileOverrideCompactionCount !==
+                        targetSessionEntry.authProfileOverrideCompactionCount
+                    ) {
+                      return null;
+                    }
+                    snapshotMatched = true;
+                    return needsSessionUpdate
+                      ? {
+                          authProfileOverride: nextProfileId,
+                          authProfileOverrideSource: "user",
+                          authProfileOverrideCompactionCount: undefined,
+                        }
+                      : null;
+                  },
+                });
+                if (
+                  !snapshotMatched ||
+                  !persisted ||
+                  persisted.authProfileOverride !== nextProfileId ||
+                  persisted.authProfileOverrideSource !== "user" ||
+                  persisted.authProfileOverrideCompactionCount !== undefined
+                ) {
+                  await sendLoginMessage(
+                    "Codex login completed, but this Telegram session could not switch to the newly authenticated profile. Retry `/login codex`, or select the profile manually.",
+                  );
+                  return;
+                }
+              } catch (error) {
+                runtime.error?.(
+                  danger(
+                    `telegram /login codex completed but failed to update session auth profile: ${String(
+                      error,
+                    )}`,
+                  ),
+                );
+                await sendLoginMessage(
+                  "Codex login completed, but this Telegram session could not switch to the newly authenticated profile. Retry `/login codex`, or select the profile manually.",
+                );
+                return;
+              }
+            }
             await sendLoginMessage("Codex login complete. Try your request again now.");
           } catch {
             runtime.error?.(danger("telegram /login codex failed"));

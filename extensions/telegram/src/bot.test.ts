@@ -240,6 +240,7 @@ async function writeDirectTelegramTranscriptMessages(params: {
         content: message.text,
         timestamp: message.timestamp,
       },
+      eventId: message.id,
     });
   }
 }

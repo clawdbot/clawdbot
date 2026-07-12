@@ -6,6 +6,7 @@ import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
+import { lockState, lockWorktreeForProcess, unlockWorktree } from "./git-lock.js";
 import {
   commandError,
   listGitWorktrees,
@@ -26,6 +27,12 @@ import {
   listRegistryWorktrees,
   updateRegistryWorktree,
 } from "./registry.js";
+import {
+  abortWorktreeRemoval,
+  claimWorktreeRemoval,
+  finalizeWorktreeRemoval,
+  hasLiveWorktreeRunLease,
+} from "./run-lease.js";
 import type {
   CreateManagedWorktreeParams,
   ManagedWorktreeBranch,
@@ -51,7 +58,6 @@ export class WorktreeSnapshotError extends Error {
   }
 }
 const SNAPSHOT_REF_PREFIX = "refs/openclaw/snapshots";
-const OPENCLAW_LOCK_PATTERN = /^openclaw pid=(\d+)$/;
 const log = createSubsystemLogger("agents/worktrees");
 
 type ServiceOptions = {
@@ -62,12 +68,6 @@ type ServiceOptions = {
 type ManagedWorktreeGcParams = {
   isOwnerActive?: (ownerKind: ManagedWorktreeOwnerKind, ownerId: string) => boolean;
 };
-
-type LockState =
-  | { kind: "none" }
-  | { kind: "live"; pid: number }
-  | { kind: "dead"; pid: number }
-  | { kind: "foreign"; reason: string };
 
 function resultMessage(result: GitResult): string {
   return (result.stderr || result.stdout).trim().split("\n").slice(-12).join("\n");
@@ -304,30 +304,6 @@ async function runSetupScript(repoRoot: string, worktreePath: string): Promise<v
       `worktree setup failed${resultMessage(result) ? `:\n${resultMessage(result)}` : ""}`,
     );
   }
-}
-
-function processIsAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
-
-async function lockState(record: ManagedWorktreeRecord): Promise<LockState> {
-  const entry = (await listGitWorktrees(record.repoRoot)).find(
-    (candidate) => path.resolve(candidate.path) === path.resolve(record.path),
-  );
-  if (!entry || entry.lockedReason === undefined) {
-    return { kind: "none" };
-  }
-  const match = OPENCLAW_LOCK_PATTERN.exec(entry.lockedReason);
-  if (!match) {
-    return { kind: "foreign", reason: entry.lockedReason };
-  }
-  const pid = Number(match[1]);
-  return processIsAlive(pid) ? { kind: "live", pid } : { kind: "dead", pid };
 }
 
 async function snapshotWorktree(record: ManagedWorktreeRecord, reason: string): Promise<string> {
@@ -581,19 +557,7 @@ export class ManagedWorktreeService {
 
   async acquire(id: string): Promise<ManagedWorktreeRecord> {
     const record = this.requireLiveRecord(id);
-    const result = await runGit(record.repoRoot, [
-      "worktree",
-      "lock",
-      "--reason",
-      `openclaw pid=${process.pid}`,
-      record.path,
-    ]);
-    if (result.code !== 0) {
-      const state = await lockState(record);
-      if (state.kind !== "live" || state.pid !== process.pid) {
-        throw commandError("git worktree lock", result);
-      }
-    }
+    await lockWorktreeForProcess(record);
     const lastActiveAt = this.now();
     updateRegistryWorktree(this.env, id, { lastActiveAt });
     return { ...record, lastActiveAt };
@@ -612,10 +576,7 @@ export class ManagedWorktreeService {
       return;
     }
     if (state.kind !== "none") {
-      const result = await runGit(record.repoRoot, ["worktree", "unlock", record.path]);
-      if (result.code !== 0) {
-        throw commandError("git worktree unlock", result);
-      }
+      await unlockWorktree(record);
     }
   }
 
@@ -623,50 +584,64 @@ export class ManagedWorktreeService {
     id: string;
     reason: string;
     force?: boolean;
+    claimToken?: string;
   }): Promise<RemoveManagedWorktreeResult> {
     const record = this.requireLiveRecord(params.id);
-    const state = await lockState(record);
-    if ((state.kind === "live" || state.kind === "foreign") && !params.force) {
-      throw new Error(
-        state.kind === "live"
-          ? `worktree is locked by live OpenClaw pid ${state.pid}`
-          : `worktree has a foreign lock${state.reason ? `: ${state.reason}` : ""}`,
-      );
-    }
-    if (state.kind !== "none") {
-      await requireGit(record.repoRoot, ["worktree", "unlock", record.path]);
-    }
-    let snapshotRef = record.snapshotRef;
-    let snapshotError: string | undefined;
+    const force = params.force ?? false;
+    // Claim removal before any cleanliness or snapshot work so a live run lease
+    // rejects it and an admitted run cannot start once the claim is held. The
+    // opaque token makes the claim exclusive against competing removers; a caller
+    // that already claimed (removeIfLossless) passes its token to keep one claim.
+    const claimToken = params.claimToken ?? randomUUID();
+    claimWorktreeRemoval(this.env, { worktreeId: record.id, token: claimToken, force });
     try {
-      snapshotRef = await snapshotWorktree(record, params.reason);
-      updateRegistryWorktree(this.env, record.id, { snapshotRef });
-    } catch (error) {
-      snapshotError = error instanceof Error ? error.message : String(error);
-      if (!params.force) {
-        throw new WorktreeSnapshotError(snapshotError, { cause: error });
+      const state = await lockState(record);
+      if ((state.kind === "live" || state.kind === "foreign") && !force) {
+        throw new Error(
+          state.kind === "live"
+            ? `worktree is locked by live OpenClaw pid ${state.pid}`
+            : `worktree has a foreign lock${state.reason ? `: ${state.reason}` : ""}`,
+        );
       }
+      if (state.kind !== "none") {
+        await requireGit(record.repoRoot, ["worktree", "unlock", record.path]);
+      }
+      let snapshotRef = record.snapshotRef;
+      let snapshotError: string | undefined;
+      try {
+        snapshotRef = await snapshotWorktree(record, params.reason);
+        updateRegistryWorktree(this.env, record.id, { snapshotRef });
+      } catch (error) {
+        snapshotError = error instanceof Error ? error.message : String(error);
+        if (!force) {
+          throw new WorktreeSnapshotError(snapshotError, { cause: error });
+        }
+      }
+      const removed = await runGit(record.repoRoot, ["worktree", "remove", "--force", record.path]);
+      if (removed.code !== 0) {
+        throw commandError("git worktree remove", removed);
+      }
+      const branchDelete = await runGit(record.repoRoot, ["branch", "-D", record.branch]);
+      if (branchDelete.code !== 0) {
+        throw commandError("git branch -D", branchDelete);
+      }
+      await requireGit(record.repoRoot, ["worktree", "prune"]);
+      await removeEmptyParents(
+        path.dirname(record.path),
+        path.join(resolveStateDir(this.env), "worktrees"),
+      );
+      const removedAt = this.now();
+      updateRegistryWorktree(this.env, record.id, { removedAt, snapshotRef });
+      finalizeWorktreeRemoval(this.env, record.id);
+      return {
+        removed: true,
+        ...(snapshotRef ? { snapshotRef } : {}),
+        ...(snapshotError ? { snapshotError } : {}),
+      };
+    } catch (error) {
+      abortWorktreeRemoval(this.env, record.id, claimToken);
+      throw error;
     }
-    const removed = await runGit(record.repoRoot, ["worktree", "remove", "--force", record.path]);
-    if (removed.code !== 0) {
-      throw commandError("git worktree remove", removed);
-    }
-    const branchDelete = await runGit(record.repoRoot, ["branch", "-D", record.branch]);
-    if (branchDelete.code !== 0) {
-      throw commandError("git branch -D", branchDelete);
-    }
-    await requireGit(record.repoRoot, ["worktree", "prune"]);
-    await removeEmptyParents(
-      path.dirname(record.path),
-      path.join(resolveStateDir(this.env), "worktrees"),
-    );
-    const removedAt = this.now();
-    updateRegistryWorktree(this.env, record.id, { removedAt, snapshotRef });
-    return {
-      removed: true,
-      ...(snapshotRef ? { snapshotRef } : {}),
-      ...(snapshotError ? { snapshotError } : {}),
-    };
   }
 
   async restore(params: { id: string }): Promise<ManagedWorktreeRecord> {
@@ -709,6 +684,9 @@ export class ManagedWorktreeService {
     }
     const lastActiveAt = this.now();
     updateRegistryWorktree(this.env, params.id, { removedAt: undefined, lastActiveAt });
+    // Clear any lease rows or removal marker stranded by a crash between git removal
+    // and finalize so the restored worktree admits runs again.
+    finalizeWorktreeRemoval(this.env, params.id);
     const restored = { ...record, lastActiveAt };
     delete restored.removedAt;
     return restored;
@@ -716,19 +694,33 @@ export class ManagedWorktreeService {
 
   async removeIfLossless(id: string): Promise<boolean> {
     const record = this.requireLiveRecord(id);
-    const status = await requireGit(record.path, ["status", "--porcelain"]);
-    const unpushed = await requireGit(record.path, [
-      "log",
-      "HEAD",
-      "--not",
-      "--remotes",
-      "--oneline",
-    ]);
-    await this.release(id);
-    if (status || unpushed) {
+    const claimToken = randomUUID();
+    try {
+      claimWorktreeRemoval(this.env, { worktreeId: id, token: claimToken, force: false });
+    } catch {
+      // A live run lease or a competing remover holds the worktree; a lossless
+      // auto-cleanup must not race it.
       return false;
     }
-    await this.remove({ id, reason: "run-end" });
+    try {
+      const status = await requireGit(record.path, ["status", "--porcelain"]);
+      const unpushed = await requireGit(record.path, [
+        "log",
+        "HEAD",
+        "--not",
+        "--remotes",
+        "--oneline",
+      ]);
+      if (status || unpushed) {
+        abortWorktreeRemoval(this.env, id, claimToken);
+        return false;
+      }
+    } catch (error) {
+      abortWorktreeRemoval(this.env, id, claimToken);
+      throw error;
+    }
+    await this.release(id);
+    await this.remove({ id, reason: "run-end", claimToken });
     return true;
   }
 
@@ -768,6 +760,9 @@ export class ManagedWorktreeService {
             record.ownerId !== undefined &&
             params.isOwnerActive?.(record.ownerKind, record.ownerId) === true
           ) {
+            continue;
+          }
+          if (hasLiveWorktreeRunLease(this.env, record.id)) {
             continue;
           }
           const state = await lockState(record);

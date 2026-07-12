@@ -475,6 +475,108 @@ func TestValidateDocChunkTranslationRejectsInventedI18NPlaceholder(t *testing.T)
 	}
 }
 
+func TestValidateDocChunkTranslationRejectsHeadingLoss(t *testing.T) {
+	t.Parallel()
+
+	source := "## Detailed behavior and rationale\n\nExplanation.\n"
+	translated := "详细说明。\n"
+
+	err := validateDocChunkTranslation(source, translated)
+	if err == nil {
+		t.Fatal("expected heading loss to be rejected")
+	}
+	if !strings.Contains(err.Error(), "heading structure mismatch: source=[2] translated=[]") {
+		t.Fatalf("expected heading structure error, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationAcceptsTranslatedHeadingText(t *testing.T) {
+	t.Parallel()
+
+	source := "## Detailed behavior and rationale\n\nExplanation.\n"
+	translated := "## 详细行为与设计理由\n\n说明。\n"
+
+	if err := validateDocChunkTranslation(source, translated); err != nil {
+		t.Fatalf("expected translated heading text with the same level to pass, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationRejectsSetextHeadingLoss(t *testing.T) {
+	t.Parallel()
+
+	source := "Detailed behavior and rationale\n---------------------------------\n\nExplanation.\n"
+	translated := "详细说明。\n"
+
+	err := validateDocChunkTranslation(source, translated)
+	if err == nil {
+		t.Fatal("expected Setext heading loss to be rejected")
+	}
+	if !strings.Contains(err.Error(), "heading structure mismatch: source=[2] translated=[]") {
+		t.Fatalf("expected Setext heading structure error, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationAcceptsTranslatedSetextHeading(t *testing.T) {
+	t.Parallel()
+
+	source := "Detailed behavior and rationale\n---------------------------------\n\nExplanation.\n"
+	translated := "详细行为与设计理由\n------------------\n\n说明。\n"
+
+	if err := validateDocChunkTranslation(source, translated); err != nil {
+		t.Fatalf("expected translated Setext heading with the same level to pass, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationDoesNotTreatThematicBreakAsSetextHeading(t *testing.T) {
+	t.Parallel()
+
+	source := "- First item\n\n---\n\nParagraph.\n"
+	translated := "- 第一项\n\n---\n\n段落。\n"
+
+	if err := validateDocChunkTranslation(source, translated); err != nil {
+		t.Fatalf("expected thematic break to remain distinct from a Setext heading, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationRejectsNestedHeadingLoss(t *testing.T) {
+	t.Parallel()
+
+	source := "> ## Warning\n>\n> Keep this setting enabled.\n\n- ### Step\n  Run the command.\n"
+	translated := "> 警告\n>\n> 保持此设置启用。\n\n- 步骤\n  运行命令。\n"
+
+	err := validateDocChunkTranslation(source, translated)
+	if err == nil {
+		t.Fatal("expected nested heading loss to be rejected")
+	}
+	if !strings.Contains(err.Error(), "heading structure mismatch: source=[2 3] translated=[]") {
+		t.Fatalf("expected nested heading structure error, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationRejectsComponentNestedHeadingLoss(t *testing.T) {
+	t.Parallel()
+
+	source := "<Note>\n## Important\n\nKeep this setting enabled.\n</Note>\n"
+	translated := "<Note>\n重要\n\n保持此设置启用。\n</Note>\n"
+
+	err := validateDocChunkTranslation(source, translated)
+	if err == nil {
+		t.Fatal("expected component-nested heading loss to be rejected")
+	}
+	if !strings.Contains(err.Error(), "heading structure mismatch: source=[2] translated=[]") {
+		t.Fatalf("expected component-nested heading structure error, got %v", err)
+	}
+}
+
+func TestHeadingExtractionIgnoresComponentExamplesInsideCodeFences(t *testing.T) {
+	t.Parallel()
+
+	text := "```mdx\n<Note>\n## Example only\n</Note>\n```\n"
+	if levels := extractMarkdownHeadingLevels(text); len(levels) != 0 {
+		t.Fatalf("expected no headings from fenced component example, got %v", levels)
+	}
+}
+
 func TestValidateDocChunkTranslationRejectsTranscriptArtifact(t *testing.T) {
 	t.Parallel()
 

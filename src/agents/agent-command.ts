@@ -175,6 +175,7 @@ import { resolveCandidateThinkingLevel, resolveEffectiveAgentRuntime } from "./t
 import { resolveAgentTimeoutMs } from "./timeout.js";
 import { hasNonzeroUsage } from "./usage.js";
 import { ensureAgentWorkspace } from "./workspace.js";
+import { acquireWorktreeRunLease, resolveWorktreeIdForPath } from "./worktrees/run-lease.js";
 
 const log = createSubsystemLogger("agents/agent-command");
 
@@ -902,61 +903,77 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
   if (opts.thinkingOnce && !thinkOnce) {
     throw new Error(`Invalid one-shot thinking level. Use one of: ${thinkingLevelsHint}.`);
   }
-  await ensureAgentWorkspace({
-    dir: workspaceDirRaw,
-    ensureBootstrapFiles: !agentCfg?.skipBootstrap,
-    skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
-  });
-  const runId = opts.runId?.trim() || sessionId;
-  const { getAcpSessionManager } = await loadAcpManagerRuntime();
-  const acpManager = getAcpSessionManager();
-  const acpResolution = sessionKey
-    ? acpManager.resolveSession({
-        cfg,
-        sessionKey,
-      })
-    : null;
-  const body =
-    !isRawModelRun && acpResolution?.kind === "ready"
-      ? resolveAcpPromptBody(message, opts.internalEvents)
-      : prependInternalEventContext(message, opts.internalEvents);
-  const transcriptBody =
-    opts.transcriptMessage ?? resolveInternalEventTranscriptBody(message, opts.internalEvents);
-
-  return {
-    opts: commandOpts,
-    body,
-    transcriptBody,
-    cfg,
-    configuredThinkingCatalog,
-    normalizedSpawned,
-    agentCfg,
-    thinkOverride,
-    thinkOnce,
-    verboseOverride,
-    timeoutMs,
-    runTimeoutOverrideMs,
-    sessionId,
-    sessionKey,
+  // Lease the managed worktree before any workspace-dependent preparation so idle
+  // GC or a separate remover cannot delete the checkout while it is being set up;
+  // a session bound to a removed worktree fails closed here. Released on any prepare
+  // failure below and in the run's outer cleanup.
+  const resolvedCwd = cwd ? resolveUserPath(cwd) : undefined;
+  const worktreeId = await resolveWorktreeIdForPath({
     sessionEntry: sessionEntryRaw,
-    sessionStore,
-    storePath,
-    isNewSession,
-    persistedThinking,
-    persistedVerbose,
-    sessionAgentId,
-    outboundSession,
-    workspaceDir,
-    cwd: cwd ? resolveUserPath(cwd) : undefined,
-    agentDir,
-    pluginsEnabled,
-    manifestMetadataSnapshot,
-    modelManifestContext,
-    runId,
-    isSubagentLane,
-    acpManager,
-    acpResolution,
-  };
+    candidatePaths: [resolvedCwd ?? workspaceDir, workspaceDir],
+  });
+  const runLease = worktreeId ? await acquireWorktreeRunLease(worktreeId) : undefined;
+  try {
+    await ensureAgentWorkspace({
+      dir: workspaceDirRaw,
+      ensureBootstrapFiles: !agentCfg?.skipBootstrap,
+      skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
+    });
+    const runId = opts.runId?.trim() || sessionId;
+    const { getAcpSessionManager } = await loadAcpManagerRuntime();
+    const acpManager = getAcpSessionManager();
+    const acpResolution = sessionKey
+      ? acpManager.resolveSession({
+          cfg,
+          sessionKey,
+        })
+      : null;
+    const body =
+      !isRawModelRun && acpResolution?.kind === "ready"
+        ? resolveAcpPromptBody(message, opts.internalEvents)
+        : prependInternalEventContext(message, opts.internalEvents);
+    const transcriptBody =
+      opts.transcriptMessage ?? resolveInternalEventTranscriptBody(message, opts.internalEvents);
+
+    return {
+      opts: commandOpts,
+      body,
+      transcriptBody,
+      cfg,
+      configuredThinkingCatalog,
+      normalizedSpawned,
+      agentCfg,
+      thinkOverride,
+      thinkOnce,
+      verboseOverride,
+      timeoutMs,
+      runTimeoutOverrideMs,
+      sessionId,
+      sessionKey,
+      sessionEntry: sessionEntryRaw,
+      sessionStore,
+      storePath,
+      isNewSession,
+      persistedThinking,
+      persistedVerbose,
+      sessionAgentId,
+      outboundSession,
+      workspaceDir,
+      cwd: resolvedCwd,
+      agentDir,
+      pluginsEnabled,
+      manifestMetadataSnapshot,
+      modelManifestContext,
+      runId,
+      isSubagentLane,
+      acpManager,
+      acpResolution,
+      runLease,
+    };
+  } catch (error) {
+    await runLease?.release();
+    throw error;
+  }
 }
 
 async function agentCommandInternal(
@@ -1008,9 +1025,9 @@ async function agentCommandInternal(
     pluginsEnabled,
     manifestMetadataSnapshot,
     modelManifestContext,
+    runLease,
   } = prepared;
   let lifecycleGeneration = opts.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(runId);
-  assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
   const effectiveCwd = cwd ? resolveUserPath(cwd) : workspaceDir;
   let sessionEntry = prepared.sessionEntry;
   const sessionStateActor = classifySessionStateActor({
@@ -1026,7 +1043,6 @@ async function agentCommandInternal(
   let trackedRestartRecoveryDeliveryContext = false;
   let currentRunDeliveryContext: DeliveryContext | undefined;
   const preparedSessionId = sessionEntry?.sessionId;
-  const sessionStoreRuntime = storePath && sessionKey ? await loadSessionStoreRuntime() : undefined;
   const internalModelRunTargets =
     initialOpts.modelRun === true && suppressVisibleSessionEffects
       ? new Map<string, AgentRunSessionTarget>()
@@ -1043,49 +1059,56 @@ async function agentCommandInternal(
     );
   }
 
-  // Reset marks its mutation before interrupting work. An aborted run must not
-  // queue behind that mutation or reset would wait on the run holding the queue.
-  const sessionWorkAdmission = await beginSessionWorkAdmission({
-    scope: storePath ?? `agent:${sessionAgentId}`,
-    identities: [sessionKey, sessionId],
-    signal: opts.abortSignal,
-    onInterrupt: () => lifecycleAbortController.abort(createAgentRunRestartAbortError()),
-    assertAllowed: () => {
-      const currentEntry =
-        sessionStoreRuntime && storePath && sessionKey
-          ? sessionStoreRuntime.loadSessionEntry({
-              storePath,
-              sessionKey,
-              readConsistency: "latest",
-            })
-          : sessionEntry;
-      if (!currentEntry && preparedSessionId) {
-        throw new Error(`Session "${sessionKey ?? sessionId}" changed while starting work. Retry.`);
-      }
-      const matchesIntentionalRollover =
-        isNewSession && currentEntry?.sessionId === preparedSessionId;
-      if (currentEntry && currentEntry.sessionId !== sessionId && !matchesIntentionalRollover) {
-        throw new Error(`Session "${sessionKey ?? sessionId}" changed while starting work. Retry.`);
-      }
-      const archivedSessionError = resolveSessionWorkStartError(
-        sessionKey ?? sessionId,
-        currentEntry,
-      );
-      if (archivedSessionError) {
-        throw new Error(archivedSessionError);
-      }
-      sessionEntry = currentEntry;
-      if (sessionStore && sessionKey) {
-        if (currentEntry) {
-          sessionStore[sessionKey] = currentEntry;
-        } else {
-          delete sessionStore[sessionKey];
-        }
-      }
-    },
-  });
-
+  let sessionWorkAdmission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
   try {
+    assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+    const sessionStoreRuntime =
+      storePath && sessionKey ? await loadSessionStoreRuntime() : undefined;
+    // Reset marks its mutation before interrupting work. An aborted run must not
+    // queue behind that mutation or reset would wait on the run holding the queue.
+    sessionWorkAdmission = await beginSessionWorkAdmission({
+      scope: storePath ?? `agent:${sessionAgentId}`,
+      identities: [sessionKey, sessionId],
+      signal: opts.abortSignal,
+      onInterrupt: () => lifecycleAbortController.abort(createAgentRunRestartAbortError()),
+      assertAllowed: () => {
+        const currentEntry =
+          sessionStoreRuntime && storePath && sessionKey
+            ? sessionStoreRuntime.loadSessionEntry({
+                storePath,
+                sessionKey,
+                readConsistency: "latest",
+              })
+            : sessionEntry;
+        if (!currentEntry && preparedSessionId) {
+          throw new Error(
+            `Session "${sessionKey ?? sessionId}" changed while starting work. Retry.`,
+          );
+        }
+        const matchesIntentionalRollover =
+          isNewSession && currentEntry?.sessionId === preparedSessionId;
+        if (currentEntry && currentEntry.sessionId !== sessionId && !matchesIntentionalRollover) {
+          throw new Error(
+            `Session "${sessionKey ?? sessionId}" changed while starting work. Retry.`,
+          );
+        }
+        const archivedSessionError = resolveSessionWorkStartError(
+          sessionKey ?? sessionId,
+          currentEntry,
+        );
+        if (archivedSessionError) {
+          throw new Error(archivedSessionError);
+        }
+        sessionEntry = currentEntry;
+        if (sessionStore && sessionKey) {
+          if (currentEntry) {
+            sessionStore[sessionKey] = currentEntry;
+          } else {
+            delete sessionStore[sessionKey];
+          }
+        }
+      },
+    });
     return await sessionWorkAdmission.run(async () => {
       if (opts.deliver === true) {
         const sendPolicy = resolveSendPolicy({
@@ -2821,7 +2844,10 @@ async function agentCommandInternal(
       }
     });
   } finally {
-    sessionWorkAdmission.release();
+    if (runLease) {
+      await runLease.release();
+    }
+    sessionWorkAdmission?.release();
     if (internalModelRunTargets) {
       // Compaction may rotate a private session identity. Remove every owned
       // SQLite row only after delivery; transcript and trajectory rows cascade.

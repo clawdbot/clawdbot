@@ -383,7 +383,6 @@ type FallbackRunnerParams = {
 type EmbeddedAgentParams = {
   lifecycleGeneration?: string;
   onExecutionStarted?: (info?: { lifecycleGeneration?: string }) => void;
-  onAssistantMessageStart?: () => Promise<void> | void;
   onExecutionPhase?: (info: {
     phase:
       | "runner_entered"

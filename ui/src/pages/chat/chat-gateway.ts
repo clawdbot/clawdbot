@@ -1,6 +1,6 @@
 import { isAssistantHeartbeatAckForDisplay } from "../../lib/chat/heartbeat-display.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
-import { parseChatSideResult } from "../../lib/chat/side-result.ts";
+import { parseChatSideResult, type ChatSideResult } from "../../lib/chat/side-result.ts";
 // Control UI page module reconciles Chat Gateway events into Chat state.
 import { isUiGlobalSessionKey, resolveUiDefaultAgentId } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
@@ -291,7 +291,7 @@ export function handleChatGatewayEvent(state: ChatState, payload?: ChatEventPayl
     typeof payload?.runId === "string" &&
     state.chatSideResultPending?.runId === payload.runId
   ) {
-    state.chatSideResult = {
+    appendChatSideChatTurn(state, {
       kind: "btw",
       runId: payload.runId,
       sessionKey: payload.sessionKey ?? state.sessionKey,
@@ -299,7 +299,7 @@ export function handleChatGatewayEvent(state: ChatState, payload?: ChatEventPayl
       text: extractBtwFailureText(payload) ?? "The side question ended without a result.",
       isError: true,
       ts: Date.now(),
-    };
+    });
     state.chatSideResultPending = null;
     return null;
   }
@@ -342,15 +342,25 @@ export function handleChatSideResultGatewayEvent(state: ChatState, payload: unkn
   // replace this pane's live pending card — displaying it would also let the
   // dismiss button retire the hidden pending run. Record it so its trailing
   // terminal chat event is still swallowed here.
-  const pendingRunId = state.chatSideResultPending?.runId;
-  if (pendingRunId && pendingRunId !== sideResult.runId) {
+  const pending = state.chatSideResultPending;
+  if (pending?.runId && pending.runId !== sideResult.runId) {
     state.chatSideResultTerminalRuns?.add(sideResult.runId);
     return true;
   }
-  state.chatSideResult = sideResult;
+  // Follow-up commands embed prior-turn context; the server echoes that whole
+  // blob as the question. The correlated pending record holds the user's
+  // typed question, so prefer it for display.
+  const question = pending?.runId === sideResult.runId ? pending.question : sideResult.question;
+  appendChatSideChatTurn(state, { ...sideResult, question });
   state.chatSideResultPending = null;
   state.chatSideResultTerminalRuns?.add(sideResult.runId);
   return true;
+}
+
+/** An arriving answer appends a turn and reopens a panel hidden via X/Escape. */
+function appendChatSideChatTurn(state: ChatState, turn: ChatSideResult) {
+  state.chatSideChatTurns = [...(state.chatSideChatTurns ?? []), turn];
+  state.chatSideChatHidden = false;
 }
 
 function extractBtwFailureText(payload: ChatEventPayload): string | null {

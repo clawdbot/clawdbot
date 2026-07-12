@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildMoreDetailsSideCommand,
   buildSideChatComposerDraft,
+  buildSideChatFollowUpCommand,
   CHAT_SELECTION_SNIPPET_MAX_CHARS,
   collapseChatSelectionSnippet,
   combineSideChatComposerDraft,
@@ -67,10 +68,52 @@ describe("combineSideChatComposerDraft", () => {
   });
 });
 
+describe("buildSideChatFollowUpCommand", () => {
+  it("sends a plain /btw when there is no previous turn", () => {
+    expect(buildSideChatFollowUpCommand(null, "what about tests?")).toEqual({
+      command: "/btw what about tests?",
+      question: "what about tests?",
+    });
+  });
+
+  it("carries the previous side question and answer as context", () => {
+    expect(
+      buildSideChatFollowUpCommand(
+        { question: "Is cert A valid?", answer: "No,\nit expired." },
+        "when did it expire?",
+      ),
+    ).toEqual({
+      command:
+        '/btw Context — the previous side question "Is cert A valid?" was answered: "No, it expired.". Follow-up question: when did it expire?',
+      question: "when did it expire?",
+    });
+  });
+
+  it("collapses multiline questions and rejects empty ones", () => {
+    expect(buildSideChatFollowUpCommand(null, "first\nsecond")?.question).toBe("first second");
+    expect(buildSideChatFollowUpCommand(null, "  \n ")).toBeNull();
+  });
+
+  it("caps overlong previous turns", () => {
+    const followUp = buildSideChatFollowUpCommand(
+      { question: "q".repeat(5000), answer: "x".repeat(5000) },
+      "why?",
+    );
+    expect(followUp).not.toBeNull();
+    expect(followUp!.command.length).toBeLessThan(2 * CHAT_SELECTION_SNIPPET_MAX_CHARS + 200);
+  });
+});
+
 describe("extractSideQuestionDisplayText", () => {
   it("drops the /btw and /side prefixes", () => {
     expect(extractSideQuestionDisplayText("/btw what changed?")).toBe("what changed?");
     expect(extractSideQuestionDisplayText("/side: what changed?")).toBe("what changed?");
     expect(extractSideQuestionDisplayText("/btw")).toBe("");
+  });
+
+  it("never truncates questions that merely resemble follow-up context", () => {
+    expect(
+      extractSideQuestionDisplayText("/btw Why does this say Follow-up question: pending?"),
+    ).toBe("Why does this say Follow-up question: pending?");
   });
 });

@@ -20,7 +20,7 @@ const VIEWPORTS = [
   [1440, 900],
 ] as const;
 const TOUCH_TARGET_MIN_PX = 43.5;
-const LONG_SIDE_RESULT_BODY = Array.from(
+const LONG_SIDE_CHAT_BODY = Array.from(
   { length: 80 },
   (_, index) => `<p>Line ${index + 1}: keep the complete side result readable.</p>`,
 ).join("");
@@ -47,7 +47,7 @@ type ControlRect = {
 type ChatFixtureOptions = {
   composerAttachment?: boolean;
   direct?: boolean;
-  sideResultBody?: string;
+  sideChatBody?: string;
   singleAgent?: boolean;
   slashMenu?: boolean;
 };
@@ -291,14 +291,30 @@ function chatHtml(opts: ChatFixtureOptions = {}) {
                 </div>
               </div>
               ${
-                opts.sideResultBody !== undefined
-                  ? `<section class="chat-side-result" role="status" aria-live="polite">
-                      <div class="chat-side-result__header">
-                        <div class="chat-side-result__label-row"><span class="chat-side-result__label">BTW</span><span class="chat-side-result__meta">Not saved to chat history</span></div>
-                        <button class="btn chat-side-result__dismiss">${iconSvg()}</button>
+                opts.sideChatBody !== undefined
+                  ? `<section class="chat-side-chat" role="dialog" aria-label="Side chat">
+                      <header class="chat-side-chat__header">
+                        <div class="chat-side-chat__heading">
+                          <h2 class="chat-side-chat__title">Side chat</h2>
+                          <span class="chat-side-chat__meta">Not saved to chat history</span>
+                        </div>
+                        <div class="chat-side-chat__actions">
+                          <button class="btn btn--ghost btn--icon chat-icon-btn">${iconSvg()}</button>
+                          <button class="btn btn--ghost btn--icon chat-icon-btn">${iconSvg()}</button>
+                        </div>
+                      </header>
+                      <div class="chat-side-chat__scroll">
+                        <article class="chat-side-chat__turn">
+                          <div class="chat-side-chat__question">What should I check next?</div>
+                          <div class="chat-side-chat__answer">${opts.sideChatBody}</div>
+                        </article>
                       </div>
-                      <div class="chat-side-result__question">What should I check next?</div>
-                      <div class="chat-side-result__body">${opts.sideResultBody}</div>
+                      <footer class="chat-side-chat__composer">
+                        <div class="chat-side-chat__prompt">
+                          <input class="chat-side-chat__input" type="text" placeholder="Follow up…" />
+                          <button class="btn btn--ghost btn--icon chat-icon-btn chat-side-chat__send">${iconSvg()}</button>
+                        </div>
+                      </footer>
                     </section>`
                   : ""
               }
@@ -1930,13 +1946,23 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     [1024, 768],
     [1366, 900],
   ] as const)(
-    "scrolls long BTW side result bodies instead of expanding the card at %sx%s",
+    "scrolls long side-chat conversations instead of expanding the panel at %sx%s",
     async (width, height) => {
       const page = await openFixture(width, height, {
-        sideResultBody: LONG_SIDE_RESULT_BODY,
+        sideChatBody: LONG_SIDE_CHAT_BODY,
       });
       try {
-        const body = await page.locator(".chat-side-result__body").evaluate((node) => {
+        const panel = await page.locator(".chat-side-chat").evaluate((node) => {
+          const element = node as HTMLElement;
+          return {
+            clientHeight: element.clientHeight,
+            position: getComputedStyle(element).position,
+          };
+        });
+        expect(panel.position).toBe("absolute");
+        expect(panel.clientHeight).toBeLessThanOrEqual(560);
+
+        const body = await page.locator(".chat-side-chat__scroll").evaluate((node) => {
           const style = getComputedStyle(node as HTMLElement);
           return {
             overflowY: style.overflowY,
@@ -1946,9 +1972,8 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         });
         expect(body.overflowY).toBe("auto");
         expect(body.clientHeight).toBeLessThan(body.scrollHeight);
-        expect(body.clientHeight).toBeLessThanOrEqual(480);
 
-        const scrollTop = await page.locator(".chat-side-result__body").evaluate((node) => {
+        const scrollTop = await page.locator(".chat-side-chat__scroll").evaluate((node) => {
           const element = node as HTMLElement;
           element.scrollTop = element.scrollHeight;
           return element.scrollTop;
@@ -1960,31 +1985,34 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     },
   );
 
-  it("renders BTW side results as a mobile overlay without horizontal overflow", async () => {
+  it("renders the side chat as a mobile overlay without horizontal overflow", async () => {
     const page = await openFixture(320, 568, {
-      sideResultBody: LONG_SIDE_RESULT_BODY,
+      sideChatBody: LONG_SIDE_CHAT_BODY,
     });
     try {
       await expectNoHorizontalOverflow(page);
-      const card = await page.locator(".chat-side-result").evaluate((node) => {
+      const panel = await page.locator(".chat-side-chat").evaluate((node) => {
         const element = node as HTMLElement;
-        const style = getComputedStyle(element);
         return {
           clientHeight: element.clientHeight,
-          overflowY: style.overflowY,
-          position: style.position,
+          position: getComputedStyle(element).position,
+        };
+      });
+      expect(panel.position).toBe("fixed");
+      expect(panel.clientHeight).toBeLessThanOrEqual(380);
+
+      const scroll = await page.locator(".chat-side-chat__scroll").evaluate((node) => {
+        const element = node as HTMLElement;
+        return {
+          overflowY: getComputedStyle(element).overflowY,
+          clientHeight: element.clientHeight,
           scrollHeight: element.scrollHeight,
         };
       });
-      const bodyOverflowY = await page
-        .locator(".chat-side-result__body")
-        .evaluate((node) => getComputedStyle(node).overflowY);
-      expect(card.position).toBe("fixed");
-      expect(card.overflowY).toBe("auto");
-      expect(card.clientHeight).toBeLessThan(card.scrollHeight);
-      expect(bodyOverflowY).toBe("visible");
+      expect(scroll.overflowY).toBe("auto");
+      expect(scroll.clientHeight).toBeLessThan(scroll.scrollHeight);
 
-      const scrollTop = await page.locator(".chat-side-result").evaluate((node) => {
+      const scrollTop = await page.locator(".chat-side-chat__scroll").evaluate((node) => {
         const element = node as HTMLElement;
         element.scrollTop = element.scrollHeight;
         return element.scrollTop;

@@ -12,12 +12,17 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Android Application singleton that owns process-wide secure prefs and lazy NodeRuntime startup.
  */
 class NodeApp : Application() {
   val prefs: SecurePrefs by lazy { SecurePrefs(this) }
+
+  // System share senders can create overlapping Activity tasks; keep one bounded process queue.
+  internal val chatShareDraftSeq = AtomicLong()
+  internal val chatShareDraftQueue = ChatShareDraftQueue()
 
   private val runtimeScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
   private val runtimeLock = Any()

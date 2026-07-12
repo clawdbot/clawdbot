@@ -94,6 +94,38 @@ func extractSegments(body, relPath string) ([]Segment, error) {
 	return filtered, nil
 }
 
+func extractMarkdownHeadingLevels(body string) []int {
+	source := []byte(stripDocComponentTagsForHeadingParse(body))
+	doc := goldmark.New(goldmark.WithExtensions(extension.GFM)).Parser().Parse(text.NewReader(source))
+	levels := []int{}
+	_ = ast.Walk(doc, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		heading, ok := node.(*ast.Heading)
+		if ok {
+			levels = append(levels, heading.Level)
+		}
+		return ast.WalkContinue, nil
+	})
+	return levels
+}
+
+func stripDocComponentTagsForHeadingParse(body string) string {
+	lines := strings.Split(body, "\n")
+	fenceDelimiter := ""
+	for index, line := range lines {
+		wasInFence := fenceDelimiter != ""
+		var toggled bool
+		fenceDelimiter, toggled = updateFenceDelimiter(fenceDelimiter, line)
+		if wasInFence || toggled || fenceDelimiter != "" {
+			continue
+		}
+		lines[index] = docsComponentTagRE.ReplaceAllString(line, "")
+	}
+	return strings.Join(lines, "\n")
+}
+
 func blockParent(n ast.Node) ast.Node {
 	for node := n.Parent(); node != nil; node = node.Parent() {
 		if isTranslatableBlock(node) {

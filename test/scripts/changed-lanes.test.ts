@@ -1,6 +1,6 @@
 // Changed Lanes tests cover changed lanes script behavior.
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -10,6 +10,7 @@ import {
   isLiveDockerPackageScriptOnlyChange,
   isPackageScriptOnlyChange,
   listChangedPathsFromGit,
+  listStagedChangedPaths,
 } from "../../scripts/changed-lanes.mjs";
 import {
   buildChangedCheckCrabboxArgs,
@@ -31,6 +32,7 @@ import {
   shouldRunTestTempCreationReport,
   createShrinkwrapGuardCommand,
 } from "../../scripts/check-changed.mjs";
+import { resolveOxfmtInvocation } from "../../scripts/format-docs.mjs";
 import { isDirectRunPath } from "../../scripts/lib/direct-run.mjs";
 import { cleanupTempDirs, makeTempRepoRoot } from "../helpers/temp-repo.js";
 
@@ -86,6 +88,30 @@ function writeRepoFile(repoDir: string, filePath: string, contents: string): voi
   const absolutePath = path.join(repoDir, filePath);
   mkdirSync(path.dirname(absolutePath), { recursive: true });
   writeFileSync(absolutePath, contents, "utf8");
+}
+
+// Executes the exact "format changed files" plan command with the repo-pinned oxfmt,
+// reconstructing `pnpm format:check <plan args>`. Guards the runtime verdict, not just
+// plan construction: a misformatted added file must fail, deleted paths must not.
+function runChangedFormatLaneWithRepoOxfmt(cwd: string, changedPaths: string[]) {
+  const plan = createChangedCheckPlan(detectChangedLanes(changedPaths));
+  const formatCommand = plan.commands.find((command) => command.name === "format changed files");
+  expect(formatCommand?.args[0]).toBe("format:check");
+  const packageJson = JSON.parse(readFileSync(path.join(repoRoot, "package.json"), "utf8")) as {
+    scripts: Record<string, string>;
+  };
+  const [scriptBin, ...scriptArgs] = packageJson.scripts["format:check"].split(" ");
+  expect(scriptBin).toBe("oxfmt");
+  const invocation = resolveOxfmtInvocation(
+    [...scriptArgs, ...(formatCommand?.args.slice(1) ?? [])],
+    { repoRoot },
+  );
+  return spawnSync(invocation.command, invocation.args, {
+    cwd,
+    encoding: "utf8",
+    shell: invocation.shell,
+    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+  });
 }
 
 function createSyntheticMergeRepo(prefix: string): { dir: string; staleBase: string } {
@@ -454,6 +480,74 @@ describe("scripts/changed-lanes", () => {
         "src/untracked.test.ts",
       ],
     });
+  });
+
+  it("includes staged added, modified, and deleted files in the changed format check", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-lanes-staged-format-");
+    git(dir, ["init", "-q", "--initial-branch=main"]);
+    writeRepoFile(dir, "src/modified.ts", "export const modified = { value: 1 };\n");
+    writeRepoFile(dir, "src/removed.ts", "export const removed = { value: 1 };\n");
+    git(dir, ["add", "."]);
+    git(dir, [
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "user.name=Test User",
+      "commit",
+      "-q",
+      "-m",
+      "initial",
+    ]);
+    writeRepoFile(dir, "src/added.test.ts", "export const added={value:1};\n");
+    writeRepoFile(dir, "src/modified.ts", "export const modified={value:2};\n");
+    git(dir, ["add", "src/added.test.ts", "src/modified.ts"]);
+    git(dir, ["rm", "-q", "src/removed.ts"]);
+
+    const paths = listStagedChangedPaths(dir);
+    const plan = createChangedCheckPlan(detectChangedLanes(paths));
+
+    expect(paths).toEqual(["src/added.test.ts", "src/modified.ts", "src/removed.ts"]);
+    expect(plan.commands.find((command) => command.name === "format changed files")).toEqual({
+      name: "format changed files",
+      args: [
+        "format:check",
+        "--no-error-on-unmatched-pattern",
+        "--",
+        "src/added.test.ts",
+        "src/modified.ts",
+        "src/removed.ts",
+      ],
+    });
+  });
+
+  it("fails the changed format check on a misformatted added file and passes once formatted", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-format-added-");
+    writeRepoFile(dir, "src/added.test.ts", "export const added={value:1};\n");
+
+    const dirty = runChangedFormatLaneWithRepoOxfmt(dir, ["src/added.test.ts"]);
+    expect(dirty.status).not.toBe(0);
+    expect(`${dirty.stdout}${dirty.stderr}`).toContain("added.test.ts");
+
+    writeRepoFile(dir, "src/added.test.ts", "export const added = { value: 1 };\n");
+    const formatted = runChangedFormatLaneWithRepoOxfmt(dir, ["src/added.test.ts"]);
+    expect(formatted.status).toBe(0);
+  });
+
+  it("fails the changed format check on a misformatted modified file", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-format-modified-");
+    writeRepoFile(dir, "src/modified.ts", "export const modified={value:2};\n");
+
+    const result = runChangedFormatLaneWithRepoOxfmt(dir, ["src/modified.ts"]);
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}${result.stderr}`).toContain("modified.ts");
+  });
+
+  it("does not fail the changed format check for deleted paths", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-format-deleted-");
+    writeRepoFile(dir, "src/kept.ts", "export const kept = { value: 1 };\n");
+
+    const result = runChangedFormatLaneWithRepoOxfmt(dir, ["src/deleted.ts", "src/kept.ts"]);
+    expect(result.status).toBe(0);
   });
 
   it("uses the merge commit first parent instead of a stale PR payload base", () => {

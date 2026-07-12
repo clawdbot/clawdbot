@@ -3,12 +3,15 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import {
   codexChannelLoginRuntime,
   type ModelsAuthLoginFlowOptions,
 } from "../../plugin-sdk/provider-auth-login-flow-runtime.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import type { ReplyPayload } from "../types.js";
+import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 
 const PRIVATE_CHAT_TYPES = new Set(["direct", "dm", "im", "private"]);
@@ -18,6 +21,10 @@ const WEB_LOGIN_SURFACES = new Set(["control", "control-ui", "dashboard", "inter
 const activeCodexLoginFlows = new Map<string, { expiresAt: number }>();
 
 type RunLoginFlow = (opts: ModelsAuthLoginFlowOptions) => Promise<unknown>;
+
+const LOGIN_COMPLETE_MESSAGE = "Codex login complete. Try your request again now.";
+const LOGIN_SESSION_SWITCH_FAILED_MESSAGE =
+  "Codex login completed, but this session could not switch to the newly authenticated profile. Retry `/login codex`, or select the profile manually.";
 
 function parseLoginCommand(commandBodyNormalized: string): { providerInput: string } | null {
   const match = commandBodyNormalized.trim().match(/^\/login(?:\s+(.+))?$/u);
@@ -140,11 +147,95 @@ async function emitLoginMessage(params: HandleCommandsParams, text: string): Pro
   throw new Error("Channel /login requires immediate block delivery for device codes.");
 }
 
+async function switchLoginSessionProfile(params: {
+  commandParams: HandleCommandsParams;
+  nextProfileId: string | undefined;
+}): Promise<"unchanged" | "updated" | "failed"> {
+  const { commandParams, nextProfileId } = params;
+  const currentEntry = commandParams.sessionEntry;
+  if (!currentEntry || !nextProfileId) {
+    return "unchanged";
+  }
+  const needsUpdate =
+    currentEntry.authProfileOverride !== nextProfileId ||
+    currentEntry.authProfileOverrideSource !== "user" ||
+    currentEntry.authProfileOverrideCompactionCount !== undefined;
+
+  const sessionStore = commandParams.sessionStore;
+  if (!sessionStore) {
+    return "failed";
+  }
+  const liveEntry = sessionStore[commandParams.sessionKey];
+  const matchesLoginSnapshot = (entry: SessionEntry): boolean =>
+    entry.sessionId === currentEntry.sessionId &&
+    entry.authProfileOverride === currentEntry.authProfileOverride &&
+    entry.authProfileOverrideSource === currentEntry.authProfileOverrideSource &&
+    entry.authProfileOverrideCompactionCount === currentEntry.authProfileOverrideCompactionCount;
+  if (!liveEntry || !matchesLoginSnapshot(liveEntry)) {
+    return "failed";
+  }
+
+  const nextEntry = {
+    ...liveEntry,
+    authProfileOverride: nextProfileId,
+    authProfileOverrideSource: "user" as const,
+  };
+  delete nextEntry.authProfileOverrideCompactionCount;
+  try {
+    let persistedEntry: SessionEntry = nextEntry;
+    if (commandParams.storePath) {
+      let snapshotMatched = false;
+      const persisted = await updateSessionEntry(
+        {
+          storePath: commandParams.storePath,
+          sessionKey: commandParams.sessionKey,
+        },
+        (entry) => {
+          if (!matchesLoginSnapshot(entry)) {
+            return null;
+          }
+          snapshotMatched = true;
+          return needsUpdate
+            ? {
+                authProfileOverride: nextProfileId,
+                authProfileOverrideSource: "user",
+                authProfileOverrideCompactionCount: undefined,
+              }
+            : null;
+        },
+        {
+          requireWriteSuccess: true,
+          skipMaintenance: true,
+        },
+      );
+      if (
+        !snapshotMatched ||
+        !persisted ||
+        persisted.authProfileOverride !== nextProfileId ||
+        persisted.authProfileOverrideSource !== "user" ||
+        persisted.authProfileOverrideCompactionCount !== undefined
+      ) {
+        return "failed";
+      }
+      persistedEntry = persisted;
+    }
+    commandParams.sessionEntry = persistedEntry;
+    sessionStore[commandParams.sessionKey] = persistedEntry;
+    if (needsUpdate) {
+      markCommandSessionMetadataChanged(commandParams);
+      return "updated";
+    }
+    return "unchanged";
+  } catch {
+    // Credential persistence already succeeded, so report partial success.
+  }
+  return "failed";
+}
+
 async function runChannelCodexLogin(params: {
   commandParams: HandleCommandsParams;
   provider: string;
   agentId: string;
-  profileId?: string;
   runLoginFlow?: RunLoginFlow;
   runtime?: RuntimeEnv;
 }): Promise<ReplyPayload> {
@@ -166,17 +257,29 @@ async function runChannelCodexLogin(params: {
   }
 
   try {
-    await codexChannelLoginRuntime.runDeviceLoginFlow({
+    const loginResult = await codexChannelLoginRuntime.runDeviceLoginFlow({
       provider: params.provider,
       agentId: params.agentId,
-      ...(params.profileId ? { profileId: params.profileId } : {}),
       config: params.commandParams.cfg,
       runtime: params.runtime ?? defaultRuntime,
       sendMessage: async (text) => await emitLoginMessage(params.commandParams, text),
       unsupportedPromptMessage: "Channel /login supports only fixed Codex device-code auth.",
       runLoginFlow: params.runLoginFlow,
     });
-    return { text: "Codex login complete. Try your request again now." };
+    const nextProfileId = loginResult.profiles.find(
+      (profile) => profile.provider === params.provider,
+    )?.profileId;
+    if (!nextProfileId) {
+      return { text: LOGIN_SESSION_SWITCH_FAILED_MESSAGE };
+    }
+    const switchResult = await switchLoginSessionProfile({
+      commandParams: params.commandParams,
+      nextProfileId,
+    });
+    return {
+      text:
+        switchResult === "failed" ? LOGIN_SESSION_SWITCH_FAILED_MESSAGE : LOGIN_COMPLETE_MESSAGE,
+    };
   } catch {
     return { text: "Codex login did not complete. Send `/login codex` to request a new code." };
   } finally {
@@ -236,10 +339,6 @@ export const handleLoginCommand: CommandHandler = async (params, allowTextComman
     commandParams: params,
     provider,
     agentId,
-    profileId: codexChannelLoginRuntime.resolveProviderScopedProfileId(
-      params.sessionEntry?.authProfileOverride,
-      provider,
-    ),
   });
   return { shouldContinue: false, reply };
 };

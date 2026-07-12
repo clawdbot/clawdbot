@@ -61,6 +61,15 @@ export const WizardStepOptionSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const WizardDeviceCodeSchema = Type.Object(
+  {
+    code: NonEmptyString,
+    expiresInMinutes: Type.Optional(Type.Integer({ minimum: 1, maximum: 1440 })),
+    message: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
 /** UI contract for one wizard step rendered by gateway clients. */
 export const WizardStepSchema = Type.Object(
   {
@@ -83,6 +92,7 @@ export const WizardStepSchema = Type.Object(
     sensitive: Type.Optional(Type.Boolean()),
     executor: Type.Optional(Type.Union([Type.Literal("gateway"), Type.Literal("client")])),
     externalUrl: Type.Optional(Type.String()),
+    deviceCode: Type.Optional(WizardDeviceCodeSchema),
   },
   { additionalProperties: false },
 );

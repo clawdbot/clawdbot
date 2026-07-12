@@ -588,6 +588,23 @@ struct OnboardingAISetupTests {
         #expect(OnboardingProviderIcon.resourceURL(for: "gemini-cli") == nil)
     }
 
+    @Test func `device code presentation decodes structured wizard metadata`() throws {
+        let presentation = try #require(parseWizardDeviceCode([
+            "code": AnyCodable("ABCD-1234"),
+            "expiresInMinutes": AnyCodable(15),
+            "message": AnyCodable("Enter this code in your browser."),
+        ]))
+
+        #expect(presentation.code == "ABCD-1234")
+        #expect(presentation.expiresInMinutes == 15)
+        #expect(presentation.message == "Enter this code in your browser.")
+        #expect(parseWizardDeviceCode(["code": AnyCodable("")]) == nil)
+        #expect(parseWizardDeviceCode([
+            "code": AnyCodable("ABCD-1234"),
+            "expiresInMinutes": AnyCodable(1e100),
+        ])?.expiresInMinutes == nil)
+    }
+
     @Test func `provider auth transport outlives device code windows`() {
         #expect(OnboardingAISetupModel.providerAuthRequestTimeoutMs > 15 * 60 * 1000)
     }

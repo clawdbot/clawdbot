@@ -1875,8 +1875,8 @@ describe("ci workflow guards", () => {
       "${{ needs.preflight.outputs.compatibility_target }}",
     );
     expect(uiTest.run).toContain('if [[ "$COMPATIBILITY_TARGET" == "true" ]]');
-    expect(uiTest.run).toContain("pnpm --dir ui test --retry=1 --testTimeout=10000");
-    expect(uiTest.run).not.toContain("pnpm --dir ui test -- --retry");
+    expect(uiTest.run).toContain("pnpm --dir ui test --testTimeout=10000");
+    expect(uiTest.run).not.toContain("--retry");
     expect(uiTest.run).toContain("pnpm --dir ui test");
   });
 

@@ -81,6 +81,32 @@ describe("WizardSession", () => {
     expect((await session.next()).status).toBe("done");
   });
 
+  test("carries device-code presentation without parsing provider prose", async () => {
+    const session = new WizardSession(async (prompter) => {
+      await prompter.openUrl?.("https://provider.example/device");
+      await prompter.deviceCode?.({
+        title: "Provider sign-in",
+        code: "ABCD-1234",
+        expiresInMinutes: 15,
+        message: "Enter this one-time code in your browser.",
+      });
+    });
+
+    const first = await session.next();
+    expect(first.step).toMatchObject({
+      type: "note",
+      title: "Provider sign-in",
+      message:
+        "Enter this one-time code in your browser.\nCode: ABCD-1234\nCode expires in 15 minutes. Never share it.",
+      externalUrl: "https://provider.example/device",
+      deviceCode: {
+        code: "ABCD-1234",
+        expiresInMinutes: 15,
+        message: "Enter this one-time code in your browser.",
+      },
+    });
+  });
+
   test("invalid answers throw", async () => {
     const session = noteRunner();
     const first = await session.next();

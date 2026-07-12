@@ -16,19 +16,21 @@ Linux-compatible Gateway runtime.
 ## Recommended: Windows Hub
 
 Windows Hub is the native WinUI companion app for Windows 10 20H2+ and
-Windows 11. It installs without administrator privileges and ships as signed
-x64 and ARM64 installers on OpenClaw releases.
+Windows 11. It installs without administrator privileges and ships signed x64
+and ARM64 installers from its own release page.
 
-Download the latest stable installer from the
-[OpenClaw releases page](https://github.com/openclaw/openclaw/releases) or
-directly via `releases/latest/download`:
+Windows Hub publishes independently from the OpenClaw CLI and Gateway. Download
+the latest stable Hub installer from the
+[Windows Hub releases page](https://github.com/openclaw/openclaw-windows-node/releases/latest)
+or directly via `releases/latest/download`:
 
-- [OpenClawCompanion-Setup-x64.exe](https://github.com/openclaw/openclaw/releases/latest/download/OpenClawCompanion-Setup-x64.exe)
-- [OpenClawCompanion-Setup-arm64.exe](https://github.com/openclaw/openclaw/releases/latest/download/OpenClawCompanion-Setup-arm64.exe)
-- [Checksums](https://github.com/openclaw/openclaw/releases/latest/download/OpenClawCompanion-SHA256SUMS.txt)
+- [OpenClawCompanion-Setup-x64.exe](https://github.com/openclaw/openclaw-windows-node/releases/latest/download/OpenClawCompanion-Setup-x64.exe)
+- [OpenClawCompanion-Setup-arm64.exe](https://github.com/openclaw/openclaw-windows-node/releases/latest/download/OpenClawCompanion-Setup-arm64.exe)
 
-If a link above 404s, visit the [releases page](https://github.com/openclaw/openclaw/releases)
-and look for `OpenClawCompanion-Setup-*` assets on the latest release.
+If a link above 404s, visit the [Windows Hub releases page](https://github.com/openclaw/openclaw-windows-node/releases)
+and open the newest stable Windows Hub release. Regular OpenClaw stable releases
+also mirror a pinned, release-validated Windows Hub build; that mirror can lag a
+newer standalone Hub release.
 
 After install, launch **OpenClaw Companion** from the Start menu or system
 tray. The installer also adds shortcuts for Gateway Setup, Chat, Settings,

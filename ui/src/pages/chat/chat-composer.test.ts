@@ -11,17 +11,12 @@ import {
   renderCompactionIndicator,
   renderContextNotice,
   renderFallbackIndicator,
-  renderSideResult,
   resetContextNoticeThemeCacheForTest,
   type ChatRunControlsProps,
 } from "./components/chat-composer.ts";
 
 vi.mock("../../components/icons.ts", () => ({
   icons: {},
-}));
-
-vi.mock("../../components/markdown.ts", () => ({
-  toSanitizedMarkdownHtml: (value: string) => value,
 }));
 
 function createProps(overrides: Partial<ChatRunControlsProps> = {}): ChatRunControlsProps {
@@ -768,114 +763,5 @@ describe("context notice", () => {
       "Session context usage: ~190k of 200k (~95%)",
     );
     expect(container.querySelector(".context-ring__action")).toBeNull();
-  });
-});
-
-describe("side result render", () => {
-  it("renders, dismisses, and styles BTW side results outside transcript history", () => {
-    const container = document.createElement("div");
-    const onDismissSideResult = vi.fn();
-
-    render(
-      renderSideResult(
-        {
-          kind: "btw",
-          runId: "btw-run-1",
-          sessionKey: "main",
-          question: "what changed?",
-          text: "The web UI now renders **BTW** separately.",
-          isError: false,
-          ts: 2,
-        },
-        null,
-        onDismissSideResult,
-      ),
-      container,
-    );
-
-    const sideResult = container.querySelector<HTMLElement>(".chat-side-result");
-    expect(sideResult).toBeInstanceOf(HTMLElement);
-    expect([...sideResult!.classList]).toEqual(["chat-side-result"]);
-    expect(sideResult!.getAttribute("aria-label")).toBe("BTW side result");
-    expect(sideResult!.querySelector(".chat-side-result__label")?.textContent).toBe("BTW");
-    expect(sideResult!.querySelector(".chat-side-result__meta")?.textContent).toBe(
-      "Not saved to chat history",
-    );
-    expect(sideResult!.querySelector(".chat-side-result__question")?.textContent).toBe(
-      "what changed?",
-    );
-    expect(
-      sideResult!
-        .querySelector(".chat-side-result__body")
-        ?.textContent?.trim()
-        .replaceAll("**", ""),
-    ).toBe("The web UI now renders BTW separately.");
-
-    const button = container.querySelector<HTMLButtonElement>(".chat-side-result__dismiss");
-    expect(button).toBeInstanceOf(HTMLButtonElement);
-    if (!(button instanceof HTMLButtonElement)) {
-      throw new Error("Expected side result dismiss button");
-    }
-    button.click();
-    expect(onDismissSideResult).toHaveBeenCalledTimes(1);
-
-    render(
-      renderSideResult({
-        kind: "btw",
-        runId: "btw-run-3",
-        sessionKey: "main",
-        question: "what failed?",
-        text: "The side question could not be answered.",
-        isError: true,
-        ts: 4,
-      }),
-      container,
-    );
-
-    const errorResult = container.querySelector<HTMLElement>(".chat-side-result--error");
-    expect(errorResult).toBeInstanceOf(HTMLElement);
-    expect([...errorResult!.classList]).toEqual(["chat-side-result", "chat-side-result--error"]);
-  });
-
-  it("renders a pending placeholder until the side result arrives", () => {
-    const container = document.createElement("div");
-    const onDismissSideResult = vi.fn();
-
-    render(
-      renderSideResult(null, { question: "what changed?", ts: 1 }, onDismissSideResult),
-      container,
-    );
-
-    const pending = container.querySelector<HTMLElement>(".chat-side-result--pending");
-    expect(pending).toBeInstanceOf(HTMLElement);
-    expect(pending!.querySelector(".chat-side-result__meta")?.textContent).toBe("Thinking…");
-    expect(pending!.querySelector(".chat-side-result__question")?.textContent).toBe(
-      "what changed?",
-    );
-    expect(pending!.querySelector(".chat-side-result__body")).toBeNull();
-
-    const dismiss = pending!.querySelector<HTMLButtonElement>(".chat-side-result__dismiss");
-    dismiss?.click();
-    expect(onDismissSideResult).toHaveBeenCalledTimes(1);
-
-    // A delivered result replaces the placeholder even when pending state lingers.
-    render(
-      renderSideResult(
-        {
-          kind: "btw",
-          runId: "btw-run-2",
-          sessionKey: "main",
-          question: "what changed?",
-          text: "Answer.",
-          isError: false,
-          ts: 2,
-        },
-        { question: "what changed?", ts: 1 },
-        onDismissSideResult,
-      ),
-      container,
-    );
-    expect(container.querySelector(".chat-side-result--pending")).toBeNull();
-    expect(container.querySelector(".chat-side-result__body")?.textContent?.trim()).toBe("Answer.");
   });
 });

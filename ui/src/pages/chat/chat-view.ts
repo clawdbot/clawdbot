@@ -35,6 +35,7 @@ import {
   renderSessionWorkspaceToggle,
   type SessionWorkspaceProps,
 } from "./components/chat-session-workspace.ts";
+import { isSideChatPanelVisible, renderSideChatPanel } from "./components/chat-side-chat.ts";
 import "./components/chat-sidebar.ts";
 import type {
   DetailFullMessageResult,
@@ -72,8 +73,9 @@ export type ChatProps = {
   compactionStatus?: CompactionStatus | null;
   fallbackStatus?: FallbackStatus | null;
   messages: unknown[];
-  sideResult?: ChatSideResult | null;
-  sideResultPending?: ChatSideResultPending | null;
+  sideChatTurns?: ChatSideResult[];
+  sideChatPending?: ChatSideResultPending | null;
+  sideChatHidden?: boolean;
   toolMessages: unknown[];
   streamSegments: ChatStreamSegment[];
   stream: string | null;
@@ -139,9 +141,15 @@ export type ChatProps = {
   onQueueRetry?: (id: string) => void;
   onQueueSteer?: (id: string) => void;
   onGoalCommand?: (command: string) => void;
-  /** Sends a detached /btw side question (chat selection popup). */
-  onSideQuestion?: (command: string) => void;
-  onDismissSideResult?: () => void;
+  /** Sends a detached /btw side question (selection popup or side-chat
+   * follow-up). `displayQuestion` overrides the pending-turn display when the
+   * command embeds carried follow-up context; `onSendRejected` lets the panel
+   * restore its typed follow-up when the detached send is not accepted. */
+  onSideQuestion?: (command: string, displayQuestion?: string, onSendRejected?: () => void) => void;
+  /** Hides the side-chat panel; the conversation (and a pending run) survives. */
+  onSideChatClose?: () => void;
+  /** Discards the side-chat conversation and retires any pending run. */
+  onSideChatClear?: () => void;
   onNewSession: () => void;
   onClearHistory?: () => void;
   agentsList: {
@@ -202,6 +210,12 @@ export function renderChat(props: ChatProps) {
   const tasksOpen = props.backgroundTasks?.collapsed === false;
   const tasksDockBottom = tasksOpen && props.backgroundTasks?.narrowLayout === true;
   const canCompose = props.canSend;
+  const sideChatProps = {
+    turns: props.sideChatTurns ?? [],
+    pending: props.sideChatPending ?? null,
+    hidden: props.sideChatHidden === true,
+  };
+  const sideChatVisible = isSideChatPanelVisible(sideChatProps);
   let chatSection: HTMLElement | null = null;
 
   const thread = renderChatThread({
@@ -268,8 +282,6 @@ export function renderChat(props: ChatProps) {
     fallbackStatus: props.fallbackStatus,
     messages: props.messages,
     stream: props.stream,
-    sideResult: props.sideResult,
-    sideResultPending: props.sideResultPending,
     queue: props.queue,
     draft: props.draft,
     sessions: props.sessions,
@@ -298,7 +310,6 @@ export function renderChat(props: ChatProps) {
     onQueueRetry: props.onQueueRetry,
     onQueueSteer: props.onQueueSteer,
     onGoalCommand: props.onGoalCommand,
-    onDismissSideResult: props.onDismissSideResult,
     onNewSession: props.onNewSession,
     onClearReply: props.onClearReply,
     onAttachmentsChange: props.onAttachmentsChange,
@@ -346,13 +357,9 @@ export function renderChat(props: ChatProps) {
           props.onClearReply?.();
           return;
         }
-        if (
-          event.key === "Escape" &&
-          (props.sideResult || props.sideResultPending) &&
-          !isChatThreadSearchOpen(props.paneId)
-        ) {
+        if (event.key === "Escape" && sideChatVisible && !isChatThreadSearchOpen(props.paneId)) {
           event.preventDefault();
-          props.onDismissSideResult?.();
+          props.onSideChatClose?.();
           return;
         }
         if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.key === "f") {
@@ -503,6 +510,16 @@ export function renderChat(props: ChatProps) {
                 onDismiss: (pullRequest) => props.onDismissPullRequest?.(pullRequest),
               })}
               ${scrollToBottomButton} ${chatColumnFooter}
+              ${renderSideChatPanel({
+                ...sideChatProps,
+                // Detached slash sends are refused while disconnected (see
+                // canSubmitDraft); hide the input instead of eating drafts.
+                canFollowUp:
+                  canCompose && props.connected && typeof props.onSideQuestion === "function",
+                onFollowUp: props.onSideQuestion,
+                onClose: props.onSideChatClose,
+                onClear: props.onSideChatClear,
+              })}
             </div>
 
             ${sidebarOpen

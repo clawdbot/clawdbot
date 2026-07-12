@@ -26,8 +26,9 @@ var docsProtocolTokens = []string{
 }
 
 type docChunkStructure struct {
-	fenceCount int
-	tagCounts  map[string]int
+	fenceCount    int
+	tagCounts     map[string]int
+	headingLevels []int
 }
 
 type docChunkSplitPlan struct {
@@ -204,6 +205,9 @@ func validateDocChunkTranslation(source, translated string) error {
 	if sourceStructure.fenceCount != translatedStructure.fenceCount {
 		return fmt.Errorf("code fence mismatch: source=%d translated=%d", sourceStructure.fenceCount, translatedStructure.fenceCount)
 	}
+	if !slices.Equal(sourceStructure.headingLevels, translatedStructure.headingLevels) {
+		return fmt.Errorf("heading structure mismatch: source=%v translated=%v", sourceStructure.headingLevels, translatedStructure.headingLevels)
+	}
 	if !slices.Equal(sortedKeys(sourceStructure.tagCounts), sortedKeys(translatedStructure.tagCounts)) {
 		return fmt.Errorf("component tag set mismatch")
 	}
@@ -335,8 +339,9 @@ func summarizeDocChunkStructure(text string) docChunkStructure {
 		}
 	}
 	return docChunkStructure{
-		fenceCount: counts["__fence_toggle__"],
-		tagCounts:  countsWithoutFence(counts),
+		fenceCount:    counts["__fence_toggle__"],
+		tagCounts:     countsWithoutFence(counts),
+		headingLevels: extractMarkdownHeadingLevels(text),
 	}
 }
 

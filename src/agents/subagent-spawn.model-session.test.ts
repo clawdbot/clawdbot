@@ -121,7 +121,6 @@ describe("spawnSubagentDirect runtime model persistence", () => {
       hasInProcessGatewayContextMock: () => true,
       getRuntimeConfig: () => createSubagentSpawnTestConfig(os.tmpdir()),
       updateSessionStoreMock: dedicatedUpdateSessionStoreMock,
-      pruneLegacyStoreKeysMock,
       workspaceDir: os.tmpdir(),
     });
     resetForInProcessTest();

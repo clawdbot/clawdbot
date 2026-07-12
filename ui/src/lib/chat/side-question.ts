@@ -54,7 +54,35 @@ export function combineSideChatComposerDraft(
   return `${prefill}${existing}`;
 }
 
-/** Human-readable question for the pending side-result card (drops the /btw prefix). */
+/**
+ * Detached side answers never enter session history, so a follow-up /btw must
+ * carry its own context: the previous side question and answer ride along
+ * (capped) ahead of the new question. The command text is prompt-only — the
+ * panel displays the returned `question` from structured state and never
+ * parses the command string back apart.
+ */
+export function buildSideChatFollowUpCommand(
+  previous: { question: string; answer: string } | null,
+  question: string,
+): { command: string; question: string } | null {
+  // /btw sends only the first line; collapse so multiline questions are not
+  // silently truncated at send time.
+  const trimmed = question.replace(/\s+/g, " ").trim();
+  if (!trimmed) {
+    return null;
+  }
+  const previousQuestion = previous ? collapseChatSelectionSnippet(previous.question) : "";
+  const previousAnswer = previous ? collapseChatSelectionSnippet(previous.answer) : "";
+  if (!previousQuestion && !previousAnswer) {
+    return { command: `/btw ${trimmed}`, question: trimmed };
+  }
+  return {
+    command: `/btw Context — the previous side question "${previousQuestion}" was answered: "${previousAnswer}". Follow-up question: ${trimmed}`,
+    question: trimmed,
+  };
+}
+
+/** Human-readable question for the pending side-chat turn (drops the /btw prefix). */
 export function extractSideQuestionDisplayText(message: string): string {
   return message
     .trim()

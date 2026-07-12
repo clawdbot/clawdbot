@@ -4,6 +4,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   enforceEmbeddingMaxInputTokens,
   hasNonTextEmbeddingParts,
+  isEmbeddingBatchUnavailableError,
   type EmbeddingInput,
   type MemoryEmbeddingProviderRuntime,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
@@ -676,7 +677,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     }
 
     const message = formatErrorMessage(result.error);
-    const forceDisable = /asyncBatchEmbedContent not available/i.test(message);
+    const forceDisable = isEmbeddingBatchUnavailableError(result.error);
     const failure = await this.recordBatchFailure({
       provider: params.provider,
       message,

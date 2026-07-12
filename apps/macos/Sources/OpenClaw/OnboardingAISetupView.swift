@@ -494,10 +494,17 @@ struct OnboardingAISetupView: View {
             }
 
             if let step = self.model.authStep {
-                if let title = step.title, !title.isEmpty {
+                let deviceCode = parseWizardDeviceCode(step.devicecode)
+                if deviceCode == nil,
+                   let title = step.title,
+                   !title.isEmpty,
+                   title != self.model.activeAuthOption?.label
+                {
                     Text(title).font(.headline)
                 }
-                if let message = step.message, !message.isEmpty {
+                if let deviceCode {
+                    self.deviceCodeStep(deviceCode)
+                } else if let message = step.message, !message.isEmpty {
                     ScrollView {
                         Text(message)
                             .textSelection(.enabled)
@@ -505,7 +512,9 @@ struct OnboardingAISetupView: View {
                     }
                     .frame(maxHeight: 190)
                 }
-                if let url = OnboardingProviderAuthLink.safeURL(step.externalurl) {
+                if deviceCode == nil,
+                   let url = OnboardingProviderAuthLink.safeURL(step.externalurl)
+                {
                     Link("Open sign-in page…", destination: url)
                         .font(.caption.weight(.semibold))
                 }
@@ -549,6 +558,51 @@ struct OnboardingAISetupView: View {
         }
     }
 
+    private func deviceCodeStep(_ deviceCode: WizardDeviceCodePresentation) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Finish in your browser")
+                    .font(.headline)
+                Text(deviceCode.message ?? "Enter this one-time code on the provider's sign-in page.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 12) {
+                Text(deviceCode.code)
+                    .font(.system(.title2, design: .monospaced).weight(.semibold))
+                    .textSelection(.enabled)
+                Spacer(minLength: 8)
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(deviceCode.code, forType: .string)
+                } label: {
+                    Label("Copy", systemImage: "doc.on.doc")
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color(NSColor.controlBackgroundColor)))
+
+            HStack(spacing: 12) {
+                if let minutes = deviceCode.expiresInMinutes {
+                    Label("Expires in \(minutes) minutes", systemImage: "clock")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+                if let url = OnboardingProviderAuthLink.safeURL(self.model.authStep?.externalurl) {
+                    Link(destination: url) {
+                        Label("Open sign-in page", systemImage: "arrow.up.right.square")
+                    }
+                    .font(.caption.weight(.semibold))
+                }
+            }
+        }
+    }
+
     private func openProviderAuthURLIfNeeded(_ rawURL: String?) {
         guard let url = OnboardingProviderAuthLink.safeURL(rawURL),
               url != openedProviderAuthURL
@@ -583,6 +637,9 @@ struct OnboardingAISetupView: View {
 
     private var authContinueTitle: String {
         guard let step = model.authStep else { return "Continue" }
+        if parseWizardDeviceCode(step.devicecode) != nil {
+            return String(localized: "I've signed in")
+        }
         return wizardStepType(step) == "note" ? "Continue" : "Submit"
     }
 

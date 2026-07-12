@@ -21,7 +21,7 @@ import {
 } from "../../app/settings.ts";
 import { isRenderableControlUiAvatarUrl } from "../../lib/avatar.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
-import { retirePendingChatSideQuestion } from "../../lib/chat/side-result.ts";
+import { retirePendingChatSideQuestion, type ChatSideResult } from "../../lib/chat/side-result.ts";
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
@@ -556,7 +556,8 @@ export function resetChatStateForRouteSession(
   state.chatStream = null;
   state.chatSending = false;
   state.chatSendingScopeKey = null;
-  state.chatSideResult = null;
+  state.chatSideChatTurns = [];
+  state.chatSideChatHidden = false;
   state.lastError = null;
   state.chatError = null;
   state.chatAvatarUrl = null;
@@ -1274,9 +1275,10 @@ export function createPageState(
     chatError: null,
     agentsError: null,
     chatStreamSegments: [] as Array<{ text: string; ts: number }>,
-    chatSideResult: null,
+    chatSideChatTurns: [] as ChatSideResult[],
     chatSideResultPending: null,
     chatSideResultTerminalRuns: new Set<string>(),
+    chatSideChatHidden: false,
     chatRunStatus: null,
     compactionStatus: null,
     fallbackStatus: null,

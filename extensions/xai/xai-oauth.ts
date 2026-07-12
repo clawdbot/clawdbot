@@ -590,6 +590,15 @@ async function noteXaiDeviceCode(
   deviceCode: XaiDeviceCodeResponse,
 ): Promise<void> {
   const expiresInMinutes = Math.max(1, Math.round(deviceCode.expiresInMs / 60_000));
+  if (ctx.prompter.deviceCode) {
+    await ctx.prompter.deviceCode({
+      title: "xAI OAuth",
+      code: deviceCode.userCode,
+      expiresInMinutes,
+      message: "Enter this one-time code on the xAI sign-in page.",
+    });
+    return;
+  }
   await ctx.prompter.note(
     [
       ctx.isRemote
@@ -615,20 +624,19 @@ export async function loginXaiDeviceCode(ctx: ProviderAuthContext): Promise<Prov
       ...(ctx.signal ? { signal: ctx.signal } : {}),
     });
     const browserUrl = deviceCode.verificationUriComplete ?? deviceCode.verificationUri;
-    if (ctx.isRemote) {
+    let openedBrowser = false;
+    try {
       await ctx.openUrl(browserUrl);
+      openedBrowser = true;
+    } catch {
+      ctx.runtime.log(`Open manually: ${deviceCode.verificationUri}`);
     }
     await noteXaiDeviceCode(ctx, deviceCode);
     const logUrl = deviceCode.verificationUri;
     if (ctx.isRemote) {
       ctx.runtime.log(`\nOpen this URL in your LOCAL browser:\n\n${logUrl}\n`);
-    } else {
-      try {
-        await ctx.openUrl(browserUrl);
-        ctx.runtime.log(`Open: ${logUrl}`);
-      } catch {
-        ctx.runtime.log(`Open manually: ${logUrl}`);
-      }
+    } else if (openedBrowser) {
+      ctx.runtime.log(`Open: ${logUrl}`);
     }
 
     progress.update("Waiting for xAI device authorization...");

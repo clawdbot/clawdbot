@@ -1274,6 +1274,26 @@ html.openclaw-native-nav .topbar .topbar-nav-toggle {
   min-height: 12px;
 }
 
+.sidebar-session-pagination {
+  display: flex;
+  gap: 14px;
+  padding: 0 10px 10px;
+}
+
+.sidebar-session-pagination__button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.sidebar-session-pagination__button:hover,
+.sidebar-session-pagination__button:focus-visible {
+  color: var(--text);
+}
+
 .sidebar-recent-session--dragging {
   opacity: 0.45;
 }

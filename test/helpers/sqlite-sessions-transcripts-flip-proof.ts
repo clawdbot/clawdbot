@@ -35,7 +35,7 @@ import {
   resolveSessionTranscriptIdentity,
 } from "../../src/plugin-sdk/session-transcript-runtime.js";
 import { sleep } from "../../src/utils.js";
-import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
+import { createOpenClawTestInstance } from "./openclaw-test-instance.js";
 
 type DoctorMode = "import" | "inspect" | "validate" | "restore";
 type ProofChildProcess = ChildProcessByStdio<null, Readable, Readable>;
