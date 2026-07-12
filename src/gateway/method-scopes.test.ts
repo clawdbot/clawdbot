@@ -476,18 +476,21 @@ describe("operator scope authorization", () => {
     });
   });
 
-  it.each(["exec.approval.get", "exec.approval.list", "exec.approval.resolve"])(
-    "requires approvals scope for %s",
-    (method) => {
-      expect(authorizeOperatorScopesForMethod(method, ["operator.write"])).toEqual({
-        allowed: false,
-        missingScope: "operator.approvals",
-      });
-      expect(authorizeOperatorScopesForMethod(method, ["operator.approvals"])).toEqual({
-        allowed: true,
-      });
-    },
-  );
+  it.each([
+    "approval.get",
+    "approval.resolve",
+    "exec.approval.get",
+    "exec.approval.list",
+    "exec.approval.resolve",
+  ])("requires approvals scope for %s", (method) => {
+    expect(authorizeOperatorScopesForMethod(method, ["operator.write"])).toEqual({
+      allowed: false,
+      missingScope: "operator.approvals",
+    });
+    expect(authorizeOperatorScopesForMethod(method, ["operator.approvals"])).toEqual({
+      allowed: true,
+    });
+  });
 
   it.each([
     "exec.approvals.get",

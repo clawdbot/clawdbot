@@ -354,6 +354,7 @@ export function createExecApprovalHandlers(
         record,
         timeoutMs,
         respond,
+        context,
       });
       if (!decisionPromise) {
         return;

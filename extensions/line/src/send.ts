@@ -79,7 +79,7 @@ function normalizeTarget(to: string): string {
   // fixtures (e.g. "U123") are left alone. openclaw/openclaw#81628
   if (normalized.length >= 33 && !/^[CUR]/.test(normalized)) {
     throw new Error(
-      `Recipient is not a valid LINE id (case-sensitive; expected leading capital C/U/R): ${normalized.slice(0, 4)}…`,
+      `Recipient is not a valid LINE id (case-sensitive; expected leading capital C/U/R): ${truncateUtf16Safe(normalized, 4)}…`,
     );
   }
 

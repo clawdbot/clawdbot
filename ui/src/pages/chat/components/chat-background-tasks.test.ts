@@ -67,7 +67,7 @@ afterEach(() => {
 });
 
 describe("background tasks rail state", () => {
-  it("starts collapsed and loads agent-scoped tasks on expand", async () => {
+  it("loads agent-scoped tasks eagerly so the collapsed badge detects running work", async () => {
     const { host, request } = createHost({
       request: (method, params) => {
         expect(method).toBe("tasks.list");
@@ -77,17 +77,33 @@ describe("background tasks rail state", () => {
     });
 
     expect(createBackgroundTasksProps(host, openSession).collapsed).toBe(true);
-    expect(request).not.toHaveBeenCalled();
-
-    toggleBackgroundTasks(host);
-    createBackgroundTasksProps(host, openSession);
     await flushAsync();
 
     const props = createBackgroundTasksProps(host, openSession);
-    expect(props.collapsed).toBe(false);
+    expect(props.collapsed).toBe(true);
     expect(request).toHaveBeenCalledTimes(2);
     expect(props.tasks?.map((task) => task.id)).toEqual(["task-1"]);
     expect(backgroundTasksActiveCount(props)).toBe(1);
+  });
+
+  it("loads the snapshot when a task event arrives before any load", async () => {
+    const { host, request } = createHost({
+      connected: false,
+      request: () => Promise.resolve({ tasks: [makeTask({ id: "task-1" })] }),
+    });
+    createBackgroundTasksProps(host, openSession);
+    expect(request).not.toHaveBeenCalled();
+
+    host.connected = true;
+    handleBackgroundTasksEvent(host, {
+      action: "upserted",
+      task: makeTask({ id: "task-1" }),
+    });
+    await flushAsync();
+
+    expect(request).toHaveBeenCalledTimes(2);
+    const props = createBackgroundTasksProps(host, openSession);
+    expect(props.tasks?.map((task) => task.id)).toEqual(["task-1"]);
   });
 
   it("keeps the pane open across agent switches but reloads the task list", async () => {
@@ -239,6 +255,51 @@ describe("background tasks rail rendering", () => {
     expect(transcript).not.toBeNull();
     transcript?.click();
     expect(onOpenSession).toHaveBeenCalledWith("agent:main:subagent:abc");
+  });
+
+  it("shows live tool activity for running tasks and duration for finished tasks", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(
+      html`${renderBackgroundTasksRail({
+        agentId: "main",
+        collapsed: false,
+        narrowLayout: false,
+        connected: true,
+        canCancel: false,
+        loading: false,
+        error: null,
+        tasks: [
+          makeTask({ id: "task-1", toolUseCount: 12, lastToolName: "read" }),
+          makeTask({
+            id: "task-2",
+            status: "completed",
+            startedAt: 1_000,
+            endedAt: 66_000,
+            updatedAt: 70_000,
+            toolUseCount: 1,
+          }),
+        ],
+        cancellingTaskIds: new Set(),
+        finishedCollapsed: false,
+        onToggleCollapsed: () => {},
+        onToggleFinished: () => {},
+        onRefresh: () => {},
+        onCancel: () => {},
+        onOpenSession: () => {},
+      })}`,
+      container,
+    );
+
+    const running = container.querySelector('[data-task-id="task-1"]');
+    expect(running?.textContent).toContain("12 tool uses");
+    expect(running?.textContent).toContain("read");
+    expect(running?.querySelector("openclaw-elapsed-time")).not.toBeNull();
+
+    const finished = container.querySelector('[data-task-id="task-2"]');
+    expect(finished?.textContent).toContain("1 tool use");
+    expect(finished?.textContent).toContain("1m 5s");
+    expect(finished?.querySelector("openclaw-elapsed-time")).toBeNull();
   });
 
   it("collapses the finished section", () => {

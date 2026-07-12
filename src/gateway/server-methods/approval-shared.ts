@@ -156,10 +156,10 @@ export function isApprovalRecordVisibleToClient<TPayload>(params: {
     return true;
   }
 
-  // Device identity is the strongest requester binding; fall back to the
-  // live connection only for older callers that have not attached a device.
+  // Shipped legacy adapters retain exact requester connection/device authority.
+  // Unified durable methods apply their separate record authorization after lookup.
   if (requestedByDeviceId) {
-    return requestedByDeviceId === normalizeApprovalIdentity(params.client?.connect?.device?.id);
+    return requestedByDeviceId === clientDeviceId;
   }
 
   const requestedByConnId = normalizeApprovalIdentity(params.record.requestedByConnId);
@@ -167,7 +167,7 @@ export function isApprovalRecordVisibleToClient<TPayload>(params: {
     return requestedByConnId === normalizeApprovalIdentity(params.client?.connId);
   }
 
-  if (requestedByClientId) {
+  if (requestedByClientId || approvalReviewerDeviceIds.length > 0) {
     return false;
   }
 
@@ -218,21 +218,34 @@ export function bindApprovalReviewerDeviceIds<TPayload>(params: {
   }
 }
 
+function respondApprovalStorageUnavailable(params: {
+  context: GatewayRequestContext;
+  respond: RespondFn;
+  operation: "request" | "resolve";
+  error: unknown;
+}): void {
+  params.context.logGateway?.error?.(
+    `approval ${params.operation} storage failure: ${String(params.error)}`,
+  );
+  params.respond(
+    false,
+    undefined,
+    errorShape(ErrorCodes.UNAVAILABLE, `approval ${params.operation} unavailable`),
+  );
+}
+
 /** Registers an approval record and converts manager registration errors to gateway errors. */
 export function registerPendingApprovalRecord<TPayload>(params: {
   manager: ExecApprovalManager<TPayload>;
   record: ExecApprovalRecord<TPayload>;
   timeoutMs: number;
   respond: RespondFn;
+  context: GatewayRequestContext;
 }): Promise<ExecApprovalDecision | null> | undefined {
   try {
     return params.manager.register(params.record, params.timeoutMs);
   } catch (err) {
-    params.respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, `registration failed: ${String(err)}`),
-    );
+    respondApprovalStorageUnavailable({ ...params, operation: "request", error: err });
     return undefined;
   }
 }
@@ -435,111 +448,135 @@ export async function handlePendingApprovalRequest<
   requireDeliveryRoute?: boolean;
   suppressDelivery?: boolean;
 }): Promise<void> {
-  const suppressDelivery = params.suppressDelivery === true;
-  const approvalClientConnIds = suppressDelivery
-    ? null
-    : resolveApprovalRequestRecipientConnIds({
-        context: params.context,
-        record: params.record,
-        excludeConnId: params.clientConnId,
-      });
-  if (!suppressDelivery) {
-    if (approvalClientConnIds) {
-      params.context.broadcastToConnIds(
-        params.requestEventName,
-        params.requestEvent,
-        approvalClientConnIds,
-        {
+  // Delivery may outlive the normal resolved-record grace. Keep the executable
+  // binding until the requester response and post-decision handoff finish.
+  const releaseHandoff = params.manager.retainForHandoff(params.record.id);
+  try {
+    const suppressDelivery = params.suppressDelivery === true;
+    const approvalClientConnIds = suppressDelivery
+      ? null
+      : resolveApprovalRequestRecipientConnIds({
+          context: params.context,
+          record: params.record,
+          excludeConnId: params.clientConnId,
+        });
+    if (!suppressDelivery) {
+      if (approvalClientConnIds) {
+        params.context.broadcastToConnIds(
+          params.requestEventName,
+          params.requestEvent,
+          approvalClientConnIds,
+          {
+            dropIfSlow: true,
+          },
+        );
+      } else {
+        params.context.broadcast(params.requestEventName, params.requestEvent, {
           dropIfSlow: true,
+        });
+      }
+    }
+
+    const hasApprovalClients = suppressDelivery
+      ? false
+      : approvalClientConnIds !== null
+        ? approvalClientConnIds.size > 0
+        : (params.context.hasExecApprovalClients?.(params.clientConnId) ?? false);
+    const deliveredResult = suppressDelivery ? false : params.deliverRequest();
+    const delivered = isPromiseLike(deliveredResult) ? await deliveredResult : deliveredResult;
+    // A turn-source route can approve without an active approval client, so keep
+    // the record alive when the originating channel/account can still receive it.
+    const hasTurnSourceRoute =
+      !hasApprovalClients &&
+      !delivered &&
+      hasApprovalTurnSourceRoute({
+        turnSourceChannel: params.record.request.turnSourceChannel,
+        turnSourceAccountId: params.record.request.turnSourceAccountId,
+        approvalKind: params.approvalKind ?? "exec",
+      });
+    const deliveryRoute: ApprovalRequestDeliveryRoute = delivered
+      ? "forwarder"
+      : hasApprovalClients
+        ? "approval-client"
+        : hasTurnSourceRoute
+          ? "turn-source"
+          : "none";
+
+    const respondWithDecision = async (decision: ExecApprovalDecision | null): Promise<void> => {
+      if (params.afterDecision) {
+        try {
+          await params.afterDecision(decision, params.requestEvent);
+        } catch (err) {
+          params.context.logGateway?.error?.(
+            `${params.afterDecisionErrorLabel ?? "approval follow-up failed"}: ${String(err)}`,
+          );
+        }
+      }
+      params.respond(
+        true,
+        {
+          id: params.record.id,
+          decision,
+          createdAtMs: params.record.createdAtMs,
+          expiresAtMs: params.record.expiresAtMs,
         },
+        undefined,
       );
-    } else {
-      params.context.broadcast(params.requestEventName, params.requestEvent, { dropIfSlow: true });
+    };
+
+    if (
+      params.requireDeliveryRoute !== false &&
+      !params.keepPendingWithoutRoute &&
+      !hasApprovalClients &&
+      !hasTurnSourceRoute &&
+      !delivered
+    ) {
+      let noRouteWon: boolean;
+      try {
+        noRouteWon = params.manager.expire(params.record.id, "no-approval-route");
+      } catch (err) {
+        respondApprovalStorageUnavailable({ ...params, operation: "request", error: err });
+        return;
+      }
+      if (!noRouteWon) {
+        // Delivery can yield while another surface resolves the same approval.
+        // Preserve that first answer instead of reporting a synthetic no-route timeout.
+        await respondWithDecision(await params.decisionPromise);
+        return;
+      }
+      params.respond(
+        true,
+        {
+          id: params.record.id,
+          decision: null,
+          createdAtMs: params.record.createdAtMs,
+          expiresAtMs: params.record.expiresAtMs,
+        },
+        undefined,
+      );
+      return;
     }
-  }
 
-  const hasApprovalClients = suppressDelivery
-    ? false
-    : approvalClientConnIds !== null
-      ? approvalClientConnIds.size > 0
-      : (params.context.hasExecApprovalClients?.(params.clientConnId) ?? false);
-  const deliveredResult = suppressDelivery ? false : params.deliverRequest();
-  const delivered = isPromiseLike(deliveredResult) ? await deliveredResult : deliveredResult;
-  // A turn-source route can approve without an active approval client, so keep
-  // the record alive when the originating channel/account can still receive it.
-  const hasTurnSourceRoute =
-    !hasApprovalClients &&
-    !delivered &&
-    hasApprovalTurnSourceRoute({
-      turnSourceChannel: params.record.request.turnSourceChannel,
-      turnSourceAccountId: params.record.request.turnSourceAccountId,
-      approvalKind: params.approvalKind ?? "exec",
-    });
-  const deliveryRoute: ApprovalRequestDeliveryRoute = delivered
-    ? "forwarder"
-    : hasApprovalClients
-      ? "approval-client"
-      : hasTurnSourceRoute
-        ? "turn-source"
-        : "none";
-
-  if (
-    params.requireDeliveryRoute !== false &&
-    !params.keepPendingWithoutRoute &&
-    !hasApprovalClients &&
-    !hasTurnSourceRoute &&
-    !delivered
-  ) {
-    params.manager.expire(params.record.id, "no-approval-route");
-    params.respond(
-      true,
-      {
-        id: params.record.id,
-        decision: null,
-        createdAtMs: params.record.createdAtMs,
-        expiresAtMs: params.record.expiresAtMs,
-      },
-      undefined,
-    );
-    return;
-  }
-
-  if (params.twoPhase) {
-    params.respond(
-      true,
-      {
-        status: "accepted",
-        id: params.record.id,
-        // Agent-side timeouts use this to distinguish delivered prompts from
-        // requests kept pending only because manual /approve routing may work.
-        deliveryRoute,
-        createdAtMs: params.record.createdAtMs,
-        expiresAtMs: params.record.expiresAtMs,
-      },
-      undefined,
-    );
-  }
-
-  const decision = await params.decisionPromise;
-  if (params.afterDecision) {
-    try {
-      await params.afterDecision(decision, params.requestEvent);
-    } catch (err) {
-      params.context.logGateway?.error?.(
-        `${params.afterDecisionErrorLabel ?? "approval follow-up failed"}: ${String(err)}`,
+    if (params.twoPhase) {
+      params.respond(
+        true,
+        {
+          status: "accepted",
+          id: params.record.id,
+          // Agent-side timeouts use this to distinguish delivered prompts from
+          // requests kept pending only because manual /approve routing may work.
+          deliveryRoute,
+          createdAtMs: params.record.createdAtMs,
+          expiresAtMs: params.record.expiresAtMs,
+        },
+        undefined,
       );
     }
+
+    await respondWithDecision(await params.decisionPromise);
+  } finally {
+    releaseHandoff?.();
   }
-  params.respond(
-    true,
-    {
-      id: params.record.id,
-      decision,
-      createdAtMs: params.record.createdAtMs,
-      expiresAtMs: params.record.expiresAtMs,
-    },
-    undefined,
-  );
 }
 
 /** Resolves a pending approval and broadcasts the final decision exactly once. */
@@ -579,19 +616,31 @@ export async function handleApprovalResolve<TPayload, TResolvedEvent extends obj
     errorLabel: string;
   }>;
 }): Promise<void> {
-  const resolved = resolvePendingApprovalRecord({
-    manager: params.manager,
-    inputId: params.inputId,
-    client: params.client,
-    exposeAmbiguousPrefixError: params.exposeAmbiguousPrefixError,
-  });
-  if (!resolved.ok) {
-    const resolvedRepeat = resolveResolvedApprovalRecord({
+  let resolved: ApprovalRecordLookupResult<TPayload>;
+  try {
+    resolved = resolvePendingApprovalRecord({
       manager: params.manager,
       inputId: params.inputId,
       client: params.client,
       exposeAmbiguousPrefixError: params.exposeAmbiguousPrefixError,
     });
+  } catch (err) {
+    respondApprovalStorageUnavailable({ ...params, operation: "resolve", error: err });
+    return;
+  }
+  if (!resolved.ok) {
+    let resolvedRepeat: ApprovalRecordLookupResult<TPayload>;
+    try {
+      resolvedRepeat = resolveResolvedApprovalRecord({
+        manager: params.manager,
+        inputId: params.inputId,
+        client: params.client,
+        exposeAmbiguousPrefixError: params.exposeAmbiguousPrefixError,
+      });
+    } catch (err) {
+      respondApprovalStorageUnavailable({ ...params, operation: "resolve", error: err });
+      return;
+    }
     if (resolvedRepeat.ok) {
       // Treat repeated identical resolves as successful retries; a conflicting
       // retry is rejected so stale operators cannot overwrite the first choice.
@@ -628,15 +677,38 @@ export async function handleApprovalResolve<TPayload, TResolvedEvent extends obj
 
   const resolvedBy =
     params.client?.connect?.client?.displayName ?? params.client?.connect?.client?.id ?? null;
-  const ok = params.resolveRecord
-    ? params.resolveRecord({
-        approvalId: resolved.approvalId,
-        decision: params.decision,
-        resolvedBy,
-        snapshot: resolved.snapshot,
-      })
-    : params.manager.resolve(resolved.approvalId, params.decision, resolvedBy);
+  let ok: boolean;
+  try {
+    ok = params.resolveRecord
+      ? params.resolveRecord({
+          approvalId: resolved.approvalId,
+          decision: params.decision,
+          resolvedBy,
+          snapshot: resolved.snapshot,
+        })
+      : params.manager.resolve(resolved.approvalId, params.decision, resolvedBy);
+  } catch (err) {
+    respondApprovalStorageUnavailable({ ...params, operation: "resolve", error: err });
+    return;
+  }
   if (!ok) {
+    // A concurrent surface can win between the pending lookup and this
+    // resolve; report the recorded conflict, not a missing approval.
+    const raced = params.manager.getSnapshot(resolved.approvalId);
+    if (raced && raced.resolvedAtMs !== undefined) {
+      if (resolveRecordedApprovalDecision(raced) === params.decision) {
+        params.respond(true, { ok: true }, undefined);
+        return;
+      }
+      params.respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "approval already resolved", {
+          details: APPROVAL_ALREADY_RESOLVED_DETAILS,
+        }),
+      );
+      return;
+    }
     respondUnknownOrExpiredApproval(params.respond);
     return;
   }

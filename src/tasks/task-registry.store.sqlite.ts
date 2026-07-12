@@ -70,6 +70,8 @@ const TASK_RUN_SELECT_COLUMNS = [
   "ended_at",
   "last_event_at",
   "cleanup_after",
+  "tool_use_count",
+  "last_tool_name",
   "error",
   "progress_summary",
   "terminal_summary",
@@ -87,6 +89,7 @@ function rowToTaskRecord(row: TaskRegistryRow): TaskRecord {
   const endedAt = normalizeSqliteNumber(row.ended_at);
   const lastEventAt = normalizeSqliteNumber(row.last_event_at);
   const cleanupAfter = normalizeSqliteNumber(row.cleanup_after);
+  const toolUseCount = normalizeSqliteNumber(row.tool_use_count);
   const scopeKind = parseTaskScopeKind(row.scope_kind);
   const terminalOutcome = parseOptionalTaskTerminalOutcome(row.terminal_outcome);
   // System tasks intentionally have no requester session; ownerKey is the lookup anchor.
@@ -116,6 +119,8 @@ function rowToTaskRecord(row: TaskRegistryRow): TaskRecord {
     ...(endedAt != null ? { endedAt } : {}),
     ...(lastEventAt != null ? { lastEventAt } : {}),
     ...(cleanupAfter != null ? { cleanupAfter } : {}),
+    ...(toolUseCount != null ? { toolUseCount } : {}),
+    ...(row.last_tool_name ? { lastToolName: row.last_tool_name } : {}),
     ...(row.error ? { error: row.error } : {}),
     ...(row.progress_summary ? { progressSummary: row.progress_summary } : {}),
     ...(row.terminal_summary ? { terminalSummary: row.terminal_summary } : {}),
@@ -158,6 +163,8 @@ function bindTaskRecordBase(record: TaskRecord): Insertable<TaskRunsTable> {
     ended_at: record.endedAt ?? null,
     last_event_at: record.lastEventAt ?? null,
     cleanup_after: record.cleanupAfter ?? null,
+    tool_use_count: record.toolUseCount ?? null,
+    last_tool_name: record.lastToolName ?? null,
     error: record.error ?? null,
     progress_summary: record.progressSummary ?? null,
     terminal_summary: record.terminalSummary ?? null,
@@ -247,6 +254,8 @@ function upsertTaskRow(db: DatabaseSync, row: Insertable<TaskRunsTable>): void {
           ended_at: (eb) => eb.ref("excluded.ended_at"),
           last_event_at: (eb) => eb.ref("excluded.last_event_at"),
           cleanup_after: (eb) => eb.ref("excluded.cleanup_after"),
+          tool_use_count: (eb) => eb.ref("excluded.tool_use_count"),
+          last_tool_name: (eb) => eb.ref("excluded.last_tool_name"),
           error: (eb) => eb.ref("excluded.error"),
           progress_summary: (eb) => eb.ref("excluded.progress_summary"),
           terminal_summary: (eb) => eb.ref("excluded.terminal_summary"),

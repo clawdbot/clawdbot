@@ -271,13 +271,20 @@ async function mcpCall(
       : undefined) ?? MCP_PROTOCOL_VERSION;
 
   // 2. notifications/initialized — required handshake ack (no response body).
-  await postMcp({
+  const initialized = await postMcp({
     body: { jsonrpc: "2.0", method: "notifications/initialized" },
     sessionId,
     protocolVersion: negotiatedVersion,
     timeoutSeconds,
     signal,
   });
+  if (!initialized.ok) {
+    throw new Error(
+      `Parallel MCP notifications/initialized failed (${initialized.status}): ${
+        initialized.text || initialized.statusText
+      }`,
+    );
+  }
 
   // 3. tools/call.
   const callId = randomUUID();

@@ -197,8 +197,11 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
         true
     }
 
-    func waitForRunCompletion(runId _: String, timeoutMs _: Int) async -> Bool {
-        true
+    func waitForRunCompletion(
+        runId _: String,
+        timeoutMs _: Int) async -> OpenClawChatRunObservation
+    {
+        .terminal(.completed)
     }
 
     func events() -> AsyncStream<OpenClawChatTransportEvent> {
@@ -291,7 +294,10 @@ struct AppleReviewDemoChatTransport: OpenClawChatTransport {
         try await self.transport.requestHealth(timeoutMs: timeoutMs)
     }
 
-    func waitForRunCompletion(runId: String, timeoutMs: Int) async -> Bool {
+    func waitForRunCompletion(
+        runId: String,
+        timeoutMs: Int) async -> OpenClawChatRunObservation
+    {
         await self.transport.waitForRunCompletion(runId: runId, timeoutMs: timeoutMs)
     }
 

@@ -943,7 +943,13 @@ SCHEDULE TYPES (schedule.kind):
   tz omitted => Gateway host local timezone, not UTC.
   Example 6pm Shanghai daily: { "kind": "cron", "expr": "0 18 * * *", "tz": "Asia/Shanghai" }
 
-Optional trigger scripts poll headlessly on every/cron schedules and run the payload only when they return { fire: true }.
+TRIGGER SCRIPTS (optional; every/cron only):
+- Requires operator-enabled cron.triggers.enabled. If add rejects the disabled gate, explain that requirement instead of falling back to model polling.
+- Runs headlessly with the owning agent's allowed tools; quiet checks use no model. Read the deeply frozen prior JSON value at trigger.state, then return or json({ fire: boolean, message?: string, state?: JSONValue }). Return a new state object; do not mutate trigger.state.
+- fire:false persists returned state without running the payload or creating run history. fire:true runs the payload; message is appended to systemEvent/agentTurn text. Fired state persists only after payload success, so checks should be read-only and actions belong in the payload.
+- Silent watchers must set top-level delivery.mode="none". Isolated agentTurn jobs default to announce when delivery is omitted, which requires a resolvable channel and can make an otherwise successful payload fail.
+- once:true disables the job after its first successful fired payload. Each evaluation has a 30s wall-clock limit, 5 tool calls, and 16KB state.
+- Call allowed tools through the hidden Code Mode catalog (for example await tools.call("exec", { command: "..." })); use search/describe when the tool id is ambiguous.
 
 For "at", ISO timestamps without timezone are UTC.
 

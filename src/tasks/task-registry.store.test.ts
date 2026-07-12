@@ -2,6 +2,7 @@
 import { statSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { emitAgentEvent } from "../infra/agent-events.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -617,6 +618,36 @@ describe("task-registry store runtime", () => {
           taskId: created.taskId,
           agentId: "worker",
           requesterAgentId: "main",
+        });
+      },
+    );
+  });
+
+  it("persists tool activity across sqlite restore", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-task-tool-activity-" },
+      async () => {
+        const created = createTaskRecord({
+          runtime: "subagent",
+          ownerKey: "agent:main:main",
+          scopeKind: "session",
+          childSessionKey: "agent:main:subagent:tools",
+          runId: "run-tool-activity-sqlite",
+          task: "Sweep files",
+          status: "running",
+          deliveryStatus: "not_applicable",
+        });
+        emitAgentEvent({
+          runId: "run-tool-activity-sqlite",
+          stream: "tool",
+          data: { phase: "start", name: "read", toolCallId: "call-1" },
+        });
+
+        resetTaskRegistryForTests({ persist: false });
+        expect(findTaskByRunId("run-tool-activity-sqlite")).toMatchObject({
+          taskId: created.taskId,
+          toolUseCount: 1,
+          lastToolName: "read",
         });
       },
     );

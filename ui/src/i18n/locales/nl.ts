@@ -2356,6 +2356,8 @@ export const nl: TranslationMap = {
       finished: "Voltooid ({count})",
       stopTask: "{title} stoppen",
       viewTranscript: "Transcript bekijken",
+      toolUseOne: "1 toolgebruik",
+      toolUseMany: "{count} toolgebruiken",
     },
     sessionDiff: {
       title: "Wijzigingen",

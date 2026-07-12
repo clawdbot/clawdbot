@@ -322,6 +322,27 @@ describe("runParallelMcpSearch", () => {
     );
   });
 
+  it("throws when the initialized acknowledgement fails", async () => {
+    endpointMockState.responses.push(
+      jsonResponse(
+        { jsonrpc: "2.0", id: "i", result: { protocolVersion: "2025-06-18" } },
+        { "mcp-session-id": "server-session-1" },
+      ),
+      new Response("ack nope", { status: 500 }),
+    );
+
+    await expect(runParallelMcpSearch({ searchQueries: ["x"], maxResults: 5 })).rejects.toThrow(
+      /notifications\/initialized failed \(500\): ack nope/,
+    );
+
+    expect(endpointMockState.calls.map((c) => readBody(c).method)).toEqual([
+      "initialize",
+      "notifications/initialized",
+    ]);
+    expect(headerOf(endpointMockState.calls[1], "Mcp-Session-Id")).toBe("server-session-1");
+    expect(headerOf(endpointMockState.calls[1], "MCP-Protocol-Version")).toBe("2025-06-18");
+  });
+
   it("bounds initialize error bodies without using response.text()", async () => {
     const tracked = cancelTrackedResponse(`${"parallel mcp unavailable ".repeat(1024)}tail`, {
       status: 503,

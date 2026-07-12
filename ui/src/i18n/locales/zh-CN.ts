@@ -2291,6 +2291,8 @@ export const zh_CN: TranslationMap = {
       finished: "已完成 ({count})",
       stopTask: "停止 {title}",
       viewTranscript: "查看转录",
+      toolUseOne: "1 次工具调用",
+      toolUseMany: "{count} 次工具调用",
     },
     sessionDiff: {
       title: "更改",

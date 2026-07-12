@@ -2353,6 +2353,8 @@ export const ja_JP: TranslationMap = {
       finished: "完了（{count}）",
       stopTask: "{title}を停止",
       viewTranscript: "トランスクリプトを表示",
+      toolUseOne: "ツール使用 1 回",
+      toolUseMany: "ツール使用 {count} 回",
     },
     sessionDiff: {
       title: "変更",

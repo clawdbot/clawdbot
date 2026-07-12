@@ -7,11 +7,13 @@ import { getAgentRunContext } from "../infra/agent-events.js";
 import { deriveContinuationDelegateChildRunId } from "./subagent-continuation-ids.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
+  buildLatestSubagentRunReadIndexFromRuns,
   buildSubagentRunReadIndexFromRuns,
   countActiveDescendantRunsFromRuns,
   getSubagentRunByChildSessionKeyFromRuns,
   listDescendantRunsForRequesterFromRuns,
   listRunsForControllerFromRuns,
+  type LatestSubagentRunReadIndex,
   type SubagentRunReadIndex,
 } from "./subagent-registry-queries.js";
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
@@ -31,6 +33,11 @@ export function buildSubagentRunReadIndex(now = Date.now()): SubagentRunReadInde
     inMemoryRuns: subagentRuns.values(),
     now,
   });
+}
+
+/** Builds an O(1) latest-run lookup from one persisted and in-memory snapshot. */
+export function buildLatestSubagentRunReadIndex(): LatestSubagentRunReadIndex {
+  return buildLatestSubagentRunReadIndexFromRuns(getSubagentRunsSnapshotForRead(subagentRuns));
 }
 
 /** Lists runs controlled by a session key. */

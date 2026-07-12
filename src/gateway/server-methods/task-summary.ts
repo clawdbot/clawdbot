@@ -44,6 +44,11 @@ export function mapTaskSummary(task: TaskRecord): TaskSummary {
   const progressSummary = sanitizeOptionalTaskText(task.progressSummary);
   const terminalSummary = sanitizeOptionalTaskText(task.terminalSummary, { errorContext: true });
   const error = sanitizeOptionalTaskText(task.error, { errorContext: true });
+  const lastToolName = sanitizeOptionalTaskText(task.lastToolName);
+  const toolUseCount =
+    typeof task.toolUseCount === "number" && Number.isInteger(task.toolUseCount)
+      ? Math.max(0, task.toolUseCount)
+      : undefined;
   return {
     id: task.taskId,
     taskId: task.taskId,
@@ -63,6 +68,8 @@ export function mapTaskSummary(task: TaskRecord): TaskSummary {
     updatedAt: taskUpdatedAt(task),
     ...(task.startedAt !== undefined ? { startedAt: task.startedAt } : {}),
     ...(task.endedAt !== undefined ? { endedAt: task.endedAt } : {}),
+    ...(toolUseCount !== undefined ? { toolUseCount } : {}),
+    ...(lastToolName ? { lastToolName } : {}),
     ...(progressSummary ? { progressSummary } : {}),
     ...(terminalSummary ? { terminalSummary } : {}),
     ...(error ? { error } : {}),

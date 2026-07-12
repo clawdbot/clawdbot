@@ -18,7 +18,6 @@ import {
   bindApprovalRequesterMetadata,
   buildRequestedApprovalEvent,
   handlePendingApprovalRequest,
-  registerPendingApprovalRecord,
 } from "./server-methods/approval-shared.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 
@@ -116,15 +115,9 @@ function createApprovalRuntime(params: {
       const record = manager.create(request, timeoutMs, `plugin:${randomUUID()}`);
       bindApprovalRequesterMetadata({ record, client: params.client });
       const respond: RespondFn = () => {};
-      const decisionPromise = registerPendingApprovalRecord({
-        manager,
-        record,
-        timeoutMs,
-        respond,
-      });
-      if (!decisionPromise) {
-        return { id: record.id, decision: null };
-      }
+      // Internal policy requests have no RPC response channel. Registration
+      // failures must reject so an unreviewable request cannot reach the node.
+      const decisionPromise = manager.register(record, timeoutMs);
       const requestEvent = buildRequestedApprovalEvent(record);
       await handlePendingApprovalRequest({
         manager,

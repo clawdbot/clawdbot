@@ -2334,6 +2334,8 @@ export const vi: TranslationMap = {
       finished: "Đã hoàn tất ({count})",
       stopTask: "Dừng {title}",
       viewTranscript: "Xem bản ghi",
+      toolUseOne: "1 lần sử dụng công cụ",
+      toolUseMany: "{count} lần sử dụng công cụ",
     },
     sessionDiff: {
       title: "Thay đổi",

@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { emitAgentEvent } from "../../infra/agent-events.js";
 import {
   createTaskRecord as createTaskRecordOrNull,
   getTaskById,
@@ -316,6 +317,35 @@ describe("tasks gateway handlers", () => {
     expect(payload?.task?.terminalSummary).toBe("Failed after build");
     expect(payload?.task?.error).toBe("Tool failed");
     expect(JSON.stringify(calls[0]?.[1])).not.toContain("OpenClaw runtime context");
+  });
+
+  it("exposes tool activity in task summaries", async () => {
+    const task = createTaskRecord({
+      runtime: "subagent",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: "agent:main:subagent:activity",
+      runId: "run-tool-activity",
+      task: "Sweep the repo",
+      status: "running",
+      deliveryStatus: "not_applicable",
+    });
+    emitAgentEvent({
+      runId: "run-tool-activity",
+      stream: "tool",
+      data: { phase: "start", name: "read", toolCallId: "call-1" },
+    });
+    emitAgentEvent({
+      runId: "run-tool-activity",
+      stream: "tool",
+      data: { phase: "start", name: "exec", toolCallId: "call-2" },
+    });
+
+    const { payload } = await getTaskPayload(task.taskId);
+
+    expect(payload?.task?.toolUseCount).toBe(2);
+    expect(payload?.task?.lastToolName).toBe("exec");
   });
 
   it("cancels running task records and returns the updated task", async () => {

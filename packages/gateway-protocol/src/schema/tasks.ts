@@ -41,6 +41,8 @@ export const TaskSummarySchema = Type.Object(
     updatedAt: Type.Optional(TimestampSchema),
     startedAt: Type.Optional(TimestampSchema),
     endedAt: Type.Optional(TimestampSchema),
+    toolUseCount: Type.Optional(Type.Integer({ minimum: 0 })),
+    lastToolName: Type.Optional(Type.String()),
     progressSummary: Type.Optional(Type.String()),
     terminalSummary: Type.Optional(Type.String()),
     error: Type.Optional(Type.String()),

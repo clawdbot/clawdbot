@@ -1,9 +1,17 @@
 // Gateway auxiliary method handlers.
 // Wires reload, secrets, exec approval, and plugin approval RPC handlers.
+import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js";
-import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
+import {
+  resolveExecApprovalRequestAllowedDecisions,
+  type ExecApprovalRequestPayload,
+} from "../infra/exec-approvals.js";
+import {
+  resolvePluginApprovalRequestAllowedDecisions,
+  type PluginApprovalRequestPayload,
+} from "../infra/plugin-approvals.js";
 import {
   resolveCommandSecretsFromActiveRuntimeSnapshot,
   type CommandSecretAssignment,
@@ -13,6 +21,7 @@ import {
   type PreparedSecretsRuntimeSnapshot,
 } from "../secrets/runtime-state.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
+import { resolveApprovalSessionAudience } from "./approval-session-audience.js";
 import { diffConfigPaths } from "./config-diff.js";
 import {
   buildGatewayReloadPlan,
@@ -21,6 +30,10 @@ import {
 } from "./config-reload-plan.js";
 import { createExecApprovalIosPushDelivery } from "./exec-approval-ios-push.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
+import {
+  closeOrphanedOperatorApprovals,
+  pruneTerminalOperatorApprovals,
+} from "./operator-approval-store.js";
 import type { ChannelAutostartSuppression } from "./server-channels.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./server-methods/types.js";
 import {
@@ -76,7 +89,28 @@ export function createGatewayAuxHandlers(params: {
   getChannelAutostartSuppression?: () => ChannelAutostartSuppression | null;
   logChannels: { info: (msg: string) => void };
 }) {
-  const execApprovalManager = new ExecApprovalManager();
+  // Both approval kinds share one durable first-answer-wins registry and
+  // Gateway-lifetime epoch while retaining separate in-process waiter maps.
+  // A newly constructed Gateway cannot resume the prior lifetime's waiters.
+  const approvalPersistence = { runtimeEpoch: randomUUID() };
+  const approvalStartupNowMs = Date.now();
+  closeOrphanedOperatorApprovals({
+    runtimeEpoch: approvalPersistence.runtimeEpoch,
+    nowMs: approvalStartupNowMs,
+  });
+  pruneTerminalOperatorApprovals({ nowMs: approvalStartupNowMs });
+
+  const execApprovalManager = new ExecApprovalManager<ExecApprovalRequestPayload>({
+    approvalKind: "exec",
+    persistence: approvalPersistence,
+    resolveAllowedDecisions: resolveExecApprovalRequestAllowedDecisions,
+    resolveAudienceSessionKeys: resolveApprovalSessionAudience,
+    onError: (error, context) => {
+      params.log.error?.(
+        `${context.approvalKind} approval ${context.operation} failed for ${context.approvalId}: ${String(error)}`,
+      );
+    },
+  });
   const execApprovalForwarder = createExecApprovalForwarder();
   const execApprovalIosPushDelivery = createExecApprovalIosPushDelivery({ log: params.log });
   const loadExecApprovalHandlers = createLazyPromise(
@@ -90,12 +124,34 @@ export function createGatewayAuxHandlers(params: {
     { cacheRejections: true },
   );
   const buildReloadPlan = params.buildReloadPlan ?? buildGatewayReloadPlan;
-  const pluginApprovalManager = new ExecApprovalManager<PluginApprovalRequestPayload>();
+  const pluginApprovalManager = new ExecApprovalManager<PluginApprovalRequestPayload>({
+    approvalKind: "plugin",
+    persistence: approvalPersistence,
+    resolveAllowedDecisions: (request) => resolvePluginApprovalRequestAllowedDecisions(request),
+    resolveAudienceSessionKeys: resolveApprovalSessionAudience,
+    onError: (error, context) => {
+      params.log.error?.(
+        `${context.approvalKind} approval ${context.operation} failed for ${context.approvalId}: ${String(error)}`,
+      );
+    },
+  });
   const loadPluginApprovalHandlers = createLazyPromise(
     () =>
       import("./server-methods/plugin-approval.js").then(({ createPluginApprovalHandlers }) =>
         createPluginApprovalHandlers(pluginApprovalManager, {
           forwarder: execApprovalForwarder,
+        }),
+      ),
+    { cacheRejections: true },
+  );
+  const loadApprovalHandlers = createLazyPromise(
+    () =>
+      import("./server-methods/approval.js").then(({ createApprovalHandlers }) =>
+        createApprovalHandlers({
+          execApprovalManager,
+          pluginApprovalManager,
+          forwarder: execApprovalForwarder,
+          iosPushDelivery: execApprovalIosPushDelivery,
         }),
       ),
     { cacheRejections: true },
@@ -301,6 +357,8 @@ export function createGatewayAuxHandlers(params: {
         "plugin.approval.resolve",
         loadPluginApprovalHandlers,
       ),
+      "approval.get": createLazyHandler("approval.get", loadApprovalHandlers),
+      "approval.resolve": createLazyHandler("approval.resolve", loadApprovalHandlers),
       "secrets.reload": createLazyHandler("secrets.reload", loadSecretsHandlers),
       "secrets.resolve": createLazyHandler("secrets.resolve", loadSecretsHandlers),
     },

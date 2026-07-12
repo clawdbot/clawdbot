@@ -2299,6 +2299,8 @@ export const th: TranslationMap = {
       finished: "เสร็จสิ้น ({count})",
       stopTask: "หยุด {title}",
       viewTranscript: "ดูบันทึกการสนทนา",
+      toolUseOne: "ใช้เครื่องมือ 1 ครั้ง",
+      toolUseMany: "ใช้เครื่องมือ {count} ครั้ง",
     },
     sessionDiff: {
       title: "การเปลี่ยนแปลง",

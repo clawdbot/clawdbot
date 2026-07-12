@@ -442,8 +442,10 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
     if (!created.id) {
       throw new Error("Failed to open tab (missing id)");
     }
-    runtime.lastTargetId = created.id;
     const resolvedUrl = created.url ?? url;
+    if (!isSelectableCdpBrowserTarget({ url: resolvedUrl, type: created.type })) {
+      throw new Error("Failed to open tab (non-selectable target)");
+    }
     await assertBrowserNavigationResultAllowed({ url: resolvedUrl, ...ssrfPolicyOpts });
     const wsUrl = normalizeWsUrl(created.webSocketDebuggerUrl, profile.cdpUrl);
     if (wsUrl) {
@@ -452,6 +454,9 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
         configuredUrl: profile.cdpUrl,
       });
     }
+    // Adopt only fully validated targets. A failed open must not make a
+    // blocked or non-page target sticky for the next implicit action.
+    runtime.lastTargetId = created.id;
     triggerManagedTabLimit(created.id, opts);
     return assignTabAlias({
       profileState: runtime,

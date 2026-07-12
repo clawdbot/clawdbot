@@ -113,6 +113,7 @@ export function createPluginApprovalHandlers(
         record,
         timeoutMs,
         respond,
+        context,
       });
       if (!decisionPromise) {
         return;

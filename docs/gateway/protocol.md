@@ -550,7 +550,8 @@ methods. Treat this as feature discovery, not a full enumeration of
   </Accordion>
 
   <Accordion title="Approval families">
-    - `exec.approval.request`, `exec.approval.get`, `exec.approval.list`, and `exec.approval.resolve` cover one-shot exec approval requests plus pending approval lookup/replay.
+    - `approval.get` and `approval.resolve` are the kind-agnostic durable approval methods (scope `operator.approvals`). `approval.get` returns a sanitized pending or retained terminal projection with a stable `urlPath`; `approval.resolve` accepts the canonical approval id, an explicit `kind`, and a decision, applies first-answer-wins resolution, and always returns the recorded canonical result.
+    - `exec.approval.request`, `exec.approval.get`, `exec.approval.list`, and `exec.approval.resolve` cover one-shot exec approval requests plus pending approval lookup/replay. They are protocol-boundary adapters over the same durable approval registry.
     - `exec.approval.waitDecision` waits on one pending exec approval and returns the final decision (or `null` on timeout).
     - `exec.approvals.get` and `exec.approvals.set` manage gateway exec approval policy snapshots.
     - `exec.approvals.node.get` and `exec.approvals.node.set` manage node-local exec approval policy via node relay commands.

@@ -2320,6 +2320,8 @@ export const hi: TranslationMap = {
       finished: "समाप्त ({count})",
       stopTask: "{title} रोकें",
       viewTranscript: "ट्रांसक्रिप्ट देखें",
+      toolUseOne: "1 टूल उपयोग",
+      toolUseMany: "{count} टूल उपयोग",
     },
     sessionDiff: {
       title: "परिवर्तन",

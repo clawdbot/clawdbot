@@ -29,6 +29,8 @@ const runningSubagent = {
   createdAt: baseTime - 5_000,
   updatedAt: baseTime,
   startedAt: baseTime - 4_000,
+  toolUseCount: 12,
+  lastToolName: "read",
   progressSummary: "Reading provider catalogs",
 };
 
@@ -110,12 +112,21 @@ describeControlUiE2e("Control UI chat background-tasks rail mocked Gateway E2E",
       expect(response?.status()).toBe(200);
       await page.getByText("Background tasks rail proof.").waitFor({ timeout: 10_000 });
 
+      // The snapshot loads eagerly, so the collapsed toggle badge already
+      // detects the two active tasks before the rail is ever opened.
+      const badge = page.locator(".chat-tasks-toggle__badge");
+      await badge.waitFor({ state: "visible" });
+      expect(await badge.textContent()).toBe("2");
+
       await page.getByRole("button", { name: "Show background tasks" }).click();
       const rail = page.locator(".chat-tasks-rail");
       await rail.locator('[data-task-id="task-subagent"]').waitFor({ state: "visible" });
       await rail.locator('[data-task-id="task-cron"]').waitFor({ state: "visible" });
       await rail.locator('[data-task-id="task-cli"]').waitFor({ state: "visible" });
-      expect(await rail.textContent()).toContain("Reading provider catalogs");
+      const railText = await rail.textContent();
+      expect(railText).toContain("Reading provider catalogs");
+      expect(railText).toContain("12 tool uses");
+      expect(railText).toContain("read");
 
       const listRequests = await gateway.getRequests("tasks.list");
       expect(listRequests.length).toBeGreaterThanOrEqual(2);

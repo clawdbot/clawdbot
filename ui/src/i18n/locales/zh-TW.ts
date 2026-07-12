@@ -2294,6 +2294,8 @@ export const zh_TW: TranslationMap = {
       finished: "已完成 ({count})",
       stopTask: "停止 {title}",
       viewTranscript: "檢視文字記錄",
+      toolUseOne: "使用 1 次工具",
+      toolUseMany: "使用 {count} 次工具",
     },
     sessionDiff: {
       title: "變更",

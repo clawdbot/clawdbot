@@ -2,6 +2,7 @@
 // prompt/control paths instead of repeatedly scanning the run map.
 import { describe, expect, it } from "vitest";
 import {
+  buildLatestSubagentRunReadIndexFromRuns,
   buildSubagentRunReadIndexFromRuns,
   countActiveDescendantRunsFromRuns,
   getSubagentRunByChildSessionKeyFromRuns,
@@ -39,6 +40,29 @@ function listRunsForController(
 }
 
 describe("subagent registry read index", () => {
+  it("indexes the latest generation for each child session", () => {
+    const childSessionKey = "agent:main:subagent:restarted";
+    const olderGeneration = makeRun({
+      runId: "run-newer-created-at",
+      childSessionKey,
+      generation: 1,
+      createdAt: 200,
+    });
+    const latestGeneration = makeRun({
+      runId: "run-latest-generation",
+      childSessionKey: ` ${childSessionKey} `,
+      generation: 2,
+      createdAt: 100,
+    });
+
+    const index = buildLatestSubagentRunReadIndexFromRuns(
+      toRunMap([olderGeneration, latestGeneration]),
+    );
+
+    expect(index.getLatestSubagentRun(childSessionKey)).toBe(latestGeneration);
+    expect(index.getLatestSubagentRun("agent:main:subagent:missing")).toBeNull();
+  });
+
   it("matches existing query helpers while reusing one indexed snapshot", () => {
     const now = Date.now();
     const root = "agent:main:main";

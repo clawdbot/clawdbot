@@ -2361,6 +2361,8 @@ export const ru: TranslationMap = {
       finished: "Завершены ({count})",
       stopTask: "Остановить {title}",
       viewTranscript: "Просмотреть расшифровку",
+      toolUseOne: "1 вызов инструмента",
+      toolUseMany: "{count} вызовов инструмента",
     },
     sessionDiff: {
       title: "Изменения",

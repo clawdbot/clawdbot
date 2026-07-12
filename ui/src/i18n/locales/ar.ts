@@ -2320,6 +2320,8 @@ export const ar: TranslationMap = {
       finished: "مكتملة ({count})",
       stopTask: "إيقاف {title}",
       viewTranscript: "عرض النص",
+      toolUseOne: "استخدام واحد لأداة",
+      toolUseMany: "{count} استخدامات للأدوات",
     },
     sessionDiff: {
       title: "التغييرات",

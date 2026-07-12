@@ -34,15 +34,6 @@ struct IOSGatewayChatTransportTests {
         return try #require(value as? [String: Any])
     }
 
-    @Test func `agent wait treats success as completion`() {
-        #expect(IOSGatewayChatTransport.isAgentWaitCompletionStatus("success"))
-        #expect(IOSGatewayChatTransport.isAgentWaitCompletionStatus(" ok "))
-        #expect(IOSGatewayChatTransport.isAgentWaitCompletionStatus("completed"))
-        #expect(IOSGatewayChatTransport.isAgentWaitCompletionStatus("succeeded"))
-        #expect(!IOSGatewayChatTransport.isAgentWaitCompletionStatus("timeout"))
-        #expect(!IOSGatewayChatTransport.isAgentWaitCompletionStatus("failed"))
-    }
-
     @Test func `agent wait timeout adds gateway margin`() {
         #expect(IOSGatewayChatTransport.agentWaitRequestTimeoutSeconds(timeoutMs: 1) == 6)
         #expect(IOSGatewayChatTransport.agentWaitRequestTimeoutSeconds(timeoutMs: 1000) == 6)
@@ -53,12 +44,26 @@ struct IOSGatewayChatTransportTests {
         #expect(IOSGatewayChatTransport.compactionRequestTimeoutSeconds == 0)
     }
 
-    @Test func `agent wait completion decodes fallback run id`() throws {
+    @Test func `agent wait distinguishes terminal and retryable timeouts`() throws {
         let data = Data(#"{"status":"completed"}"#.utf8)
-        let completion = try IOSGatewayChatTransport.decodeAgentWaitCompletion(data, fallbackRunId: "run-local")
-        #expect(completion.runId == "run-local")
-        #expect(completion.status == "completed")
-        #expect(completion.completed)
+        #expect(try IOSGatewayChatTransport.decodeAgentWaitObservation(data) == .terminal(.completed))
+
+        let pending = Data(#"{"status":"pending"}"#.utf8)
+        #expect(try IOSGatewayChatTransport.decodeAgentWaitObservation(pending) == .checkAgain)
+
+        let queued = Data(#"{"status":"timeout","timeoutPhase":"queue","providerStarted":false}"#.utf8)
+        #expect(try IOSGatewayChatTransport.decodeAgentWaitObservation(queued) == .checkAgain)
+
+        let providerTimeout = Data(
+            #"{"status":"timeout","timeoutPhase":"provider","providerStarted":true}"#.utf8)
+        #expect(
+            try IOSGatewayChatTransport.decodeAgentWaitObservation(providerTimeout) ==
+                .terminal(.failed(message: "Run timed out")))
+
+        let stopped = Data(#"{"status":"timeout","stopReason":"stop"}"#.utf8)
+        #expect(
+            try IOSGatewayChatTransport.decodeAgentWaitObservation(stopped) ==
+                .terminal(.failed(message: "Run cancelled")))
     }
 
     @Test func `model patch result decodes authoritative Luna thinking state`() throws {
@@ -254,7 +259,7 @@ struct IOSGatewayChatTransportTests {
         #expect(params["message"] as? String == "hello")
         #expect(params["thinking"] as? String == "low")
         #expect(params["idempotencyKey"] as? String == "send-1")
-        #expect(params["timeoutMs"] as? Int == IOSGatewayChatTransport.defaultChatSendTimeoutMs)
+        #expect(params["timeoutMs"] == nil)
         #expect(params["attachments"] == nil)
     }
 

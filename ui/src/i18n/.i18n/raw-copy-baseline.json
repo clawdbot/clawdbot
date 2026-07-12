@@ -2085,20 +2085,6 @@
       "kind": "html-attribute",
       "name": "aria-label",
       "path": "ui/src/pages/chat/components/chat-composer.ts",
-      "text": "BTW side question pending"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/pages/chat/components/chat-composer.ts",
-      "text": "BTW side result"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/pages/chat/components/chat-composer.ts",
       "text": "Cancel reply"
     },
     {
@@ -2114,20 +2100,6 @@
       "name": "aria-label",
       "path": "ui/src/pages/chat/components/chat-composer.ts",
       "text": "Compact recommended session context"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/pages/chat/components/chat-composer.ts",
-      "text": "Dismiss BTW question"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/pages/chat/components/chat-composer.ts",
-      "text": "Dismiss BTW result"
     },
     {
       "count": 1,
@@ -2176,13 +2148,6 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/chat/components/chat-composer.ts",
-      "text": "BTW"
-    },
-    {
-      "count": 2,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer.ts",
       "text": "close"
     },
     {
@@ -2225,13 +2190,6 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/chat/components/chat-composer.ts",
-      "text": "Not saved to chat history"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer.ts",
       "text": "run"
     },
     {
@@ -2261,13 +2219,6 @@
       "name": "text",
       "path": "ui/src/pages/chat/components/chat-composer.ts",
       "text": "Tab"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer.ts",
-      "text": "Thinking…"
     },
     {
       "count": 1,
@@ -2443,6 +2394,62 @@
       "name": "label",
       "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
       "text": "Verse"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/pages/chat/components/chat-side-chat.ts",
+      "text": "Clear side chat"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/pages/chat/components/chat-side-chat.ts",
+      "text": "Close side chat"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/pages/chat/components/chat-side-chat.ts",
+      "text": "Follow up in side chat"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/pages/chat/components/chat-side-chat.ts",
+      "text": "Send follow-up"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/pages/chat/components/chat-side-chat.ts",
+      "text": "Side chat"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/chat/components/chat-side-chat.ts",
+      "text": "Not saved to chat history"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/chat/components/chat-side-chat.ts",
+      "text": "Side chat"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/chat/components/chat-side-chat.ts",
+      "text": "Thinking…"
     },
     {
       "count": 1,

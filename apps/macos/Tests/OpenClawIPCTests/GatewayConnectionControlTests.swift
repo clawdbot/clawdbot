@@ -680,6 +680,7 @@ private func makeTestGatewayConnection() -> (GatewayConnection, FakeWebSocketSes
         let params = json?["params"] as? [String: Any]
         #expect(params?["thinking"] == nil)
         #expect(params?["expectedSessionRoutingContract"] as? String == "per-sender|main|main")
+        #expect(params?["timeoutMs"] == nil)
     }
 
     @Test func `routing identity decodes agent and contract from one response`() throws {

@@ -242,7 +242,7 @@ private func makeViewModel(
         @Sendable (TestSessionListQuery) async throws -> OpenClawChatSessionsListResponse?)? = nil,
     sendMessageHook: (@Sendable (String) async throws -> OpenClawChatSendResponse)? = nil,
     sendMessageStatus: String = "ok",
-    waitForRunCompletionHook: (@Sendable (String, Int) async -> Bool)? = nil,
+    waitForRunCompletionHook: (@Sendable (String, Int) async -> OpenClawChatRunObservation)? = nil,
     healthResponses: [Bool] = [true],
     initialThinkingLevel: String? = nil,
     modelPickerStore: ChatModelPickerStore? = nil,
@@ -545,7 +545,8 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         (@Sendable (TestSessionListQuery) async throws -> OpenClawChatSessionsListResponse?)?
     private let sendMessageHook: (@Sendable (String) async throws -> OpenClawChatSendResponse)?
     private let sendMessageStatus: String
-    private let waitForRunCompletionHook: (@Sendable (String, Int) async -> Bool)?
+    private let waitForRunCompletionHook:
+        (@Sendable (String, Int) async -> OpenClawChatRunObservation)?
     private let healthResponses: [Bool]
 
     private let stream: AsyncStream<OpenClawChatTransportEvent>
@@ -572,7 +573,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
             @Sendable (TestSessionListQuery) async throws -> OpenClawChatSessionsListResponse?)? = nil,
         sendMessageHook: (@Sendable (String) async throws -> OpenClawChatSendResponse)? = nil,
         sendMessageStatus: String = "ok",
-        waitForRunCompletionHook: (@Sendable (String, Int) async -> Bool)? = nil,
+        waitForRunCompletionHook: (@Sendable (String, Int) async -> OpenClawChatRunObservation)? = nil,
         healthResponses: [Bool] = [true])
     {
         self.historyResponses = historyResponses
@@ -815,9 +816,12 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         return self.healthResponses.last ?? true
     }
 
-    func waitForRunCompletion(runId: String, timeoutMs: Int) async -> Bool {
+    func waitForRunCompletion(
+        runId: String,
+        timeoutMs: Int) async -> OpenClawChatRunObservation
+    {
         await self.state.waitCompletionRunIdsAppend(runId)
-        return await self.waitForRunCompletionHook?(runId, timeoutMs) ?? false
+        return await self.waitForRunCompletionHook?(runId, timeoutMs) ?? .unavailable
     }
 
     func emit(_ evt: OpenClawChatTransportEvent) {
@@ -2633,7 +2637,7 @@ struct ChatViewModelTests {
         let (transport, vm) = await makeViewModel(
             historyResponses: [history1, history2, history3],
             sendMessageStatus: "pending",
-            waitForRunCompletionHook: { _, _ in true })
+            waitForRunCompletionHook: { _, _ in .terminal(.completed) })
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
 
         await sendUserMessage(vm, text: "hello")
@@ -2650,6 +2654,102 @@ struct ChatViewModelTests {
                         message.role == "assistant" &&
                             message.content.contains { $0.text == "completed after wait" }
                     }
+            }
+        }
+    }
+
+    @Test func `terminal wait keeps ownership until history becomes available`() async throws {
+        let historyCalls = AsyncCounter()
+        let waitCalls = AsyncCounter()
+        let sessionId = "sess-main"
+        let now = (Date().timeIntervalSince1970 * 1000) + 10000
+        let empty = historyPayload(sessionId: sessionId)
+        let completed = historyPayload(
+            sessionId: sessionId,
+            messages: [
+                chatTextMessage(
+                    role: "assistant",
+                    text: "recovered after history failure",
+                    timestamp: now + 1),
+            ])
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [empty, empty, empty, completed],
+            requestHistoryHook: { _ in
+                let count = await historyCalls.increment()
+                if count == 3 {
+                    throw NSError(domain: "ChatViewModelTests", code: 1)
+                }
+            },
+            sendMessageStatus: "pending",
+            waitForRunCompletionHook: { _, _ in
+                await waitCalls.increment() == 1 ? .terminal(.completed) : .unavailable
+            })
+        await MainActor.run {
+            vm.pendingRunTerminalRetryMs = 10
+            vm.pendingRunRefreshDelaysMs = [60000]
+        }
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+
+        await sendUserMessage(vm, text: "hello")
+        try await waitUntil("terminal observation retries failed history") {
+            let waits = await transport.waitCompletionRunIds()
+            return await MainActor.run {
+                waits.count >= 2 &&
+                    vm.pendingRunCount == 0 &&
+                    vm.messages.contains { message in
+                        message.content.contains { $0.text == "recovered after history failure" }
+                    }
+            }
+        }
+        #expect(await MainActor.run { vm.errorText == nil })
+    }
+
+    @Test func `terminal wait surfaces a missed lifecycle failure`() async throws {
+        let historyCalls = AsyncCounter()
+        let sessionId = "sess-main"
+        let empty = historyPayload(sessionId: sessionId)
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [empty, empty, empty],
+            requestHistoryHook: { _ in
+                if await historyCalls.increment() >= 3 {
+                    throw NSError(domain: "ChatViewModelTests", code: 2)
+                }
+            },
+            sendMessageStatus: "pending",
+            waitForRunCompletionHook: { _, _ in
+                .terminal(.failed(message: "Provider rejected the request"))
+            })
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+
+        await sendUserMessage(vm, text: "hello")
+        try await waitUntil("terminal failure clears pending run") {
+            await MainActor.run {
+                vm.pendingRunCount == 0 &&
+                    vm.errorText == "Provider rejected the request"
+            }
+        }
+        #expect(await !(transport.waitCompletionRunIds()).isEmpty)
+    }
+
+    @Test func `terminal wait retires a confirmed no-output completion`() async throws {
+        let sessionId = "sess-main"
+        let empty = historyPayload(sessionId: sessionId)
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [empty, empty, empty, empty],
+            sendMessageStatus: "pending",
+            waitForRunCompletionHook: { _, _ in .terminal(.completed) })
+        await MainActor.run {
+            vm.pendingRunTerminalRetryMs = 10
+            vm.pendingRunTerminalHistoryGraceMs = 10
+            vm.pendingRunRefreshDelaysMs = [60000]
+        }
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+
+        await sendUserMessage(vm, text: "hello")
+        try await waitUntil("confirmed no-output completion clears pending run") {
+            let waits = await transport.waitCompletionRunIds()
+            return await MainActor.run {
+                waits.count >= 2 && vm.pendingRunCount == 0 && vm.errorText == nil
             }
         }
     }

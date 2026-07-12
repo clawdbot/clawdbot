@@ -1493,7 +1493,8 @@ extension GatewayConnection {
         thinking: String?,
         idempotencyKey: String,
         attachments: [OpenClawChatAttachmentPayload],
-        timeoutMs: Int = 30000,
+        runTimeoutMs: Int? = nil,
+        requestTimeoutMs: Int = 30000,
         ifCurrentRoute route: Route? = nil,
         distinguishPreDispatchRouteChange: Bool = false) async throws -> OpenClawChatSendResponse
     {
@@ -1502,8 +1503,10 @@ extension GatewayConnection {
             "sessionKey": AnyCodable(resolvedKey),
             "message": AnyCodable(message),
             "idempotencyKey": AnyCodable(idempotencyKey),
-            "timeoutMs": AnyCodable(timeoutMs),
         ]
+        if let runTimeoutMs {
+            params["timeoutMs"] = AnyCodable(runTimeoutMs)
+        }
         if let agentID = agentID?.trimmingCharacters(in: .whitespacesAndNewlines), !agentID.isEmpty {
             params["agentId"] = AnyCodable(agentID)
         }
@@ -1535,12 +1538,15 @@ extension GatewayConnection {
             let data = try await request(
                 method: Method.chatSend.rawValue,
                 params: params,
-                timeoutMs: Double(timeoutMs),
+                timeoutMs: Double(requestTimeoutMs),
                 ifCurrentRoute: route,
                 distinguishPreDispatchRouteChange: distinguishPreDispatchRouteChange)
             return try self.decoder.decode(OpenClawChatSendResponse.self, from: data)
         }
-        return try await self.requestDecoded(method: .chatSend, params: params, timeoutMs: Double(timeoutMs))
+        return try await self.requestDecoded(
+            method: .chatSend,
+            params: params,
+            timeoutMs: Double(requestTimeoutMs))
     }
 
     func chatAbort(sessionKey: String, runId: String) async throws -> Bool {

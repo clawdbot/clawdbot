@@ -16,6 +16,7 @@ const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 export const BOUNDARY_CHECKS = [
   ["prompt:snapshots:check", "pnpm", ["prompt:snapshots:check"]],
   ["plugin-extension-boundary", "pnpm", ["run", "lint:plugins:no-extension-imports"]],
+  ["lint:docker-e2e", "pnpm", ["run", "lint:docker-e2e"]],
   ["lint:tmp:no-random-messaging", "pnpm", ["run", "lint:tmp:no-random-messaging"]],
   ["lint:tmp:channel-agnostic-boundaries", "pnpm", ["run", "lint:tmp:channel-agnostic-boundaries"]],
   ["lint:tmp:tsgo-core-boundary", "pnpm", ["run", "lint:tmp:tsgo-core-boundary"]],

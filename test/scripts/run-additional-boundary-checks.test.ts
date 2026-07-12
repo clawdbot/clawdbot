@@ -213,6 +213,14 @@ describe("run-additional-boundary-checks", () => {
     });
   });
 
+  it("keeps the Docker E2E package guard in CI boundary checks", () => {
+    expect(BOUNDARY_CHECKS).toContainEqual({
+      label: "lint:docker-e2e",
+      command: "pnpm",
+      args: ["run", "lint:docker-e2e"],
+    });
+  });
+
   it("keeps the Telegram grammY type import guard in source boundary checks", () => {
     expect(BOUNDARY_CHECKS).toContainEqual({
       label: "lint:extensions:telegram-grammy-types",

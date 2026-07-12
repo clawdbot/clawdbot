@@ -76,6 +76,10 @@ export type SubagentRunReadIndex = {
   runsByControllerSessionKey: ReadonlyMap<string, readonly SubagentRunRecord[]>;
 };
 
+export type LatestSubagentRunReadIndex = {
+  getLatestSubagentRun(childSessionKey: string): SubagentRunRecord | null;
+};
+
 function rememberLatestRunEntry(
   map: Map<string, SubagentRunRecord>,
   key: string,
@@ -85,6 +89,24 @@ function rememberLatestRunEntry(
   if (!existing || compareSubagentRunGeneration(entry, existing) > 0) {
     map.set(key, entry);
   }
+}
+
+/** Builds a reusable latest-generation lookup from one registry snapshot. */
+export function buildLatestSubagentRunReadIndexFromRuns(
+  runs: Map<string, SubagentRunRecord>,
+): LatestSubagentRunReadIndex {
+  const latestRunByChildSessionKey = new Map<string, SubagentRunRecord>();
+  for (const entry of runs.values()) {
+    const childSessionKey = entry.childSessionKey.trim();
+    if (!childSessionKey) {
+      continue;
+    }
+    rememberLatestRunEntry(latestRunByChildSessionKey, childSessionKey, entry);
+  }
+  return {
+    getLatestSubagentRun: (childSessionKey) =>
+      latestRunByChildSessionKey.get(childSessionKey.trim()) ?? null,
+  };
 }
 
 function rememberLatestRunPair(

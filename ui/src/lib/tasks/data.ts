@@ -20,6 +20,8 @@ export type TaskSummary = {
   updatedAt?: TaskTimestamp;
   startedAt?: TaskTimestamp;
   endedAt?: TaskTimestamp;
+  toolUseCount?: number;
+  lastToolName?: string;
   progressSummary?: string;
   terminalSummary?: string;
   error?: string;
@@ -36,6 +38,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function optionalCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
 }
 
 function normalizeTaskStatus(value: unknown): TaskStatus | null {
@@ -95,6 +101,8 @@ export function normalizeTaskSummary(value: unknown): TaskSummary | null {
   const updatedAt = normalizeTimestamp(value.updatedAt);
   const startedAt = normalizeTimestamp(value.startedAt);
   const endedAt = normalizeTimestamp(value.endedAt);
+  const toolUseCount = optionalCount(value.toolUseCount);
+  const lastToolName = optionalString(value.lastToolName);
   const progressSummary = optionalString(value.progressSummary);
   const terminalSummary = optionalString(value.terminalSummary);
   const error = optionalString(value.error);
@@ -113,6 +121,8 @@ export function normalizeTaskSummary(value: unknown): TaskSummary | null {
     ...(updatedAt !== undefined ? { updatedAt } : {}),
     ...(startedAt !== undefined ? { startedAt } : {}),
     ...(endedAt !== undefined ? { endedAt } : {}),
+    ...(toolUseCount !== undefined ? { toolUseCount } : {}),
+    ...(lastToolName ? { lastToolName } : {}),
     ...(progressSummary ? { progressSummary } : {}),
     ...(terminalSummary ? { terminalSummary } : {}),
     ...(error ? { error } : {}),

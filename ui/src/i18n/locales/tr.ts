@@ -2360,6 +2360,8 @@ export const tr: TranslationMap = {
       finished: "Tamamlandı ({count})",
       stopTask: "{title} öğesini durdur",
       viewTranscript: "Transkripti görüntüle",
+      toolUseOne: "1 araç kullanımı",
+      toolUseMany: "{count} araç kullanımı",
     },
     sessionDiff: {
       title: "Değişiklikler",

@@ -607,6 +607,51 @@ describe("task-registry", () => {
     });
   });
 
+  it("tracks tool activity from tool-start events", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+
+      createTaskRecord({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:main:subagent:tools",
+        runId: "run-tools",
+        task: "Sweep the repo",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        startedAt: 100,
+      });
+
+      emitAgentEvent({
+        runId: "run-tools",
+        stream: "tool",
+        data: { phase: "start", name: "read", toolCallId: "call-1" },
+      });
+      emitAgentEvent({
+        runId: "run-tools",
+        stream: "tool",
+        data: { phase: "end", name: "read", toolCallId: "call-1" },
+      });
+      emitAgentEvent({
+        runId: "run-tools",
+        stream: "tool",
+        data: { phase: "start", name: "exec", toolCallId: "call-2" },
+      });
+      // Nameless starts refresh lastEventAt but must not count as activity.
+      emitAgentEvent({
+        runId: "run-tools",
+        stream: "tool",
+        data: { phase: "start", toolCallId: "call-3" },
+      });
+
+      expectRecordFields(requireTaskByRunId("run-tools"), {
+        toolUseCount: 2,
+        lastToolName: "exec",
+      });
+    });
+  });
+
   it("keeps subagent abort lifecycle projections provisional", async () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();

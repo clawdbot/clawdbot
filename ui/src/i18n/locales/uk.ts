@@ -2347,6 +2347,8 @@ export const uk: TranslationMap = {
       finished: "Завершено ({count})",
       stopTask: "Зупинити {title}",
       viewTranscript: "Переглянути транскрипт",
+      toolUseOne: "1 використання інструмента",
+      toolUseMany: "{count} використань інструментів",
     },
     sessionDiff: {
       title: "Зміни",

@@ -8392,6 +8392,33 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Static Bans
   - H2: Done Criteria
 
+## refactor/operator-approvals.md
+
+- Route: /refactor/operator-approvals
+- Headings:
+  - H1: Multi-surface operator approvals
+  - H2: Goals
+  - H2: Non-goals
+  - H2: Existing system and evidence map
+  - H2: Prior art
+  - H2: Architecture and ownership
+  - H2: Persistent record
+  - H2: State machine and compare-and-set
+  - H2: Gateway API
+  - H2: Events and portable actions
+  - H2: Control UI
+  - H2: Authorization and privacy
+  - H2: Audience projection
+  - H2: Restart, timeout, and route semantics
+  - H2: Compatibility plan
+  - H2: Rollout
+  - H3: PR 1: durable lifecycle
+  - H3: PR 2: deep link and typed actions
+  - H3: PR 3: propagation and fail-closed behavior
+  - H2: Tests
+  - H2: Observability
+  - H2: Open decisions
+
 ## reference/AGENTS.default.md
 
 - Route: /reference/AGENTS.default

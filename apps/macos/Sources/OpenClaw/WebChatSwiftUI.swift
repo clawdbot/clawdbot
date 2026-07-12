@@ -19,6 +19,19 @@ private enum WebChatSwiftUILayout {
 }
 
 struct MacGatewayChatTransport: OpenClawChatTransport {
+    private struct AgentWaitResponse: Decodable {
+        var status: String?
+        var endedAt: Double?
+        var error: String?
+        var stopReason: String?
+        var livenessState: String?
+        var yielded: Bool?
+        var pendingError: Bool?
+        var timeoutPhase: String?
+        var providerStarted: Bool?
+        var aborted: Bool?
+    }
+
     /// Shared across transport value copies so the live view model and its
     /// snapshot observer cannot diverge on the owner of the bare global alias.
     private final class RoutingIdentity: @unchecked Sendable {
@@ -392,6 +405,43 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
 
     func requestHealth(timeoutMs: Int) async throws -> Bool {
         try await GatewayConnection.shared.healthOK(timeoutMs: timeoutMs)
+    }
+
+    func waitForRunCompletion(
+        runId rawRunId: String,
+        timeoutMs: Int) async -> OpenClawChatRunObservation
+    {
+        let runId = rawRunId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !runId.isEmpty,
+              let route = await GatewayConnection.shared.captureRoute()
+        else { return .unavailable }
+        do {
+            let data = try await GatewayConnection.shared.request(
+                method: "agent.wait",
+                params: [
+                    "runId": AnyCodable(runId),
+                    "timeoutMs": AnyCodable(timeoutMs),
+                ],
+                timeoutMs: Double(timeoutMs + 5000),
+                ifCurrentRoute: route)
+            let decoded = try JSONDecoder().decode(AgentWaitResponse.self, from: data)
+            return OpenClawChatRunObservation.fromWaitResponse(
+                status: decoded.status,
+                endedAt: decoded.endedAt,
+                error: decoded.error,
+                stopReason: decoded.stopReason,
+                livenessState: decoded.livenessState,
+                yielded: decoded.yielded,
+                pendingError: decoded.pendingError,
+                timeoutPhase: decoded.timeoutPhase,
+                providerStarted: decoded.providerStarted,
+                aborted: decoded.aborted)
+        } catch {
+            webChatSwiftLogger.warning(
+                "agent.wait failed runId=\(runId, privacy: .public) "
+                    + "error=\(error.localizedDescription, privacy: .public)")
+            return .unavailable
+        }
     }
 
     func resetSession(sessionKey: String) async throws {

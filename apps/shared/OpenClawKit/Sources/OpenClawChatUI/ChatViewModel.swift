@@ -185,20 +185,23 @@ public final class OpenClawChatViewModel {
     var readySessionMetadataGeneration: UInt64?
 
     @ObservationIgnored
-    nonisolated(unsafe) var pendingRunTimeoutTasks: [String: Task<Void, Never>] = [:]
-    var nextPendingRunTimeoutArmID: UInt64 = 0
-    var pendingRunTimeoutArmIDs: [String: UInt64] = [:]
+    nonisolated(unsafe) var pendingRunOwnerTasks: [String: Task<Void, Never>] = [:]
+    var nextPendingRunOwnerArmID: UInt64 = 0
+    var pendingRunOwnerArmIDs: [String: UInt64] = [:]
     @ObservationIgnored
     private nonisolated(unsafe) var activeSessionRunIndicatorTimeoutTask: Task<Void, Never>?
-    let pendingRunTimeoutMs: UInt64 = 120_000
-    static let postSendRefreshDelaysMs: [UInt64] = [
+    var pendingRunWaitTimeoutMs: UInt64 = 120_000
+    var pendingRunUnavailableRetryMs: UInt64 = 30000
+    var pendingRunTerminalRetryMs: UInt64 = 2000
+    var pendingRunTerminalHistoryGraceMs: UInt64 = 10000
+    var pendingRunRefreshDelaysMs: [UInt64] = [
         1500,
         4000,
         9000,
         20000,
         45000,
-        90000,
     ]
+    var pendingRunSteadyRefreshDelayMs: UInt64 = 60000
     // Session switches can overlap in-flight picker patches, so stale completions
     // must compare against the latest request and latest desired value for that session.
     private var nextModelSelectionRequestID: UInt64 = 0
@@ -377,7 +380,7 @@ public final class OpenClawChatViewModel {
         self.outboxRetryTask?.cancel()
         self.outboxChangesTask?.cancel()
         self.activeSessionRunIndicatorTimeoutTask?.cancel()
-        for (_, task) in self.pendingRunTimeoutTasks {
+        for (_, task) in self.pendingRunOwnerTasks {
             task.cancel()
         }
     }
@@ -693,7 +696,7 @@ extension OpenClawChatViewModel {
 
     private func armActiveSessionRunIndicatorTimeout() {
         self.activeSessionRunIndicatorTimeoutTask?.cancel()
-        let timeoutMs = self.pendingRunTimeoutMs
+        let timeoutMs = self.pendingRunWaitTimeoutMs
         self.activeSessionRunIndicatorTimeoutTask = Task { [weak self] in
             do {
                 try await Task.sleep(nanoseconds: timeoutMs * 1_000_000)
@@ -928,7 +931,9 @@ extension OpenClawChatViewModel {
         if self.runMessageScopesByRunID[runId] == nil {
             self.runMessageScopesByRunID[runId] = currentRunMessageScope()
         }
-        self.armPendingRunTimeout(runId: runId)
+        if self.pendingRunOwnerArmIDs[runId] == nil {
+            self.armPendingRunOwner(runId: runId)
+        }
         if !bufferedText.isEmpty {
             self.updateStreamingAssistantText(bufferedText)
         }

@@ -384,6 +384,24 @@ describe("LINE send helpers", () => {
     expect(pushMessageMock).not.toHaveBeenCalled();
   });
 
+  it("preserves UTF-16 boundaries in invalid recipient diagnostics", async () => {
+    await expect(
+      sendModule.pushMessagesLine(`aab😀${"x".repeat(40)}`, [{ type: "text", text: "hello" }], {
+        cfg: LINE_TEST_CFG,
+      }),
+    ).rejects.toThrow(
+      "Recipient is not a valid LINE id (case-sensitive; expected leading capital C/U/R): aab…",
+    );
+    await expect(
+      sendModule.pushMessagesLine(`aa😀${"y".repeat(40)}`, [{ type: "text", text: "hello" }], {
+        cfg: LINE_TEST_CFG,
+      }),
+    ).rejects.toThrow(
+      "Recipient is not a valid LINE id (case-sensitive; expected leading capital C/U/R): aa😀…",
+    );
+    expect(pushMessageMock).not.toHaveBeenCalled();
+  });
+
   it("accepts case-exact LINE recipients with the leading capital preserved", async () => {
     await sendModule.pushMessagesLine(
       "Cabcdef0123456789abcdef0123456789",

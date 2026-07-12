@@ -145,7 +145,7 @@ type SecretsReloadHarnessParams = {
 
 function createSecretsReloadHarness(params: SecretsReloadHarnessParams) {
   const respond = params.respond ?? vi.fn();
-  const { extraHandlers } = createGatewayAuxHandlers({
+  const gatewayAux = createGatewayAuxHandlers({
     log: {},
     activateRuntimeSecrets: params.activateRuntimeSecrets,
     buildReloadPlan: params.buildReloadPlan,
@@ -161,8 +161,10 @@ function createSecretsReloadHarness(params: SecretsReloadHarnessParams) {
     getChannelAutostartSuppression: params.getChannelAutostartSuppression,
     logChannels: { info: params.logChannelsInfo ?? vi.fn() },
   });
+  const { extraHandlers } = gatewayAux;
 
   return {
+    ...gatewayAux,
     extraHandlers,
     respond,
     reload: () => invokeSecretsReload({ handlers: extraHandlers, respond }),
@@ -203,6 +205,21 @@ afterEach(() => {
 });
 
 describe("gateway aux handlers", () => {
+  it("shares one approval epoch per gateway lifetime and rotates it on restart", () => {
+    const first = createSecretsReloadHarness({
+      activateRuntimeSecrets: mockResolvedSecrets(asConfig({})),
+    });
+    const second = createSecretsReloadHarness({
+      activateRuntimeSecrets: mockResolvedSecrets(asConfig({})),
+    });
+
+    expect(first.execApprovalManager.runtimeEpoch).toBe(first.pluginApprovalManager.runtimeEpoch);
+    expect(second.execApprovalManager.runtimeEpoch).toBe(second.pluginApprovalManager.runtimeEpoch);
+    expect(first.execApprovalManager.runtimeEpoch).not.toBe(
+      second.execApprovalManager.runtimeEpoch,
+    );
+  });
+
   it("refuses secrets.reload channel restarts while crash-loop safe mode suppresses autostart", async () => {
     const buildReloadPlan = buildRestartChannelsPlan("slack");
     activateSnapshot(slackConfig("old-slack-secret"));

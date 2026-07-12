@@ -2337,6 +2337,8 @@ export const ko: TranslationMap = {
       finished: "완료됨({count})",
       stopTask: "{title} 중지",
       viewTranscript: "트랜스크립트 보기",
+      toolUseOne: "도구 사용 1회",
+      toolUseMany: "도구 사용 {count}회",
     },
     sessionDiff: {
       title: "변경 사항",

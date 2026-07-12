@@ -265,6 +265,45 @@ import {
   DeviceTokenRevokeParamsSchema,
   type DeviceTokenRotateParams,
   DeviceTokenRotateParamsSchema,
+  type AllowedApprovalSnapshot,
+  AllowedApprovalSnapshotSchema,
+  isWellFormedApprovalId,
+  type ApprovalAllowDecision,
+  ApprovalAllowDecisionSchema,
+  type ApprovalDecision,
+  ApprovalDecisionSchema,
+  type ApprovalGetParams,
+  ApprovalGetParamsSchema,
+  type ApprovalGetResult,
+  ApprovalGetResultSchema,
+  type ApprovalKind,
+  ApprovalKindSchema,
+  type ApprovalPresentation,
+  ApprovalPresentationSchema,
+  type ApprovalResolveParams,
+  ApprovalResolveParamsSchema,
+  type ApprovalResolveResult,
+  ApprovalResolveResultSchema,
+  type ApprovalSnapshot,
+  ApprovalSnapshotSchema,
+  type ApprovalTerminalReason,
+  ApprovalTerminalReasonSchema,
+  type CancelledApprovalSnapshot,
+  CancelledApprovalSnapshotSchema,
+  type DeniedApprovalSnapshot,
+  DeniedApprovalSnapshotSchema,
+  type ExecApprovalPresentation,
+  ExecApprovalPresentationSchema,
+  type ExpiredApprovalSnapshot,
+  ExpiredApprovalSnapshotSchema,
+  type PendingApprovalSnapshot,
+  PendingApprovalSnapshotSchema,
+  type PluginApprovalPresentation,
+  PluginApprovalPresentationSchema,
+  type PluginApprovalSeverity,
+  PluginApprovalSeveritySchema,
+  type TerminalApprovalSnapshot,
+  TerminalApprovalSnapshotSchema,
   type ExecApprovalsGetParams,
   ExecApprovalsGetParamsSchema,
   type ExecApprovalsNodeGetParams,
@@ -1255,6 +1294,53 @@ export const validateDeviceTokenRotateParams = lazyCompile<DeviceTokenRotatePara
 export const validateDeviceTokenRevokeParams = lazyCompile<DeviceTokenRevokeParams>(
   DeviceTokenRevokeParamsSchema,
 );
+export const validateApprovalKind = lazyCompile<ApprovalKind>(ApprovalKindSchema);
+export const validateApprovalDecision = lazyCompile<ApprovalDecision>(ApprovalDecisionSchema);
+export const validateApprovalAllowDecision = lazyCompile<ApprovalAllowDecision>(
+  ApprovalAllowDecisionSchema,
+);
+export const validateApprovalTerminalReason = lazyCompile<ApprovalTerminalReason>(
+  ApprovalTerminalReasonSchema,
+);
+export const validatePluginApprovalSeverity = lazyCompile<PluginApprovalSeverity>(
+  PluginApprovalSeveritySchema,
+);
+export const validateExecApprovalPresentation = lazyCompile<ExecApprovalPresentation>(
+  ExecApprovalPresentationSchema,
+);
+export const validatePluginApprovalPresentation = lazyCompile<PluginApprovalPresentation>(
+  PluginApprovalPresentationSchema,
+);
+export const validateApprovalPresentation = lazyCompile<ApprovalPresentation>(
+  ApprovalPresentationSchema,
+);
+export const validatePendingApprovalSnapshot = lazyCompile<PendingApprovalSnapshot>(
+  PendingApprovalSnapshotSchema,
+);
+export const validateAllowedApprovalSnapshot = lazyCompile<AllowedApprovalSnapshot>(
+  AllowedApprovalSnapshotSchema,
+);
+export const validateDeniedApprovalSnapshot = lazyCompile<DeniedApprovalSnapshot>(
+  DeniedApprovalSnapshotSchema,
+);
+export const validateExpiredApprovalSnapshot = lazyCompile<ExpiredApprovalSnapshot>(
+  ExpiredApprovalSnapshotSchema,
+);
+export const validateCancelledApprovalSnapshot = lazyCompile<CancelledApprovalSnapshot>(
+  CancelledApprovalSnapshotSchema,
+);
+export const validateApprovalSnapshot = lazyCompile<ApprovalSnapshot>(ApprovalSnapshotSchema);
+export const validateTerminalApprovalSnapshot = lazyCompile<TerminalApprovalSnapshot>(
+  TerminalApprovalSnapshotSchema,
+);
+export const validateApprovalGetParams = lazyCompile<ApprovalGetParams>(ApprovalGetParamsSchema);
+export const validateApprovalGetResult = lazyCompile<ApprovalGetResult>(ApprovalGetResultSchema);
+export const validateApprovalResolveParams = lazyCompile<ApprovalResolveParams>(
+  ApprovalResolveParamsSchema,
+);
+export const validateApprovalResolveResult = lazyCompile<ApprovalResolveResult>(
+  ApprovalResolveResultSchema,
+);
 export const validateExecApprovalsGetParams = lazyCompile<ExecApprovalsGetParams>(
   ExecApprovalsGetParamsSchema,
 );
@@ -1682,6 +1768,26 @@ export {
   TerminalDataEventSchema,
   TerminalExitEventSchema,
   TerminalEventSchema,
+  isWellFormedApprovalId,
+  ApprovalKindSchema,
+  ApprovalDecisionSchema,
+  ApprovalAllowDecisionSchema,
+  ApprovalTerminalReasonSchema,
+  PluginApprovalSeveritySchema,
+  ExecApprovalPresentationSchema,
+  PluginApprovalPresentationSchema,
+  ApprovalPresentationSchema,
+  PendingApprovalSnapshotSchema,
+  AllowedApprovalSnapshotSchema,
+  DeniedApprovalSnapshotSchema,
+  ExpiredApprovalSnapshotSchema,
+  CancelledApprovalSnapshotSchema,
+  ApprovalSnapshotSchema,
+  TerminalApprovalSnapshotSchema,
+  ApprovalGetParamsSchema,
+  ApprovalGetResultSchema,
+  ApprovalResolveParamsSchema,
+  ApprovalResolveResultSchema,
   ExecApprovalsGetParamsSchema,
   ExecApprovalsSetParamsSchema,
   ExecApprovalGetParamsSchema,
@@ -2012,6 +2118,25 @@ export type {
   CronRunParams,
   CronRunsParams,
   CronRunLogEntry,
+  ApprovalKind,
+  ApprovalDecision,
+  ApprovalAllowDecision,
+  ApprovalTerminalReason,
+  PluginApprovalSeverity,
+  ExecApprovalPresentation,
+  PluginApprovalPresentation,
+  ApprovalPresentation,
+  PendingApprovalSnapshot,
+  AllowedApprovalSnapshot,
+  DeniedApprovalSnapshot,
+  ExpiredApprovalSnapshot,
+  CancelledApprovalSnapshot,
+  ApprovalSnapshot,
+  TerminalApprovalSnapshot,
+  ApprovalGetParams,
+  ApprovalGetResult,
+  ApprovalResolveParams,
+  ApprovalResolveResult,
   ExecApprovalsGetParams,
   ExecApprovalsNodeSnapshot,
   ExecApprovalsSetParams,

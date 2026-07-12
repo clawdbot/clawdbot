@@ -2342,6 +2342,8 @@ export const fa: TranslationMap = {
       finished: "پایان‌یافته ({count})",
       stopTask: "توقف {title}",
       viewTranscript: "مشاهدهٔ رونوشت",
+      toolUseOne: "۱ بار استفاده از ابزار",
+      toolUseMany: "{count} بار استفاده از ابزار",
     },
     sessionDiff: {
       title: "تغییرات",

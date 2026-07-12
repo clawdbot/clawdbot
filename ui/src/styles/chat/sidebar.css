@@ -874,6 +874,13 @@
   opacity: 0.6;
 }
 
+/* Currently running tool name: lifted from the muted meta line so live
+   activity is scannable without reading the whole row. */
+.chat-tasks-rail__task-tool {
+  color: var(--text);
+  font-weight: 550;
+}
+
 .chat-tasks-rail__task-detail {
   display: -webkit-box;
   -webkit-box-orient: vertical;
