@@ -307,13 +307,17 @@ describe("msteams monitor handler authz", () => {
     return call[argIndex];
   }
 
-  function firstSettledDispatch(): { ctxPayload?: unknown } {
+  function settledDispatchAt(callIndex: number): { ctxPayload?: unknown } {
     const dispatched = mockCallArg(
       runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher,
-      0,
+      callIndex,
       0,
     );
     return { ctxPayload: recordFromMockCall(dispatched).ctx };
+  }
+
+  function firstSettledDispatch(): { ctxPayload?: unknown } {
+    return settledDispatchAt(0);
   }
 
   function logMeta(logFn: unknown, message: string): Record<string, unknown> {
@@ -1114,6 +1118,7 @@ describe("msteams monitor handler authz", () => {
           id: "msg-debounce-blocked-quote-1",
           text: '<quoted messageId="quoted-message-2"/>\nCurrent message',
           extraActivity: {
+            replyToId: "parent-msg",
             entities: [
               {
                 type: "quotedReply",
@@ -1151,6 +1156,149 @@ describe("msteams monitor handler authz", () => {
       );
       expect(ctxPayload.SupplementalContext).toEqual({});
       expect(String(ctxPayload.BodyForAgent)).not.toContain("Blocked prompt injection");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not carry quotedReply context across debounced Teams channel threads", async () => {
+    vi.useFakeTimers();
+    resetThreadMocks();
+    const { deps } = createDeps(
+      {
+        messages: { inbound: { debounceMs: 60_000 } },
+        channels: {
+          msteams: {
+            groupPolicy: "open",
+            requireMention: false,
+          },
+        },
+      } as OpenClawConfig,
+      {
+        createInboundDebouncer,
+        resolveInboundDebounceMs: vi.fn(() => 60_000),
+      },
+    );
+
+    try {
+      const handler = createMSTeamsMessageHandler(deps);
+      const common = {
+        from: { id: "member-id", aadObjectId: "member-aad", name: "Member" },
+        conversation: { id: "19:channel@thread.tacv2", conversationType: "channel" as const },
+        channelData: {
+          team: { id: "team123", name: "Team 123" },
+          channel: { name: "General" },
+        },
+      };
+      await handler(
+        createMessageActivity({
+          ...common,
+          id: "msg-debounce-thread-a",
+          text: '<quoted messageId="quoted-message-thread-a"/>\nThread A message',
+          extraActivity: {
+            replyToId: "thread-a",
+            entities: [
+              {
+                type: "quotedReply",
+                messageId: "quoted-message-thread-a",
+                senderId: "sender-aad",
+                senderName: "Sender",
+                preview: "thread A quote",
+              },
+            ],
+          },
+        }),
+      );
+      await handler(
+        createMessageActivity({
+          ...common,
+          id: "msg-debounce-thread-b",
+          text: "Thread B message",
+          extraActivity: { replyToId: "thread-b" },
+        }),
+      );
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.waitFor(() =>
+        expect(
+          runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher,
+        ).toHaveBeenCalledTimes(2),
+      );
+
+      const firstPayload = recordFromMockCall(settledDispatchAt(0).ctxPayload);
+      const secondPayload = recordFromMockCall(settledDispatchAt(1).ctxPayload);
+      expect(firstPayload.BodyForAgent).toBe("Thread A message");
+      expect(firstPayload.SupplementalContext).toMatchObject({
+        quote: {
+          id: "quoted-message-thread-a",
+          body: "thread A quote",
+          sender: "Sender",
+        },
+      });
+      expect(secondPayload.BodyForAgent).toBe("Thread B message");
+      expect(secondPayload.SupplementalContext).toEqual({});
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not debounce separate Teams channel root posts together", async () => {
+    vi.useFakeTimers();
+    resetThreadMocks();
+    const { deps } = createDeps(
+      {
+        messages: { inbound: { debounceMs: 60_000 } },
+        channels: {
+          msteams: {
+            groupPolicy: "open",
+            requireMention: false,
+          },
+        },
+      } as OpenClawConfig,
+      {
+        createInboundDebouncer,
+        resolveInboundDebounceMs: vi.fn(() => 60_000),
+      },
+    );
+
+    try {
+      const handler = createMSTeamsMessageHandler(deps);
+      const common = {
+        from: { id: "member-id", aadObjectId: "member-aad", name: "Member" },
+        conversation: { id: "19:channel@thread.tacv2", conversationType: "channel" as const },
+        channelData: {
+          team: { id: "team123", name: "Team 123" },
+          channel: { name: "General" },
+        },
+      };
+      await handler(
+        createMessageActivity({
+          ...common,
+          id: "msg-root-thread-a",
+          text: "Root thread A",
+        }),
+      );
+      await handler(
+        createMessageActivity({
+          ...common,
+          id: "msg-root-thread-b",
+          text: "Root thread B",
+        }),
+      );
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.waitFor(() =>
+        expect(
+          runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher,
+        ).toHaveBeenCalledTimes(2),
+      );
+
+      expect(recordFromMockCall(settledDispatchAt(0).ctxPayload).BodyForAgent).toBe(
+        "Root thread A",
+      );
+      expect(recordFromMockCall(settledDispatchAt(1).ctxPayload).BodyForAgent).toBe(
+        "Root thread B",
+      );
     } finally {
       vi.useRealTimers();
     }
