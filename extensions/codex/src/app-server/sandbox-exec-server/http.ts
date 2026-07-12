@@ -259,6 +259,15 @@ function readStreamingSandboxHttpResponse(params: {
     params.child.stderr.on("data", (chunk: string) => {
       stderr = sliceUtf16Safe(`${stderr}${chunk}`, -4096);
     });
+    // A stream error before headers would leave the request unsettled if the
+    // child stays alive; route it through fail() so the response lifecycle
+    // settles exactly once.  The outer no-op listener on the same stream
+    // prevents the EventEmitter from throwing before this listener fires.
+    const streamErrorToFail = (error: Error) => {
+      fail(`sandbox http/request output stream error: ${error.message}`, null);
+    };
+    params.child.stdout.on("error", streamErrorToFail);
+    params.child.stderr.on("error", streamErrorToFail);
     params.child.once("error", (error) => {
       // ChildProcess error can precede close while the helper is still alive.
       // Keep its backend lease until close provides the terminal exit state.

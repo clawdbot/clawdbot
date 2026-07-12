@@ -169,4 +169,44 @@ describe("sandbox exec-server pipe survival", () => {
 
     socket.close();
   });
+
+  it("streaming HTTP request settles on pre-header stdout error while child stays alive", async () => {
+    // Child stays alive forever without emitting headers so the only way the
+    // request settles is through the stream-error → fail path.
+    const sandbox = createSandboxContext({
+      buildExecSpec: async () => ({
+        argv: [process.execPath, "-e", "setTimeout(function(){},300000)"],
+        env: { PATH: process.env.PATH, TMPDIR },
+        stdinMode: "pipe-closed" as const,
+      }),
+    });
+    const client = createClient();
+    const env = await ensureCodexSandboxExecServerEnvironment({ client: client as any, sandbox });
+    expect(env).toBeDefined();
+    const socket = await openSocket(execServerUrlFromClient(client));
+    collectNotifications(socket);
+
+    const requestPromise = rpc(socket, "http/request", {
+      requestId: "http-pipe-err-1",
+      method: "GET",
+      url: "https://example.com/",
+      streamResponse: true,
+    });
+
+    // Wait for the spawned child so the readStreamingSandboxHttpResponse
+    // listeners are attached.
+    await delay(100);
+    const child = spawnedChildren.at(-1);
+    expect(child).toBeDefined();
+
+    // Emit a stdout error before headers; the fix must settle the request
+    // through its guarded failure path instead of hanging.
+    child!.stdout.emit("error", new Error("EPIPE: simulated broken output pipe"));
+
+    await expect(requestPromise).rejects.toThrow("sandbox http/request output stream error");
+
+    // The WebSocket bridge must survive the settled failure.
+    expect(socket.readyState).toBe(WS_OPEN);
+    socket.close();
+  });
 });
