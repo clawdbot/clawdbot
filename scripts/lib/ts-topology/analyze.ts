@@ -1,6 +1,7 @@
 // Analyze script supports OpenClaw repository automation.
 import path from "node:path";
 import ts from "typescript";
+import { expectDefined } from "../../../packages/normalization-core/src/expect.js";
 import {
   canonicalSymbolInfo,
   countIdentifierUsages,
@@ -298,8 +299,12 @@ function finalizeRecords(records: TopologyRecord[]) {
       return byRefs;
     }
     return (
-      left.publicSpecifiers[0].localeCompare(right.publicSpecifiers[0]) ||
-      left.exportNames[0].localeCompare(right.exportNames[0])
+      expectDefined(left.publicSpecifiers[0], "left topology public specifier").localeCompare(
+        expectDefined(right.publicSpecifiers[0], "right topology public specifier"),
+      ) ||
+      expectDefined(left.exportNames[0], "left topology export name").localeCompare(
+        expectDefined(right.exportNames[0], "right topology export name"),
+      )
     );
   });
 }

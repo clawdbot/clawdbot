@@ -15,6 +15,10 @@ OpenClaw "presence" is a lightweight, best-effort view of:
 Presence renders live connection metadata in the Control UI **Devices** page
 and the macOS app's **Instances** tab.
 
+This page covers the Gateway client roster. To detect the Mac you most recently
+used and route node alerts there, see
+[Active computer presence](/nodes/presence).
+
 ## Presence fields (what shows up)
 
 Presence entries are structured objects with fields like:
@@ -113,6 +117,9 @@ indicator (Active/Idle/Stale) based on the age of the last update.
 ## Related
 
 <CardGroup cols={2}>
+  <Card title="Active computer presence" href="/nodes/presence" icon="computer-mouse">
+    How physical Mac input selects an active node and routes connection alerts.
+  </Card>
   <Card title="Typing indicators" href="/concepts/typing-indicators" icon="ellipsis">
     When typing indicators are sent and how to tune them.
   </Card>

@@ -163,7 +163,7 @@ function isNodeModulesPackageRoot(segments: string[], index: number): boolean {
   if (parent === "node_modules") {
     return true;
   }
-  return parent?.startsWith("@") && segments[index - 2] === "node_modules";
+  return parent !== undefined && parent.startsWith("@") && segments[index - 2] === "node_modules";
 }
 
 function pathContainsPackedTestCargo(packedPath: string): boolean {

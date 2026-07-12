@@ -1508,6 +1508,7 @@ async function runEmbeddedAgentInternal(
       agentHarness = selectHarnessForModel(effectiveModel);
       pluginHarnessOwnsTransport = agentHarness.id !== "openclaw";
 
+      const authStages = log.isEnabled("trace") ? createEmbeddedRunStageTracker() : undefined;
       const usesOpenAIAuthRouting = provider === OPENAI_PROVIDER_ID;
       const openClawNativeCodexResponsesNeedsAuthBootstrap =
         !pluginHarnessOwnsTransport &&
@@ -1545,6 +1546,7 @@ async function runEmbeddedAgentInternal(
             params.authProfileIdSource === "user" ? params.authProfileId : undefined,
         });
       }
+      authStages?.mark("scope");
       const attemptAuthProfileStore = usesOpenAIAuthRouting
         ? ensureAuthProfileStore(agentDir, {
             externalCliProviderIds: [OPENAI_PROVIDER_ID],
@@ -1563,6 +1565,7 @@ async function runEmbeddedAgentInternal(
               ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
                 allowKeychainPrompt: false,
               }));
+      authStages?.mark("store");
       const requestedProfileId = params.authProfileId?.trim() || undefined;
       const lockedProfileId =
         params.authProfileIdSource === "user" ? requestedProfileId : undefined;
@@ -1599,12 +1602,19 @@ async function runEmbeddedAgentInternal(
             }),
         });
 
-      const materializeAuthPlan = async (plan: AgentRuntimeAuthPlan) => {
+      const materializedRouteModels = new WeakMap<
+        AgentRuntimeAuthPlan,
+        Promise<typeof runtimeModel>
+      >();
+      const materializeAuthPlanUncached = async (plan: AgentRuntimeAuthPlan) => {
         // Native harness sessions own their model tuple. Route preparation may
         // attest auth/transport, but must not rediscover or replace that model.
         if (nativeModelOwned) {
           return runtimeModel;
         }
+        const requiresCredentialScopedResolve = Boolean(
+          plan.modelRoute && (plan.forwardedAuthProfileId || params.authProfileId),
+        );
         return (
           (await materializePreparedRuntimeModel({
             plan,
@@ -1612,7 +1622,9 @@ async function runEmbeddedAgentInternal(
             modelId,
             config: params.config,
             model: runtimeModel,
-            forceResolve: Boolean(plan.modelRoute),
+            // Unscoped direct auth cannot change credential-scoped metadata.
+            // Reuse an already matching tuple; route mismatches still resolve.
+            forceResolve: requiresCredentialScopedResolve,
             resolveModel: ({ config, authProfileId, authProfileMode }) =>
               resolveModelAsync(provider, modelId, agentDir, config, {
                 authStorage,
@@ -1627,10 +1639,25 @@ async function runEmbeddedAgentInternal(
           })) ?? runtimeModel
         );
       };
+      const materializeAuthPlan = (plan: AgentRuntimeAuthPlan) => {
+        if (!plan.modelRoute) {
+          return materializeAuthPlanUncached(plan);
+        }
+        const cached = materializedRouteModels.get(plan);
+        if (cached) {
+          return cached;
+        }
+        // Prepared plans are immutable within one run. Carry their exact model
+        // tuple into auth initialization instead of repeating provider discovery.
+        const materialized = materializeAuthPlanUncached(plan);
+        materializedRouteModels.set(plan, materialized);
+        return materialized;
+      };
       let resolvedAuthPreparation = createAuthPreparation();
       let preparedAuthAttempts = resolvedAuthPreparation.attempts;
       let activePreparedAuthPlan = resolvedAuthPreparation.plan;
       applyResolvedRuntimeModel(await materializeAuthPlan(activePreparedAuthPlan));
+      authStages?.mark("prepare-plan");
 
       const finalizedHarness = selectHarnessForPreparedAttempts(
         effectiveModel,
@@ -1653,6 +1680,7 @@ async function runEmbeddedAgentInternal(
           );
         }
       }
+      authStages?.mark("harness");
       // A selected plugin harness owns context pressure with its native transcript,
       // even if it cannot expose manual compaction. Generic recovery is OpenClaw-only.
       const genericCompactionRecoveryAllowed = !pluginHarnessOwnsTransport;
@@ -1864,6 +1892,7 @@ async function runEmbeddedAgentInternal(
         },
         log,
       });
+      authStages?.mark("controller");
       const advancePluginHarnessAuthAttempt = async (): Promise<boolean> => {
         if (!pluginHarnessOwnsTransport || lockedProfileId) {
           return false;
@@ -1963,6 +1992,15 @@ async function runEmbeddedAgentInternal(
           preparedProfileAttempted = initialAttempt?.kind === "profile";
           lastProfileId = forwardedPluginHarnessProfileId;
         }
+      }
+      authStages?.mark("initialize");
+      if (authStages) {
+        log.trace(
+          formatEmbeddedRunStageSummary(
+            `[trace:embedded-run] auth stages: runId=${params.runId} sessionId=${params.sessionId} phase=auth`,
+            authStages.snapshot(),
+          ),
+        );
       }
       startupStages.mark("auth");
       notifyExecutionPhase("auth", { provider, model: modelId });

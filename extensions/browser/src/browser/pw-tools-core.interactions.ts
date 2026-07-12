@@ -4,7 +4,7 @@
  */
 import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { Frame, Page } from "playwright-core";
+import type { FileChooser, Frame, Page } from "playwright-core";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   ACT_MAX_BATCH_ACTIONS,
@@ -690,10 +690,15 @@ export async function clickViaPlaywright(
     delayMs?: number;
     timeoutMs?: number;
     signal?: AbortSignal;
+    resolvedPage?: Page;
   } & BrowserNavigationPolicyOptions,
 ): Promise<void> {
   const resolved = requireRefOrSelector(opts.ref, opts.selector);
-  const page = await getRestoredPageForTarget(opts);
+  const page = opts.resolvedPage ?? (await getRestoredPageForTarget(opts));
+  if (opts.resolvedPage) {
+    ensurePageState(page);
+    restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
+  }
   const label = resolved.ref ?? resolved.selector!;
   const locator = resolved.ref
     ? refLocator(page, requireRef(resolved.ref))
@@ -1588,13 +1593,36 @@ async function captureElementScreenshotForLabels(
 }
 
 /** Sets file inputs for a role ref or selector with strict existing-path checks. */
-export async function setInputFilesViaPlaywright(opts: {
-  cdpUrl: string;
-  targetId?: string;
-  inputRef?: string;
-  element?: string;
-  paths: string[];
-}): Promise<void> {
+export async function setFileChooserFilesViaPlaywright(
+  opts: {
+    cdpUrl: string;
+    targetId?: string;
+    page: Page;
+    fileChooser: FileChooser;
+    paths: string[];
+    timeoutMs: number;
+  } & BrowserNavigationPolicyOptions,
+): Promise<void> {
+  await awaitNavigationGuardedInteraction({
+    action: async () => {
+      await opts.fileChooser.setFiles(opts.paths, { timeout: opts.timeoutMs });
+    },
+    cdpUrl: opts.cdpUrl,
+    page: opts.page,
+    ...interactionNavigationPolicy(opts),
+    targetId: opts.targetId,
+  });
+}
+
+export async function setInputFilesViaPlaywright(
+  opts: {
+    cdpUrl: string;
+    targetId?: string;
+    inputRef?: string;
+    element?: string;
+    paths: string[];
+  } & BrowserNavigationPolicyOptions,
+): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
@@ -1618,7 +1646,15 @@ export async function setInputFilesViaPlaywright(opts: {
   const resolvedPaths = resolvedResult.paths;
 
   try {
-    await locator.setInputFiles(resolvedPaths);
+    await awaitNavigationGuardedInteraction({
+      action: async () => {
+        await locator.setInputFiles(resolvedPaths);
+      },
+      cdpUrl: opts.cdpUrl,
+      page,
+      ...interactionNavigationPolicy(opts),
+      targetId: opts.targetId,
+    });
   } catch (err) {
     throw toFriendlyInteractionError(err, inputRef || element);
   }

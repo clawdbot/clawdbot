@@ -56,6 +56,16 @@ vi.mock("./pw-session.page-cdp.js", () => pageCdpMocks);
 const interactions = await import("./pw-tools-core.interactions.js");
 const snapshots = await import("./pw-tools-core.snapshot.js");
 
+function createSnapshotPage(overrides: Record<string, unknown>) {
+  const mainFrame = {};
+  return {
+    mainFrame: vi.fn(() => mainFrame),
+    on: vi.fn(),
+    off: vi.fn(),
+    ...overrides,
+  };
+}
+
 describe("pw-tools-core browser SSRF guards", () => {
   beforeEach(() => {
     pageState.page = null;
@@ -1038,10 +1048,10 @@ describe("pw-tools-core browser SSRF guards", () => {
 
   it("re-checks current page URL before snapshotting AI content", async () => {
     const ariaSnapshot = vi.fn(async () => 'button "Save"');
-    pageState.page = {
+    pageState.page = createSnapshotPage({
       ariaSnapshot,
       url: vi.fn(() => "https://example.com"),
-    };
+    });
 
     await snapshots.snapshotAiViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
@@ -1063,10 +1073,10 @@ describe("pw-tools-core browser SSRF guards", () => {
 
   it("re-checks current page URL before role snapshots", async () => {
     const ariaSnapshot = vi.fn(async () => "");
-    pageState.page = {
+    pageState.page = createSnapshotPage({
       locator: vi.fn(() => ({ ariaSnapshot })),
       url: vi.fn(() => "https://example.com"),
-    };
+    });
 
     await snapshots.snapshotRoleViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",

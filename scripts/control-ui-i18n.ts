@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { completeSimple, type AssistantMessage, type Model } from "openclaw/plugin-sdk/llm";
 import * as ts from "typescript";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { formatErrorMessage } from "../src/infra/errors.ts";
 import {
   compareStringArrays,
@@ -1322,7 +1323,8 @@ function extractTranslationResult(message: AssistantMessage): string {
 function parseTranslationReply(raw: string): Record<string, unknown> {
   const trimmed = raw.trim();
   const fenced = /^```(?:json)?\s*\n([\s\S]*?)\n```\s*$/.exec(trimmed);
-  return JSON.parse(fenced ? fenced[1] : trimmed) as Record<string, unknown>;
+  const json = fenced ? expectDefined(fenced[1], "fenced translation JSON body") : trimmed;
+  return JSON.parse(json);
 }
 
 export function parseTranslationBatchReply(

@@ -1055,8 +1055,9 @@ jobs:
           if [[ "$COMPATIBILITY_TARGET" == "true" ]]; then
             # Frozen targets can contain timing-sensitive tests fixed on current main.
             # Give legacy browser fixtures enough headroom on shared hosted runners.
+            # Isolate files because older suites can still leak module mocks between tests.
             # Do not retry whole files: several rely on one-shot mocked browser globals.
-            pnpm --dir ui test --testTimeout=30000
+            pnpm --dir ui test --testTimeout=30000 --isolate
           else
             pnpm --dir ui test
           fi
@@ -1197,13 +1198,58 @@ jobs:
           if (typeof smokePlan.createQaSmokeCiPart === "function") {
             runs = smokePlan.createQaSmokeCiPart(partId).runs;
           } else if (typeof smokePlan.createQaSmokeCiMatrix === "function") {
+            // Legacy planners select the entire profile and can mix long-lived
+            // execution kinds. Reuse the current bounded smoke contract and
+            // isolate each kind so frozen targets cannot pin a profile part.
+            const compatibilityScenarioIds = new Set([
+              "control-ui-chat-flow-playwright",
+              "crestodian-ring-zero-setup",
+              "dreaming-shadow-trial-report",
+              "gateway-smoke",
+              "group-visible-reply-tool",
+              "long-running-release-audit",
+              "luna-thinking-visibility-switch",
+              "matrix-restart-resume",
+              "personal-task-followthrough-status",
+              "plugin-lifecycle-hot-reload",
+              "subagent-completion-direct-fallback",
+              "telegram-commands-command",
+            ]);
             const partIndex = partId === "profile-1" ? 0 : partId === "profile-2" ? 1 : -1;
             if (partIndex < 0) {
               throw new Error(`unknown QA smoke CI profile part: ${partId}`);
             }
-            runs = smokePlan
+            const scenarioCatalog = await import("./extensions/qa-lab/src/scenario-catalog.ts");
+            const scenarioKindById = new Map(
+              scenarioCatalog
+                .readQaScenarioPack()
+                .scenarios.map((scenario) => [scenario.id, scenario.execution.kind]),
+            );
+            const legacyRuns = smokePlan
               .createQaSmokeCiMatrix()
               .include.filter((_, index) => index % 2 === partIndex);
+            runs = legacyRuns.flatMap((run) => {
+              const scenarioIdsByKind = new Map();
+              for (const scenarioId of run.scenario_ids) {
+                if (!compatibilityScenarioIds.has(scenarioId)) {
+                  continue;
+                }
+                const kind = scenarioKindById.get(scenarioId);
+                if (!kind) {
+                  throw new Error(`legacy QA smoke scenario not found: ${scenarioId}`);
+                }
+                const scenarioIds = scenarioIdsByKind.get(kind) ?? [];
+                scenarioIds.push(scenarioId);
+                scenarioIdsByKind.set(kind, scenarioIds);
+              }
+              return [...scenarioIdsByKind.entries()]
+                .toSorted(([left], [right]) => left.localeCompare(right))
+                .map(([kind, scenarioIds]) => ({
+                  ...run,
+                  slug: `${run.slug}-${kind}`,
+                  scenario_ids: scenarioIds,
+                }));
+            });
           } else {
             throw new Error("QA smoke plan does not expose a supported CI planner.");
           }

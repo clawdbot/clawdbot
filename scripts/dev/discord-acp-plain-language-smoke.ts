@@ -283,7 +283,7 @@ function validateCliArgs(argv: string[]): void {
       continue;
     }
     if (arg.startsWith("--") && arg.includes("=")) {
-      const [flag] = arg.split("=", 1);
+      const flag = arg.slice(0, arg.indexOf("="));
       if (VALUE_OPTIONS.has(flag)) {
         continue;
       }

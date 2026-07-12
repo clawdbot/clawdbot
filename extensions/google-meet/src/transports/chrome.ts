@@ -566,7 +566,9 @@ function meetStatusScript(params: {
       w.__openclawMeetCaptions?.observer?.disconnect?.();
       w.__openclawMeetCaptions = {
         sessionId: captionSessionId,
-        epoch: Date.now() + "-" + Math.random().toString(36).slice(2),
+        // Epochs cross document lifetimes in the runtime transcript cursor.
+        // Strong UUIDs keep a reloaded page distinct from its prior buffer.
+        epoch: crypto.randomUUID(),
         enabledAttempted: false,
         observerInstalled: false,
         observer: undefined,

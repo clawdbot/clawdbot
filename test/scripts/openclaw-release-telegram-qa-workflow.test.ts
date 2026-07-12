@@ -211,9 +211,6 @@ describe("release Telegram QA workflow", () => {
     const source = readFileSync(WORKFLOW_PATH, "utf8");
 
     expect(source.match(/associatedPullRequests\(first:10\)/gu)).toHaveLength(2);
-    expect(source.match(/for-each-ref --format='%\(refname\)' 'refs\/tags\/v\*'/gu)).toHaveLength(
-      2,
-    );
     expect(source.match(/if \.signature == null then "missing"/gu)).toHaveLength(2);
     expect(source.match(/\$signature_status" == "invalid"/gu)).toHaveLength(2);
     expect(
@@ -226,11 +223,26 @@ describe("release Telegram QA workflow", () => {
       2,
     );
     expect(source.match(/collaborators\/\$\{permission_actor\}\/permission/gu)).toHaveLength(2);
-    expect(
-      (source.match(/refs\/remotes\/origin\/extended-stable/gu) ?? []).length,
-    ).toBeGreaterThanOrEqual(2);
     expect((source.match(/extended-stable\/\[0-9\]/gu) ?? []).length).toBeGreaterThanOrEqual(2);
     expect(source).not.toContain("collaborators/${signer}/permission");
+  });
+
+  it("resolves only candidate-specific provenance refs without fetching histories", () => {
+    const source = readFileSync(WORKFLOW_PATH, "utf8");
+
+    expect(source.match(/branches-where-head/gu)).toHaveLength(2);
+    expect(source.match(/gh api --paginate/gu)).toHaveLength(2);
+    expect(
+      source.match(/git(?: -C \.candidate)? ls-remote --exit-code --refs origin/gu),
+    ).toHaveLength(2);
+    expect(
+      source.match(/git(?: -C \.candidate)? ls-remote origin 'refs\/tags\/v\*'/gu),
+    ).toHaveLength(2);
+    expect(source).not.toContain("'+refs/heads/release/*:refs/remotes/origin/release/*'");
+    expect(source).not.toContain(
+      "'+refs/heads/extended-stable/*:refs/remotes/origin/extended-stable/*'",
+    );
+    expect(source).not.toContain("'+refs/tags/v*:refs/tags/v*'");
   });
 
   it("dispatches one accepted trusted-main child from release checks", () => {

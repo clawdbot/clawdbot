@@ -18,6 +18,7 @@ import type { Dirent } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve, win32 } from "node:path";
 import { pathToFileURL } from "node:url";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../src/cli/completion-runtime.ts";
 import {
   isLegacyPluginDependencyInstallStagePath,
@@ -89,7 +90,12 @@ const requiredPathGroups = [
   ...listBundledPluginPackArtifacts(),
   ...listStaticExtensionAssetOutputs().filter((relativePath) => {
     const match = /^dist\/extensions\/([^/]+)\//u.exec(relativePath);
-    return !match || !rootPackageExcludedExtensionDirs.has(match[1]);
+    return (
+      !match ||
+      !rootPackageExcludedExtensionDirs.has(
+        expectDefined(match[1], "release-check extension artifact id"),
+      )
+    );
   }),
   ...WORKSPACE_TEMPLATE_PACK_PATHS,
   "scripts/npm-runner.mjs",
@@ -422,7 +428,7 @@ export function resolvePackedTarballPath(packDestination: string, results: PackR
       `release-check: npm pack produced ${filenames.length} tarballs; expected exactly one.`,
     );
   }
-  const filename = filenames[0];
+  const filename = expectDefined(filenames[0], "npm pack tarball filename");
   const filenameBasename = basename(filename);
   const resolvedDestination = resolve(packDestination);
   const resolvedTarball = resolve(resolvedDestination, filenameBasename);
@@ -1112,7 +1118,8 @@ export function collectAppcastSparkleVersionErrors(xml: string): string[] {
     errors.push("appcast.xml contains no <item> entries.");
   }
 
-  for (const [, item] of itemMatches) {
+  for (const [index, match] of itemMatches.entries()) {
+    const item = expectDefined(match[1], `appcast item body at index ${index}`);
     const title = extractTag(item, "title") ?? "unknown";
     const shortVersion = extractTag(item, "sparkle:shortVersionString");
     const sparkleVersion = extractTag(item, "sparkle:version");

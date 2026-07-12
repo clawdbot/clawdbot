@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "../../packages/normalization-core/src/expect.js";
 
 /** Rendered baseline artifact for the sessions/transcripts SQLite schema. */
 export type SqliteSessionSchemaBaselineRender = {
@@ -62,14 +63,14 @@ function readCreatedTableName(statement: string): string | null {
   const match = statement.match(
     /^CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+("[^"]+"|[A-Za-z_][A-Za-z0-9_]*)\b/iu,
   );
-  return match ? normalizeIdentifier(match[1]) : null;
+  return match ? normalizeIdentifier(expectDefined(match[1], "created table name")) : null;
 }
 
 function readIndexedTableName(statement: string): string | null {
   const match = statement.match(
     /^CREATE\s+(?:UNIQUE\s+)?INDEX\s+IF\s+NOT\s+EXISTS\s+("[^"]+"|[A-Za-z_][A-Za-z0-9_]*)\s+ON\s+("[^"]+"|[A-Za-z_][A-Za-z0-9_]*)\b/isu,
   );
-  return match ? normalizeIdentifier(match[2]) : null;
+  return match ? normalizeIdentifier(expectDefined(match[2], "indexed table name")) : null;
 }
 
 function isTargetSessionSchemaStatement(statement: string): boolean {

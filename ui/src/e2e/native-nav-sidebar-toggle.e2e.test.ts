@@ -52,6 +52,22 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
       // which runs at document end. Playwright init scripts fire before
       // document.documentElement exists, so defer until the DOM is parsed.
       await page.addInitScript(() => {
+        const nativeWindow = window as Window & {
+          openclawNavMessages?: unknown[];
+        };
+        nativeWindow.openclawNavMessages = [];
+        Object.defineProperty(window, "webkit", {
+          configurable: true,
+          value: {
+            messageHandlers: {
+              openclawNav: {
+                postMessage(message: unknown) {
+                  nativeWindow.openclawNavMessages?.push(message);
+                },
+              },
+            },
+          },
+        });
         const stamp = () =>
           document.documentElement.classList.add("openclaw-native-macos", "openclaw-native-nav");
         if (document.documentElement) {
@@ -86,6 +102,32 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
   it("hides both web toggles when the native titlebar toggle is present", async () => {
     const page = await openPage({ nativeNav: true });
 
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const messages = (window as Window & { openclawNavMessages?: unknown[] })
+            .openclawNavMessages;
+          return messages?.find(
+            (message) =>
+              typeof message === "object" &&
+              message !== null &&
+              (message as { type?: string }).type === "nav-state",
+          );
+        }),
+      )
+      .toMatchObject({ type: "nav-state", collapsed: false });
+    const initialWidth = await page.evaluate(() => {
+      const messages = (window as Window & { openclawNavMessages?: unknown[] }).openclawNavMessages;
+      const message = messages?.find(
+        (candidate) =>
+          typeof candidate === "object" &&
+          candidate !== null &&
+          (candidate as { type?: string }).type === "nav-state",
+      );
+      return (message as { width?: number } | undefined)?.width ?? 0;
+    });
+    expect(initialWidth).toBeGreaterThan(0);
+
     await expect.poll(() => page.locator(".sidebar-brand__collapse").isVisible()).toBe(false);
 
     // Collapse through the native titlebar path; the floating expand control
@@ -96,12 +138,33 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
     await expect
       .poll(() => page.locator(".shell").getAttribute("class"))
       .toContain("shell--nav-collapsed");
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          (
+            window as Window & { openclawNavMessages?: Array<{ collapsed?: boolean }> }
+          ).openclawNavMessages?.some((message) => message.collapsed === true),
+        ),
+      )
+      .toBe(true);
     await expect.poll(() => page.locator(".shell-nav-expand").isVisible()).toBe(false);
     // With the in-page expand control hidden, collapse anchors keyboard focus
     // on the content column instead of stranding it on the body.
     await expect
       .poll(() => page.evaluate(() => document.activeElement?.classList.contains("content")))
       .toBe(true);
+
+    await page.evaluate(() => {
+      window.dispatchEvent(new CustomEvent("openclaw:native-open-search"));
+    });
+    await expect
+      .poll(() => page.locator(".cmd-palette-overlay").getAttribute("open"))
+      .not.toBeNull();
+
+    await page.evaluate(() => {
+      window.dispatchEvent(new CustomEvent("openclaw:native-new-session"));
+    });
+    await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
   });
 
   it("keeps the drawer hamburger at narrow widths in plain browsers", async () => {

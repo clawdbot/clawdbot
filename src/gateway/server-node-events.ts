@@ -6,6 +6,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { validateNodePresenceActivityPayload } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { updatePairedDeviceMetadata } from "../infra/device-pairing.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -19,6 +20,7 @@ import { runWithGatewayIndependentRootWorkContinuation } from "../process/gatewa
 import { resolveAgentHarnessSessionContextError } from "../sessions/agent-harness-session-key.js";
 import {
   NODE_PRESENCE_ALIVE_EVENT,
+  NODE_PRESENCE_ACTIVITY_EVENT,
   normalizeNodePresenceAliveReason,
 } from "../shared/node-presence.js";
 import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
@@ -391,7 +393,7 @@ export const handleNodeEvent = async (
   ctx: NodeEventContext,
   nodeId: string,
   evt: NodeEvent,
-  opts?: { connId?: string; deviceId?: string },
+  opts?: { connId?: string; deviceId?: string; presenceAllowed?: boolean },
 ): Promise<NodeEventHandleResult | undefined> => {
   switch (evt.event) {
     case "voice.transcript": {
@@ -889,6 +891,26 @@ export const handleNodeEvent = async (
         ctx.logGateway.warn(`push apns register failed node=${nodeId}: ${formatForLog(err)}`);
       }
       return undefined;
+    }
+    case NODE_PRESENCE_ACTIVITY_EVENT: {
+      const obj = parsePayloadObject(evt.payloadJSON);
+      if (!obj || !validateNodePresenceActivityPayload(obj)) {
+        return { ok: true, event: evt.event, handled: false, reason: "invalid_payload" };
+      }
+      if (opts?.presenceAllowed !== true) {
+        return { ok: true, event: evt.event, handled: false, reason: "permission_required" };
+      }
+      const updated = ctx.updateNodePresenceActivity?.({
+        nodeId,
+        connId: opts.connId,
+        idleSeconds: obj.idleSeconds,
+        ...(obj.saturated === true ? { saturated: true } : {}),
+      });
+      if (!updated) {
+        return { ok: true, event: evt.event, handled: false, reason: "stale_connection" };
+      }
+      ctx.broadcast("node.presence", { nodeId, ...updated }, { dropIfSlow: true });
+      return { ok: true, event: evt.event, handled: true, reason: "updated" };
     }
     case NODE_PRESENCE_ALIVE_EVENT: {
       const obj = parsePayloadObject(evt.payloadJSON);

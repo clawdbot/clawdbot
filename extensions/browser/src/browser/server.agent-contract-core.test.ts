@@ -497,6 +497,8 @@ describe("browser control server", () => {
     expect(cdpMocks.snapshotRoleViaCdp).toHaveBeenCalledWith({
       wsUrl: "ws://127.0.0.1/devtools/page/abcd1234",
       urls: undefined,
+      maxChars: DEFAULT_AI_SNAPSHOT_MAX_CHARS,
+      timeoutMs: undefined,
       options: {
         interactive: true,
         compact: undefined,

@@ -1449,6 +1449,42 @@ describe("cron service timer regressions", () => {
     }
   });
 
+  it("persists delivery errors from successful startup catch-up runs", async () => {
+    const store = timerRegressionFixtures.makeStorePath();
+    const scheduledAt = Date.parse("2026-02-15T13:01:00.000Z");
+    const cronJob = createIsolatedRegressionJob({
+      id: "startup-delivery-error",
+      name: "startup delivery error",
+      scheduledAt,
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: scheduledAt },
+      payload: { kind: "agentTurn", message: "work" },
+      state: { nextRunAtMs: scheduledAt },
+    });
+    await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
+
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => scheduledAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({
+        status: "ok" as const,
+        summary: "work completed",
+        delivered: false,
+        deliveryError: "Message delivery failed",
+      })),
+    });
+
+    await runMissedJobs(state);
+
+    const job = requireJob(state, cronJob.id);
+    expect(job.state.lastStatus).toBe("ok");
+    expect(job.state.lastDeliveryStatus).toBe("not-delivered");
+    expect(job.state.lastDeliveryError).toBe("Message delivery failed");
+  });
+
   it("notifies setup timeout after startup catch-up finalization", async () => {
     vi.useFakeTimers();
     try {

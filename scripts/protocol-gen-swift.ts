@@ -85,7 +85,7 @@ function camelCase(input: string) {
     .trim()
     .toLowerCase()
     .split(/\s+/)
-    .map((p, i) => (i === 0 ? p : p[0].toUpperCase() + p.slice(1)))
+    .map((p, i) => (i === 0 ? p : p.charAt(0).toUpperCase() + p.slice(1)))
     .join("");
 }
 

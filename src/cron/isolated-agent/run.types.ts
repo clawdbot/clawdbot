@@ -18,6 +18,8 @@ export type RunCronAgentTurnResult = {
    * cannot guarantee a final delivery ack synchronously.
    */
   deliveryAttempted?: boolean;
+  /** Post-run delivery failure on an otherwise successful isolated turn. */
+  deliveryError?: string;
   delivery?: CronDeliveryTrace;
 } & CronRunOutcome &
   CronRunTelemetry;

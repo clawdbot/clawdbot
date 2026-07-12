@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { translateNativeEntries } from "./control-ui-i18n.ts";
 
 type NativeI18nSurface = "android" | "apple";
@@ -211,18 +212,18 @@ function isAsciiAlphaNumeric(character: string): boolean {
 
 export function isConditionalBranchIdentifier(source: string): boolean {
   let index = 0;
-  while (index < source.length && isAsciiLowercaseLetter(source[index])) {
+  while (index < source.length && isAsciiLowercaseLetter(source.charAt(index))) {
     index += 1;
   }
 
   // Keep this scanner linear: PR-controlled native source passes through CI,
   // so a backtracking regex here can become a cheap native-i18n DoS trigger.
-  if (index === 0 || index >= source.length || !isAsciiUppercaseLetter(source[index])) {
+  if (index === 0 || index >= source.length || !isAsciiUppercaseLetter(source.charAt(index))) {
     return false;
   }
 
   for (index += 1; index < source.length; index += 1) {
-    if (!isAsciiAlphaNumeric(source[index])) {
+    if (!isAsciiAlphaNumeric(source.charAt(index))) {
       return false;
     }
   }
@@ -622,15 +623,18 @@ function identifierBefore(source: string, offset: number): string | null {
     cursor -= 1;
   }
   const end = cursor + 1;
-  while (cursor >= 0 && (isAsciiAlphaNumeric(source[cursor]) || source[cursor] === "_")) {
+  while (
+    cursor >= 0 &&
+    (isAsciiAlphaNumeric(source.charAt(cursor)) || source.charAt(cursor) === "_")
+  ) {
     cursor -= 1;
   }
   const start = cursor + 1;
   if (
     start === end ||
-    (!isAsciiLowercaseLetter(source[start]) &&
-      !isAsciiUppercaseLetter(source[start]) &&
-      source[start] !== "_")
+    (!isAsciiLowercaseLetter(source.charAt(start)) &&
+      !isAsciiUppercaseLetter(source.charAt(start)) &&
+      source.charAt(start) !== "_")
   ) {
     return null;
   }
@@ -739,18 +743,18 @@ function addCapturedLiteralCandidates(
 
 function skipWhitespaceAndBrace(source: string, offset: number): number {
   let cursor = offset;
-  while (cursor < source.length && /\s/u.test(source[cursor])) {
+  while (cursor < source.length && /\s/u.test(source.charAt(cursor))) {
     cursor += 1;
   }
-  if (source[cursor] === "{") {
+  if (source.charAt(cursor) === "{") {
     cursor += 1;
-    while (cursor < source.length && /\s/u.test(source[cursor])) {
+    while (cursor < source.length && /\s/u.test(source.charAt(cursor))) {
       cursor += 1;
     }
   }
   if (source.startsWith("return", cursor) && !isAsciiAlphaNumeric(source[cursor + 6] ?? "")) {
     cursor += 6;
-    while (cursor < source.length && /\s/u.test(source[cursor])) {
+    while (cursor < source.length && /\s/u.test(source.charAt(cursor))) {
       cursor += 1;
     }
   }
@@ -1189,7 +1193,9 @@ async function mapWithConcurrency<T, R>(
         if (index >= values.length) {
           return;
         }
-        results[index] = await run(values[index]);
+        results[index] = await run(
+          expectDefined(values[index], `native i18n concurrency input at index ${index}`),
+        );
       }
     }),
   );
@@ -1306,10 +1312,14 @@ function adjacentDuplicateWords(value: string, locale: string): string[] {
   const duplicates = new Set<string>();
   for (let index = 1; index < words.length; index += 1) {
     if (
-      words[index - 1].normalize("NFKC").toLocaleLowerCase(locale) ===
-      words[index].normalize("NFKC").toLocaleLowerCase(locale)
+      expectDefined(words[index - 1], `native i18n word before index ${index}`)
+        .normalize("NFKC")
+        .toLocaleLowerCase(locale) ===
+      expectDefined(words[index], `native i18n word at index ${index}`)
+        .normalize("NFKC")
+        .toLocaleLowerCase(locale)
     ) {
-      duplicates.add(words[index]);
+      duplicates.add(expectDefined(words[index], `duplicate native i18n word at index ${index}`));
     }
   }
   return [...duplicates].toSorted(compareCodePoints);
@@ -1443,8 +1453,8 @@ export function validateNativeLocaleArtifact(
     errors.push(`entry count must be ${inventory.length}, got ${rawEntries.length}`);
   }
   for (let index = 0; index < Math.min(entries.length, inventory.length); index += 1) {
-    const actual = entries[index];
-    const expected = inventory[index];
+    const actual = expectDefined(entries[index], `native locale entry at index ${index}`);
+    const expected = expectDefined(inventory[index], `native inventory entry at index ${index}`);
     if (actual.id !== expected.id) {
       errors.push(
         `entries[${index}].id must be ${JSON.stringify(expected.id)}, got ${JSON.stringify(actual.id)}`,

@@ -319,6 +319,13 @@ while the node is connected, and removes it on disconnect. Set
   nodes report current connection time with reason `connect`; paired nodes can
   also report durable background presence via a trusted node event.
 
+Native macOS nodes can also send authenticated `node.presence.activity` events
+with bounded input idle time. The Gateway derives activity timestamps on its
+own clock, exposes the freshest connected Mac through `node.list` and
+`node.describe`, and broadcasts `node.presence` updates to read-scoped clients.
+See [Active computer presence](/nodes/presence) for selection, privacy, model
+context, and notification-routing behavior.
+
 ### Node background alive event
 
 Nodes call `node.event` with `event: "node.presence.alive"` to record that a

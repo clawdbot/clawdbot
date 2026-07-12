@@ -841,7 +841,7 @@ function copyStaticSourceAssets({
   taxonomyPath: string;
 }): string[] {
   fs.mkdirSync(staticAssetsDir, { recursive: true });
-  const copied = [
+  const copied: Array<[string, string]> = [
     [taxonomyPath, path.join(staticAssetsDir, "taxonomy.yaml")],
     [scoresPath, path.join(staticAssetsDir, "maturity-scores.yaml")],
   ];

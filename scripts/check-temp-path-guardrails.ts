@@ -74,7 +74,7 @@ function findMatchingParen(source: string, openIndex: number): number {
   let depth = 1;
   const quoteState: QuoteScanState = { quote: null, escaped: false };
   for (let i = openIndex + 1; i < source.length; i += 1) {
-    const ch = source[i];
+    const ch = source.charAt(i);
     if (consumeQuotedChar(quoteState, ch)) {
       continue;
     }
@@ -192,7 +192,8 @@ function hasDynamicTmpdirJoin(source: string): boolean {
       if (closeParenIndex !== -1) {
         const argsSource = scanSource.slice(openParenIndex + 1, closeParenIndex);
         const args = splitTopLevelArguments(argsSource);
-        if (args.length >= 2 && isOsTmpdirExpression(args[0])) {
+        const firstArg = args[0];
+        if (firstArg && isOsTmpdirExpression(firstArg)) {
           for (const arg of args.slice(1)) {
             const trimmed = arg.trim();
             if (trimmed.startsWith("`") && trimmed.includes("${")) {

@@ -73,6 +73,7 @@ export function buildEmbeddedSystemPrompt(params: {
     /** Supported message actions for the current channel (e.g., react, edit, unsend) */
     channelActions?: string[];
     activeProcessSessions?: ActiveProcessSessionReference[];
+    activeNode?: string;
   };
   messageToolHints?: string[];
   toolSchemaDirectoryPrompt?: string;

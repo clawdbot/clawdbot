@@ -504,15 +504,21 @@ struct DashboardWindowSmokeTests {
         let sidebar = try #require(buttons.first { $0.accessibilityLabel() == "Toggle Sidebar" })
         let back = try #require(buttons.first { $0.accessibilityLabel() == "Back" })
         let forward = try #require(buttons.first { $0.accessibilityLabel() == "Forward" })
-        // Titlebar order mirrors Safari: sidebar toggle first, then history.
-        let stack = try #require(sidebar.superview as? NSStackView)
-        #expect(stack.arrangedSubviews.firstIndex(of: sidebar) == 0)
-        #expect(stack.arrangedSubviews.firstIndex(of: back) == 1)
-        #expect(stack.arrangedSubviews.firstIndex(of: forward) == 2)
-        // A typo'd SF Symbol name yields a nil image (invisible button), and a
-        // frame narrower than the fitting size clips the trailing control.
+        let search = try #require(buttons.first { $0.accessibilityLabel() == "Search" })
+        let newSession = try #require(buttons.first { $0.accessibilityLabel() == "New Session" })
+        let accessory = try #require(sidebar.superview as? DashboardNavAccessoryView)
+        // Until a trusted nav-state report arrives (older gateway bundles never
+        // send one), the shipped toggle/back/forward trio stays visible and the
+        // collapsed-only pair stays hidden.
+        #expect(accessory.state == .legacy)
+        #expect(!back.isHidden)
+        #expect(!forward.isHidden)
+        #expect(search.isHidden)
+        #expect(newSession.isHidden)
+        // A typo'd SF Symbol name yields a nil image (invisible button).
         #expect(sidebar.image != nil)
-        #expect(stack.fittingSize.width <= stack.frame.width)
+        #expect(search.image != nil)
+        #expect(newSession.image != nil)
         // The toggle has no readiness state; back/forward stay disabled until
         // the back-forward list gains entries (the SPA pushes history entries).
         #expect(sidebar.isEnabled)
@@ -520,6 +526,20 @@ struct DashboardWindowSmokeTests {
         #expect(!back.isEnabled)
         #expect(!forward.isEnabled)
         #expect(controller._testAllowsBackForwardGestures)
+
+        // Collapsed swaps history for search/new-session; expanded stretches
+        // the accessory toward the reported web sidebar edge.
+        accessory.apply(.collapsed, windowWidth: 1280)
+        #expect(back.isHidden)
+        #expect(forward.isHidden)
+        #expect(!search.isHidden)
+        #expect(!newSession.isHidden)
+        accessory.apply(.expanded(sidebarWidth: 258), windowWidth: 1280)
+        #expect(!back.isHidden)
+        #expect(!forward.isHidden)
+        #expect(search.isHidden)
+        #expect(newSession.isHidden)
+        #expect(accessory.frame.width > DashboardNavAccessoryView.legacyWidth)
     }
 
     @Test func `dashboard failure state opens in dashboard window`() throws {

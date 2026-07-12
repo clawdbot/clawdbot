@@ -2217,6 +2217,24 @@ public struct NodePresenceAlivePayload: Codable, Sendable {
     }
 }
 
+public struct NodePresenceActivityPayload: Codable, Sendable {
+    public let idleseconds: Int
+    public let saturated: Bool?
+
+    public init(
+        idleseconds: Int,
+        saturated: Bool? = nil)
+    {
+        self.idleseconds = idleseconds
+        self.saturated = saturated
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case idleseconds = "idleSeconds"
+        case saturated
+    }
+}
+
 public struct NodePendingDrainParams: Codable, Sendable {
     public let maxitems: Int?
 

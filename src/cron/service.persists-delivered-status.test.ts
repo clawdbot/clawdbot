@@ -1,5 +1,6 @@
 // Delivered status tests cover persistence of cron delivery outcomes.
 import { describe, expect, it, vi } from "vitest";
+import { appendCronRunLog, readCronRunLogEntriesSync } from "./run-log.js";
 import { CronService } from "./service.js";
 import {
   createFinishedBarrier,
@@ -92,10 +93,13 @@ function createIsolatedCronWithFinishedBarrier(params: {
   status?: "ok" | "error";
   delivered?: boolean;
   error?: string;
+  deliveryError?: string;
   onFinished?: (evt: {
     jobId: string;
+    error?: string;
     delivered?: boolean;
     deliveryStatus?: string;
+    deliveryError?: string;
     failureNotificationDelivery?: {
       delivered?: boolean;
       status: string;
@@ -114,14 +118,17 @@ function createIsolatedCronWithFinishedBarrier(params: {
       status: params.status ?? ("ok" as const),
       summary: "done",
       ...(params.error === undefined ? {} : { error: params.error }),
+      ...(params.deliveryError === undefined ? {} : { deliveryError: params.deliveryError }),
       ...(params.delivered === undefined ? {} : { delivered: params.delivered }),
     })),
     onEvent: (evt) => {
       if (evt.action === "finished") {
         params.onFinished?.({
           jobId: evt.jobId,
+          error: evt.error,
           delivered: evt.delivered,
           deliveryStatus: evt.deliveryStatus,
+          deliveryError: evt.deliveryError,
           failureNotificationDelivery: evt.failureNotificationDelivery,
         });
       }
@@ -190,10 +197,13 @@ async function runIsolatedJobAndReadState(params: {
   status?: "ok" | "error";
   delivered?: boolean;
   error?: string;
+  deliveryError?: string;
   onFinished?: (evt: {
     jobId: string;
+    error?: string;
     delivered?: boolean;
     deliveryStatus?: string;
+    deliveryError?: string;
     failureNotificationDelivery?: {
       delivered?: boolean;
       status: string;
@@ -208,6 +218,7 @@ async function runIsolatedJobAndReadState(params: {
     ...(params.status !== undefined ? { status: params.status } : {}),
     ...(params.delivered !== undefined ? { delivered: params.delivered } : {}),
     ...(params.error !== undefined ? { error: params.error } : {}),
+    ...(params.deliveryError !== undefined ? { deliveryError: params.deliveryError } : {}),
     onFinished: (evt) => {
       params.onFinished?.(evt);
       finishedEvents.get(evt.jobId)?.(evt);
@@ -456,5 +467,79 @@ describe("CronService persists delivered status", () => {
 
     expect(capturedEvent?.delivered).toBe(true);
     expect(capturedEvent?.deliveryStatus).toBe("delivered");
+  });
+
+  it("surfaces a successful run's delivery error to CLI/UI/API run logs across the cron boundary", async () => {
+    // Regression for https://github.com/openclaw/openclaw/issues/95419:
+    // when an isolated turn succeeds but post-run delivery fails, the run keeps
+    // `status: "ok"` (#94058) while the runner now reports the dispatch failure
+    // on a dedicated `deliveryError` field. That diagnostic must travel through
+    // service state -> the finished event -> the persisted run-log entry so the
+    // CLI/UI/API run logs can show *why* delivery did not land, instead of the
+    // failure being silently dropped because the run is not marked an error.
+    let capturedEvent:
+      | {
+          jobId: string;
+          error?: string;
+          delivered?: boolean;
+          deliveryStatus?: string;
+          deliveryError?: string;
+        }
+      | undefined;
+    const updated = await runIsolatedJobAndReadState({
+      job: buildAnnounceIsolatedAgentTurnJob("delivery-error-readback"),
+      status: "ok",
+      delivered: false,
+      deliveryError: "Message delivery failed",
+      onFinished: (evt) => {
+        capturedEvent = evt;
+      },
+    });
+
+    // The run itself succeeded: the run-level error stays empty so the run is
+    // not mislabeled as a failure, while delivery is recorded as not-delivered
+    // and `lastDeliveryError` carries the dispatch diagnostic.
+    expectSuccessfulCronRun(updated);
+    expect(updated?.state.lastError).toBeUndefined();
+    expect(updated?.state.lastDelivered).toBe(false);
+    expect(updated?.state.lastDeliveryStatus).toBe("not-delivered");
+    expect(updated?.state.lastDeliveryError).toBe("Message delivery failed");
+
+    // The finished event mirrors the persisted state: it carries the delivery
+    // error (the field the gateway forwards into the run log) without polluting
+    // the run-level error.
+    expect(capturedEvent?.error).toBeUndefined();
+    expect(capturedEvent?.delivered).toBe(false);
+    expect(capturedEvent?.deliveryStatus).toBe("not-delivered");
+    expect(capturedEvent?.deliveryError).toBe("Message delivery failed");
+
+    // Cross-cron-boundary readback: persist the finished event into the run log
+    // exactly as the gateway does (server-cron.ts forwards `evt.deliveryError`),
+    // then read it back the way the CLI/UI/API do. The delivery diagnostic must
+    // survive the round-trip while the run-log `error` column stays empty.
+    const runLogStore = await makeStorePath();
+    await appendCronRunLog({
+      storePath: runLogStore.storePath,
+      entry: {
+        ts: Date.now(),
+        jobId: capturedEvent!.jobId,
+        action: "finished",
+        status: "ok",
+        error: capturedEvent?.error,
+        delivered: capturedEvent?.delivered,
+        deliveryStatus: "not-delivered",
+        deliveryError: capturedEvent?.deliveryError,
+      },
+    });
+
+    const readBack = readCronRunLogEntriesSync({
+      storePath: runLogStore.storePath,
+      jobId: capturedEvent!.jobId,
+    });
+    expect(readBack).toHaveLength(1);
+    expect(readBack[0]?.status).toBe("ok");
+    expect(readBack[0]?.error).toBeUndefined();
+    expect(readBack[0]?.deliveryStatus).toBe("not-delivered");
+    expect(readBack[0]?.deliveryError).toBe("Message delivery failed");
   });
 });

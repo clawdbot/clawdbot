@@ -43,6 +43,7 @@ import {
   type ApplicationNavigationOptions,
 } from "./context.ts";
 import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
+import { postNativeNavState, type NativeNavState } from "./native-nav-state.ts";
 import { hasOperatorAdminAccess } from "./operator-access.ts";
 import { controlUiPublicAssetPath } from "./public-assets.ts";
 import { selectRenderedRouteMatch } from "./router-outlet.ts";
@@ -444,6 +445,7 @@ class OpenClawShell extends OpenClawLightDomElement {
   private sessionKeyClient: GatewayBrowserClient | null = null;
   private runtimeConfigClient: GatewayBrowserClient | null = null;
   private runtimeConfigSource: ApplicationContext["runtimeConfig"] | null = null;
+  private lastNativeNavState: NativeNavState | undefined;
   private readonly settingsPreloadTimers = new Map<
     EventTarget,
     ReturnType<typeof globalThis.setTimeout>
@@ -521,6 +523,8 @@ class OpenClawShell extends OpenClawLightDomElement {
     document.addEventListener("keydown", this.handleDocumentKeydown);
     window.addEventListener("resize", this.handleWindowResize);
     window.addEventListener("openclaw:native-toggle-sidebar", this.handleNativeToggleSidebar);
+    window.addEventListener("openclaw:native-open-search", this.handleNativeOpenSearch);
+    window.addEventListener("openclaw:native-new-session", this.handleNativeNewSession);
   }
 
   override disconnectedCallback() {
@@ -528,6 +532,8 @@ class OpenClawShell extends OpenClawLightDomElement {
     document.removeEventListener("keydown", this.handleDocumentKeydown);
     window.removeEventListener("resize", this.handleWindowResize);
     window.removeEventListener("openclaw:native-toggle-sidebar", this.handleNativeToggleSidebar);
+    window.removeEventListener("openclaw:native-open-search", this.handleNativeOpenSearch);
+    window.removeEventListener("openclaw:native-new-session", this.handleNativeNewSession);
     this.resetShellEpochState();
     super.disconnectedCallback();
   }
@@ -672,6 +678,21 @@ class OpenClawShell extends OpenClawLightDomElement {
     this.toggleNavigationSurface();
   };
 
+  private readonly handleNativeOpenSearch = () => {
+    this.openPalette();
+  };
+
+  private readonly handleNativeNewSession = () => {
+    const context = this.context;
+    if (!context || this.onboarding) {
+      return;
+    }
+    const agentId = context.agentSelection.state.selectedId ?? "";
+    this.navigate("new-session", {
+      search: agentId ? `?agent=${encodeURIComponent(agentId)}` : "",
+    });
+  };
+
   private readonly handleWindowResize = () => {
     const dismissedHiddenMenus =
       isMobileNavLayout() && !this.navDrawerOpen && this.dismissSidebarTransientMenus();
@@ -782,6 +803,31 @@ class OpenClawShell extends OpenClawLightDomElement {
     }
     this.requestUpdate();
   };
+
+  override updated() {
+    const context = this.context;
+    if (!context) {
+      return;
+    }
+    const mobileNavLayout = isMobileNavLayout();
+    const snapshot = context.navigation.snapshot;
+    const navState = {
+      collapsed:
+        this.onboarding ||
+        mobileNavLayout ||
+        (this.isSettingsTakeover() && !mobileNavLayout) ||
+        (!this.navDrawerOpen && snapshot.navCollapsed),
+      width: snapshot.navWidth,
+    } satisfies NativeNavState;
+    if (
+      navState.collapsed === this.lastNativeNavState?.collapsed &&
+      navState.width === this.lastNativeNavState.width
+    ) {
+      return;
+    }
+    this.lastNativeNavState = navState;
+    postNativeNavState(navState);
+  }
 
   private synchronizeGateway(snapshot: ApplicationContext["gateway"]["snapshot"]) {
     this.updateGatewaySessionKey(snapshot);

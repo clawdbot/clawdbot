@@ -132,6 +132,8 @@ describe("gateway/node-catalog", () => {
           remoteIp: "100.0.0.11",
           pathEnv: "/usr/bin:/bin",
           connectedAtMs,
+          lastActiveAtMs: 120,
+          presenceUpdatedAtMs: 125,
         },
       ],
     });
@@ -151,6 +153,8 @@ describe("gateway/node-catalog", () => {
     expect(node?.pathEnv).toBe("/usr/bin:/bin");
     expect(node?.approvedAtMs).toBe(100);
     expect(node?.connectedAtMs).toBe(connectedAtMs);
+    expect(node?.lastActiveAtMs).toBe(120);
+    expect(node?.presenceUpdatedAtMs).toBe(125);
     expect(node?.lastSeenAtMs).toBe(connectedAtMs);
     expect(node?.lastSeenReason).toBe("connect");
     expect(node?.paired).toBe(true);

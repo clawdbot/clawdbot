@@ -132,6 +132,7 @@ import {
 } from "../../net.js";
 import { filterLegacyNodeProtocolFeatures } from "../../node-command-policy.js";
 import { reconcileNodePairingOnConnect } from "../../node-connect-reconcile.js";
+import { scheduleNodeConnectionNotification } from "../../node-connection-notifications.js";
 import {
   resolveNodePairingClientIpSource,
   shouldAutoApproveNodePairingFromTrustedCidrs,
@@ -2576,6 +2577,16 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           deviceId: device?.id,
         });
         advanceHandshakePhase("ready");
+        if (role === "node") {
+          const context = buildRequestContext();
+          const nodeId = connectParams.device?.id ?? connectParams.client.id;
+          const nodeSession = context.nodeRegistry.get(nodeId);
+          // Only a current session that received hello-ok counts as connected;
+          // failed or replaced handshakes must not alert or consume cooldown.
+          if (nodeSession?.connId === connId) {
+            scheduleNodeConnectionNotification(context.nodeRegistry, nodeSession);
+          }
+        }
         if (pendingNodePairingCleanup) {
           const context = buildRequestContext();
           const cleanupClaim = pendingNodePairingCleanup;

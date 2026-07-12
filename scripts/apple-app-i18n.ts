@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { NATIVE_I18N_LOCALES } from "./native-app-i18n.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -196,7 +197,7 @@ export async function checkAppleAppI18n() {
 
 export async function compileMacosLocalizations(outputDir: string) {
   await checkAppleAppI18n();
-  const spec = CATALOGS[1];
+  const spec = expectDefined(CATALOGS[1], "macOS localization catalog specification");
   const catalog = JSON.parse(await readFile(path.join(ROOT, spec.path), "utf8")) as Catalog;
   if (!catalog.strings) {
     throw new Error(`invalid Apple string catalog: ${spec.path}`);

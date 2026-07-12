@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { pathToFileURL } from "node:url";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import {
   openOpenClawAgentDatabase,
   closeOpenClawAgentDatabasesForTest,
@@ -459,7 +460,7 @@ function percentile(values: number[], pct: number): number {
   }
   const sorted = values.toSorted((left, right) => left - right);
   const index = Math.min(sorted.length - 1, Math.ceil((pct / 100) * sorted.length) - 1);
-  return Number(sorted[index].toFixed(3));
+  return Number(expectDefined(sorted[index], `SQLite benchmark percentile ${pct}`).toFixed(3));
 }
 
 function runTimedQuery(

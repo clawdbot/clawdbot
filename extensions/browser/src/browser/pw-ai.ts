@@ -79,6 +79,7 @@ export {
   traceStartViaPlaywright,
   traceStopViaPlaywright,
   typeViaPlaywright,
+  uploadViaPlaywright,
   waitForDownloadViaPlaywright,
   waitForViaPlaywright,
 } from "./pw-tools-core.js";

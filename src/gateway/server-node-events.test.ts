@@ -1705,6 +1705,72 @@ describe("agent request events", () => {
     expect(getRecentNodePresencePersistCountForTests()).toBe(1);
   });
 
+  it("updates authenticated accessibility-backed node activity without a system event", async () => {
+    const broadcast = vi.fn();
+    const updateNodePresenceActivity = vi.fn(() => ({
+      lastActiveAtMs: 90_000,
+      presenceUpdatedAtMs: 100_000,
+    }));
+    const ctx: NodeEventContext = {
+      ...buildCtx(),
+      broadcast,
+      updateNodePresenceActivity,
+    };
+    const result = await handleNodeEvent(
+      ctx,
+      "mac-node",
+      {
+        event: "node.presence.activity",
+        payloadJSON: JSON.stringify({ idleSeconds: 10 }),
+      },
+      { connId: "conn-1", deviceId: "mac-node", presenceAllowed: true },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      event: "node.presence.activity",
+      handled: true,
+      reason: "updated",
+    });
+    expect(updateNodePresenceActivity).toHaveBeenCalledWith({
+      nodeId: "mac-node",
+      connId: "conn-1",
+      idleSeconds: 10,
+    });
+    expect(broadcast).toHaveBeenCalledWith(
+      "node.presence",
+      {
+        nodeId: "mac-node",
+        lastActiveAtMs: 90_000,
+        presenceUpdatedAtMs: 100_000,
+      },
+      { dropIfSlow: true },
+    );
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects node activity without the advertised accessibility permission", async () => {
+    const updateNodePresenceActivity = vi.fn();
+    const ctx: NodeEventContext = { ...buildCtx(), updateNodePresenceActivity };
+    const result = await handleNodeEvent(
+      ctx,
+      "mac-node",
+      {
+        event: "node.presence.activity",
+        payloadJSON: JSON.stringify({ idleSeconds: 0 }),
+      },
+      { connId: "conn-1", deviceId: "mac-node", presenceAllowed: false },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      event: "node.presence.activity",
+      handled: false,
+      reason: "permission_required",
+    });
+    expect(updateNodePresenceActivity).not.toHaveBeenCalled();
+  });
+
   it("rejects node presence alive events without authenticated device identity", async () => {
     const ctx = buildCtx();
     const result = await handleNodeEvent(ctx, "ios-node", {

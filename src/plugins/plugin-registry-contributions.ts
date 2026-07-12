@@ -70,18 +70,6 @@ export type ResolveProviderOwnersParams = PluginRegistryContributionOptions & {
   providerId: string;
 };
 
-export type ResolveChannelOwnersParams = PluginRegistryContributionOptions & {
-  channelId: string;
-};
-
-export type ResolveCliBackendOwnersParams = PluginRegistryContributionOptions & {
-  cliBackendId: string;
-};
-
-export type ResolveSetupProviderOwnersParams = PluginRegistryContributionOptions & {
-  setupProviderId: string;
-};
-
 export type ResolveManifestContractPluginIdsParams = LoadPluginRegistryParams & {
   contract: PluginManifestContractListKey;
   origin?: PluginOrigin;
@@ -409,44 +397,6 @@ export function resolveProviderOwners(params: ResolveProviderOwnersParams): read
     ...params,
     contribution: "providers",
     matches: (contributionId) => normalizeProviderId(contributionId) === providerId,
-  });
-}
-
-export function resolveChannelOwners(params: ResolveChannelOwnersParams): readonly string[] {
-  const channelId = normalizeContributionId(params.channelId);
-  if (!channelId) {
-    return [];
-  }
-  return resolvePluginContributionOwners({
-    ...params,
-    contribution: "channels",
-    matches: channelId,
-  });
-}
-
-export function resolveCliBackendOwners(params: ResolveCliBackendOwnersParams): readonly string[] {
-  const cliBackendId = normalizeContributionId(params.cliBackendId);
-  if (!cliBackendId) {
-    return [];
-  }
-  return resolvePluginContributionOwners({
-    ...params,
-    contribution: "cliBackends",
-    matches: cliBackendId,
-  });
-}
-
-export function resolveSetupProviderOwners(
-  params: ResolveSetupProviderOwnersParams,
-): readonly string[] {
-  const setupProviderId = normalizeContributionId(params.setupProviderId);
-  if (!setupProviderId) {
-    return [];
-  }
-  return resolvePluginContributionOwners({
-    ...params,
-    contribution: "setupProviders",
-    matches: setupProviderId,
   });
 }
 

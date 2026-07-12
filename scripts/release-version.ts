@@ -1,6 +1,7 @@
 // Release Version keeps the core and explicitly selected native release trains aligned.
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import {
   canonicalAndroidVersionCode,
   normalizeAndroidVersionCode,
@@ -131,7 +132,10 @@ export function applyReleaseVersionPlan(plan: ReleaseVersionPlan): void {
       tempPaths.push(tempPath);
     }
     for (const [index, change] of plan.changes.entries()) {
-      fs.renameSync(tempPaths[index], change.path);
+      fs.renameSync(
+        expectDefined(tempPaths[index], `release temp path at index ${index}`),
+        change.path,
+      );
     }
   } finally {
     for (const tempPath of tempPaths) {

@@ -186,6 +186,7 @@ const pwMocks = vi.hoisted(() => {
   return {
     armDialogViaPlaywright: vi.fn(async () => {}),
     armFileUploadViaPlaywright: vi.fn(async () => {}),
+    uploadViaPlaywright: vi.fn(async () => {}),
     batchViaPlaywright: vi.fn(async (_opts?: unknown) => ({ results: [] })),
     clickCoordsViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
     clickViaPlaywright: vi.fn(async (_opts?: unknown) => {}),

@@ -103,6 +103,7 @@ final class MacNodeModeCoordinator: NSObject {
     private var lastObservedComputerControlEnabled: Bool
     private let runtime: MacNodeRuntime
     private let session: GatewayNodeSession
+    private let presenceReporter: MacNodePresenceReporter
     private let routeInvalidationHook: (@Sendable () async -> Void)?
     private let refreshEvents: AsyncStream<Void>
     private let refreshContinuation: AsyncStream<Void>.Continuation
@@ -116,6 +117,7 @@ final class MacNodeModeCoordinator: NSObject {
             runtime: MacNodeRuntime(
                 canvasSurfaceUrl: { await session.currentCanvasHostUrl() },
                 refreshCanvasSurfaceUrl: { await session.refreshCanvasHostUrl() }),
+            presenceReporter: MacNodePresenceReporter(),
             observeNotifications: true,
             initialPaused: nil,
             initialComputerControlEnabled: nil,
@@ -125,6 +127,7 @@ final class MacNodeModeCoordinator: NSObject {
     init(
         session: GatewayNodeSession,
         runtime: MacNodeRuntime,
+        presenceReporter: MacNodePresenceReporter = MacNodePresenceReporter(),
         observeNotifications: Bool = false,
         initialPaused: Bool? = nil,
         initialComputerControlEnabled: Bool? = nil,
@@ -133,6 +136,7 @@ final class MacNodeModeCoordinator: NSObject {
         let refreshEvents = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingNewest(1))
         self.session = session
         self.runtime = runtime
+        self.presenceReporter = presenceReporter
         self.routeInvalidationHook = routeInvalidationHook
         self.refreshEvents = refreshEvents.stream
         self.refreshContinuation = refreshEvents.continuation
@@ -389,6 +393,7 @@ final class MacNodeModeCoordinator: NSObject {
     }
 
     private func invalidateRuntimeRoute() async {
+        self.presenceReporter.stop()
         await self.runtime.setEventSender(nil)
         await self.runtime.releaseHeldComputerInput()
         await self.routeInvalidationHook?()
@@ -571,6 +576,13 @@ final class MacNodeModeCoordinator: NSObject {
                 await self.runtime.setEventSender { [weak self] event, payload in
                     guard let self else { return }
                     await self.session.sendEvent(
+                        event: event,
+                        payloadJSON: payload,
+                        ifCurrentRoute: installedRoute)
+                }
+                await self.presenceReporter.start { [weak self] event, payload in
+                    guard let self else { return false }
+                    return await self.session.sendEvent(
                         event: event,
                         payloadJSON: payload,
                         ifCurrentRoute: installedRoute)

@@ -26,6 +26,9 @@ export type NodeListNode = {
   paired?: boolean;
   connected?: boolean;
   connectedAtMs?: number;
+  lastActiveAtMs?: number;
+  presenceUpdatedAtMs?: number;
+  active?: boolean;
   lastSeenAtMs?: number;
   lastSeenReason?: string;
   approvedAtMs?: number;

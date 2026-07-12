@@ -40,6 +40,12 @@ export type NodeEventContext = {
     sessionKey: string;
     terminal: boolean;
   }) => boolean;
+  updateNodePresenceActivity?: (params: {
+    nodeId: string;
+    connId?: string;
+    idleSeconds: number;
+    saturated?: boolean;
+  }) => { lastActiveAtMs: number; presenceUpdatedAtMs: number } | null;
   logGateway: { warn: (msg: string) => void };
 };
 

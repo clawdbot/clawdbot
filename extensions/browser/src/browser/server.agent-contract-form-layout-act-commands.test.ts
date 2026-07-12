@@ -490,6 +490,7 @@ describe("browser control server", () => {
   it("rejects loose hook and download timeout options before dispatch", async () => {
     const base = await startServerAndBase();
     const uploadCalls = pwMocks.armFileUploadViaPlaywright.mock.calls.length;
+    const atomicUploadCalls = pwMocks.uploadViaPlaywright.mock.calls.length;
     const dialogCalls = pwMocks.armDialogViaPlaywright.mock.calls.length;
     const waitCalls = pwMocks.waitForDownloadViaPlaywright.mock.calls.length;
     const downloadCalls = pwMocks.downloadViaPlaywright.mock.calls.length;
@@ -520,6 +521,7 @@ describe("browser control server", () => {
     expect(downloadRes.error).toContain("timeoutMs must be a positive integer.");
 
     expect(pwMocks.armFileUploadViaPlaywright).toHaveBeenCalledTimes(uploadCalls);
+    expect(pwMocks.uploadViaPlaywright).toHaveBeenCalledTimes(atomicUploadCalls);
     expect(pwMocks.armDialogViaPlaywright).toHaveBeenCalledTimes(dialogCalls);
     expect(pwMocks.waitForDownloadViaPlaywright).toHaveBeenCalledTimes(waitCalls);
     expect(pwMocks.downloadViaPlaywright).toHaveBeenCalledTimes(downloadCalls);
@@ -545,6 +547,12 @@ describe("browser control server", () => {
       ref: "e12",
     });
     expectOkResult(uploadWithRef);
+    expectBrowserCallFields(pwMocks.uploadViaPlaywright, {
+      targetId: "abcd1234",
+      paths: [path.resolve(DEFAULT_UPLOAD_DIR, "b.txt")],
+      ref: "e12",
+      signal: expect.any(AbortSignal),
+    });
 
     const uploadWithInputRef = await postJson(`${base}/hooks/file-chooser`, {
       paths: ["c.txt"],

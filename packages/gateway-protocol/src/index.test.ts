@@ -15,6 +15,7 @@ import {
   validateNodeEventResult,
   validateNodePluginToolsUpdateParams,
   validateNodeSkillsUpdateParams,
+  validateNodePresenceActivityPayload,
   validateNodePresenceAlivePayload,
   validateSessionsSearchParams,
   validateSessionsUsageParams,
@@ -987,6 +988,21 @@ describe("validateNodePresenceAlivePayload", () => {
         arbitrary: true,
       }),
     ).toBe(false);
+  });
+});
+
+describe("validateNodePresenceActivityPayload", () => {
+  it("accepts bounded input idle time", () => {
+    expect(validateNodePresenceActivityPayload({ idleSeconds: 12 })).toBe(true);
+    expect(validateNodePresenceActivityPayload({ idleSeconds: 2_592_000, saturated: true })).toBe(
+      true,
+    );
+  });
+
+  it("rejects negative, unbounded, and extra fields", () => {
+    expect(validateNodePresenceActivityPayload({ idleSeconds: -1 })).toBe(false);
+    expect(validateNodePresenceActivityPayload({ idleSeconds: 2_592_001 })).toBe(false);
+    expect(validateNodePresenceActivityPayload({ idleSeconds: 1, active: true })).toBe(false);
   });
 });
 

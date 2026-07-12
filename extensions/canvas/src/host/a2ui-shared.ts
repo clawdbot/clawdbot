@@ -27,6 +27,16 @@ export function injectCanvasLiveReload(html: string): string {
   // - iOS: window.webkit.messageHandlers.openclawCanvasA2UIAction.postMessage(...)
   // - Android: window.openclawCanvasA2UIAction.postMessage(...)
   const handlerNames = ["openclawCanvasA2UIAction"];
+  let liveReloadErrorReported = false;
+  let pageUnloading = false;
+  globalThis.addEventListener?.("pagehide", () => { pageUnloading = true; }, { once: true });
+  function reportCanvasLiveReloadError(err) {
+    if (liveReloadErrorReported) return;
+    liveReloadErrorReported = true;
+    try {
+      console.error("OpenClaw canvas live reload unavailable:", err);
+    } catch {}
+  }
   function postToNode(payload) {
     try {
       const raw = typeof payload === "string" ? payload : JSON.stringify(payload);
@@ -67,7 +77,17 @@ export function injectCanvasLiveReload(html: string): string {
     ws.onmessage = (ev) => {
       if (String(ev.data || "") === "reload") location.reload();
     };
-  } catch {}
+    ws.onerror = (ev) => {
+      reportCanvasLiveReloadError(ev);
+    };
+    ws.onclose = (ev) => {
+      if (ev.code !== 1000 && !(ev.code === 1001 && pageUnloading)) {
+        reportCanvasLiveReloadError(ev);
+      }
+    };
+  } catch (err) {
+    reportCanvasLiveReloadError(err);
+  }
 })();
 </script>
 `.trim();

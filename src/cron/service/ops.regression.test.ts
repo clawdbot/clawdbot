@@ -759,7 +759,12 @@ describe("cron service ops regressions", () => {
     await saveCronStore(store.storePath, { version: 1, jobs: [job] });
 
     const started = createDeferred<void>();
-    const execution = createDeferred<{ status: "ok"; summary: string }>();
+    const execution = createDeferred<{
+      status: "ok";
+      summary: string;
+      delivered: false;
+      deliveryError: string;
+    }>();
     const events: CronEvent[] = [];
     const state = createCronServiceState({
       cronEnabled: true,
@@ -780,7 +785,12 @@ describe("cron service ops regressions", () => {
     await started.promise;
 
     await expect(remove(state, job.id)).resolves.toEqual({ ok: true, removed: true });
-    execution.resolve({ status: "ok", summary: "completed after removal" });
+    execution.resolve({
+      status: "ok",
+      summary: "completed after removal",
+      delivered: false,
+      deliveryError: "Message delivery failed",
+    });
     await waitForActiveTasks(5_000);
 
     const terminalEvents = events.filter((evt) => evt.action === "finished" && evt.runId === runId);
@@ -789,6 +799,7 @@ describe("cron service ops regressions", () => {
         jobId: job.id,
         status: "ok",
         summary: "completed after removal",
+        deliveryError: "Message delivery failed",
       }),
     ]);
     expect(state.store?.jobs.some((entry) => entry.id === job.id)).toBe(false);

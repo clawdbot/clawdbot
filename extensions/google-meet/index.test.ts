@@ -3716,6 +3716,7 @@ describe("google-meet plugin", () => {
       Date,
       JSON,
       String,
+      crypto: { randomUUID: () => "caption-epoch" },
       document,
       location: {
         href: "https://meet.google.com/abc-defg-hij",
@@ -3777,6 +3778,11 @@ describe("google-meet plugin", () => {
     const disconnectObserver = vi.fn();
     const clearCaptionTimer = vi.fn();
     let settleCaption: (() => void) | undefined;
+    const randomUUID = vi
+      .fn()
+      .mockReturnValueOnce("epoch-1")
+      .mockReturnValueOnce("epoch-2")
+      .mockReturnValueOnce("epoch-3");
     const document = {
       body: { innerText: "meeting ended", textContent: "meeting ended" },
       title: "Meet",
@@ -3806,6 +3812,7 @@ describe("google-meet plugin", () => {
       },
       String,
       URL,
+      crypto: { randomUUID },
       document,
       location: { href: "https://meet.google.com/abc-defg-hij", hostname: "meet.google.com" },
       MutationObserver: class {
@@ -3829,6 +3836,7 @@ describe("google-meet plugin", () => {
     page.caption = "Alice\nmeeting ended after the recap";
     await inspect();
     const state = windowState["__openclawMeetCaptions"] as {
+      epoch: string;
       lines: Array<{ text: string }>;
       visible: Array<{ text: string }>;
     };
@@ -3865,6 +3873,11 @@ describe("google-meet plugin", () => {
     const afterFinalize = JSON.parse(readTranscript("session-1", true)()) as { lines: unknown[] };
     expect(afterFinalize.lines).toHaveLength(2);
 
+    delete windowState["__openclawMeetCaptions"];
+    await inspect();
+    const reloadedState = windowState["__openclawMeetCaptions"] as { epoch: string };
+    expect(reloadedState.epoch).not.toBe(state.epoch);
+
     const inspectNextSession = new Script(
       `(${chromeTransportTesting.meetStatusScriptForTest({
         allowMicrophone: false,
@@ -3877,11 +3890,13 @@ describe("google-meet plugin", () => {
     await inspectNextSession();
     const nextState = windowState["__openclawMeetCaptions"] as {
       droppedLines: number;
+      epoch: string;
       sessionId?: string;
       lines: Array<{ text: string }>;
       visible: Array<{ text: string }>;
     };
     expect(nextState.sessionId).toBe("session-2");
+    expect(nextState.epoch).not.toBe(state.epoch);
     expect(nextState.lines).toEqual([]);
     expect(nextState.visible.map((line) => line.text)).toEqual(["meeting ended after the recap"]);
     expect(disconnectObserver).toHaveBeenCalledTimes(1);

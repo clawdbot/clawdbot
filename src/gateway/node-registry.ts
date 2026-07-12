@@ -14,6 +14,7 @@ import type {
   NodePluginToolDescriptor,
   NodeSkillDescriptor,
 } from "../../packages/gateway-protocol/src/schema/nodes.js";
+import { setActiveNodeContext } from "../infra/active-node-context.js";
 import { NODE_MCP_TOOLS_CALL_COMMAND } from "../infra/node-commands.js";
 import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
 import {
@@ -56,6 +57,8 @@ export type NodeSession = {
   permissions?: Record<string, boolean>;
   pathEnv?: string;
   connectedAtMs: number;
+  lastActiveAtMs?: number;
+  presenceUpdatedAtMs?: number;
 };
 
 /** Pending invoke awaiting a node.invoke.response. */
@@ -351,6 +354,7 @@ export class NodeRegistry {
       pathEnv,
       connectedAtMs: Date.now(),
     };
+    const replacesPresence = this.nodesById.get(nodeId)?.lastActiveAtMs !== undefined;
     this.nodesById.set(nodeId, session);
     this.nodesByConn.set(client.connId, nodeId);
     if (transport) {
@@ -365,6 +369,9 @@ export class NodeRegistry {
       remoteIp: session.remoteIp,
       tools: [],
     });
+    if (replacesPresence) {
+      this.publishActiveNodeContext();
+    }
     return session;
   }
 
@@ -378,8 +385,12 @@ export class NodeRegistry {
     this.eventTransportsByConn.delete(connId);
     const unregistersCurrentNode = this.nodesById.get(nodeId)?.connId === connId;
     if (unregistersCurrentNode) {
+      const hadPresence = this.nodesById.get(nodeId)?.lastActiveAtMs !== undefined;
       this.nodesById.delete(nodeId);
       removeConnectedNodePluginTools(nodeId);
+      if (hadPresence) {
+        this.publishActiveNodeContext();
+      }
     }
     for (const [id, pending] of this.pendingInvokes.entries()) {
       if (pending.connId !== connId) {
@@ -419,6 +430,57 @@ export class NodeRegistry {
   /** Return a connected node session by node id. */
   get(nodeId: string): NodeSession | undefined {
     return this.nodesById.get(nodeId);
+  }
+
+  /** Updates recent input activity for the exact authenticated node connection. */
+  updatePresenceActivity(params: {
+    nodeId: string;
+    connId?: string;
+    idleSeconds: number;
+    saturated?: boolean;
+    observedAtMs?: number;
+  }): NodeSession | null {
+    const node = this.nodesById.get(params.nodeId);
+    if (
+      !node ||
+      !params.connId ||
+      node.connId !== params.connId ||
+      node.permissions?.accessibility !== true
+    ) {
+      return null;
+    }
+    const observedAtMs = params.observedAtMs ?? Date.now();
+    const lastActiveAtMs = Math.max(0, observedAtMs - params.idleSeconds * 1000);
+    if (params.saturated !== true || node.lastActiveAtMs === undefined) {
+      node.lastActiveAtMs = Math.max(node.lastActiveAtMs ?? 0, lastActiveAtMs);
+    }
+    node.presenceUpdatedAtMs = observedAtMs;
+    this.publishActiveNodeContext();
+    return node;
+  }
+
+  /** Returns the connected node with the freshest reported local input. */
+  getActiveNode(): NodeSession | undefined {
+    let active: NodeSession | undefined;
+    for (const node of this.nodesById.values()) {
+      if (node.lastActiveAtMs === undefined) {
+        continue;
+      }
+      if (
+        !active ||
+        node.lastActiveAtMs > (active.lastActiveAtMs ?? 0) ||
+        (node.lastActiveAtMs === active.lastActiveAtMs &&
+          (node.presenceUpdatedAtMs ?? 0) > (active.presenceUpdatedAtMs ?? 0))
+      ) {
+        active = node;
+      }
+    }
+    return active;
+  }
+
+  private publishActiveNodeContext(): void {
+    const active = this.getActiveNode();
+    setActiveNodeContext(active ? { nodeId: active.nodeId } : null);
   }
 
   /** Probe websocket liveness with ping/pong when the socket supports it. */
@@ -576,6 +638,7 @@ export class NodeRegistry {
       if (surface.permissions === undefined) {
         node.permissions = undefined;
         (node.client.connect as { permissions?: Record<string, boolean> }).permissions = undefined;
+        this.clearPresenceIfAccessibilityUnavailable(node);
         return node;
       }
       const declared = node.declaredPermissions ?? {};
@@ -598,9 +661,19 @@ export class NodeRegistry {
       node.permissions = nextPermissions;
       (node.client.connect as { permissions?: Record<string, boolean> }).permissions =
         nextPermissions;
+      this.clearPresenceIfAccessibilityUnavailable(node);
     }
 
     return node;
+  }
+
+  private clearPresenceIfAccessibilityUnavailable(node: NodeSession): void {
+    if (node.permissions?.accessibility === true || node.lastActiveAtMs === undefined) {
+      return;
+    }
+    node.lastActiveAtMs = undefined;
+    node.presenceUpdatedAtMs = undefined;
+    this.publishActiveNodeContext();
   }
 
   async invoke(params: {

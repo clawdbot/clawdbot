@@ -109,7 +109,7 @@ function resolveLabelMetadata(label: string): { color: string; description?: str
   if (extraMetadata) {
     return extraMetadata;
   }
-  const prefix = label.includes(":") ? label.split(":", 1)[0].trim() : label.trim();
+  const prefix = label.includes(":") ? label.slice(0, label.indexOf(":")).trim() : label.trim();
   return { color: COLOR_BY_PREFIX.get(prefix) ?? "ededed" };
 }
 

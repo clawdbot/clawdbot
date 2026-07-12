@@ -3,6 +3,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { createPrivateKey, createSign } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { readBoundedResponseText } from "./lib/bounded-response.ts";
 import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
 
@@ -50,7 +51,7 @@ type GitHubBodyReadOptions = {
 
 export function parseRepoArg(args: string[]): string | null {
   for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i];
+    const arg = expectDefined(args[i], `GitHub CLI argument at index ${i}`);
     if (arg === "-R" || arg === "--repo") {
       return normalizeRepo(args[i + 1] ?? null);
     }

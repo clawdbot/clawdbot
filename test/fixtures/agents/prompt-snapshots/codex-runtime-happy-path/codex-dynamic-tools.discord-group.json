@@ -245,7 +245,7 @@
     "tools": [
       {
         "deferLoading": true,
-        "description": "Paired nodes: status/list; pass node to describe/control. Pairing, notify, camera/photos/screen/location/notifications/invoke. Files: file_fetch.",
+        "description": "Paired nodes: status/list with active-computer presence; pass node to describe/control. Pairing, notify, camera/photos/screen/location/notifications/invoke. Files: file_fetch.",
         "inputSchema": {
           "properties": {
             "action": {

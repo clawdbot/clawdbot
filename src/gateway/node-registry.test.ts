@@ -7,6 +7,10 @@ import {
   MAX_TIMER_TIMEOUT_MS,
 } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  getActiveNodeContext,
+  resetActiveNodeContextForTests,
+} from "../infra/active-node-context.js";
 import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
@@ -27,6 +31,7 @@ function makeClient(
   sent: string[] = [],
   opts: {
     clientId?: string;
+    displayName?: string;
     platform?: string;
     version?: string;
     caps?: string[];
@@ -60,6 +65,7 @@ function makeClient(
         version: opts.version ?? "1.0.0",
         platform: opts.platform ?? "darwin",
         mode: "node",
+        displayName: opts.displayName,
       },
       device: {
         id: nodeId,
@@ -83,6 +89,7 @@ function makeClient(
 afterEach(() => {
   testNodeHostCommands = [];
   resetConnectedNodePluginToolsForTest();
+  resetActiveNodeContextForTests();
 });
 
 function registerDemoNodePluginTool(params: {
@@ -205,6 +212,137 @@ function authorizeSystemRun(registry: NodeRegistry, overrides: Partial<SystemRun
 }
 
 describe("gateway/node-registry", () => {
+  it("ranks connected nodes by gateway-derived input activity", () => {
+    const registry = createTestNodeRegistry();
+    registry.register(
+      makeClient("conn-1", "node-1", [], {
+        displayName: "Desk Mac",
+        permissions: { accessibility: true },
+      }),
+      {},
+    );
+    registry.register(
+      makeClient("conn-2", "node-2", [], {
+        displayName: "Laptop",
+        permissions: { accessibility: true },
+      }),
+      {},
+    );
+
+    expect(
+      registry.updatePresenceActivity({
+        nodeId: "node-1",
+        connId: "conn-1",
+        idleSeconds: 10,
+        observedAtMs: 100_000,
+      }),
+    ).toMatchObject({ lastActiveAtMs: 90_000, presenceUpdatedAtMs: 100_000 });
+    registry.updatePresenceActivity({
+      nodeId: "node-2",
+      connId: "conn-2",
+      idleSeconds: 2,
+      observedAtMs: 105_000,
+    });
+
+    expect(registry.getActiveNode()?.nodeId).toBe("node-2");
+    expect(getActiveNodeContext()).toEqual({ nodeId: "node-2" });
+    expect(registry.unregister("conn-2")).toBe("node-2");
+    expect(registry.getActiveNode()?.nodeId).toBe("node-1");
+    expect(getActiveNodeContext()).toEqual({ nodeId: "node-1" });
+  });
+
+  it("recomputes active context when a same-id connection replaces reported presence", () => {
+    const registry = createTestNodeRegistry();
+    registry.register(
+      makeClient("conn-old", "node-1", [], { permissions: { accessibility: true } }),
+      {},
+    );
+    registry.updatePresenceActivity({
+      nodeId: "node-1",
+      connId: "conn-old",
+      idleSeconds: 0,
+      observedAtMs: 100_000,
+    });
+
+    registry.register(
+      makeClient("conn-new", "node-1", [], { permissions: { accessibility: true } }),
+      {},
+    );
+
+    expect(registry.getActiveNode()).toBeUndefined();
+    expect(getActiveNodeContext()).toBeNull();
+    expect(registry.unregister("conn-old")).toBeNull();
+    expect(getActiveNodeContext()).toBeNull();
+  });
+
+  it("rejects presence updates from stale node connections", () => {
+    const registry = createTestNodeRegistry();
+    registry.register(
+      makeClient("conn-new", "node-1", [], { permissions: { accessibility: true } }),
+      {},
+    );
+
+    expect(
+      registry.updatePresenceActivity({
+        nodeId: "node-1",
+        connId: "conn-old",
+        idleSeconds: 0,
+        observedAtMs: 100_000,
+      }),
+    ).toBeNull();
+    expect(registry.getActiveNode()).toBeUndefined();
+  });
+
+  it("does not advance a bounded estimate on saturated idle keepalives", () => {
+    const registry = createTestNodeRegistry();
+    registry.register(
+      makeClient("conn-1", "node-1", [], { permissions: { accessibility: true } }),
+      {},
+    );
+    const first = registry.updatePresenceActivity({
+      nodeId: "node-1",
+      connId: "conn-1",
+      idleSeconds: 2_592_000,
+      saturated: true,
+      observedAtMs: 3_000_000_000,
+    });
+    const keepalive = registry.updatePresenceActivity({
+      nodeId: "node-1",
+      connId: "conn-1",
+      idleSeconds: 2_592_000,
+      saturated: true,
+      observedAtMs: 3_000_180_000,
+    });
+
+    expect(first?.lastActiveAtMs).toBe(408_000_000);
+    expect(keepalive?.lastActiveAtMs).toBe(408_000_000);
+    expect(keepalive?.presenceUpdatedAtMs).toBe(3_000_180_000);
+  });
+
+  it("clears reported presence when Accessibility permission is removed", () => {
+    const registry = createTestNodeRegistry();
+    registry.register(
+      makeClient("conn-1", "node-1", [], {
+        permissions: { accessibility: true },
+        declaredPermissions: { accessibility: true },
+      }),
+      {},
+    );
+    registry.updatePresenceActivity({
+      nodeId: "node-1",
+      connId: "conn-1",
+      idleSeconds: 0,
+      observedAtMs: 100_000,
+    });
+
+    registry.updateSurface("node-1", { commands: [], permissions: { accessibility: false } });
+
+    expect(registry.get("node-1")?.lastActiveAtMs).toBeUndefined();
+    expect(registry.get("node-1")?.presenceUpdatedAtMs).toBeUndefined();
+    expect(registry.getActiveNode()).toBeUndefined();
+    expect(getActiveNodeContext()).toBeNull();
+  });
+
   it("checks node websocket connectivity with ping/pong", async () => {
     const registry = createTestNodeRegistry();
     registry.register(

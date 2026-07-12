@@ -158,6 +158,7 @@ export type DispatchCronDeliveryState = {
   result?: RunCronAgentTurnResult;
   delivered: boolean;
   deliveryAttempted: boolean;
+  deliveryError?: string;
   cronRunSessionCleanupAttempted: boolean;
   summary?: string;
   outputText?: string;
@@ -1006,12 +1007,14 @@ export async function dispatchCronDelivery(
 
   let delivered = verifiedMessageToolDelivery;
   let deliveryAttempted = verifiedMessageToolDelivery;
+  let deliveryError: string | undefined;
   let directCronSessionCleanupAttempted = false;
   let deferredDeletingSessionMirror: DirectCronTranscriptMirror | undefined;
   const buildDeliveryState = (result?: RunCronAgentTurnResult): DispatchCronDeliveryState => ({
     ...(result ? { result } : {}),
     delivered,
     deliveryAttempted,
+    ...(deliveryError ? { deliveryError } : {}),
     cronRunSessionCleanupAttempted: directCronSessionCleanupAttempted,
     summary,
     outputText,
@@ -1200,6 +1203,7 @@ export async function dispatchCronDelivery(
       const onError = params.deliveryBestEffort
         ? (err: unknown, _payload: unknown) => {
             hadPartialFailure = true;
+            deliveryError ??= formatErrorMessage(err);
             logCronDeliveryErrorDeferred(
               `[cron:${params.job.id}] delivery payload failed (bestEffort): ${formatErrorMessage(err)}`,
             );
@@ -1241,6 +1245,7 @@ export async function dispatchCronDelivery(
             throw send.error;
           }
           hadPartialFailure = true;
+          deliveryError ??= formatErrorMessage(send.error);
         }
         return send.status === "sent" || send.status === "partial_failed" ? send.results : [];
       };
@@ -1386,6 +1391,7 @@ export async function dispatchCronDelivery(
       await logCronDeliveryError(
         `[cron:${params.job.id}] delivery failed (bestEffort): ${formatErrorMessage(err)}`,
       );
+      deliveryError = formatErrorMessage(err);
       return null;
     }
   };
@@ -1526,12 +1532,16 @@ export async function dispatchCronDelivery(
       if (!params.deliveryBestEffort) {
         return buildDeliveryState(failDeliveryTarget(params.resolvedDelivery.error.message));
       }
+      delivered = false;
+      deliveryError = params.resolvedDelivery.error.message;
       await logCronDeliveryWarn(`[cron:${params.job.id}] ${params.resolvedDelivery.error.message}`);
       return buildDeliveryState(
         params.withRunSession({
           status: "ok",
           summary,
           outputText,
+          delivered,
+          deliveryError,
           deliveryAttempted,
           ...params.telemetry,
         }),

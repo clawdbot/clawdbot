@@ -2,6 +2,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "../../packages/normalization-core/src/expect.js";
 import { resolvePnpmRunner } from "../pnpm-runner.mjs";
 import { stageCodexAppServerProtocolArtifacts } from "./codex-app-server-protocol-artifacts.js";
 
@@ -246,7 +247,7 @@ async function resolvePrimaryWorktreeSiblingCodex(repoRoot: string): Promise<str
     return undefined;
   }
 
-  const gitDir = path.resolve(repoRoot, match[1].trim());
+  const gitDir = path.resolve(repoRoot, expectDefined(match[1], "gitdir target").trim());
   const worktreeMarker = `${path.sep}.git${path.sep}worktrees${path.sep}`;
   const markerIndex = gitDir.indexOf(worktreeMarker);
   if (markerIndex < 0) {

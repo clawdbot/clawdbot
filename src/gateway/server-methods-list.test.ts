@@ -17,6 +17,10 @@ describe("GATEWAY_EVENTS", () => {
     expect(GATEWAY_EVENTS).not.toContain("talk.realtime.relay");
     expect(GATEWAY_EVENTS).not.toContain("talk.transcription.relay");
   });
+
+  it("advertises node presence activity updates", () => {
+    expect(GATEWAY_EVENTS).toContain("node.presence");
+  });
 });
 
 describe("listGatewayMethods", () => {

@@ -1,6 +1,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { NATIVE_I18N_LOCALES } from "./native-app-i18n.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -63,7 +64,8 @@ export async function checkAndroidAppI18n() {
     readAndroidSource(),
     Promise.all(LOCALES.map(readStrings)),
   ]);
-  const [base, ...translations] = localeStrings;
+  const base = expectDefined(localeStrings[0], "English Android string resources");
+  const translations = localeStrings.slice(1);
   const baseKeys = new Set(base.keys());
   const problems: Array<readonly [string, string[]]> = translations.flatMap((strings, index) => {
     const locale = NATIVE_I18N_LOCALES[index];
