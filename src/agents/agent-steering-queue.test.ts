@@ -404,4 +404,93 @@ describe("agent steering queue", () => {
     const title = leased?.prompt.split("\n").find((line) => line.startsWith("1. "));
     expect(title).toBe(`1. ${"x".repeat(499)}`);
   });
+
+  it("leases three maximum-result items once renderer overhead is budgeted", () => {
+    const runs = runMap(
+      Array.from({ length: 3 }, (_, index) => {
+        const runId = `max-result-${index + 1}`;
+        return makeRun({
+          runId,
+          createdAt: index,
+          endedAt: index,
+          delivery: {
+            status: "pending",
+            payload: payload(runId, {
+              label: `label-${index + 1}-` + "L".repeat(500),
+              task: `task-${index + 1}-` + "T".repeat(500),
+              frozenResultText: `RESULT_${index + 1}_` + "r".repeat(6_000),
+            }),
+          },
+        });
+      }),
+    );
+
+    const leased = leasePendingAgentSteeringItemsFromSubagentRuns({
+      runs,
+      requesterSessionKey,
+      leaseId: "lease-three-max",
+      now: 3_000,
+    });
+
+    expect(leased?.runIds).toEqual(["max-result-1", "max-result-2", "max-result-3"]);
+    expect(leased!.prompt.length).toBeLessThanOrEqual(24_000);
+    expect(leased!.prompt).toContain("RESULT_1_");
+    expect(leased!.prompt).toContain("RESULT_2_");
+    expect(leased!.prompt).toContain("RESULT_3_");
+  });
+
+  it("scales metadata caps for bursts so completion results stay dense", () => {
+    const burstSize = 40;
+    const runs = runMap(
+      Array.from({ length: burstSize }, (_, index) => {
+        const runId = `run-${index + 1}`;
+        const marker = `RESULT_MARKER_${index + 1}_`;
+        return makeRun({
+          runId,
+          createdAt: index,
+          endedAt: index,
+          delivery: {
+            status: "pending",
+            payload: payload(runId, {
+              label: `label-${index + 1}-` + "L".repeat(500),
+              task: `task-${index + 1}-` + "T".repeat(500),
+              childSessionKey: `agent:main:subagent:${runId}:` + "S".repeat(400),
+              frozenResultText: `${marker}${"r".repeat(400)}`,
+            }),
+          },
+        });
+      }),
+    );
+
+    const leased = leasePendingAgentSteeringItemsFromSubagentRuns({
+      runs,
+      requesterSessionKey,
+      leaseId: "lease-burst",
+      now: 3_000,
+    });
+
+    expect(leased).toBeDefined();
+    expect(leased!.prompt.length).toBeLessThanOrEqual(24_000);
+    expect(leased!.runIds.length).toBeGreaterThan(3);
+
+    const titleLines = leased!.prompt.split("\n").filter((line) => /^\d+\. /.test(line));
+    expect(titleLines.length).toBe(leased!.runIds.length);
+    for (const title of titleLines) {
+      // Dynamic budget must shrink well below the small-batch 500-char ceiling.
+      expect(title.length).toBeLessThan(1 + 1 + 200);
+    }
+
+    let retainedResults = 0;
+    let retainedResultChars = 0;
+    for (const runId of leased!.runIds) {
+      const index = Number(runId.slice("run-".length));
+      const marker = `RESULT_MARKER_${index}_`;
+      expect(leased!.prompt).toContain(marker);
+      retainedResults += 1;
+      retainedResultChars += marker.length + 400;
+    }
+    // Metadata-heavy burst should still keep most of the soft ceiling for results.
+    expect(retainedResults).toBe(leased!.runIds.length);
+    expect(retainedResultChars / leased!.prompt.length).toBeGreaterThan(0.45);
+  });
 });
