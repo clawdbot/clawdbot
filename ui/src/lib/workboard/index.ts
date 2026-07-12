@@ -423,40 +423,36 @@ type WorkboardLoadToken = {
   queuedAfterGeneration?: number;
 };
 
-const workboardStates = new WeakMap<WorkboardHost, WorkboardUiState>();
-const workboardLoadPromises = new WeakMap<WorkboardHost, Promise<boolean>>();
-const workboardLoadTokens = new WeakMap<WorkboardHost, WorkboardLoadToken>();
-const workboardLoadErrors = new WeakMap<WorkboardHost, string>();
-const workboardLifecycleTaskRefreshPromises = new WeakMap<WorkboardHost, Promise<number | null>>();
-const workboardLifecycleWritePromises = new WeakMap<WorkboardHost, Set<Promise<unknown>>>();
-const workboardLoadGenerations = new WeakMap<WorkboardHost, number>();
-const workboardLifecycleReconciliationEpochs = new WeakMap<WorkboardHost, number>();
-const workboardPollingGenerations = new WeakMap<WorkboardHost, number>();
-const workboardTaskPollOffsets = new WeakMap<WorkboardHost, number>();
-const workboardTaskDiscoveryOffsets = new WeakMap<WorkboardHost, number>();
-const workboardDefaultTaskDiscoveryCursors = new WeakMap<WorkboardHost, string>();
-const workboardPollingTimers = new WeakMap<WorkboardHost, ReturnType<typeof setTimeout>>();
-const workboardLifecycleTaskPreparedTimers = new WeakMap<
-  WorkboardHost,
-  ReturnType<typeof setTimeout>
->();
-const workboardLifecycleTaskRetryTimers = new WeakMap<
-  WorkboardHost,
-  ReturnType<typeof setTimeout>
->();
-const workboardLifecycleTaskContinuationTimers = new WeakMap<
-  WorkboardHost,
-  ReturnType<typeof setTimeout>
->();
-const workboardPollingEntries = new WeakMap<
-  WorkboardHost,
-  {
-    client: GatewayBrowserClient | null;
-    enabled: boolean;
-    intervalMs: WorkboardAutoRefreshIntervalMs;
-    requestUpdate?: () => void;
-  }
->();
+type WorkboardPollingEntry = {
+  client: GatewayBrowserClient | null;
+  enabled: boolean;
+  intervalMs: WorkboardAutoRefreshIntervalMs;
+  requestUpdate?: () => void;
+};
+
+type WorkboardRuntime = {
+  state?: WorkboardUiState;
+  loadPromise?: Promise<boolean>;
+  loadToken?: WorkboardLoadToken;
+  loadError?: string;
+  lifecycleTaskRefreshPromise?: Promise<number | null>;
+  lifecycleWrites: Set<Promise<unknown>>;
+  loadGeneration?: number;
+  lifecycleReconciliationEpoch?: number;
+  pollingGeneration?: number;
+  taskPollOffset?: number;
+  taskDiscoveryOffset?: number;
+  defaultTaskDiscoveryCursor?: string;
+  pollingTimer?: ReturnType<typeof setTimeout>;
+  lifecycleTaskPreparedTimer?: ReturnType<typeof setTimeout>;
+  lifecycleTaskRetryTimer?: ReturnType<typeof setTimeout>;
+  lifecycleTaskContinuationTimer?: ReturnType<typeof setTimeout>;
+  pollingEntry?: WorkboardPollingEntry;
+  pendingStatusTransitions: Set<string>;
+  lifecycleSyncKeys: Map<string, string>;
+};
+
+const workboardRuntimes = new WeakMap<WorkboardHost, WorkboardRuntime>();
 const WORKBOARD_RECENT_DONE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const SESSION_CAPTURE_HISTORY_LIMIT = 40;
 const SESSION_CAPTURE_HISTORY_MAX_CHARS = 6000;
@@ -475,23 +471,25 @@ const WORKBOARD_LIFECYCLE_TASK_RETRY_MS = 5000;
 const WORKBOARD_LIFECYCLE_TASK_CONTINUE_MS = 100;
 
 function nextWorkboardLoadGeneration(host: WorkboardHost): number {
-  const generation = (workboardLoadGenerations.get(host) ?? 0) + 1;
-  workboardLoadGenerations.set(host, generation);
+  const runtime = getWorkboardRuntime(host);
+  const generation = (runtime.loadGeneration ?? 0) + 1;
+  runtime.loadGeneration = generation;
   return generation;
 }
 
 function isCurrentWorkboardLoadGeneration(host: WorkboardHost, generation: number): boolean {
-  return workboardLoadGenerations.get(host) === generation;
+  return getWorkboardRuntime(host).loadGeneration === generation;
 }
 
 function nextWorkboardPollingGeneration(host: WorkboardHost): number {
-  const generation = (workboardPollingGenerations.get(host) ?? 0) + 1;
-  workboardPollingGenerations.set(host, generation);
+  const runtime = getWorkboardRuntime(host);
+  const generation = (runtime.pollingGeneration ?? 0) + 1;
+  runtime.pollingGeneration = generation;
   return generation;
 }
 
 function currentWorkboardPollingGeneration(host: WorkboardHost): number {
-  return workboardPollingGenerations.get(host) ?? 0;
+  return getWorkboardRuntime(host).pollingGeneration ?? 0;
 }
 
 function isCurrentWorkboardPollingGeneration(host: WorkboardHost, generation: number): boolean {
@@ -499,13 +497,14 @@ function isCurrentWorkboardPollingGeneration(host: WorkboardHost, generation: nu
 }
 
 function nextWorkboardLifecycleReconciliationEpoch(host: WorkboardHost): number {
-  const epoch = (workboardLifecycleReconciliationEpochs.get(host) ?? 0) + 1;
-  workboardLifecycleReconciliationEpochs.set(host, epoch);
+  const runtime = getWorkboardRuntime(host);
+  const epoch = (runtime.lifecycleReconciliationEpoch ?? 0) + 1;
+  runtime.lifecycleReconciliationEpoch = epoch;
   return epoch;
 }
 
 function currentWorkboardLifecycleReconciliationEpoch(host: WorkboardHost): number {
-  return workboardLifecycleReconciliationEpochs.get(host) ?? 0;
+  return getWorkboardRuntime(host).lifecycleReconciliationEpoch ?? 0;
 }
 
 function isCurrentWorkboardLifecycleReconciliationEpoch(
@@ -516,11 +515,12 @@ function isCurrentWorkboardLifecycleReconciliationEpoch(
 }
 
 function invalidateWorkboardLoads(host: WorkboardHost) {
-  const state = workboardStates.get(host);
+  const runtime = getWorkboardRuntime(host);
+  const state = runtime.state;
   if (state) {
     setWorkboardLifecycleTasksPrepared(state, false, { host });
     resetWorkboardLifecycleTaskConfirmations(state, { host });
-    if (workboardLoadPromises.has(host)) {
+    if (runtime.loadPromise) {
       if (!state.draftSaving) {
         state.loading = false;
       }
@@ -530,53 +530,50 @@ function invalidateWorkboardLoads(host: WorkboardHost) {
     }
   }
   nextWorkboardLoadGeneration(host);
-  workboardLoadPromises.delete(host);
-  workboardLoadTokens.delete(host);
+  delete runtime.loadPromise;
+  delete runtime.loadToken;
   nextWorkboardLifecycleReconciliationEpoch(host);
 }
 
 function clearWorkboardLifecycleTaskPreparedTimer(host: WorkboardHost) {
-  const timer = workboardLifecycleTaskPreparedTimers.get(host);
+  const runtime = getWorkboardRuntime(host);
+  const timer = runtime.lifecycleTaskPreparedTimer;
   if (timer) {
     clearTimeout(timer);
-    workboardLifecycleTaskPreparedTimers.delete(host);
+    delete runtime.lifecycleTaskPreparedTimer;
   }
 }
 
 function clearWorkboardLifecycleTaskRetryTimer(host: WorkboardHost) {
-  const timer = workboardLifecycleTaskRetryTimers.get(host);
+  const runtime = getWorkboardRuntime(host);
+  const timer = runtime.lifecycleTaskRetryTimer;
   if (timer) {
     clearTimeout(timer);
-    workboardLifecycleTaskRetryTimers.delete(host);
+    delete runtime.lifecycleTaskRetryTimer;
   }
 }
 
 function clearWorkboardLifecycleTaskContinuationTimer(host: WorkboardHost) {
-  const timer = workboardLifecycleTaskContinuationTimers.get(host);
+  const runtime = getWorkboardRuntime(host);
+  const timer = runtime.lifecycleTaskContinuationTimer;
   if (timer) {
     clearTimeout(timer);
-    workboardLifecycleTaskContinuationTimers.delete(host);
+    delete runtime.lifecycleTaskContinuationTimer;
   }
 }
 
 function trackWorkboardLifecycleWrite(host: WorkboardHost, write: Promise<unknown>) {
-  const writes = workboardLifecycleWritePromises.get(host) ?? new Set<Promise<unknown>>();
-  writes.add(write);
-  workboardLifecycleWritePromises.set(host, writes);
+  getWorkboardRuntime(host).lifecycleWrites.add(write);
 }
 
 function releaseWorkboardLifecycleWrite(host: WorkboardHost, write: Promise<unknown>) {
-  const writes = workboardLifecycleWritePromises.get(host);
-  writes?.delete(write);
-  if (writes?.size === 0) {
-    workboardLifecycleWritePromises.delete(host);
-  }
+  getWorkboardRuntime(host).lifecycleWrites.delete(write);
 }
 
 async function waitForWorkboardLifecycleWrites(host: WorkboardHost) {
   while (true) {
-    const writes = workboardLifecycleWritePromises.get(host);
-    if (!writes?.size) {
+    const writes = getWorkboardRuntime(host).lifecycleWrites;
+    if (!writes.size) {
       return;
     }
     await Promise.allSettled(writes);
@@ -593,11 +590,12 @@ function resetWorkboardLifecycleTaskConfirmations(
 }
 
 export function stopWorkboardLifecycleRefresh(host: WorkboardHost) {
+  const runtime = getWorkboardRuntime(host);
   clearWorkboardLifecycleTaskPreparedTimer(host);
   clearWorkboardLifecycleTaskRetryTimer(host);
   clearWorkboardLifecycleTaskContinuationTimer(host);
-  workboardLifecycleTaskRefreshPromises.delete(host);
-  const state = workboardStates.get(host);
+  delete runtime.lifecycleTaskRefreshPromise;
+  const state = runtime.state;
   if (state) {
     setWorkboardLifecycleTasksPrepared(state, false);
     setWorkboardLifecycleTaskRefreshFailed(state, false);
@@ -617,8 +615,8 @@ export function stopWorkboardLifecycleRefresh(host: WorkboardHost) {
     state.loadAttempted = false;
   }
   nextWorkboardLoadGeneration(host);
-  workboardLoadPromises.delete(host);
-  workboardLoadTokens.delete(host);
+  delete runtime.loadPromise;
+  delete runtime.loadToken;
   nextWorkboardLifecycleReconciliationEpoch(host);
 }
 
@@ -649,12 +647,12 @@ function setWorkboardLifecycleTasksPrepared(
   }
   const nextTimer = setTimeout(
     () => {
-      workboardLifecycleTaskPreparedTimers.delete(host);
+      delete getWorkboardRuntime(host).lifecycleTaskPreparedTimer;
       options.requestUpdate?.();
     },
     Math.max(0, preparedAt + state.autoRefreshIntervalMs - Date.now()),
   );
-  workboardLifecycleTaskPreparedTimers.set(host, nextTimer);
+  getWorkboardRuntime(host).lifecycleTaskPreparedTimer = nextTimer;
 }
 
 function workboardLifecycleTasksPreparedAt(state: WorkboardUiState, now = Date.now()) {
@@ -691,10 +689,10 @@ function setWorkboardLifecycleTaskRefreshFailed(
     return;
   }
   const nextTimer = setTimeout(() => {
-    workboardLifecycleTaskRetryTimers.delete(host);
+    delete getWorkboardRuntime(host).lifecycleTaskRetryTimer;
     options.requestUpdate?.();
   }, retryDelayMs);
-  workboardLifecycleTaskRetryTimers.set(host, nextTimer);
+  getWorkboardRuntime(host).lifecycleTaskRetryTimer = nextTimer;
 }
 
 function setWorkboardLifecycleTaskRefreshContinuation(
@@ -719,10 +717,10 @@ function setWorkboardLifecycleTaskRefreshContinuation(
   // Continue bounded exact-confirmation even when routine polling is off.
   // Keep this separate so render polling cannot cancel the freshness-bounded sequence.
   const nextTimer = setTimeout(() => {
-    workboardLifecycleTaskContinuationTimers.delete(host);
+    delete getWorkboardRuntime(host).lifecycleTaskContinuationTimer;
     options.requestUpdate?.();
   }, WORKBOARD_LIFECYCLE_TASK_CONTINUE_MS);
-  workboardLifecycleTaskContinuationTimers.set(host, nextTimer);
+  getWorkboardRuntime(host).lifecycleTaskContinuationTimer = nextTimer;
 }
 
 function workboardLifecycleTaskRefreshRetryPending(state: WorkboardUiState, now = Date.now()) {
@@ -798,13 +796,23 @@ function createDefaultState(): WorkboardUiState {
   };
 }
 
-export function getWorkboardState(host: WorkboardHost): WorkboardUiState {
-  let state = workboardStates.get(host);
-  if (!state) {
-    state = createDefaultState();
-    workboardStates.set(host, state);
+function getWorkboardRuntime(host: WorkboardHost): WorkboardRuntime {
+  let runtime = workboardRuntimes.get(host);
+  if (!runtime) {
+    runtime = {
+      lifecycleWrites: new Set(),
+      pendingStatusTransitions: new Set(),
+      lifecycleSyncKeys: new Map(),
+    };
+    workboardRuntimes.set(host, runtime);
   }
-  return state;
+  return runtime;
+}
+
+export function getWorkboardState(host: WorkboardHost): WorkboardUiState {
+  const runtime = getWorkboardRuntime(host);
+  runtime.state ??= createDefaultState();
+  return runtime.state;
 }
 
 export function workboardMutationsReady(state: WorkboardUiState): boolean {
@@ -821,7 +829,7 @@ export function workboardHasActiveWrites(state: WorkboardUiState): boolean {
 }
 
 function workboardHasActiveLoad(host: WorkboardHost): boolean {
-  return workboardLoadPromises.has(host);
+  return Boolean(getWorkboardRuntime(host).loadPromise);
 }
 
 function workboardLifecycleSyncBlocked(host: WorkboardHost, state: WorkboardUiState): boolean {
@@ -1669,18 +1677,19 @@ function selectRotatingBatch<T>(
   host: WorkboardHost,
   items: readonly T[],
   limit: number,
-  offsets: WeakMap<WorkboardHost, number>,
+  offsetKey: "taskPollOffset" | "taskDiscoveryOffset",
 ): T[] {
+  const runtime = getWorkboardRuntime(host);
   if (items.length <= limit) {
-    offsets.set(host, 0);
+    runtime[offsetKey] = 0;
     return [...items];
   }
-  const offset = (offsets.get(host) ?? 0) % items.length;
+  const offset = (runtime[offsetKey] ?? 0) % items.length;
   const batch = Array.from(
     { length: limit },
     (_, index) => items[(offset + index) % items.length],
   ).filter((item): item is T => item !== undefined);
-  offsets.set(host, (offset + batch.length) % items.length);
+  runtime[offsetKey] = (offset + batch.length) % items.length;
   return batch;
 }
 
@@ -1713,7 +1722,7 @@ function selectWorkboardTaskPollIds(
       ids.push(taskId);
     }
   }
-  return selectRotatingBatch(host, ids, WORKBOARD_TASK_POLL_BATCH_SIZE, workboardTaskPollOffsets);
+  return selectRotatingBatch(host, ids, WORKBOARD_TASK_POLL_BATCH_SIZE, "taskPollOffset");
 }
 
 type WorkboardTaskDiscoveryQuery = {
@@ -1745,7 +1754,7 @@ function selectWorkboardTaskDiscoveryQueries(
     if (sessionKey.startsWith("subagent:workboard-")) {
       if (!hasUnfilteredQuery) {
         hasUnfilteredQuery = true;
-        const cursor = workboardDefaultTaskDiscoveryCursors.get(host);
+        const cursor = getWorkboardRuntime(host).defaultTaskDiscoveryCursor;
         queries.push(cursor ? { cursor } : {});
       }
     } else if (!seenSessionKeys.has(sessionKey)) {
@@ -1757,7 +1766,7 @@ function selectWorkboardTaskDiscoveryQueries(
     host,
     queries,
     WORKBOARD_TASK_DISCOVERY_BATCH_SIZE,
-    workboardTaskDiscoveryOffsets,
+    "taskDiscoveryOffset",
   );
 }
 
@@ -1940,9 +1949,7 @@ function selectWorkboardMissingTaskConfirmationIds(
     seen.add(taskId);
     ids.push(taskId);
   }
-  return Number.isFinite(limit)
-    ? selectRotatingBatch(host, ids, limit, workboardTaskPollOffsets)
-    : ids;
+  return Number.isFinite(limit) ? selectRotatingBatch(host, ids, limit, "taskPollOffset") : ids;
 }
 
 type WorkboardTaskLinkState = Pick<WorkboardUiState, "cards" | "tasksByCardId" | "missingTaskIds">;
@@ -2055,6 +2062,7 @@ async function loadWorkboardInternal(
   params: LoadWorkboardParams,
   queuedAfterGeneration?: number,
 ): Promise<boolean> {
+  const runtime = getWorkboardRuntime(params.host);
   const state = getWorkboardState(params.host);
   if (
     !params.client ||
@@ -2065,20 +2073,20 @@ async function loadWorkboardInternal(
     return false;
   }
   const client = params.client;
-  const existingLoad = workboardLoadPromises.get(params.host);
+  const existingLoad = runtime.loadPromise;
   if (existingLoad) {
-    const existingGeneration = workboardLoadGenerations.get(params.host);
+    const existingGeneration = runtime.loadGeneration;
     const result = await existingLoad;
     const existingLoadIsCurrent =
       existingGeneration !== undefined &&
       isCurrentWorkboardLoadGeneration(params.host, existingGeneration);
-    const currentLoadToken = workboardLoadTokens.get(params.host);
+    const currentLoadMarker = runtime.loadToken;
     // Only follow a replacement created by this load's forced-waiter queue.
     // Fresh loads after teardown or writes must not revive stale callers.
     const queuedLoadReplacedExisting =
       existingGeneration !== undefined &&
-      currentLoadToken?.queuedAfterGeneration === existingGeneration &&
-      workboardLoadPromises.has(params.host);
+      currentLoadMarker?.queuedAfterGeneration === existingGeneration &&
+      Boolean(runtime.loadPromise);
     // Forced callers carry their own diagnostics/task-refresh contract, so a
     // weaker in-flight load cannot satisfy them.
     return params.force &&
@@ -2090,12 +2098,12 @@ async function loadWorkboardInternal(
   }
   const generation = nextWorkboardLoadGeneration(params.host);
   const loadToken: WorkboardLoadToken = { queuedAfterGeneration };
-  workboardLoadTokens.set(params.host, loadToken);
+  runtime.loadToken = loadToken;
   const lastRefreshErrorBeforeLoad = state.lastRefreshError;
   state.loadAttempted = true;
   state.loading = true;
   if (!params.preserveError) {
-    workboardLoadErrors.delete(params.host);
+    delete runtime.loadError;
     state.error = null;
   }
   if (params.taskRefresh !== "linked" || !state.lifecycleTaskRefreshFailed) {
@@ -2222,9 +2230,9 @@ async function loadWorkboardInternal(
       }
       if (nextUnfilteredCursor !== undefined) {
         if (nextUnfilteredCursor) {
-          workboardDefaultTaskDiscoveryCursors.set(params.host, nextUnfilteredCursor);
+          runtime.defaultTaskDiscoveryCursor = nextUnfilteredCursor;
         } else {
-          workboardDefaultTaskDiscoveryCursors.delete(params.host);
+          delete runtime.defaultTaskDiscoveryCursor;
         }
       }
       state.cards = taskLinkState.cards;
@@ -2261,11 +2269,11 @@ async function loadWorkboardInternal(
           }),
         { host: params.host, requestUpdate: params.requestUpdate },
       );
-      const recoveredLoadError = workboardLoadErrors.get(params.host);
+      const recoveredLoadError = runtime.loadError;
       if (recoveredLoadError !== undefined && state.error === recoveredLoadError) {
         state.error = null;
       }
-      workboardLoadErrors.delete(params.host);
+      delete runtime.loadError;
       // Preserve stale edit text for recovery, but never re-enable its full-card
       // save payload after canonical state may have changed.
       state.mutationReadiness = state.editingCardId ? "stale_edit_draft" : "ready";
@@ -2277,14 +2285,14 @@ async function loadWorkboardInternal(
         if (params.preserveError) {
           state.lastRefreshError = formattedError;
         } else {
-          workboardLoadErrors.set(params.host, formattedError);
+          runtime.loadError = formattedError;
           state.error = formattedError;
         }
       }
       return false;
     } finally {
       const isCurrentGeneration = isCurrentWorkboardLoadGeneration(params.host, generation);
-      const ownsLoad = workboardLoadTokens.get(params.host) === loadToken;
+      const ownsLoad = runtime.loadToken === loadToken;
       if (!isCurrentGeneration && !state.loaded) {
         state.loadAttempted = false;
       }
@@ -2292,13 +2300,13 @@ async function loadWorkboardInternal(
         state.loading = false;
       }
       if (ownsLoad) {
-        workboardLoadPromises.delete(params.host);
-        workboardLoadTokens.delete(params.host);
+        delete runtime.loadPromise;
+        delete runtime.loadToken;
       }
       params.requestUpdate?.();
     }
   })();
-  workboardLoadPromises.set(params.host, loadPromise);
+  runtime.loadPromise = loadPromise;
   return await loadPromise;
 }
 
@@ -2389,26 +2397,28 @@ function shouldDeferWorkboardPoll(state: WorkboardUiState): boolean {
 }
 
 function clearWorkboardPolling(host: WorkboardHost) {
-  const timer = workboardPollingTimers.get(host);
+  const runtime = getWorkboardRuntime(host);
+  const timer = runtime.pollingTimer;
   if (timer) {
     clearTimeout(timer);
-    workboardPollingTimers.delete(host);
+    delete runtime.pollingTimer;
   }
 }
 
 function scheduleWorkboardPoll(host: WorkboardHost) {
   clearWorkboardPolling(host);
-  const entry = workboardPollingEntries.get(host);
+  const runtime = getWorkboardRuntime(host);
+  const entry = runtime.pollingEntry;
   if (!entry?.enabled || !entry.client || entry.intervalMs <= 0) {
     return;
   }
   const pollingGeneration = currentWorkboardPollingGeneration(host);
   const timer = setTimeout(() => {
-    workboardPollingTimers.delete(host);
+    delete runtime.pollingTimer;
     if (!isCurrentWorkboardPollingGeneration(host, pollingGeneration)) {
       return;
     }
-    const current = workboardPollingEntries.get(host);
+    const current = runtime.pollingEntry;
     const state = getWorkboardState(host);
     if (!current?.enabled || !current.client || current.intervalMs <= 0) {
       return;
@@ -2430,7 +2440,7 @@ function scheduleWorkboardPoll(host: WorkboardHost) {
       }
     });
   }, entry.intervalMs);
-  workboardPollingTimers.set(host, timer);
+  runtime.pollingTimer = timer;
 }
 
 export function configureWorkboardPolling(params: {
@@ -2439,16 +2449,17 @@ export function configureWorkboardPolling(params: {
   enabled: boolean;
   requestUpdate?: () => void;
 }) {
+  const runtime = getWorkboardRuntime(params.host);
   const state = getWorkboardState(params.host);
   const intervalMs = state.autoRefreshIntervalMs;
-  const previous = workboardPollingEntries.get(params.host);
+  const previous = runtime.pollingEntry;
   const enabled = params.enabled && intervalMs > 0;
-  workboardPollingEntries.set(params.host, {
+  runtime.pollingEntry = {
     client: params.client,
     enabled,
     intervalMs,
     requestUpdate: params.requestUpdate,
-  });
+  };
   if (!enabled) {
     clearWorkboardPolling(params.host);
     clearWorkboardLifecycleTaskPreparedTimer(params.host);
@@ -2460,16 +2471,17 @@ export function configureWorkboardPolling(params: {
     previous.enabled !== enabled ||
     previous.intervalMs !== intervalMs ||
     previous.client !== params.client;
-  if (!state.pollRefreshInProgress && (configChanged || !workboardPollingTimers.get(params.host))) {
+  if (!state.pollRefreshInProgress && (configChanged || !runtime.pollingTimer)) {
     scheduleWorkboardPoll(params.host);
   }
 }
 
 export function stopWorkboardPolling(host: WorkboardHost) {
+  const runtime = getWorkboardRuntime(host);
   nextWorkboardPollingGeneration(host);
   clearWorkboardPolling(host);
-  workboardPollingEntries.delete(host);
-  const state = workboardStates.get(host);
+  delete runtime.pollingEntry;
+  const state = runtime.state;
   if (!state?.pollRefreshInProgress) {
     return;
   }
@@ -2479,8 +2491,8 @@ export function stopWorkboardPolling(host: WorkboardHost) {
     state.loadAttempted = false;
   }
   nextWorkboardLoadGeneration(host);
-  workboardLoadPromises.delete(host);
-  workboardLoadTokens.delete(host);
+  delete runtime.loadPromise;
+  delete runtime.loadToken;
 }
 
 function replaceCard(state: WorkboardUiState, card: WorkboardCard) {
@@ -2717,15 +2729,8 @@ function shouldSyncCardStatus(card: WorkboardCard, targetStatus: WorkboardStatus
   return false;
 }
 
-const pendingStatusTransitions = new WeakMap<WorkboardHost, Set<string>>();
-
 function pendingStatusTransitionMap(host: WorkboardHost) {
-  let transitions = pendingStatusTransitions.get(host);
-  if (!transitions) {
-    transitions = new Set();
-    pendingStatusTransitions.set(host, transitions);
-  }
-  return transitions;
+  return getWorkboardRuntime(host).pendingStatusTransitions;
 }
 
 function recordPendingStatusTransition(
@@ -2744,12 +2749,11 @@ function clearPendingStatusTransition(host: WorkboardHost, cardId: string, recor
   if (!recorded) {
     return;
   }
-  const transitions = pendingStatusTransitions.get(host);
-  transitions?.delete(cardId);
+  getWorkboardRuntime(host).pendingStatusTransitions.delete(cardId);
 }
 
 function hasPendingStatusTransition(host: WorkboardHost, cardId: string): boolean {
-  return pendingStatusTransitions.get(host)?.has(cardId) ?? false;
+  return getWorkboardRuntime(host).pendingStatusTransitions.has(cardId);
 }
 
 function shouldSkipStaleLifecycleStatus(
@@ -2839,15 +2843,8 @@ function lifecycleSyncKey(card: WorkboardCard, lifecycle: WorkboardLifecycle): s
   ].join(":");
 }
 
-const lifecycleSyncKeys = new WeakMap<WorkboardHost, Map<string, string>>();
-
 function getLifecycleSyncKeys(host: WorkboardHost): Map<string, string> {
-  let keys = lifecycleSyncKeys.get(host);
-  if (!keys) {
-    keys = new Map();
-    lifecycleSyncKeys.set(host, keys);
-  }
-  return keys;
+  return getWorkboardRuntime(host).lifecycleSyncKeys;
 }
 
 function mergePatchMetadata(patch: Record<string, unknown>, metadata: Record<string, unknown>) {
@@ -3066,7 +3063,8 @@ async function refreshWorkboardLifecycleTasks(
   },
   state: WorkboardUiState,
 ): Promise<number | null> {
-  const existingRefresh = workboardLifecycleTaskRefreshPromises.get(params.host);
+  const runtime = getWorkboardRuntime(params.host);
+  const existingRefresh = runtime.lifecycleTaskRefreshPromise;
   if (existingRefresh) {
     return await existingRefresh;
   }
@@ -3195,12 +3193,12 @@ async function refreshWorkboardLifecycleTasks(
       return null;
     }
   })();
-  workboardLifecycleTaskRefreshPromises.set(params.host, refresh);
+  runtime.lifecycleTaskRefreshPromise = refresh;
   try {
     return await refresh;
   } finally {
-    if (workboardLifecycleTaskRefreshPromises.get(params.host) === refresh) {
-      workboardLifecycleTaskRefreshPromises.delete(params.host);
+    if (runtime.lifecycleTaskRefreshPromise === refresh) {
+      delete runtime.lifecycleTaskRefreshPromise;
     }
   }
 }

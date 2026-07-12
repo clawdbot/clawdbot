@@ -342,7 +342,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.dismissPendingSystem).toHaveBeenCalledWith("run-error");
     expect(chatLog.addSystem).toHaveBeenCalledWith("run error: provider exploded");
     expect(state.activeChatRunId).toBeNull();
-    expect(loadHistory).toHaveBeenCalled();
+    expect(loadHistory).not.toHaveBeenCalled();
     expect(tui.requestRender).toHaveBeenCalledTimes(2);
     vi.useRealTimers();
   });
@@ -1682,8 +1682,8 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     );
   });
 
-  it("renders malformed streaming fragment text for chat error events", () => {
-    const { state, chatLog, handleChatEvent } = createHandlersHarness({
+  it("renders malformed streaming fragment text for chat error events without reloading", () => {
+    const { state, chatLog, loadHistory, handleChatEvent } = createHandlersHarness({
       state: { activeChatRunId: null },
     });
 
@@ -1697,6 +1697,45 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.addSystem).toHaveBeenCalledWith(
       "run error: LLM streaming response contained a malformed fragment. Please try again.",
     );
+    expect(loadHistory).not.toHaveBeenCalled();
+  });
+
+  it("restores a terminal error when another run delays a history reload", async () => {
+    const { state, chatLog, loadHistory, noteLocalRunId, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-error" },
+    });
+    handleChatEvent({
+      runId: "run-other",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "still running" },
+    });
+    noteLocalRunId("run-local-empty");
+    handleChatEvent({
+      runId: "run-local-empty",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+    });
+    handleChatEvent({
+      runId: "run-error",
+      sessionKey: state.currentSessionKey,
+      state: "error",
+      errorMessage: "provider exploded",
+    });
+
+    expect(state.activeChatRunId).toBe("run-other");
+    expect(loadHistory).not.toHaveBeenCalled();
+
+    handleChatEvent({
+      runId: "run-other",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "done" }] },
+    });
+
+    await vi.waitFor(() => expect(chatLog.addSystem).toHaveBeenCalledTimes(2));
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+    expect(chatLog.addSystem).toHaveBeenLastCalledWith("run error: provider exploded");
   });
 
   it("shows a concise /auth hint for local auth failures", () => {

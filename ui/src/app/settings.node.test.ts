@@ -5,6 +5,8 @@ import { createStorageMock } from "../test-helpers/storage.ts";
 import {
   loadLocalUserIdentity,
   loadSettings,
+  persistSessionToken,
+  resolvePageGatewaySettings,
   resolveApplicationStartupSettings,
   saveSettings,
   type UiSettings,
@@ -127,6 +129,32 @@ describe("loadSettings default gateway URL derivation", () => {
     setControlUiBasePath(" /openclaw/ ");
 
     expect(loadSettings().gatewayUrl).toBe(expectedGatewayUrl("/openclaw"));
+  });
+
+  it("binds standalone documents to the page Gateway without persisting a selection", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/openclaw/approve/exec%3A1",
+    });
+    setControlUiBasePath("/openclaw");
+    const remote = makeSettings("wss://remote.example:8443", {
+      sessionKey: "agent:remote:main",
+      lastActiveSessionKey: "agent:remote:main",
+    });
+    const sessionCredential = ["page", "session", "credential"].join("-");
+    persistSessionToken(expectedGatewayUrl("/openclaw"), sessionCredential);
+    const before = [...Array(localStorage.length)].map((_, index) => localStorage.key(index));
+
+    expect(resolvePageGatewaySettings(remote)).toMatchObject({
+      gatewayUrl: expectedGatewayUrl("/openclaw"),
+      token: sessionCredential,
+      sessionKey: "main",
+      lastActiveSessionKey: "main",
+    });
+    expect([...Array(localStorage.length)].map((_, index) => localStorage.key(index))).toEqual(
+      before,
+    );
   });
 
   it("defaults chat auto-scroll to near-bottom", () => {

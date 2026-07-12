@@ -21,6 +21,7 @@ import {
   type PreparedSecretsRuntimeSnapshot,
 } from "../secrets/runtime-state.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
+import { resolveApprovalSessionAudience } from "./approval-session-audience.js";
 import { diffConfigPaths } from "./config-diff.js";
 import {
   buildGatewayReloadPlan,
@@ -103,6 +104,7 @@ export function createGatewayAuxHandlers(params: {
     approvalKind: "exec",
     persistence: approvalPersistence,
     resolveAllowedDecisions: resolveExecApprovalRequestAllowedDecisions,
+    resolveAudienceSessionKeys: resolveApprovalSessionAudience,
     onError: (error, context) => {
       params.log.error?.(
         `${context.approvalKind} approval ${context.operation} failed for ${context.approvalId}: ${String(error)}`,
@@ -126,6 +128,7 @@ export function createGatewayAuxHandlers(params: {
     approvalKind: "plugin",
     persistence: approvalPersistence,
     resolveAllowedDecisions: (request) => resolvePluginApprovalRequestAllowedDecisions(request),
+    resolveAudienceSessionKeys: resolveApprovalSessionAudience,
     onError: (error, context) => {
       params.log.error?.(
         `${context.approvalKind} approval ${context.operation} failed for ${context.approvalId}: ${String(error)}`,

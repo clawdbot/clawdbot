@@ -100,6 +100,12 @@
   flex: 0 0 auto;
 }
 
+.chat-group.assistant .chat-group-footer-actions,
+.chat-group.assistant .chat-message-actions-row {
+  justify-content: flex-start;
+  margin-left: 0;
+}
+
 .chat-message-actions-row {
   align-self: stretch;
   margin-top: 4px;
@@ -573,7 +579,7 @@ details.msg-meta:not([open]) .msg-meta__details {
   left: 0;
   z-index: 30;
   width: max-content;
-  max-width: min(28rem, calc(100vw - 32px));
+  max-width: min(36rem, calc(100vw - 32px));
   padding: 3px 7px;
   border: 1px solid var(--border);
   border-radius: var(--radius-full);

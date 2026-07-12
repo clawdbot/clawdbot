@@ -34,13 +34,24 @@ class FakeGatewayClient {
   }
 }
 
-function createStore() {
+function createStore(
+  params: {
+    settings?: ReturnType<typeof loadSettings>;
+    persistDefaultConnectionSettings?: boolean;
+  } = {},
+) {
   const clients: FakeGatewayClient[] = [];
-  const gateway = createApplicationGateway(loadSettings(), "", "", (opts) => {
-    const client = new FakeGatewayClient(opts);
-    clients.push(client);
-    return client as unknown as GatewayBrowserClient;
-  });
+  const gateway = createApplicationGateway(
+    params.settings ?? loadSettings(),
+    "",
+    "",
+    (opts) => {
+      const client = new FakeGatewayClient(opts);
+      clients.push(client);
+      return client as unknown as GatewayBrowserClient;
+    },
+    { persistDefaultConnectionSettings: params.persistDefaultConnectionSettings },
+  );
   const current = () => {
     const client = clients.at(-1);
     if (!client) {
@@ -152,5 +163,74 @@ describe("createApplicationGateway reconnecting snapshot", () => {
 
     // The superseded client cannot demote the fresh attempt's snapshot.
     expect(gateway.snapshot.reconnecting).toBe(true);
+  });
+
+  it("does not copy selected-remote settings into an ephemeral document Gateway", () => {
+    const pageGateway = "ws://127.0.0.1:18789";
+    const remoteGateway = "wss://saved-remote.example.test";
+    const pageSettingsKey = `openclaw.control.settings.v1:${pageGateway}`;
+    const selectionKey = `openclaw.control.currentGateway.v1:${pageGateway}`;
+    const storedPageSettings = JSON.stringify({
+      gatewayUrl: pageGateway,
+      theme: "claw",
+      sessionKey: "agent:page:saved",
+    });
+    const settings = {
+      ...loadSettings(),
+      gatewayUrl: pageGateway,
+      token: "page-token",
+      theme: "dash" as const,
+      sessionKey: "agent:page:document",
+      lastActiveSessionKey: "agent:page:document",
+    };
+    localStorage.setItem(pageSettingsKey, storedPageSettings);
+    localStorage.setItem(selectionKey, remoteGateway);
+    const { gateway, current } = createStore({
+      settings,
+      persistDefaultConnectionSettings: false,
+    });
+
+    gateway.start();
+    expect(current().opts.token).toBe("page-token");
+    current().opts.onHello?.(HELLO);
+    gateway.connect({ token: "replacement-page-token" });
+
+    expect(current().opts.token).toBe("replacement-page-token");
+    expect(localStorage.getItem(pageSettingsKey)).toBe(storedPageSettings);
+    expect(localStorage.getItem(selectionKey)).toBe(remoteGateway);
+  });
+
+  it("keeps ephemeral login on the serving gateway from persisting the selection", () => {
+    const pageGateway = "ws://127.0.0.1:18789";
+    const remoteGateway = "wss://saved-remote.example.test";
+    const otherGateway = "wss://other-remote.example.test";
+    const pageSettingsKey = `openclaw.control.settings.v1:${pageGateway}`;
+    const selectionKey = `openclaw.control.currentGateway.v1:${pageGateway}`;
+    const settings = {
+      ...loadSettings(),
+      gatewayUrl: pageGateway,
+      token: "",
+    };
+    localStorage.setItem(selectionKey, remoteGateway);
+    const { gateway, current } = createStore({
+      settings,
+      persistDefaultConnectionSettings: false,
+    });
+
+    gateway.start();
+    // The login gate always resubmits its prefilled (serving) gateway URL;
+    // an unchanged URL must not count as an explicit gateway selection.
+    gateway.connect({ gatewayUrl: pageGateway, token: "approval-token", password: "pw" });
+
+    expect(current().opts.url).toBe(pageGateway);
+    expect(current().opts.token).toBe("approval-token");
+    expect(localStorage.getItem(pageSettingsKey)).toBeNull();
+    expect(localStorage.getItem(selectionKey)).toBe(remoteGateway);
+
+    // A genuinely changed URL is an explicit selection and persists.
+    gateway.connect({ gatewayUrl: otherGateway });
+
+    expect(current().opts.url).toBe(otherGateway);
+    expect(localStorage.getItem(selectionKey)).toBe(otherGateway);
   });
 });

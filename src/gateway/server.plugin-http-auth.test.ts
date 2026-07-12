@@ -654,6 +654,78 @@ describe("gateway plugin HTTP auth boundary", () => {
     },
   );
 
+  test("reserves standalone approval documents ahead of plugin routes", async () => {
+    const handlePluginRequest = vi.fn(async (_req: IncomingMessage, res: ServerResponse) => {
+      res.statusCode = 200;
+      res.end("plugin-shadowed-approval");
+      return true;
+    });
+
+    await withRootMountedControlUiServer({
+      prefix: "openclaw-plugin-http-approval-reservation-test-",
+      handlePluginRequest,
+      run: async (server) => {
+        const response = await sendRequest(server, { path: "/approve/plugin%3Arequest.json" });
+
+        expect(response.res.statusCode).toBe(503);
+        expect(response.getBody()).toContain("Control UI assets not found");
+        expect(handlePluginRequest).not.toHaveBeenCalled();
+      },
+    });
+  });
+
+  test("terminates approval-document writes at the reservation stage", async () => {
+    const handlePluginRequest = vi.fn(async (_req: IncomingMessage, res: ServerResponse) => {
+      res.statusCode = 200;
+      res.end("plugin-shadowed-approval-write");
+      return true;
+    });
+
+    await withRootMountedControlUiServer({
+      prefix: "openclaw-plugin-http-approval-write-reservation-test-",
+      handlePluginRequest,
+      run: async (server) => {
+        for (const method of ["POST", "PUT"] as const) {
+          const response = await sendRequest(server, {
+            path: "/approve/plugin%3Arequest.json",
+            method,
+          });
+
+          // The server approval-document stage owns the terminal 404 for all
+          // methods; writes never fall through to plugin HTTP handlers.
+          expect(response.res.statusCode, method).toBe(404);
+          expect(response.getBody(), method).toBe("Not Found");
+        }
+        expect(handlePluginRequest).not.toHaveBeenCalled();
+      },
+    });
+  });
+
+  test("keeps approval documents reserved when control ui serving is disabled", async () => {
+    const handlePluginRequest = vi.fn(async (_req: IncomingMessage, res: ServerResponse) => {
+      res.statusCode = 200;
+      res.end("plugin-shadowed-disabled-approval");
+      return true;
+    });
+
+    await withPluginGatewayServer({
+      prefix: "openclaw-plugin-http-disabled-approval-reservation-test-",
+      resolvedAuth: AUTH_NONE,
+      overrides: {
+        controlUiEnabled: false,
+        controlUiBasePath: "",
+        handlePluginRequest,
+      },
+      run: async (server) => {
+        const response = await sendRequest(server, { path: "/approve/exec%3Arequest" });
+
+        expect(response.res.statusCode).toBe(404);
+        expect(response.getBody()).toBe("Not Found");
+        expect(handlePluginRequest).not.toHaveBeenCalled();
+      },
+    });
+  });
+
   test("passes POST webhook routes through root-mounted control ui to plugins", async () => {
     const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
       const pathname = new URL(req.url ?? "/", "http://localhost").pathname;

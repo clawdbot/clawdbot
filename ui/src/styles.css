@@ -2,6 +2,7 @@
 @import "./styles/layout.css";
 @import "./styles/layout.mobile.css";
 @import "./styles/components.css";
+@import "./styles/approval.css";
 @import "./styles/activity.css";
 @import "./styles/about.css";
 @import "./styles/chat.css";

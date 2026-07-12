@@ -166,6 +166,8 @@ Add kind-agnostic reviewer methods:
 | `approval.get { id }`                     | Returns a visible pending or retained terminal projection.                                                                                                                                                          |
 | `approval.resolve { id, kind, decision }` | Accepts the canonical ID or fixed-size transport reference, then runs authorization, kind and allowed-decision validation, deadline reconciliation, and terminal CAS. The response always carries the canonical ID. |
 
+After a successful CAS, return the committed projection immediately. Legacy events, channel forwarders, and push terminalizers are best-effort follow-ups; a slow or failed surface must not delay or roll back the winning response.
+
 Kind-specific request validation remains in `exec.approval.request` and `plugin.approval.request`. Existing `exec.approval.get/list/waitDecision/resolve` and `plugin.approval.list/waitDecision/resolve` become protocol-boundary adapters to the canonical service because they are shipped Gateway API. Internal callers migrate to the service in the same change.
 
 A reviewer projection is a tagged union:
@@ -228,6 +230,8 @@ Keep `button.url`, `button.webApp`, and command-backed approval controls as depr
 The route is `${basePath}/approve/{approvalId}`. The ID is the only path parameter; source session identity comes from the record.
 
 Because the current router has exact static routes and rewrites unknown paths to Chat, detect this deep link in `ui/src/app/bootstrap.ts` before normal route normalization. Reuse normal Gateway/auth setup, but render a standalone approval page outside the sidebar shell and global modal.
+
+The document is owned by the Gateway that served its URL. Its initial connection ignores the full app's persisted remote-Gateway selection without changing or copying that selection's settings; only auth stays session-scoped to the serving Gateway. Trusted native auth or a separately confirmed `gatewayUrl` override may retarget it. The core reserves the one-segment `/approve` namespace ahead of plugin HTTP routes and static-extension detection, including IDs that end in `.json` or `.js`; when Control UI serving is disabled, the reserved route fails closed with `404`. Keep the page in the main Control UI bundle so a failed lazy chunk cannot strand a security decision on a spinner.
 
 Page states:
 
@@ -371,6 +375,8 @@ Do not silently change them in the storage PR. The strict-semantics PR must upda
 ### PR 3: Control UI deep link
 
 - Standalone authenticated approval page and base-path-aware startup routing.
+- Serving-Gateway binding without mutating the operator's saved remote selection.
+- Core-owned approval HTTP namespace, including asset-like IDs.
 - Gateway-authored URL payload and pending-state polling until lifecycle events ship.
 - Mobile-width, reconnect, competing-answer, reload, and mounted-path proof.
 
