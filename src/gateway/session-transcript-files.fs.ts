@@ -491,8 +491,8 @@ export async function cleanupArchivedSessionTranscripts(opts: {
         if (now - timestamp > rule.olderThanMs) {
           const stat = await ignoreMissingArchivePath(() => fs.promises.stat(fullPath), null);
           if (stat?.isFile()) {
-            opts.onRemoveFile?.(canonicalizePathForComparison(fullPath));
             if (opts.dryRun) {
+              opts.onRemoveFile?.(canonicalizePathForComparison(fullPath));
               removed += 1;
             } else {
               const removedFile = await ignoreMissingArchivePath(async () => {
@@ -500,6 +500,7 @@ export async function cleanupArchivedSessionTranscripts(opts: {
                 return true;
               }, false);
               if (removedFile) {
+                opts.onRemoveFile?.(canonicalizePathForComparison(fullPath));
                 removed += 1;
               }
             }

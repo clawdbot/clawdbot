@@ -81,6 +81,26 @@ describe("cleanupArchivedSessionTranscripts", () => {
     ]);
   });
 
+  it("reports only archives deleted successfully when one disappears during cleanup", async () => {
+    await seed([`a.jsonl.deleted.${OLD_STAMP}`, `b.jsonl.deleted.${OLD_STAMP}`]);
+    const onRemoveFile = vi.fn();
+    vi.spyOn(fsPromises, "rm").mockRejectedValueOnce(filesystemError("ENOENT"));
+
+    const result = await cleanupArchivedSessionTranscripts({
+      directories: [dir],
+      rules: [{ reason: "deleted", olderThanMs: 30 * DAY_MS }],
+      nowMs: NOW_MS,
+      onRemoveFile,
+    });
+
+    expect(result).toEqual({ removed: 1, scanned: 2 });
+    expect(onRemoveFile).toHaveBeenCalledTimes(1);
+    expect(onRemoveFile.mock.calls[0]?.[0]).toMatch(
+      new RegExp(`/b\\.jsonl\\.deleted\\.${OLD_STAMP}$`),
+    );
+    expect(await remaining()).toEqual([`a.jsonl.deleted.${OLD_STAMP}`]);
+  });
+
   it("skips excluded archive paths during dry-run", async () => {
     await seed([`a.jsonl.deleted.${OLD_STAMP}`, `b.jsonl.reset.${OLD_STAMP}`]);
     const excludedPath = await fsPromises.realpath(path.join(dir, `a.jsonl.deleted.${OLD_STAMP}`));
