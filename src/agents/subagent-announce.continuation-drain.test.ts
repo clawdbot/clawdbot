@@ -28,7 +28,7 @@ const updateSessionEntryInStore = async (
   if (!existing || typeof existing !== "object") {
     return null;
   }
-  const patch = await update(existing as Record<string, unknown>);
+  const patch = update(existing as Record<string, unknown>);
   if (!patch) {
     return null;
   }

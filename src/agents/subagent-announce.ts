@@ -465,7 +465,6 @@ async function drainChildContinuationQueue(params: {
         // instead of re-minting a fresh one (stable chain correlation).
         ...(advanced.chainId ? { chainId: advanced.chainId } : {}),
       });
-      let wroteDurableEntry = false;
       try {
         const agentId = resolveAgentIdFromSessionKeyLazy(params.childSessionKey);
         const storePath = resolveStorePathLazy(cfg.session?.store, { agentId });
@@ -481,19 +480,19 @@ async function drainChildContinuationQueue(params: {
           }),
           { requireWriteSuccess: true },
         );
-        wroteDurableEntry = persisted !== null;
+        if (!persisted) {
+          defaultRuntime.error?.(
+            `[continuation:drain-persist-missing-entry] child=${params.childSessionKey} advanced chain state was not durably written`,
+          );
+          return false;
+        }
+        return true;
       } catch (writeErr) {
         defaultRuntime.error?.(
           `[continuation:drain-persist-failed] child=${params.childSessionKey} error=${writeErr instanceof Error ? writeErr.message : String(writeErr)}`,
         );
         return false;
       }
-      if (!wroteDurableEntry) {
-        defaultRuntime.error?.(
-          `[continuation:drain-persist-missing-entry] child=${params.childSessionKey} advanced chain state was not durably written`,
-        );
-      }
-      return wroteDurableEntry;
     };
     let forceDispatchRegardlessOfDelay = params.dispatchRegardlessOfDelay === true;
     if (params.chainStateOverride) {
