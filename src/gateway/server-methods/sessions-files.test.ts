@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sessionsFilesHandlers } from "./sessions-files.js";
+import { updateWorkspaceFile } from "./workspace-fs.js";
 
 const hoisted = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
@@ -309,6 +310,14 @@ describe("sessions.files RPC handlers", () => {
       }),
     );
     expect(browserPreview.file.content).toBe("# Nested read me\n");
+
+    const aliasedPreview = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.get", {
+        sessionKey: "agent:main:main",
+        path: "packages//app/src/readme.md",
+      }),
+    );
+    expect(aliasedPreview.file.workspacePath).toBe("packages/app/src/readme.md");
 
     const parentRelativePreview = expectOkPayload(
       await invokeSessionFilesHandler("sessions.files.get", {
@@ -690,6 +699,91 @@ describe("sessions.files RPC handlers", () => {
     expect(fs.readFileSync(path.join(workspaceRoot, "ui/vite.config.ts"), "utf8")).toBe(current);
   });
 
+  it("rejects malformed CAS hashes before reading the workspace", async () => {
+    const calls = await invokeSessionFilesHandler("sessions.files.set", {
+      sessionKey: "agent:main:main",
+      path: "ui/vite.config.ts",
+      content: "changed\n",
+      expectedHash: "not-a-sha256",
+    });
+
+    expect(calls).toMatchObject([{ ok: false }]);
+    expect(fs.readFileSync(path.join(workspaceRoot, "ui/vite.config.ts"), "utf8")).toBe(
+      "export default {};\n",
+    );
+  });
+
+  it("allows only one concurrent save for the same expected hash", async () => {
+    const original = "export default {};\n";
+    const expectedHash = hashContent(original);
+    const [first, second] = await Promise.all([
+      invokeSessionFilesHandler("sessions.files.set", {
+        sessionKey: "agent:main:main",
+        path: "ui/vite.config.ts",
+        content: "export default { first: true };\n",
+        expectedHash,
+      }),
+      invokeSessionFilesHandler("sessions.files.set", {
+        sessionKey: "agent:main:main",
+        path: "ui/vite.config.ts",
+        content: "export default { second: true };\n",
+        expectedHash,
+      }),
+    ]);
+
+    const calls = [first[0], second[0]];
+    expect(calls.filter((call) => call?.ok)).toHaveLength(1);
+    const conflict = calls.find((call) => !call?.ok)?.error as Record<string, any>;
+    expect(conflict.details).toMatchObject({ type: "session_file_conflict" });
+    const content = fs.readFileSync(path.join(workspaceRoot, "ui/vite.config.ts"), "utf8");
+    expect(["export default { first: true };\n", "export default { second: true };\n"]).toContain(
+      content,
+    );
+    expect(conflict.details.currentHash).toBe(hashContent(content));
+  });
+
+  it("serializes concurrent saves across lexical aliases", async () => {
+    const original = "export default {};\n";
+    const expectedHash = hashContent(original);
+    const results = await Promise.all([
+      updateWorkspaceFile(
+        workspaceRoot,
+        "ui/vite.config.ts",
+        "export default { first: true };\n",
+        expectedHash,
+      ),
+      updateWorkspaceFile(
+        workspaceRoot,
+        "ui//vite.config.ts",
+        "export default { second: true };\n",
+        expectedHash,
+      ),
+    ]);
+
+    expect(results.map((result) => result.status).toSorted()).toEqual(["conflict", "updated"]);
+  });
+
+  it("serializes concurrent saves across nested workspace roots", async () => {
+    const original = "export default {};\n";
+    const expectedHash = hashContent(original);
+    const results = await Promise.all([
+      updateWorkspaceFile(
+        workspaceRoot,
+        "ui/vite.config.ts",
+        "export default { outer: true };\n",
+        expectedHash,
+      ),
+      updateWorkspaceFile(
+        path.join(workspaceRoot, "ui"),
+        "vite.config.ts",
+        "export default { nested: true };\n",
+        expectedHash,
+      ),
+    ]);
+
+    expect(results.map((result) => result.status).toSorted()).toEqual(["conflict", "updated"]);
+  });
+
   it("rejects writes to nonexistent files", async () => {
     const error = expectError(
       await invokeSessionFilesHandler("sessions.files.set", {
@@ -758,6 +852,25 @@ describe("sessions.files RPC handlers", () => {
         sessionKey: "agent:main:main",
         path: "ui/vite.config.ts",
         content: "before\0after",
+        expectedHash: hashContent("export default {};\n"),
+      }),
+    );
+
+    expect(error.details).toMatchObject({
+      path: "ui/vite.config.ts",
+      type: "session_file_unsafe",
+    });
+    expect(fs.readFileSync(path.join(workspaceRoot, "ui/vite.config.ts"), "utf8")).toBe(
+      "export default {};\n",
+    );
+  });
+
+  it("rejects replacement content that cannot round-trip through UTF-8", async () => {
+    const error = expectError(
+      await invokeSessionFilesHandler("sessions.files.set", {
+        sessionKey: "agent:main:main",
+        path: "ui/vite.config.ts",
+        content: "before\ud800after",
         expectedHash: hashContent("export default {};\n"),
       }),
     );

@@ -161,18 +161,24 @@ describe("reply session initialization concurrency", () => {
     const readyPath = path.join(tempDir, "snapshot-ready.json");
     const proceedPath = path.join(tempDir, "proceed");
     const resultPath = path.join(tempDir, "result.json");
-    const baseTime = Date.now();
-    const activeTurnUpdatedAt = baseTime + 20;
-    const preparedUpdatedAt = baseTime + 30;
-
     try {
       await upsertSessionEntry(
         { sessionKey: SESSION_KEY, storePath },
         {
           sessionId: "existing-session",
-          updatedAt: baseTime,
+          updatedAt: Date.now(),
         },
       );
+      const initialUpdatedAt = loadSessionEntry({
+        readConsistency: "latest",
+        sessionKey: SESSION_KEY,
+        storePath,
+      })?.updatedAt;
+      if (typeof initialUpdatedAt !== "number") {
+        throw new Error("initial session timestamp was not persisted");
+      }
+      const activeTurnUpdatedAt = initialUpdatedAt + 20;
+      const preparedUpdatedAt = initialUpdatedAt + 30;
 
       const child = spawn(
         process.execPath,

@@ -101,6 +101,8 @@ export type FileSidebarContent = {
   path: string;
   name: string;
   content: string;
+  /** Stable per-session identity used to retain an unsaved in-memory draft. */
+  draftKey?: string;
   root?: string | null;
   language?: string;
   line?: number | null;
@@ -109,6 +111,26 @@ export type FileSidebarContent = {
   unavailableReason?: DetailUnavailableReason | null;
   edit?: FileSidebarEdit;
 };
+
+type RetainedFileDraft = {
+  content: string;
+  expectedHash: string;
+};
+
+const retainedFileDrafts = new Map<string, RetainedFileDraft>();
+
+function retainedFileDraftKey(content: FileSidebarContent): string {
+  return content.draftKey ?? `${content.root ?? ""}\u0000${content.path}`;
+}
+
+function setRetainedFileDraft(content: FileSidebarContent, draft: RetainedFileDraft | null) {
+  const key = retainedFileDraftKey(content);
+  retainedFileDrafts.delete(key);
+  if (!draft) {
+    return;
+  }
+  retainedFileDrafts.set(key, draft);
+}
 
 export type SidebarContent =
   | MarkdownSidebarContent
@@ -682,6 +704,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
   private showingRawText = false;
   private fileEditor: FileEditorViewHandle | null = null;
   private fileEditorLoad: Promise<void> | null = null;
+  private fileDraftContent: string | null = null;
   private fileSavedContent = "";
   private fileHash = "";
   private copyFeedbackTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
@@ -720,8 +743,24 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     this.fileReloading = false;
     this.fileSaving = false;
     this.fileSaveNotice = null;
+    const retainedDraft =
+      this.content?.kind === "file" && this.content.edit
+        ? retainedFileDrafts.get(retainedFileDraftKey(this.content))
+        : undefined;
+    const restoredDraft =
+      this.content?.kind === "file" && retainedDraft?.content !== this.content.content
+        ? retainedDraft
+        : undefined;
+    if (retainedDraft && !restoredDraft && this.content?.kind === "file") {
+      setRetainedFileDraft(this.content, null);
+    }
+    this.fileDraftContent = restoredDraft?.content ?? null;
     this.fileSavedContent = this.content?.kind === "file" ? this.content.content : "";
-    this.fileHash = this.content?.kind === "file" ? (this.content.edit?.hash ?? "") : "";
+    this.fileHash =
+      restoredDraft?.expectedHash ??
+      (this.content?.kind === "file" ? (this.content.edit?.hash ?? "") : "");
+    this.fileEditing = Boolean(restoredDraft);
+    this.fileDirty = Boolean(restoredDraft);
     this.fileEditorLoading = this.content?.kind === "file";
     this.destroyFileEditor();
     if (this.copyFeedbackTimer) {
@@ -789,7 +828,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
         }
         const editor = await createFileEditorView({
           parent,
-          content: current.content,
+          content: this.fileDraftContent ?? current.content,
           name: current.name,
           editable: this.fileEditing,
           onSave: this.saveFile,
@@ -803,11 +842,19 @@ class ChatDetailPanel extends OpenClawLightDomElement {
           return;
         }
         this.fileEditor = editor;
+        this.fileDraftContent = null;
         editor.onDocChanged((nextContent) => {
           const dirty = nextContent !== this.fileSavedContent;
           if (dirty !== this.fileDirty) {
             this.fileDirty = dirty;
           }
+          if (!dirty && this.visibleContent?.kind === "file") {
+            this.fileHash = this.visibleContent.edit?.hash ?? "";
+          }
+          setRetainedFileDraft(
+            current,
+            dirty ? { content: nextContent, expectedHash: this.fileHash } : null,
+          );
           if (this.fileSaveNotice?.kind === "error") {
             this.fileSaveNotice = null;
           }
@@ -966,6 +1013,11 @@ class ChatDetailPanel extends OpenClawLightDomElement {
       return;
     }
     this.fileEditor?.setContent(this.fileSavedContent);
+    const content = this.visibleContent;
+    if (content?.kind === "file") {
+      setRetainedFileDraft(content, null);
+      this.fileHash = content.edit?.hash ?? "";
+    }
     this.fileDirty = false;
     this.fileSaveNotice = null;
     this.fileEditing = false;
@@ -976,6 +1028,11 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     this.fileSavedContent = nextContent;
     this.fileHash = hash;
     this.fileDirty = this.fileEditor?.getContent() !== nextContent;
+    const draftContent = this.fileEditor?.getContent();
+    setRetainedFileDraft(
+      content,
+      this.fileDirty && draftContent != null ? { content: draftContent, expectedHash: hash } : null,
+    );
     this.fileSaveNotice = null;
     this.visibleContent = {
       ...content,

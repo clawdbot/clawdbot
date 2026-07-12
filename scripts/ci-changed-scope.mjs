@@ -1,6 +1,7 @@
 // Determines CI scope from changed paths.
 import { execFileSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
+import { getChangedPathFacts } from "./lib/changed-path-facts.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
 
@@ -32,7 +33,6 @@ const EMPTY_SCOPE = {
   runUiTests: false,
 };
 
-const DOCS_PATH_RE = /^(docs\/|.*\.mdx?$)/;
 const SKILLS_PYTHON_SCOPE_RE = /^(skills\/|skills\/pyproject\.toml$)/;
 const INSTALL_SMOKE_WORKFLOW_SCOPE_RE = /^\.github\/workflows\/install-smoke\.yml$/;
 const NATIVE_PROTOCOL_GEN_RE = /^apps\/shared\/OpenClawKit\/Sources\/OpenClawProtocol\//;
@@ -52,16 +52,12 @@ const WINDOWS_TEST_SCOPE_RE =
   /^(src\/process\/(?:exec\.windows|windows-command)\.test\.ts$|src\/infra\/windows-install-roots\.test\.ts$|src\/shared\/runtime-import\.test\.ts$|test\/scripts\/(?:format-generated-module|npm-runner|openclaw-cross-os-release-workflow|pnpm-runner|ui|vitest-process-group)\.test\.ts$)/;
 const WINDOWS_DAEMON_SCOPE_RE =
   /^src\/daemon\/(?:schtasks(?:[-.][^/]+)?|runtime-hints\.windows-paths(?:\.test)?|test-helpers\/schtasks-(?:base-mocks|fixtures))\.ts$/;
-const TEST_ONLY_PATH_RE =
-  /(^test\/|\/test\/|\/tests\/|(?:^|\/)[^/]+\.(?:test|spec|test-utils|test-support|test-harness|e2e-harness)\.[cm]?[jt]sx?$)/;
 const CONTROL_UI_I18N_SCOPE_RE =
   /^(ui\/src\/i18n\/|scripts\/control-ui-i18n\.ts$|\.github\/workflows\/control-ui-locale-refresh\.yml$)/;
 const CONTROL_UI_TEST_SCOPE_RE =
   /^(ui\/|test\/vitest\/vitest\.shared\.config\.ts$|scripts\/ensure-playwright-chromium\.mjs$)/;
 const NATIVE_I18N_SCOPE_RE =
   /^(?:apps\/\.i18n\/|apps\/android\/app\/src\/main\/|apps\/ios\/|apps\/macos\/Sources\/|apps\/shared\/OpenClawKit\/Sources\/|scripts\/(?:android-app-i18n|apple-app-i18n|native-app-i18n)\.ts$|test\/scripts\/(?:android-app-i18n|apple-app-i18n|native-app-i18n)\.test\.ts$|\.github\/workflows\/(?:ci|native-app-locale-refresh)\.yml$)/;
-const NATIVE_ONLY_RE =
-  /^(apps\/android\/|apps\/ios\/|apps\/macos\/|apps\/macos-mlx-tts\/|apps\/shared\/|apps\/swabble\/|Swabble\/|appcast\.xml$)/;
 const FAST_INSTALL_SMOKE_SCOPE_RE =
   /^(Dockerfile$|\.npmrc$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|scripts\/ci-changed-scope\.mjs$|scripts\/postinstall-bundled-plugins\.mjs$|scripts\/e2e\/(?:Dockerfile(?:\.qr-import)?|agents-delete-shared-workspace-docker\.sh|gateway-network-docker\.sh)$|extensions\/[^/]+\/(?:package\.json|openclaw\.plugin\.json)$|\.github\/workflows\/install-smoke\.yml$|\.github\/actions\/setup-node-env\/action\.yml$)/;
 const FULL_INSTALL_SMOKE_SCOPE_RE =
@@ -71,7 +67,7 @@ const FAST_INSTALL_SMOKE_RUNTIME_SCOPE_RE =
 const NODE_FAST_PLUGIN_CONTRACT_SCOPE_RE =
   /^src\/plugins\/contracts\/(?:inventory\/bundled-capability-metadata|registry|tts-contract-suites)\.ts$/;
 const NODE_FAST_CI_ROUTING_SCOPE_RE =
-  /^(scripts\/(?:ci-changed-scope|check-changed|run-vitest|test-projects(?:\.test-support)?)\.mjs$|scripts\/test-projects\.test-support\.d\.mts$|src\/commands\/status\.scan-result\.test\.ts$|src\/scripts\/ci-changed-scope\.test\.ts$|test\/scripts\/(?:changed-lanes|run-vitest|test-projects)\.test\.ts$)/;
+  /^(scripts\/(?:ci-changed-scope|check-changed|run-vitest|test-projects(?:\.test-support)?)\.mjs$|scripts\/(?:test-projects\.test-support|lib\/changed-path-facts)\.d\.mts$|scripts\/lib\/changed-path-facts\.mjs$|src\/commands\/status\.scan-result\.test\.ts$|src\/scripts\/ci-changed-scope\.test\.ts$|test\/scripts\/(?:changed-lanes|changed-path-facts|run-vitest|test-projects)\.test\.ts$)/;
 const NODE_FAST_SCOPE_RE = new RegExp(
   `${NODE_FAST_PLUGIN_CONTRACT_SCOPE_RE.source}|${NODE_FAST_CI_ROUTING_SCOPE_RE.source}`,
 );
@@ -101,14 +97,15 @@ export function detectChangedScope(changedPaths) {
   let hasNonNativeNonDocs = false;
 
   for (const rawPath of changedPaths) {
-    const path = rawPath.trim();
+    const facts = getChangedPathFacts(rawPath);
+    const { path } = facts;
     if (!path) {
       continue;
     }
 
     const isAppleSwiftConfig = APPLE_SWIFT_CONFIG_RE.test(path);
 
-    if (DOCS_PATH_RE.test(path)) {
+    if (facts.surface === "docs") {
       continue;
     }
 
@@ -143,9 +140,7 @@ export function detectChangedScope(changedPaths) {
 
     if (
       (WINDOWS_SCOPE_RE.test(path) || WINDOWS_DAEMON_SCOPE_RE.test(path)) &&
-      (!TEST_ONLY_PATH_RE.test(path) ||
-        WINDOWS_TEST_SCOPE_RE.test(path) ||
-        WINDOWS_DAEMON_SCOPE_RE.test(path))
+      (!facts.isTestOnly || WINDOWS_TEST_SCOPE_RE.test(path) || WINDOWS_DAEMON_SCOPE_RE.test(path))
     ) {
       runWindows = true;
     }
@@ -162,7 +157,7 @@ export function detectChangedScope(changedPaths) {
       runUiTests = true;
     }
 
-    if (!NATIVE_ONLY_RE.test(path)) {
+    if (!facts.isNativeOnly) {
       hasNonNativeNonDocs = true;
     }
   }
@@ -209,8 +204,9 @@ export function detectNodeFastScope(changedPaths) {
   let runCiRouting = false;
 
   for (const rawPath of changedPaths) {
-    const path = rawPath.trim();
-    if (!path || DOCS_PATH_RE.test(path)) {
+    const facts = getChangedPathFacts(rawPath);
+    const { path } = facts;
+    if (!path || facts.surface === "docs") {
       continue;
     }
 
@@ -236,11 +232,12 @@ export function detectNodeFastScope(changedPaths) {
  * @returns {InstallSmokeScope}
  */
 function detectInstallSmokeScopeForPath(path) {
+  const facts = getChangedPathFacts(path);
   const runFullInstallSmoke = FULL_INSTALL_SMOKE_SCOPE_RE.test(path);
   const runFastInstallSmoke =
     runFullInstallSmoke ||
     FAST_INSTALL_SMOKE_SCOPE_RE.test(path) ||
-    (FAST_INSTALL_SMOKE_RUNTIME_SCOPE_RE.test(path) && !TEST_ONLY_PATH_RE.test(path));
+    (FAST_INSTALL_SMOKE_RUNTIME_SCOPE_RE.test(path) && !facts.isTestOnly);
   return { runFastInstallSmoke, runFullInstallSmoke };
 }
 
@@ -259,8 +256,9 @@ export function detectInstallSmokeScope(changedPaths) {
   let runFastInstallSmoke = false;
   let runFullInstallSmoke = false;
   for (const rawPath of changedPaths) {
-    const path = rawPath.trim();
-    if (!path || DOCS_PATH_RE.test(path)) {
+    const facts = getChangedPathFacts(rawPath);
+    const { path } = facts;
+    if (!path || facts.surface === "docs") {
       continue;
     }
     const pathScope = detectInstallSmokeScopeForPath(path);

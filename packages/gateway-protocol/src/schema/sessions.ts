@@ -74,6 +74,12 @@ export const SessionFileRelevanceSchema = Type.Union([
   Type.Literal("mixed"),
 ]);
 
+const SessionFileHashSchema = Type.String({
+  minLength: 64,
+  maxLength: 64,
+  pattern: "^[a-f0-9]{64}$",
+});
+
 /** One file path referenced by a session transcript. */
 export const SessionFileEntrySchema = Type.Object(
   {
@@ -85,7 +91,7 @@ export const SessionFileEntrySchema = Type.Object(
     size: Type.Optional(Type.Integer({ minimum: 0 })),
     updatedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
     content: Type.Optional(Type.String()),
-    hash: Type.Optional(NonEmptyString),
+    hash: Type.Optional(SessionFileHashSchema),
   },
   { additionalProperties: false },
 );
@@ -164,7 +170,7 @@ export const SessionsFilesSetParamsSchema = Type.Object(
     path: NonEmptyString,
     agentId: Type.Optional(NonEmptyString),
     content: Type.String(),
-    expectedHash: NonEmptyString,
+    expectedHash: SessionFileHashSchema,
   },
   { additionalProperties: false },
 );

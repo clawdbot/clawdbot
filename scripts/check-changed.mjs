@@ -14,13 +14,12 @@ import { performance } from "node:perf_hooks";
 import {
   LIVE_DOCKER_AUTH_SHELL_TARGETS,
   detectChangedLanesForPaths,
-  isChangedLaneTestPath,
   listChangedPathsFromGit,
   listStagedChangedPaths,
-  normalizeChangedPath,
 } from "./changed-lanes.mjs";
 import { shrinkwrapPackageDirsForChangedPaths } from "./generate-npm-shrinkwrap.mjs";
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
+import { getChangedPathFacts, normalizeChangedPath } from "./lib/changed-path-facts.mjs";
 import { printTimingSummary } from "./lib/check-timing-summary.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import {
@@ -220,7 +219,9 @@ export function shouldRunAppcastOwnerTest(paths) {
 }
 
 export function shouldRunTestTempCreationReport(paths) {
-  return paths.some((changedPath) => isChangedLaneTestPath(changedPath));
+  return paths.some(
+    (changedPath) => getChangedPathFacts(normalizeChangedPath(changedPath)).isChangedLaneTest,
+  );
 }
 
 export function createShrinkwrapGuardCommand(paths) {
@@ -439,7 +440,7 @@ export function createChangedCheckPlan(result, options = {}) {
   }
   if (
     lanes.liveDockerTooling &&
-    result.paths.some((changedPath) => changedPath.startsWith("src/"))
+    result.paths.some((changedPath) => getChangedPathFacts(changedPath).surface === "source")
   ) {
     addTypecheck("typecheck core tests", ["tsgo:core:test"]);
     addLint("lint core", ["lint:core"]);

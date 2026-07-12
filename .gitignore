@@ -123,6 +123,7 @@ USER.md
 .antigravitycli/
 .serena/
 .crabbox/
+/.openclaw/trajectory-exports/
 
 # local QA evidence mirrors; CI publishes canonical Mantis files as Actions artifacts
 /mantis/

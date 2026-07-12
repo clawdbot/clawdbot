@@ -2,18 +2,15 @@
 import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
+import { getChangedPathFacts, normalizeChangedPath } from "./lib/changed-path-facts.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
+export { normalizeChangedPath } from "./lib/changed-path-facts.mjs";
 
 const GIT_OUTPUT_MAX_BUFFER = 64 * 1024 * 1024;
 const IMPLAUSIBLE_NO_MERGE_BASE_DIFF_PATHS = 200;
 const RAW_SYNC_CHANGED_LANES_ENV = "OPENCLAW_CHANGED_LANES_RAW_SYNC";
 
-const DOCS_PATH_RE = /^(?:docs\/|README\.md$|AGENTS\.md$|.*\.mdx?$)/u;
-const APP_PATH_RE = /^(?:apps\/|Swabble\/|appcast\.xml$)/u;
-const EXTENSION_PATH_RE = /^extensions\/[^/]+(?:\/|$)/u;
-const CORE_PATH_RE = /^(?:src\/|packages\/)/u;
-const UI_PATH_RE = /^(?:ui\/|tsconfig\.ui\.json$)/u;
 const SCRIPTS_TYPECHECK_PATH_RE =
   /^(?:scripts\/.*\.(?:[cm]?ts|[cm]?tsx)|tsconfig\.scripts\.json)$/u;
 // Keep aligned with tsconfig.strict-ratchet.json includes and its oxlint override.
@@ -38,11 +35,6 @@ export const STRICT_RATCHET_PACKAGE_DIRS = [
 ];
 const TEST_ROOT_TYPECHECK_PATH_RE =
   /^(?:test\/(?!fixtures\/).*\.(?:[cm]?ts|[cm]?tsx)|test\/tsconfig\/tsconfig\.test\.root\.json)$/u;
-const TOOLING_PATH_RE =
-  /^(?:scripts\/|test\/vitest\/|\.github\/|\.vscode\/|config\/|deploy\/|git-hooks\/|Dockerfile\.sandbox(?:-(?:browser|common))?$|Makefile$|docker-setup\.sh$|setup-podman\.sh$|openclaw\.podman\.env$|skills\/pyproject\.toml$|vitest(?:\..+)?\.config\.ts$|tsconfig.*\.json$|\.dockerignore$|\.gitignore$|\.jscpd\.json$|\.npmignore$|\.pre-commit-config\.yaml$|\.swiftformat$|\.swiftlint\.yml$|\.oxlint.*|\.oxfmt.*)/u;
-const ROOT_GLOBAL_PATH_RE =
-  /^(?:package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsdown\.config\.ts$|vitest\.config\.ts$)/u;
-const LEGACY_ROOT_ASSET_PATH_RE = /^assets\//u;
 export const LIVE_DOCKER_AUTH_SHELL_TARGETS = [
   "scripts/lib/live-docker-auth.sh",
   "scripts/test-live-acp-bind-docker.sh",
@@ -59,8 +51,6 @@ const LIVE_DOCKER_TOOLING_PATHS = new Set([
   "src/gateway/live-agent-probes.test.ts",
 ]);
 const LIVE_DOCKER_PACKAGE_SCRIPT_RE = /^test:docker:live-[\w:-]+$/u;
-const TEST_PATH_RE =
-  /(?:^|\/)(?:test|__tests__)\/|(?:\.|\/)(?:test|spec|e2e|browser\.test)\.[cm]?[jt]sx?$/u;
 const PUBLIC_EXTENSION_CONTRACT_RE =
   /^(?:src\/plugin-sdk\/|src\/plugins\/contracts\/|src\/channels\/plugins\/|scripts\/lib\/plugin-sdk-entrypoints\.json$|scripts\/sync-plugin-sdk-exports\.mjs$|scripts\/generate-plugin-sdk-api-baseline\.ts$)/u;
 /**
@@ -92,16 +82,6 @@ export const RELEASE_METADATA_PATHS = new Set([
  */
 
 /**
- * Normalizes a changed file path into repo-relative POSIX form.
- */
-export function normalizeChangedPath(inputPath) {
-  return String(inputPath ?? "")
-    .trim()
-    .replaceAll("\\", "/")
-    .replace(/^\.\/+/u, "");
-}
-
-/**
  * Creates the default changed-lanes result object.
  */
 export function createEmptyChangedLanes() {
@@ -124,7 +104,7 @@ export function createEmptyChangedLanes() {
 }
 
 export function isChangedLaneTestPath(changedPath) {
-  return TEST_PATH_RE.test(normalizeChangedPath(changedPath));
+  return getChangedPathFacts(normalizeChangedPath(changedPath)).isChangedLaneTest;
 }
 
 /**
@@ -160,7 +140,7 @@ export function detectChangedLanes(changedPaths, options = {}) {
     paths.every((changedPath) => RELEASE_METADATA_PATHS.has(changedPath))
   ) {
     lanes.releaseMetadata = true;
-    lanes.docs = paths.some((changedPath) => DOCS_PATH_RE.test(changedPath));
+    lanes.docs = paths.some((changedPath) => getChangedPathFacts(changedPath).surface === "docs");
     for (const changedPath of paths) {
       reasons.push(`${changedPath}: release metadata`);
     }
@@ -168,6 +148,7 @@ export function detectChangedLanes(changedPaths, options = {}) {
   }
 
   for (const changedPath of paths) {
+    const facts = getChangedPathFacts(changedPath);
     if (SCRIPTS_TYPECHECK_PATH_RE.test(changedPath)) {
       lanes.scripts = true;
     }
@@ -183,7 +164,7 @@ export function detectChangedLanes(changedPaths, options = {}) {
       lanes.testRoot = true;
     }
 
-    if (DOCS_PATH_RE.test(changedPath)) {
+    if (facts.surface === "docs") {
       lanes.docs = true;
       continue;
     }
@@ -208,7 +189,7 @@ export function detectChangedLanes(changedPaths, options = {}) {
       continue;
     }
 
-    if (ROOT_GLOBAL_PATH_RE.test(changedPath)) {
+    if (facts.surface === "rootGlobal") {
       lanes.all = true;
       extensionImpactFromCore = true;
       reasons.push(`${changedPath}: root config/package surface`);
@@ -225,8 +206,8 @@ export function detectChangedLanes(changedPaths, options = {}) {
       continue;
     }
 
-    if (EXTENSION_PATH_RE.test(changedPath)) {
-      if (isChangedLaneTestPath(changedPath)) {
+    if (facts.surface === "extension") {
+      if (facts.isChangedLaneTest) {
         lanes.extensionTests = true;
         reasons.push(`${changedPath}: extension test`);
       } else {
@@ -237,8 +218,8 @@ export function detectChangedLanes(changedPaths, options = {}) {
       continue;
     }
 
-    if (CORE_PATH_RE.test(changedPath)) {
-      if (isChangedLaneTestPath(changedPath)) {
+    if (facts.surface === "source" || facts.surface === "package") {
+      if (facts.isChangedLaneTest) {
         lanes.coreTests = true;
         reasons.push(`${changedPath}: core test`);
       } else {
@@ -249,8 +230,8 @@ export function detectChangedLanes(changedPaths, options = {}) {
       continue;
     }
 
-    if (UI_PATH_RE.test(changedPath)) {
-      if (isChangedLaneTestPath(changedPath)) {
+    if (facts.surface === "ui") {
+      if (facts.isChangedLaneTest) {
         lanes.coreTests = true;
         reasons.push(`${changedPath}: UI test`);
       } else {
@@ -261,25 +242,25 @@ export function detectChangedLanes(changedPaths, options = {}) {
       continue;
     }
 
-    if (APP_PATH_RE.test(changedPath)) {
+    if (facts.surface === "app") {
       lanes.apps = true;
       reasons.push(`${changedPath}: app surface`);
       continue;
     }
 
-    if (changedPath.startsWith("test/") || changedPath.startsWith("test-fixtures/")) {
+    if (facts.surface === "rootTest" || facts.surface === "testFixture") {
       lanes.tooling = true;
       reasons.push(`${changedPath}: root test/support surface`);
       continue;
     }
 
-    if (TOOLING_PATH_RE.test(changedPath)) {
+    if (facts.surface === "rootTooling") {
       lanes.tooling = true;
       reasons.push(`${changedPath}: tooling surface`);
       continue;
     }
 
-    if (LEGACY_ROOT_ASSET_PATH_RE.test(changedPath)) {
+    if (facts.surface === "legacyRootAsset") {
       lanes.tooling = true;
       reasons.push(`${changedPath}: legacy root asset cleanup`);
       continue;

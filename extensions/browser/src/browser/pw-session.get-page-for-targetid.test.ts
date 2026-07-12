@@ -9,6 +9,9 @@ import {
   focusPageByTargetIdViaPlaywright,
   getPageForTargetId,
   listPagesViaPlaywright,
+  rememberRoleRefsForTarget,
+  restoreRoleRefsForTarget,
+  ensurePageState,
   setCdpConnectRetryDelayMsForTests,
 } from "./pw-session.js";
 
@@ -20,12 +23,15 @@ type MockPageSpec = {
   url?: string;
   title?: string;
   targetLookupError?: string;
+  navigateDuringTargetLookup?: boolean;
+  subframeNavigationDuringTargetLookup?: boolean;
 };
 
 type BrowserMockBundle = {
   browser: import("playwright-core").Browser;
   browserClose: ReturnType<typeof vi.fn>;
   pages: import("playwright-core").Page[];
+  pageHandlers: Array<Map<string, Array<(...args: unknown[]) => void>>>;
   pageActions: Array<{
     bringToFront: ReturnType<typeof vi.fn>;
     close: ReturnType<typeof vi.fn>;
@@ -39,12 +45,18 @@ function makeBrowser(pages: MockPageSpec[]): BrowserMockBundle {
     bringToFront: vi.fn(async () => {}),
     close: vi.fn(async () => {}),
   }));
+  const pageHandlers = pages.map(() => new Map<string, Array<(...args: unknown[]) => void>>());
 
   const pageObjects = pages.map((spec, index) => {
     const actions = pageActions[index]!;
+    const handlers = pageHandlers[index]!;
+    const mainFrame = { url: () => spec.url ?? `https://page-${index + 1}.example` };
     const page = {
-      on: vi.fn(),
+      on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
+        handlers.set(event, [...(handlers.get(event) ?? []), handler]);
+      }),
       context: () => context,
+      mainFrame: () => mainFrame,
       title: vi.fn(async () => spec.title ?? spec.targetId ?? `page-${index + 1}`),
       url: vi.fn(() => spec.url ?? `https://page-${index + 1}.example`),
       bringToFront: actions.bringToFront,
@@ -67,6 +79,16 @@ function makeBrowser(pages: MockPageSpec[]): BrowserMockBundle {
           if (spec?.targetLookupError) {
             throw new Error(spec.targetLookupError);
           }
+          if (spec?.navigateDuringTargetLookup) {
+            const pageIndex = pageObjects.indexOf(page);
+            pageHandlers[pageIndex]?.get("framenavigated")?.[0]?.(page.mainFrame());
+          }
+          if (spec?.subframeNavigationDuringTargetLookup) {
+            const pageIndex = pageObjects.indexOf(page);
+            pageHandlers[pageIndex]?.get("framenavigated")?.[0]?.({
+              url: () => "https://frame.example/new",
+            });
+          }
           return { targetInfo: { targetId: spec?.targetId } };
         }),
         detach: vi.fn(async () => {}),
@@ -81,7 +103,7 @@ function makeBrowser(pages: MockPageSpec[]): BrowserMockBundle {
     close: browserClose,
   } as unknown as import("playwright-core").Browser;
 
-  return { browser, browserClose, pages: pageObjects, pageActions };
+  return { browser, browserClose, pages: pageObjects, pageHandlers, pageActions };
 }
 
 function installBrowser(pages: MockPageSpec[]): BrowserMockBundle {
@@ -158,6 +180,58 @@ describe("pw-session getPageForTargetId", () => {
     });
 
     expect(resolved).toBe(pages[1]);
+  });
+
+  it("binds a resolved replacement page to target-cache invalidation", async () => {
+    const cdpUrl = "http://127.0.0.1:18792";
+    const targetId = "TARGET_REPLACED";
+    rememberRoleRefsForTarget({
+      cdpUrl,
+      targetId,
+      refs: { e1: { role: "button", name: "Old document" } },
+    });
+    const { pages, pageHandlers } = installBrowser([{ targetId }]);
+    const page = await getPageForTargetId({ cdpUrl, targetId });
+    const navigationHandler = pageHandlers[0]?.get("framenavigated")?.[0];
+    navigationHandler?.(page.mainFrame());
+    restoreRoleRefsForTarget({ cdpUrl, targetId, page });
+
+    expect(navigationHandler).toBeTypeOf("function");
+    expect(ensurePageState(page).roleRefs).toBeUndefined();
+    expect(page).toBe(pages[0]);
+  });
+
+  it("invalidates target refs when navigation races target lookup", async () => {
+    const cdpUrl = "http://127.0.0.1:18792";
+    const targetId = "TARGET_RACE";
+    rememberRoleRefsForTarget({
+      cdpUrl,
+      targetId,
+      refs: { e1: { role: "button", name: "Old document" } },
+    });
+    installBrowser([{ targetId, navigateDuringTargetLookup: true }]);
+
+    const page = await getPageForTargetId({ cdpUrl, targetId });
+    restoreRoleRefsForTarget({ cdpUrl, targetId, page });
+
+    expect(ensurePageState(page).roleRefs).toBeUndefined();
+  });
+
+  it("invalidates page-wide aria refs when subframe navigation races target lookup", async () => {
+    const cdpUrl = "http://127.0.0.1:18792";
+    const targetId = "TARGET_ARIA_RACE";
+    rememberRoleRefsForTarget({
+      cdpUrl,
+      targetId,
+      refs: { e1: { role: "button", name: "Old embedded document" } },
+      mode: "aria",
+    });
+    installBrowser([{ targetId, subframeNavigationDuringTargetLookup: true }]);
+
+    const page = await getPageForTargetId({ cdpUrl, targetId });
+    restoreRoleRefsForTarget({ cdpUrl, targetId, page });
+
+    expect(ensurePageState(page).roleRefs).toBeUndefined();
   });
 
   it("focuses and closes only the exact target when URLs are identical", async () => {

@@ -99,6 +99,7 @@ export type SessionWorkspaceHost = {
   settings?: UiSettings;
   sessionWorkspaceState?: SessionWorkspaceState;
   sessionWorkspaceOpenRequest?: SessionWorkspaceOpenRequest;
+  sessionWorkspaceDraftScope?: string;
   requestUpdate?: () => void;
   handleOpenSidebar: (content: SidebarContent) => void;
 };
@@ -178,13 +179,6 @@ function languageForFile(name: string): string {
     return "yaml";
   }
   return extension;
-}
-
-function fileSidebarContent(name: string, content: string): string {
-  if (/\.(?:md|markdown|mdx)$/i.test(name)) {
-    return content;
-  }
-  return `# ${name}\n\n\`\`\`${languageForFile(name)}\n${content}\n\`\`\``;
 }
 
 function basenameForPath(filePath: string): string {
@@ -409,17 +403,10 @@ function openFile(
         return null;
       }
       const name = file.name || basenameForPath(path);
-      if (/\.(?:md|markdown|mdx)$/i.test(name) && opts.line == null) {
-        return {
-          kind: "markdown",
-          content: fileSidebarContent(name, file.content),
-          rawText: file.content,
-        };
-      }
       const canEdit =
         typeof file.hash === "string" &&
         hasUniformLineEndings(file.content) &&
-        isGatewayMethodAdvertised(state, "sessions.files.set") !== false &&
+        isGatewayMethodAdvertised(state, "sessions.files.set") === true &&
         hasOperatorAdminAccess(state.hello?.auth ?? null);
       const edit = canEdit
         ? {
@@ -494,6 +481,13 @@ function openFile(
         path: file.workspacePath || file.path || path,
         name,
         content: file.content,
+        draftKey: [
+          state.settings?.gatewayUrl ?? "",
+          state.sessionWorkspaceDraftScope ?? "",
+          result.sessionKey,
+          result.root ?? "",
+          file.workspacePath || file.path || path,
+        ].join("\u0000"),
         root: result.root ?? null,
         language: languageForFile(name),
         line: opts.line ?? null,
@@ -647,8 +641,9 @@ function openArtifact(
 
 export function createSessionWorkspaceProps(
   state: SessionWorkspaceHost,
-  options?: { narrowLayout?: boolean },
+  options?: { narrowLayout?: boolean; draftScope?: string },
 ): SessionWorkspaceProps {
+  state.sessionWorkspaceDraftScope = options?.draftScope;
   const workspace = getWorkspaceState(state);
   if (
     !workspace.collapsed &&

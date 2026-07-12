@@ -1481,6 +1481,7 @@ class ChatPane extends OpenClawLightDomElement {
       this.context.gateway.snapshot.hello?.auth ?? null,
     );
     const sessionWorkspace = createSessionWorkspaceProps(state, {
+      draftScope: this.paneId,
       narrowLayout: this.paneWidth < WORKSPACE_RAIL_SIDE_MIN_PANE_WIDTH,
     });
     const railSideDocked =
