@@ -35,9 +35,23 @@ import {
 import { getTaskRegistryStore, resetTaskRegistryRuntimeForTests } from "./task-registry.store.js";
 import type { TaskRecord, TaskStatus } from "./task-registry.types.js";
 
-export function listTaskRecordsUnsorted(): TaskRecord[] {
+// When an optional filter predicate is provided, only matching records are
+// cloned and returned. This avoids cloning the full task database when the
+// caller would only discard most records in a subsequent filter pass.
+export function listTaskRecordsUnsorted(
+  filter?: (task: TaskRecord) => boolean,
+): TaskRecord[] {
   ensureTaskRegistryReady();
-  return snapshotTaskRecords(tasks);
+  if (!filter) {
+    return snapshotTaskRecords(tasks);
+  }
+  const results: TaskRecord[] = [];
+  for (const record of tasks.values()) {
+    if (filter(record)) {
+      results.push(cloneTaskRecord(record));
+    }
+  }
+  return results;
 }
 
 function taskMatchesRelatedSession(task: TaskRecord, sessionKey: string | undefined): boolean {
