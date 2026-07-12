@@ -24,6 +24,7 @@ import {
   patchSessionEntryTarget,
   persistSessionResetLifecycle,
   persistSessionTranscriptTurn,
+  readTranscriptStatsSync,
   readSessionUpdatedAt,
   recordInboundSessionMeta,
   replaceSessionEntry,
@@ -2422,6 +2423,55 @@ describe("session accessor seam", () => {
         storePath,
       })?.entry.sessionFile,
     ).toBe(`sqlite:main:session-1:${path.join(tempDir, "openclaw-agent.sqlite")}`);
+  });
+
+  it("tracks replacement and deletion transcript mutations", async () => {
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+    const scope = {
+      agentId: "main",
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+    await upsertSessionEntry(scope, {
+      sessionId: scope.sessionId,
+      updatedAt: 10,
+    });
+    await replaceSqliteTranscriptEvents(scope, [
+      { sessionId: scope.sessionId, type: "session" },
+      { timestamp: "1970-01-01T00:00:00.001Z", type: "custom" },
+    ]);
+
+    const replaced = readTranscriptStatsSync(scope);
+    expect(replaced).toMatchObject({
+      eventCount: 2,
+      lastMutationAtMs: expect.any(Number),
+    });
+    expect(replaced.lastMutationAtMs).toBeGreaterThanOrEqual(1_700_000_000_000);
+
+    await importSqliteSessionRows({
+      agentId: scope.agentId,
+      entry: {
+        sessionId: scope.sessionId,
+        updatedAt: 10,
+      },
+      sessionKey: scope.sessionKey,
+      storePath: scope.storePath,
+      transcriptMtimeMs: 1_600_000_000_000,
+    });
+    const imported = readTranscriptStatsSync(scope);
+    expect(imported.lastMutationAtMs).toBe(replaced.lastMutationAtMs);
+    expect(imported.lastObservedMutationAtMs).toBe(replaced.lastMutationAtMs);
+
+    await replaceSqliteTranscriptEvents(scope, []);
+
+    const cleared = readTranscriptStatsSync(scope);
+    dateNow.mockRestore();
+    expect(cleared).toMatchObject({
+      eventCount: 0,
+      lastMutationAtMs: expect.any(Number),
+    });
+    expect(cleared.lastMutationAtMs).toBeGreaterThan(imported.lastMutationAtMs ?? 0);
   });
 
   it("resolves an explicit read transcript file without agent identity", () => {

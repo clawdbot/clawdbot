@@ -5730,30 +5730,6 @@
       "id": "native.android.d06711f88020d74e"
     },
     {
-      "kind": "ui-call",
-      "line": 127,
-      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageListCard.kt",
-      "source": "Jump to latest",
-      "surface": "android",
-      "id": "native.android.97a0b44d89402809"
-    },
-    {
-      "kind": "ui-call",
-      "line": 148,
-      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageListCard.kt",
-      "source": "Loading session",
-      "surface": "android",
-      "id": "native.android.69239493702da212"
-    },
-    {
-      "kind": "ui-call",
-      "line": 168,
-      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageListCard.kt",
-      "source": "No messages yet",
-      "surface": "android",
-      "id": "native.android.a7d32e86ce4c0a17"
-    },
-    {
       "kind": "conditional-branch",
       "line": 169,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",

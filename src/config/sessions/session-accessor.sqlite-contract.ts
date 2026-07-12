@@ -63,6 +63,8 @@ export type TranscriptEvent = unknown;
 
 export type SessionTranscriptStats = {
   eventCount: number;
+  lastMutationAtMs?: number;
+  lastObservedMutationAtMs?: number;
   maxSeq: number;
   sizeBytes: number;
 };

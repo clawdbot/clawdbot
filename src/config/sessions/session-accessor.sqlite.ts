@@ -297,6 +297,7 @@ export type SqliteSessionImportRowsParams = {
   sessionKey: string;
   entry: SessionEntry;
   readTranscriptEvents?: (append: (event: TranscriptEvent) => void) => void;
+  transcriptMtimeMs?: number;
 };
 
 /** Summary of rows written by an internal doctor/migration import. */
@@ -1393,8 +1394,21 @@ export function readSqliteTranscriptStatsSync(
       ])
       .where("session_id", "=", resolved.sessionId),
   );
+  const session = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("sessions")
+      .select(["transcript_observed_at", "transcript_updated_at"])
+      .where("session_id", "=", resolved.sessionId),
+  );
   return {
     eventCount: row?.event_count ?? 0,
+    ...(session?.transcript_updated_at !== null && session?.transcript_updated_at !== undefined
+      ? { lastMutationAtMs: session.transcript_updated_at }
+      : {}),
+    ...(session?.transcript_observed_at !== null && session?.transcript_observed_at !== undefined
+      ? { lastObservedMutationAtMs: session.transcript_observed_at }
+      : {}),
     maxSeq: row?.max_seq ?? 0,
     sizeBytes: row?.size_bytes ?? 0,
   };
@@ -1608,6 +1622,9 @@ export async function deleteSqliteTranscript(scope: SessionTranscriptReadScope):
     let deleted = false;
     runOpenClawAgentWriteTransaction((database) => {
       deleted = deleteSqliteTranscriptEventsInTransaction(database, resolved.sessionId);
+      if (deleted) {
+        touchTranscriptMutationInTransaction(database, resolved.sessionId);
+      }
     }, toDatabaseOptions(resolved));
     return deleted;
   });
@@ -1689,11 +1706,24 @@ export async function importSqliteSessionRows(
           if (existingEventJson.has(eventJson)) {
             return;
           }
-          if (appendTranscriptEventInTransaction(database, transcriptScope, event)) {
+          if (
+            appendTranscriptEventInTransaction(database, transcriptScope, event, {
+              touchMutation: false,
+            })
+          ) {
             existingEventJson.add(eventJson);
             transcriptEvents += 1;
           }
         });
+      }
+      if (params.transcriptMtimeMs !== undefined) {
+        advanceTranscriptMutationAtInTransaction(
+          database,
+          params.entry.sessionId,
+          params.transcriptMtimeMs,
+        );
+      } else if (transcriptEvents > 0) {
+        touchTranscriptMutationInTransaction(database, params.entry.sessionId);
       }
     }, toDatabaseOptions(resolved));
     return {
@@ -1745,9 +1775,7 @@ export async function appendSqliteTranscriptEvents(
   const resolved = resolveSqliteTranscriptScope(scope);
   await runExclusiveSqliteSessionWrite(resolved, async () => {
     runOpenClawAgentWriteTransaction((database) => {
-      for (const event of events) {
-        appendTranscriptEventInTransaction(database, resolved, event);
-      }
+      appendTranscriptEventsInTransaction(database, resolved, events);
     }, toDatabaseOptions(resolved));
   });
 }
@@ -3897,7 +3925,15 @@ function writeSessionEntry(
   const db = getSessionKysely(database.db);
   const normalizedEntry = normalizeSqliteSessionEntryTimestamp(entry);
   const updatedAt = normalizedEntry.updatedAt;
-  const sessionRow = bindSqliteSessionRoot({ entry: normalizedEntry, sessionKey, updatedAt });
+  // Registry writes snapshot the current transcript watermark so recovery can
+  // distinguish same-millisecond transcript writes before and after this row.
+  const transcriptObservedAt =
+    readTranscriptMutationStateInTransaction(database, normalizedEntry.sessionId).updatedAt ??
+    updatedAt;
+  const sessionRow = {
+    ...bindSqliteSessionRoot({ entry: normalizedEntry, sessionKey, updatedAt }),
+    transcript_observed_at: transcriptObservedAt,
+  };
   executeSqliteQuerySync(
     database.db,
     db
@@ -3907,6 +3943,7 @@ function writeSessionEntry(
         conflict.column("session_id").doUpdateSet({
           session_key: sessionKey,
           session_scope: sessionRow.session_scope,
+          transcript_observed_at: transcriptObservedAt,
           updated_at: updatedAt,
           started_at: sessionRow.started_at,
           ended_at: sessionRow.ended_at,
@@ -4132,6 +4169,67 @@ function readNextTranscriptSeq(database: OpenClawAgentDatabase, sessionId: strin
   const maxSeq =
     row?.max_seq === null || row?.max_seq === undefined ? -1 : normalizeSqliteNumber(row.max_seq);
   return maxSeq + 1;
+}
+
+function normalizeTranscriptMutationAtMs(value: number): number | undefined {
+  const timestamp = Math.floor(value);
+  return Number.isFinite(timestamp) && timestamp >= 0 ? timestamp : undefined;
+}
+
+function readTranscriptMutationStateInTransaction(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+): { observedAt: number | null; updatedAt: number | null } {
+  const db = getSessionKysely(database.db);
+  const row = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("sessions")
+      .select(["transcript_observed_at", "transcript_updated_at"])
+      .where("session_id", "=", sessionId),
+  );
+  return {
+    observedAt: row?.transcript_observed_at ?? null,
+    updatedAt: row?.transcript_updated_at ?? null,
+  };
+}
+
+function advanceTranscriptMutationAtInTransaction(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+  value: number,
+  options: { strictly?: boolean } = {},
+): void {
+  const transcriptUpdatedAt = normalizeTranscriptMutationAtMs(value);
+  if (transcriptUpdatedAt === undefined) {
+    return;
+  }
+  const state = readTranscriptMutationStateInTransaction(database, sessionId);
+  const next = options.strictly
+    ? Math.max(transcriptUpdatedAt, (state.updatedAt ?? -1) + 1, (state.observedAt ?? -1) + 1)
+    : Math.max(transcriptUpdatedAt, state.updatedAt ?? 0);
+  if (state.updatedAt !== null && state.updatedAt >= next) {
+    return;
+  }
+  const db = getSessionKysely(database.db);
+  executeSqliteQuerySync(
+    database.db,
+    db
+      .updateTable("sessions")
+      .set({ transcript_updated_at: next })
+      .where("session_id", "=", sessionId),
+  );
+}
+
+function touchTranscriptMutationInTransaction(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+): void {
+  const now = normalizeTranscriptMutationAtMs(Date.now());
+  if (now === undefined) {
+    return;
+  }
+  advanceTranscriptMutationAtInTransaction(database, sessionId, now, { strictly: true });
 }
 
 function deleteSqliteTranscriptEventsInTransaction(
@@ -4490,16 +4588,18 @@ function writeSqliteParentForkTranscriptInTransaction(
         ...(params.source.appendMode ? { appendMode: params.source.appendMode } : {}),
       }
     : null;
-  appendTranscriptEventInTransaction(database, targetScope, {
-    ...createSessionTranscriptHeader({
-      cwd: params.source.cwd,
-      sessionId: targetScope.sessionId,
-    }),
-    parentSession: params.parentSessionFile,
-  });
-  for (const event of [...pathEntries, ...labelEntries, ...(leafEntry ? [leafEntry] : [])]) {
-    appendTranscriptEventInTransaction(database, targetScope, event);
-  }
+  appendTranscriptEventsInTransaction(database, targetScope, [
+    {
+      ...createSessionTranscriptHeader({
+        cwd: params.source.cwd,
+        sessionId: targetScope.sessionId,
+      }),
+      parentSession: params.parentSessionFile,
+    },
+    ...pathEntries,
+    ...labelEntries,
+    ...(leafEntry ? [leafEntry] : []),
+  ]);
 }
 
 function forkSqliteParentTranscriptInTransaction(
@@ -4679,20 +4779,13 @@ function forkSqliteCheckpointTranscriptInTransaction(
     sessionKey: params.targetSessionKey,
   };
   const sessionFile = formatSqliteSessionMarkerForScope(targetScope);
-  appendTranscriptEventInTransaction(
-    database,
-    targetScope,
+  appendTranscriptEventsInTransaction(database, targetScope, [
     createSessionTranscriptHeader({
       cwd: readTranscriptHeaderCwd(selected.rows),
       sessionId,
     }),
-  );
-  for (const event of selected.rows) {
-    if (isSessionTranscriptHeader(event)) {
-      continue;
-    }
-    appendTranscriptEventInTransaction(database, targetScope, event);
-  }
+    ...selected.rows.filter((event) => !isSessionTranscriptHeader(event)),
+  ]);
   return {
     status: "created",
     sessionId,
@@ -4834,7 +4927,7 @@ function appendTranscriptEventInTransaction(
   database: OpenClawAgentDatabase,
   scope: ResolvedTranscriptScope,
   event: TranscriptEvent,
-  options: { dedupeByMessageIdempotency?: boolean } = {},
+  options: { dedupeByMessageIdempotency?: boolean; touchMutation?: boolean } = {},
 ): boolean {
   const db = getSessionKysely(database.db);
   const createdAt = readEventTimestamp(event) ?? Date.now();
@@ -4864,6 +4957,9 @@ function appendTranscriptEventInTransaction(
       created_at: createdAt,
     }),
   );
+  if (options.touchMutation !== false) {
+    touchTranscriptMutationInTransaction(database, scope.sessionId);
+  }
   if (!identity) {
     return true;
   }
@@ -4895,6 +4991,27 @@ function appendTranscriptEventInTransaction(
       .onConflict((conflict) => conflict.columns(["session_id", "event_id"]).doNothing()),
   );
   return true;
+}
+
+function appendTranscriptEventsInTransaction(
+  database: OpenClawAgentDatabase,
+  scope: ResolvedTranscriptScope,
+  events: readonly TranscriptEvent[],
+): number {
+  let appended = 0;
+  for (const event of events) {
+    if (
+      appendTranscriptEventInTransaction(database, scope, event, {
+        touchMutation: false,
+      })
+    ) {
+      appended += 1;
+    }
+  }
+  if (appended > 0) {
+    touchTranscriptMutationInTransaction(database, scope.sessionId);
+  }
+  return appended;
 }
 
 function appendTranscriptEventRowInTransaction(
@@ -5041,8 +5158,11 @@ function replaceSqliteTranscriptEventsInTransaction(
   resolved: ResolvedTranscriptScope,
   events: readonly TranscriptEvent[],
 ): void {
-  deleteSqliteTranscriptEventsInTransaction(database, resolved.sessionId);
+  const deleted = deleteSqliteTranscriptEventsInTransaction(database, resolved.sessionId);
   if (events.length === 0) {
+    if (deleted) {
+      touchTranscriptMutationInTransaction(database, resolved.sessionId);
+    }
     return;
   }
   ensureTranscriptSessionRoot(database, resolved, readEventTimestamp(events[0]) ?? Date.now());
@@ -5057,6 +5177,9 @@ function replaceSqliteTranscriptEventsInTransaction(
     if (appended) {
       seq += 1;
     }
+  }
+  if (deleted || seq > 0) {
+    touchTranscriptMutationInTransaction(database, resolved.sessionId);
   }
 }
 

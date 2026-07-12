@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   loadExactSqliteSessionEntry,
   loadSqliteTranscriptEventsSync,
+  readSqliteTranscriptStatsSync,
   upsertSqliteSessionEntry,
 } from "../config/sessions/session-accessor.sqlite.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
@@ -154,6 +155,29 @@ describe("runDoctorSessionSqlite", () => {
       message?: { content?: unknown };
     };
     expect(message?.message?.content).toEqual([{ type: "text", text: "legacy string" }]);
+  });
+
+  it("preserves the legacy transcript mtime as the SQLite mutation watermark", async () => {
+    const store = createLegacyStore();
+    const transcriptMtimeMs = 1_700_000_000_000;
+    const transcriptMtime = new Date(transcriptMtimeMs);
+    fs.utimesSync(store.transcriptPath, transcriptMtime, transcriptMtime);
+
+    const report = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "import",
+      store: store.storePath,
+    });
+
+    expect(report.totals).toMatchObject({ importedEntries: 1, issues: 0 });
+    expect(
+      readSqliteTranscriptStatsSync({
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        storePath: store.storePath,
+      }).lastMutationAtMs,
+    ).toBe(transcriptMtimeMs);
   });
 
   it("preserves a same-generation canonical harness owner during legacy import", async () => {

@@ -446,6 +446,7 @@ async function importLegacySessionRecord(
   report: DoctorSessionSqliteTargetReport,
 ): Promise<void> {
   const result = countTranscriptEvents(record);
+  const transcriptMtimeMs = readLegacyTranscriptMtimeMs(record);
   if (result.status === "missing") {
     if (markAlreadyMigratedTranscript(target, record, report)) {
       return;
@@ -473,6 +474,7 @@ async function importLegacySessionRecord(
       ...(record.transcriptPath
         ? { readTranscriptEvents: createTranscriptEventPrefixReader(record.transcriptPath) }
         : {}),
+      ...(transcriptMtimeMs !== undefined ? { transcriptMtimeMs } : {}),
     });
     report.importedEntries += 1;
     report.importedTranscriptEvents += imported.transcriptEvents;
@@ -491,6 +493,7 @@ async function importLegacySessionRecord(
     ...(record.transcriptPath && result.status === "ok"
       ? { readTranscriptEvents: createTranscriptEventReader(record.transcriptPath) }
       : {}),
+    ...(transcriptMtimeMs !== undefined ? { transcriptMtimeMs } : {}),
   });
   report.importedEntries += 1;
   report.importedTranscriptEvents += imported.transcriptEvents;
@@ -876,6 +879,18 @@ function countTranscriptEvents(
   | { status: "missing" }
   | { status: "malformed"; message: string } {
   return countTranscriptEventsForPath(record.transcriptPath);
+}
+
+function readLegacyTranscriptMtimeMs(record: LegacySessionRecord): number | undefined {
+  if (!record.transcriptPath) {
+    return undefined;
+  }
+  try {
+    const mtimeMs = Math.floor(fs.statSync(record.transcriptPath).mtimeMs);
+    return Number.isFinite(mtimeMs) && mtimeMs >= 0 ? mtimeMs : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function listUnreferencedJsonlFiles(

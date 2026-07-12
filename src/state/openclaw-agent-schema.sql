@@ -14,6 +14,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   session_scope TEXT NOT NULL DEFAULT 'conversation' CHECK (session_scope IN ('conversation', 'shared-main', 'group', 'channel')),
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
+  transcript_updated_at INTEGER DEFAULT NULL,
+  transcript_observed_at INTEGER DEFAULT NULL,
   started_at INTEGER,
   ended_at INTEGER,
   status TEXT CHECK (status IS NULL OR status IN ('running', 'done', 'failed', 'killed', 'timeout')),

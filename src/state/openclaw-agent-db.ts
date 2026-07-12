@@ -46,10 +46,10 @@ export { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
  * per pathname, protected with private file modes, and registered in the shared
  * OpenClaw state database for discovery and maintenance.
  */
-// v4 = session/transcript flip (branch lineage). Main's v2 memory-identity
+// v5 = transcript mutation watermark. The v4 session/transcript flip and main's v2 memory-identity
 // change is folded in structure-gated (migrateMemoryIndexSourcesIdentity), so
 // v2 main DBs and pre-merge v4 flip DBs both converge on this schema.
-export const OPENCLAW_AGENT_SCHEMA_VERSION = 4;
+export const OPENCLAW_AGENT_SCHEMA_VERSION = 5;
 const OPENCLAW_AGENT_DB_DIR_MODE = 0o700;
 const OPENCLAW_AGENT_DB_FILE_MODE = 0o600;
 const OPENCLAW_AGENT_DB_SLOW_OPEN_MS = 1_000;
@@ -155,6 +155,28 @@ function dropLegacyMemoryIndexSchema(db: DatabaseSync): void {
   `);
 }
 
+function backfillTranscriptMutationWatermarks(db: DatabaseSync): void {
+  const transcriptTable = db
+    .prepare("SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .get("transcript_events") as { ok?: unknown } | undefined;
+  if (transcriptTable?.ok !== 1) {
+    return;
+  }
+  db.prepare(
+    `
+      UPDATE sessions
+      SET
+        transcript_updated_at = COALESCE(transcript_updated_at, ?),
+        transcript_observed_at = COALESCE(transcript_observed_at, updated_at)
+      WHERE EXISTS (
+          SELECT 1
+          FROM transcript_events
+          WHERE transcript_events.session_id = sessions.session_id
+        )
+    `,
+  ).run(Date.now());
+}
+
 function migrateOpenClawAgentSchema(db: DatabaseSync): void {
   const userVersion = readSqliteUserVersion(db);
   if (userVersion >= OPENCLAW_AGENT_SCHEMA_VERSION) {
@@ -164,7 +186,17 @@ function migrateOpenClawAgentSchema(db: DatabaseSync): void {
     db.exec("DROP INDEX IF EXISTS idx_agent_transcript_events_session;");
   }
   const columns = readSqliteSessionColumns(db);
-  if (userVersion > 1 || !columns) {
+  if (columns && !columns.has("transcript_updated_at")) {
+    db.exec("ALTER TABLE sessions ADD COLUMN transcript_updated_at INTEGER DEFAULT NULL;");
+  }
+  if (columns && !columns.has("transcript_observed_at")) {
+    db.exec("ALTER TABLE sessions ADD COLUMN transcript_observed_at INTEGER DEFAULT NULL;");
+  }
+  if (!columns) {
+    return;
+  }
+  if (userVersion > 1) {
+    backfillTranscriptMutationWatermarks(db);
     return;
   }
   const copyColumns = [
@@ -232,6 +264,8 @@ function migrateOpenClawAgentSchema(db: DatabaseSync): void {
         session_scope TEXT NOT NULL DEFAULT 'conversation' CHECK (session_scope IN ('conversation', 'shared-main', 'group', 'channel')),
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
+        transcript_updated_at INTEGER DEFAULT NULL,
+        transcript_observed_at INTEGER DEFAULT NULL,
         started_at INTEGER,
         ended_at INTEGER,
         status TEXT CHECK (status IS NULL OR status IN ('running', 'done', 'failed', 'killed', 'timeout')),
@@ -252,6 +286,7 @@ function migrateOpenClawAgentSchema(db: DatabaseSync): void {
       DROP TABLE sessions;
       ALTER TABLE sessions_new RENAME TO sessions;
     `);
+  backfillTranscriptMutationWatermarks(db);
 }
 
 function parseMigratedSessionEntry(value: unknown): MigratedSessionEntry | null {

@@ -138,6 +138,8 @@ export interface Sessions {
   spawned_by: string | null;
   started_at: number | null;
   status: string | null;
+  transcript_observed_at: Generated<number | null>;
+  transcript_updated_at: Generated<number | null>;
   updated_at: number;
 }
 

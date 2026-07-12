@@ -3,11 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import {
-  clearAgentHarnesses,
-  listRegisteredAgentHarnesses,
-  restoreRegisteredAgentHarnesses,
-} from "../agents/harness/registry.js";
+import { clearAgentHarnesses } from "../agents/harness/registry.js";
 import { resolveConfigEnvVars } from "../config/env-substitution.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -22,27 +18,15 @@ import {
   resolveMemoryDreamingPluginConfig,
 } from "../memory-host-sdk/dreaming.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
-import {
-  clearDetachedTaskLifecycleRuntimeRegistration,
-  getDetachedTaskLifecycleRuntimeRegistration,
-  restoreDetachedTaskLifecycleRuntimeRegistration,
-} from "../tasks/detached-task-runtime-state.js";
+import { clearDetachedTaskLifecycleRuntimeRegistration } from "../tasks/detached-task-runtime-state.js";
 import { resolveUserPath } from "../utils.js";
 import { resolvePluginActivationSourceConfig } from "./activation-source-config.js";
 import { buildPluginApi } from "./api-builder.js";
 import { attachPluginApiFacades } from "./api-facades.js";
 import { isLateCallablePluginApiMethod } from "./api-lifecycle.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
-import {
-  clearPluginCommands,
-  listRegisteredPluginCommands,
-  restorePluginCommands,
-} from "./command-registry-state.js";
-import {
-  clearCompactionProviders,
-  listRegisteredCompactionProviders,
-  restoreRegisteredCompactionProviders,
-} from "./compaction-provider.js";
+import { clearPluginCommands } from "./command-registry-state.js";
+import { clearCompactionProviders } from "./compaction-provider.js";
 import {
   applyTestPluginDefaults,
   createPluginActivationSource,
@@ -60,20 +44,12 @@ import {
   type PluginCandidate,
   type PluginDiscoveryResult,
 } from "./discovery.js";
-import {
-  clearEmbeddingProviders,
-  listRegisteredEmbeddingProviders,
-  restoreRegisteredEmbeddingProviders,
-} from "./embedding-providers.js";
+import { clearEmbeddingProviders } from "./embedding-providers.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { initializeGlobalHookRunner } from "./hook-runner-global.js";
 import { collectPluginManifestCompatCodes } from "./installed-plugin-index-record-builder.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
-import {
-  clearPluginInteractiveHandlers,
-  listPluginInteractiveHandlers,
-  restorePluginInteractiveHandlers,
-} from "./interactive-registry.js";
+import { clearPluginInteractiveHandlers } from "./interactive-registry.js";
 import { PluginLoaderCacheState } from "./loader-cache-state.js";
 import {
   channelPluginIdBelongsToManifest,
@@ -108,18 +84,8 @@ import {
   type PluginManifestRegistry,
 } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
-import {
-  clearMemoryEmbeddingProviders,
-  listRegisteredMemoryEmbeddingProviders,
-  restoreRegisteredMemoryEmbeddingProviders,
-} from "./memory-embedding-providers.js";
-import {
-  clearMemoryPluginState,
-  getMemoryCapabilityRegistration,
-  listMemoryCorpusSupplements,
-  listMemoryPromptSupplements,
-  restoreMemoryPluginState,
-} from "./memory-state.js";
+import { clearMemoryEmbeddingProviders } from "./memory-embedding-providers.js";
+import { clearMemoryPluginState } from "./memory-state.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
 import {
   fingerprintPluginDiscoveryContext,
@@ -131,6 +97,12 @@ import {
   getCachedPluginModuleLoader,
   type PluginModuleLoaderCache,
 } from "./plugin-module-loader-cache.js";
+import {
+  createPluginRegistrationTransaction,
+  type PluginProcessGlobalState,
+  restorePluginProcessGlobalState,
+  snapshotPluginProcessGlobalState,
+} from "./plugin-registration-transaction.js";
 import {
   resolveCanonicalDistRuntimeSource,
   resolvePluginRuntimeArtifact,
@@ -369,16 +341,7 @@ class PluginLoadFailureError extends Error {
 
 type CachedPluginState = {
   registry: PluginRegistry;
-  detachedTaskRuntimeRegistration: ReturnType<typeof getDetachedTaskLifecycleRuntimeRegistration>;
-  commands?: ReturnType<typeof listRegisteredPluginCommands>;
-  interactiveHandlers?: ReturnType<typeof listPluginInteractiveHandlers>;
-  memoryCapability: ReturnType<typeof getMemoryCapabilityRegistration>;
-  memoryCorpusSupplements: ReturnType<typeof listMemoryCorpusSupplements>;
-  agentHarnesses: ReturnType<typeof listRegisteredAgentHarnesses>;
-  compactionProviders: ReturnType<typeof listRegisteredCompactionProviders>;
-  embeddingProviders: ReturnType<typeof listRegisteredEmbeddingProviders>;
-  memoryEmbeddingProviders: ReturnType<typeof listRegisteredMemoryEmbeddingProviders>;
-  memoryPromptSupplements: ReturnType<typeof listMemoryPromptSupplements>;
+  processGlobalState: PluginProcessGlobalState;
 };
 
 const MAX_PLUGIN_REGISTRY_CACHE_ENTRIES = 128;
@@ -456,151 +419,6 @@ function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
     value !== null &&
     typeof (value as { then?: unknown }).then === "function"
   );
-}
-
-type PluginRegistrySnapshot = {
-  arrays: {
-    tools: PluginRegistry["tools"];
-    hooks: PluginRegistry["hooks"];
-    typedHooks: PluginRegistry["typedHooks"];
-    channels: PluginRegistry["channels"];
-    channelSetups: PluginRegistry["channelSetups"];
-    providers: PluginRegistry["providers"];
-    modelCatalogProviders: PluginRegistry["modelCatalogProviders"];
-    sessionCatalogs: PluginRegistry["sessionCatalogs"];
-    cliBackends: PluginRegistry["cliBackends"];
-    textTransforms: PluginRegistry["textTransforms"];
-    embeddingProviders: PluginRegistry["embeddingProviders"];
-    speechProviders: PluginRegistry["speechProviders"];
-    realtimeTranscriptionProviders: PluginRegistry["realtimeTranscriptionProviders"];
-    realtimeVoiceProviders: PluginRegistry["realtimeVoiceProviders"];
-    mediaUnderstandingProviders: PluginRegistry["mediaUnderstandingProviders"];
-    transcriptSourceProviders: PluginRegistry["transcriptSourceProviders"];
-    imageGenerationProviders: PluginRegistry["imageGenerationProviders"];
-    videoGenerationProviders: PluginRegistry["videoGenerationProviders"];
-    musicGenerationProviders: PluginRegistry["musicGenerationProviders"];
-    webFetchProviders: PluginRegistry["webFetchProviders"];
-    webSearchProviders: PluginRegistry["webSearchProviders"];
-    workerProviders: PluginRegistry["workerProviders"];
-    migrationProviders: PluginRegistry["migrationProviders"];
-    codexAppServerExtensionFactories: PluginRegistry["codexAppServerExtensionFactories"];
-    agentToolResultMiddlewares: PluginRegistry["agentToolResultMiddlewares"];
-    trustedToolPolicies: PluginRegistry["trustedToolPolicies"];
-    memoryEmbeddingProviders: PluginRegistry["memoryEmbeddingProviders"];
-    agentHarnesses: PluginRegistry["agentHarnesses"];
-    httpRoutes: PluginRegistry["httpRoutes"];
-    cliRegistrars: PluginRegistry["cliRegistrars"];
-    reloads: PluginRegistry["reloads"];
-    nodeHostCommands: PluginRegistry["nodeHostCommands"];
-    nodeInvokePolicies: PluginRegistry["nodeInvokePolicies"];
-    securityAuditCollectors: PluginRegistry["securityAuditCollectors"];
-    services: PluginRegistry["services"];
-    commands: PluginRegistry["commands"];
-    interactiveHandlers: PluginRegistry["interactiveHandlers"];
-    sessionActions: PluginRegistry["sessionActions"];
-    conversationBindingResolvedHandlers: PluginRegistry["conversationBindingResolvedHandlers"];
-    diagnostics: PluginRegistry["diagnostics"];
-  };
-  gatewayHandlers: PluginRegistry["gatewayHandlers"];
-  gatewayMethodDescriptors: PluginRegistry["gatewayMethodDescriptors"];
-  coreGatewayMethodNames: PluginRegistry["coreGatewayMethodNames"];
-};
-
-function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistrySnapshot {
-  return {
-    arrays: {
-      tools: [...registry.tools],
-      hooks: [...registry.hooks],
-      typedHooks: [...registry.typedHooks],
-      channels: [...registry.channels],
-      channelSetups: [...registry.channelSetups],
-      providers: [...registry.providers],
-      modelCatalogProviders: [...registry.modelCatalogProviders],
-      sessionCatalogs: [...registry.sessionCatalogs],
-      cliBackends: [...registry.cliBackends],
-      textTransforms: [...registry.textTransforms],
-      embeddingProviders: [...registry.embeddingProviders],
-      speechProviders: [...registry.speechProviders],
-      realtimeTranscriptionProviders: [...registry.realtimeTranscriptionProviders],
-      realtimeVoiceProviders: [...registry.realtimeVoiceProviders],
-      mediaUnderstandingProviders: [...registry.mediaUnderstandingProviders],
-      transcriptSourceProviders: [...registry.transcriptSourceProviders],
-      imageGenerationProviders: [...registry.imageGenerationProviders],
-      videoGenerationProviders: [...registry.videoGenerationProviders],
-      musicGenerationProviders: [...registry.musicGenerationProviders],
-      webFetchProviders: [...registry.webFetchProviders],
-      webSearchProviders: [...registry.webSearchProviders],
-      workerProviders: new Map(registry.workerProviders),
-      migrationProviders: [...registry.migrationProviders],
-      codexAppServerExtensionFactories: [...registry.codexAppServerExtensionFactories],
-      agentToolResultMiddlewares: [...registry.agentToolResultMiddlewares],
-      trustedToolPolicies: [...registry.trustedToolPolicies],
-      memoryEmbeddingProviders: [...registry.memoryEmbeddingProviders],
-      agentHarnesses: [...registry.agentHarnesses],
-      httpRoutes: [...registry.httpRoutes],
-      cliRegistrars: [...registry.cliRegistrars],
-      reloads: [...registry.reloads],
-      nodeHostCommands: [...registry.nodeHostCommands],
-      nodeInvokePolicies: [...registry.nodeInvokePolicies],
-      securityAuditCollectors: [...registry.securityAuditCollectors],
-      services: [...registry.services],
-      commands: [...registry.commands],
-      interactiveHandlers: [...registry.interactiveHandlers],
-      sessionActions: [...registry.sessionActions],
-      conversationBindingResolvedHandlers: [...registry.conversationBindingResolvedHandlers],
-      diagnostics: [...registry.diagnostics],
-    },
-    gatewayHandlers: { ...registry.gatewayHandlers },
-    gatewayMethodDescriptors: [...registry.gatewayMethodDescriptors],
-    coreGatewayMethodNames: [...registry.coreGatewayMethodNames],
-  };
-}
-
-function restorePluginRegistry(registry: PluginRegistry, snapshot: PluginRegistrySnapshot): void {
-  registry.tools = snapshot.arrays.tools;
-  registry.hooks = snapshot.arrays.hooks;
-  registry.typedHooks = snapshot.arrays.typedHooks;
-  registry.channels = snapshot.arrays.channels;
-  registry.channelSetups = snapshot.arrays.channelSetups;
-  registry.providers = snapshot.arrays.providers;
-  registry.modelCatalogProviders = snapshot.arrays.modelCatalogProviders;
-  registry.sessionCatalogs = snapshot.arrays.sessionCatalogs;
-  registry.cliBackends = snapshot.arrays.cliBackends;
-  registry.textTransforms = snapshot.arrays.textTransforms;
-  registry.embeddingProviders = snapshot.arrays.embeddingProviders;
-  registry.speechProviders = snapshot.arrays.speechProviders;
-  registry.realtimeTranscriptionProviders = snapshot.arrays.realtimeTranscriptionProviders;
-  registry.realtimeVoiceProviders = snapshot.arrays.realtimeVoiceProviders;
-  registry.mediaUnderstandingProviders = snapshot.arrays.mediaUnderstandingProviders;
-  registry.transcriptSourceProviders = snapshot.arrays.transcriptSourceProviders;
-  registry.imageGenerationProviders = snapshot.arrays.imageGenerationProviders;
-  registry.videoGenerationProviders = snapshot.arrays.videoGenerationProviders;
-  registry.musicGenerationProviders = snapshot.arrays.musicGenerationProviders;
-  registry.webFetchProviders = snapshot.arrays.webFetchProviders;
-  registry.webSearchProviders = snapshot.arrays.webSearchProviders;
-  registry.workerProviders = snapshot.arrays.workerProviders;
-  registry.migrationProviders = snapshot.arrays.migrationProviders;
-  registry.codexAppServerExtensionFactories = snapshot.arrays.codexAppServerExtensionFactories;
-  registry.agentToolResultMiddlewares = snapshot.arrays.agentToolResultMiddlewares;
-  registry.trustedToolPolicies = snapshot.arrays.trustedToolPolicies;
-  registry.memoryEmbeddingProviders = snapshot.arrays.memoryEmbeddingProviders;
-  registry.agentHarnesses = snapshot.arrays.agentHarnesses;
-  registry.httpRoutes = snapshot.arrays.httpRoutes;
-  registry.cliRegistrars = snapshot.arrays.cliRegistrars;
-  registry.reloads = snapshot.arrays.reloads;
-  registry.nodeHostCommands = snapshot.arrays.nodeHostCommands;
-  registry.nodeInvokePolicies = snapshot.arrays.nodeInvokePolicies;
-  registry.securityAuditCollectors = snapshot.arrays.securityAuditCollectors;
-  registry.services = snapshot.arrays.services;
-  registry.commands = snapshot.arrays.commands;
-  registry.interactiveHandlers = snapshot.arrays.interactiveHandlers;
-  registry.sessionActions = snapshot.arrays.sessionActions;
-  registry.conversationBindingResolvedHandlers =
-    snapshot.arrays.conversationBindingResolvedHandlers;
-  registry.diagnostics = snapshot.arrays.diagnostics;
-  registry.gatewayHandlers = snapshot.gatewayHandlers;
-  registry.gatewayMethodDescriptors = snapshot.gatewayMethodDescriptors;
-  registry.coreGatewayMethodNames = snapshot.coreGatewayMethodNames;
 }
 
 function createGuardedPluginRegistrationApi(api: OpenClawPluginApi): {
@@ -1746,20 +1564,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     });
     if (cached) {
       if (shouldActivate) {
-        restoreRegisteredAgentHarnesses(cached.state.agentHarnesses);
-        restorePluginCommands(cached.state.commands ?? []);
-        restoreRegisteredCompactionProviders(cached.state.compactionProviders);
-        restoreDetachedTaskLifecycleRuntimeRegistration(
-          cached.state.detachedTaskRuntimeRegistration,
-        );
-        restorePluginInteractiveHandlers(cached.state.interactiveHandlers ?? []);
-        restoreRegisteredEmbeddingProviders(cached.state.embeddingProviders);
-        restoreRegisteredMemoryEmbeddingProviders(cached.state.memoryEmbeddingProviders);
-        restoreMemoryPluginState({
-          capability: cached.state.memoryCapability,
-          corpusSupplements: cached.state.memoryCorpusSupplements,
-          promptSupplements: cached.state.memoryPromptSupplements,
-        });
+        restorePluginProcessGlobalState(cached.state.processGlobalState);
         activatePluginRegistry(
           cached.state.registry,
           cached.cacheKey,
@@ -2583,14 +2388,15 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           if (registrationMode === "setup-runtime") {
             const registerSetupRuntime = mergedSetupRegistration.registerSetupRuntime;
             if (registerSetupRuntime) {
-              const registrySnapshot = snapshotPluginRegistry(registry);
+              const transaction = createPluginRegistrationTransaction({ registry });
               try {
                 runPluginRegisterSync(
                   (registrationApi) => registerSetupRuntime(registrationApi),
                   api,
                 );
+                transaction.commit({ activate: true });
               } catch (err) {
-                restorePluginRegistry(registry, registrySnapshot);
+                transaction.rollback();
                 recordPluginError({
                   logger,
                   registry,
@@ -2727,15 +2533,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         hookPolicy: entry?.hooks,
         registrationMode,
       });
-      const registrySnapshot = snapshotPluginRegistry(registry);
-      const previousAgentHarnesses = listRegisteredAgentHarnesses();
-      const previousCompactionProviders = listRegisteredCompactionProviders();
-      const previousDetachedTaskRuntimeRegistration = getDetachedTaskLifecycleRuntimeRegistration();
-      const previousEmbeddingProviders = listRegisteredEmbeddingProviders();
-      const previousMemoryCapability = getMemoryCapabilityRegistration();
-      const previousMemoryEmbeddingProviders = listRegisteredMemoryEmbeddingProviders();
-      const previousMemoryCorpusSupplements = listMemoryCorpusSupplements();
-      const previousMemoryPromptSupplements = listMemoryPromptSupplements();
+      const transaction = createPluginRegistrationTransaction({
+        registry,
+        rollbackGlobalSideEffects: () => rollbackPluginGlobalSideEffects(record.id),
+      });
 
       const beforeRegister = performance.now();
       let registerFailed = false;
@@ -2745,34 +2546,11 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           `${registrationMode}:register`,
           () => runPluginRegisterSync(register, api),
         );
-        // Snapshot loads should not replace process-global runtime prompt state.
-        if (!shouldActivate) {
-          restoreRegisteredAgentHarnesses(previousAgentHarnesses);
-          restoreRegisteredCompactionProviders(previousCompactionProviders);
-          restoreDetachedTaskLifecycleRuntimeRegistration(previousDetachedTaskRuntimeRegistration);
-          restoreRegisteredEmbeddingProviders(previousEmbeddingProviders);
-          restoreRegisteredMemoryEmbeddingProviders(previousMemoryEmbeddingProviders);
-          restoreMemoryPluginState({
-            capability: previousMemoryCapability,
-            corpusSupplements: previousMemoryCorpusSupplements,
-            promptSupplements: previousMemoryPromptSupplements,
-          });
-        }
         registry.plugins.push(record);
         seenIds.set(pluginId, candidate.origin);
+        transaction.commit({ activate: shouldActivate });
       } catch (err) {
-        rollbackPluginGlobalSideEffects(record.id);
-        restorePluginRegistry(registry, registrySnapshot);
-        restoreRegisteredAgentHarnesses(previousAgentHarnesses);
-        restoreRegisteredCompactionProviders(previousCompactionProviders);
-        restoreDetachedTaskLifecycleRuntimeRegistration(previousDetachedTaskRuntimeRegistration);
-        restoreRegisteredEmbeddingProviders(previousEmbeddingProviders);
-        restoreRegisteredMemoryEmbeddingProviders(previousMemoryEmbeddingProviders);
-        restoreMemoryPluginState({
-          capability: previousMemoryCapability,
-          corpusSupplements: previousMemoryCorpusSupplements,
-          promptSupplements: previousMemoryPromptSupplements,
-        });
+        transaction.rollback();
         recordPluginError({
           logger,
           registry,
@@ -2838,17 +2616,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       setCachedPluginRegistry(
         cacheKey,
         {
-          commands: listRegisteredPluginCommands(),
-          detachedTaskRuntimeRegistration: getDetachedTaskLifecycleRuntimeRegistration(),
-          interactiveHandlers: listPluginInteractiveHandlers(),
-          memoryCapability: getMemoryCapabilityRegistration(),
-          memoryCorpusSupplements: listMemoryCorpusSupplements(),
           registry,
-          agentHarnesses: listRegisteredAgentHarnesses(),
-          compactionProviders: listRegisteredCompactionProviders(),
-          embeddingProviders: listRegisteredEmbeddingProviders(),
-          memoryEmbeddingProviders: listRegisteredMemoryEmbeddingProviders(),
-          memoryPromptSupplements: listMemoryPromptSupplements(),
+          processGlobalState: snapshotPluginProcessGlobalState(),
         },
         onlyPluginIds,
       );
@@ -3242,15 +3011,16 @@ export async function loadOpenClawPluginCliRegistry(
       },
     });
 
-    const registrySnapshot = snapshotPluginRegistry(registry);
+    const transaction = createPluginRegistrationTransaction({ registry });
     try {
       withProfile({ pluginId: record.id, source: record.source }, "cli-metadata:register", () =>
         runPluginRegisterSync(register, api),
       );
       registry.plugins.push(record);
       seenIds.set(pluginId, candidate.origin);
+      transaction.commit({ activate: true });
     } catch (err) {
-      restorePluginRegistry(registry, registrySnapshot);
+      transaction.rollback();
       recordPluginError({
         logger,
         registry,
