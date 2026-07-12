@@ -43,6 +43,7 @@ vi.mock("./revoked-context.js", () => ({
 type StreamMock = {
   update: ReturnType<typeof vi.fn>;
   emit: ReturnType<typeof vi.fn>;
+  clearText: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
   canceled: boolean;
 };
@@ -51,6 +52,7 @@ function createStreamMock(): StreamMock {
   return {
     update: vi.fn(),
     emit: vi.fn(),
+    clearText: vi.fn(),
     close: vi.fn(async () => ({ id: "stream-final" })),
     canceled: false,
   };

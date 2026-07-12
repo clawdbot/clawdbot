@@ -97,8 +97,10 @@ export function createTeamsReplyStreamController(params: {
   // each chunk, but the SDK's HttpStream appends each emit() to its internal
   // text buffer (this.text += activity.text). Forwarding cumulative text into
   // an appending sink produces "chunk1 + chunk2 + chunk3..." duplication. We
-  // track the length of text we've already emitted and forward only the delta.
-  let emittedTextLength = 0;
+  // track the cumulative text we've already emitted and forward only the
+  // delta. Holding text instead of length preserves the next chunk when the
+  // pipeline normalizes trailing whitespace between cumulative snapshots.
+  let emittedText = "";
 
   const wasCanceled = () => canceledLocally || Boolean(stream?.canceled);
 
@@ -171,15 +173,32 @@ export function createTeamsReplyStreamController(params: {
       // appending sink. Without this, "Here's a" → "Here's a sonnet" → ...
       // gets emitted as full repeats and the SDK concatenates the lot.
       const fullText = payload.text;
-      // If the pipeline ever sends shorter text than we've emitted (e.g.
-      // edit-in-place semantics), skip rather than emit a negative slice.
-      if (fullText.length <= emittedTextLength) {
+      let prefixLength = 0;
+      while (
+        prefixLength < emittedText.length &&
+        prefixLength < fullText.length &&
+        emittedText[prefixLength] === fullText[prefixLength]
+      ) {
+        prefixLength += 1;
+      }
+      const previousRemainder = emittedText.slice(prefixLength);
+      const delta = fullText.slice(prefixLength);
+      // Duplicate or prefix-only out-of-order snapshots produce no delta.
+      if (!delta) {
         return;
       }
-      const delta = fullText.slice(emittedTextLength);
+      // Non-whitespace rewrites are not safe to append into Teams. Let block
+      // delivery carry the final payload, but clear the SDK's accumulated text
+      // before closing so stale prefixes are not finalized as another message.
+      if (previousRemainder.trim()) {
+        stream.clearText();
+        streamFailed = true;
+        streamFinalizationPending = true;
+        return;
+      }
       try {
         stream.emit(delta);
-        emittedTextLength = fullText.length;
+        emittedText = fullText;
         tokensEmitted = true;
       } catch (err) {
         if (isStreamCancelledError(err)) {
