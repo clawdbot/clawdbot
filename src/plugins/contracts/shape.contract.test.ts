@@ -98,6 +98,21 @@ describe("plugin shape compatibility matrix", () => {
     registerVirtualTestPlugin({
       registry,
       config,
+      id: "session-catalog-demo",
+      name: "Session Catalog Demo",
+      register(api) {
+        api.registerSessionCatalog({
+          id: "session-catalog-demo",
+          label: "Session Catalog Demo",
+          list: async () => [],
+          read: async ({ hostId, threadId }) => ({ hostId, threadId, items: [] }),
+        });
+      },
+    });
+
+    registerVirtualTestPlugin({
+      registry,
+      config,
       id: "document-extract-test",
       name: "Document Extract Test",
       contracts: { documentExtractors: ["pdf"] },
@@ -140,6 +155,11 @@ describe("plugin shape compatibility matrix", () => {
         capabilityMode: "plain",
       },
       {
+        id: "session-catalog-demo",
+        shape: "plain-capability",
+        capabilityMode: "plain",
+      },
+      {
         id: "document-extract-test",
         shape: "plain-capability",
         capabilityMode: "plain",
@@ -153,6 +173,7 @@ describe("plugin shape compatibility matrix", () => {
         ["text-inference"],
         ["text-inference", "web-search"],
         ["channel"],
+        ["session-catalog"],
         ["document-extractors"],
       ],
     );

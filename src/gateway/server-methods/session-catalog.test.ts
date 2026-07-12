@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 
 const activeRegistry = vi.hoisted(() => ({ sessionCatalogs: [] as unknown[] }));
@@ -70,5 +71,18 @@ describe("session catalog Gateway methods", () => {
       threadId: "thread-1",
     });
     expect(respond).toHaveBeenCalledWith(true, { sessionKey: "agent:main:adopted" });
+  });
+
+  it("rejects an unknown catalog id when listing", async () => {
+    const respond = await call("sessions.catalog.list", { catalogId: "missing" });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "unknown session catalog: missing",
+      }),
+    );
   });
 });

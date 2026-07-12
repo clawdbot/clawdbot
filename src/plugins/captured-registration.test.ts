@@ -46,6 +46,12 @@ describe("captured plugin registration", () => {
             },
           ],
         });
+        api.registerSessionCatalog({
+          id: "captured-catalog",
+          label: "Captured Catalog",
+          list: async () => [],
+          read: async ({ hostId, threadId }) => ({ hostId, threadId, items: [] }),
+        });
         api.registerVideoGenerationProvider({
           id: "captured-video",
           label: "Captured Video",
@@ -110,6 +116,7 @@ describe("captured plugin registration", () => {
     expect(captured.modelCatalogProviders.map((provider) => provider.provider)).toEqual([
       "captured-provider",
     ]);
+    expect(captured.sessionCatalogs.map((provider) => provider.id)).toEqual(["captured-catalog"]);
     expect(captured.videoGenerationProviders.map((provider) => provider.id)).toEqual([
       "captured-video",
     ]);

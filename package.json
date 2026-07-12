@@ -173,6 +173,7 @@
     "src/agents/templates/",
     "scripts/crabbox-wrapper-providers.mjs",
     "scripts/crabbox-wrapper.mjs",
+    "scripts/testbox-lease-freshness.mjs",
     "patches/",
     "skills/",
     "scripts/npm-runner.mjs",

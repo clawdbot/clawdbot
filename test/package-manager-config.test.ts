@@ -79,6 +79,7 @@ describe("package manager build policy", () => {
       expect.arrayContaining([
         "scripts/crabbox-wrapper.mjs",
         "scripts/crabbox-wrapper-providers.mjs",
+        "scripts/testbox-lease-freshness.mjs",
       ]),
     );
   });

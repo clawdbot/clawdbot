@@ -22,6 +22,7 @@ import type {
 import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
 import type { PluginAgentToolResultMiddlewareRegistration } from "./registry-types.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import type { SessionCatalogProvider } from "./session-catalog.js";
 import type {
   AnyAgentTool,
   AgentHarness,
@@ -86,6 +87,7 @@ export type CapturedPluginRegistration = {
   sessionActions: PluginSessionActionRegistration[];
   tools: AnyAgentTool[];
   modelCatalogProviders: UnifiedModelCatalogProviderPlugin[];
+  sessionCatalogs: SessionCatalogProvider[];
 };
 
 export function createCapturedPluginRegistration(params?: {
@@ -127,6 +129,7 @@ export function createCapturedPluginRegistration(params?: {
   let capturedSessionTurnCount = 0;
   const tools: AnyAgentTool[] = [];
   const modelCatalogProviders: UnifiedModelCatalogProviderPlugin[] = [];
+  const sessionCatalogs: SessionCatalogProvider[] = [];
   const pluginId = params?.id ?? "captured-plugin-registration";
   const pluginName = params?.name ?? "Captured Plugin Registration";
   const pluginSource = params?.source ?? "captured-plugin-registration";
@@ -169,6 +172,7 @@ export function createCapturedPluginRegistration(params?: {
     sessionActions,
     tools,
     modelCatalogProviders,
+    sessionCatalogs,
     api: buildPluginApi({
       id: pluginId,
       name: pluginName,
@@ -207,6 +211,9 @@ export function createCapturedPluginRegistration(params?: {
         },
         registerModelCatalogProvider(provider: UnifiedModelCatalogProviderPlugin) {
           modelCatalogProviders.push(provider);
+        },
+        registerSessionCatalog(provider: SessionCatalogProvider) {
+          sessionCatalogs.push(provider);
         },
         registerAgentHarness(harness: AgentHarness) {
           agentHarnesses.push(harness);

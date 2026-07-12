@@ -81,9 +81,16 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       return;
     }
     const request = params as SessionsCatalogListParams;
-    const selected = request.catalogId
-      ? providers().filter((provider) => provider.id === request.catalogId)
-      : providers();
+    let selected: SessionCatalogProvider[];
+    if (request.catalogId) {
+      const provider = providerOrRespond(request.catalogId, respond);
+      if (!provider) {
+        return;
+      }
+      selected = [provider];
+    } else {
+      selected = providers();
+    }
     const catalogList = await Promise.all(
       selected.map(async (provider): Promise<SessionCatalog> => {
         try {
