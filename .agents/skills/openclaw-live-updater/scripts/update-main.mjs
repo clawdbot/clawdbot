@@ -37,6 +37,7 @@ const DEFAULT_EXPECTED_ORIGIN = "openclaw/openclaw";
 const FULL_SHA_RE = /^[0-9a-f]{40}$/u;
 const GATEWAY_READINESS_ATTEMPTS = 3;
 const GATEWAY_READINESS_RETRY_DELAY_MS = 5_000;
+const GATEWAY_SUSPEND_TIMEOUT_MS = 10_000;
 const DEPENDENCY_INPUT_RE =
   /^(?:\.npmrc$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|patches\/)|(?:^|\/)package\.json$/u;
 
@@ -117,7 +118,13 @@ export function classifyActions(
   changedPaths,
   { buildProvenanceKnown, buildRequired, nodeModulesPresent },
 ) {
-  const runMacos = changedPaths.length > 0 && detectChangedScope(changedPaths).runMacos;
+  // CI skips generated protocol-only macOS jobs, but the live app embeds these Swift sources.
+  const generatedMacProtocolChanged = changedPaths.some((changedPath) =>
+    /^apps\/shared\/OpenClawKit\/Sources\/OpenClawProtocol\//u.test(changedPath),
+  );
+  const runMacos =
+    changedPaths.length > 0 &&
+    (detectChangedScope(changedPaths).runMacos || generatedMacProtocolChanged);
   const macUiVerification =
     runMacos &&
     changedPaths.some((changedPath) =>
@@ -128,12 +135,13 @@ export function classifyActions(
   const dependencyInputsChanged = changedPaths.some((changedPath) =>
     DEPENDENCY_INPUT_RE.test(changedPath),
   );
+  const dependencyInstall =
+    !nodeModulesPresent || (buildRequired && (dependencyInputsChanged || !buildProvenanceKnown));
   return {
-    dependencyInstall:
-      !nodeModulesPresent || (buildRequired && (dependencyInputsChanged || !buildProvenanceKnown)),
+    dependencyInstall,
     gatewayBuild: buildRequired,
     gatewayProbe: true,
-    gatewayRestart: buildRequired,
+    gatewayRestart: buildRequired || dependencyInstall,
     gatewaySelfHeal: false,
     macAppRebuild: runMacos,
     macUiVerification,
@@ -513,6 +521,205 @@ function defaultRunCommand(command, args, checkout) {
   });
 }
 
+function readManagedGatewayLaunchAgent(checkout) {
+  if (process.platform !== "darwin" || typeof process.getuid !== "function") {
+    throw new UpdateInvariantError(
+      "gateway_launchagent_unavailable",
+      "managed Gateway LaunchAgent inspection is only available on macOS",
+    );
+  }
+  const home = process.env.HOME;
+  if (!home) {
+    throw new UpdateInvariantError("gateway_launchagent_failed", "HOME is unavailable");
+  }
+  const plistPath = path.join(home, "Library/LaunchAgents/ai.openclaw.gateway.plist");
+  const plistResult = spawnSync("/usr/bin/plutil", ["-convert", "json", "-o", "-", plistPath], {
+    encoding: "utf8",
+  });
+  if (plistResult.status !== 0) {
+    throw new UpdateInvariantError(
+      "gateway_launchagent_failed",
+      `could not read the managed Gateway LaunchAgent: ${String(plistResult.stderr).trim()}`,
+    );
+  }
+  const plist = JSON.parse(plistResult.stdout);
+  const label = plist?.Label;
+  const programArguments = plist?.ProgramArguments;
+  const portFlag = Array.isArray(programArguments) ? programArguments.indexOf("--port") : -1;
+  const port = Number(portFlag >= 0 ? programArguments[portFlag + 1] : Number.NaN);
+  if (
+    typeof label !== "string" ||
+    !Array.isArray(programArguments) ||
+    !programArguments.includes(path.join(checkout, "dist/index.js")) ||
+    !programArguments.includes("gateway") ||
+    !Number.isInteger(port) ||
+    port < 1 ||
+    port > 65_535
+  ) {
+    throw new UpdateInvariantError(
+      "gateway_launchagent_failed",
+      "LaunchAgent does not describe this checkout's managed Gateway and port",
+    );
+  }
+  const configPath =
+    typeof plist?.EnvironmentVariables?.OPENCLAW_CONFIG_PATH === "string"
+      ? plist.EnvironmentVariables.OPENCLAW_CONFIG_PATH
+      : path.join(home, ".openclaw/openclaw.json");
+  return { configPath, label, port };
+}
+
+function runBuiltGatewayCall(checkout, method, params) {
+  const { configPath, port } = readManagedGatewayLaunchAgent(checkout);
+  const overlayPath = path.join(
+    path.dirname(configPath),
+    `.openclaw-live-updater-config-${randomUUID()}.json`,
+  );
+  writeFileSync(
+    overlayPath,
+    `${JSON.stringify({
+      $include: `./${path.basename(configPath)}`,
+      gateway: { mode: "local", port },
+    })}\n`,
+    { flag: "wx", mode: 0o600 },
+  );
+  const env = {
+    ...process.env,
+    OPENCLAW_CONFIG_PATH: overlayPath,
+    OPENCLAW_GATEWAY_PORT: String(port),
+  };
+  delete env.OPENCLAW_GATEWAY_URL;
+  delete env.OPENCLAW_GATEWAY_TOKEN;
+  delete env.OPENCLAW_GATEWAY_PASSWORD;
+  try {
+    return execFileSync(
+      process.execPath,
+      [
+        "dist/index.js",
+        "gateway",
+        "call",
+        method,
+        "--params",
+        JSON.stringify(params),
+        "--json",
+        "--timeout",
+        String(GATEWAY_SUSPEND_TIMEOUT_MS),
+      ],
+      {
+        cwd: checkout,
+        encoding: "utf8",
+        env,
+        stdio: ["ignore", "pipe", "inherit"],
+      },
+    );
+  } finally {
+    rmSync(overlayPath, { force: true });
+  }
+}
+
+export function prepareGatewaySuspension(checkout, callGateway = runBuiltGatewayCall) {
+  const requestId = `openclaw-live-updater-${randomUUID()}`;
+  let result;
+  try {
+    result = JSON.parse(callGateway(checkout, "gateway.suspend.prepare", { requestId }));
+  } catch (error) {
+    throw new UpdateInvariantError(
+      "gateway_suspend_prepare_failed",
+      `could not atomically prepare Gateway maintenance: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  if (result?.status === "ready" && typeof result.suspensionId === "string") {
+    return result;
+  }
+  if (result?.status === "busy" && Array.isArray(result.blockers)) {
+    return result;
+  }
+  throw new UpdateInvariantError(
+    "gateway_suspend_prepare_invalid",
+    `Gateway returned an invalid suspension result: ${JSON.stringify(result)}`,
+  );
+}
+
+function defaultResumeGatewaySuspension(checkout, suspensionId) {
+  runBuiltGatewayCall(checkout, "gateway.suspend.resume", { suspensionId });
+}
+
+function proveMacLaunchdGatewayStopped(checkout) {
+  const { label, port } = readManagedGatewayLaunchAgent(checkout);
+  const launchctl = spawnSync("/bin/launchctl", ["print", `gui/${process.getuid()}/${label}`], {
+    encoding: "utf8",
+  });
+  const launchctlOutput = `${launchctl.stdout ?? ""}\n${launchctl.stderr ?? ""}`;
+  const serviceBootedOut =
+    launchctl.status !== 0 && /could not find service|service not found/iu.test(launchctlOutput);
+  if (!serviceBootedOut) {
+    throw new UpdateInvariantError(
+      "gateway_not_proven_stopped",
+      "managed Gateway LaunchAgent is still loaded or its bootout state is ambiguous",
+    );
+  }
+  const listeners = spawnSync("/usr/sbin/lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"], {
+    encoding: "utf8",
+  });
+  if (
+    listeners.status !== 1 ||
+    String(listeners.stdout).trim() ||
+    String(listeners.stderr).trim()
+  ) {
+    throw new UpdateInvariantError(
+      "gateway_not_proven_stopped",
+      `Gateway port ${port} is listening or could not be inspected conclusively`,
+    );
+  }
+  return { runtimeStatus: "stopped", port, portStatus: "free", proofSource: "launchd" };
+}
+
+function defaultProveGatewayStopped(checkout) {
+  if (process.platform === "darwin") {
+    return proveMacLaunchdGatewayStopped(checkout);
+  }
+  let result;
+  try {
+    result = JSON.parse(
+      execFileSync(process.execPath, ["dist/index.js", "gateway", "status", "--json"], {
+        cwd: checkout,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "inherit"],
+      }),
+    );
+  } catch (error) {
+    throw new UpdateInvariantError(
+      "gateway_stopped_proof_failed",
+      `could not inspect the managed Gateway after suspension failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  const runtime = result?.service?.runtime;
+  const port = result?.port;
+  if (
+    runtime?.status !== "stopped" ||
+    runtime.pid != null ||
+    port?.status !== "free" ||
+    !Array.isArray(port.listeners) ||
+    port.listeners.length > 0 ||
+    result?.rpc?.ok === true
+  ) {
+    throw new UpdateInvariantError(
+      "gateway_not_proven_stopped",
+      `managed Gateway is not conclusively stopped: ${JSON.stringify({
+        runtimeStatus: runtime?.status ?? null,
+        runtimePid: runtime?.pid ?? null,
+        portStatus: port?.status ?? null,
+        listenerCount: Array.isArray(port?.listeners) ? port.listeners.length : null,
+        rpcOk: result?.rpc?.ok ?? null,
+      })}`,
+    );
+  }
+  return {
+    runtimeStatus: runtime.status,
+    port: port.port ?? null,
+    portStatus: port.status,
+  };
+}
+
 function assertExactBuild(checkout, expectedSha) {
   const state = inspectBuildState(checkout, expectedSha);
   if (!state.current) {
@@ -849,6 +1056,9 @@ export function maintainMain(options, dependencies = {}) {
       actions.macUiVerification ||= maintenanceState.macUiVerification === true;
     }
     const runCommand = dependencies.runCommand ?? defaultRunCommand;
+    const prepareSuspension = dependencies.prepareGatewaySuspension ?? prepareGatewaySuspension;
+    const resumeSuspension = dependencies.resumeGatewaySuspension ?? defaultResumeGatewaySuspension;
+    const proveGatewayStopped = dependencies.proveGatewayStopped ?? defaultProveGatewayStopped;
     const verifyMacTarget = dependencies.verifyMacTarget ?? defaultVerifyMacTarget;
     const auditGatewayLogs = dependencies.auditGatewayLogs ?? defaultAuditGatewayLogs;
     const sleep = dependencies.sleep ?? defaultSleep;
@@ -865,14 +1075,59 @@ export function maintainMain(options, dependencies = {}) {
       writeMaintenanceState(statePath, queuedMacState);
     }
 
-    if (actions.dependencyInstall) {
-      runCommand("pnpm", ["install", "--frozen-lockfile"], update.checkout);
-    }
-    if (actions.gatewayBuild) {
-      // Use the existing built CLI directly. Source launchers may auto-build a
-      // stale dist before dispatching `gateway stop`, recreating the live-import race.
-      runCommand(process.execPath, ["dist/index.js", "gateway", "stop"], update.checkout);
-      runBuildWithPreservedMacApp(runCommand, update.checkout, sleep);
+    if (actions.gatewayBuild || actions.dependencyInstall) {
+      let gatewaySuspension;
+      try {
+        gatewaySuspension = prepareSuspension(update.checkout);
+      } catch (prepareError) {
+        try {
+          gatewaySuspension = {
+            status: "offline",
+            proof: proveGatewayStopped(update.checkout),
+          };
+        } catch (proofError) {
+          throw new AggregateError(
+            [prepareError, proofError],
+            "Gateway suspension failed and the managed Gateway could not be proven stopped",
+          );
+        }
+      }
+      if (gatewaySuspension.status === "busy") {
+        return {
+          schemaVersion: 1,
+          ok: true,
+          deferred: true,
+          reason: "gateway_active_work",
+          ...update,
+          buildBefore,
+          buildChangedPaths,
+          actions,
+          gatewaySuspension,
+        };
+      }
+      if (gatewaySuspension.status === "ready") {
+        // Use the existing built CLI directly. Source launchers may auto-build a
+        // stale dist before dispatching `gateway stop`, recreating the live-import race.
+        try {
+          runCommand(process.execPath, ["dist/index.js", "gateway", "stop"], update.checkout);
+        } catch (error) {
+          try {
+            resumeSuspension(update.checkout, gatewaySuspension.suspensionId);
+          } catch (resumeError) {
+            throw new AggregateError(
+              [error, resumeError],
+              "Gateway stop failed and the prepared maintenance suspension could not be resumed",
+            );
+          }
+          throw error;
+        }
+      }
+      if (actions.dependencyInstall) {
+        runCommand("pnpm", ["install", "--frozen-lockfile"], update.checkout);
+      }
+      if (actions.gatewayBuild) {
+        runBuildWithPreservedMacApp(runCommand, update.checkout, sleep);
+      }
       assertExactBuild(update.checkout, update.afterSha);
       const restartStartedAt = restartGateway(runCommand, update.checkout, update.afterSha);
       gatewayLogAudit = verifyAndAuditGateway({

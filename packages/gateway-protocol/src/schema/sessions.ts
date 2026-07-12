@@ -85,6 +85,7 @@ export const SessionFileEntrySchema = Type.Object(
     size: Type.Optional(Type.Integer({ minimum: 0 })),
     updatedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
     content: Type.Optional(Type.String()),
+    hash: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },
 );
@@ -148,6 +149,28 @@ export const SessionsFilesGetParamsSchema = Type.Object(
 
 /** Result for reading one session-referenced file. */
 export const SessionsFilesGetResultSchema = Type.Object(
+  {
+    sessionKey: NonEmptyString,
+    root: Type.Optional(NonEmptyString),
+    file: SessionFileEntrySchema,
+  },
+  { additionalProperties: false },
+);
+
+/** Overwrites one existing session workspace file with hash-based CAS. */
+export const SessionsFilesSetParamsSchema = Type.Object(
+  {
+    sessionKey: NonEmptyString,
+    path: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
+    content: Type.String(),
+    expectedHash: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+/** Result for overwriting one session workspace file. */
+export const SessionsFilesSetResultSchema = Type.Object(
   {
     sessionKey: NonEmptyString,
     root: Type.Optional(NonEmptyString),
@@ -710,3 +733,58 @@ export const SessionsUsageParamsSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+// Wire types derive directly from local schema consts so public d.ts graphs never
+// pull in the ProtocolSchemas registry.
+export type SessionsListParams = Static<typeof SessionsListParamsSchema>;
+export type SessionsCleanupParams = Static<typeof SessionsCleanupParamsSchema>;
+export type SessionsPreviewParams = Static<typeof SessionsPreviewParamsSchema>;
+export type SessionsDescribeParams = Static<typeof SessionsDescribeParamsSchema>;
+export type SessionsResolveParams = Static<typeof SessionsResolveParamsSchema>;
+export type SessionCompactionCheckpoint = Static<typeof SessionCompactionCheckpointSchema>;
+export type SessionOperationEvent = Static<typeof SessionOperationEventSchema>;
+export type SessionsCompactionListParams = Static<typeof SessionsCompactionListParamsSchema>;
+export type SessionsCompactionGetParams = Static<typeof SessionsCompactionGetParamsSchema>;
+export type SessionsCompactionBranchParams = Static<typeof SessionsCompactionBranchParamsSchema>;
+export type SessionsCompactionRestoreParams = Static<typeof SessionsCompactionRestoreParamsSchema>;
+export type SessionsCompactionListResult = Static<typeof SessionsCompactionListResultSchema>;
+export type SessionsCompactionGetResult = Static<typeof SessionsCompactionGetResultSchema>;
+export type SessionsCompactionBranchResult = Static<typeof SessionsCompactionBranchResultSchema>;
+export type SessionsCompactionRestoreResult = Static<typeof SessionsCompactionRestoreResultSchema>;
+export type SessionWorktreeInfo = Static<typeof SessionWorktreeInfoSchema>;
+export type SessionsCreateParams = Static<typeof SessionsCreateParamsSchema>;
+export type SessionsCreateResult = Static<typeof SessionsCreateResultSchema>;
+export type SessionsSendParams = Static<typeof SessionsSendParamsSchema>;
+export type SessionsMessagesSubscribeParams = Static<typeof SessionsMessagesSubscribeParamsSchema>;
+export type SessionsMessagesUnsubscribeParams = Static<
+  typeof SessionsMessagesUnsubscribeParamsSchema
+>;
+export type SessionsAbortParams = Static<typeof SessionsAbortParamsSchema>;
+export type SessionsPluginPatchParams = Static<typeof SessionsPluginPatchParamsSchema>;
+export type SessionsPluginPatchResult = Static<typeof SessionsPluginPatchResultSchema>;
+export type SessionsResetParams = Static<typeof SessionsResetParamsSchema>;
+export type SessionsDeleteParams = Static<typeof SessionsDeleteParamsSchema>;
+export type SessionGroup = Static<typeof SessionGroupSchema>;
+export type SessionsGroupsListParams = Static<typeof SessionsGroupsListParamsSchema>;
+export type SessionsGroupsListResult = Static<typeof SessionsGroupsListResultSchema>;
+export type SessionsGroupsPutParams = Static<typeof SessionsGroupsPutParamsSchema>;
+export type SessionsGroupsRenameParams = Static<typeof SessionsGroupsRenameParamsSchema>;
+export type SessionsGroupsDeleteParams = Static<typeof SessionsGroupsDeleteParamsSchema>;
+export type SessionsGroupsMutationResult = Static<typeof SessionsGroupsMutationResultSchema>;
+export type SessionsCompactParams = Static<typeof SessionsCompactParamsSchema>;
+export type SessionsUsageParams = Static<typeof SessionsUsageParamsSchema>;
+export type SessionFileKind = Static<typeof SessionFileKindSchema>;
+export type SessionFileRelevance = Static<typeof SessionFileRelevanceSchema>;
+export type SessionFileEntry = Static<typeof SessionFileEntrySchema>;
+export type SessionFileBrowserEntry = Static<typeof SessionFileBrowserEntrySchema>;
+export type SessionFileBrowserResult = Static<typeof SessionFileBrowserResultSchema>;
+export type SessionsFilesListParams = Static<typeof SessionsFilesListParamsSchema>;
+export type SessionsFilesListResult = Static<typeof SessionsFilesListResultSchema>;
+export type SessionsFilesGetParams = Static<typeof SessionsFilesGetParamsSchema>;
+export type SessionsFilesGetResult = Static<typeof SessionsFilesGetResultSchema>;
+export type SessionsFilesSetParams = Static<typeof SessionsFilesSetParamsSchema>;
+export type SessionsFilesSetResult = Static<typeof SessionsFilesSetResultSchema>;
+export type SessionDiffFileStatus = Static<typeof SessionDiffFileStatusSchema>;
+export type SessionDiffFile = Static<typeof SessionDiffFileSchema>;
+export type SessionsDiffParams = Static<typeof SessionsDiffParamsSchema>;
+export type SessionsDiffResult = Static<typeof SessionsDiffResultSchema>;

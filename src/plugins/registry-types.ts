@@ -32,6 +32,7 @@ import type { PluginManifestContracts } from "./manifest.js";
 import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import type { SessionCatalogProvider } from "./session-catalog.js";
 import type { PluginDependencyStatus } from "./status-dependencies-core.js";
 type ChannelPlugin = import("../channels/plugins/types.plugin.js").ChannelPlugin;
 type CliBackendPlugin = import("./types.js").CliBackendPlugin;
@@ -158,6 +159,14 @@ export type PluginModelCatalogProviderRegistration = {
   pluginId: string;
   pluginName?: string;
   provider: UnifiedModelCatalogProviderPlugin;
+  source: string;
+  rootDir?: string;
+};
+
+export type PluginSessionCatalogRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  provider: SessionCatalogProvider;
   source: string;
   rootDir?: string;
 };
@@ -456,6 +465,7 @@ export type PluginRegistry = {
   channelSetups: PluginChannelSetupRegistration[];
   providers: PluginProviderRegistration[];
   modelCatalogProviders: PluginModelCatalogProviderRegistration[];
+  sessionCatalogs: PluginSessionCatalogRegistration[];
   cliBackends: PluginCliBackendRegistration[];
   textTransforms: PluginTextTransformsRegistration[];
   embeddingProviders: PluginEmbeddingProviderRegistration[];

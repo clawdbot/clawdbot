@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it } from "vitest";
+import { resolveSlackApprovalKind } from "./approval-native-gates.js";
 import { slackApprovalCapability, testing } from "./approval-native.js";
 
 function buildConfig(
@@ -97,6 +98,26 @@ async function resolvePluginOriginTarget(sessionKey: string) {
 }
 
 describe("slack native approval adapter", () => {
+  it("derives approval ownership from payload shape instead of id spelling", () => {
+    expect(
+      resolveSlackApprovalKind({
+        ...createExecApprovalRequest(),
+        id: "plugin:misleading-exec-id",
+      }),
+    ).toBe("exec");
+    expect(
+      resolveSlackApprovalKind({
+        id: "opaque-plugin-id",
+        request: {
+          title: "Plugin approval",
+          description: "Allow access",
+        },
+        createdAtMs: 0,
+        expiresAtMs: 1000,
+      }),
+    ).toBe("plugin");
+  });
+
   it("subscribes the native runtime to exec and plugin approval events", () => {
     expect(slackApprovalCapability.nativeRuntime?.eventKinds).toEqual(["exec", "plugin"]);
   });
@@ -334,6 +355,7 @@ describe("slack native approval adapter", () => {
       slackApprovalCapability.nativeRuntime?.availability.shouldHandle({
         cfg,
         accountId: "default",
+        approvalKind: "plugin",
         request,
       }),
     ).toBe(true);
@@ -412,6 +434,7 @@ describe("slack native approval adapter", () => {
       slackApprovalCapability.nativeRuntime?.availability.shouldHandle({
         cfg,
         accountId: "default",
+        approvalKind: "plugin",
         request,
       }),
     ).toBe(true);
@@ -459,6 +482,7 @@ describe("slack native approval adapter", () => {
       slackApprovalCapability.nativeRuntime?.availability.shouldHandle({
         cfg,
         accountId: "default",
+        approvalKind: "plugin",
         request,
       }),
     ).toBe(true);
@@ -534,6 +558,7 @@ describe("slack native approval adapter", () => {
       slackApprovalCapability.nativeRuntime?.availability.shouldHandle({
         cfg,
         accountId: "work",
+        approvalKind: "plugin",
         request,
       }),
     ).toBe(false);
@@ -594,6 +619,7 @@ describe("slack native approval adapter", () => {
       slackApprovalCapability.nativeRuntime?.availability.shouldHandle({
         cfg,
         accountId: "work",
+        approvalKind: "plugin",
         request,
       }),
     ).toBe(true);
@@ -657,6 +683,7 @@ describe("slack native approval adapter", () => {
       slackApprovalCapability.nativeRuntime?.availability.shouldHandle({
         cfg,
         accountId: "work",
+        approvalKind: "plugin",
         request,
       }),
     ).toBe(true);
@@ -700,6 +727,7 @@ describe("slack native approval adapter", () => {
       slackApprovalCapability.nativeRuntime?.availability.shouldHandle({
         cfg,
         accountId: "default",
+        approvalKind: "plugin",
         request,
       }),
     ).toBe(false);
@@ -715,6 +743,7 @@ describe("slack native approval adapter", () => {
       slackApprovalCapability.nativeRuntime?.availability.shouldHandle({
         cfg,
         accountId: "work",
+        approvalKind: "plugin",
         request,
       }),
     ).toBe(true);

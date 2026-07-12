@@ -735,12 +735,25 @@ html.openclaw-native-nav .topbar .topbar-nav-toggle {
   flex-shrink: 0;
 }
 
+/* The brand block is the "home" affordance: clicking it returns to chat. */
 .sidebar-brand__identity {
   display: flex;
   align-items: center;
   gap: 7px;
   min-width: 0;
   flex: 1 1 auto;
+  color: inherit;
+  text-decoration: none;
+  border-radius: var(--radius-md);
+}
+
+.sidebar-brand__identity:hover .sidebar-brand__logo {
+  transform: scale(1.05);
+}
+
+.sidebar-brand__identity:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 
 /* Positioning box for the brand mark; the lobster pet's logo stand-in
@@ -845,6 +858,72 @@ html.openclaw-native-nav .topbar .topbar-nav-toggle {
 .sidebar-shell__footer {
   padding: 12px 0 0;
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+}
+
+/* Ambient health chips (failed cron, expiring model auth) above the footer bar. */
+.sidebar-attention {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 8px 10px;
+}
+
+.sidebar-attention__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-hover);
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sidebar-attention__item--warning {
+  border-color: var(--warning-subtle, rgba(234, 179, 8, 0.25));
+  background: rgba(234, 179, 8, 0.06);
+}
+
+.sidebar-attention__item--error {
+  border-color: var(--danger-subtle, rgba(239, 68, 68, 0.25));
+  background: rgba(239, 68, 68, 0.06);
+}
+
+.sidebar-attention__item:hover {
+  border-color: var(--border-strong);
+}
+
+.sidebar-attention__icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  color: var(--warn, #b7791f);
+}
+
+.sidebar-attention__item--error .sidebar-attention__icon {
+  color: var(--danger);
+}
+
+.sidebar-attention__icon svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sidebar-attention__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sidebar-update-card {
@@ -1150,6 +1229,30 @@ html.openclaw-native-nav .topbar .topbar-nav-toggle {
   font-variant-numeric: tabular-nums;
   opacity: 0.7;
   text-align: center;
+}
+
+.sidebar-session-catalog-load-more {
+  display: block;
+  width: calc(100% - 20px);
+  margin: 3px 10px 5px;
+  padding: 4px 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: left;
+}
+
+.sidebar-session-catalog-load-more:hover:not(:disabled),
+.sidebar-session-catalog-load-more:focus-visible {
+  background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
+  color: var(--text);
+}
+
+.sidebar-session-catalog-load-more:disabled {
+  cursor: wait;
+  opacity: 0.55;
 }
 
 .sidebar-session-group-drag-handle {

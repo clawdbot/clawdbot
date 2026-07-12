@@ -110,6 +110,34 @@ describe("goal tools", () => {
     ).toBeUndefined();
   });
 
+  it.each(["42.9", "1abc", 0])(
+    "rejects invalid token budgets before creating a goal: %s",
+    async (tokenBudget) => {
+      const { config, template } = await createStoreConfig();
+      const tool = createCreateGoalTool({
+        agentSessionKey: "global",
+        runSessionKey: "global",
+        sessionAgentId: "research",
+        config,
+      });
+
+      const storePath = resolveStorePath(template, { agentId: "research" });
+      await upsertSessionEntry({
+        storePath,
+        sessionKey: "global",
+        entry: { sessionId: "sess-global", updatedAt: 1 },
+      });
+      await expect(
+        tool.execute("call-invalid-budget", {
+          objective: "ship global work",
+          token_budget: tokenBudget,
+        }),
+      ).rejects.toThrow("token_budget must be a positive integer");
+
+      expect(getSessionEntry({ storePath, sessionKey: "global" })?.goal).toBeUndefined();
+    },
+  );
+
   it("prefers scoped run session keys over the fallback session agent", async () => {
     const { config, template } = await createStoreConfig();
     const tool = createCreateGoalTool({

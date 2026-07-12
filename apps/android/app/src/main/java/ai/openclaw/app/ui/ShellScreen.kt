@@ -18,6 +18,8 @@ import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.currentAppLanguage
 import ai.openclaw.app.node.CanvasController
 import ai.openclaw.app.ui.chat.ChatScreen
+import ai.openclaw.app.ui.design.AgentAvatarSource
+import ai.openclaw.app.ui.design.ClawAgentAvatar
 import ai.openclaw.app.ui.design.ClawBottomNav
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import ai.openclaw.app.ui.design.ClawEmptyState
@@ -31,6 +33,7 @@ import ai.openclaw.app.ui.design.ClawSecondaryButton
 import ai.openclaw.app.ui.design.ClawStatus
 import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.design.OpenClawMascot
+import ai.openclaw.app.ui.design.agentAvatarSource
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -407,7 +410,7 @@ private fun OverviewScreen(
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
   val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
   val isConnected = gatewayConnectionDisplay.isConnected
-  val models by viewModel.modelCatalog.collectAsState()
+  val models by viewModel.providerModelCatalog.collectAsState()
   val providers by viewModel.modelAuthProviders.collectAsState()
   val execApprovals by viewModel.execApprovals.collectAsState()
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
@@ -416,7 +419,9 @@ private fun OverviewScreen(
   val channelsSummary by viewModel.channelsSummary.collectAsState()
   val agents by viewModel.gatewayAgents.collectAsState()
   val defaultAgentId by viewModel.gatewayDefaultAgentId.collectAsState()
-  val readyProviderCount = providerRows(providers = providers, models = models).count { it.ready }
+  val providerRows = providerRows(providers = providers, models = models)
+  val readyProviderCount = providerRows.count { it.ready }
+  val unknownProviderCount = providerRows.count { it.availability == ProviderAvailability.Unknown }
   val pendingApprovalsCount = execApprovals.size + pendingToolCalls.size
   val attentionRows =
     homeAttentionRows(
@@ -425,6 +430,7 @@ private fun OverviewScreen(
       channelsSummary = channelsSummary,
       nodesDevicesSummary = nodesDevicesSummary,
       readyProviderCount = readyProviderCount,
+      unknownProviderCount = unknownProviderCount,
     )
   val secondaryAttentionRows =
     if (nodesDevicesSummary.hasNodeCapabilityApprovalPending()) {
@@ -436,6 +442,7 @@ private fun OverviewScreen(
   val headerRoute = overviewHeaderRoute(attentionRows)
   val activeAgentName = overviewAgentName(agents = agents, defaultAgentId = defaultAgentId)
   val activeAgentBadge = overviewAgentBadgeText(agents = agents, defaultAgentId = defaultAgentId)
+  val activeAgentAvatar = overviewAgentAvatar(agents = agents, defaultAgentId = defaultAgentId)
   val overviewSessions = overviewRecentSessions(sessions)
   val overviewSessionCount = overviewSessions.size
   val candidateRecentRows =
@@ -466,6 +473,7 @@ private fun OverviewScreen(
       viewModel.refreshChatSessions(limit = 20)
       viewModel.refreshAgents()
       viewModel.refreshModelCatalog()
+      viewModel.refreshProviderModels()
       viewModel.refreshCronJobs()
       viewModel.refreshNodesDevices()
       viewModel.refreshChannels()
@@ -495,6 +503,7 @@ private fun OverviewScreen(
           OverviewPrimaryPanel(
             agentName = activeAgentName,
             agentBadge = activeAgentBadge,
+            agentAvatarSource = activeAgentAvatar,
             statusText = gatewaySummary(gatewayConnectionDisplay),
             isConnected = gatewayConnectionDisplay.isConnected,
             pendingRunCount = pendingRunCount,
@@ -626,6 +635,7 @@ private fun OverviewStatusPill(
 private fun OverviewPrimaryPanel(
   agentName: String,
   agentBadge: String,
+  agentAvatarSource: AgentAvatarSource?,
   statusText: String,
   isConnected: Boolean,
   pendingRunCount: Int,
@@ -640,7 +650,7 @@ private fun OverviewPrimaryPanel(
     Column(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xs)) {
       Text(text = "ACTIVE AGENT", style = ClawTheme.type.caption.copy(fontSize = 12.sp, lineHeight = 15.sp), color = ClawTheme.colors.textMuted)
       Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-        OverviewAgentBadge(text = agentBadge, active = isConnected)
+        OverviewAgentBadge(text = agentBadge, active = isConnected, avatarSource = agentAvatarSource)
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
           Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
             Text(text = if (pendingRunCount > 0) "$agentName is working" else agentName, style = ClawTheme.type.title.copy(fontSize = 19.sp, lineHeight = 23.sp), color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
@@ -729,6 +739,7 @@ private fun OverviewLayeredPanel(
 private fun OverviewAgentBadge(
   text: String,
   active: Boolean,
+  avatarSource: AgentAvatarSource?,
 ) {
   Surface(
     modifier = Modifier.size(42.dp),
@@ -738,12 +749,14 @@ private fun OverviewAgentBadge(
     tonalElevation = if (active) 3.dp else 1.dp,
     shadowElevation = if (active) 5.dp else 1.dp,
   ) {
-    Box(contentAlignment = Alignment.Center) {
-      Text(
-        text = text,
-        style = ClawTheme.type.title.copy(fontSize = 16.sp, lineHeight = 20.sp),
-        maxLines = 1,
-      )
+    ClawAgentAvatar(source = avatarSource, size = 42.dp) {
+      Box(contentAlignment = Alignment.Center) {
+        Text(
+          text = text,
+          style = ClawTheme.type.title.copy(fontSize = 16.sp, lineHeight = 20.sp),
+          maxLines = 1,
+        )
+      }
     }
   }
 }
@@ -1106,6 +1119,11 @@ internal fun overviewAgentBadgeText(
   return agentInitials(source)
 }
 
+internal fun overviewAgentAvatar(
+  agents: List<GatewayAgentSummary>,
+  defaultAgentId: String?,
+): AgentAvatarSource? = overviewAgent(agents = agents, defaultAgentId = defaultAgentId)?.let(::agentAvatarSource)
+
 private fun overviewAgent(
   agents: List<GatewayAgentSummary>,
   defaultAgentId: String?,
@@ -1210,6 +1228,7 @@ internal fun homeAttentionRows(
   channelsSummary: GatewayChannelsSummary,
   nodesDevicesSummary: GatewayNodesDevicesSummary,
   readyProviderCount: Int,
+  unknownProviderCount: Int = 0,
 ): List<HomeAttentionRow> =
   listOfNotNull(
     if (!isConnected) {
@@ -1232,7 +1251,7 @@ internal fun homeAttentionRows(
     } else {
       null
     },
-    if (isConnected && readyProviderCount == 0) {
+    if (isConnected && readyProviderCount == 0 && unknownProviderCount == 0) {
       HomeAttentionRow("Providers", "No ready providers", Icons.Outlined.Inventory2, Tab.Settings, SettingsRoute.ProvidersModels)
     } else {
       null
@@ -1479,7 +1498,7 @@ private fun SettingsShellScreen(
   val displayName by viewModel.displayName.collectAsState()
   val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
   val isConnected = gatewayConnectionDisplay.isConnected
-  val models by viewModel.modelCatalog.collectAsState()
+  val models by viewModel.providerModelCatalog.collectAsState()
   val providers by viewModel.modelAuthProviders.collectAsState()
   val cameraEnabled by viewModel.cameraEnabled.collectAsState()
   val notificationForwardingEnabled by viewModel.notificationForwardingEnabled.collectAsState()
@@ -1495,13 +1514,16 @@ private fun SettingsShellScreen(
   val channelsSummary by viewModel.channelsSummary.collectAsState()
   val dreamingSummary by viewModel.dreamingSummary.collectAsState()
   val appearanceThemeMode by viewModel.appearanceThemeMode.collectAsState()
-  val readyProviderCount = providerRows(providers = providers, models = models).count { it.ready }
+  val providerRows = providerRows(providers = providers, models = models)
+  val readyProviderCount = providerRows.count { it.ready }
+  val unknownProviderCount = providerRows.count { it.availability == ProviderAvailability.Unknown }
   val pendingApprovalsCount = execApprovals.size + pendingToolCalls.size
 
   LaunchedEffect(isConnected) {
     if (isConnected) {
       viewModel.refreshAgents()
       viewModel.refreshModelCatalog()
+      viewModel.refreshProviderModels()
       viewModel.refreshCronJobs()
       viewModel.refreshUsage()
       viewModel.refreshSkills()
@@ -1565,9 +1587,19 @@ private fun SettingsShellScreen(
           SettingsRow("Agents", if (agents.isEmpty()) "Load from gateway" else "${agents.size} available", Icons.Default.Person, status = agents.isNotEmpty(), route = SettingsRoute.Agents),
           SettingsRow(
             "Providers & Models",
-            if (readyProviderCount > 0) "$readyProviderCount ready" else "Review readiness",
+            when {
+              readyProviderCount > 0 -> "$readyProviderCount ready"
+              unknownProviderCount > 0 -> "Availability unknown"
+              else -> "Review readiness"
+            },
             Icons.Outlined.Inventory2,
-            status = if (isConnected) readyProviderCount > 0 else false,
+            status =
+              when {
+                !isConnected -> false
+                readyProviderCount > 0 -> true
+                unknownProviderCount > 0 -> null
+                else -> false
+              },
             route = SettingsRoute.ProvidersModels,
           ),
           SettingsRow("Approvals", approvalsSummary(pendingApprovalsCount), Icons.Default.Lock, status = approvalsStatus(pendingApprovalsCount), route = SettingsRoute.Approvals),

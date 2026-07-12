@@ -5,12 +5,12 @@ import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/
 import { normalizeBasePath } from "../app-route-paths.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import { t } from "../i18n/index.ts";
-import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import {
   resolveAuthHintKind,
   resolvePairingHint,
   shouldShowInsecureContextHint,
-} from "../lib/overview-hints.ts";
+} from "../lib/connection-hints.ts";
+import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { renderConnectCommand } from "./connect-command.ts";
@@ -313,7 +313,7 @@ function renderLoginGate(props: LoginGateProps) {
         </div>
         <div class="login-gate__form">
           <label class="field">
-            <span>${t("overview.access.wsUrl")}</span>
+            <span>${t("connection.access.wsUrl")}</span>
             <input
               inputmode="url"
               autocapitalize="none"
@@ -334,7 +334,7 @@ function renderLoginGate(props: LoginGateProps) {
             />
           </label>
           <label class="field">
-            <span>${t("overview.access.token")}</span>
+            <span>${t("connection.access.token")}</span>
             <div class="login-gate__secret-row">
               <input
                 type=${props.showGatewayToken ? "text" : "password"}
@@ -368,7 +368,7 @@ function renderLoginGate(props: LoginGateProps) {
             </div>
           </label>
           <label class="field">
-            <span>${t("overview.access.password")}</span>
+            <span>${t("connection.access.password")}</span>
             <div class="login-gate__secret-row">
               <input
                 type=${props.showGatewayPassword ? "text" : "password"}
@@ -409,13 +409,11 @@ function renderLoginGate(props: LoginGateProps) {
         </div>
         ${failure ? renderLoginFailure(failure) : ""}
         <details class="login-gate__help">
-          <summary class="login-gate__help-title">${t("overview.connection.title")}</summary>
+          <summary class="login-gate__help-title">${t("connection.help.title")}</summary>
           <ol class="login-gate__steps">
-            <li>
-              ${t("overview.connection.step1")}${renderConnectCommand("openclaw gateway run")}
-            </li>
-            <li>${t("overview.connection.step2")} ${renderConnectCommand("openclaw dashboard")}</li>
-            <li>${t("overview.connection.step3")}</li>
+            <li>${t("connection.help.step1")}${renderConnectCommand("openclaw gateway run")}</li>
+            <li>${t("connection.help.step2")} ${renderConnectCommand("openclaw dashboard")}</li>
+            <li>${t("connection.help.step3")}</li>
           </ol>
           <div class="login-gate__docs">
             <a
@@ -423,7 +421,7 @@ function renderLoginGate(props: LoginGateProps) {
               href="https://docs.openclaw.ai/web/dashboard"
               target="_blank"
               rel="noreferrer"
-              >${t("overview.connection.docsLink")}</a
+              >${t("connection.help.docsLink")}</a
             >
           </div>
         </details>

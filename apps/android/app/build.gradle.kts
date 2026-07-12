@@ -330,6 +330,8 @@ dependencies {
   implementation(libs.androidx.exifinterface)
   implementation(libs.okhttp)
   implementation(libs.bcprov)
+  implementation(libs.coil.compose)
+  implementation(libs.coil.svg)
   implementation(libs.commonmark)
   implementation(libs.commonmark.ext.autolink)
   implementation(libs.commonmark.ext.gfm.strikethrough)

@@ -98,7 +98,9 @@ describe("i18n", () => {
   });
 
   it("should replace parameters correctly", () => {
-    expect(translate.t("overview.stats.cronNext", { time: "10:00" })).toBe("Next wake 10:00");
+    expect(translate.t("connection.help.copyCommandAria", { command: "openclaw dashboard" })).toBe(
+      "Copy command: openclaw dashboard",
+    );
   });
 
   it("should fallback to English if key is missing in another locale", async () => {

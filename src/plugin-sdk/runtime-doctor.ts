@@ -9,6 +9,7 @@ export {
   normalizeLegacyChannelAliases,
   normalizeLegacyDmAliases,
   normalizeLegacyStreamingAliases,
+  resolveLegacyAliasStreamingMode,
 } from "../config/channel-compat-normalization.js";
 export type {
   CompatMutationResult,

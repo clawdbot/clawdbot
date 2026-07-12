@@ -11,6 +11,8 @@ import ai.openclaw.app.chat.normalizeVisibleChatMessageRole
 import ai.openclaw.app.tools.ToolDisplayRegistry
 import ai.openclaw.app.ui.MobileColorsAccessor
 import ai.openclaw.app.ui.design.ClawTheme
+import ai.openclaw.app.ui.image.RemoteImageResult
+import ai.openclaw.app.ui.image.safeRemoteImageStore
 import ai.openclaw.app.ui.mobileAccent
 import ai.openclaw.app.ui.mobileAccentSoft
 import ai.openclaw.app.ui.mobileBorder
@@ -295,9 +297,9 @@ private fun ChatLinkPreview(
   var previewImage by remember(messageId, url, imageUrl) { mutableStateOf<ImageBitmap?>(null) }
   LaunchedEffect(imageUrl) {
     previewImage =
-      when (val image = imageUrl?.let { chatLinkPreviewImageStore.get(it) }) {
-        is LinkPreviewImageResult.Loaded -> image.bitmap.asImageBitmap()
-        LinkPreviewImageResult.Failed, null -> null
+      when (val image = imageUrl?.let { safeRemoteImageStore.get(it) }) {
+        is RemoteImageResult.Raster -> image.bitmap.asImageBitmap()
+        is RemoteImageResult.Svg, RemoteImageResult.Failed, null -> null
       }
   }
   val uriHandler = LocalUriHandler.current

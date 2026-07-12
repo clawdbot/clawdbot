@@ -74,6 +74,7 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
         "--resume",
         "{sessionId}",
       ],
+      forkArg: "--fork-session",
       output: "jsonl",
       liveSession: "claude-stdio",
       input: "stdin",

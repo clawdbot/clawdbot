@@ -1512,6 +1512,32 @@ export async function rollbackAgentHarnessSessionEntryLifecycle(
   return await deleteSessionEntryLifecycleInternal(params, true);
 }
 
+/** Rolls back the exact locked CLI row created by a failed plugin initializer. */
+export async function rollbackPluginOwnedSessionEntryLifecycle(
+  params: DeleteSessionEntryLifecycleParams & {
+    expectedEntry: SessionEntry;
+    expectedPluginOwnerId: string;
+  },
+): Promise<DeleteSessionEntryLifecycleResult> {
+  const hasExactTarget =
+    params.target.storeKeys.length === 1 &&
+    params.target.storeKeys[0] === params.target.canonicalKey;
+  const expectedEntry = params.expectedEntry;
+  const validPluginOwner = normalizeOptionalString(expectedEntry.pluginOwnerId);
+  const expectedPluginOwner = normalizeOptionalString(params.expectedPluginOwnerId);
+  if (
+    !hasExactTarget ||
+    isAgentHarnessSessionKey(params.target.canonicalKey) ||
+    expectedEntry.agentHarnessId !== undefined ||
+    expectedEntry.modelSelectionLocked !== true ||
+    !validPluginOwner ||
+    validPluginOwner !== expectedPluginOwner
+  ) {
+    throw new Error(MODEL_SELECTION_LOCK_REMOVAL_MESSAGE);
+  }
+  return await deleteSessionEntryLifecycleInternal(params, true);
+}
+
 function shouldRemoveSessionEntry(
   entry: SessionEntry | undefined,
   removal: SessionEntryLifecycleRemoval,

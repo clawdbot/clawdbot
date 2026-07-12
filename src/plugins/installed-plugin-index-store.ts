@@ -88,6 +88,11 @@ const InstalledPluginIndexRecordSchema = z.object({
   installRecordHash: z.string().optional(),
   packageInstall: z.unknown().optional(),
   packageChannel: z.unknown().optional(),
+  packageBuild: z
+    .object({
+      bundledDist: z.boolean().optional(),
+    })
+    .optional(),
   manifestPath: z.string(),
   manifestHash: z.string(),
   manifestFile: InstalledPluginFileSignatureSchema.optional(),

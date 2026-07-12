@@ -681,16 +681,6 @@ describe("iMessage monitor last-route updates", () => {
 
   it.each([
     {
-      label: "flat true",
-      imessagePatch: { blockStreaming: true },
-      expectedDisable: false,
-    },
-    {
-      label: "flat false",
-      imessagePatch: { blockStreaming: false },
-      expectedDisable: true,
-    },
-    {
       label: "nested true",
       imessagePatch: { streaming: { block: { enabled: true } } },
       expectedDisable: false,
@@ -769,20 +759,20 @@ describe("iMessage monitor last-route updates", () => {
 
   it.each([
     {
-      label: "flat false overrides channel nested true",
+      label: "account nested false overrides channel nested true",
       channelBlockEnabled: true,
-      accountBlockStreaming: false,
+      accountBlockEnabled: false,
       expectedDisable: true,
     },
     {
-      label: "flat true overrides channel nested false",
+      label: "account nested true overrides channel nested false",
       channelBlockEnabled: false,
-      accountBlockStreaming: true,
+      accountBlockEnabled: true,
       expectedDisable: false,
     },
   ] as const)(
     "preserves account-level block streaming opt-outs when inheriting channel streaming ($label)",
-    async ({ channelBlockEnabled, accountBlockStreaming, expectedDisable }) => {
+    async ({ channelBlockEnabled, accountBlockEnabled, expectedDisable }) => {
       dispatchInboundMessageMock.mockImplementationOnce(async (params) => {
         expect(params.replyOptions?.disableBlockStreaming).toBe(expectedDisable);
         return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } } as const;
@@ -835,7 +825,7 @@ describe("iMessage monitor last-route updates", () => {
               streaming: { block: { enabled: channelBlockEnabled } },
               accounts: {
                 personal: {
-                  blockStreaming: accountBlockStreaming,
+                  streaming: { block: { enabled: accountBlockEnabled } },
                 },
               },
             },

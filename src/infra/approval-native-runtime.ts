@@ -13,7 +13,7 @@ import type {
   ChannelNativeApprovalTransportSpec,
   PreparedChannelNativeApprovalTarget,
 } from "./approval-native-runtime-types.js";
-import type { ChannelApprovalKind } from "./approval-types.js";
+import { resolveApprovalRequestKind, type ChannelApprovalKind } from "./approval-types.js";
 import {
   createExecApprovalChannelRuntime,
   type ExecApprovalChannelRuntime,
@@ -140,10 +140,6 @@ export async function deliverApprovalRequestViaChannelNativePlan<
   };
 }
 
-function defaultResolveApprovalKind(request: ApprovalRequest): ChannelApprovalKind {
-  return request.id.startsWith("plugin:") ? "plugin" : "exec";
-}
-
 type ChannelNativeApprovalRuntimeAdapter<
   TPendingEntry,
   TPreparedTarget,
@@ -165,6 +161,7 @@ type ChannelNativeApprovalRuntimeAdapter<
     channelLabel?: string;
     accountId?: string | null;
     nativeAdapter?: ChannelApprovalNativeAdapter | null;
+    /** @deprecated Trusted compatibility override; omit to derive ownership from the payload. */
     resolveApprovalKind?: (request: TRequest) => ChannelApprovalKind;
     buildPendingContent: (params: {
       request: TRequest;
@@ -192,7 +189,8 @@ export function createChannelNativeApprovalRuntime<
 ): ExecApprovalChannelRuntime<TRequest, TResolved> {
   const nowMs = adapter.nowMs ?? Date.now;
   const resolveApprovalKind =
-    adapter.resolveApprovalKind ?? ((request: TRequest) => defaultResolveApprovalKind(request));
+    adapter.resolveApprovalKind ??
+    ((request: TRequest): ChannelApprovalKind => resolveApprovalRequestKind(request));
   const handledEventKinds = new Set<ExecApprovalChannelRuntimeEventKind>(
     adapter.eventKinds ?? ["exec"],
   );

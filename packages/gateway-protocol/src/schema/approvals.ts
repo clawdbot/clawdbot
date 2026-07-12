@@ -1,33 +1,10 @@
+import type { Static } from "typebox";
 // Gateway Protocol schema module defines durable cross-surface approval shapes.
 import { Type } from "typebox";
-import type { Static } from "typebox";
+import { APPROVAL_ID_WELL_FORMED_UNICODE_PATTERN } from "./approval-id.js";
 import { NonEmptyString } from "./primitives.js";
 
-const APPROVAL_ID_WELL_FORMED_UNICODE_PATTERN =
-  "^(?!\\.{1,2}$)(?:[^\\uD800-\\uDFFF]|[\\uD800-\\uDBFF][\\uDC00-\\uDFFF])+$";
-
-/** Whether an approval id is non-empty, path-stable, and contains no unpaired UTF-16 surrogate. */
-export function isWellFormedApprovalId(value: string): boolean {
-  if (value.length === 0 || value === "." || value === "..") {
-    return false;
-  }
-  for (let index = 0; index < value.length; index += 1) {
-    const codeUnit = value.charCodeAt(index);
-    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
-      if (index + 1 >= value.length) {
-        return false;
-      }
-      const next = value.charCodeAt(index + 1);
-      if (next < 0xdc00 || next > 0xdfff) {
-        return false;
-      }
-      index += 1;
-    } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
-      return false;
-    }
-  }
-  return true;
-}
+export { isWellFormedApprovalId } from "./approval-id.js";
 
 const ApprovalIdSchema = Type.String({
   minLength: 1,
@@ -227,8 +204,8 @@ export const ApprovalResolveResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
-// These types are plugin-SDK-reachable through approval presentation. Export
-// them from the owner module so public declarations do not retain ProtocolSchemas.
+// Owner-local wire types derived directly from local schema consts so the
+// public plugin-sdk declaration graph never pulls in the ProtocolSchemas registry.
 export type ApprovalKind = Static<typeof ApprovalKindSchema>;
 export type ApprovalDecision = Static<typeof ApprovalDecisionSchema>;
 export type ApprovalAllowDecision = Static<typeof ApprovalAllowDecisionSchema>;
@@ -238,13 +215,13 @@ export type ExecApprovalPresentation = Static<typeof ExecApprovalPresentationSch
 export type PluginApprovalPresentation = Static<typeof PluginApprovalPresentationSchema>;
 export type ApprovalPresentation = Static<typeof ApprovalPresentationSchema>;
 export type PendingApprovalSnapshot = Static<typeof PendingApprovalSnapshotSchema>;
-export type AllowedApprovalSnapshot = Static<typeof AllowedApprovalSnapshotSchema>;
-export type DeniedApprovalSnapshot = Static<typeof DeniedApprovalSnapshotSchema>;
-export type ExpiredApprovalSnapshot = Static<typeof ExpiredApprovalSnapshotSchema>;
-export type CancelledApprovalSnapshot = Static<typeof CancelledApprovalSnapshotSchema>;
 export type ApprovalSnapshot = Static<typeof ApprovalSnapshotSchema>;
-export type TerminalApprovalSnapshot = Static<typeof TerminalApprovalSnapshotSchema>;
 export type ApprovalGetParams = Static<typeof ApprovalGetParamsSchema>;
 export type ApprovalGetResult = Static<typeof ApprovalGetResultSchema>;
 export type ApprovalResolveParams = Static<typeof ApprovalResolveParamsSchema>;
 export type ApprovalResolveResult = Static<typeof ApprovalResolveResultSchema>;
+export type AllowedApprovalSnapshot = Static<typeof AllowedApprovalSnapshotSchema>;
+export type DeniedApprovalSnapshot = Static<typeof DeniedApprovalSnapshotSchema>;
+export type ExpiredApprovalSnapshot = Static<typeof ExpiredApprovalSnapshotSchema>;
+export type CancelledApprovalSnapshot = Static<typeof CancelledApprovalSnapshotSchema>;
+export type TerminalApprovalSnapshot = Static<typeof TerminalApprovalSnapshotSchema>;

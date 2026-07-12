@@ -348,7 +348,7 @@ function renderGeneralCard(props: QuickSettingsProps) {
       ${renderCardHeader(icons.globe, t("nav.settingsGeneral"))}
       <div class="qs-card__body">
         <label class="qs-row">
-          <span class="qs-row__label">${t("overview.access.language")}</span>
+          <span class="qs-row__label">${t("quickSettings.language")}</span>
           <select
             class="cfg-select qs-select"
             .value=${props.locale}

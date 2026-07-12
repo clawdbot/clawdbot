@@ -1,4 +1,5 @@
 // Gateway Protocol schema module defines ephemeral follow-up task suggestions.
+import type { Static } from "typebox";
 import { Type } from "typebox";
 
 const TaskIdSchema = Type.String({ minLength: 1, maxLength: 128 });
@@ -102,3 +103,17 @@ export const TaskSuggestionEventSchema = Type.Union([
     { additionalProperties: false },
   ),
 ]);
+
+// Wire types derive directly from local schema consts so public d.ts graphs never
+// pull in the ProtocolSchemas registry.
+export type TaskSuggestion = Static<typeof TaskSuggestionSchema>;
+export type TaskSuggestionEvent = Static<typeof TaskSuggestionEventSchema>;
+export type TaskSuggestionResolution = Static<typeof TaskSuggestionResolutionSchema>;
+export type TaskSuggestionsAcceptParams = Static<typeof TaskSuggestionsAcceptParamsSchema>;
+export type TaskSuggestionsAcceptResult = Static<typeof TaskSuggestionsAcceptResultSchema>;
+export type TaskSuggestionsCreateParams = Static<typeof TaskSuggestionsCreateParamsSchema>;
+export type TaskSuggestionsCreateResult = Static<typeof TaskSuggestionsCreateResultSchema>;
+export type TaskSuggestionsDismissParams = Static<typeof TaskSuggestionsDismissParamsSchema>;
+export type TaskSuggestionsDismissResult = Static<typeof TaskSuggestionsDismissResultSchema>;
+export type TaskSuggestionsListParams = Static<typeof TaskSuggestionsListParamsSchema>;
+export type TaskSuggestionsListResult = Static<typeof TaskSuggestionsListResultSchema>;

@@ -72,6 +72,8 @@ Environment keys use letters, digits, and underscores and cannot start with a di
 | `--port <number>`         | Automatically allocated from `19100`  | Loopback host port. An explicitly selected port must not belong to another registered cell.    |
 | `--memory <value>`        | `2g`                                  | Container memory limit in Docker/Podman syntax.                                                |
 | `--cpus <value>`          | `2`                                   | Container CPU limit.                                                                           |
+| `--disk <size>`           | None                                  | Cap the container writable layer when the storage backend supports quotas.                     |
+| `--network <mode>`        | `bridge`                              | Outbound network mode: `bridge` or `internal`.                                                 |
 | `--pids-limit <number>`   | `512`                                 | Maximum number of processes in the container.                                                  |
 | `--env <KEY=VALUE>`       | None                                  | Pass an environment variable to the cell. Repeat for multiple values.                          |
 | `--gateway-token <value>` | Random 32-character hexadecimal token | Use a supplied Gateway token instead of generating one. See [Token handling](#token-handling). |
@@ -85,6 +87,26 @@ Image references are passed as one container-runtime argument. Empty references 
 The selected Docker or Podman endpoint must be local. Fleet rejects remote Docker contexts, `DOCKER_HOST` endpoints, and remote Podman services before reserving a port or creating local state; remote cell hosts need a separate storage and endpoint contract and are deferred from this MVP.
 
 The create result includes the tenant ID, container name, host port, Gateway token, and local URL. Even in JSON output, treat the result as secret-bearing because it contains the token.
+
+### Disk limits
+
+`--disk` limits only the container writable layer. The bind-mounted per-tenant state and auth directories remain host storage; use host filesystem project quotas when those directories also need a hard limit.
+
+| Runtime/storage backend | `--disk` support                                                             |
+| ----------------------- | ---------------------------------------------------------------------------- |
+| Docker overlay2 on XFS  | Requires the XFS `pquota` mount option.                                      |
+| Docker btrfs or zfs     | Supported by the storage driver.                                             |
+| Podman overlay          | Requires XFS backing storage.                                                |
+| Other backends          | Container creation fails with the daemon error and Fleet's backend guidance. |
+
+### Egress policy
+
+| Mode       | Docker                                                                                                | Podman                                                                              |
+| ---------- | ----------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `bridge`   | Supported; outbound egress is unrestricted by default.                                                | Supported; outbound egress is unrestricted by default.                              |
+| `internal` | Rejected because Docker does not preserve the published loopback Gateway port on an internal network. | Supported; the loopback Gateway remains published while outbound egress is blocked. |
+
+For Docker, keep the bridge mode and enforce outbound policy with host firewall rules such as the `DOCKER-USER` chain.
 
 ## `fleet list`
 
@@ -136,7 +158,7 @@ openclaw fleet logs acme --tail 200
 openclaw fleet logs acme --since 10m
 ```
 
-Fleet verifies the registered container's ownership labels before reading any logs, so it refuses a foreign container using the expected cell name. Press Ctrl-C to end `--follow` without treating the operator stop as a command failure.
+Fleet verifies the registered container's ownership labels before reading any logs, so it refuses a foreign container using the expected cell name. Press Ctrl-C to end `--follow` without treating the operator stop as a command failure. Log output is piped through a redaction filter that replaces the cell's current Gateway token with `<redacted>` before anything reaches the terminal.
 
 `fleet logs` has no `--json` mode because container logs are a raw stdout/stderr stream. For scripts, bound the output with `--tail` and use ordinary shell redirection or pipelines.
 
@@ -171,6 +193,38 @@ Upgrade pulls the target image, inspects the existing container and per-cell net
 The replacement is committed only after its Gateway answers `/healthz` on the cell's loopback port, matching the health contract the official compose file uses. A replacement that exits, crash-loops, or fails to become healthy within about a minute is removed and the previous container is restored, so a broken image does not take down a working cell.
 
 The Gateway token is intentionally not stored in the fleet registry. Before removing the old container, Fleet reads its environment and carries `OPENCLAW_GATEWAY_TOKEN` into the replacement. Do not manually remove the old container before an upgrade if the token exists nowhere else you control.
+
+## `fleet backup` and `fleet restore`
+
+Back up one stopped cell:
+
+```bash
+openclaw fleet stop acme
+openclaw fleet backup acme --out ./acme.tgz
+```
+
+Restore that archive into the registered cell:
+
+```bash
+openclaw fleet restore acme --from ./acme.tgz
+```
+
+These are host-operator-privileged commands. Archives contain tenant state and auth secrets, are created with mode `0600`, and must be stored like credentials. Backup refuses a running cell so SQLite state is captured consistently. Restore refuses a running cell unless `--force` is supplied, replaces only that tenant's state, rotates the Gateway token, and prints the new token once. Fleet backs up one tenant at a time; all-tenant backup is a separate operator action.
+
+Both commands accept `--max-bytes <bytes>` to bound archived or extracted file data, and both apply the same fixed one-million budget of archive path segments so metadata-only archive bombs cannot exhaust host inodes and every accepted backup stays restorable. Backup accepts `--out <path>` and both commands support `--json`.
+
+Archives contain regular files and directories only. Backup never follows or stores symlinks, hard links, sockets, or device nodes; skipped counts are reported in the result. Restore rejects archives containing any other entry type. Recreatable symlink trees such as workspace `node_modules` must be reinstalled inside the cell after a restore.
+
+## `fleet doctor`
+
+Audit every cell or one tenant without changing runtime or filesystem state:
+
+```bash
+openclaw fleet doctor
+openclaw fleet doctor acme --json
+```
+
+Doctor checks runtime locality, ownership labels, health, hardening, resource limits, loopback port binding, token presence, network ownership and egress mode, and private state-directory permissions. Warnings describe stopped cells or ownership differences; any failed finding sets a nonzero process exit code.
 
 ## `fleet rm`
 
@@ -228,20 +282,21 @@ On SELinux hosts, Docker and Podman mounts receive a private `:Z` relabel. If yo
 
 Fleet applies the following profile to every cell:
 
-| Control              | Applied profile                                      | Why                                                                                     |
-| -------------------- | ---------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| Linux capabilities   | `--cap-drop=ALL`                                     | The Gateway is a Node.js process and needs no added Linux capabilities.                 |
-| Privilege escalation | `--security-opt no-new-privileges`                   | Prevents processes from gaining privileges through setuid or setgid binaries.           |
-| Init process         | `--init`                                             | Reaps descendant processes and forwards container lifecycle signals.                    |
-| Process limit        | `--pids-limit 512` by default                        | Bounds fork and process exhaustion.                                                     |
-| Memory limit         | `--memory 2g` by default                             | Bounds cell memory use.                                                                 |
-| CPU limit            | `--cpus 2` by default                                | Bounds cell CPU use.                                                                    |
-| Restart policy       | `--restart unless-stopped`                           | Restarts a failed cell without overriding an intentional stop.                          |
-| Host publishing      | `127.0.0.1:<host-port>:18789` only                   | Keeps the Gateway off wildcard host interfaces.                                         |
-| Cell network         | One user-defined bridge per cell                     | Prevents direct container-IP traffic between cells while retaining outbound NAT access. |
-| Container identity   | Host-matched user mapping                            | Keeps private bind mounts writable without granting world access.                       |
-| Persistent state     | Per-cell mounts; no shared state mount               | Keeps tenant config, credentials, sessions, and workspaces in that tenant's data tree.  |
-| Container command    | `node dist/index.js gateway --bind lan --port 18789` | Listens on the container network so the loopback-only host port mapping can reach it.   |
+| Control              | Applied profile                                      | Why                                                                                    |
+| -------------------- | ---------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| Linux capabilities   | `--cap-drop=ALL`                                     | The Gateway is a Node.js process and needs no added Linux capabilities.                |
+| Privilege escalation | `--security-opt no-new-privileges`                   | Prevents processes from gaining privileges through setuid or setgid binaries.          |
+| Init process         | `--init`                                             | Reaps descendant processes and forwards container lifecycle signals.                   |
+| Process limit        | `--pids-limit 512` by default                        | Bounds fork and process exhaustion.                                                    |
+| Memory limit         | `--memory 2g` by default                             | Bounds cell memory use.                                                                |
+| CPU limit            | `--cpus 2` by default                                | Bounds cell CPU use.                                                                   |
+| Writable-layer disk  | Optional `--disk`                                    | Bounds the container layer when the runtime storage backend supports quotas.           |
+| Restart policy       | `--restart unless-stopped`                           | Restarts a failed cell without overriding an intentional stop.                         |
+| Host publishing      | `127.0.0.1:<host-port>:18789` only                   | Keeps the Gateway off wildcard host interfaces.                                        |
+| Cell network         | One bridge or Podman internal network per cell       | Separates container-IP traffic and optionally blocks Podman outbound egress.           |
+| Container identity   | Host-matched user mapping                            | Keeps private bind mounts writable without granting world access.                      |
+| Persistent state     | Per-cell mounts; no shared state mount               | Keeps tenant config, credentials, sessions, and workspaces in that tenant's data tree. |
+| Container command    | `node dist/index.js gateway --bind lan --port 18789` | Listens on the container network so the loopback-only host port mapping can reach it.  |
 
 Fleet never mounts `/var/run/docker.sock`, uses `--privileged` or host networking, or adds capabilities. The per-cell bridge is a cross-cell separation boundary, not an outbound firewall: cells retain the network egress needed for providers and channels. Front the loopback port with a proxy, SSH tunnel, or tailnet configuration that matches your deployment. `http://127.0.0.1:<port>` is directly reachable only from the Fleet host.
 

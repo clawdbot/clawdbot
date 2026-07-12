@@ -2,12 +2,15 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { GatewayClient } from "../gateway/client.js";
 import { saveExecApprovals, type ExecApprovalsSnapshot } from "../infra/exec-approvals.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { SkillBinsProvider } from "./invoke-types.js";
 import { handleInvoke } from "./invoke.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const approvalResolutionFailure = vi.hoisted(() => ({ error: null as Error | null }));
 type ExecApprovalsUpdate = Parameters<
@@ -397,6 +400,43 @@ describe("node host invoke", () => {
       expect(payload.allowAlwaysCoverage?.patterns?.[0]?.pattern).toBe(
         fs.realpathSync("/bin/echo"),
       );
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "resolves node skill cwd locators before preparing system.run",
+    async () => {
+      const stateDir = fs.realpathSync(tempDirs.make("openclaw-node-skill-cwd-"));
+      const skillDir = path.join(stateDir, "skills", "cwd-skill");
+      fs.mkdirSync(skillDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(skillDir, "SKILL.md"),
+        "---\nname: cwd-skill\ndescription: Cwd skill\n---\n",
+      );
+
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
+        const skillBins: SkillBinsProvider = { current: async () => [] };
+        await handleInvoke(
+          {
+            id: "invoke-skill-cwd",
+            nodeId: "node-1",
+            command: "system.run.prepare",
+            paramsJSON: JSON.stringify({
+              command: ["/bin/pwd"],
+              cwd: "node://node-1/skills/cwd-skill",
+            }),
+          },
+          { request } as unknown as GatewayClient,
+          skillBins,
+        );
+
+        const result = request.mock.calls[0]?.[1] as { payloadJSON?: string } | undefined;
+        const payload = JSON.parse(result?.payloadJSON ?? "{}") as {
+          plan?: { cwd?: string };
+        };
+        expect(payload.plan?.cwd).toBe(fs.realpathSync(skillDir));
+      });
     },
   );
 

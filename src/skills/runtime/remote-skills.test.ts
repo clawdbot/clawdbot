@@ -65,10 +65,18 @@ describe("node-hosted skill snapshots", () => {
     const snapshot = buildWorkspaceSkillSnapshot("/workspace", { entries });
     expect(snapshot.skills.map((skill) => skill.name)).toEqual(["release-helper"]);
     expect(snapshot.prompt).toContain("Build Mac (node-1)");
+    expect(snapshot.prompt).toContain(
+      "Read this SKILL.md with the normal read tool at its exact node:// location",
+    );
+    expect(snapshot.prompt).toContain("do not use file_fetch");
+    expect(snapshot.prompt).toContain("to run cat SKILL.md");
     expect(snapshot.prompt).toContain("exec host=node node=node-1");
-    expect(snapshot.prompt).toContain("skills/release-helper/ in its OpenClaw state dir");
-    expect(snapshot.prompt).toContain("relative paths resolve on the node");
+    expect(snapshot.prompt).toContain("workdir=node://node-1/skills/release-helper");
+    expect(snapshot.prompt).toContain("node host resolves that locator");
     expect(snapshot.prompt).toContain("node://node-1/skills/release-helper/SKILL.md");
+    expect(snapshot.resolvedSkills?.[0]?.readContent).toBe(
+      content("release-helper", "Prepare a release"),
+    );
     expect(getSkillsSnapshotVersion()).toBeGreaterThan(before);
 
     const connectedVersion = getSkillsSnapshotVersion();

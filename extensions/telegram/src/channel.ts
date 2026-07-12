@@ -692,6 +692,7 @@ async function resolveTelegramTargets(params: {
           proxyUrl: account.config.proxy,
           apiRoot: account.config.apiRoot,
           network: account.config.network,
+          timeoutSeconds: account.config.timeoutSeconds,
         });
         if (!id) {
           return {

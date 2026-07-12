@@ -1,5 +1,9 @@
 // Discord tests cover shared interactive plugin behavior.
+import { buildApprovalResolutionRef } from "openclaw/plugin-sdk/approval-reference-runtime";
 import { describe, expect, it } from "vitest";
+import { parseExecApprovalData } from "./approval-custom-id.js";
+import { buildDiscordComponentMessage } from "./components.js";
+import { parseCustomId } from "./internal/discord.js";
 import {
   buildDiscordInteractiveComponents,
   buildDiscordPresentationComponents,
@@ -84,6 +88,201 @@ describe("buildDiscordInteractiveComponents", () => {
         {
           type: "actions",
           buttons: [{ label: "Docs", style: "link", url: "https://example.com/docs" }],
+        },
+      ],
+    });
+  });
+
+  it.each(["url", "web-app"] as const)(
+    "renders typed %s actions as Discord link buttons",
+    (type) => {
+      expect(
+        buildDiscordPresentationComponents({
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "Review",
+                  action: { type, url: "https://example.com/review" },
+                },
+              ],
+            },
+          ],
+        }),
+      ).toEqual({
+        blocks: [
+          {
+            type: "actions",
+            buttons: [
+              {
+                label: "Review",
+                style: "link",
+                url: "https://example.com/review",
+              },
+            ],
+          },
+        ],
+      });
+    },
+  );
+
+  it("renders typed approvals as actionable transport-private Discord controls", () => {
+    const rendered = buildDiscordPresentationComponents({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Deny",
+              action: {
+                type: "approval",
+                approvalId: "opaque:approval;id=7",
+                approvalKind: "plugin",
+                decision: "deny",
+              },
+              value: "/approve opaque:approval;id=7 deny",
+              style: "danger",
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(rendered).toEqual({
+      blocks: [
+        {
+          type: "actions",
+          buttons: [
+            {
+              label: "Deny",
+              style: "danger",
+              internalCustomId:
+                "execapproval:kind=plugin;id=opaque%3Aapproval%3Bid%3D7;action=deny",
+            },
+          ],
+        },
+      ],
+    });
+    const firstBlock = rendered?.blocks?.[0];
+    const customId =
+      firstBlock?.type === "actions" ? firstBlock.buttons?.[0]?.internalCustomId : undefined;
+    expect(customId).toBeDefined();
+    if (!rendered) {
+      throw new Error("Expected Discord presentation components");
+    }
+    const built = buildDiscordComponentMessage({ spec: rendered });
+    const serialized = built.components[0]?.serialize() as
+      | { components?: Array<{ components?: Array<{ custom_id?: string }> }> }
+      | undefined;
+    expect(serialized?.components?.[0]?.components?.[0]?.custom_id).toBe(customId);
+    expect(built.entries).toEqual([]);
+    expect(parseExecApprovalData(parseCustomId(customId ?? "").data)).toEqual({
+      approvalId: "opaque:approval;id=7",
+      approvalKind: "plugin",
+      action: "deny",
+    });
+  });
+
+  it("rejects malformed approval custom ids and compacts overlong canonical ids", () => {
+    expect(
+      parseExecApprovalData(parseCustomId("execapproval:kind=exec;id=%zz;action=allow-once").data),
+    ).toBeNull();
+    expect(
+      parseExecApprovalData(
+        parseCustomId("execapproval:kind=exec;id=approval-1;action=/approve").data,
+      ),
+    ).toBeNull();
+    const overlongId = `approval/${"\u{1F4F1}".repeat(40)}`;
+    const rendered = buildDiscordPresentationComponents({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Review",
+              action: {
+                type: "approval",
+                approvalId: overlongId,
+                approvalKind: "exec",
+                decision: "allow-once",
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const firstBlock = rendered?.blocks?.[0];
+    const customId =
+      firstBlock?.type === "actions" ? firstBlock.buttons?.[0]?.internalCustomId : undefined;
+    expect(customId?.length).toBeLessThanOrEqual(100);
+    expect(parseExecApprovalData(parseCustomId(customId ?? "").data)).toEqual({
+      approvalId: buildApprovalResolutionRef({ approvalId: overlongId, approvalKind: "exec" }),
+      approvalKind: "exec",
+      action: "allow-once",
+    });
+    expect(
+      buildDiscordPresentationComponents({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Invalid",
+                action: {
+                  type: "approval",
+                  approvalId: "approval-1",
+                  approvalKind: "invalid" as "exec",
+                  decision: "allow-once",
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    ).toBeUndefined();
+  });
+
+  it("keeps legacy callbacks unchanged beside typed approvals", () => {
+    expect(
+      buildDiscordPresentationComponents({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Allow",
+                action: {
+                  type: "approval",
+                  approvalId: "approval-1",
+                  approvalKind: "exec",
+                  decision: "allow-once",
+                },
+              },
+              {
+                label: "Legacy",
+                value: "/approve approval-1 deny",
+              },
+            ],
+          },
+        ],
+      }),
+    ).toEqual({
+      blocks: [
+        {
+          type: "actions",
+          buttons: [
+            {
+              label: "Allow",
+              style: "secondary",
+              internalCustomId: "execapproval:kind=exec;id=approval-1;action=allow-once",
+            },
+            {
+              label: "Legacy",
+              style: "secondary",
+              callbackData: "/approve approval-1 deny",
+            },
+          ],
         },
       ],
     });

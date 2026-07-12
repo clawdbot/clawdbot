@@ -94,7 +94,6 @@ export {
   isTelegramExecApprovalTargetRecipient,
   resolveTelegramExecApprovalConfig,
   resolveTelegramExecApprovalTarget,
-  shouldEnableTelegramExecApprovalButtons,
   shouldHandleTelegramExecApprovalRequest,
   shouldInjectTelegramExecApprovalButtons,
   shouldSuppressLocalTelegramExecApprovalPrompt,

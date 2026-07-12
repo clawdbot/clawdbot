@@ -24,7 +24,7 @@ async function listModels(params: {
   catalog: ModelCatalogEntry[];
   cfg?: OpenClawConfig;
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
-  view?: "all" | "configured" | "default";
+  view?: "all" | "configured" | "provider-config" | "default";
 }) {
   const context = {
     getRuntimeConfig: () => params.cfg ?? ({} as OpenClawConfig),
@@ -283,6 +283,39 @@ describe("models.list OpenAI routes", () => {
           await expect(listModels({ catalog: [chatGPTRow, row], cfg })).resolves.toEqual(
             subscriptionProjection,
           );
+
+          const inventoryConfig = {
+            ...cfg,
+            models: {
+              providers: {
+                openai: {
+                  models: [{ id: "gpt-5.5", name: "GPT-5.5" }],
+                },
+              },
+            },
+          } as unknown as OpenClawConfig;
+          await expect(
+            listModels({
+              catalog: [
+                { ...row, input: ["text", "image"] },
+                { ...chatGPTRow, input: ["text", "video"] },
+              ],
+              cfg: inventoryConfig,
+              view: "provider-config",
+            }),
+          ).resolves.toEqual({
+            models: [
+              {
+                id: "gpt-5.5",
+                name: "GPT-5.5",
+                provider: "openai",
+                contextWindow: 400_000,
+                reasoning: true,
+                input: ["text", "video"],
+                available: true,
+              },
+            ],
+          });
 
           await expect(
             listModels({ catalog: [row, chatGPTRow], cfg, view: "default" }),

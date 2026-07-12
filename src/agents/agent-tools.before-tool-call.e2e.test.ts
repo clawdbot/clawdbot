@@ -977,6 +977,41 @@ describe("before_tool_call loop detection behavior", () => {
     });
   });
 
+  it("emits skill usage diagnostics for node skill locators", async () => {
+    const locator = "node://node-1/skills/remote-skill/SKILL.md";
+    const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "skill" }] });
+    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+      agentId: "main",
+      sessionKey: "session-key",
+      skillsSnapshot: {
+        prompt: "",
+        skills: [{ name: "remote-skill" }],
+        resolvedSkills: [
+          createCanonicalFixtureSkill({
+            name: "remote-skill",
+            description: "Remote skill",
+            filePath: locator,
+            baseDir: "node://node-1/skills/remote-skill",
+            source: "openclaw-node",
+          }),
+        ],
+      },
+      loopDetection: { enabled: false },
+    });
+
+    await withSkillUsageDiagnosticEvents(async (emitted, _privateData, flush) => {
+      await tool.execute("tool-call-node-skill", { path: locator }, undefined, undefined);
+      await flush();
+
+      expectEventFields(emitted[1], {
+        type: "skill.used",
+        skillName: "remote-skill",
+        activation: "read",
+        toolName: "read",
+      });
+    });
+  });
+
   it("accounts sandbox skill reads against the original canonical file", async () => {
     const workspaceDir = "/workspace";
     const readPath = "/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md";

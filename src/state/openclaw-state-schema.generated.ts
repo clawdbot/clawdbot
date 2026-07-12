@@ -225,6 +225,9 @@ CREATE TABLE IF NOT EXISTS operator_approvals (
   approval_id TEXT NOT NULL PRIMARY KEY CHECK (
     length(approval_id) > 0 AND approval_id NOT IN ('.', '..')
   ),
+  resolution_ref TEXT NOT NULL CHECK (
+    length(resolution_ref) = 43 AND resolution_ref NOT GLOB '*[^A-Za-z0-9_-]*'
+  ),
   kind TEXT NOT NULL CHECK (kind IN ('exec', 'plugin')),
   status TEXT NOT NULL CHECK (status IN ('pending', 'allowed', 'denied', 'expired', 'cancelled')),
   presentation_json TEXT NOT NULL,
@@ -326,6 +329,9 @@ CREATE TABLE IF NOT EXISTS operator_approvals (
 
 CREATE INDEX IF NOT EXISTS idx_operator_approvals_status_expiry
   ON operator_approvals(status, expires_at_ms, approval_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_operator_approvals_resolution_ref
+  ON operator_approvals(resolution_ref);
 
 CREATE INDEX IF NOT EXISTS idx_operator_approvals_source_session_created
   ON operator_approvals(source_session_key, created_at_ms DESC, approval_id);
@@ -1593,6 +1599,38 @@ CREATE TABLE IF NOT EXISTS worker_environment_credentials (
   expires_at_ms INTEGER NOT NULL CHECK (expires_at_ms >= 0),
   delivered_at_ms INTEGER CHECK (delivered_at_ms >= 0),
   FOREIGN KEY (environment_id) REFERENCES worker_environments(environment_id) ON DELETE CASCADE
+);
+
+-- One durable sequence cursor per attached session owner epoch. The environment
+-- binding prevents independent workers with coincident epochs from sharing replay state.
+CREATE TABLE IF NOT EXISTS worker_transcript_commit_heads (
+  session_id TEXT NOT NULL,
+  run_epoch INTEGER NOT NULL CHECK (run_epoch >= 0),
+  environment_id TEXT NOT NULL,
+  next_seq INTEGER NOT NULL CHECK (next_seq >= 1),
+  updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= 0),
+  PRIMARY KEY (session_id, run_epoch)
+);
+
+-- Pending rows preserve a claimed request across gateway restarts. Terminal rows
+-- cache the exact result returned for deterministic at-least-once replay.
+CREATE TABLE IF NOT EXISTS worker_transcript_commits (
+  session_id TEXT NOT NULL,
+  run_epoch INTEGER NOT NULL CHECK (run_epoch >= 0),
+  seq INTEGER NOT NULL CHECK (seq >= 1),
+  request_hash TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('pending', 'terminal')),
+  result_json TEXT,
+  created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
+  updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= 0),
+  PRIMARY KEY (session_id, run_epoch, seq),
+  FOREIGN KEY (session_id, run_epoch)
+    REFERENCES worker_transcript_commit_heads(session_id, run_epoch)
+    ON DELETE CASCADE,
+  CHECK (
+    (state = 'pending' AND result_json IS NULL) OR
+    (state = 'terminal' AND result_json IS NOT NULL)
+  )
 );
 
 CREATE TABLE IF NOT EXISTS fleet_cells (

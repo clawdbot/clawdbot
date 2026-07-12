@@ -5,7 +5,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
-import { loadModelCatalogSnapshotForBrowse } from "./model-catalog-browse.js";
+import {
+  buildProviderConfigModelCatalogForBrowse,
+  loadModelCatalogSnapshotForBrowse,
+} from "./model-catalog-browse.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 
 const DEFAULT_MODEL_CATALOG_BROWSE_TIMEOUT_MS = 750;
@@ -93,6 +96,48 @@ describe("loadModelCatalogSnapshotForBrowse", () => {
     ).resolves.toBe(fullCatalog);
 
     expect(loadCatalog).toHaveBeenCalledExactlyOnceWith({ readOnly: false });
+  });
+
+  it.each([
+    ["without picker allowlists", config()],
+    ["with provider wildcards", config({ providerWildcard: true })],
+  ])("uses the read-only catalog for provider-config views %s", async (_label, cfg) => {
+    const loadCatalog = vi.fn(async ({ readOnly }: { readOnly: boolean }) =>
+      readOnly ? readOnlyCatalog : fullCatalog,
+    );
+
+    await expect(
+      loadModelCatalogSnapshotForBrowse({ cfg, view: "provider-config", loadCatalog }),
+    ).resolves.toBe(readOnlyCatalog);
+
+    expect(loadCatalog).toHaveBeenCalledExactlyOnceWith({ readOnly: true });
+  });
+
+  it("builds provider-config inventory independently of picker allowlists", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/allowlisted": {},
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            models: [
+              { id: "two", name: "Two" },
+              { id: "one", name: "One" },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(buildProviderConfigModelCatalogForBrowse({ cfg })).toMatchObject([
+      { provider: "openai", id: "one", name: "One" },
+      { provider: "openai", id: "two", name: "Two" },
+    ]);
   });
 
   it("returns an empty catalog when read-only catalog loading times out with provider wildcards", async () => {

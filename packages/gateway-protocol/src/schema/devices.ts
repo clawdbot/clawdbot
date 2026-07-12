@@ -1,4 +1,5 @@
 // Gateway Protocol schema module defines protocol validation shapes.
+import type { Static } from "typebox";
 import { Type } from "typebox";
 import { NonEmptyString } from "./primitives.js";
 
@@ -131,3 +132,15 @@ export const DevicePairSetupCodeResultSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+// Wire types derive directly from local schema consts so public d.ts graphs never
+// pull in the ProtocolSchemas registry.
+export type DevicePairListParams = Static<typeof DevicePairListParamsSchema>;
+export type DevicePairApproveParams = Static<typeof DevicePairApproveParamsSchema>;
+export type DevicePairRejectParams = Static<typeof DevicePairRejectParamsSchema>;
+export type DevicePairRemoveParams = Static<typeof DevicePairRemoveParamsSchema>;
+export type DevicePairSetupCodeParams = Static<typeof DevicePairSetupCodeParamsSchema>;
+export type DevicePairSetupCodeResult = Static<typeof DevicePairSetupCodeResultSchema>;
+export type DevicePairRenameParams = Static<typeof DevicePairRenameParamsSchema>;
+export type DeviceTokenRotateParams = Static<typeof DeviceTokenRotateParamsSchema>;
+export type DeviceTokenRevokeParams = Static<typeof DeviceTokenRevokeParamsSchema>;

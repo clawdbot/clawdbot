@@ -1,4 +1,5 @@
 // Gateway Protocol schema module defines protocol validation shapes.
+import type { Static } from "typebox";
 import { Type } from "typebox";
 import { NonEmptyString } from "./primitives.js";
 
@@ -21,6 +22,17 @@ export const ModelChoiceSchema = Type.Object(
     available: Type.Optional(Type.Boolean()),
     contextWindow: Type.Optional(Type.Integer({ minimum: 1 })),
     reasoning: Type.Optional(Type.Boolean()),
+    input: Type.Optional(
+      Type.Array(
+        Type.Union([
+          Type.Literal("text"),
+          Type.Literal("image"),
+          Type.Literal("audio"),
+          Type.Literal("video"),
+          Type.Literal("document"),
+        ]),
+      ),
+    ),
   },
   { additionalProperties: false },
 );
@@ -241,7 +253,12 @@ export const AgentsFilesSetResultSchema = Type.Object(
 export const ModelsListParamsSchema = Type.Object(
   {
     view: Type.Optional(
-      Type.Union([Type.Literal("default"), Type.Literal("configured"), Type.Literal("all")]),
+      Type.Union([
+        Type.Literal("default"),
+        Type.Literal("configured"),
+        Type.Literal("provider-config"),
+        Type.Literal("all"),
+      ]),
     ),
   },
   { additionalProperties: false },
@@ -1082,3 +1099,73 @@ export const ToolsInvokeResultSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+// Wire types derive directly from local schema consts so public d.ts graphs never
+// pull in the ProtocolSchemas registry.
+export type AgentSummary = Static<typeof AgentSummarySchema>;
+export type AgentsFileEntry = Static<typeof AgentsFileEntrySchema>;
+export type AgentsCreateParams = Static<typeof AgentsCreateParamsSchema>;
+export type AgentsCreateResult = Static<typeof AgentsCreateResultSchema>;
+export type AgentsUpdateParams = Static<typeof AgentsUpdateParamsSchema>;
+export type AgentsUpdateResult = Static<typeof AgentsUpdateResultSchema>;
+export type AgentsDeleteParams = Static<typeof AgentsDeleteParamsSchema>;
+export type AgentsDeleteResult = Static<typeof AgentsDeleteResultSchema>;
+export type AgentsFilesListParams = Static<typeof AgentsFilesListParamsSchema>;
+export type AgentsFilesListResult = Static<typeof AgentsFilesListResultSchema>;
+export type AgentsFilesGetParams = Static<typeof AgentsFilesGetParamsSchema>;
+export type AgentsFilesGetResult = Static<typeof AgentsFilesGetResultSchema>;
+export type AgentsFilesSetParams = Static<typeof AgentsFilesSetParamsSchema>;
+export type AgentsFilesSetResult = Static<typeof AgentsFilesSetResultSchema>;
+export type AgentsListParams = Static<typeof AgentsListParamsSchema>;
+export type AgentsListResult = Static<typeof AgentsListResultSchema>;
+export type ModelChoice = Static<typeof ModelChoiceSchema>;
+export type ModelsListParams = Static<typeof ModelsListParamsSchema>;
+export type ModelsListResult = Static<typeof ModelsListResultSchema>;
+export type SkillsStatusParams = Static<typeof SkillsStatusParamsSchema>;
+export type ToolsCatalogParams = Static<typeof ToolsCatalogParamsSchema>;
+export type ToolCatalogProfile = Static<typeof ToolCatalogProfileSchema>;
+export type ToolCatalogEntry = Static<typeof ToolCatalogEntrySchema>;
+export type ToolCatalogGroup = Static<typeof ToolCatalogGroupSchema>;
+export type ToolsCatalogResult = Static<typeof ToolsCatalogResultSchema>;
+export type ToolsEffectiveParams = Static<typeof ToolsEffectiveParamsSchema>;
+export type ToolsEffectiveEntry = Static<typeof ToolsEffectiveEntrySchema>;
+export type ToolsEffectiveGroup = Static<typeof ToolsEffectiveGroupSchema>;
+export type ToolsEffectiveNotice = Static<typeof ToolsEffectiveNoticeSchema>;
+export type ToolsEffectiveResult = Static<typeof ToolsEffectiveResultSchema>;
+export type ToolsInvokeParams = Static<typeof ToolsInvokeParamsSchema>;
+export type ToolsInvokeResult = Static<typeof ToolsInvokeResultSchema>;
+export type SkillsBinsParams = Static<typeof SkillsBinsParamsSchema>;
+export type SkillsBinsResult = Static<typeof SkillsBinsResultSchema>;
+export type SkillsSearchParams = Static<typeof SkillsSearchParamsSchema>;
+export type SkillsSearchResult = Static<typeof SkillsSearchResultSchema>;
+export type SkillsDetailParams = Static<typeof SkillsDetailParamsSchema>;
+export type SkillsDetailResult = Static<typeof SkillsDetailResultSchema>;
+export type SkillsProposalsListParams = Static<typeof SkillsProposalsListParamsSchema>;
+export type SkillsProposalsListResult = Static<typeof SkillsProposalsListResultSchema>;
+export type SkillsProposalInspectParams = Static<typeof SkillsProposalInspectParamsSchema>;
+export type SkillsProposalInspectResult = Static<typeof SkillsProposalInspectResultSchema>;
+export type SkillsProposalCreateParams = Static<typeof SkillsProposalCreateParamsSchema>;
+export type SkillsProposalUpdateParams = Static<typeof SkillsProposalUpdateParamsSchema>;
+export type SkillsProposalReviseParams = Static<typeof SkillsProposalReviseParamsSchema>;
+export type SkillsProposalRequestRevisionParams = Static<
+  typeof SkillsProposalRequestRevisionParamsSchema
+>;
+export type SkillsProposalRequestRevisionResult = Static<
+  typeof SkillsProposalRequestRevisionResultSchema
+>;
+export type SkillsProposalActionParams = Static<typeof SkillsProposalActionParamsSchema>;
+export type SkillsProposalApplyResult = Static<typeof SkillsProposalApplyResultSchema>;
+export type SkillsProposalRecordResult = Static<typeof SkillsProposalRecordResultSchema>;
+export type SkillsCuratorStatusParams = Static<typeof SkillsCuratorStatusParamsSchema>;
+export type SkillsCuratorStatusResult = Static<typeof SkillsCuratorStatusResultSchema>;
+export type SkillsCuratorActionParams = Static<typeof SkillsCuratorActionParamsSchema>;
+export type SkillsCuratorActionResult = Static<typeof SkillsCuratorActionResultSchema>;
+export type SkillsSecurityVerdictsParams = Static<typeof SkillsSecurityVerdictsParamsSchema>;
+export type SkillsSecurityVerdictsResult = Static<typeof SkillsSecurityVerdictsResultSchema>;
+export type SkillsSkillCardParams = Static<typeof SkillsSkillCardParamsSchema>;
+export type SkillsSkillCardResult = Static<typeof SkillsSkillCardResultSchema>;
+export type SkillsUploadBeginParams = Static<typeof SkillsUploadBeginParamsSchema>;
+export type SkillsUploadChunkParams = Static<typeof SkillsUploadChunkParamsSchema>;
+export type SkillsUploadCommitParams = Static<typeof SkillsUploadCommitParamsSchema>;
+export type SkillsInstallParams = Static<typeof SkillsInstallParamsSchema>;
+export type SkillsUpdateParams = Static<typeof SkillsUpdateParamsSchema>;

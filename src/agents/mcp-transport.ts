@@ -124,6 +124,8 @@ export function resolveMcpTransport(
           config: resolved.oauth,
         })
       : undefined;
+  // The SDK reuses one fetch for OAuth and long-lived SSE/streamable bodies.
+  // Per-RPC deadlines belong to client calls, not this transport fetch.
   const baseFetch = buildMcpHttpFetch({
     sslVerify: resolved.sslVerify,
     clientCert: resolved.clientCert,

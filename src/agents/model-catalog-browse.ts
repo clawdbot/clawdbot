@@ -6,8 +6,11 @@ import {
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
-import { parseConfiguredModelVisibilityEntries } from "./model-selection-shared.js";
+import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
+import {
+  buildConfiguredModelCatalog,
+  parseConfiguredModelVisibilityEntries,
+} from "./model-selection-shared.js";
 
 /**
  * Loads the model catalog shape used by browse/list commands without letting optional
@@ -16,7 +19,20 @@ import { parseConfiguredModelVisibilityEntries } from "./model-selection-shared.
 const DEFAULT_MODEL_CATALOG_BROWSE_TIMEOUT_MS = 750;
 
 /** Visible model subset requested by model browse callers. */
-export type ModelCatalogBrowseView = "default" | "configured" | "all";
+export type ModelCatalogBrowseView = "default" | "configured" | "provider-config" | "all";
+
+/** Source-authored provider rows for inventory UIs, independent of picker allowlists. */
+export function buildProviderConfigModelCatalogForBrowse(params: {
+  cfg: OpenClawConfig;
+  workspaceDir?: string;
+}): ModelCatalogEntry[] {
+  return buildConfiguredModelCatalog(params).toSorted(
+    (a, b) =>
+      a.provider.localeCompare(b.provider) ||
+      a.name.localeCompare(b.name) ||
+      a.id.localeCompare(b.id),
+  );
+}
 
 /** True when a browse view cannot be answered from read-only cached catalog entries. */
 export function modelCatalogBrowseRequiresFullDiscovery(params: {

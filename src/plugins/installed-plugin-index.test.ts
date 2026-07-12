@@ -180,6 +180,7 @@ function createRichPluginFixture(params: { id?: string; packageVersion?: string 
       packageName: "@vendor/demo-plugin",
       packageVersion: params.packageVersion ?? "1.2.3",
       packageManifest: {
+        build: { bundledDist: false },
         channel: {
           id: "demo",
           label: "Demo",
@@ -272,6 +273,9 @@ describe("installed plugin index", () => {
         nativeCommandsAutoEnabled: true,
         nativeSkillsAutoEnabled: false,
       },
+    });
+    expectRecordFields(readRecordField(plugin, "packageBuild", "package build"), {
+      bundledDist: false,
     });
     expectSha256(plugin.manifestHash);
     const packageJson = requireRecord(index.plugins[0]?.packageJson, "package json");

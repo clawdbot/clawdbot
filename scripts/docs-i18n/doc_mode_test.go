@@ -501,6 +501,311 @@ func TestValidateDocChunkTranslationAcceptsTranslatedHeadingText(t *testing.T) {
 	}
 }
 
+func TestValidateDocChunkTranslationRejectsTranslatedInlineCode(t *testing.T) {
+	t.Parallel()
+
+	source := "Run `--user <your uid>:<your gid>` by default.\n"
+	translated := "Ejecuta `--user <tu uid>:<tu gid>` de forma predeterminada.\n"
+
+	err := validateDocChunkTranslation(source, translated)
+	if err == nil {
+		t.Fatal("expected translated inline code to be rejected")
+	}
+	if !strings.Contains(err.Error(), "inline code mismatch") {
+		t.Fatalf("expected inline code mismatch, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationAcceptsPreservedInlineCode(t *testing.T) {
+	t.Parallel()
+
+	source := "Run `--user <your uid>:<your gid>` by default.\n"
+	translated := "Ejecuta `--user <your uid>:<your gid>` de forma predeterminada.\n"
+
+	if err := validateDocChunkTranslation(source, translated); err != nil {
+		t.Fatalf("expected unchanged inline code to pass, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationAcceptsReorderedInlineCode(t *testing.T) {
+	t.Parallel()
+
+	source := "Use `--source` before `--target`.\n"
+	translated := "Usa `--target` después de `--source`.\n"
+
+	if err := validateDocChunkTranslation(source, translated); err != nil {
+		t.Fatalf("expected reordered intact inline code to pass, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationRejectsTranslatedMultiBacktickCode(t *testing.T) {
+	t.Parallel()
+
+	source := "Use ``<your `uid`>`` as the placeholder.\n"
+	translated := "Usa ``<tu `uid`>`` como marcador.\n"
+
+	err := validateDocChunkTranslation(source, translated)
+	if err == nil {
+		t.Fatal("expected translated multi-backtick code to be rejected")
+	}
+	if !strings.Contains(err.Error(), "inline code mismatch") {
+		t.Fatalf("expected inline code mismatch, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationRejectsChangedTripleBacktickCodeSpan(t *testing.T) {
+	t.Parallel()
+
+	source := "Use ```foo``` as the value.\n"
+	translated := "Usa ```bar``` como valor.\n"
+
+	err := validateDocChunkTranslation(source, translated)
+	if err == nil {
+		t.Fatal("expected changed triple-backtick code span to be rejected")
+	}
+	if !strings.Contains(err.Error(), "inline code mismatch") {
+		t.Fatalf("expected inline code mismatch, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationRejectsChangedMultilineCodeSpan(t *testing.T) {
+	t.Parallel()
+
+	source := "Use ``a\n<Widget path=\"x\">`` as the value.\n"
+	translated := "Usa ``a\n<Widget path=\"y\">`` como valor.\n"
+
+	err := validateDocChunkTranslation(source, translated)
+	if err == nil {
+		t.Fatal("expected changed multiline code span to be rejected")
+	}
+	if !strings.Contains(err.Error(), "inline code mismatch") {
+		t.Fatalf("expected inline code mismatch, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationRejectsChangedMultilineCodeIndent(t *testing.T) {
+	t.Parallel()
+
+	source := "<Check>\n    Use ``a\n    b``.\n</Check>\n"
+	translated := "<Check>\n    Usa ``a\nb``.\n</Check>\n"
+
+	err := validateDocChunkTranslation(source, translated)
+	if err == nil {
+		t.Fatal("expected changed multiline code indentation to be rejected")
+	}
+	if !strings.Contains(err.Error(), "inline code mismatch") {
+		t.Fatalf("expected inline code mismatch, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationRejectsCodeAfterUnmatchedBacktick(t *testing.T) {
+	t.Parallel()
+
+	source := "literal `\n\n<Check>\n`foo`\n</Check>\n"
+	translated := "literal `\n\n<Check>\n`bar`\n</Check>\n"
+
+	err := validateDocChunkTranslation(source, translated)
+	if err == nil {
+		t.Fatal("expected changed component code after unmatched backtick to be rejected")
+	}
+	if !strings.Contains(err.Error(), "inline code mismatch") {
+		t.Fatalf("expected inline code mismatch, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationRejectsChangedCapitalizedPlaceholder(t *testing.T) {
+	t.Parallel()
+
+	source := "Run `openclaw pairing approve sms <CODE>`.\n"
+	translated := "Ejecuta `openclaw pairing approve sms <TOKEN>`.\n"
+
+	err := validateDocChunkTranslation(source, translated)
+	if err == nil {
+		t.Fatal("expected changed capitalized placeholder to be rejected")
+	}
+	if !strings.Contains(err.Error(), "inline code mismatch") {
+		t.Fatalf("expected inline code mismatch, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationRejectsChangedCodeInsideMDXComponent(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		source     string
+		translated string
+	}{
+		{
+			name:       "same line",
+			source:     "<Check>`package.json` has metadata</Check>\n",
+			translated: "<Check>`paquete.json` tiene metadatos</Check>\n",
+		},
+		{
+			name:       "indented component",
+			source:     "    <Check>`package.json` has metadata</Check>\n",
+			translated: "    <Check>`paquete.json` tiene metadatos</Check>\n",
+		},
+		{
+			name:       "indented component body",
+			source:     "<Tab>\n\n    - `pairing`\n\n</Tab>\n",
+			translated: "<Tab>\n\n    - `emparejamiento`\n\n</Tab>\n",
+		},
+		{
+			name:       "component-like literal in hidden code",
+			source:     "<Check>\n\n    Use `<Widget path=\"x\">`.\n\n</Check>\n",
+			translated: "<Check>\n\n    Usa `<Widget path=\"y\">`.\n\n</Check>\n",
+		},
+		{
+			name:       "component-like literal in hidden multiline code",
+			source:     "<Check>\n\n    Use ``a\n    <Widget path=\"x\">``.\n\n</Check>\n",
+			translated: "<Check>\n\n    Usa ``a\n    <Widget path=\"y\">``.\n\n</Check>\n",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			err := validateDocChunkTranslation(test.source, test.translated)
+			if err == nil {
+				t.Fatal("expected changed component-nested code to be rejected")
+			}
+			if !strings.Contains(err.Error(), "inline code mismatch") {
+				t.Fatalf("expected inline code mismatch, got %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateDocChunkTranslationRejectsCodeAfterComponentFence(t *testing.T) {
+	t.Parallel()
+
+	source := "<Check>\n    ```md\n    example\n    ```\n    Run `foo`.\n</Check>\n"
+	translated := "<Check>\n    ```md\n    ejemplo\n    ```\n    Ejecuta `bar`.\n</Check>\n"
+
+	err := validateDocChunkTranslation(source, translated)
+	if err == nil {
+		t.Fatal("expected changed code after a component fence to be rejected")
+	}
+	if !strings.Contains(err.Error(), "inline code mismatch") {
+		t.Fatalf("expected inline code mismatch, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationRejectsChangedCodeInSplitComponentBody(t *testing.T) {
+	t.Parallel()
+
+	source := "    - `pairing`\n"
+	translated := "    - `emparejamiento`\n"
+
+	err := validateDocChunkTranslation(source, translated)
+	if err == nil {
+		t.Fatal("expected changed code in an isolated component-body chunk to be rejected")
+	}
+	if !strings.Contains(err.Error(), "inline code mismatch") {
+		t.Fatalf("expected inline code mismatch, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationRejectsChangedCodeInsideMDXAttribute(t *testing.T) {
+	t.Parallel()
+
+	source := "<Accordion title=\"First recall returns `status=timeout`\">\nDetails.\n</Accordion>\n"
+	translated := "<Accordion title=\"La primera consulta devuelve `status=error`\">\nDetalles.\n</Accordion>\n"
+
+	err := validateDocChunkTranslation(source, translated)
+	if err == nil {
+		t.Fatal("expected changed code inside an MDX attribute to be rejected")
+	}
+	if !strings.Contains(err.Error(), "inline code mismatch") {
+		t.Fatalf("expected inline code mismatch, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationRejectsAnglePlaceholderInsideMDXAttribute(t *testing.T) {
+	t.Parallel()
+
+	source := "<Accordion title=\"Run `--user <your uid>`\">\nDetails.\n</Accordion>\n"
+	translated := "<Accordion title=\"Ejecuta `--user <tu uid>`\">\nDetalles.\n</Accordion>\n"
+
+	err := validateDocChunkTranslation(source, translated)
+	if err == nil {
+		t.Fatal("expected changed angle placeholder inside an MDX attribute to be rejected")
+	}
+	if !strings.Contains(err.Error(), "inline code mismatch") {
+		t.Fatalf("expected inline code mismatch, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationRejectsAttributeCodeWithoutTrailingNewline(t *testing.T) {
+	t.Parallel()
+
+	source := "<Accordion title=\"Run `foo`\">"
+	translated := "<Accordion title=\"Ejecuta `bar`\">"
+
+	err := validateDocChunkTranslation(source, translated)
+	if err == nil {
+		t.Fatal("expected changed attribute code without trailing newline to be rejected")
+	}
+	if !strings.Contains(err.Error(), "inline code mismatch") {
+		t.Fatalf("expected inline code mismatch, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationAllowsTranslationInsideFencedExamples(t *testing.T) {
+	t.Parallel()
+
+	source := "```md\nUse `<your uid>` here.\n```\n"
+	translated := "```md\nUsa `<tu uid>` aquí.\n```\n"
+
+	if err := validateDocChunkTranslation(source, translated); err != nil {
+		t.Fatalf("expected fenced example prose to remain governed by fence validation, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationAllowsTranslationInsideNestedFences(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		source     string
+		translated string
+	}{
+		{
+			name:       "blockquote",
+			source:     "> ```md\n> Use `foo` here.\n> ```\n",
+			translated: "> ```md\n> Usa `bar` aquí.\n> ```\n",
+		},
+		{
+			name:       "list item",
+			source:     "- ```md\n  Use `foo` here.\n  ```\n",
+			translated: "- ```md\n  Usa `bar` aquí.\n  ```\n",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if err := validateDocChunkTranslation(test.source, test.translated); err != nil {
+				t.Fatalf("expected nested fenced example prose to remain exempt, got %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateDocChunkTranslationChecksCodeAfterUnclosedNestedFence(t *testing.T) {
+	t.Parallel()
+
+	source := "> ```md\n> example\nOutside `foo`.\n"
+	translated := "> ```md\n> ejemplo\nFuera `bar`.\n"
+
+	err := validateDocChunkTranslation(source, translated)
+	if err == nil {
+		t.Fatal("expected changed code after an unclosed nested fence to be rejected")
+	}
+	if !strings.Contains(err.Error(), "inline code mismatch") {
+		t.Fatalf("expected inline code mismatch, got %v", err)
+	}
+}
+
 func TestValidateDocChunkTranslationRejectsSetextHeadingLoss(t *testing.T) {
 	t.Parallel()
 

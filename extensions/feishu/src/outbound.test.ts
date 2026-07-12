@@ -77,6 +77,7 @@ vi.mock("./comment-reaction.js", () => ({
   cleanupAmbientCommentTypingReaction: cleanupAmbientCommentTypingReactionMock,
 }));
 
+import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
 import { feishuPlugin } from "./channel.js";
 import { feishuOutbound } from "./outbound.js";
 import { createFeishuSendReceipt } from "./send-result.js";
@@ -982,6 +983,143 @@ describe("feishuOutbound.sendPayload native cards", () => {
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
   });
 
+  it.each(["url", "web-app"] as const)(
+    "renders typed %s presentation actions as Feishu link buttons",
+    async (type) => {
+      const presentation: MessagePresentation = {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Review",
+                action: { type, url: "https://example.com/review" },
+              },
+            ],
+          },
+        ],
+      };
+      const payload = { presentation };
+      const rendered = await feishuOutbound.renderPresentation?.({
+        payload,
+        presentation,
+        ctx: {
+          cfg: emptyConfig,
+          to: "chat_1",
+          text: "",
+          accountId: "main",
+          payload,
+        },
+      });
+
+      const renderedChannelData = rendered?.channelData as
+        | { feishu?: { card?: Record<string, any> } }
+        | undefined;
+      expect(rendered?.text).toBe("- Review: https://example.com/review");
+      expect(renderedChannelData?.feishu?.card?.body?.elements).toEqual([
+        {
+          tag: "button",
+          text: { tag: "plain_text", content: "Review" },
+          type: "default",
+          behaviors: [{ type: "open_url", default_url: "https://example.com/review" }],
+        },
+      ]);
+    },
+  );
+
+  it("keeps explicit command actions authoritative over deprecated link fields", async () => {
+    const presentation: MessagePresentation = {
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Deny",
+              action: { type: "command", command: "/approve req-1 deny" },
+              url: "https://example.com/stale",
+              webApp: { url: "https://example.com/stale-app" },
+            },
+          ],
+        },
+      ],
+    };
+    const payload = { presentation };
+    const rendered = await feishuOutbound.renderPresentation?.({
+      payload,
+      presentation,
+      ctx: {
+        cfg: emptyConfig,
+        to: "chat_1",
+        text: "",
+        accountId: "main",
+        payload,
+      },
+    });
+
+    const renderedChannelData = rendered?.channelData as
+      | { feishu?: { card?: Record<string, any> } }
+      | undefined;
+    expect(renderedChannelData?.feishu?.card?.body?.elements).toEqual([
+      {
+        tag: "button",
+        text: { tag: "plain_text", content: "Deny" },
+        type: "default",
+        behaviors: [
+          {
+            type: "callback",
+            value: createFeishuCardInteractionEnvelope({
+              k: "quick",
+              a: "feishu.payload.button",
+              q: "/approve req-1 deny",
+            }),
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("keeps typed approval actions out of Feishu callback envelopes", async () => {
+    const presentation: MessagePresentation = {
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Allow",
+              action: {
+                type: "approval",
+                approvalId: "approval-1",
+                approvalKind: "plugin",
+                decision: "allow-once",
+              },
+              value: "/approve approval-1 allow-once",
+            },
+          ],
+        },
+      ],
+    };
+    const payload = { presentation };
+    const rendered = await feishuOutbound.renderPresentation?.({
+      payload,
+      presentation,
+      ctx: {
+        cfg: emptyConfig,
+        to: "chat_1",
+        text: "",
+        accountId: "main",
+        payload,
+      },
+    });
+
+    const renderedChannelData = rendered?.channelData as
+      | { feishu?: { card?: Record<string, any> } }
+      | undefined;
+    expect(rendered?.text).toBe("- Allow");
+    expect(renderedChannelData?.feishu?.card?.body?.elements).toEqual([
+      { tag: "markdown", content: "- Allow" },
+    ]);
+  });
+
   it("does not duplicate title-only presentation cards in outbound fallbacks", async () => {
     const presentation: MessagePresentation = {
       title: "Status",
@@ -1645,7 +1783,7 @@ describe("feishuOutbound.sendPayload native cards", () => {
     },
   );
 
-  it("omits command guidance when all command buttons have URLs overriding the fallback text", async () => {
+  it("prefers explicit command guidance over deprecated button URLs", async () => {
     const result = await feishuOutbound.sendPayload?.({
       cfg: emptyConfig,
       to: "comment:docx:doxcn123:7623358762119646411",
@@ -1670,9 +1808,7 @@ describe("feishuOutbound.sendPayload native cards", () => {
       },
     });
 
-    expect(commentThreadParams()?.content).toBe(
-      "Review this\n\n- Open URL: https://example.com/action",
-    );
+    expect(commentThreadParams()?.content).toBe("Review this\n\n- Open URL: `/approve req_1`");
     expectFeishuResult(result, "reply_msg");
   });
 

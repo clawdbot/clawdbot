@@ -13,10 +13,10 @@ import type {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
-  buildApprovalPendingReplyPayload,
   buildApprovalResolvedReplyPayload,
-  buildPluginApprovalPendingReplyPayload,
   buildPluginApprovalResolvedReplyPayload,
+  buildTypedApprovalPendingReplyPayload,
+  buildTypedPluginApprovalPendingReplyPayload,
 } from "../plugin-sdk/approval-renderers.js";
 import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
@@ -34,11 +34,11 @@ import {
   type ExecApprovalRequest,
   type ExecApprovalResolved,
 } from "./exec-approvals.js";
+import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "./plugin-approval-canonical-decisions.js";
 import {
   approvalDecisionLabel,
   buildPluginApprovalExpiredMessage,
   buildPluginApprovalRequestMessage,
-  resolvePluginApprovalRequestAllowedDecisions,
   type PluginApprovalRequest,
   type PluginApprovalResolved,
 } from "./plugin-approvals.js";
@@ -432,7 +432,8 @@ function buildExecPendingPayload(params: {
     renderParams: params,
     resolveRenderer: (adapter) => adapter?.render?.exec?.buildPendingPayload,
     buildFallback: () =>
-      buildApprovalPendingReplyPayload({
+      buildTypedApprovalPendingReplyPayload({
+        approvalKind: "exec",
         approvalId: params.request.id,
         approvalSlug: params.request.id.slice(0, 8),
         text: buildExecApprovalRequestMessage(params.request, params.nowMs),
@@ -472,11 +473,13 @@ function buildPluginPendingPayload(params: {
     renderParams: params,
     resolveRenderer: (adapter) => adapter?.render?.plugin?.buildPendingPayload,
     buildFallback: () =>
-      buildPluginApprovalPendingReplyPayload({
+      buildTypedPluginApprovalPendingReplyPayload({
         request: params.request,
         nowMs: params.nowMs,
         text: buildPluginApprovalRequestMessage(params.request, params.nowMs),
-        allowedDecisions: resolvePluginApprovalRequestAllowedDecisions(params.request.request),
+        allowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions(
+          params.request.request,
+        ),
       }),
   });
 }

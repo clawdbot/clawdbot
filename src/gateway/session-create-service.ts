@@ -154,7 +154,11 @@ type CreatedGatewaySession = {
 };
 
 type TrustedInitialSessionEntry = {
-  agentHarnessId: NonNullable<SessionEntry["agentHarnessId"]>;
+  agentHarnessId?: NonNullable<SessionEntry["agentHarnessId"]>;
+  pluginOwnerId?: string;
+  providerOverride?: string;
+  modelOverride?: string;
+  cliSessionBindings?: SessionEntry["cliSessionBindings"];
   initializationPending?: true;
   modelSelectionLocked?: true;
   pluginExtensions?: SessionEntry["pluginExtensions"];
@@ -193,6 +197,8 @@ export async function createGatewaySession(params: {
   initialEntry?: TrustedInitialSessionEntry;
   /** Exact harness namespace authorized by the scoped plugin runtime. */
   authorizedAgentHarnessId?: string;
+  /** Exact plugin namespace authorized by the scoped plugin runtime. */
+  authorizedPluginId?: string;
   afterCreate?: (created: CreatedGatewaySession) => Promise<void>;
 }): Promise<CreateGatewaySessionResult> {
   const requestedKey = normalizeOptionalString(params.key);
@@ -233,6 +239,20 @@ export async function createGatewaySession(params: {
       normalizeOptionalAgentRuntimeId(params.initialEntry.agentHarnessId) &&
     isAgentHarnessSessionKeyOwnedBy(explicitTargetKey, params.authorizedAgentHarnessId),
   );
+  const authorizedPluginCreation = Boolean(
+    explicitTargetKey &&
+    params.initialEntry?.pluginOwnerId &&
+    params.authorizedPluginId === params.initialEntry.pluginOwnerId,
+  );
+  if (params.initialEntry?.pluginOwnerId && !authorizedPluginCreation) {
+    return {
+      ok: false,
+      error: errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "trusted plugin session owner is not authorized",
+      ),
+    };
+  }
   const existingHarnessEntry =
     explicitTargetKey && isAgentHarnessSessionKey(explicitTargetKey)
       ? resolveSessionEntryAccessTarget({ cfg: params.cfg, sessionKey: explicitTargetKey }).entry
@@ -503,12 +523,14 @@ export async function createGatewaySession(params: {
         const initialAgentHarnessId = params.initialEntry
           ? normalizeOptionalString(params.initialEntry.agentHarnessId)
           : undefined;
-        if (params.initialEntry && !initialAgentHarnessId) {
+        if (params.initialEntry && !initialAgentHarnessId && !authorizedPluginCreation) {
           return {
             ok: false,
             error: errorShape(
               ErrorCodes.INVALID_REQUEST,
-              "initial agentHarnessId must be non-empty",
+              params.initialEntry?.agentHarnessId !== undefined
+                ? "initial agentHarnessId must be non-empty"
+                : "trusted initial session state requires an authorized owner",
             ),
           };
         }
@@ -532,6 +554,20 @@ export async function createGatewaySession(params: {
           ...(params.worktree ? { worktree: params.worktree } : {}),
           ...(execNode ? { execHost: "node", execNode } : {}),
           ...(initialAgentHarnessId ? { agentHarnessId: initialAgentHarnessId } : {}),
+          ...(authorizedPluginCreation
+            ? { pluginOwnerId: params.initialEntry?.pluginOwnerId }
+            : {}),
+          ...(authorizedPluginCreation && params.initialEntry?.providerOverride
+            ? { providerOverride: params.initialEntry.providerOverride }
+            : {}),
+          ...(authorizedPluginCreation && params.initialEntry?.modelOverride
+            ? { modelOverride: params.initialEntry.modelOverride }
+            : {}),
+          // Seeded CLI bindings ride only the plugin-authorized creation path;
+          // harness creations must never smuggle pre-bound CLI session ids.
+          ...(authorizedPluginCreation && params.initialEntry?.cliSessionBindings
+            ? { cliSessionBindings: structuredClone(params.initialEntry.cliSessionBindings) }
+            : {}),
           ...(params.initialEntry?.initializationPending === true
             ? { initializationPending: true }
             : {}),

@@ -41,44 +41,16 @@ function asStreamingConfigObject(value: unknown): IMessageStreamingConfig | unde
     : undefined;
 }
 
-function asOwnBooleanProperty(value: unknown, key: string): boolean | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const record = value as Record<string, unknown>;
-  return Object.hasOwn(record, key) && typeof record[key] === "boolean" ? record[key] : undefined;
-}
-
 function mergeIMessageStreamingConfig(
   base: unknown,
   account: unknown,
-  accountFlatBlockStreaming: unknown,
 ): IMessageStreamingConfig | undefined {
   const baseConfig = asStreamingConfigObject(base);
   const accountConfig = asStreamingConfigObject(account);
-  const accountBlockEnabled = asOwnBooleanProperty(accountConfig?.block, "enabled");
-  const flatAccountBlockEnabled =
-    accountBlockEnabled === undefined && typeof accountFlatBlockStreaming === "boolean"
-      ? accountFlatBlockStreaming
-      : undefined;
-  const applyFlatAccountBlockEnabled = (
-    config: IMessageStreamingConfig | undefined,
-  ): IMessageStreamingConfig | undefined => {
-    if (flatAccountBlockEnabled === undefined || config === undefined) {
-      return config;
-    }
-    return {
-      ...config,
-      block: {
-        ...config.block,
-        enabled: flatAccountBlockEnabled,
-      },
-    };
-  };
   if (!baseConfig || !accountConfig) {
-    return applyFlatAccountBlockEnabled(accountConfig ?? baseConfig);
+    return accountConfig ?? baseConfig;
   }
-  return applyFlatAccountBlockEnabled({
+  return {
     ...baseConfig,
     ...accountConfig,
     ...(baseConfig.block || accountConfig.block
@@ -97,7 +69,7 @@ function mergeIMessageStreamingConfig(
           },
         }
       : {}),
-  });
+  };
 }
 
 function mergeIMessageAccountConfig(cfg: OpenClawConfig, accountId: string): IMessageAccountConfig {
@@ -112,7 +84,6 @@ function mergeIMessageAccountConfig(cfg: OpenClawConfig, accountId: string): IMe
   const streaming = mergeIMessageStreamingConfig(
     (cfg.channels?.imessage as Record<string, unknown> | undefined)?.streaming,
     (accountConfig as Record<string, unknown> | undefined)?.streaming,
-    (accountConfig as Record<string, unknown> | undefined)?.blockStreaming,
   );
   return streaming !== undefined ? ({ ...merged, streaming } as IMessageAccountConfig) : merged;
 }

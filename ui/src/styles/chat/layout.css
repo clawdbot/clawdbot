@@ -1462,48 +1462,6 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   }
 }
 
-.agent-chat__composer-progress {
-  display: flex;
-  align-items: center;
-  box-sizing: border-box;
-  width: 100%;
-  min-height: 32px;
-  padding: 6px 10px;
-  border: 1px solid color-mix(in srgb, currentColor 32%, transparent);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, currentColor 8%, var(--card));
-  color: var(--muted);
-  pointer-events: none;
-}
-
-.agent-chat__composer-progress--mobile {
-  display: none;
-}
-
-.agent-chat__composer-progress .agent-chat__run-status {
-  width: 100%;
-  max-width: none;
-  height: auto;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  justify-content: flex-start;
-  color: inherit;
-  font-size: var(--control-ui-text-sm);
-}
-
-.agent-chat__composer-progress--in-progress {
-  color: var(--info);
-}
-
-.agent-chat__composer-progress--done {
-  color: var(--ok);
-}
-
-.agent-chat__composer-progress--interrupted {
-  color: var(--warn);
-}
-
 .agent-chat__composer-combobox {
   position: relative;
   display: flex;
@@ -2507,12 +2465,10 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 .agent-chat__run-status {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   height: 24px;
   max-width: 132px;
-  padding: 0 8px;
-  border-radius: var(--radius-full);
-  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  padding: 0 2px;
   color: var(--muted);
   font-size: 0.72rem;
   line-height: 1;
@@ -2538,25 +2494,11 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   text-overflow: ellipsis;
 }
 
-/* Status chips keep their semantic hue in the text/icon only; borders stay
-   near-neutral so the row reads as quiet metadata, not alerts. */
-.agent-chat__run-status--in-progress {
-  color: var(--info);
-  border-color: color-mix(in srgb, var(--info) 18%, transparent);
-}
-
-.agent-chat__run-status--in-progress svg {
-  animation: chat-run-status-spin 1s linear infinite;
-}
-
-.agent-chat__run-status--done {
-  color: var(--ok);
-  border-color: color-mix(in srgb, var(--ok) 18%, transparent);
-}
-
+/* Interrupted is the only visible composer run status: killed runs leave no
+   transcript marker, so silence would read as "finished". Working/Done are
+   covered by the thread spark, content arriving, and Stop reverting. */
 .agent-chat__run-status--interrupted {
   color: var(--warn);
-  border-color: color-mix(in srgb, var(--warn) 22%, transparent);
 }
 
 @keyframes chat-run-status-spin {
@@ -2803,19 +2745,13 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   .agent-chat__composer-controls {
     order: 0;
     display: grid;
-    grid-template-columns: 40px minmax(0, max-content);
+    /* Three columns: settings, the transient interrupted toast (absent in
+       the normal state, so its column collapses), and the model picker. */
+    grid-template-columns: 40px minmax(0, max-content) minmax(0, max-content);
     flex: 1 1 0;
     width: auto;
     margin-left: 0;
     gap: 0;
-  }
-
-  .agent-chat__composer-progress--mobile {
-    display: flex;
-  }
-
-  .agent-chat__composer-run-status {
-    display: none;
   }
 
   .agent-chat__composer-meta {

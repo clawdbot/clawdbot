@@ -176,6 +176,14 @@ describe("unified approval protocol validators", () => {
         prefix: true,
       }),
     ).toBe(false);
+    expect(
+      validateApprovalResolveParams({
+        id: "plugin",
+        kind: "plugin",
+        decision: "deny",
+        resolvedBy: "public-actor",
+      }),
+    ).toBe(false);
     for (const id of ["\ud800", "\udc00", ".", ".."]) {
       expect(validateApprovalGetParams({ id })).toBe(false);
       expect(validateApprovalResolveParams({ id, kind: "exec", decision: "deny" })).toBe(false);

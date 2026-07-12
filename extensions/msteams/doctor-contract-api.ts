@@ -3,8 +3,16 @@ import crypto from "node:crypto";
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type {
+  ChannelDoctorConfigMutation,
+  ChannelDoctorLegacyConfigRule,
+} from "openclaw/plugin-sdk/channel-contract";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   archiveLegacyStateSource,
+  hasLegacyStreamingAliases,
+  normalizeLegacyChannelAliases,
+  resolveLegacyAliasStreamingMode,
   type PluginDoctorStateMigration,
 } from "openclaw/plugin-sdk/runtime-doctor";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
@@ -46,6 +54,48 @@ import {
   normalizeMSTeamsSsoStoredToken,
   type MSTeamsSsoStoredToken,
 } from "./src/sso-token-store.js";
+
+export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
+  {
+    path: ["channels", "msteams"],
+    message:
+      'channels.msteams.streamMode, channels.msteams.streaming (scalar), chunkMode, blockStreaming, and blockStreamingCoalesce are legacy; use channels.msteams.streaming.{mode,chunkMode,block.enabled,block.coalesce}. Run "openclaw doctor --fix".',
+    match: (value) => hasLegacyStreamingAliases(value),
+  },
+];
+
+export function normalizeCompatibilityConfig({
+  cfg,
+}: {
+  cfg: OpenClawConfig;
+}): ChannelDoctorConfigMutation {
+  const channels = cfg.channels as Record<string, unknown> | undefined;
+  const msteams = channels?.msteams;
+  if (!isRecord(msteams)) {
+    return { config: cfg, changes: [] };
+  }
+  const changes: string[] = [];
+  const aliases = normalizeLegacyChannelAliases({
+    entry: msteams,
+    pathPrefix: "channels.msteams",
+    changes,
+    resolveStreamingOptions: (entry) => ({
+      // Teams previews default to partial streaming, matching the runtime
+      // default in reply-dispatcher when no mode is configured.
+      resolvedMode: resolveLegacyAliasStreamingMode(entry, "partial"),
+    }),
+  });
+  if (!aliases.changed) {
+    return { config: cfg, changes: [] };
+  }
+  return {
+    config: {
+      ...cfg,
+      channels: { ...channels, msteams: aliases.entry },
+    } as OpenClawConfig,
+    changes,
+  };
+}
 
 type FeedbackLearningEntry = {
   sessionKey: string;

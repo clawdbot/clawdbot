@@ -13,7 +13,6 @@ type NavigationItem = {
 // lives in the collapsed "More" section. Chat is reachable through the session
 // list and Settings/Docs live in the sidebar footer, so neither is listed here.
 export const SIDEBAR_NAV_ROUTES = [
-  "overview",
   "workboard",
   "sessions",
   "usage",
@@ -28,11 +27,9 @@ export const SIDEBAR_NAV_ROUTES = [
 
 export type SidebarNavRoute = (typeof SIDEBAR_NAV_ROUTES)[number];
 
-// Sessions are the sidebar's core content; Overview is the only page pinned by
-// default. Users pin more via the customize menu.
-export const DEFAULT_SIDEBAR_PINNED_ROUTES = [
-  "overview",
-] as const satisfies readonly SidebarNavRoute[];
+// Sessions are the sidebar's core content; nothing is pinned by default. Users
+// pin pages via the customize menu.
+export const DEFAULT_SIDEBAR_PINNED_ROUTES = [] as const satisfies readonly SidebarNavRoute[];
 
 /**
  * Normalize a persisted pinned-route list. Returns null when the value is not a
@@ -69,7 +66,10 @@ type SettingsNavigationGroup = {
 // Grouping feeds the full-page settings sidebar (settings-sidebar.ts).
 export const SETTINGS_NAVIGATION_GROUPS = [
   { labelKey: null, routes: ["profile", "config", "appearance"] },
-  { labelKey: "nav.settingsGroupConnections", routes: ["channels", "communications"] },
+  {
+    labelKey: "nav.settingsGroupConnections",
+    routes: ["connection", "channels", "communications"],
+  },
   {
     labelKey: "nav.settingsGroupAgents",
     routes: ["ai-agents", "model-providers", "automation", "mcp"],
@@ -86,10 +86,10 @@ export const SETTINGS_NAVIGATION_ROUTES: readonly NavigationRouteId[] =
 const NAVIGATION_ICONS: NavigationItem = {
   agents: "bot",
   activity: "activity",
-  overview: "barChart",
   workboard: "kanban",
   worktrees: "folder",
   channels: "link",
+  connection: "radio",
   sessions: "fileText",
   usage: "coins",
   cron: "calendarClock",
@@ -174,10 +174,10 @@ export function cancelRoutePreload(
 const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey: string }> = {
   agents: { titleKey: "tabs.agents", subtitleKey: "subtitles.agents" },
   activity: { titleKey: "tabs.activity", subtitleKey: "subtitles.activity" },
-  overview: { titleKey: "tabs.overview", subtitleKey: "subtitles.overview" },
   workboard: { titleKey: "tabs.workboard", subtitleKey: "subtitles.workboard" },
   worktrees: { titleKey: "tabs.worktrees", subtitleKey: "subtitles.worktrees" },
   channels: { titleKey: "tabs.channels", subtitleKey: "subtitles.channels" },
+  connection: { titleKey: "tabs.connection", subtitleKey: "subtitles.connection" },
   sessions: { titleKey: "tabs.sessions", subtitleKey: "subtitles.sessions" },
   usage: { titleKey: "tabs.usage", subtitleKey: "subtitles.usage" },
   cron: { titleKey: "tabs.cron", subtitleKey: "subtitles.cron" },

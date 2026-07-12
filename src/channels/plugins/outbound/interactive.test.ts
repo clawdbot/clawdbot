@@ -137,6 +137,103 @@ describe("presentation capability limits", () => {
     ]);
   });
 
+  it("keeps approval and link actions out of generic callback byte limits", () => {
+    const buttons = applyPresentationActionLimits(
+      [
+        {
+          label: "Approve",
+          action: {
+            type: "approval",
+            approvalId: "approval/with/a/long/stable/id",
+            approvalKind: "exec",
+            decision: "allow-once",
+          },
+        },
+        {
+          label: "Review",
+          action: { type: "url", url: "https://example.test/approve/a-long-id" },
+        },
+        {
+          label: "Open app",
+          action: { type: "web-app", url: "https://example.test/app/a-long-id" },
+        },
+      ],
+      {
+        limits: {
+          actions: {
+            maxValueBytes: 4,
+          },
+        },
+      },
+    );
+
+    expect(buttons).toEqual([
+      {
+        label: "Approve",
+        action: {
+          type: "approval",
+          approvalId: "approval/with/a/long/stable/id",
+          approvalKind: "exec",
+          decision: "allow-once",
+        },
+      },
+      {
+        label: "Review",
+        action: { type: "url", url: "https://example.test/approve/a-long-id" },
+      },
+      {
+        label: "Open app",
+        action: { type: "web-app", url: "https://example.test/app/a-long-id" },
+      },
+    ]);
+  });
+
+  it("preserves legacy fields without letting them override canonical action semantics", () => {
+    const presentation = adaptMessagePresentationForChannel({
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Approve",
+                action: {
+                  type: "approval",
+                  approvalId: "approval:1",
+                  approvalKind: "plugin",
+                  decision: "deny",
+                },
+                value: "legacy-shadow",
+                url: "https://ignored.example.test",
+              },
+            ],
+          },
+        ],
+      },
+      capabilities: {
+        limits: { actions: { maxValueBytes: 4 } },
+      },
+    });
+
+    expect(presentation.blocks).toEqual([
+      {
+        type: "buttons",
+        buttons: [
+          {
+            label: "Approve",
+            action: {
+              type: "approval",
+              approvalId: "approval:1",
+              approvalKind: "plugin",
+              decision: "deny",
+            },
+            url: "https://ignored.example.test",
+          },
+        ],
+      },
+    ]);
+  });
+
   it("keeps typed select actions when only the legacy fallback exceeds value limits", () => {
     const presentation = adaptMessagePresentationForChannel({
       presentation: {
@@ -285,6 +382,11 @@ describe("presentation capability limits", () => {
               { label: "Approve", value: "ok" },
               { label: "Audit trail", value: "x".repeat(20) },
               { label: "Docs", value: "x".repeat(20), url: "https://docs.example.test" },
+              {
+                label: "Retry",
+                action: { type: "callback", value: "x".repeat(20) },
+                url: "https://ignored.example.test",
+              },
             ],
           },
         ],
@@ -306,7 +408,7 @@ describe("presentation capability limits", () => {
           { label: "Docs", url: "https://docs.example.test" },
         ],
       },
-      { type: "context", text: "Actions:\n- Audit trail" },
+      { type: "context", text: "Actions:\n- Audit trail\n- Retry" },
     ]);
   });
 
@@ -351,6 +453,28 @@ describe("presentation capability limits", () => {
         buttons: [{ label: "Wait", value: "wait", disabled: true }],
       },
     ]);
+  });
+
+  it("keeps disabled link fallback non-actionable", () => {
+    const presentation = adaptMessagePresentationForChannel({
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Unavailable",
+                action: { type: "url", url: "https://private.example.test" },
+                disabled: true,
+              },
+            ],
+          },
+        ],
+      },
+      capabilities: { limits: { actions: {} } },
+    });
+
+    expect(presentation.blocks).toEqual([{ type: "context", text: "Actions:\n- Unavailable" }]);
   });
 
   it("degrades unsupported controls before channel rendering", () => {

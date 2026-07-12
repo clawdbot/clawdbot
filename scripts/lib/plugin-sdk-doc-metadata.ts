@@ -36,6 +36,12 @@ export const pluginSdkDocMetadata = {
   "approval-delivery-runtime": {
     category: "runtime",
   },
+  "approval-gateway-runtime": {
+    category: "runtime",
+  },
+  "approval-reference-runtime": {
+    category: "runtime",
+  },
   "approval-native-runtime": {
     category: "runtime",
   },

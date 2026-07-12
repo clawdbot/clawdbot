@@ -5,13 +5,33 @@ import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ModelProviderConfig } from "../config/types.models.js";
-import { resolveBundledProviderPolicySurface } from "./provider-public-artifacts.js";
+import {
+  resolveBundledProviderPolicySurface,
+  resolveProviderPolicySurface,
+} from "./provider-public-artifacts.js";
+
+function writeExternalPolicyFixture(): string {
+  const pluginRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-provider-policy-external-"));
+  fs.writeFileSync(
+    path.join(pluginRoot, "provider-policy-api.js"),
+    [
+      "export function resolveThinkingProfile({ modelId }) {",
+      '  return modelId === "full"',
+      '    ? { levels: [{ id: "off" }, { id: "high" }, { id: "max" }], defaultLevel: "off" }',
+      '    : { levels: [{ id: "off" }, { id: "low", label: "on" }], defaultLevel: "off" };',
+      "}",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  return pluginRoot;
+}
 
 describe("provider public artifacts", () => {
   const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
   const originalTrustBundledPluginsDir = process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
 
-  afterEach(() => {
+  function restoreBundledPluginEnv() {
     if (originalBundledPluginsDir === undefined) {
       delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
     } else {
@@ -22,6 +42,10 @@ describe("provider public artifacts", () => {
     } else {
       process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = originalTrustBundledPluginsDir;
     }
+  }
+
+  afterEach(() => {
+    restoreBundledPluginEnv();
     vi.doUnmock("./bundled-dir.js");
     vi.doUnmock("./manifest-registry.js");
     vi.doUnmock("./public-surface-loader.js");
@@ -96,6 +120,67 @@ describe("provider public artifacts", () => {
       defaultLevel: "low",
       preserveWhenCatalogReasoningFalse: true,
     });
+  });
+
+  it("loads trusted official external provider policy before runtime registration", () => {
+    const bundledPluginsDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-empty-bundled-plugins-"),
+    );
+    const pluginRoot = writeExternalPolicyFixture();
+
+    try {
+      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
+      process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
+      const fixturePlugin = {
+        id: "fixture-provider",
+        origin: "external",
+        trustedOfficialInstall: true,
+        rootDir: pluginRoot,
+        providers: ["fixture-provider"],
+        cliBackends: [],
+      } as const;
+      const surface = resolveProviderPolicySurface("fixture-provider", {
+        manifestRegistry: { plugins: [fixturePlugin as never] },
+      });
+
+      expect(
+        surface
+          ?.resolveThinkingProfile?.({ provider: "fixture-provider", modelId: "full" })
+          ?.levels.map((level) => level.id),
+      ).toEqual(["off", "high", "max"]);
+      expect(
+        surface
+          ?.resolveThinkingProfile?.({ provider: "fixture-provider", modelId: "legacy" })
+          ?.levels.map((level) => level.label),
+      ).toEqual([undefined, "on"]);
+    } finally {
+      restoreBundledPluginEnv();
+      fs.rmSync(pluginRoot, { recursive: true, force: true });
+      fs.rmSync(bundledPluginsDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not load public policy code from untrusted external plugins", () => {
+    const pluginRoot = writeExternalPolicyFixture();
+    try {
+      expect(
+        resolveProviderPolicySurface("fixture-provider", {
+          manifestRegistry: {
+            plugins: [
+              {
+                id: "fixture-provider",
+                origin: "external",
+                rootDir: pluginRoot,
+                providers: ["fixture-provider"],
+                cliBackends: [],
+              } as never,
+            ],
+          },
+        }),
+      ).toBeNull();
+    } finally {
+      fs.rmSync(pluginRoot, { recursive: true, force: true });
+    }
   });
 
   it("resolves multi-provider policy artifacts by manifest-owned provider id", async () => {

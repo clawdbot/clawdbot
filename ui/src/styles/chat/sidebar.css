@@ -1127,22 +1127,56 @@
 }
 
 .file-view {
+  position: relative;
   flex: 1;
   min-height: 0;
-  overflow: auto;
-  padding: 8px 0;
+  overflow: hidden;
+}
+
+.file-view__mount,
+.sidebar-file-view .cm-editor {
+  height: 100%;
+  min-height: 0;
+}
+
+.sidebar-file-view .cm-editor {
+  background: transparent;
+  color: var(--text);
   font-family: var(--mono);
   font-size: 12.5px;
   line-height: 1.6;
+}
+
+.sidebar-file-view .cm-scroller {
+  overflow: auto;
+  font-family: inherit;
   tab-size: 2;
 }
 
-.file-view__line {
-  display: grid;
-  /* Fixed gutter width (digit count set per file): an auto gutter column would
-     absorb free space on short lines and indent their code past longer lines. */
-  grid-template-columns: calc(var(--file-view-ln-digits, 3) * 1ch + 18px) max-content;
+.sidebar-file-view .cm-content {
   min-width: max-content;
+  padding: 8px 0;
+  caret-color: var(--text);
+}
+
+.sidebar-file-view .cm-line {
+  padding: 0 12px 0 8px;
+}
+
+.sidebar-file-view .cm-gutters {
+  border-right: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  background: var(--panel);
+  color: var(--muted);
+  user-select: none;
+}
+
+.sidebar-file-view .cm-lineNumbers .cm-gutterElement {
+  min-width: 3ch;
+  padding: 0 10px 0 8px;
+}
+
+.sidebar-file-view .cm-focused {
+  outline: none;
 }
 
 .file-view__line--target {
@@ -1157,128 +1191,116 @@
   background: color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
-.file-view__ln {
-  position: sticky;
-  left: 0;
-  z-index: 1;
-  padding: 0 10px 0 8px;
-  color: var(--muted);
-  background: var(--panel);
-  text-align: right;
-  user-select: none;
-}
-
-.file-view__line--target .file-view__ln,
-.file-view__line--match .file-view__ln {
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
-}
-
-.file-view__line--current .file-view__ln {
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 22%, var(--panel));
-}
-
-.file-view__lc {
-  padding-right: 12px;
-  white-space: pre;
-}
-
-.file-view :where(.hljs-comment, .hljs-quote) {
+.file-view .tok-comment {
   color: var(--muted);
   font-style: italic;
 }
 
-.file-view :where(.hljs-keyword, .hljs-selector-tag, .hljs-subst) {
+.file-view .tok-keyword {
   color: #ff8a80;
 }
 
 .file-view
-  :where(
-    .hljs-number,
-    .hljs-literal,
-    .hljs-variable,
-    .hljs-template-variable,
-    .hljs-tag .hljs-attr
-  ) {
+  :where(.tok-number, .tok-literal, .tok-atom, .tok-bool, .tok-variableName, .tok-variableName2) {
   color: #79c0ff;
 }
 
-.file-view :where(.hljs-string, .hljs-doctag) {
+.file-view :where(.tok-string, .tok-string2) {
   color: #a5d6ff;
 }
 
-.file-view :where(.hljs-title, .hljs-section, .hljs-selector-id, .hljs-function .hljs-title) {
+.file-view :where(.tok-heading, .tok-definition) {
   color: #d2a8ff;
 }
 
-.file-view :where(.hljs-type, .hljs-class .hljs-title, .hljs-built_in, .hljs-builtin-name) {
+.file-view :where(.tok-typeName, .tok-className, .tok-namespace, .tok-macroName) {
   color: #ffa657;
 }
 
-.file-view
-  :where(
-    .hljs-attr,
-    .hljs-attribute,
-    .hljs-name,
-    .hljs-selector-class,
-    .hljs-selector-attr,
-    .hljs-selector-pseudo
-  ) {
+.file-view :where(.tok-propertyName, .tok-labelName) {
   color: #7ee787;
 }
 
-.file-view :where(.hljs-symbol, .hljs-bullet, .hljs-link) {
+.file-view :where(.tok-link, .tok-url) {
   color: var(--accent-2);
 }
 
-.file-view .hljs-deletion {
+.file-view .tok-meta {
+  color: #c9d1d9;
+}
+
+.file-view .tok-deleted {
   color: #ffa198;
   background: rgba(248, 81, 73, 0.12);
 }
 
-.file-view .hljs-addition {
+.file-view .tok-inserted {
   color: #7ee787;
   background: rgba(46, 160, 67, 0.12);
 }
 
-:root[data-theme-mode="light"] .file-view :where(.hljs-keyword, .hljs-selector-tag, .hljs-subst) {
+.file-view .tok-emphasis {
+  font-style: italic;
+}
+
+.file-view .tok-strong {
+  font-weight: 600;
+}
+
+:root[data-theme-mode="light"] .file-view .tok-keyword {
   color: #cf222e;
 }
 
 :root[data-theme-mode="light"]
   .file-view
-  :where(.hljs-number, .hljs-literal, .hljs-variable, .hljs-template-variable) {
+  :where(.tok-number, .tok-literal, .tok-atom, .tok-bool, .tok-variableName, .tok-variableName2) {
   color: #0550ae;
 }
 
-:root[data-theme-mode="light"] .file-view :where(.hljs-string, .hljs-doctag) {
+:root[data-theme-mode="light"] .file-view :where(.tok-string, .tok-string2) {
   color: #0a3069;
 }
 
-:root[data-theme-mode="light"]
-  .file-view
-  :where(.hljs-title, .hljs-section, .hljs-selector-id, .hljs-function .hljs-title) {
+:root[data-theme-mode="light"] .file-view :where(.tok-heading, .tok-definition) {
   color: #8250df;
 }
 
 :root[data-theme-mode="light"]
   .file-view
-  :where(.hljs-type, .hljs-class .hljs-title, .hljs-built_in, .hljs-builtin-name) {
+  :where(.tok-typeName, .tok-className, .tok-namespace, .tok-macroName) {
   color: #953800;
 }
 
-:root[data-theme-mode="light"]
-  .file-view
-  :where(
-    .hljs-attr,
-    .hljs-attribute,
-    .hljs-name,
-    .hljs-selector-class,
-    .hljs-selector-attr,
-    .hljs-selector-pseudo
-  ) {
+:root[data-theme-mode="light"] .file-view :where(.tok-propertyName, .tok-labelName) {
   color: #116329;
+}
+
+:root[data-theme-mode="light"] .file-view .tok-meta {
+  color: #57606a;
+}
+
+.file-view__loading {
+  position: absolute;
+  inset: 12px;
+  pointer-events: none;
+}
+
+.file-view__save-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--warning) 40%, var(--border));
+  background: color-mix(in srgb, var(--warning) 10%, var(--panel));
+  color: var(--text);
+  font-size: 12px;
+}
+
+.file-view__save-notice-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 4px;
 }
 
 .sidebar-file-view__footer {

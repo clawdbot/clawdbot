@@ -23,6 +23,7 @@ import {
   type MessagePresentation,
   normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
+  resolveMessagePresentationButtonAction,
   resolveMessagePresentationControlValue,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
@@ -108,8 +109,15 @@ const MATTERMOST_PRESENTATION_CAPABILITIES = {
   },
 } satisfies ChannelOutboundAdapter["presentationCapabilities"];
 
-function hasMattermostPresentationButtons(presentation: MessagePresentation): boolean {
-  return buildMattermostPresentationButtons(presentation).some((row) => row.length > 0);
+function hasMattermostPresentationNavigation(presentation: MessagePresentation): boolean {
+  return presentation.blocks.some(
+    (block) =>
+      block.type === "buttons" &&
+      block.buttons.some((button) => {
+        const action = resolveMessagePresentationButtonAction(button);
+        return action?.type === "url" || action?.type === "web-app";
+      }),
+  );
 }
 
 function readMattermostPresentationButtons(payload: {
@@ -645,19 +653,24 @@ const mattermostOutbound: ChannelOutboundAdapter = {
       return null;
     }
     const buttons = buildMattermostPresentationButtons(presentation);
-    if (!hasMattermostPresentationButtons(presentation)) {
+    const hasButtons = buttons.some((row) => row.length > 0);
+    if (!hasButtons && !hasMattermostPresentationNavigation(presentation)) {
       return null;
     }
     return {
       ...payload,
       text: renderMessagePresentationFallbackText({ text: payload.text, presentation }),
-      channelData: {
-        ...payload.channelData,
-        mattermost: {
-          ...(payload.channelData?.mattermost as Record<string, unknown> | undefined),
-          presentationButtons: buttons,
-        },
-      },
+      ...(hasButtons
+        ? {
+            channelData: {
+              ...payload.channelData,
+              mattermost: {
+                ...(payload.channelData?.mattermost as Record<string, unknown> | undefined),
+                presentationButtons: buttons,
+              },
+            },
+          }
+        : {}),
     };
   },
   sendPayload: async (ctx) => {

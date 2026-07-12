@@ -115,7 +115,7 @@ describe("OpenClaw shell source initialization", () => {
     const trigger = document.createElement("button");
     shell.navDrawerOpen = true;
     shell.navDrawerTrigger = trigger;
-    shell.lastWorkspaceLocation = { routeId: "overview", search: "?agent=old" };
+    shell.lastWorkspaceLocation = { routeId: "usage", search: "?agent=old" };
     shell.activeSessionKey = "agent:old:main";
     shell.commandPaletteTarget = {};
     shell.agentsListClient = client;
@@ -147,7 +147,7 @@ describe("OpenClaw shell source initialization", () => {
     const shell = document.createElement(
       "openclaw-app-shell",
     ) as unknown as ShellInitializationState;
-    shell.routeState = { routeId: "overview" };
+    shell.routeState = { routeId: "usage" };
     const client = {} as GatewayBrowserClient;
     const snapshot = { client, connected: true };
     const firstAgents = {

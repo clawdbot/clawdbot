@@ -14,6 +14,7 @@ import {
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
+import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { hashWorkerCredential } from "./credential.js";
 import {
   createWorkerEnvironmentService,
@@ -108,6 +109,7 @@ describe("worker environment service", () => {
     serviceOptions: Partial<
       Pick<
         WorkerEnvironmentServiceOptions,
+        | "applyTranscriptCommit"
         | "bootstrapCallTimeoutMs"
         | "providerCallTimeoutMs"
         | "resolveSshIdentity"
@@ -216,6 +218,33 @@ describe("worker environment service", () => {
     };
   }
 
+  function seedAttachedIdentity(
+    environmentId: string,
+    sessionId: string,
+  ): WorkerConnectionIdentity {
+    const ready = seedReady(environmentId);
+    const attached = store.transition({
+      environmentId,
+      from: ready.state,
+      to: "attached",
+      patch: attachedPatch(environmentId, sessionId),
+    });
+    const credential = store.getCredential(environmentId);
+    if (!credential || !attached.bootstrapReceipt) {
+      throw new Error("attached worker fixture is incomplete");
+    }
+    return {
+      environmentId,
+      credentialHash: credential.credentialHash,
+      bundleHash: credential.bundleHash,
+      sessionId,
+      ownerEpoch: attached.ownerEpoch,
+      rpcSetVersion: credential.rpcSetVersion,
+      protocolFeatures: [...attached.bootstrapReceipt.protocolFeatures],
+      credentialExpiresAtMs: credential.expiresAtMs,
+    };
+  }
+
   it("persists intent and an immutable profile snapshot before provisioning", async () => {
     const operationIds: string[] = [];
     const provider = createProvider({
@@ -316,6 +345,50 @@ describe("worker environment service", () => {
     });
     expect(prepareInstallation).toHaveBeenCalledTimes(1);
     expect(prepareInstallation).toHaveBeenCalledWith("bundle");
+  });
+
+  it("fences transcript commits by current epoch and exact session credential binding", async () => {
+    const environmentId = "worker-transcript-fence";
+    const sessionId = "session-transcript-fence";
+    const identity = seedAttachedIdentity(environmentId, sessionId);
+    const applyTranscriptCommit = vi.fn(async () => ({
+      ok: true as const,
+      result: { entryIds: ["entry-1"], newLeafId: "entry-1" },
+    }));
+    const workerService = createService(createProvider(), { applyTranscriptCommit });
+    const request = {
+      runEpoch: identity.ownerEpoch,
+      seq: 1,
+      baseLeafId: null,
+      messages: [
+        {
+          role: "user" as const,
+          content: [{ type: "text" as const, text: "hello" }],
+          timestamp: 1,
+        },
+      ],
+    };
+
+    await expect(workerService.commitTranscript(identity, request)).resolves.toMatchObject({
+      ok: true,
+    });
+    expect(applyTranscriptCommit).toHaveBeenCalledOnce();
+
+    await expect(
+      workerService.commitTranscript(identity, {
+        ...request,
+        runEpoch: identity.ownerEpoch + 1,
+        seq: 2,
+      }),
+    ).resolves.toEqual({ ok: false, reason: "epoch-mismatch" });
+
+    database.db
+      .prepare("UPDATE worker_environment_credentials SET session_id = ? WHERE environment_id = ?")
+      .run("session-other", environmentId);
+    await expect(workerService.commitTranscript(identity, { ...request, seq: 2 })).resolves.toEqual(
+      { ok: false, reason: "session-not-attached" },
+    );
+    expect(applyTranscriptCommit).toHaveBeenCalledOnce();
   });
 
   it("rejects attach before current bootstrap", async () => {

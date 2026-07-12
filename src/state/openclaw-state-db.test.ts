@@ -7,6 +7,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { readCronRunLogEntriesSync } from "../cron/run-log.js";
+import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -841,6 +842,103 @@ describe("openclaw state database", () => {
       )
       .get() as { name?: string } | undefined;
     expect(credentialTable?.name).toBe("worker_environment_credentials");
+  });
+
+  it("adds worker transcript commit tables to existing state databases", () => {
+    const stateDir = createTempStateDir();
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const databasePath = database.path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacyDb = new DatabaseSync(databasePath);
+    legacyDb.exec(`
+      DROP TABLE worker_transcript_commits;
+      DROP TABLE worker_transcript_commit_heads;
+    `);
+    legacyDb.close();
+
+    const reopened = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const tables = reopened.db
+      .prepare(
+        `SELECT name FROM sqlite_master
+          WHERE type = 'table' AND name IN (
+            'worker_transcript_commit_heads',
+            'worker_transcript_commits'
+          )
+          ORDER BY name`,
+      )
+      .all() as Array<{ name?: string }>;
+    expect(tables.map((table) => table.name)).toEqual([
+      "worker_transcript_commit_heads",
+      "worker_transcript_commits",
+    ]);
+  });
+
+  it("backfills durable approval transport references in databases created by PR 1", () => {
+    const stateDir = createTempStateDir();
+    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
+    const databasePath = database.path;
+    const approvalId = "approval/from-pr1";
+    const expectedRef = buildApprovalResolutionRef({ approvalId, approvalKind: "exec" });
+    database.db
+      .prepare(
+        `INSERT INTO operator_approvals (
+          approval_id,
+          resolution_ref,
+          kind,
+          status,
+          presentation_json,
+          requested_by_device_token_auth,
+          reviewer_device_ids_json,
+          audience_session_keys_json,
+          runtime_epoch,
+          created_at_ms,
+          expires_at_ms,
+          updated_at_ms
+        ) VALUES (?, ?, 'exec', 'pending', ?, 0, '[]', '[]', 'pr1-runtime', 1, 1000, 1)`,
+      )
+      .run(
+        approvalId,
+        expectedRef,
+        JSON.stringify({
+          kind: "exec",
+          commandText: "echo migration",
+          commandPreview: null,
+          warningText: null,
+          host: "gateway",
+          nodeId: null,
+          agentId: "main",
+          allowedDecisions: ["allow-once", "deny"],
+        }),
+      );
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacyDb = new DatabaseSync(databasePath);
+    legacyDb.exec(`
+      DROP INDEX idx_operator_approvals_resolution_ref;
+      ALTER TABLE operator_approvals DROP COLUMN resolution_ref;
+    `);
+    legacyDb.close();
+
+    const reopened = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
+    expect(
+      reopened.db
+        .prepare("SELECT resolution_ref FROM operator_approvals WHERE approval_id = ?")
+        .get(approvalId),
+    ).toEqual({ resolution_ref: expectedRef });
+    const indexes = reopened.db.prepare("PRAGMA index_list(operator_approvals)").all() as Array<{
+      name?: unknown;
+      unique?: unknown;
+    }>;
+    expect(indexes).toContainEqual(
+      expect.objectContaining({ name: "idx_operator_approvals_resolution_ref", unique: 1 }),
+    );
   });
 
   it("migrates requester and executor attribution for existing cross-agent tasks", () => {

@@ -11,6 +11,7 @@ import type {
   SessionsPatchResult,
   SessionWorkspaceGetResult,
   SessionWorkspaceListResult,
+  SessionWorkspaceSetResult,
 } from "../../api/types.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { isSessionRunActive } from "../session-run-state.ts";
@@ -197,6 +198,12 @@ export type SessionCapability = {
     path: string,
     options?: { agentId?: string | null },
   ) => Promise<SessionWorkspaceGetResult | null>;
+  setFile: (
+    key: string,
+    path: string,
+    content: string,
+    options: { agentId?: string | null; expectedHash: string },
+  ) => Promise<SessionWorkspaceSetResult | null>;
   subscribeMessages: (
     key: string,
     options?: { agentId?: string | null },
@@ -407,6 +414,22 @@ function requestSessionFile(
   return client.request<SessionWorkspaceGetResult | null>("sessions.files.get", {
     sessionKey: key,
     path,
+    ...(options.agentId?.trim() ? { agentId: options.agentId.trim() } : {}),
+  });
+}
+
+function requestSessionFileSet(
+  client: SessionRequestClient,
+  key: string,
+  path: string,
+  content: string,
+  options: { agentId?: string | null; expectedHash: string },
+): Promise<SessionWorkspaceSetResult | null> {
+  return client.request<SessionWorkspaceSetResult | null>("sessions.files.set", {
+    sessionKey: key,
+    path,
+    content,
+    expectedHash: options.expectedHash,
     ...(options.agentId?.trim() ? { agentId: options.agentId.trim() } : {}),
   });
 }
@@ -1169,6 +1192,20 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     return isCurrentConnection(scope) ? result : null;
   };
 
+  const setFile = async (
+    key: string,
+    path: string,
+    content: string,
+    options: { agentId?: string | null; expectedHash: string },
+  ): Promise<SessionWorkspaceSetResult | null> => {
+    const scope = captureConnection();
+    if (!scope) {
+      return null;
+    }
+    const result = await requestSessionFileSet(scope.client, key, path, content, options);
+    return isCurrentConnection(scope) ? result : null;
+  };
+
   const subscribeMessages = async (
     key: string,
     options: { agentId?: string | null } = {},
@@ -1362,6 +1399,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     steer,
     listFiles,
     getFile,
+    setFile,
     subscribeMessages,
     unsubscribeMessages,
     listCheckpoints,

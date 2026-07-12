@@ -12,7 +12,11 @@ import type {
   PluginDoctorStateMigrationContext,
 } from "openclaw/plugin-sdk/runtime-doctor";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { stateMigrations } from "./doctor-contract-api.js";
+import {
+  legacyConfigRules,
+  normalizeCompatibilityConfig,
+  stateMigrations,
+} from "./doctor-contract-api.js";
 import {
   buildMSTeamsConversationStateKey,
   MSTEAMS_CONVERSATIONS_NAMESPACE,
@@ -346,5 +350,97 @@ describe("msteams doctor state migration", () => {
       sessionKey: sanitizedSessionKey,
       learnings: ["Prefer cards for channel feedback"],
     });
+  });
+});
+
+describe("msteams streaming legacy config rules", () => {
+  const rule = legacyConfigRules.find((entry) => entry.message.includes("chunkMode"));
+
+  it("matches flat streaming aliases", () => {
+    expect(rule?.match?.({ blockStreaming: true }, {})).toBe(true);
+    expect(rule?.match?.({ chunkMode: "newline" }, {})).toBe(true);
+    expect(rule?.match?.({ streamMode: "block" }, {})).toBe(true);
+    expect(rule?.match?.({ streaming: { mode: "partial" } }, {})).toBe(false);
+  });
+});
+
+describe("msteams normalizeCompatibilityConfig streaming aliases", () => {
+  function msteamsConfig(entry: Record<string, unknown>) {
+    return { channels: { msteams: entry } } as never;
+  }
+
+  it("moves flat aliases into the nested streaming shape", () => {
+    const result = normalizeCompatibilityConfig({
+      cfg: msteamsConfig({
+        streamMode: "block",
+        chunkMode: "newline",
+        blockStreaming: true,
+        blockStreamingCoalesce: { idleMs: 250 },
+      }),
+    });
+
+    const msteams = result.config.channels?.msteams as Record<string, unknown>;
+    expect(msteams.streaming).toEqual({
+      mode: "block",
+      chunkMode: "newline",
+      block: { enabled: true, coalesce: { idleMs: 250 } },
+    });
+    expect(msteams.streamMode).toBeUndefined();
+    expect(msteams.chunkMode).toBeUndefined();
+    expect(msteams.blockStreaming).toBeUndefined();
+    expect(msteams.blockStreamingCoalesce).toBeUndefined();
+    for (const change of [
+      "Moved channels.msteams.streamMode → channels.msteams.streaming.mode (block).",
+      "Moved channels.msteams.chunkMode → channels.msteams.streaming.chunkMode.",
+      "Moved channels.msteams.blockStreaming → channels.msteams.streaming.block.enabled.",
+      "Moved channels.msteams.blockStreamingCoalesce → channels.msteams.streaming.block.coalesce.",
+    ]) {
+      expect(result.changes).toContain(change);
+    }
+  });
+
+  it("removes a conflicting streamMode when streaming.mode is already set", () => {
+    const result = normalizeCompatibilityConfig({
+      cfg: msteamsConfig({
+        streamMode: "off",
+        streaming: { mode: "block" },
+      }),
+    });
+
+    const msteams = result.config.channels?.msteams as Record<string, unknown>;
+    expect(msteams.streamMode).toBeUndefined();
+    expect(msteams.streaming).toEqual({ mode: "block" });
+    // Doctor drops mutations without change messages, so the conflict removal
+    // must be reported or the invalid flat key would never be persisted away.
+    expect(result.changes).toEqual([
+      "Removed channels.msteams.streamMode (channels.msteams.streaming.mode already set).",
+    ]);
+  });
+
+  it("removes flat aliases when the nested value is already set", () => {
+    const result = normalizeCompatibilityConfig({
+      cfg: msteamsConfig({
+        blockStreaming: false,
+        streaming: { block: { enabled: true } },
+      }),
+    });
+
+    const msteams = result.config.channels?.msteams as Record<string, unknown>;
+    expect(msteams.streaming).toEqual({ block: { enabled: true } });
+    expect(msteams.blockStreaming).toBeUndefined();
+    expect(result.changes).toContain(
+      "Removed channels.msteams.blockStreaming (channels.msteams.streaming.block.enabled already set).",
+    );
+  });
+
+  it("is idempotent: a second run reports no changes", () => {
+    const first = normalizeCompatibilityConfig({
+      cfg: msteamsConfig({ streamMode: "block", chunkMode: "newline" }),
+    });
+    expect(first.changes.length).toBeGreaterThan(0);
+
+    const second = normalizeCompatibilityConfig({ cfg: first.config });
+    expect(second.changes).toEqual([]);
+    expect(second.config).toBe(first.config);
   });
 });

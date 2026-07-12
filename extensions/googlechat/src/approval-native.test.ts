@@ -270,6 +270,7 @@ describe("googleChatApprovalCapability", () => {
       shouldHandleGoogleChatNativeApprovalRequest({
         cfg,
         accountId: "alpha",
+        approvalKind: "exec",
         request,
       }),
     ).toBe(true);
@@ -277,6 +278,7 @@ describe("googleChatApprovalCapability", () => {
       shouldHandleGoogleChatNativeApprovalRequest({
         cfg,
         accountId: "beta",
+        approvalKind: "exec",
         request,
       }),
     ).toBe(false);
@@ -312,6 +314,7 @@ describe("googleChatApprovalCapability", () => {
     expect(
       shouldHandleGoogleChatNativeApprovalRequest({
         cfg,
+        approvalKind: "exec",
         request,
       }),
     ).toBe(false);

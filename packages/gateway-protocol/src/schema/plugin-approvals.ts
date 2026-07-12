@@ -1,3 +1,4 @@
+import type { Static } from "typebox";
 // Gateway Protocol schema module defines protocol validation shapes.
 import { Type } from "typebox";
 import { NonEmptyString } from "./primitives.js";
@@ -54,3 +55,8 @@ export const PluginApprovalResolveParamsSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+// Owner-local wire types derived directly from local schema consts so the
+// public plugin-sdk declaration graph never pulls in the ProtocolSchemas registry.
+export type PluginApprovalRequestParams = Static<typeof PluginApprovalRequestParamsSchema>;
+export type PluginApprovalResolveParams = Static<typeof PluginApprovalResolveParamsSchema>;

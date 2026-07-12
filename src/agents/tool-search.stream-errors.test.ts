@@ -87,4 +87,47 @@ describe("tool-search code-mode stream errors", () => {
     });
     expect(spawnedChild?.kill).toHaveBeenCalledOnce();
   });
+
+  it("keeps stderr tail in exit error messages valid at UTF-16 boundaries", async () => {
+    toolSearch.testing.setToolSearchCodeModeSupportedForTest(true);
+    toolSearch.testing.setToolSearchMinCodeTimeoutMsForTest(1000);
+
+    spawnMock.mockImplementationOnce(
+      (_command: string, _args: readonly string[], _options: SpawnOptions): ChildProcess => {
+        const { child, stderr } = createMockSpawnChild();
+        process.nextTick(() => {
+          stderr?.emit("data", `${"a".repeat(500)}😀${"a".repeat(499)}`);
+          process.nextTick(() => {
+            child.emit("exit", 1, null);
+          });
+        });
+        return child as unknown as ChildProcess;
+      },
+    );
+
+    const runtime = new toolSearch.ToolSearchRuntime(
+      {},
+      toolSearch.testing.resolveToolSearchConfig({}),
+    );
+
+    let caught: Error | undefined;
+    try {
+      await toolSearch.testing.runCodeModeChild({
+        code: "return 1;",
+        config: toolSearch.testing.resolveToolSearchConfig({}),
+        logs: [],
+        parentToolCallId: "call-stderr-utf16",
+        runtime,
+      });
+    } catch (error) {
+      caught = error instanceof Error ? error : new Error(String(error));
+    }
+
+    expect(caught).toBeDefined();
+    expect(caught?.message).toMatch(/tool_search_code child exited with 1/);
+    expect(caught?.message).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,
+    );
+    expect(caught?.message.endsWith("a".repeat(499))).toBe(true);
+  });
 });

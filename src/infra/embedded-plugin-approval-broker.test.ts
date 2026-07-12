@@ -7,7 +7,7 @@ function requestPayload() {
     description: "Apply a pending workspace skill proposal into live workspace skills.",
     toolName: "skill_workshop",
     sessionKey: "agent:main:main",
-    allowedDecisions: ["allow-once", "deny"] as const,
+    allowedDecisions: ["allow-once"] as const,
   };
 }
 
@@ -54,6 +54,18 @@ describe("EmbeddedPluginApprovalBroker", () => {
     expect(broker.resolve(approval?.id, "allow-always")).toBe(false);
     broker.stop();
     await expect(resultPromise).rejects.toThrow("embedded plugin approval broker stopped");
+  });
+
+  it("keeps deny available as the canonical fail-closed decision", async () => {
+    const broker = new EmbeddedPluginApprovalBroker();
+    const resultPromise = broker.request({
+      request: requestPayload(),
+      timeoutMs: 5_000,
+    });
+    const approval = broker.listPending()[0];
+
+    expect(broker.resolve(approval?.id, "deny")).toBe(true);
+    await expect(resultPromise).resolves.toMatchObject({ decision: "deny" });
   });
 
   it("times out pending approvals", async () => {

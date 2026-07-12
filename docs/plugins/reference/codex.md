@@ -1,5 +1,5 @@
 ---
-summary: "OpenClaw Codex app-server harness, model provider, and native session supervision plugin."
+summary: "Codex app-server harness, model provider, and native session catalog."
 read_when:
   - You are installing, configuring, or auditing the codex plugin
 title: "Codex plugin"
@@ -7,7 +7,7 @@ title: "Codex plugin"
 
 # Codex plugin
 
-OpenClaw Codex app-server harness, model provider, and native session supervision plugin.
+Codex app-server harness, model provider, and native session catalog.
 
 ## Distribution
 

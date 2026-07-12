@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   encodeSessionArchiveContent,
+  materializeSessionArchiveForRead,
   readSessionArchiveContentSync,
   SESSION_ARCHIVE_ZSTD_SUFFIX,
   stripSessionArchiveCompressionSuffix,
@@ -52,6 +53,29 @@ describe("archive compression", () => {
     fs.writeFileSync(archivePath, "plain\n", "utf8");
 
     expect(readSessionArchiveContentSync(archivePath)).toBe("plain\n");
+  });
+
+  it("materializes compressed archives to a stable plain JSONL cache path", () => {
+    const content = `${JSON.stringify({ type: "message", body: "cold" })}\n`;
+    const encoded = encodeSessionArchiveContent(content);
+    const dir = makeTempDir();
+    const archivePath = path.join(
+      dir,
+      `sess.jsonl.deleted.2026-07-11T00-00-00.000Z${encoded.suffix}`,
+    );
+    fs.writeFileSync(archivePath, encoded.bytes);
+
+    const first = materializeSessionArchiveForRead(archivePath);
+    const second = materializeSessionArchiveForRead(archivePath);
+
+    expect(second).toBe(first);
+    expect(fs.readFileSync(first, "utf8")).toBe(content);
+    if (encoded.suffix === "") {
+      // Plain archives pass through untouched.
+      expect(first).toBe(archivePath);
+    } else {
+      expect(first.endsWith(".jsonl")).toBe(true);
+    }
   });
 
   it("strips the zstd suffix so archive name parsers see one shape", () => {

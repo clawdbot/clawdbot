@@ -26,6 +26,7 @@ import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { passesManifestOwnerBasePolicy } from "../plugins/manifest-owner-policy.js";
+import type { OpenClawPackageBuild } from "../plugins/manifest.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { loadPluginRegistrySnapshot } from "../plugins/plugin-registry.js";
 import {
@@ -95,6 +96,7 @@ type CrestodianOwnerPluginRegistryRecord = {
   packageVersion?: string;
   installRecordHash?: string;
   packageJson?: { path: string; hash: string };
+  packageBuild?: OpenClawPackageBuild;
 };
 
 type CrestodianOwnerPluginRegistryLoader = (params: {
@@ -391,6 +393,7 @@ function projectOwnerPluginArtifacts(params: {
         origin: record.origin,
         rootDir: record.rootDir,
         ...(record.source ? { source: record.source } : {}),
+        ...(record.packageBuild ? { packageBuild: record.packageBuild } : {}),
       }),
     };
   });

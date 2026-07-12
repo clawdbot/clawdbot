@@ -1,4 +1,5 @@
 // Gateway Protocol schemas for cooperative host suspension.
+import type { Static } from "typebox";
 import { Type } from "typebox";
 
 const SuspensionTokenSchema = Type.String({ minLength: 1, maxLength: 128, pattern: "\\S" });
@@ -107,3 +108,14 @@ export const GatewaySuspendResumeResultSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+// Wire types derive directly from local schema consts so public d.ts graphs never
+// pull in the ProtocolSchemas registry.
+export type GatewaySuspendTaskBlocker = Static<typeof GatewaySuspendTaskBlockerSchema>;
+export type GatewaySuspendBlocker = Static<typeof GatewaySuspendBlockerSchema>;
+export type GatewaySuspendPrepareParams = Static<typeof GatewaySuspendPrepareParamsSchema>;
+export type GatewaySuspendPrepareResult = Static<typeof GatewaySuspendPrepareResultSchema>;
+export type GatewaySuspendStatusParams = Static<typeof GatewaySuspendStatusParamsSchema>;
+export type GatewaySuspendStatusResult = Static<typeof GatewaySuspendStatusResultSchema>;
+export type GatewaySuspendResumeParams = Static<typeof GatewaySuspendResumeParamsSchema>;
+export type GatewaySuspendResumeResult = Static<typeof GatewaySuspendResumeResultSchema>;

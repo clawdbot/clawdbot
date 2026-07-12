@@ -3,9 +3,6 @@ import { ADMIN_SCOPE, APPROVALS_SCOPE } from "./method-scopes.js";
 import type { GatewayClient } from "./server-methods/types.js";
 
 export type OperatorApprovalAccessBinding = {
-  requestedByConnId?: string | null;
-  requestedByDeviceId?: string | null;
-  requestedByClientId?: string | null;
   reviewerDeviceIds?: readonly string[] | null;
 };
 
@@ -73,21 +70,11 @@ export function canAccessOperatorApproval(params: {
     return Boolean(clientDeviceId && reviewerDeviceIds.includes(clientDeviceId));
   }
 
-  const requestedByDeviceId = normalizeIdentity(params.binding.requestedByDeviceId);
-  if (requestedByDeviceId) {
-    return requestedByDeviceId === clientDeviceId;
-  }
-
-  const requestedByConnId = normalizeIdentity(params.binding.requestedByConnId);
-  if (requestedByConnId) {
-    return requestedByConnId === normalizeIdentity(params.client?.connId);
-  }
-
-  if (normalizeIdentity(params.binding.requestedByClientId)) {
-    return false;
-  }
-
-  // Only genuinely legacy, unbound records retain the broad approvals-scope
-  // recovery behavior.
+  // No explicit reviewer binding: the operator.approvals scope tier is the
+  // access authority, matching the shipped contract where any authorized
+  // approval surface (Telegram buttons, macOS app, control UI) may resolve
+  // any pending approval. Cross-surface first-answer-wins depends on this;
+  // reviewerDeviceIds is the opt-in restriction, and requester identity gates
+  // only the legacy adapters in approval-shared.
   return true;
 }

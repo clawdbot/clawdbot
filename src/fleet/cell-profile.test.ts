@@ -22,6 +22,7 @@ import {
   parseEnvAssignments,
   type CellContainerProfile,
   validateFleetImage,
+  validateDiskSize,
   validateTenantId,
 } from "./cell-profile.js";
 
@@ -116,6 +117,31 @@ describe("fleet image references", () => {
     );
     expect(() => validateFleetImage("--help")).toThrow(/must not begin/iu);
     expect(() => validateFleetImage(" ")).toThrow(/must not be empty/iu);
+  });
+});
+
+describe("fleet disk limits", () => {
+  it.each(["10g", "512m", "1.5g", "10GB", "1024", "2tb"])("accepts %s", (value) => {
+    expect(validateDiskSize(value)).toBe(value);
+  });
+
+  it.each(["", " ", "0", "0g", "0.0GB", "-1g", "10 g", "g", "10g;x", "--size", "1e9"])(
+    "rejects %j",
+    (value) => {
+      expect(() => validateDiskSize(value)).toThrow(/--disk/iu);
+    },
+  );
+
+  it("adds storage-opt and the replay label only when configured", () => {
+    const withDisk = buildCellRunArgs(makeProfile({ diskSize: "10g" }), {
+      environmentFile: TEST_ENVIRONMENT_FILE,
+    });
+    const withoutDisk = buildCellRunArgs(makeProfile(), { environmentFile: TEST_ENVIRONMENT_FILE });
+    expectOption(withDisk, "--storage-opt", "size=10g");
+    expect(withDisk.indexOf("--storage-opt")).toBe(withDisk.indexOf("--cpus") + 2);
+    expect(withDisk).toContain("openclaw.fleet.disk-limit=10g");
+    expect(withoutDisk).not.toContain("--storage-opt");
+    expect(withoutDisk.join(" ")).not.toContain("openclaw.fleet.disk-limit");
   });
 });
 

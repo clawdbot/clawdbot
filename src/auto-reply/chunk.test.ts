@@ -624,10 +624,13 @@ describe("chunkMarkdownTextWithMode", () => {
 });
 
 describe("resolveChunkMode", () => {
-  const providerCfg = { channels: { slack: { chunkMode: "newline" as const } } };
+  // Flat chunkMode stays canonical for channels without a nested streaming
+  // schema (signal, irc, googlechat, whatsapp); nested-only channels are
+  // covered by the imessage rows below.
+  const providerCfg = { channels: { signal: { chunkMode: "newline" as const } } };
   const accountCfg = {
     channels: {
-      slack: {
+      signal: {
         chunkMode: "length" as const,
         accounts: {
           primary: { chunkMode: "newline" as const },
@@ -641,10 +644,10 @@ describe("resolveChunkMode", () => {
     { cfg: {}, provider: "discord", accountId: undefined, expected: "length" },
     { cfg: undefined, provider: "imessage", accountId: undefined, expected: "length" },
     { cfg: providerCfg, provider: "__internal__", accountId: undefined, expected: "length" },
-    { cfg: providerCfg, provider: "slack", accountId: undefined, expected: "newline" },
+    { cfg: providerCfg, provider: "signal", accountId: undefined, expected: "newline" },
     { cfg: providerCfg, provider: "discord", accountId: undefined, expected: "length" },
-    { cfg: accountCfg, provider: "slack", accountId: "primary", expected: "newline" },
-    { cfg: accountCfg, provider: "slack", accountId: "other", expected: "length" },
+    { cfg: accountCfg, provider: "signal", accountId: "primary", expected: "newline" },
+    { cfg: accountCfg, provider: "signal", accountId: "other", expected: "length" },
     {
       cfg: { channels: { imessage: { streaming: { chunkMode: "newline" as const } } } },
       provider: "imessage",
@@ -669,6 +672,21 @@ describe("resolveChunkMode", () => {
       provider: "webchat",
       accountId: undefined,
       expected: "length",
+    },
+    // Mattermost's schema accepts both shapes; the nested streaming config
+    // wins over the flat key when both are present.
+    {
+      cfg: {
+        channels: {
+          mattermost: {
+            chunkMode: "length" as const,
+            streaming: { chunkMode: "newline" as const },
+          },
+        },
+      },
+      provider: "mattermost",
+      accountId: undefined,
+      expected: "newline",
     },
   ] as const)(
     "resolves default/provider/account/internal chunk mode for $provider $accountId",

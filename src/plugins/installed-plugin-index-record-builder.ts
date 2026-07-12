@@ -323,6 +323,9 @@ export function buildInstalledPluginIndexRecords(params: {
     if (packageChannel) {
       indexRecord.packageChannel = packageChannel;
     }
+    if (candidate?.packageManifest?.build) {
+      indexRecord.packageBuild = structuredClone(candidate.packageManifest.build);
+    }
     if (packageJson) {
       indexRecord.packageJson = packageJson;
     }

@@ -1,5 +1,6 @@
 // Gateway Protocol schema module defines protocol validation shapes.
-import { Type, type Static } from "typebox";
+import type { Static } from "typebox";
+import { Type } from "typebox";
 import { NonEmptyString } from "./primitives.js";
 
 /**
@@ -278,3 +279,11 @@ export type PluginsUninstallParams = Static<typeof PluginsUninstallParamsSchema>
 export type PluginsUninstallResult = Static<typeof PluginsUninstallResultSchema>;
 export type PluginsSetEnabledParams = Static<typeof PluginsSetEnabledParamsSchema>;
 export type PluginsSetEnabledResult = Static<typeof PluginsSetEnabledResultSchema>;
+
+// Wire types derive directly from local schema consts so public d.ts graphs never
+// pull in the ProtocolSchemas registry.
+export type PluginControlUiDescriptor = Static<typeof PluginControlUiDescriptorSchema>;
+export type PluginsUiDescriptorsParams = Static<typeof PluginsUiDescriptorsParamsSchema>;
+export type PluginsUiDescriptorsResult = Static<typeof PluginsUiDescriptorsResultSchema>;
+export type PluginsSessionActionParams = Static<typeof PluginsSessionActionParamsSchema>;
+export type PluginsSessionActionResult = Static<typeof PluginsSessionActionResultSchema>;

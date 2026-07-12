@@ -3,6 +3,10 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   type WorkerAdmissionHandshake,
   type WorkerConnectParams,
+  type WorkerProtocolCloseReason,
+  type WorkerTranscriptCommitErrorReason,
+  type WorkerTranscriptCommitParams,
+  type WorkerTranscriptCommitResult,
   WORKER_RPC_SET_VERSION,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { OpenClawConfig } from "../../config/types.js";
@@ -22,6 +26,7 @@ import {
   type WorkerSshEndpoint,
   type WorkerSshIdentity,
 } from "../../plugins/types.js";
+import { safeEqualSecret } from "../../security/secret-equal.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import {
   admitWorkerConnection,
@@ -98,7 +103,19 @@ export type WorkerEnvironmentServiceOptions = {
   resolveWorkerGateway?: () => { host: "127.0.0.1" | "::1"; port: number } | undefined;
   now?: () => number;
   logger?: { warn: (message: string) => void };
+  applyTranscriptCommit?: (params: {
+    identity: WorkerConnectionIdentity;
+    request: WorkerTranscriptCommitParams;
+  }) => Promise<WorkerTranscriptCommitApplicationResult>;
 };
+
+export type WorkerTranscriptCommitApplicationResult =
+  | { ok: true; result: WorkerTranscriptCommitResult }
+  | { ok: false; reason: WorkerTranscriptCommitErrorReason };
+
+export type WorkerTranscriptCommitServiceResult =
+  | WorkerTranscriptCommitApplicationResult
+  | { ok: false; closeReason: WorkerProtocolCloseReason };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -946,6 +963,47 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     return { checkedAtMs, credentialHash, grant };
   };
 
+  const commitTranscript = (
+    identity: WorkerConnectionIdentity,
+    request: WorkerTranscriptCommitParams,
+  ): Promise<WorkerTranscriptCommitServiceResult> =>
+    withLock(identity.environmentId, async () => {
+      if (stopping) {
+        return { ok: false, closeReason: "environment-unavailable" };
+      }
+      const credential = store.getCredential(identity.environmentId);
+      if (!credential || !safeEqualSecret(credential.credentialHash, identity.credentialHash)) {
+        return { ok: false, closeReason: "credential-replaced" };
+      }
+      if (now() >= credential.expiresAtMs) {
+        return { ok: false, closeReason: "credential-expired" };
+      }
+      const environment = store.get(identity.environmentId);
+      if (!environment || environment.destroyRequestedAtMs !== null) {
+        return { ok: false, closeReason: "environment-unavailable" };
+      }
+      if (
+        request.runEpoch !== identity.ownerEpoch ||
+        request.runEpoch !== credential.ownerEpoch ||
+        request.runEpoch !== environment.ownerEpoch
+      ) {
+        return { ok: false, reason: "epoch-mismatch" };
+      }
+      if (
+        environment.state !== "attached" ||
+        !identity.sessionId ||
+        credential.sessionId !== identity.sessionId ||
+        environment.attachedSessionIds.length !== 1 ||
+        environment.attachedSessionIds[0] !== identity.sessionId
+      ) {
+        return { ok: false, reason: "session-not-attached" };
+      }
+      if (!options.applyTranscriptCommit) {
+        return { ok: false, closeReason: "gateway-unavailable" };
+      }
+      return await options.applyTranscriptCommit({ identity, request });
+    });
+
   return {
     list: () => store.list().map(project),
     get: (environmentId: string) => {
@@ -983,6 +1041,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       stopping
         ? ("environment-unavailable" as const)
         : validateWorkerConnectionIdentity({ store, identity, nowMs: now() }),
+    commitTranscript,
     attachSession,
     takeMintedCredential: (binding: WorkerCredentialBinding) =>
       readPendingCredential(binding)?.grant,

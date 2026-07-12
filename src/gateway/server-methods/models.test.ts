@@ -44,7 +44,7 @@ function createDemoOAuthStore(params: { access: string; expires: number }) {
 }
 
 function requestModelsList(params: {
-  view: "default" | "configured" | "all";
+  view: "default" | "configured" | "provider-config" | "all";
   respond?: ReturnType<typeof vi.fn>;
   runtimeConfig?: OpenClawConfig;
   loadGatewayModelCatalog: (params?: {
@@ -82,6 +82,155 @@ function requestModelsList(params: {
 }
 
 describe("models.list", () => {
+  it("keeps source-authored provider inventory when the canonical catalog is missing", async () => {
+    const sourceProvider = {
+      baseUrl: "https://vllm.example/v1",
+      apiKey: {
+        source: "file",
+        provider: "mounted-json",
+        id: "/providers/vllm/apiKey",
+      },
+      models: [
+        {
+          id: "source-model",
+          name: "Source Model",
+          contextWindow: 128_000,
+          reasoning: true,
+          input: ["text", "image"],
+          params: { temperature: 0.2 },
+          compat: { supportsDeveloperRole: false },
+        },
+      ],
+    };
+    const sourceConfig = {
+      agents: {
+        defaults: {
+          models: {
+            "vllm/allowlisted": {},
+          },
+        },
+      },
+      secrets: {
+        providers: {
+          "mounted-json": {
+            source: "file",
+            path: "/tmp/openclaw-test-secrets.json",
+            mode: "json",
+          },
+        },
+      },
+      models: {
+        providers: {
+          vllm: sourceProvider,
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const runtimeConfig = {
+      ...sourceConfig,
+      models: {
+        providers: {
+          vllm: {
+            ...sourceProvider,
+            apiKey: "test-key",
+            models: [{ id: "runtime-only", name: "Runtime Only" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const loadGatewayModelCatalog = vi.fn(() => Promise.resolve([]));
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+    try {
+      const { request, respond } = requestModelsList({
+        view: "provider-config",
+        runtimeConfig,
+        loadGatewayModelCatalog,
+        reqId: "req-models-list-provider-config-source",
+      });
+      await request;
+
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        {
+          models: [
+            {
+              id: "source-model",
+              name: "Source Model",
+              provider: "vllm",
+              contextWindow: 128_000,
+              reasoning: true,
+              input: ["text", "image"],
+              available: true,
+            },
+          ],
+        },
+        undefined,
+      );
+      expect(loadGatewayModelCatalog).toHaveBeenCalledExactlyOnceWith({ readOnly: true });
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
+  });
+
+  it("omits unknown provider-config availability", async () => {
+    const config = {
+      secrets: {
+        providers: {
+          "mounted-json": {
+            source: "file",
+            path: "/tmp/openclaw-test-secrets.json",
+            mode: "json",
+          },
+        },
+      },
+      models: {
+        providers: {
+          vllm: {
+            baseUrl: "https://vllm.example/v1",
+            apiKey: {
+              source: "file",
+              provider: "mounted-json",
+              id: "/providers/vllm/apiKey",
+            },
+            models: [
+              {
+                id: "llama-secure",
+                name: "Llama Secure",
+                input: ["text", "image", "document"],
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    setRuntimeConfigSnapshot(config, config);
+    try {
+      const { request, respond } = requestModelsList({
+        view: "provider-config",
+        runtimeConfig: config,
+        loadGatewayModelCatalog: vi.fn(() => Promise.resolve([])),
+        reqId: "req-models-list-provider-config-unknown",
+      });
+      await request;
+
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        {
+          models: [
+            {
+              id: "llama-secure",
+              name: "Llama Secure",
+              provider: "vllm",
+              input: ["text", "image", "document"],
+            },
+          ],
+        },
+        undefined,
+      );
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
+  });
+
   it("does not block the configured view on slow model catalog discovery", async () => {
     await withoutOpenAIEnvAuth(async () => {
       const catalog = createDeferred<never>();

@@ -40,7 +40,15 @@ export type FleetCellOperationLease = {
   owner: string;
 };
 
-export type FleetCellOperationName = "create" | "start" | "stop" | "restart" | "upgrade" | "rm";
+export type FleetCellOperationName =
+  | "create"
+  | "start"
+  | "stop"
+  | "restart"
+  | "upgrade"
+  | "backup"
+  | "restore"
+  | "rm";
 
 function kyselyFor(db: DatabaseSync) {
   return getNodeSqliteKysely<FleetRegistryDatabase>(db);

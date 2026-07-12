@@ -58,6 +58,7 @@ import type {
 } from "./invoke-types.js";
 import { NodeHostMcpError, type NodeHostMcpManager } from "./mcp.js";
 import { invokeRegisteredNodeHostCommand } from "./plugin-node-host.js";
+import { resolveNodeHostedSkillDirectory } from "./skills.js";
 
 const OUTPUT_CAP = 200_000;
 const MCP_TEXT_CONTENT_MAX_BYTES = 1024 * 1024;
@@ -109,6 +110,16 @@ type SystemRunPrepareEnv =
       ok: false;
       message: string;
     };
+
+function resolveNodeSkillCwdParam<T extends { cwd?: unknown }>(params: T, nodeId: string): T {
+  if (typeof params.cwd !== "string") {
+    return params;
+  }
+  // Resolve before approval planning so the plan, policy, and spawn all bind
+  // the same canonical node-local directory instead of trusting a URI at exec time.
+  const resolved = resolveNodeHostedSkillDirectory(params.cwd, nodeId);
+  return resolved ? { ...params, cwd: resolved } : params;
+}
 
 function buildEnvOverrideRejectionMessage(params: {
   rejectedOverrideBlockedKeys: string[];
@@ -770,7 +781,10 @@ async function dispatchInvoke(
 
   if (command === "system.run.prepare") {
     try {
-      const params = decodeParams<SystemRunPrepareParams>(frame.paramsJSON);
+      const params = resolveNodeSkillCwdParam(
+        decodeParams<SystemRunPrepareParams>(frame.paramsJSON),
+        frame.nodeId,
+      );
       const prepared = buildSystemRunApprovalPlan(params);
       if (!prepared.ok) {
         await sendErrorResult(client, frame, "INVALID_REQUEST", prepared.message);
@@ -826,7 +840,10 @@ async function dispatchInvoke(
 
   let params: SystemRunParams;
   try {
-    params = decodeParams<SystemRunParams>(frame.paramsJSON);
+    params = resolveNodeSkillCwdParam(
+      decodeParams<SystemRunParams>(frame.paramsJSON),
+      frame.nodeId,
+    );
   } catch (err) {
     await sendInvalidRequestResult(client, frame, err);
     return;

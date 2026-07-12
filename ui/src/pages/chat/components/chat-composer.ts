@@ -194,6 +194,21 @@ function isCurrentSessionSubmittedProgress(
   );
 }
 
+// Single source for "the agent is visibly working": drives both the thread's
+// working spark and the composer's sr-only announcement. A fresh terminal
+// toast masks stale abortable rows so neither surface flashes back to working.
+export function isChatRunWorking(
+  props: Pick<ChatComposerProps, "canAbort" | "onAbort" | "runStatus" | "queue" | "sessionKey">,
+): boolean {
+  const canAbort = Boolean(props.canAbort && props.onAbort);
+  return (
+    (canAbort && !hasTerminalRunStatus(props.runStatus)) ||
+    props.queue.some((item) =>
+      isCurrentSessionSubmittedProgress(item, props.sessionKey, props.runStatus),
+    )
+  );
+}
+
 function composerDraftKey(props: Pick<ChatComposerProps, "currentAgentId" | "sessionKey">): string {
   return `${props.currentAgentId}\u0000${props.sessionKey}`;
 }
@@ -1257,39 +1272,25 @@ type ComposerRunStatus =
       occurredAt?: number | null;
     };
 
-export function renderChatRunStatusIndicator(
-  status: ComposerRunStatus | null | undefined,
-  inProgressLabel = "In progress",
-) {
-  if (!status) {
+// Working and Done need no composer chrome: the thread's working spark,
+// content arriving, and Stop reverting to Send already show them (screen
+// readers get the composer's persistent sr-only run-status region).
+// Interrupted keeps a visible toast: the transcript shows nothing when a run
+// is killed, so silence would read as "finished".
+export function renderChatRunStatusIndicator(status: ComposerRunStatus | null | undefined) {
+  if (status?.phase !== "interrupted") {
     return nothing;
   }
-  if (status.phase !== "in-progress") {
-    const elapsed = Date.now() - status.occurredAt;
-    if (elapsed >= CHAT_RUN_STATUS_TOAST_DURATION_MS) {
-      return nothing;
-    }
+  const elapsed = Date.now() - status.occurredAt;
+  if (elapsed >= CHAT_RUN_STATUS_TOAST_DURATION_MS) {
+    return nothing;
   }
-  const label =
-    status.phase === "in-progress"
-      ? inProgressLabel
-      : status.phase === "done"
-        ? "Done"
-        : "Interrupted";
-  const icon =
-    status.phase === "in-progress"
-      ? icons.loader
-      : status.phase === "done"
-        ? icons.check
-        : icons.stop;
   return html`
     <span
-      class="agent-chat__run-status agent-chat__run-status--${status.phase}"
-      role="status"
-      aria-live="polite"
-      aria-label=${`Run status: ${label}`}
+      class="agent-chat__run-status agent-chat__run-status--interrupted"
+      aria-label="Run status: Interrupted"
     >
-      ${icon}<span class="agent-chat__run-status-label">${label}</span>
+      ${icons.stop}<span class="agent-chat__run-status-label">Interrupted</span>
     </span>
   `;
 }
@@ -2107,7 +2108,16 @@ export function renderChatComposer(props: ChatComposerProps) {
         : props.sending || submittedProgress
           ? "Sending message..."
           : `${assistantName} is working...`;
-  const mobileRunStatusIndicator = renderChatRunStatusIndicator(composerRunStatus, inProgressLabel);
+  // Persistent sr-only live region: run phases are otherwise conveyed only
+  // visually (thread spark, content arriving, interrupted toast).
+  const runStatusAnnouncement =
+    composerRunStatus == null
+      ? ""
+      : composerRunStatus.phase === "in-progress"
+        ? inProgressLabel
+        : composerRunStatus.phase === "done"
+          ? "Done"
+          : "Interrupted";
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const sendShortcut = normalizeChatSendShortcut(props.sendShortcut);
 
@@ -2368,15 +2378,6 @@ export function renderChatComposer(props: ChatComposerProps) {
       onQueueRemove: props.onQueueRemove,
     })}
     <div class="agent-chat__composer-shell">
-      ${mobileRunStatusIndicator !== nothing && composerRunStatus
-        ? html`
-            <div
-              class="agent-chat__composer-progress agent-chat__composer-progress--mobile agent-chat__composer-progress--${composerRunStatus.phase}"
-            >
-              ${mobileRunStatusIndicator}
-            </div>
-          `
-        : nothing}
       <div
         class="agent-chat__input"
         @click=${(event: MouseEvent) => focusComposerFromChrome(event, canCompose)}
@@ -2576,6 +2577,13 @@ export function renderChatComposer(props: ChatComposerProps) {
               aria-atomic="true"
               >${activeSlashMenuOptionLabel}</span
             >
+            <span
+              class="agent-chat__run-status-announcement agent-chat__sr-only"
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+              >${runStatusAnnouncement}</span
+            >
           </div>
           <div class="agent-chat__composer-actions">
             ${renderChatPrimaryActions(runControlsProps)}
@@ -2586,10 +2594,10 @@ export function renderChatComposer(props: ChatComposerProps) {
           ${composerControls !== nothing
             ? html`
                 <div class="agent-chat__composer-controls">
-                  ${composerRunStatus
+                  ${composerRunStatus?.phase === "interrupted"
                     ? html`
                         <div class="agent-chat__composer-run-status">
-                          ${renderChatRunStatusIndicator(composerRunStatus, inProgressLabel)}
+                          ${renderChatRunStatusIndicator(composerRunStatus)}
                         </div>
                       `
                     : nothing}

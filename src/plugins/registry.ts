@@ -154,6 +154,7 @@ import {
 } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { validateJsonSchemaValue, type JsonSchemaValue } from "./schema-validator.js";
+import type { SessionCatalogProvider } from "./session-catalog.js";
 import { normalizeSessionEntrySlotKey } from "./session-entry-slot-keys.js";
 import { defaultSlotIdForKey, hasKind } from "./slots.js";
 import {
@@ -846,6 +847,37 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         scope: normalizedScope.scope,
       }),
     );
+  };
+
+  const registerSessionCatalog = (record: PluginRecord, provider: SessionCatalogProvider) => {
+    const id = provider.id.trim();
+    const label = provider.label.trim();
+    if (!id || !label) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "session catalog requires non-empty id and label",
+      });
+      return;
+    }
+    const existing = registry.sessionCatalogs.find((entry) => entry.provider.id === id);
+    if (existing) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `session catalog already registered: ${id} (${existing.pluginId})`,
+      });
+      return;
+    }
+    registry.sessionCatalogs.push({
+      pluginId: record.id,
+      pluginName: record.name,
+      provider: { ...provider, id, label },
+      source: record.source,
+      rootDir: record.rootDir,
+    });
   };
 
   const describeHttpRouteOwner = (entry: PluginHttpRouteRegistration): string => {
@@ -2811,6 +2843,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       }
       const harnessId = normalizeOptionalAgentRuntimeId(entry.agentHarnessId);
       if (!harnessId) {
+        const pluginOwnerId = normalizeOptionalString(entry.pluginOwnerId);
+        if (pluginOwnerId) {
+          return { ownerPluginId: pluginOwnerId };
+        }
         throw new Error(
           `Plugin "${pluginId}" must provide a registered agent harness id to ${action} locked sessions.`,
         );
@@ -2829,7 +2865,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
           `Locked session "${sessionKey}" belongs to agent harness "${harnessId}", which does not match its reserved session key.`,
         );
       }
-      return { harnessId, registration };
+      return { ownerPluginId: registration.pluginId, harnessId, registration };
     };
     const assertLockedSessionEntryOwned = (
       sessionKey: string,
@@ -2840,9 +2876,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       if (!resolved) {
         return;
       }
-      if (resolved.registration.pluginId !== pluginId) {
+      if (resolved.ownerPluginId !== pluginId) {
         throw new Error(
-          `Agent harness "${resolved.harnessId}" is owned by plugin "${resolved.registration.pluginId}", not "${pluginId}".`,
+          `Locked session "${sessionKey}" is owned by plugin "${resolved.ownerPluginId}", not "${pluginId}".`,
         );
       }
     };
@@ -2891,14 +2927,20 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       const locked = entry
         ? resolveLockedSessionHarnessRegistration(params.sessionKey, entry, params.action)
         : undefined;
-      if (!entry || !locked || locked.registration.pluginId === pluginId) {
+      if (!entry || !locked || locked.ownerPluginId === pluginId) {
         assertSessionEntryOwned({ action: params.action, entry, sessionKey: params.sessionKey });
         return undefined;
       }
-      if (!locked.registration.harness.delegatedExecutionPluginIds?.includes(pluginId)) {
+      const registration = "registration" in locked ? locked.registration : undefined;
+      if (!registration) {
+        throw new Error(
+          `Locked session "${params.sessionKey}" is owned by plugin "${locked.ownerPluginId}", not "${pluginId}".`,
+        );
+      }
+      if (!registration.harness.delegatedExecutionPluginIds?.includes(pluginId)) {
         assertLockedSessionEntryOwned(params.sessionKey, entry, params.action);
       }
-      return locked.registration.pluginId;
+      return locked.ownerPluginId;
     };
     const assertSessionIdentitiesOwned = (params: {
       action: string;
@@ -3000,9 +3042,15 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         sessionKey && entry
           ? resolveLockedSessionHarnessRegistration(sessionKey, entry, "run")
           : undefined;
-      const ownerPluginId = locked?.registration.pluginId;
+      const ownerPluginId = locked?.ownerPluginId;
       if (locked && entry && sessionKey && ownerPluginId !== pluginId) {
-        if (!locked.registration.harness.delegatedExecutionPluginIds?.includes(pluginId)) {
+        const registration = "registration" in locked ? locked.registration : undefined;
+        if (!registration) {
+          throw new Error(
+            `Locked session "${sessionKey}" is owned by plugin "${locked.ownerPluginId}", not "${pluginId}".`,
+          );
+        }
+        if (!registration.harness.delegatedExecutionPluginIds?.includes(pluginId)) {
           assertLockedSessionEntryOwned(sessionKey, entry, "run");
         }
         const requestedHarnessId = normalizeOptionalAgentRuntimeId(params.agentHarnessId);
@@ -3193,11 +3241,40 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
             listSessionEntries: session.listSessionEntries,
             createSessionEntry: async (params) =>
               await runWithPluginScope(async () => {
-                // Session ownership follows the registered harness capability,
-                // independently of whether the caller chooses its reserved namespace.
-                assertOwnedHarness(params.initialEntry.agentHarnessId, "create its sessions");
-                assertReservedSessionKeyOwned(params.key, "create");
-                return await session.createSessionEntry(params);
+                if (
+                  "agentHarnessId" in params.initialEntry ===
+                  "cliBackendId" in params.initialEntry
+                ) {
+                  throw new Error(
+                    `Plugin "${pluginId}" session creation requires exactly one runtime owner.`,
+                  );
+                }
+                if ("agentHarnessId" in params.initialEntry) {
+                  // Session ownership follows the registered harness capability,
+                  // independently of whether the caller chooses its reserved namespace.
+                  assertOwnedHarness(params.initialEntry.agentHarnessId, "create its sessions");
+                  assertReservedSessionKeyOwned(params.key, "create");
+                  return await session.createSessionEntry(params);
+                }
+                const cliInitial = params.initialEntry;
+                const backend = registry.cliBackends.find(
+                  (entry) => entry.backend.id === cliInitial.cliBackendId,
+                );
+                if (!backend || backend.pluginId !== pluginId) {
+                  throw new Error(
+                    `Plugin "${pluginId}" must own CLI backend "${cliInitial.cliBackendId}" to create its sessions.`,
+                  );
+                }
+                // Plugin-owned sessions stay inside a namespace that no other plugin can claim.
+                if (!params.key.startsWith(`plugin:${pluginId}:`)) {
+                  throw new Error(
+                    `Plugin "${pluginId}" session keys must start with "plugin:${pluginId}:".`,
+                  );
+                }
+                return await session.createSessionEntry({
+                  ...params,
+                  initialEntry: { ...cliInitial, pluginOwnerId: pluginId },
+                });
               }),
             patchSessionEntry: async (params) =>
               await runWithPluginScope(async () => {
@@ -3446,6 +3523,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               registerMigrationProvider: (provider) => registerMigrationProvider(record, provider),
               registerGatewayMethod: (method, handler, opts) =>
                 registerGatewayMethod(record, method, handler, opts),
+              registerSessionCatalog: (provider) => registerSessionCatalog(record, provider),
               registerService: (service) => registerService(record, service),
               registerGatewayDiscoveryService: (service) =>
                 registerGatewayDiscoveryService(record, service),
@@ -3855,6 +3933,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               registerHttpRoute: (routeParams) => registerHttpRoute(record, routeParams),
               registerGatewayMethod: (method, handler, opts) =>
                 registerGatewayMethod(record, method, handler, opts),
+              registerSessionCatalog: (provider) => registerSessionCatalog(record, provider),
             }
           : {}),
         // Allow setup-only/setup-runtime paths to surface parse-time CLI metadata
@@ -3922,6 +4001,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerWebSearchProvider,
     registerMigrationProvider,
     registerGatewayMethod,
+    registerSessionCatalog,
     registerCli,
     registerReload,
     registerNodeHostCommand,

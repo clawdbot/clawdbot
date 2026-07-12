@@ -66,10 +66,12 @@ import {
   resolveSqliteSessionKeyBySessionId,
   resolveSqliteSessionParentForkDecision,
   rollbackSqliteAgentHarnessSessionEntryLifecycle,
+  rollbackSqlitePluginOwnedSessionEntryLifecycle,
   resetSqliteSessionEntryLifecycle,
   updateSqliteSessionEntry,
   upsertSqliteSessionEntry,
   withSqliteTranscriptWriteLock,
+  withSqliteTranscriptWriteTransaction,
 } from "./session-accessor.sqlite.js";
 import {
   formatSqliteSessionFileMarker,
@@ -346,6 +348,11 @@ export type SessionTranscriptWriteLockAccessorContext = {
   ) => Promise<TranscriptMessageAppendResult<TMessage> | undefined>;
   readEvents: () => Promise<TranscriptEvent[]>;
   replaceEvents: (events: readonly TranscriptEvent[]) => Promise<void>;
+};
+
+export type SessionTranscriptWriteTransactionContext = {
+  /** Canonical marker for the same agent database owned by the transaction. */
+  sessionFile: string;
 };
 
 export type SessionTranscriptTurnUpdateMode = "inline" | "file-only" | "none";
@@ -1925,6 +1932,16 @@ export async function rollbackAgentHarnessSessionEntryLifecycle(
   return await rollbackSqliteAgentHarnessSessionEntryLifecycle(params);
 }
 
+/** Internal exact-row rollback for failed trusted plugin-owned CLI initialization. */
+export async function rollbackPluginOwnedSessionEntryLifecycle(
+  params: DeleteSessionEntryLifecycleParams & {
+    expectedEntry: SessionEntry;
+    expectedPluginOwnerId: string;
+  },
+): Promise<DeleteSessionEntryLifecycleResult> {
+  return await rollbackSqlitePluginOwnedSessionEntryLifecycle(params);
+}
+
 /** Applies exact entry lifecycle mutations and artifact cleanup at the storage boundary. */
 export async function applySessionEntryLifecycleMutation(params: {
   agentId?: string;
@@ -2446,6 +2463,14 @@ export async function withTranscriptWriteLock<T>(
   run: (context: SessionTranscriptWriteLockAccessorContext) => Promise<T> | T,
 ): Promise<T> {
   return await withSqliteTranscriptWriteLock(scope, run);
+}
+
+/** Runs a synchronous DAG batch under one transcript writer queue and transaction. */
+export async function withTranscriptWriteTransaction<T>(
+  scope: SessionTranscriptWriteScope,
+  run: (context: SessionTranscriptWriteTransactionContext) => T,
+): Promise<T> {
+  return await withSqliteTranscriptWriteTransaction(scope, run);
 }
 
 /**

@@ -3,7 +3,6 @@
  * Root fields apply to the default account; `accounts` entries override them per account.
  */
 import type {
-  BlockStreamingCoalesceConfig,
   ChannelDeliveryStreamingConfig,
   ContextVisibilityMode,
   DmPolicy,
@@ -98,13 +97,8 @@ export type IMessageAccountConfig = {
   probeTimeoutMs?: number;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
-  /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
-  chunkMode?: "length" | "newline";
   /** Structured streaming + chunking settings. */
   streaming?: ChannelDeliveryStreamingConfig;
-  blockStreaming?: boolean;
-  /** Merge streamed block replies before sending. */
-  blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   /** When private API is available, mark inbound chats read before dispatch (default: true). */
   sendReadReceipts?: boolean;
   /**

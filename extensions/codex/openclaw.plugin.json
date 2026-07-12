@@ -1,7 +1,7 @@
 {
   "id": "codex",
   "name": "Codex",
-  "description": "OpenClaw Codex app-server harness, model provider, and native session supervision plugin.",
+  "description": "Codex app-server harness, model provider, and native session catalog.",
   "providers": ["codex"],
   "contracts": {
     "mediaUnderstandingProviders": ["codex"],
@@ -484,12 +484,12 @@
     },
     "supervision": {
       "label": "Codex Supervision",
-      "help": "Expose non-archived Codex Desktop and CLI sessions through a separate supervision connection without changing the ordinary Codex harness.",
+      "help": "Configure the separate user-home App Server connection used by the native session catalog and optional supervision tools.",
       "advanced": true
     },
     "supervision.enabled": {
       "label": "Enable Codex Supervision",
-      "help": "List non-archived native sessions through managed user-home stdio by default; explicit App Server connection settings are honored."
+      "help": "Enable agent-facing Codex supervision tools. The operator session catalog remains available whenever the plugin is active."
     },
     "supervision.endpoints": {
       "label": "Legacy Supervisor Endpoints",

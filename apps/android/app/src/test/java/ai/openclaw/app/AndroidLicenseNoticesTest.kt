@@ -38,6 +38,7 @@ class AndroidLicenseNoticesTest {
       listOf(
         "AndroidX Room",
         "Bouncy Castle Provider",
+        "Coil",
         "CommonMark Java",
         "dnsjava",
         "KaTeX",
@@ -56,5 +57,6 @@ class AndroidLicenseNoticesTest {
     assertTrue(licenses.any { license -> license.text.contains("BSD 3-Clause") })
     assertTrue(licenses.any { license -> license.text.contains("MIT License") })
     assertTrue(licenses.any { license -> license.text.contains("Bouncy Castle Licence") })
+    assertTrue(licenses.any { license -> license.title == "Coil" && license.text.contains("Coil Contributors") })
   }
 }

@@ -412,16 +412,33 @@ describe("unified approval handlers", () => {
       ok: false,
       error: { code: "INVALID_REQUEST", details: { reason: "APPROVAL_NOT_FOUND" } },
     });
+    expect(managers.exec.getLiveSnapshot(pending.record.id)).toBe(pending.record);
+
+    const underscopedInternal = await invoke({
+      handlers,
+      method: "approval.resolve",
+      body,
+      client: createClient({ internal: true, scopes: ["operator.read"] }),
+    });
+    expect(underscopedInternal).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST", details: { reason: "APPROVAL_NOT_FOUND" } },
+    });
+    expect(managers.exec.getLiveSnapshot(pending.record.id)).toBe(pending.record);
 
     const trusted = await invoke({
       handlers,
       method: "approval.resolve",
       body,
-      client: createClient({ internal: true, scopes: ["operator.approvals"] }),
+      client: createClient({ internal: true }),
     });
     expect(trusted.result).toMatchObject({
       applied: true,
-      approval: { status: "denied", decision: "deny" },
+      approval: { status: "denied", decision: "deny", reason: "user" },
+    });
+    expect(getOperatorApproval({ id: pending.record.id, databaseOptions })?.resolver).toEqual({
+      kind: "runtime",
+      id: "approval-test",
     });
     await expect(pending.decision).resolves.toBe("deny");
   });
@@ -625,6 +642,39 @@ describe("unified approval handlers", () => {
     });
   });
 
+  it("settles the canonical live waiter when a transport-ref lookup finds corrupt state", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const managers = createManagers(databaseOptions);
+    const pending = registerExec(managers.exec, { id: "corrupt-through-transport-ref" });
+    const durable = getOperatorApproval({ id: pending.record.id, databaseOptions });
+    if (!durable) {
+      throw new Error("expected durable approval");
+    }
+    corruptDurableApprovalPresentation(databaseOptions, pending.record.id);
+    const handlers = createApprovalHandlers({
+      execApprovalManager: managers.exec,
+      pluginApprovalManager: managers.plugin,
+      databaseOptions,
+    });
+
+    const response = await invoke({
+      handlers,
+      method: "approval.resolve",
+      body: { id: durable.resolutionRef, kind: "exec", decision: "allow-once" },
+      client: createClient({ deviceId: "telegram" }),
+    });
+
+    expect(response).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST", details: { reason: "APPROVAL_NOT_FOUND" } },
+    });
+    await expect(pending.decision).resolves.toBe("deny");
+    expect(managers.exec.getLiveSnapshot(pending.record.id)).toMatchObject({
+      status: "denied",
+      terminalReason: "storage-corrupt",
+    });
+  });
+
   it("repairs durable pending state after a transient local storage failure", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-reconcile-"));
     tempDirs.push(stateDir);
@@ -791,6 +841,159 @@ describe("unified approval handlers", () => {
     });
   });
 
+  it("returns durable exec truth and continues follow-ups after publication failures", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const managers = createManagers(databaseOptions);
+    const pending = registerExec(managers.exec, { id: "exec-publication-failures" });
+    const context = createContext();
+    const broadcastToConnIds = context.broadcastToConnIds as ReturnType<typeof vi.fn>;
+    broadcastToConnIds.mockImplementation(() => {
+      throw new Error("broadcast unavailable");
+    });
+    const handleResolved = vi.fn(async () => {
+      throw new Error("forwarder unavailable");
+    });
+    const handleIosResolved = vi.fn(async () => {});
+    const forwarder = {
+      handleRequested: vi.fn(async () => false),
+      handleResolved,
+      handlePluginApprovalRequested: vi.fn(async () => false),
+      handlePluginApprovalResolved: vi.fn(async () => {}),
+      stop: vi.fn(),
+    } satisfies ExecApprovalForwarder;
+    const handlers = createApprovalHandlers({
+      execApprovalManager: managers.exec,
+      pluginApprovalManager: managers.plugin,
+      forwarder,
+      iosPushDelivery: { handleResolved: handleIosResolved },
+      databaseOptions,
+    });
+
+    const response = await invoke({
+      handlers,
+      method: "approval.resolve",
+      body: { id: pending.record.id, kind: "exec", decision: "deny" },
+      client: createClient({ deviceId: "reviewer" }),
+      context,
+    });
+
+    expect(response.result).toMatchObject({
+      applied: true,
+      approval: { status: "denied", decision: "deny", reason: "user" },
+    });
+    expect(validateApprovalResolveResult(response.result)).toBe(true);
+    await expect(pending.decision).resolves.toBe("deny");
+    expect(getOperatorApproval({ id: pending.record.id, databaseOptions })).toMatchObject({
+      status: "denied",
+      decision: "deny",
+    });
+    expect(handleResolved).toHaveBeenCalledTimes(1);
+    expect(handleIosResolved).toHaveBeenCalledTimes(1);
+    expect(context.logGateway.error).toHaveBeenCalledWith(
+      expect.stringContaining("exec approvals: unified resolve broadcast failed"),
+    );
+    expect(context.logGateway.error).toHaveBeenCalledWith(
+      expect.stringContaining("exec approvals: unified resolve forwarder failed"),
+    );
+  });
+
+  it("responds with committed truth before a slow resolution forwarder finishes", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const managers = createManagers(databaseOptions);
+    const pending = registerExec(managers.exec, { id: "exec-slow-resolution-forwarder" });
+    let releaseForwarder!: () => void;
+    const forwarderPending = new Promise<void>((resolve) => {
+      releaseForwarder = resolve;
+    });
+    const handleResolved = vi.fn(() => forwarderPending);
+    const forwarder = {
+      handleRequested: vi.fn(async () => false),
+      handleResolved,
+      handlePluginApprovalRequested: vi.fn(async () => false),
+      handlePluginApprovalResolved: vi.fn(async () => {}),
+      stop: vi.fn(),
+    } satisfies ExecApprovalForwarder;
+    const handlers = createApprovalHandlers({
+      execApprovalManager: managers.exec,
+      pluginApprovalManager: managers.plugin,
+      forwarder,
+      databaseOptions,
+    });
+    const respond = vi.fn();
+    const handler = handlers["approval.resolve"]({
+      req: {
+        id: "req-slow-forwarder",
+        type: "req",
+        method: "approval.resolve",
+        params: { id: pending.record.id, kind: "exec", decision: "deny" },
+      },
+      params: { id: pending.record.id, kind: "exec", decision: "deny" },
+      client: createClient({ deviceId: "reviewer" }),
+      context: createContext(),
+      isWebchatConnect: () => false,
+      respond,
+    });
+    let handlerFinished = false;
+    const handlerCompletion = Promise.resolve(handler).then(() => {
+      handlerFinished = true;
+    });
+
+    try {
+      await vi.waitFor(() => expect(respond).toHaveBeenCalledTimes(1), { timeout: 500 });
+      expect(respond.mock.calls[0]?.[1]).toMatchObject({
+        applied: true,
+        approval: { status: "denied", decision: "deny" },
+      });
+      await vi.waitFor(() => expect(handleResolved).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(handlerFinished).toBe(true), { timeout: 500 });
+    } finally {
+      releaseForwarder();
+    }
+    await handlerCompletion;
+  });
+
+  it("continues plugin forwarding when the resolved-event broadcast fails", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const managers = createManagers(databaseOptions);
+    const pending = registerPlugin(managers.plugin, { id: "plugin-publication-failure" });
+    const context = createContext();
+    const broadcastToConnIds = context.broadcastToConnIds as ReturnType<typeof vi.fn>;
+    broadcastToConnIds.mockImplementation(() => {
+      throw new Error("broadcast unavailable");
+    });
+    const handlePluginApprovalResolved = vi.fn(async () => {});
+    const forwarder = {
+      handleRequested: vi.fn(async () => false),
+      handleResolved: vi.fn(async () => {}),
+      handlePluginApprovalRequested: vi.fn(async () => false),
+      handlePluginApprovalResolved,
+      stop: vi.fn(),
+    } satisfies ExecApprovalForwarder;
+    const handlers = createApprovalHandlers({
+      execApprovalManager: managers.exec,
+      pluginApprovalManager: managers.plugin,
+      forwarder,
+      databaseOptions,
+    });
+
+    const response = await invoke({
+      handlers,
+      method: "approval.resolve",
+      body: { id: pending.record.id, kind: "plugin", decision: "deny" },
+      client: createClient({ deviceId: "reviewer" }),
+      context,
+    });
+
+    expect(response.result).toMatchObject({
+      applied: true,
+      approval: { status: "denied", decision: "deny" },
+    });
+    expect(handlePluginApprovalResolved).toHaveBeenCalledTimes(1);
+    expect(context.logGateway.error).toHaveBeenCalledWith(
+      expect.stringContaining("plugin approvals: unified resolve broadcast failed"),
+    );
+  });
+
   it("uses the live requester connection when filtering legacy resolved events", async () => {
     const databaseOptions = createDatabaseOptions();
     const managers = createManagers(databaseOptions);
@@ -891,6 +1094,77 @@ describe("unified approval handlers", () => {
     expect(context.broadcastToConnIds).toHaveBeenCalledTimes(1);
   });
 
+  it("resolves an overlong canonical id through its fixed-size transport reference", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const managers = createManagers(databaseOptions);
+    const pending = registerExec(managers.exec, {
+      id: `approval/${"\u{1F4F1}".repeat(40)}/transport-limit`,
+      reviewerDeviceIds: ["telegram"],
+    });
+    const durable = getOperatorApproval({ id: pending.record.id, databaseOptions });
+    expect(durable?.resolutionRef).toHaveLength(43);
+    const handlers = createApprovalHandlers({
+      execApprovalManager: managers.exec,
+      pluginApprovalManager: managers.plugin,
+      databaseOptions,
+    });
+
+    const response = await invoke({
+      handlers,
+      method: "approval.resolve",
+      body: { id: durable?.resolutionRef, kind: "exec", decision: "deny" },
+      client: createClient({ deviceId: "telegram" }),
+    });
+
+    expect(response.result).toMatchObject({
+      applied: true,
+      approval: { id: pending.record.id, status: "denied", decision: "deny" },
+    });
+    expect(validateApprovalResolveResult(response.result)).toBe(true);
+    await expect(pending.decision).resolves.toBe("deny");
+  });
+
+  it("resolves through the durable transport ref exactly like the canonical id", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const managers = createManagers(databaseOptions);
+    // No explicit reviewer binding: any authorized reviewer device may resolve,
+    // and the opaque transport ref must behave exactly like the canonical id.
+    const pending = registerExec(managers.exec, {
+      id: "ref-parity-approval",
+      requester: { connId: "conn-owner", deviceId: null, clientId: null },
+      reviewerDeviceIds: [],
+    });
+    const durable = getOperatorApproval({ id: pending.record.id, databaseOptions });
+    expect(durable?.resolutionRef).toHaveLength(43);
+    const handlers = createApprovalHandlers({
+      execApprovalManager: managers.exec,
+      pluginApprovalManager: managers.plugin,
+      databaseOptions,
+    });
+
+    const winner = await invoke({
+      handlers,
+      method: "approval.resolve",
+      body: { id: durable?.resolutionRef, kind: "exec", decision: "deny" },
+      client: createClient({ deviceId: "reviewer-surface" }),
+    });
+    expect(winner.result).toMatchObject({
+      applied: true,
+      approval: { id: pending.record.id, status: "denied", decision: "deny" },
+    });
+    await expect(pending.decision).resolves.toBe("deny");
+
+    const replayByCanonicalId = await invoke({
+      handlers,
+      method: "approval.resolve",
+      body: { id: pending.record.id, kind: "exec", decision: "deny" },
+      client: createClient({ deviceId: "another-surface" }),
+    });
+    expect(replayByCanonicalId.result).toMatchObject({
+      applied: false,
+      approval: { id: pending.record.id, status: "denied", decision: "deny" },
+    });
+  });
   it.each([
     { status: "allowed", decision: "allow-once", terminalDecision: "allow-once" },
     { status: "denied", decision: "deny", terminalDecision: "deny" },

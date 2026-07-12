@@ -116,6 +116,14 @@ export type RunCliAgentParams = {
   ownerNumbers?: string[];
   cliSessionId?: string;
   cliSessionBinding?: CliSessionBinding;
+  /** Consume the backend fork argument on this resume invocation only. */
+  forkCliSessionOnResume?: boolean;
+  /** Atomically claim the persisted one-shot marker after the CLI queue admits this turn. */
+  claimCliSessionFork?: () => Promise<boolean>;
+  /** Re-arm a claimed marker when the CLI turn fails before producing a successor session. */
+  restoreCliSessionFork?: () => Promise<void>;
+  /** Persist the successor ID as soon as the CLI reports the forked session. */
+  persistCliSessionForkSuccessor?: (sessionId: string) => Promise<void>;
   authProfileId?: string;
   /** Private seam: report the credential/runtime owner only after a successful real turn. */
   onSuccessfulAuthBinding?: (binding: {

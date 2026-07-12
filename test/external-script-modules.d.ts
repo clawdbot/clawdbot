@@ -134,6 +134,18 @@ declare module "*openclaw-live-updater/scripts/update-main.mjs" {
     release?: () => void;
   };
   export function parseGatewayLogAudit(output: string, sinceMs: number): Record<string, unknown>;
+  export function prepareGatewaySuspension(
+    checkout: string,
+    callGateway?: (checkout: string, method: string, params: { requestId: string }) => string,
+  ):
+    | { status: "ready"; suspensionId: string }
+    | {
+        status: "busy";
+        reason: string;
+        retryAfterMs: number;
+        activeCount: number;
+        blockers: Array<{ kind: string; count: number; message: string }>;
+      };
   export function verifyGatewayReadiness(
     runCommand: (command: string, args: string[], checkout: string) => unknown,
     checkout: string,

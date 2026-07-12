@@ -46,50 +46,43 @@ function getPaletteBaseItems(): PaletteItem[] {
       action: "nav:new-session",
     },
     {
-      id: "nav-overview",
-      label: t("overview.palette.items.overview"),
-      icon: "barChart",
-      category: "navigation",
-      action: "nav:overview",
-    },
-    {
       id: "nav-sessions",
-      label: t("overview.palette.items.sessions"),
+      label: t("palette.items.sessions"),
       icon: "fileText",
       category: "navigation",
       action: "nav:sessions",
     },
     {
       id: "nav-cron",
-      label: t("overview.palette.items.scheduled"),
+      label: t("palette.items.scheduled"),
       icon: "scrollText",
       category: "navigation",
       action: "nav:cron",
     },
     {
       id: "nav-skills",
-      label: t("overview.palette.items.skills"),
+      label: t("palette.items.skills"),
       icon: "zap",
       category: "navigation",
       action: "nav:skills",
     },
     {
       id: "nav-plugins",
-      label: t("overview.palette.items.plugins"),
+      label: t("palette.items.plugins"),
       icon: "puzzle",
       category: "navigation",
       action: "nav:plugins",
     },
     {
       id: "nav-config",
-      label: t("overview.palette.items.settings"),
+      label: t("palette.items.settings"),
       icon: "settings",
       category: "navigation",
       action: "nav:config",
     },
     {
       id: "nav-agents",
-      label: t("overview.palette.items.agents"),
+      label: t("palette.items.agents"),
       icon: "folder",
       category: "navigation",
       action: "nav:agents",
@@ -287,11 +280,11 @@ function handleKeydown(e: KeyboardEvent, props: CommandPaletteProps) {
 function getCategoryLabel(category: string): string {
   switch (category) {
     case "search":
-      return t("overview.palette.categories.search");
+      return t("palette.categories.search");
     case "navigation":
-      return t("overview.palette.categories.navigation");
+      return t("palette.categories.navigation");
     case "skills":
-      return t("overview.palette.categories.skills");
+      return t("palette.categories.skills");
     case "chats":
       return t("sessionsView.title");
     default:
@@ -348,7 +341,7 @@ function renderCommandPalette(props: CommandPaletteProps) {
   const grouped = groupItems(items);
   const activeItem = items[props.activeIndex];
   const activeOptionId = activeItem ? getOptionId(activeItem) : nothing;
-  const paletteLabel = t("overview.palette.placeholder");
+  const paletteLabel = t("palette.placeholder");
 
   return html`
     <dialog
@@ -395,7 +388,7 @@ function renderCommandPalette(props: CommandPaletteProps) {
                 <span class="nav-item__icon" style="opacity:0.3;width:20px;height:20px"
                   >${icons.search}</span
                 >
-                <span>${t("overview.palette.noResults")}</span>
+                <span>${t("palette.noResults")}</span>
               </div>`
             : grouped.map(
                 ([category, groupedItems]) => html`
@@ -429,9 +422,9 @@ function renderCommandPalette(props: CommandPaletteProps) {
               )}
         </div>
         <div class="cmd-palette__footer">
-          <span><kbd>↑↓</kbd> ${t("overview.palette.footer.navigate")}</span>
-          <span><kbd>↵</kbd> ${t("overview.palette.footer.select")}</span>
-          <span><kbd>esc</kbd> ${t("overview.palette.footer.close")}</span>
+          <span><kbd>↑↓</kbd> ${t("palette.footer.navigate")}</span>
+          <span><kbd>↵</kbd> ${t("palette.footer.select")}</span>
+          <span><kbd>esc</kbd> ${t("palette.footer.close")}</span>
         </div>
       </div>
     </dialog>

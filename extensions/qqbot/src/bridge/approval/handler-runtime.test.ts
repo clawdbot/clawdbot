@@ -104,8 +104,8 @@ describe("qqbotApprovalNativeRuntime", () => {
     expect(payload.text).toContain("📁 目录:\n```\n/tmp\\u{A}![fake](u)\n```");
     expect(payload.text).toContain("🤖 Agent:\n````\nagent```fake\n````");
     expect(payload.keyboard.content.rows[0]?.buttons.map((button) => button.action.data)).toEqual([
-      "approve:approval-1:allow-once",
-      "approve:approval-1:deny",
+      "approve:v2:exec:approval-1:allow-once",
+      "approve:v2:exec:approval-1:deny",
     ]);
   });
 
@@ -137,8 +137,8 @@ describe("qqbotApprovalNativeRuntime", () => {
     expect(payload.text).not.toContain("stale raw");
     expect(payload.text).toContain("⏱️ 超时: 600 秒");
     expect(payload.keyboard.content.rows[0]?.buttons.map((button) => button.action.data)).toEqual([
-      "approve:plugin:approval-1:allow-once",
-      "approve:plugin:approval-1:deny",
+      "approve:v2:plugin:plugin%3Aapproval-1:allow-once",
+      "approve:v2:plugin:plugin%3Aapproval-1:deny",
     ]);
   });
 });

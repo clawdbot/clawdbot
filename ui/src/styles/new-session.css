@@ -15,17 +15,21 @@
   width: min(720px, 100%);
 }
 
-.new-session-page__title {
+/* The draft page opens with the same hero as the chat welcome screen. The
+   shared .agent-chat__welcome sizing is built for a full-height chat pane,
+   so neutralize its stretch/centering inside this column. */
+.new-session-page .agent-chat__welcome {
+  flex: initial;
+  width: 100%;
   margin: 0;
-  font-size: 22px;
-  font-weight: 600;
-  color: var(--text-strong);
+  padding: 0 0 8px;
+  min-height: auto;
 }
 
-.new-session-page__hint {
-  margin: 0 0 8px;
-  font-size: 13px;
-  color: var(--muted);
+.new-session-page .agent-chat__recents,
+.new-session-page .agent-chat__suggestions {
+  align-self: center;
+  margin-top: 4px;
 }
 
 .new-session-page__targets {

@@ -9,11 +9,15 @@ import type { NormalizedUsage, UsageLike } from "../agents/usage.js";
 import { normalizeUsage } from "../agents/usage.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import {
-  isCheckpointSessionTranscriptFileName,
+  materializeSessionArchiveForRead,
+  SESSION_ARCHIVE_ZSTD_SUFFIX,
+} from "../config/sessions/archive-compression.js";
+import {
+  isCompactionCheckpointTranscriptFileName,
   isPrimarySessionTranscriptFileName,
   isSessionArchiveArtifactName,
   isUsageCountedSessionTranscriptFileName,
-  parseParentSessionIdFromCheckpointFileName,
+  parseCompactionCheckpointTranscriptFileName,
   parseSessionArchiveTimestamp,
   parseUsageCountedSessionIdFromFileName,
 } from "../config/sessions/artifacts.js";
@@ -412,7 +416,7 @@ async function listUsageCountedTranscriptFileStats(
       (entry) =>
         entry.isFile() &&
         (isUsageCountedSessionTranscriptFileName(entry.name) ||
-          (includeCheckpoints && isCheckpointSessionTranscriptFileName(entry.name))),
+          (includeCheckpoints && isCompactionCheckpointTranscriptFileName(entry.name))),
     )
     .map((entry) => async (): Promise<UsageCostTranscriptFile | undefined> => {
       const filePath = path.join(sessionsDir, entry.name);
@@ -422,6 +426,23 @@ async function listUsageCountedTranscriptFileStats(
       }
       if (params?.minMtimeMs !== undefined && stats.mtimeMs < params.minMtimeMs) {
         return undefined;
+      }
+      // Compressed archives normalize to their materialized plain-JSONL cache
+      // at discovery, so every downstream size, incremental offset, and cache
+      // signature measures decompressed bytes; mixing offset spaces would
+      // truncate or overcount archived usage.
+      if (filePath.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX)) {
+        try {
+          const materialized = materializeSessionArchiveForRead(filePath);
+          const materializedStats = await fs.promises.stat(materialized);
+          return {
+            filePath: materialized,
+            size: materializedStats.size,
+            mtimeMs: stats.mtimeMs,
+          };
+        } catch {
+          return undefined;
+        }
       }
       return { filePath, size: stats.size, mtimeMs: stats.mtimeMs };
     });
@@ -507,6 +528,19 @@ async function resolveUsageCostTranscriptFile(
       sessionId: marker.sessionId,
       size: stats.sizeBytes,
     };
+  }
+  if (sessionFile.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX)) {
+    try {
+      const materialized = materializeSessionArchiveForRead(sessionFile);
+      const materializedStats = await fs.promises.stat(materialized);
+      return {
+        filePath: materialized,
+        size: materializedStats.size,
+        mtimeMs: materializedStats.mtimeMs,
+      };
+    } catch {
+      return undefined;
+    }
   }
   const stats = await fs.promises.stat(sessionFile).catch(() => null);
   return stats ? { filePath: sessionFile, size: stats.size, mtimeMs: stats.mtimeMs } : undefined;
@@ -1392,6 +1426,13 @@ async function* readTranscriptRecords(
     }
     return;
   }
+  // Discovery normalizes compressed archives to their materialized cache, so
+  // this branch only serves direct callers that pass a raw .zst path; those
+  // callers never carry persisted offsets, keeping the range space coherent.
+  if (filePath.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX)) {
+    yield* readJsonlRecords(materializeSessionArchiveForRead(filePath), startOffset, endOffset);
+    return;
+  }
   yield* readJsonlRecords(filePath, startOffset, endOffset);
 }
 
@@ -1617,7 +1658,7 @@ export async function loadCostUsageSummary(params?: {
     // copies of pre-compaction entries from the parent primary; counting them
     // in daily totals would double-count tokens/cost. Skip — discovery uses
     // them to advance parent mtime and label, but cost tallies must not.
-    if (isCheckpointSessionTranscriptFileName(path.basename(file.filePath))) {
+    if (isCompactionCheckpointTranscriptFileName(path.basename(file.filePath))) {
       continue;
     }
     await scanUsageFile({
@@ -2327,11 +2368,12 @@ export async function discoverAllSessions(params?: {
     // checkpoint history. Group them under the parent session id, do not
     // re-read for label (the parent primary already carries it), and advance
     // the parent's mtime if this checkpoint is newer.
-    if (!sqliteMarker && isCheckpointSessionTranscriptFileName(fileName)) {
-      const parentId = parseParentSessionIdFromCheckpointFileName(fileName);
-      if (!parentId) {
+    if (!sqliteMarker && isCompactionCheckpointTranscriptFileName(fileName)) {
+      const checkpoint = parseCompactionCheckpointTranscriptFileName(fileName);
+      if (!checkpoint) {
         continue;
       }
+      const parentId = checkpoint.sessionId;
       const existing = discovered.get(parentId);
       if (!existing) {
         // Parent primary may not have been scanned yet (or may be absent

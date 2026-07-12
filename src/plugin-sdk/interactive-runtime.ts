@@ -51,6 +51,8 @@ export {
   renderMessagePresentationFallbackText,
   renderMessagePresentationTableFallbackText,
   resolveMessagePresentationActionValue,
+  resolveMessagePresentationButtonAction,
   resolveMessagePresentationControlValue,
+  resolveMessagePresentationOptionAction,
   resolveInteractiveTextFallback,
 } from "../interactive/payload.js";

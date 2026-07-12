@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
 import {
   formatSessionArchiveTimestamp,
   parseSessionArchiveTimestamp,
@@ -180,7 +181,16 @@ async function resetArchiveHeaderMatchesSessionId(
   sessionId: string,
   archivePath: string,
 ): Promise<boolean> {
-  const stat = await fs.promises.stat(archivePath).catch(() => null);
+  // Compressed archives must be probed through the materialized JSONL cache:
+  // a raw prefix read of zstd bytes never matches a session header, which
+  // would silently drop every compressed archive from fallback history.
+  let probePath: string;
+  try {
+    probePath = materializeSessionArchiveForRead(archivePath);
+  } catch {
+    return false;
+  }
+  const stat = await fs.promises.stat(probePath).catch(() => null);
   if (!stat?.isFile()) {
     return false;
   }
@@ -193,7 +203,7 @@ async function resetArchiveHeaderMatchesSessionId(
   }
 
   let matches = false;
-  const handle = await fs.promises.open(archivePath, "r").catch(() => null);
+  const handle = await fs.promises.open(probePath, "r").catch(() => null);
   if (!handle) {
     return false;
   }

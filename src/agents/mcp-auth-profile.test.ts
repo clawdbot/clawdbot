@@ -1,6 +1,7 @@
 /** Tests auth-profile backed MCP bearer projection. */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveMcpBearerBundleConfig, withMcpAuthProfileBearer } from "./mcp-auth-profile.js";
+import * as mcpHttpFetch from "./mcp-http-fetch.js";
 
 const authMocks = vi.hoisted(() => ({
   loadAuthProfileStoreForSecretsRuntime: vi.fn(),
@@ -27,7 +28,12 @@ describe("mcp auth profile bearer projection", () => {
     authMocks.resolveMcpOAuthAccessToken.mockReset();
   });
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("projects existing MCP-native OAuth credentials without an auth profile", async () => {
+    const buildMcpHttpFetch = vi.spyOn(mcpHttpFetch, "buildMcpHttpFetch");
     authMocks.resolveMcpOAuthAccessToken.mockResolvedValueOnce("native-access-token");
 
     const resolved = await resolveMcpBearerBundleConfig({
@@ -38,6 +44,7 @@ describe("mcp auth profile bearer projection", () => {
             type: "http",
             auth: "oauth",
             oauth: { scope: "docs.read" },
+            requestTimeoutMs: 25,
           },
         },
       },
@@ -52,6 +59,12 @@ describe("mcp auth profile bearer projection", () => {
     expect(resolved.config.mcpServers.docs?.auth).toBeUndefined();
     expect(resolved.config.mcpServers.docs?.oauth).toBeUndefined();
     expect(Object.values(resolved.env ?? {})).toEqual(["native-access-token"]);
+    expect(buildMcpHttpFetch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resourceUrl: "https://mcp.example.com/mcp",
+        timeoutMs: 25,
+      }),
+    );
     expect(authMocks.resolveMcpOAuthAccessToken).toHaveBeenCalledWith(
       expect.objectContaining({
         serverName: "docs",

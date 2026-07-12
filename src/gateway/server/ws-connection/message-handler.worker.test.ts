@@ -8,6 +8,8 @@ import {
   PROTOCOL_VERSION,
   type WorkerAdmissionFailureReason,
   type WorkerConnectParams,
+  type WorkerTranscriptCommitErrorReason,
+  WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import {
   resetGatewayWorkAdmission,
@@ -22,7 +24,7 @@ const CREDENTIAL = ["worker", "credential", "fixture"].join("-");
 const HANDSHAKE = {
   bundleHash: "a".repeat(64),
   openclawVersion: "2026.7.11",
-  protocolFeatures: ["worker-heartbeat-v1"],
+  protocolFeatures: ["worker-heartbeat-v1", WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE],
 };
 const WORKER_CONNECT: WorkerConnectParams = {
   minProtocol: PROTOCOL_VERSION,
@@ -53,6 +55,18 @@ const IDENTITY: WorkerConnectionIdentity = {
   protocolFeatures: [...HANDSHAKE.protocolFeatures],
   credentialExpiresAtMs: Date.now() + 60_000,
 };
+const TRANSCRIPT_COMMIT = {
+  runEpoch: 1,
+  seq: 1,
+  baseLeafId: null,
+  messages: [
+    {
+      role: "user" as const,
+      content: [{ type: "text" as const, text: "hello" }],
+      timestamp: 1,
+    },
+  ],
+};
 const cleanups: Array<() => void> = [];
 
 function createLogger() {
@@ -62,6 +76,8 @@ function createLogger() {
 function attachHarness(
   options: {
     admissionFailure?: WorkerAdmissionFailureReason;
+    commitFailure?: WorkerTranscriptCommitErrorReason;
+    identity?: WorkerConnectionIdentity;
     validationFailure?: ReturnType<WorkerConnectionService["validateWorkerConnection"]>;
   } = {},
 ) {
@@ -72,7 +88,15 @@ function attachHarness(
     admitWorker: vi.fn(async () =>
       options.admissionFailure
         ? { ok: false as const, reason: options.admissionFailure }
-        : { ok: true as const, identity: IDENTITY },
+        : { ok: true as const, identity: options.identity ?? IDENTITY },
+    ),
+    commitTranscript: vi.fn(async () =>
+      options.commitFailure
+        ? { ok: false as const, reason: options.commitFailure }
+        : {
+            ok: true as const,
+            result: { entryIds: ["entry-1"], newLeafId: "entry-1" },
+          },
     ),
     validateWorkerConnection: vi.fn(() => options.validationFailure ?? null),
   } as WorkerConnectionService;
@@ -83,6 +107,7 @@ function attachHarness(
   });
   const logGateway = createLogger();
   const logWsControl = createLogger();
+  const setLastFrameMeta = vi.fn();
   const cleanup = attachWorkerWsMessageHandler({
     socket: socket as unknown as WebSocket,
     connId: "worker-connection",
@@ -96,7 +121,7 @@ function attachHarness(
     setHandshakeState: vi.fn(),
     advanceHandshakePhase: vi.fn(),
     setCloseCause: vi.fn(),
-    setLastFrameMeta: vi.fn(),
+    setLastFrameMeta,
     logGateway,
     logWsControl,
   });
@@ -110,6 +135,7 @@ function attachHarness(
     responses,
     service,
     setClient,
+    setLastFrameMeta,
     sendRequest: (method: string, params: unknown) =>
       send({ type: "req", id: "request-1", method, params }),
     sendConnect: () =>
@@ -179,6 +205,83 @@ describe("dedicated worker websocket protocol", () => {
       ok: true,
       payload: { status: "ok", ownerEpoch: 1 },
     });
+  });
+
+  it("dispatches semantic transcript commits on the closed worker allowlist", async () => {
+    const harness = attachHarness();
+    await admit(harness);
+    harness.sendRequest("worker.transcript.commit", TRANSCRIPT_COMMIT);
+
+    await vi.waitFor(() => expect(harness.responses).toHaveLength(2));
+    expect(harness.responses[1]).toMatchObject({
+      ok: true,
+      payload: { entryIds: ["entry-1"], newLeafId: "entry-1" },
+    });
+    expect(harness.service.commitTranscript).toHaveBeenCalledWith(IDENTITY, TRANSCRIPT_COMMIT);
+    expect(harness.setLastFrameMeta).toHaveBeenLastCalledWith({
+      type: "req",
+      method: "worker.transcript.commit",
+    });
+    expect(harness.close).not.toHaveBeenCalled();
+  });
+
+  it("rejects transcript commits when the admitted worker lacks the feature", async () => {
+    const harness = attachHarness({
+      identity: { ...IDENTITY, protocolFeatures: ["worker-heartbeat-v1"] },
+    });
+    await admit(harness);
+    harness.sendRequest("worker.transcript.commit", TRANSCRIPT_COMMIT);
+
+    await vi.waitFor(() => expect(harness.close).toHaveBeenCalledWith(1008, "method-not-allowed"));
+    expect(harness.service.commitTranscript).not.toHaveBeenCalled();
+  });
+
+  it("returns closed transcript errors without closing the worker connection", async () => {
+    const harness = attachHarness({ commitFailure: "stale-base-leaf" });
+    await admit(harness);
+    harness.sendRequest("worker.transcript.commit", TRANSCRIPT_COMMIT);
+
+    await vi.waitFor(() => expect(harness.responses).toHaveLength(2));
+    expect(harness.responses[1]).toMatchObject({
+      ok: false,
+      error: { details: { reason: "stale-base-leaf" } },
+    });
+    expect(harness.close).not.toHaveBeenCalled();
+  });
+
+  it("rejects structurally invalid transcript batches before application", async () => {
+    const harness = attachHarness();
+    await admit(harness);
+    harness.sendRequest("worker.transcript.commit", {
+      ...TRANSCRIPT_COMMIT,
+      sessionId: "foreign-session",
+    });
+
+    await vi.waitFor(() => expect(harness.responses).toHaveLength(2));
+    expect(harness.responses[1]).toMatchObject({
+      ok: false,
+      error: { details: { reason: "invalid-batch" } },
+    });
+    expect(harness.service.commitTranscript).not.toHaveBeenCalled();
+    expect(harness.close).not.toHaveBeenCalled();
+  });
+
+  it("closes a replaced worker before parsing a malformed transcript batch", async () => {
+    const harness = attachHarness();
+    await admit(harness);
+    vi.mocked(harness.service.validateWorkerConnection).mockReturnValue("credential-replaced");
+    harness.sendRequest("worker.transcript.commit", {
+      ...TRANSCRIPT_COMMIT,
+      sessionId: "foreign-session",
+    });
+
+    await vi.waitFor(() => expect(harness.responses).toHaveLength(2));
+    expect(harness.responses[1]).toMatchObject({
+      ok: false,
+      error: { details: { reason: "credential-replaced" } },
+    });
+    await vi.waitFor(() => expect(harness.close).toHaveBeenCalledWith(1008, "credential-replaced"));
+    expect(harness.service.commitTranscript).not.toHaveBeenCalled();
   });
 
   it("revalidates ownership immediately before admission", async () => {

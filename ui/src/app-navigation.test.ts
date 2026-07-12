@@ -61,11 +61,11 @@ describe("navigationIconForRoute", () => {
       Object.fromEntries(ALL_ROUTES.map((routeId) => [routeId, navigationIconForRoute(routeId)])),
     ).toEqual({
       chat: "messageSquare",
-      overview: "barChart",
       activity: "activity",
       workboard: "kanban",
       worktrees: "folder",
       channels: "link",
+      connection: "radio",
       sessions: "fileText",
       usage: "coins",
       cron: "calendarClock",
@@ -103,11 +103,11 @@ describe("titleForRoute", () => {
       Object.fromEntries(ALL_ROUTES.map((routeId) => [routeId, titleForRoute(routeId)])),
     ).toEqual({
       chat: "Chat",
-      overview: "Overview",
       activity: "Activity",
       workboard: "Workboard",
       worktrees: "Worktrees",
       channels: "Channels",
+      connection: "Connection",
       sessions: "Sessions",
       usage: "Usage",
       cron: "Cron Jobs",
@@ -139,11 +139,11 @@ describe("subtitleForRoute", () => {
       Object.fromEntries(ALL_ROUTES.map((routeId) => [routeId, subtitleForRoute(routeId)])),
     ).toEqual({
       chat: "Gateway chat for quick interventions.",
-      overview: "Status, entry points, health.",
       activity: "Browser-local tool activity summaries.",
       workboard: "Agent work queue and session handoff.",
       worktrees: "Isolated agent task checkouts and recovery snapshots.",
       channels: "Channels and settings.",
+      connection: "Gateway endpoint, credentials, and handshake status.",
       sessions: "Active sessions and defaults.",
       usage: "API usage and costs.",
       cron: "Wakeups and recurring runs.",
@@ -210,7 +210,7 @@ describe("normalizePath", () => {
 describe("pathForRoute", () => {
   it("returns correct path without base", () => {
     expect(pathForRoute("chat")).toBe("/chat");
-    expect(pathForRoute("overview")).toBe("/overview");
+    expect(pathForRoute("connection")).toBe("/settings/connection");
     expect(pathForRoute("debug")).toBe("/debug");
     expect(pathForRoute("logs")).toBe("/logs");
     expect(pathForRoute("plugins")).toBe("/settings/plugins");
@@ -226,7 +226,9 @@ describe("routeIdFromPath", () => {
   it("returns tab for valid path", () => {
     expect(routeIdFromPath("/chat")).toBe("chat");
     expect(routeIdFromPath("/new")).toBe("new-session");
-    expect(routeIdFromPath("/overview")).toBe("overview");
+    expect(routeIdFromPath("/overview")).toBeNull();
+    expect(routeIdFromPath("/settings/connection")).toBe("connection");
+    expect(routeIdFromPath("/connection")).toBeNull();
     expect(routeIdFromPath("/activity")).toBe("activity");
     expect(routeIdFromPath("/sessions")).toBe("sessions");
     expect(routeIdFromPath("/debug")).toBe("debug");
@@ -261,7 +263,7 @@ describe("routeIdFromPath", () => {
 
   it("matches canonical route casing exactly", () => {
     expect(routeIdFromPath("/CHAT")).toBeNull();
-    expect(routeIdFromPath("/Overview")).toBeNull();
+    expect(routeIdFromPath("/Sessions")).toBeNull();
   });
 });
 
@@ -300,7 +302,7 @@ describe("inferBasePathFromPathname", () => {
 
   it("returns empty string for direct tab path", () => {
     expect(inferBasePathFromPathname("/chat")).toBe("");
-    expect(inferBasePathFromPathname("/overview")).toBe("");
+    expect(inferBasePathFromPathname("/settings/connection")).toBe("");
     expect(inferBasePathFromPathname("/settings/general")).toBe("");
     expect(inferBasePathFromPathname("/settings/appearance")).toBe("");
     expect(inferBasePathFromPathname("/appearance")).toBe("");
@@ -344,17 +346,6 @@ describe("plugin tabs route", () => {
     expect(pluginTabKey({ pluginId: "other", id: "logbook" })).not.toBe(pluginTabKey(ref));
   });
 
-  it("round-trips a selected Codex host and thread without changing the tab key", () => {
-    const ref = {
-      pluginId: "codex",
-      id: "sessions",
-      hostId: "node:macbook",
-      threadId: "thread-1",
-    };
-    expect(pluginTabRefFromSearch(pluginTabSearch(ref))).toEqual(ref);
-    expect(pluginTabKey(ref)).toBe("codex/sessions");
-  });
-
   it("stays out of the customizable static sidebar routes", () => {
     expect(SIDEBAR_NAV_ROUTES).not.toContain("plugin");
     expect(SIDEBAR_NAV_ROUTES).toContain("plugins");
@@ -374,6 +365,7 @@ describe("SIDEBAR_NAV_ROUTES", () => {
       "profile",
       "config",
       "appearance",
+      "connection",
       "channels",
       "communications",
       "ai-agents",

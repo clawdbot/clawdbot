@@ -688,15 +688,14 @@ describe("cron tool", () => {
   it("documents the event-trigger authoring contract", () => {
     const tool = createTestCronTool();
 
-    expect(tool.description).toContain("Requires operator-enabled cron.triggers.enabled");
-    expect(tool.description).toContain("quiet checks use no model");
+    expect(tool.description).toContain("Gate: cron.triggers.enabled");
+    expect(tool.description).toContain("quiet check uses no model");
     expect(tool.description).toContain("trigger.state");
-    expect(tool.description).toContain("fire:false persists returned state");
-    expect(tool.description).toContain("without running the payload or creating run history");
-    expect(tool.description).toContain("Fired state persists only after payload success");
-    expect(tool.description).toContain('Silent watchers must set top-level delivery.mode="none"');
-    expect(tool.description).toContain("can make an otherwise successful payload fail");
-    expect(tool.description).toContain("once:true disables the job");
+    expect(tool.description).toContain("fire:false: save state; no payload/run history");
+    expect(tool.description).toContain("Fired state saves only after payload success");
+    expect(tool.description).toContain('Silent watcher: top-level delivery.mode="none"');
+    expect(tool.description).toContain("missing route may fail payload");
+    expect(tool.description).toContain("once:true: disable after first successful fired payload");
     expect(tool.description).toContain('await tools.call("exec"');
   });
 

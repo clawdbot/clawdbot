@@ -479,6 +479,7 @@ export const de: TranslationMap = {
     noEvents: "No events yet.",
   },
   quickSettings: {
+    language: "Sprache",
     appearance: {
       lobsterVisits: "Hummerbesuche",
       lobsterVisitsOn: "Schaut gelegentlich vorbei",
@@ -615,10 +616,10 @@ export const de: TranslationMap = {
   tabs: {
     agents: "Agenten",
     activity: "Aktivität",
-    overview: "Übersicht",
     workboard: "Arbeitsbereich",
     worktrees: "Worktrees",
     channels: "Kanäle",
+    connection: "Verbindung",
     sessions: "Sitzungen",
     usage: "Nutzung",
     cron: "Cron-Aufgaben",
@@ -645,10 +646,10 @@ export const de: TranslationMap = {
   subtitles: {
     agents: "Agent-Arbeitsbereiche, Tools und Identitäten verwalten.",
     activity: "Browser-lokale Zusammenfassungen der Tool-Aktivität.",
-    overview: "Gateway-Status, Einstiegspunkte und eine schnelle Zustandsprüfung.",
     workboard: "Agenten-Arbeitswarteschlange und Sitzungsübergabe.",
     worktrees: "Isolierte Checkouts für Agentenaufgaben und Wiederherstellungs-Snapshots.",
     channels: "Kanäle und Einstellungen verwalten.",
+    connection: "Gateway-Endpunkt, Anmeldedaten und Handshake-Status.",
     sessions: "Aktive Sitzungen inspizieren und Standardeinstellungen pro Sitzung anpassen.",
     usage: "API-Nutzung und Kosten überwachen.",
     cron: "Aufweckzeiten und wiederkehrende Agent-Läufe planen.",
@@ -946,154 +947,6 @@ export const de: TranslationMap = {
     unavailableTitle: "Plugin panel unavailable",
     unavailableSubtitle:
       "The plugin that owns this tab is not active on the connected gateway, or it did not provide a panel.",
-  },
-  codexSessions: {
-    eyebrow: "Codex-Flotte",
-    title: "Sitzungen auf allen deinen Computern",
-    interactiveSubtitle:
-      "Starten Sie einen Chat-Branch, dessen Modellauswahl unter der Kontrolle des Codex App Server bleibt, archivieren Sie berechtigte lokale Sitzungen nach Bestätigung und zeigen Sie Sitzungen gekoppelter Computer an.",
-    summaryLabel: "Zusammenfassung der Codex-Sitzungen",
-    summary: {
-      sessions: "Sitzungen",
-      onlineHosts: "online",
-      hosts: "Hosts",
-    },
-    searchLabel: "Codex-Sitzungen durchsuchen",
-    searchPlaceholder: "Sitzungstitel durchsuchen",
-    refresh: "Aktualisieren",
-    disconnected: "Verbinde dich erneut mit dem Gateway, um die Codex-Sitzungen zu aktualisieren.",
-    partial: "Nicht verfügbare Hosts: {count}. Andere Hosts bleiben verfügbar.",
-    loading: "Codex-Sitzungen werden geladen…",
-    loadMore: "Mehr laden",
-    loadingMore: "Wird geladen…",
-    untitled: "Unbenannte Codex-Sitzung",
-    threadId: "Thread",
-    actions: {
-      continue: "Fortfahren",
-      continueAsBranch: "Als Branch fortfahren",
-      openChat: "Chat öffnen",
-      continuing: "Wird fortgesetzt…",
-      archive: "Archivieren",
-      readTranscript: "Gelesen",
-      readTranscriptLabel: "Transkript für {title} lesen",
-      continueLabel: "{title} fortsetzen",
-      continueAsBranchLabel: "{title} als Branch fortsetzen",
-      openChatLabel: "Chat für {title} öffnen",
-      continueAsBranchHint:
-        "Erstellen Sie einen Chat aus dem gespeicherten sichtbaren Verlauf. Bei Ihrer ersten Nachricht wählt der Codex App Server das Modell und den Anbieter für den neuen Harness-Thread aus. Die spätere Auswahl bleibt Codex-gesteuert; OpenClaw ersetzt niemals eine andere Laufzeitumgebung, ein anderes Modell oder einen Fallback. Die Quelle bleibt unverändert, und laufende Arbeit ist möglicherweise nicht enthalten.",
-      archiveLabel: "{title} archivieren",
-      archiveConfirmation:
-        "{title} und alle erzeugten Nachfolger archivieren? Bestätigen Sie, dass kein anderer Codex-Client oder OpenClaw-Runner sie verwendet. Das Archivieren, während ein anderer Runner aktiv ist, kann dessen Arbeit unterbrechen.",
-      active: "Aktive Sitzungen können keinen Branch starten und nicht archiviert werden.",
-      archiveActivityUnknownHint:
-        "Die Aktivität ist unbekannt, da der Status prozesslokal ist. Archivieren Sie erst, nachdem Sie bestätigt haben, dass kein anderer Codex-Client oder Runner diese Sitzung verwendet.",
-      statusUnavailable:
-        "Diese Codex-Sitzung kann in ihrem aktuellen Zustand nicht verwaltet werden.",
-      hostOffline:
-        "Verbinden Sie diesen Computer erneut, bevor Sie seine Codex-Sitzungen verwalten.",
-      gatewayOffline:
-        "Stellen Sie erneut eine Verbindung zum Gateway her, bevor Sie Codex-Sitzungen verwalten.",
-      remoteReadOnly: "Sitzungen gekoppelter Computer können vorerst nur angezeigt werden.",
-    },
-    status: {
-      active: "Aktiv",
-      idle: "Inaktiv",
-      archived: "Archiviert",
-      storedActivityUnknown: "Gespeichert / Aktivität unbekannt",
-      systemError: "Systemfehler",
-      unknown: "Unbekannt",
-    },
-    host: {
-      gateway: "Gateway",
-      node: "Knoten",
-      connected: "Verbunden",
-      offline: "Offline",
-      unavailable: "Sitzungskatalog nicht verfügbar",
-      sessionCount: "{count} angezeigt",
-    },
-    empty: {
-      title: "Keine Codex-Hosts gefunden",
-      supervisionSubtitle:
-        "Aktiviere die Codex-Überwachung auf dem Gateway oder einem gekoppelten Computer und aktualisiere dann diese Ansicht.",
-      search: "Keine Sitzungen auf diesem Host entsprechen deiner Suche.",
-      nonArchived: "Keine nicht archivierten Sitzungen auf diesem Host.",
-    },
-    sidebar: {
-      title: "Codex-Sitzungen",
-      unavailable: "Codex-Sitzungen nicht verfügbar",
-      viewAll: "Alle Codex-Sitzungen anzeigen",
-      truncated: "Weitere Sitzungen sind im vollständigen Katalog verfügbar.",
-    },
-    transcript: {
-      eyebrow: "Codex-Transkript",
-      back: "Alle Codex-Sitzungen",
-      you: "Sie",
-      reasoning: "Argumentation",
-      command: "Befehl",
-      fileChange: "Dateiänderung",
-      item: "Codex-Element",
-      details: "Vollständige Details",
-      loading: "Transkript wird geladen…",
-      loadMore: "Ältere Transkriptelemente laden",
-    },
-  },
-  claudeSessions: {
-    eyebrow: "Claude-Flotte",
-    title: "Claude-Sitzungen auf Ihren Computern",
-    subtitle:
-      "Durchsuchen Sie nicht archivierte Claude CLI- und Claude Desktop-Sitzungen und lesen Sie deren paginierte lokale Transkripte.",
-    summaryLabel: "Claude-Sitzungszusammenfassung",
-    summary: {
-      sessions: "Sitzungen",
-      onlineHosts: "online",
-      hosts: "Hosts",
-    },
-    searchLabel: "Claude-Sitzungen suchen",
-    searchPlaceholder: "Sitzungstitel durchsuchen",
-    refresh: "Aktualisieren",
-    disconnected:
-      "Stellen Sie die Verbindung zur Gateway wieder her, um Claude-Sitzungen zu aktualisieren.",
-    partial: "Nicht verfügbare Hosts: {count}. Andere Hosts bleiben verfügbar.",
-    loading: "Claude-Sitzungen werden geladen…",
-    loadMore: "Mehr laden",
-    loadingMore: "Wird geladen…",
-    untitled: "Unbenannte Claude-Sitzung",
-    sessionId: "Sitzung",
-    stored: "Gespeichert",
-    read: "Gelesen",
-    readLabel: "Transkript für {title} lesen",
-    host: {
-      gateway: "Gateway",
-      node: "Knoten",
-      connected: "Verbunden",
-      offline: "Offline",
-      unavailable: "Sitzungskatalog nicht verfügbar",
-      sessionCount: "{count} angezeigt",
-    },
-    empty: {
-      title: "Keine Claude-Sitzungen gefunden",
-      subtitle:
-        "Installieren und verwenden Sie Claude CLI oder Claude Desktop, und aktualisieren Sie dann diese Ansicht.",
-      search: "Keine Sitzungen auf diesem Host entsprechen deiner Suche.",
-      nonArchived: "Keine nicht archivierten Sitzungen auf diesem Host.",
-    },
-    sidebar: {
-      title: "Claude-Sitzungen",
-      viewAll: "Alle Claude-Sitzungen anzeigen",
-      truncated: "Weitere Sitzungen sind im vollständigen Katalog verfügbar.",
-    },
-    transcript: {
-      eyebrow: "Claude-Transkript",
-      back: "Alle Claude-Sitzungen",
-      you: "Sie",
-      reasoning: "Argumentation",
-      toolCall: "Tool-Aufruf",
-      toolResult: "Tool-Ergebnis",
-      item: "Claude-Element",
-      details: "Vollständige Details",
-      loading: "Transkript wird geladen…",
-      loadMore: "Ältere Transkriptelemente laden",
-    },
   },
   logbook: {
     duration: {
@@ -1450,158 +1303,80 @@ export const de: TranslationMap = {
     eventUnarchived: "Aus Archiv wiederhergestellt",
     eventStale: "Veraltete Sitzung",
   },
-  overview: {
+  connection: {
+    lostTitle: "Gateway-Verbindung verloren",
+    reconnecting: "Verbindung wird wiederhergestellt…",
+    offlineHint:
+      "Live-Updates und Aktionen sind pausiert, bis die Verbindung wiederhergestellt ist.",
+    retryNow: "Jetzt erneut versuchen",
     access: {
-      title: "Gateway-Zugang",
-      subtitle: "Wo sich das Dashboard verbindet und wie es sich authentifiziert.",
+      title: "Gateway-Zugriff",
+      subtitle: "Wohin sich das Dashboard verbindet und wie es sich authentifiziert.",
       wsUrl: "WebSocket-URL",
       token: "Gateway-Token",
-      password: "Passwort (nicht gespeichert)",
+      password: "Passwort (wird nicht gespeichert)",
       passwordPlaceholder: "System- oder gemeinsames Passwort",
       sessionKey: "Standard-Sitzungsschlüssel",
-      language: "Sprache",
-      connectHint: "Klicken Sie auf Verbinden, um Verbindungsänderungen anzuwenden.",
-      trustedProxy: "Authentifiziert über vertrauenswürdigen Proxy.",
+      connectHint: "Klicken Sie auf „Verbinden“, um die Verbindungsänderungen anzuwenden.",
+      trustedProxy: "Über einen vertrauenswürdigen Proxy authentifiziert.",
       showToken: "Token anzeigen",
       hideToken: "Token ausblenden",
       toggleTokenVisibility: "Token-Sichtbarkeit umschalten",
       showPassword: "Passwort anzeigen",
       hidePassword: "Passwort ausblenden",
-      togglePasswordVisibility: "Sichtbarkeit des Passworts umschalten",
+      togglePasswordVisibility: "Passwort-Sichtbarkeit umschalten",
     },
     snapshot: {
-      title: "Aufnahme",
-      subtitle: "Neueste Gateway-Handshake-Informationen.",
+      title: "Momentaufnahme",
+      subtitle: "Neueste Informationen zum Gateway-Handshake.",
       status: "Status",
       uptime: "Betriebszeit",
       tickInterval: "Tick-Intervall",
       lastChannelsRefresh: "Letzte Kanalaktualisierung",
-      channelsHint:
-        "Verwenden Sie Kanäle, um WhatsApp, Telegram, Discord, Signal oder iMessage zu verknüpfen.",
     },
-    stats: {
-      instances: "Instanzen",
-      instancesHint: "Präsenzsignale in den letzten 5 Minuten.",
-      sessions: "Sitzungen",
-      sessionsHint: "Letzte vom Gateway verfolgte Sitzungsschlüssel.",
-      cron: "Cron",
-      cronNext: "Nächste Ausführung {time}",
-    },
-    notes: {
-      title: "Notizen",
-      subtitle: "Kurze Hinweise für Remote-Steuerung.",
-      tailscaleTitle: "Tailscale Serve",
-      tailscaleText:
-        "Bevorzugen Sie den Serve-Modus, um das Gateway auf Loopback mit Tailnet-Auth zu halten.",
-      sessionTitle: "Sitzungshygiene",
-      sessionText: "Verwenden Sie /new oder sessions.patch, um den Kontext zurückzusetzen.",
-      cronTitle: "Cron-Erinnerungen",
-      cronText: "Verwenden Sie isolierte Sitzungen für wiederkehrende Läufe.",
-    },
-    auth: {
-      required:
-        "Dieses Gateway erfordert Authentifizierung. Fügen Sie ein Token oder Passwort hinzu und klicken Sie auf Verbinden.",
-      failed:
-        "Authentifizierung fehlgeschlagen. Kopieren Sie erneut eine URL mit Token über {command}, oder aktualisieren Sie das Token und klicken Sie auf Verbinden.",
-    },
-    pairing: {
-      hint: "Dieses Gerät benötigt eine Pairing-Freigabe vom Gateway-Host.",
-      scopeUpgradeTitle: "Umfangserweiterung wartet auf Genehmigung.",
-      scopeUpgradeSummary:
-        "Dieses Gerät ist bereits gekoppelt, aber der angeforderte erweiterte Umfang wartet auf Genehmigung.",
-      roleUpgradeTitle: "Rollenänderung wartet auf Genehmigung.",
-      roleUpgradeSummary:
-        "Dieses Gerät ist bereits gekoppelt, aber die angeforderte Rollenänderung wartet auf Genehmigung.",
-      metadataUpgradeTitle: "Änderung der Gerätemetadaten wartet auf Genehmigung.",
-      metadataUpgradeSummary:
-        "Dieses Gerät ist bereits gekoppelt, aber die Änderung der Metadaten wartet auf Genehmigung.",
-      mobileHint:
-        "Auf dem Mobilgerät? Kopieren Sie die vollständige URL (einschließlich #token=...) von openclaw dashboard --no-open auf Ihrem Desktop.",
-      docsTitle: "Gerätekopplungs-Dokumentation (öffnet sich in neuem Tab)",
-      docsLink: "Docs: Gerätekopplung",
-    },
-    insecure: {
-      hint: "Diese Seite ist HTTP, daher blockiert der Browser die Geräteidentifikation. Verwenden Sie HTTPS (Tailscale Serve) oder öffnen Sie {url} auf dem Gateway-Host.",
-      stayHttp: "Wenn Sie bei HTTP bleiben müssen, setzen Sie {config} (nur Token).",
-    },
-    connection: {
-      title: "So verbindest du dich",
-      step1: "Starte das Gateway auf deinem Host-Rechner:",
-      step2: "Rufe eine tokenisierte Dashboard-URL ab:",
+    help: {
+      title: "So stellen Sie eine Verbindung her",
+      step1: "Starten Sie das Gateway auf Ihrem Hostcomputer:",
+      step2: "Rufen Sie eine Dashboard-URL mit Token ab:",
       step3:
-        "Füge oben die WebSocket-URL und das Token ein oder öffne die tokenisierte URL direkt.",
-      step4: "Oder generiere ein wiederverwendbares Token:",
-      docsHint: "Für den Remote-Zugriff wird Tailscale Serve empfohlen. ",
+        "Fügen Sie oben die WebSocket-URL und das Token ein oder öffnen Sie direkt die URL mit Token.",
       docsLink: "Dokumentation lesen →",
-      authDocsTitle: "Control UI-Authentifizierungsdokumentation (öffnet sich in neuem Tab)",
-      authDocsLink: "Docs: Control UI-Authentifizierung",
-      tailscaleDocsTitle: "Tailscale Serve-Dokumentation (öffnet sich in neuem Tab)",
-      tailscaleDocsLink: "Docs: Tailscale Serve",
-      insecureHttpDocsTitle: "Dokumentation zu unsicherem HTTP (öffnet sich in neuem Tab)",
-      insecureHttpDocsLink: "Docs: Unsicheres HTTP",
       copyCommand: "Befehl kopieren",
       copyCommandAria: "Befehl kopieren: {command}",
     },
-    cards: {
-      cost: "Kosten",
+  },
+  attention: {
+    cronFailed: "{count} Cronjob(s) fehlgeschlagen",
+    cronOverdue: "{count} Cronjob(s) überfällig",
+    modelAuthExpired: "Modellauthentifizierung abgelaufen: {providers}",
+    modelAuthExpiring: "Modellauthentifizierung läuft bald ab: {providers}",
+  },
+  palette: {
+    placeholder: "Chats und Befehle durchsuchen…",
+    noResults: "Keine Ergebnisse",
+    categories: {
+      search: "Suchen",
+      navigation: "Navigation",
       skills: "Skills",
-      recentSessions: "Letzte Sitzungen",
-      modelAuth: "Modell-Authentifizierung",
-      modelAuthOk: "{count} ok",
-      modelAuthExpired: "{count} abgelaufen",
-      modelAuthExpiring: "{count} laufen bald ab",
-      modelAuthProviders: "{count} Anbieter",
-      modelAuthUsageLeft: "{pct}% übrig",
-      modelAuthExpiresIn: "läuft {when} ab",
-      modelAuthAttentionExpiredTitle: "Modell-Authentifizierung abgelaufen",
-      modelAuthAttentionExpiringTitle: "Modell-Authentifizierung läuft bald ab",
-      modelAuthAttentionExpiredDesc:
-        "{providers} — mit openclaw models auth erneut authentifizieren",
-      modelAuthAttentionExpiringEntry: "{provider} ({when})",
     },
-    attention: {
-      title: "Aufmerksamkeit",
+    items: {
+      sessions: "Sitzungen",
+      scheduled: "Geplant",
+      skills: "Skills",
+      plugins: "Plugins",
+      settings: "Einstellungen",
+      agents: "Agenten",
+      shellCommand: "Shell-Befehl",
+      debugMode: "Debug-Modus",
     },
-    eventLog: {
-      title: "Ereignisprotokoll",
+    descriptions: {
+      shellCommand: "Shell ausführen",
+      debugMode: "Debug-Modus umschalten",
     },
-    logTail: {
-      title: "Gateway-Protokolle",
-    },
-    quickActions: {
-      newSession: "Neue Sitzung",
-      automation: "Automatisierung",
-      refreshAll: "Alles aktualisieren",
-      terminal: "Terminal",
-    },
-    palette: {
-      placeholder: "Befehl eingeben…",
-      noResults: "Keine Ergebnisse",
-      categories: {
-        search: "Suchen",
-        navigation: "Navigation",
-        skills: "Skills",
-      },
-      items: {
-        overview: "Übersicht",
-        sessions: "Sitzungen",
-        scheduled: "Geplant",
-        skills: "Skills",
-        plugins: "Plugins",
-        settings: "Einstellungen",
-        agents: "Agenten",
-        shellCommand: "Shell-Befehl",
-        debugMode: "Debug-Modus",
-      },
-      descriptions: {
-        shellCommand: "Shell ausführen",
-        debugMode: "Debug umschalten",
-      },
-      footer: {
-        navigate: "navigieren",
-        select: "auswählen",
-        close: "schließen",
-      },
+    footer: {
+      navigate: "navigieren",
+      select: "auswählen",
+      close: "schließen",
     },
   },
   dreaming: {
@@ -2114,16 +1889,15 @@ export const de: TranslationMap = {
       },
     },
   },
-  connection: {
-    lostTitle: "Gateway-Verbindung verloren",
-    reconnecting: "Verbindung wird wiederhergestellt…",
-    offlineHint:
-      "Live-Updates und Aktionen sind pausiert, bis die Verbindung wiederhergestellt ist.",
-    retryNow: "Jetzt erneut versuchen",
-  },
   chat: {
     disconnected: "Verbindung zum Gateway getrennt.",
     archivedSessionDisabled: "Stellen Sie diese Sitzung wieder her, um Nachrichten zu senden.",
+    loadOlder: "Ältere laden",
+    catalog: {
+      remoteViewOnly:
+        "Diese Sitzung befindet sich auf einem gekoppelten Knoten und ist schreibgeschützt.",
+      unsupportedViewOnly: "Diese externe Sitzungsquelle ist schreibgeschützt.",
+    },
     taskSuggestions: {
       eyebrow: "Vorgeschlagene Folgeaufgabe",
       start: "In Worktree starten",

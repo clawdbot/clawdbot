@@ -120,29 +120,23 @@ describe("channel-streaming", () => {
     ).toBe(false);
   });
 
-  it("falls back to legacy flat fields when the canonical object is absent", () => {
+  it("ignores legacy flat fields when the canonical object is absent", () => {
+    // Doctor migrates the flat aliases (`openclaw doctor --fix`); runtime reads
+    // only the nested streaming shape.
     const entry = {
       chunkMode: "newline",
       blockStreaming: true,
       nativeStreaming: true,
       blockStreamingCoalesce: { minChars: 120, maxChars: 240, idleMs: 500 },
       draftChunk: { minChars: 8, maxChars: 16, breakPreference: "newline" },
-    } as const;
+    } as never;
 
     expect(getChannelStreamingConfigObject(entry)).toBeUndefined();
-    expect(resolveChannelStreamingChunkMode(entry)).toBe("newline");
-    expect(resolveChannelStreamingNativeTransport(entry)).toBe(true);
-    expect(resolveChannelStreamingBlockEnabled(entry)).toBe(true);
-    expect(resolveChannelStreamingBlockCoalesce(entry)).toEqual({
-      minChars: 120,
-      maxChars: 240,
-      idleMs: 500,
-    });
-    expect(resolveChannelStreamingPreviewChunk(entry)).toEqual({
-      minChars: 8,
-      maxChars: 16,
-      breakPreference: "newline",
-    });
+    expect(resolveChannelStreamingChunkMode(entry)).toBeUndefined();
+    expect(resolveChannelStreamingNativeTransport(entry)).toBeUndefined();
+    expect(resolveChannelStreamingBlockEnabled(entry)).toBeUndefined();
+    expect(resolveChannelStreamingBlockCoalesce(entry)).toBeUndefined();
+    expect(resolveChannelStreamingPreviewChunk(entry)).toBeUndefined();
     expect(resolveChannelStreamingPreviewToolProgress(entry)).toBe(true);
   });
 
@@ -161,9 +155,9 @@ describe("channel-streaming", () => {
         streaming: { mode: "block", block: { enabled: true } },
       }),
     ).toBe(true);
-    expect(resolveChannelStreamingBlockEnabled({ streaming: "block", blockStreaming: false })).toBe(
-      false,
-    );
+    expect(
+      resolveChannelStreamingBlockEnabled({ streaming: "block", blockStreaming: false } as never),
+    ).toBeUndefined();
   });
 
   it("selects a longer transcript candidate for ellipsis-truncated finals", async () => {

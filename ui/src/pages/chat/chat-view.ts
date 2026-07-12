@@ -25,6 +25,7 @@ import {
 } from "./components/chat-background-tasks.ts";
 import {
   handleChatAttachmentDrop,
+  isChatRunWorking,
   renderChatComposer,
   resetChatComposerState,
 } from "./components/chat-composer.ts";
@@ -73,6 +74,7 @@ export type ChatProps = {
   compactionStatus?: CompactionStatus | null;
   fallbackStatus?: FallbackStatus | null;
   messages: unknown[];
+  historyPagination?: { loading: boolean; onLoadOlder: () => void };
   sideChatTurns?: ChatSideResult[];
   sideChatPending?: ChatSideResultPending | null;
   sideChatHidden?: boolean;
@@ -231,6 +233,7 @@ export function renderChat(props: ChatProps) {
     showThinking: props.showThinking,
     showToolCalls: props.showToolCalls,
     runActive: Boolean(props.canAbort),
+    runWorking: isChatRunWorking(props),
     sessions: props.sessions,
     sessionHost: props.sessionHost,
     assistantName: props.assistantName,
@@ -415,6 +418,18 @@ export function renderChat(props: ChatProps) {
         },
         requestUpdate,
       )}
+      ${props.historyPagination
+        ? html`<div class="chat-history-pagination">
+            <button
+              class="btn btn--sm"
+              type="button"
+              ?disabled=${props.historyPagination.loading}
+              @click=${props.historyPagination.onLoadOlder}
+            >
+              ${props.historyPagination.loading ? t("common.loading") : t("chat.loadOlder")}
+            </button>
+          </div>`
+        : nothing}
 
       <div
         class="chat-workbench ${props.sessionWorkspace?.collapsed

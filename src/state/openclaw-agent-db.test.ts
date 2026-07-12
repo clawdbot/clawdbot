@@ -23,6 +23,7 @@ import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
+  runOpenClawAgentWriteTransaction,
 } from "./openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -965,6 +966,26 @@ describe("openclaw agent database", () => {
 
     expect(fs.statSync(parentDir).mode & 0o777).toBe(0o755);
   });
+
+  it.runIf(process.platform !== "win32")(
+    "defers nested permission repair until the outer transaction commits",
+    () => {
+      const stateDir = createTempStateDir();
+      const options = {
+        agentId: "worker-1",
+        env: { OPENCLAW_STATE_DIR: stateDir },
+      };
+      const database = openOpenClawAgentDatabase(options);
+      fs.chmodSync(database.path, 0o644);
+
+      runOpenClawAgentWriteTransaction(() => {
+        runOpenClawAgentWriteTransaction(() => undefined, options);
+        expect(fs.statSync(database.path).mode & 0o777).toBe(0o644);
+      }, options);
+
+      expect(fs.statSync(database.path).mode & 0o777).toBe(0o600);
+    },
+  );
 
   it("configures durable SQLite connection pragmas", () => {
     const stateDir = createTempStateDir();

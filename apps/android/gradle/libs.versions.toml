@@ -15,6 +15,7 @@ androidx-uiautomator = "2.4.0"
 androidx-webkit = "1.15.0"
 bcprov = "1.84"
 commonmark = "0.29.0"
+coil = "3.5.0"
 coroutines = "1.11.0"
 dnsjava = "3.6.5"
 junit = "4.13.2"
@@ -62,6 +63,8 @@ commonmark-ext-autolink = { module = "org.commonmark:commonmark-ext-autolink", v
 commonmark-ext-gfm-strikethrough = { module = "org.commonmark:commonmark-ext-gfm-strikethrough", version.ref = "commonmark" }
 commonmark-ext-gfm-tables = { module = "org.commonmark:commonmark-ext-gfm-tables", version.ref = "commonmark" }
 commonmark-ext-task-list-items = { module = "org.commonmark:commonmark-ext-task-list-items", version.ref = "commonmark" }
+coil-compose = { module = "io.coil-kt.coil3:coil-compose", version.ref = "coil" }
+coil-svg = { module = "io.coil-kt.coil3:coil-svg", version.ref = "coil" }
 dnsjava = { module = "dnsjava:dnsjava", version.ref = "dnsjava" }
 junit = { module = "junit:junit", version.ref = "junit" }
 junit-vintage-engine = { module = "org.junit.vintage:junit-vintage-engine", version.ref = "junit-vintage" }

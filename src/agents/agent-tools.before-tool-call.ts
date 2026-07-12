@@ -638,6 +638,9 @@ function resolveRelativeToolPath(candidate: string, ctx?: HookContext): string |
   if (!trimmed) {
     return undefined;
   }
+  if (trimmed.startsWith("node://")) {
+    return trimmed;
+  }
   if (trimmed === "~") {
     return os.homedir();
   }
@@ -670,8 +673,12 @@ function skillInstructionPaths(snapshot: SkillSnapshot | undefined): Map<string,
     }
     const match = resolvedSkillUsageMatch({ activation: "read", skill });
     const filePath = typeof skill.filePath === "string" ? skill.filePath.trim() : "";
-    if (filePath && path.isAbsolute(filePath)) {
-      matches.set(path.resolve(filePath), match);
+    if (filePath) {
+      if (filePath.startsWith("node://")) {
+        matches.set(filePath, match);
+      } else if (path.isAbsolute(filePath)) {
+        matches.set(path.resolve(filePath), match);
+      }
     }
     const baseDir = typeof skill.baseDir === "string" ? skill.baseDir.trim() : "";
     if (baseDir && path.isAbsolute(baseDir)) {

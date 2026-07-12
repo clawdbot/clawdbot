@@ -13,6 +13,9 @@ const mocks = await vi.hoisted(async () => {
     runFleetLifecycleCommand: vi.fn(),
     runFleetUpgradeCommand: vi.fn(),
     runFleetRemoveCommand: vi.fn(),
+    runFleetBackupCommand: vi.fn(),
+    runFleetRestoreCommand: vi.fn(),
+    runFleetDoctorCommand: vi.fn(),
   };
 });
 
@@ -28,6 +31,9 @@ vi.mock("./commands.runtime.js", () => ({
   runFleetLifecycleCommand: mocks.runFleetLifecycleCommand,
   runFleetUpgradeCommand: mocks.runFleetUpgradeCommand,
   runFleetRemoveCommand: mocks.runFleetRemoveCommand,
+  runFleetBackupCommand: mocks.runFleetBackupCommand,
+  runFleetRestoreCommand: mocks.runFleetRestoreCommand,
+  runFleetDoctorCommand: mocks.runFleetDoctorCommand,
 }));
 
 function createProgram(): Command {
@@ -66,6 +72,10 @@ describe("fleet cli", () => {
       "3g",
       "--cpus",
       "1.5",
+      "--disk",
+      "10GB",
+      "--network",
+      "internal",
       "--pids-limit",
       "256",
       "--env",
@@ -86,6 +96,8 @@ describe("fleet cli", () => {
       port: 19_123,
       memory: "3g",
       cpus: "1.5",
+      disk: "10GB",
+      network: "internal",
       pidsLimit: 256,
       env: ["CHANNEL_ID=alpha", "FEATURE_FLAG=1"],
       gatewayToken: "test-token",
@@ -104,6 +116,8 @@ describe("fleet cli", () => {
       port: undefined,
       memory: "2g",
       cpus: "2",
+      disk: undefined,
+      network: "bridge",
       pidsLimit: 512,
       env: [],
       gatewayToken: undefined,
@@ -141,6 +155,40 @@ describe("fleet cli", () => {
     });
   });
 
+  it("registers backup, restore, logs, and doctor options", async () => {
+    await runFleetCli([
+      "backup",
+      "tenant-a",
+      "--out",
+      "/tmp/cell.tgz",
+      "--max-bytes",
+      "42",
+      "--json",
+    ]);
+    await runFleetCli(["restore", "tenant-a", "--from", "/tmp/cell.tgz", "--force", "--json"]);
+    await runFleetCli(["logs", "tenant-a", "--tail", "500", "--since", "10m"]);
+    await runFleetCli(["doctor", "tenant-a", "--json"]);
+    expect(mocks.runFleetBackupCommand).toHaveBeenCalledWith({
+      tenant: "tenant-a",
+      out: "/tmp/cell.tgz",
+      maxBytes: 42,
+      json: true,
+    });
+    expect(mocks.runFleetRestoreCommand).toHaveBeenCalledWith({
+      tenant: "tenant-a",
+      from: "/tmp/cell.tgz",
+      force: true,
+      json: true,
+    });
+    expect(mocks.runFleetLogsCommand).toHaveBeenCalledWith({
+      tenant: "tenant-a",
+      follow: false,
+      tail: 500,
+      since: "10m",
+    });
+    expect(mocks.runFleetDoctorCommand).toHaveBeenCalledWith({ tenant: "tenant-a", json: true });
+  });
+
   it.each([
     {
       argv: ["create", "tenant-a", "--runtime", "containerd"],
@@ -158,6 +206,12 @@ describe("fleet cli", () => {
       argv: ["logs", "tenant-a", "--tail", "1.5"],
       error: /--tail must be a positive integer/,
     },
+    { argv: ["create", "tenant-a", "--disk", "10 g"], error: /--disk/ },
+    {
+      argv: ["create", "tenant-a", "--network", "none"],
+      error: /--network must be bridge or internal/,
+    },
+    { argv: ["restore", "tenant-a"], error: /required option '--from/ },
   ])("rejects invalid options: $argv", async ({ argv, error }) => {
     await expect(runFleetCli(argv)).rejects.toThrow(error);
     expect(mocks.runFleetCreateCommand).not.toHaveBeenCalled();

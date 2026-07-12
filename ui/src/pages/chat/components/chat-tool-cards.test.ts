@@ -279,6 +279,36 @@ describe("tool-cards", () => {
     }
   });
 
+  it("opens the raw file path from an expanded edit card", () => {
+    const container = document.createElement("div");
+    const onOpenWorkspaceFile = vi.fn();
+    render(
+      renderToolCard(
+        {
+          id: "msg:edit:open",
+          name: "edit",
+          args: { file_path: "packages/app/src/raw-name.ts", oldText: "old", newText: "new" },
+          completed: true,
+        },
+        {
+          expanded: true,
+          onOpenWorkspaceFile,
+          onToggleExpanded: vi.fn(),
+        },
+      ),
+      container,
+    );
+
+    const pathButton = container.querySelector<HTMLButtonElement>(
+      '.chat-tool-card__detail-link[title="Open file"]',
+    );
+    expect(pathButton).toBeInstanceOf(HTMLButtonElement);
+    pathButton!.click();
+    expect(onOpenWorkspaceFile).toHaveBeenCalledWith({
+      path: "packages/app/src/raw-name.ts",
+    });
+  });
+
   it("keeps read offsets and limits visible in expanded args", () => {
     const container = document.createElement("div");
     render(

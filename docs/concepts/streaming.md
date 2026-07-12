@@ -50,6 +50,14 @@ Model output
 newline, before falling back to length chunking once the text exceeds the
 limit.
 
+Channels with a nested `streaming` config (Telegram, Discord, Slack, iMessage,
+Microsoft Teams) spell these overrides as
+`channels.<id>.streaming.{chunkMode,block.enabled,block.coalesce}`; the flat
+`*.chunkMode` / `*.blockStreaming` / `*.blockStreamingCoalesce` spellings apply
+to channels without one (for example Signal, IRC, Google Chat, WhatsApp,
+Mattermost). Stale flat keys on nested-streaming channels are migrated by
+`openclaw doctor --fix` and are not read at runtime.
+
 **Boundary semantics** for `blockStreamingBreak`:
 
 - `text_end`: stream blocks as soon as the chunker emits; flush on each `text_end`.

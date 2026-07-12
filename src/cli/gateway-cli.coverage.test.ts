@@ -3,16 +3,21 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
+import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvOverride } from "../config/test-helpers.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { testApi as usageTestApi, usageHandlers } from "../gateway/server-methods/usage.js";
 import { GatewayLockError } from "../infra/gateway-lock.js";
 import { registerGatewayCli } from "./gateway-cli.js";
 
 type DiscoveredBeacon = Awaited<
   ReturnType<typeof import("../infra/bonjour-discovery.js").discoverGatewayBeacons>
 >[number];
+type UsageCostHandlerArgs = Parameters<(typeof usageHandlers)["usage.cost"]>[0];
 
-const callGateway = vi.fn<(opts: unknown) => Promise<{ ok: true }>>(async () => ({ ok: true }));
+const defaultCallGateway = async (): Promise<unknown> => ({ ok: true });
+const callGateway = vi.fn<(opts: unknown) => Promise<unknown>>(defaultCallGateway);
 const formatGatewayClientRequestErrorJson = vi.fn();
 const formatGatewayTransportErrorJson = vi.fn();
 const startGatewayServer = vi.fn<
@@ -156,6 +161,8 @@ describe("gateway-cli coverage", () => {
 
   beforeEach(() => {
     gatewayProgram = createGatewayProgram();
+    callGateway.mockReset();
+    callGateway.mockImplementation(defaultCallGateway);
     runtimeLogs.length = 0;
     runtimeErrors.length = 0;
     defaultRuntime.log.mockClear();
@@ -252,6 +259,123 @@ describe("gateway-cli coverage", () => {
     expect(costCall?.method).toBe("usage.cost");
     expect(costCall?.params).toEqual({ days: 7, agentScope: "all" });
   });
+
+  it("waits for real all-agent usage caches before printing totals", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-usage-cost-cli-"));
+    const config = {
+      agents: {
+        list: [{ id: "main", default: true }, { id: "dev" }],
+      },
+      session: {},
+    } as OpenClawConfig;
+    const seedUsage = (agentId: string, totalTokens: number, totalCost: number) => {
+      const sessionsDir = path.join(stateDir, "agents", agentId, "sessions");
+      fs.mkdirSync(sessionsDir, { recursive: true });
+      const session = SessionManager.create(sessionsDir, sessionsDir);
+      session.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "done" }],
+        api: "openai-responses",
+        provider: "openai",
+        model: "gpt-5.4",
+        usage: {
+          input: totalTokens,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens,
+          cost: {
+            input: totalCost,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            total: totalCost,
+          },
+        },
+        stopReason: "stop",
+        timestamp: Date.now(),
+      });
+    };
+
+    try {
+      await withEnvOverride({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        seedUsage("main", 30, 0.03);
+        seedUsage("dev", 70, 0.07);
+        usageTestApi.costUsageCache.clear();
+        const observedStatuses: Array<string | undefined> = [];
+        callGateway.mockImplementation(async (raw) => {
+          const request = raw as { method?: string; params?: Record<string, unknown> };
+          if (request.method !== "usage.cost") {
+            return { ok: true };
+          }
+          return await new Promise((resolve, reject) => {
+            const respond: UsageCostHandlerArgs["respond"] = (ok, payload, error) => {
+              if (!ok) {
+                reject(new Error(error?.message ?? "usage.cost failed"));
+                return;
+              }
+              const summary = payload as { cacheStatus?: { status?: string } };
+              observedStatuses.push(summary.cacheStatus?.status);
+              resolve(payload);
+            };
+            const result = usageHandlers["usage.cost"]({
+              respond,
+              params: request.params ?? {},
+              context: { getRuntimeConfig: () => config },
+            } as unknown as UsageCostHandlerArgs);
+            Promise.resolve(result).catch(reject);
+          });
+        });
+
+        await runGatewayCommand(["gateway", "usage-cost", "--all-agents", "--days", "7", "--json"]);
+
+        expect(observedStatuses[0]).toBe("refreshing");
+        expect(observedStatuses.at(-1)).toBe("fresh");
+        expect(callGateway.mock.calls.length).toBeGreaterThanOrEqual(2);
+        const costCalls = callGateway.mock.calls.map(
+          ([raw]) => raw as { method?: string; timeoutMs?: number },
+        );
+        expect(costCalls.every((call) => call.method === "usage.cost")).toBe(true);
+        expect(costCalls.every((call) => (call.timeoutMs ?? 0) > 0)).toBe(true);
+        expect(costCalls.every((call) => (call.timeoutMs ?? 0) <= 10_000)).toBe(true);
+        expect(costCalls[0]?.timeoutMs).toBe(10_000);
+        expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+          expect.objectContaining({
+            totals: expect.objectContaining({ totalTokens: 100, totalCost: 0.1 }),
+            cacheStatus: expect.objectContaining({ status: "fresh" }),
+          }),
+        );
+      });
+    } finally {
+      usageTestApi.costUsageCache.clear();
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["refreshing", "partial", "stale"] as const)(
+    "uses --timeout as the command-wide usage-cost settle budget for %s caches",
+    async (status) => {
+      callGateway.mockResolvedValue({
+        cacheStatus: { status, cachedFiles: 0, pendingFiles: 1 },
+      });
+
+      await expectGatewayExit([
+        "gateway",
+        "usage-cost",
+        "--all-agents",
+        "--timeout",
+        "50",
+        "--json",
+      ]);
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      const costCall = firstMockArg(callGateway) as { method?: string; timeoutMs?: number };
+      expect(costCall.method).toBe("usage.cost");
+      expect(costCall.timeoutMs).toBeGreaterThan(0);
+      expect(costCall.timeoutMs).toBeLessThanOrEqual(50);
+      expect(runtimeErrors.join("\n")).toContain("Timed out waiting for usage cost cache refresh");
+    },
+  );
 
   it("rejects combining --agent with --all-agents for usage-cost", async () => {
     callGateway.mockClear();

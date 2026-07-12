@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import type { SessionCatalogProvider } from "openclaw/plugin-sdk/session-catalog";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CLAUDE_SESSIONS_LIST_COMMAND,
@@ -15,6 +16,7 @@ import {
 } from "./session-catalog.js";
 
 const homes: string[] = [];
+const originalHome = process.env.HOME;
 
 async function createHome(): Promise<string> {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-claude-catalog-"));
@@ -83,10 +85,75 @@ function message(
 }
 
 afterEach(async () => {
+  process.env.HOME = originalHome;
   await Promise.all(homes.splice(0).map((home) => fs.rm(home, { recursive: true, force: true })));
 });
 
 describe("Claude session catalog", () => {
+  it("adopts a local CLI row with a locked one-shot fork binding", async () => {
+    const home = await createHome();
+    process.env.HOME = home;
+    const sessionId = "claude-source-session";
+    await writeProject({
+      home,
+      entries: [
+        {
+          sessionId,
+          fullPath: path.join(home, ".claude", "projects", "-workspace", `${sessionId}.jsonl`),
+          summary: "Source session",
+          projectPath: "/work/source",
+        },
+      ],
+      transcripts: { [sessionId]: [message(sessionId, "user", "source prompt", 1)] },
+    });
+    const createSessionEntry = vi.fn(async (params: Record<string, unknown>) => ({
+      key: `agent:main:${String(params.key)}`,
+      agentId: "main",
+      sessionId: "openclaw-adopted",
+      entry: { sessionId: "openclaw-adopted", updatedAt: Date.now() },
+    }));
+    let provider: SessionCatalogProvider | undefined;
+    const api = {
+      id: "anthropic",
+      config: {},
+      runtime: {
+        config: { current: () => ({}) },
+        agent: {
+          session: {
+            listSessionEntries: () => [],
+            createSessionEntry,
+          },
+        },
+      },
+      registerSessionCatalog: (candidate: SessionCatalogProvider) => {
+        provider = candidate;
+      },
+    } as unknown as OpenClawPluginApi;
+    registerClaudeSessionCatalog(api);
+
+    await expect(
+      provider?.continueSession?.({ hostId: "gateway:local", threadId: sessionId }),
+    ).resolves.toEqual({
+      sessionKey: expect.stringContaining("plugin:anthropic:catalog-adopt:claude:"),
+    });
+    expect(createSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spawnedCwd: "/work/source",
+        initialEntry: expect.objectContaining({
+          cliBackendId: "claude-cli",
+          model: "claude-opus-4-8",
+          modelSelectionLocked: true,
+          pluginOwnerId: "anthropic",
+          cliSessionBinding: {
+            sessionId,
+            forceReuse: true,
+            forkNextResume: true,
+          },
+        }),
+      }),
+    );
+  });
+
   it("merges CLI indexes with active Desktop metadata and hides archived Desktop sessions", async () => {
     const home = await createHome();
     await writeProject({
@@ -290,21 +357,15 @@ describe("Claude session catalog", () => {
     await fs.mkdir(path.join(home, ".claude", "projects"), { recursive: true });
     expect(commands.every((command) => command.isAvailable?.(availabilityContext))).toBe(true);
 
-    const registerGatewayMethod = vi.fn();
-    const registerControlUiDescriptor = vi.fn();
+    const registerSessionCatalog = vi.fn();
     const api = {
       runtime: {},
-      session: { controls: { registerControlUiDescriptor } },
-      registerGatewayMethod,
+      registerSessionCatalog,
     } as unknown as OpenClawPluginApi;
     registerClaudeSessionCatalog(api);
-    expect(registerControlUiDescriptor).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "sessions", label: "Claude Sessions" }),
+    expect(registerSessionCatalog).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "claude", label: "Claude Code" }),
     );
-    expect(registerGatewayMethod).toHaveBeenCalledTimes(2);
-    for (const call of registerGatewayMethod.mock.calls) {
-      expect(call[2]).toEqual({ scope: "operator.write" });
-    }
   });
 
   it("keeps one failed node isolated from healthy hosts", async () => {

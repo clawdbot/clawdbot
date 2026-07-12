@@ -10,6 +10,7 @@ import {
   persistSessionTranscriptTurn,
 } from "../config/sessions/session-accessor.js";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import * as transcriptEvents from "../sessions/transcript-events.js";
 import {
@@ -25,6 +26,9 @@ import {
   rpcReq,
   writeSessionStore,
 } from "./test-helpers.server.js";
+import type { WorkerConnectionIdentity } from "./worker-environments/connection-identity.js";
+import type { WorkerTranscriptCommitStore } from "./worker-environments/transcript-commit-store.js";
+import { createWorkerTranscriptCommitter } from "./worker-environments/transcript-commit.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -1205,6 +1209,97 @@ describe("session.message websocket events", () => {
           expect(hiddenAppend.ok).toBe(true);
         },
       });
+    } finally {
+      ws.close();
+    }
+  });
+
+  test("streams every worker transcript commit entry to the selected session subscriber", async () => {
+    const storePath = await createSessionStoreFile();
+    const sessionId = "sess-worker-commit-fanout";
+    const sessionKey = "agent:main:worker";
+    await writeSessionStore({
+      entries: {
+        worker: {
+          sessionId,
+          updatedAt: Date.now(),
+        },
+      },
+      storePath,
+    });
+    const config: OpenClawConfig = {
+      agents: { list: [{ id: "main", default: true }] },
+      session: { mainKey: "main", store: storePath },
+    };
+    const ledger: WorkerTranscriptCommitStore = {
+      begin: () => ({ kind: "claimed" }),
+      complete: ({ outcome }) => outcome,
+    };
+    const committer = createWorkerTranscriptCommitter({ getConfig: () => config, store: ledger });
+    const identity: WorkerConnectionIdentity = {
+      environmentId: "environment-fanout",
+      credentialHash: ["fanout", "credential", "hash"].join("-"),
+      bundleHash: "f".repeat(64),
+      sessionId,
+      ownerEpoch: 4,
+      rpcSetVersion: 1,
+      protocolFeatures: ["worker-transcript-commit-v1"],
+      credentialExpiresAtMs: Date.now() + 10_000,
+    };
+
+    const ws = await harness.openWs();
+    try {
+      await connectOk(ws, { scopes: ["operator.read"] });
+      const subscribeRes = await rpcReq(ws, "sessions.messages.subscribe", { key: sessionKey });
+      expect(subscribeRes.ok).toBe(true);
+      expect(subscribeRes.payload?.subscribed).toBe(true);
+      expect(subscribeRes.payload?.key).toBe(sessionKey);
+
+      const eventPromises = [1, 2, 3].map((messageSeq) =>
+        onceMessage(
+          ws,
+          (message) =>
+            message.type === "event" &&
+            message.event === "session.message" &&
+            (message.payload as { sessionKey?: unknown } | undefined)?.sessionKey === sessionKey &&
+            (message.payload as { messageSeq?: unknown } | undefined)?.messageSeq === messageSeq,
+        ),
+      );
+      const outcome = await committer.commit({
+        identity,
+        request: {
+          runEpoch: identity.ownerEpoch,
+          seq: 1,
+          baseLeafId: null,
+          messages: ["first", "second", "third"].map((text, index) => ({
+            role: "user" as const,
+            content: [{ type: "text" as const, text }],
+            timestamp: 100 + index,
+          })),
+        },
+      });
+      expect(outcome.ok).toBe(true);
+      if (!outcome.ok) {
+        throw new Error(`expected worker transcript commit, received ${outcome.reason}`);
+      }
+      const events = await Promise.all(eventPromises);
+      const payloads = events.map((event) =>
+        requireRecord(event.payload, "session.message payload"),
+      );
+      expect(payloads.map((payload) => payload.messageId)).toEqual(outcome.result.entryIds);
+      expect(payloads.map((payload) => payload.messageSeq)).toEqual([1, 2, 3]);
+      expect(
+        payloads.map((payload) => {
+          const message = requireRecord(payload.message, "session.message payload message");
+          return requireRecord(message["__openclaw"], "session.message metadata").id;
+        }),
+      ).toEqual(outcome.result.entryIds);
+      expect(
+        payloads.map((payload) => {
+          const message = requireRecord(payload.message, "session.message payload message");
+          return requireRecord(message["__openclaw"], "session.message metadata").seq;
+        }),
+      ).toEqual([1, 2, 3]);
     } finally {
       ws.close();
     }

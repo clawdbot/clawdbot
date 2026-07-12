@@ -6,11 +6,10 @@ import {
 
 export function resolveDiscordPreviewStreamMode(
   params: {
-    streamMode?: unknown;
     streaming?: unknown;
   } = {},
 ): StreamingMode {
-  if (params.streaming === undefined && params.streamMode === undefined) {
+  if (params.streaming === undefined) {
     return "progress";
   }
   return resolveChannelPreviewStreamMode(params, "off");

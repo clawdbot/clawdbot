@@ -11,6 +11,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     channelSetups: [],
     providers: [],
     modelCatalogProviders: [],
+    sessionCatalogs: [],
     cliBackends: [],
     textTransforms: [],
     embeddingProviders: [],

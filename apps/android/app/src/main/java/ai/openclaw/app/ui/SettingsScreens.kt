@@ -37,6 +37,7 @@ import ai.openclaw.app.node.DeviceNotificationListenerService
 import ai.openclaw.app.photoReadPermissionsForRequest
 import ai.openclaw.app.reconcileRestoredAction
 import ai.openclaw.app.setAppLanguage
+import ai.openclaw.app.ui.design.ClawAgentAvatar
 import ai.openclaw.app.ui.design.ClawDetailRow
 import ai.openclaw.app.ui.design.ClawIconBadge
 import ai.openclaw.app.ui.design.ClawListItem
@@ -56,6 +57,7 @@ import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.design.OpenClawMascot
 import ai.openclaw.app.ui.design.TalkWaveform
 import ai.openclaw.app.ui.design.TalkWaveformPhase
+import ai.openclaw.app.ui.design.agentAvatarSource
 import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -2253,7 +2255,11 @@ private fun AgentListRow(
   ClawDetailRow(
     title = agent.name?.takeIf { it.isNotBlank() } ?: agent.id,
     subtitle = if (isDefault) "Default assistant" else "Ready",
-    leading = { ClawTextBadge(text = agentBadge(agent)) },
+    leading = {
+      ClawAgentAvatar(source = agentAvatarSource(agent), size = 30.dp) {
+        ClawTextBadge(text = agentBadge(agent))
+      }
+    },
     trailing = { ClawStatusPill(text = if (isDefault) "Default" else "Ready", status = ClawStatus.Success) },
   )
 }

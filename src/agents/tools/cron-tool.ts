@@ -943,13 +943,13 @@ SCHEDULE TYPES (schedule.kind):
   tz omitted => Gateway host local timezone, not UTC.
   Example 6pm Shanghai daily: { "kind": "cron", "expr": "0 18 * * *", "tz": "Asia/Shanghai" }
 
-TRIGGER SCRIPTS (optional; every/cron only):
-- Requires operator-enabled cron.triggers.enabled. If add rejects the disabled gate, explain that requirement instead of falling back to model polling.
-- Runs headlessly with the owning agent's allowed tools; quiet checks use no model. Read the deeply frozen prior JSON value at trigger.state, then return or json({ fire: boolean, message?: string, state?: JSONValue }). Return a new state object; do not mutate trigger.state.
-- fire:false persists returned state without running the payload or creating run history. fire:true runs the payload; message is appended to systemEvent/agentTurn text. Fired state persists only after payload success, so checks should be read-only and actions belong in the payload.
-- Silent watchers must set top-level delivery.mode="none". Isolated agentTurn jobs default to announce when delivery is omitted, which requires a resolvable channel and can make an otherwise successful payload fail.
-- once:true disables the job after its first successful fired payload. Each evaluation has a 30s wall-clock limit, 5 tool calls, and 16KB state.
-- Call allowed tools through the hidden Code Mode catalog (for example await tools.call("exec", { command: "..." })); use search/describe when the tool id is ambiguous.
+TRIGGER SCRIPTS (every/cron only):
+- Gate: cron.triggers.enabled. Disabled add -> explain; no model-poll fallback.
+- Headless; owner tool allowlist; quiet check uses no model. Prior JSON: frozen trigger.state. Return/json({ fire: boolean, message?: string, state?: JSONValue }); new state only; never mutate old.
+- fire:false: save state; no payload/run history. fire:true: run payload; append message to systemEvent/agentTurn. Fired state saves only after payload success. Check reads; payload acts.
+- Silent watcher: top-level delivery.mode="none". Isolated agentTurn with no delivery => announce; missing route may fail payload.
+- once:true: disable after first successful fired payload. Limits/check: 30s, 5 tool calls, 16KB state.
+- Tools via hidden Code Mode catalog: await tools.call("exec", { command: "..." }); unclear id -> search/describe.
 
 For "at", ISO timestamps without timezone are UTC.
 

@@ -10,7 +10,7 @@ read_when:
 
 Codex supervision is an opt-in capability of the official `codex` plugin. It
 shows non-archived Codex Desktop and CLI source sessions from the Gateway
-computer and opted-in paired computers in the sidebar and **Codex Sessions** page.
+computer and opted-in paired computers in the normal sessions sidebar and Chat pane.
 
 The initial release deliberately keeps ownership narrow:
 
@@ -57,7 +57,8 @@ be the primary backend. Supervision becomes available when that opportunistic
 plugin activation succeeds. App Server availability is checked when
 supervision first connects. An explicit Codex plugin disable or policy block
 prevents opportunistic activation, and an existing explicit
-`supervision.enabled: false` remains an opt-out.
+`supervision.enabled: false` disables agent-facing supervision tools; the
+operator catalog remains registered whenever the Codex plugin is active.
 Existing installations can enable the same capability manually:
 
 Enable the `codex` plugin and its supervision capability in `openclaw.json`:
@@ -90,7 +91,7 @@ native Codex state. Set `appServer.homeScope: "user"` explicitly if the harness
 should share that state too. Supervision honors explicit `appServer` connection
 settings instead of replacing them with its local user-home default.
 
-A Chat created through **Codex Sessions** is not an ordinary harness session.
+A Chat adopted from the **Codex** sidebar group is not an ordinary harness session.
 Its private supervision binding uses the supervision connection for source
 reads, canonical branch creation, history injection, and every later turn. With
 the default local connection, that preserves the native user Codex home, auth,
@@ -128,12 +129,12 @@ Loaded pages render in chronological order. The viewer never loads an unbounded
 `thread/read` history. A page above the 20 MiB transport safety ceiling fails
 closed instead of risking the node or Gateway connection.
 
-Open **Codex Sessions** for the fleet overview. The page lists the same sessions
-grouped by host. Search matches normalized session titles; refresh and per-host
-pagination preserve healthy hosts when another host is offline or unavailable.
-Each returned search page scans a bounded number of native pages per host
-rather than sending the query to App Server, because native search can also
-match transcript previews. Use **Load more** to continue older results.
+Open the **Codex** group in the normal sessions sidebar. It lists the same sessions
+grouped by host. **Load more sessions** appends the next page from each host that
+has older rows, and those appended rows survive the sidebar's periodic refresh.
+Each returned search page scans a bounded number of native pages per host rather
+than sending the query to App Server, because native search can also match
+transcript previews.
 
 Host availability and thread status are separate. **Offline** or **Unavailable**
 describes a host refresh; an unavailable host returns no fresh session rows and

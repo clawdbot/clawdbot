@@ -44,6 +44,7 @@ function createIndex(overrides: Partial<InstalledPluginIndex> = {}): InstalledPl
         manifestHash: "manifest-hash",
         rootDir: "/plugins/demo",
         origin: "global",
+        packageBuild: { bundledDist: false },
         enabled: true,
         syntheticAuthRefs: ["demo"],
         startup: {
@@ -224,6 +225,7 @@ describe("installed plugin index persistence", () => {
     expect(persisted.warning).toContain("DO NOT EDIT.");
     expect(persisted.policyHash).toBe(index.policyHash);
     expectPluginIds(persisted, ["demo"]);
+    expectPluginFields(persisted, "demo", { packageBuild: { bundledDist: false } });
   });
 
   it("preserves startup config paths across persisted index roundtrips", async () => {

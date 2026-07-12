@@ -6,6 +6,8 @@ export interface Skill {
   description: string;
   /** Additional loading guidance rendered with the location in full and compact catalogs. */
   locationNote?: string;
+  /** Runtime-only content for non-filesystem skill locators such as node://. */
+  readContent?: string;
   filePath: string;
   baseDir: string;
   /** Deterministic marker for the SKILL.md content rendered as <version>. */

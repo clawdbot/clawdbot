@@ -1189,9 +1189,11 @@ describe("TUI PTY real backends", () => {
       await requireSharedGatewayFixture();
     }, LOCAL_TEST_TIMEOUT_MS);
 
-    registerValidationLoopTest("gateway");
     for (const register of gatewayTestRegistrations) {
       register();
     }
+    // Validation abort can terminalize the TUI before the embedded command lanes
+    // finish unwinding. Keep it last so shared-Gateway teardown owns that tail.
+    registerValidationLoopTest("gateway");
   });
 });

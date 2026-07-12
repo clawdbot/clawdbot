@@ -10,6 +10,10 @@ Requires a clear in-app disclosure and fresh consent before Installed Apps can s
 
 Adds an Android system share target that stages bounded text and image shares for review without losing existing composer drafts. Thanks @NianJiuZst.
 
+Displays configured agent avatars across Android overview, settings, and chat, with bounded data and public remote image loading. Thanks @guarismo.
+
+Shows source-configured provider model inventory, capabilities, and route-aware availability in Android without exposing runtime route details. Thanks @snowzlmbot.
+
 ## 2026.7.1 - 2026-07-08
 
 Adds multi-gateway switching with isolated credentials, history, queues, and notification routing.

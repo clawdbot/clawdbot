@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as mcpHttpFetch from "../agents/mcp-http-fetch.js";
 import { withTempHome } from "../config/home-env.test-harness.js";
 import { registerMcpCli } from "./mcp-cli.js";
 
@@ -343,6 +344,7 @@ describe("mcp cli", () => {
     await withTempHome("openclaw-cli-mcp-home-", async () => {
       const workspaceDir = await createWorkspace();
       vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+      const buildMcpHttpFetch = vi.spyOn(mcpHttpFetch, "buildMcpHttpFetch");
       runMcpOAuthLogin.mockResolvedValueOnce("authorized");
 
       await runMcpCommand([
@@ -363,6 +365,12 @@ describe("mcp cli", () => {
       ]);
       await runMcpCommand(["mcp", "login", "docs", "--code", "abc123"]);
 
+      expect(buildMcpHttpFetch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          resourceUrl: "https://mcp.example.com",
+          timeoutMs: 9_000,
+        }),
+      );
       expect(runMcpOAuthLogin).toHaveBeenCalledWith({
         serverName: "docs",
         serverUrl: "https://mcp.example.com",

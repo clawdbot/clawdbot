@@ -24,16 +24,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
-function withoutAuthorizationHeader(
-  headers: Record<string, string> | undefined,
-): Record<string, string> | undefined {
-  if (!headers) {
-    return undefined;
-  }
-  const entries = Object.entries(headers).filter(([key]) => key.toLowerCase() !== "authorization");
-  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
-}
-
 function normalizeStringHeaders(value: unknown): Record<string, string> | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -136,6 +126,9 @@ async function resolveMcpBearerToken(params: {
       clientCert: resolved.clientCert,
       clientKey: resolved.clientKey,
       resourceUrl: resolved.url,
+      // External bearer projection performs only OAuth discovery/token work,
+      // so the configured deadline can own the full short-lived response.
+      timeoutMs: resolved.requestTimeoutMs,
     }),
     headers: withoutMcpAuthorizationHeader(resolved.headers),
     resourceUrl: resolved.url,
@@ -159,7 +152,7 @@ export function withMcpAuthProfileBearer(
   } & McpAuthProfileOptions,
 ): FetchLike {
   const resourceOrigin = new URL(params.resourceUrl).origin;
-  const configuredHeaders = withoutAuthorizationHeader(params.headers);
+  const configuredHeaders = withoutMcpAuthorizationHeader(params.headers);
   return async (url, init) => {
     if (new URL(url).origin !== resourceOrigin) {
       return params.fetchFn(url, init);
@@ -239,7 +232,7 @@ export async function resolveMcpBearerBundleConfig(
       nextEnv[envVar] = token;
       authorization = `Bearer \${${envVar}}`;
     }
-    const headers = withoutAuthorizationHeader(normalizeStringHeaders(server.headers));
+    const headers = withoutMcpAuthorizationHeader(normalizeStringHeaders(server.headers));
     nextServers ??= { ...params.config.mcpServers };
     nextServers[serverName] = stripOpenClawOnlyOAuthConfig({
       ...server,

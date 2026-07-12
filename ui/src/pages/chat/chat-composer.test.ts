@@ -321,15 +321,15 @@ describe("chat run controls", () => {
 });
 
 describe("chat status indicators", () => {
-  it("renders compact composer run statuses", () => {
+  it("renders only interrupted as a visible composer run status", () => {
     const container = document.createElement("div");
     const nowSpy = vi.spyOn(Date, "now");
     try {
       nowSpy.mockReturnValue(1_000);
+      // Working and Done have no composer chrome: the thread spark and content
+      // arriving cover them (the sr-only region announces them separately).
       render(renderChatRunStatusIndicator({ phase: "in-progress" }), container);
-      let indicator = container.querySelector(".agent-chat__run-status--in-progress");
-      expect(indicator?.textContent).toContain("In progress");
-      expect(indicator?.getAttribute("aria-label")).toBe("Run status: In progress");
+      expect(container.querySelector(".agent-chat__run-status")).toBeNull();
 
       render(
         renderChatRunStatusIndicator({
@@ -340,8 +340,7 @@ describe("chat status indicators", () => {
         }),
         container,
       );
-      indicator = container.querySelector(".agent-chat__run-status--done");
-      expect(indicator?.textContent).toContain("Done");
+      expect(container.querySelector(".agent-chat__run-status")).toBeNull();
 
       render(
         renderChatRunStatusIndicator({
@@ -352,20 +351,21 @@ describe("chat status indicators", () => {
         }),
         container,
       );
-      indicator = container.querySelector(".agent-chat__run-status--interrupted");
+      const indicator = container.querySelector(".agent-chat__run-status--interrupted");
       expect(indicator?.textContent).toContain("Interrupted");
+      expect(indicator?.getAttribute("aria-label")).toBe("Run status: Interrupted");
 
       nowSpy.mockReturnValue(7_000);
       render(
         renderChatRunStatusIndicator({
-          phase: "done",
+          phase: "interrupted",
           runId: "run-1",
           sessionKey: "main",
           occurredAt: 1_000,
         }),
         container,
       );
-      expect(container.querySelector(".agent-chat__run-status--done")).toBeNull();
+      expect(container.querySelector(".agent-chat__run-status--interrupted")).toBeNull();
     } finally {
       nowSpy.mockRestore();
     }

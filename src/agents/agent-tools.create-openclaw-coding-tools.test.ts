@@ -158,6 +158,40 @@ function cronCreatorToolNames(
 }
 
 describe("createOpenClawCodingTools", () => {
+  it("reads node-hosted skill content through the assembled workspace-only read tool", async () => {
+    const locator = "node://node-1/skills/pond/SKILL.md";
+    const tools = createOpenClawCodingTools({
+      config: { tools: { fs: { workspaceOnly: true } } },
+      skillsSnapshot: {
+        prompt: "",
+        skills: [{ name: "pond" }],
+        resolvedSkills: [
+          {
+            name: "pond",
+            description: "Pond skill",
+            filePath: locator,
+            baseDir: "node://node-1/skills/pond",
+            readContent: "# Pond\nassembled-marker",
+            source: "openclaw-node",
+            sourceInfo: {
+              source: "openclaw-node",
+              path: locator,
+              scope: "temporary",
+              origin: "top-level",
+            },
+            disableModelInvocation: false,
+          },
+        ],
+      },
+    });
+
+    const result = await requireTool(tools, "read").execute("node-skill-read", {
+      path: locator,
+    });
+
+    expect(JSON.stringify(result)).toContain("assembled-marker");
+  });
+
   const testConfig: OpenClawConfig = {};
 
   afterEach(() => {

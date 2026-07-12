@@ -13,6 +13,7 @@ import {
   normalizeUsage,
   type ContextUsage,
 } from "../agents/usage.js";
+import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
 import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
@@ -1236,7 +1237,14 @@ async function findExistingTranscriptHistoryPathAsync(
           return refreshedActivePath;
         }
       }
-      return archivePath;
+      // Compressed archives materialize to a plain JSONL cache once (archives
+      // are write-once) so every downstream reader — index, tail chunks,
+      // header probes — keeps working without knowing about zstd.
+      try {
+        return materializeSessionArchiveForRead(archivePath);
+      } catch {
+        continue;
+      }
     }
   }
   return null;

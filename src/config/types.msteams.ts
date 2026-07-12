@@ -1,6 +1,5 @@
 // Defines Microsoft Teams channel configuration types.
 import type {
-  BlockStreamingCoalesceConfig,
   ChannelPreviewStreamingConfig,
   ContextVisibilityMode,
   DmPolicy,
@@ -141,16 +140,10 @@ export type MSTeamsConfig = {
   contextVisibility?: ContextVisibilityMode;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
-  /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
-  chunkMode?: "length" | "newline";
   /** Preview/progress streaming config for visible in-progress replies. */
   streaming?: ChannelPreviewStreamingConfig;
   /** Send native Teams typing indicator before replies. Default: true for groups/channels; DMs use informative stream status. */
   typingIndicator?: boolean;
-  /** Enable progressive block-by-block message delivery instead of a single reply. */
-  blockStreaming?: boolean;
-  /** Merge streamed block replies before sending. */
-  blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   /**
    * Allowed host suffixes for inbound attachment downloads.
    * Use ["*"] to allow any host (not recommended).

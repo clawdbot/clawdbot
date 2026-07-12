@@ -222,6 +222,7 @@ async function runGuildPreflight(params: {
   cfg?: import("openclaw/plugin-sdk/config-contracts").OpenClawConfig;
   guildEntries?: Parameters<typeof preflightDiscordMessage>[0]["guildEntries"];
   includeGuildObject?: boolean;
+  abortSignal?: AbortSignal;
 }) {
   return preflightDiscordMessage({
     ...createPreflightArgs({
@@ -237,6 +238,7 @@ async function runGuildPreflight(params: {
       client: createGuildTextClient(params.channelId),
     }),
     guildEntries: params.guildEntries,
+    abortSignal: params.abortSignal,
   });
 }
 
@@ -982,6 +984,7 @@ describe("preflightDiscordMessage", () => {
   });
 
   it("canonicalizes PluralKit webhook messages to the original Discord message id", async () => {
+    const abortController = new AbortController();
     fetchPluralKitMessageInfoMock.mockResolvedValue({
       id: "proxy-456",
       original: "orig-123",
@@ -1007,15 +1010,17 @@ describe("preflightDiscordMessage", () => {
       discordConfig: {
         pluralkit: { enabled: true },
       } as DiscordConfig,
+      abortSignal: abortController.signal,
     });
 
     expect(fetchPluralKitMessageInfoMock).toHaveBeenCalledTimes(1);
     const pluralKitCall = firstMockArg(
       fetchPluralKitMessageInfoMock,
       "fetchPluralKitMessageInfo",
-    ) as { messageId?: unknown; config?: { enabled?: unknown } } | undefined;
+    ) as { messageId?: unknown; config?: { enabled?: unknown }; signal?: AbortSignal } | undefined;
     expect(pluralKitCall?.messageId).toBe("proxy-456");
     expect(pluralKitCall?.config?.enabled).toBe(true);
+    expect(pluralKitCall?.signal).toBe(abortController.signal);
     const preflight = expectPreflightResult(result);
     expect(preflight.sender.isPluralKit).toBe(true);
     expect(preflight.canonicalMessageId).toBe("orig-123");

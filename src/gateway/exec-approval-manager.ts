@@ -4,12 +4,14 @@ import { randomUUID } from "node:crypto";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { buildApprovalPresentation } from "../infra/approval-presentation.js";
+import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
 import type {
   ExecApprovalDecision,
   ExecApprovalRequestPayload as InfraExecApprovalRequestPayload,
 } from "../infra/exec-approvals.js";
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import { resolveApprovalSessionAudience } from "./approval-session-audience.js";
 import {
   consumeOperatorApprovalAllowOnce,
   forceDenyOperatorApproval,
@@ -257,14 +259,14 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
       const source = resolveApprovalSource(record.request);
       let audienceSessionKeys: string[] = [];
       if (source.sessionKey) {
-        audienceSessionKeys = [source.sessionKey];
-        if (this.options.resolveAudienceSessionKeys) {
-          try {
-            audienceSessionKeys = this.options.resolveAudienceSessionKeys(source.sessionKey);
-          } catch {
-            // Lineage is routing metadata, not an approval safety prerequisite.
-            // Preserve at least the source audience when session stores are unavailable.
-          }
+        try {
+          audienceSessionKeys = (
+            this.options.resolveAudienceSessionKeys ?? resolveApprovalSessionAudience
+          )(source.sessionKey);
+        } catch {
+          // Lineage is routing metadata, not an approval safety prerequisite.
+          // Preserve at least the source audience when session stores are unavailable.
+          audienceSessionKeys = [source.sessionKey];
         }
       }
       const inserted = insertOperatorApproval({
@@ -329,6 +331,10 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     const source = resolveApprovalSource(record.request);
     return {
       id: record.id,
+      resolutionRef: buildApprovalResolutionRef({
+        approvalId: record.id,
+        approvalKind: this.approvalKind,
+      }),
       kind: this.approvalKind,
       status,
       presentation,

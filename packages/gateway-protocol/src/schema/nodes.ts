@@ -276,3 +276,24 @@ export const NodeInvokeRequestEventSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+// Wire types derive directly from local schema consts so public d.ts graphs never
+// pull in the ProtocolSchemas registry.
+export type NodePairListParams = Static<typeof NodePairListParamsSchema>;
+export type NodePairApproveParams = Static<typeof NodePairApproveParamsSchema>;
+export type NodePairRejectParams = Static<typeof NodePairRejectParamsSchema>;
+export type NodePairRemoveParams = Static<typeof NodePairRemoveParamsSchema>;
+export type NodeRenameParams = Static<typeof NodeRenameParamsSchema>;
+export type NodeListParams = Static<typeof NodeListParamsSchema>;
+export type NodePendingAckParams = Static<typeof NodePendingAckParamsSchema>;
+export type NodeDescribeParams = Static<typeof NodeDescribeParamsSchema>;
+export type NodeInvokeParams = Static<typeof NodeInvokeParamsSchema>;
+export type NodeInvokeResultParams = Static<typeof NodeInvokeResultParamsSchema>;
+export type NodeEventParams = Static<typeof NodeEventParamsSchema>;
+export type NodeEventResult = Static<typeof NodeEventResultSchema>;
+export type NodePresenceAlivePayload = Static<typeof NodePresenceAlivePayloadSchema>;
+export type NodePresenceAliveReason = Static<typeof NodePresenceAliveReasonSchema>;
+export type NodePendingDrainParams = Static<typeof NodePendingDrainParamsSchema>;
+export type NodePendingDrainResult = Static<typeof NodePendingDrainResultSchema>;
+export type NodePendingEnqueueParams = Static<typeof NodePendingEnqueueParamsSchema>;
+export type NodePendingEnqueueResult = Static<typeof NodePendingEnqueueResultSchema>;

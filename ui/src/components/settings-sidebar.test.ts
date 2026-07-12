@@ -68,7 +68,7 @@ describe("settings sidebar search", () => {
     expect(labels()).toEqual(["Appearance"]);
 
     enterQuery("connections");
-    expect(labels()).toEqual(["Channels", "Communications"]);
+    expect(labels()).toEqual(["Connection", "Channels", "Communications"]);
 
     enterQuery("does-not-exist");
     expect(labels()).toEqual([]);

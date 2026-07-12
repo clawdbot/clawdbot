@@ -50,6 +50,7 @@ const providerArtifactMocks = vi.hoisted(() => ({
 
 vi.mock("../plugins/provider-public-artifacts.js", () => ({
   resolveBundledProviderPolicySurface: providerArtifactMocks.resolveBundledProviderPolicySurface,
+  resolveProviderPolicySurface: providerArtifactMocks.resolveBundledProviderPolicySurface,
 }));
 
 function closeSessionSqliteDatabasesForTest(): void {
@@ -693,6 +694,7 @@ describe("gateway session utils", () => {
     expect(row.thinkingLevels?.map((level) => level.id)).toContain("xhigh");
     expect(providerArtifactMocks.resolveBundledProviderPolicySurface).toHaveBeenCalledWith(
       "openai",
+      { manifestRegistry: undefined },
     );
   });
 

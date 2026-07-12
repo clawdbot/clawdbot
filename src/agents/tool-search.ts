@@ -11,7 +11,7 @@ import {
   uniqueStrings,
   uniqueValues,
 } from "@openclaw/normalization-core/string-normalization";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tools.js";
@@ -2199,7 +2199,7 @@ function runCodeModeChild(params: {
       }
       const rejectOnExit = () => {
         const suffix = stderrTail.trim();
-        const detail = suffix ? `: ${suffix.slice(-500)}` : "";
+        const detail = suffix ? `: ${sliceUtf16Safe(suffix, -500)}` : "";
         settle(() =>
           reject(
             new Error(

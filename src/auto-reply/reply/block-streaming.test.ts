@@ -122,10 +122,12 @@ describe("resolveEffectiveBlockStreamingConfig", () => {
     ).toMatchObject({ minChars: 25, maxChars: 80, idleMs: 2 });
   });
 
-  it("merges legacy account block coalescing over channel nested config", () => {
+  it("merges flat account block coalescing over channel nested config for flat-canonical channels", () => {
+    // Mattermost's plugin schema still accepts flat blockStreamingCoalesce as
+    // canonical config, so the account-level flat read must keep working.
     const cfg = {
       channels: {
-        imessage: {
+        mattermost: {
           streaming: { block: { coalesce: { minChars: 25, maxChars: 80, idleMs: 5 } } },
           accounts: {
             personal: {
@@ -139,7 +141,7 @@ describe("resolveEffectiveBlockStreamingConfig", () => {
     expect(
       resolveEffectiveBlockStreamingConfig({
         cfg,
-        provider: "imessage",
+        provider: "mattermost",
         accountId: "personal",
       }).coalescing,
     ).toMatchObject({ minChars: 25, maxChars: 80, idleMs: 2 });

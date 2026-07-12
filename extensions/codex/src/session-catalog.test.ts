@@ -2,9 +2,9 @@
 /* oxlint-disable typescript/unbound-method -- assertions inspect vi.fn-backed object methods, not unbound class methods. */
 import { createHash } from "node:crypto";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import type { SessionCatalogProvider } from "openclaw/plugin-sdk/session-catalog";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexThread } from "./app-server/protocol.js";
@@ -19,15 +19,11 @@ import {
   CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
   CODEX_APP_SERVER_THREADS_LIST_COMMAND,
   CODEX_LOCAL_SESSION_HOST_ID,
-  CODEX_SESSION_ARCHIVE_METHOD,
-  CODEX_SESSION_CATALOG_METHOD,
-  CODEX_SESSION_CONTINUE_METHOD,
-  CODEX_SESSION_READ_METHOD,
   continueLocalCodexSession,
   createCodexSessionCatalogControl,
   createCodexSessionCatalogNodeHostCommands,
   listCodexSessionCatalog,
-  registerCodexSessionCatalogGateway,
+  registerCodexSessionCatalog,
   readCodexSessionTranscript,
   type CodexSessionCatalogControl,
 } from "./session-catalog.js";
@@ -74,7 +70,6 @@ type PatchSessionEntryParams = Parameters<
 type SessionEntrySummary = ReturnType<
   PluginRuntime["agent"]["session"]["listSessionEntries"]
 >[number];
-type GatewayHandler = (options: GatewayRequestHandlerOptions) => void | Promise<void>;
 
 const config = {} as OpenClawConfig;
 
@@ -93,7 +88,6 @@ function createControl(overrides: Partial<CodexSessionCatalogControl> = {}) {
     async (run: (value: CodexSessionCatalogControl) => Promise<unknown>) => await run(control),
   ) as unknown as CodexSessionCatalogControl["withPinnedConnection"];
   const control = {
-    assertEnabled: vi.fn(),
     connectionFingerprint: "catalog-connection",
     withPinnedConnection,
     listPage: vi.fn(async () => ({ sessions: [] })),
@@ -215,10 +209,14 @@ function createRuntime(
     let summary: SessionEntrySummary;
     if (existing) {
       const entry = existing.entry;
+      const initialHarnessId =
+        "agentHarnessId" in createParams.initialEntry
+          ? createParams.initialEntry.agentHarnessId
+          : undefined;
       const initialMatches =
         createParams.recoverMatchingInitialEntry === true &&
         entry.initializationPending === true &&
-        entry.agentHarnessId === createParams.initialEntry.agentHarnessId &&
+        entry.agentHarnessId === initialHarnessId &&
         entry.modelSelectionLocked === createParams.initialEntry.modelSelectionLocked &&
         JSON.stringify(entry.pluginExtensions) ===
           JSON.stringify(createParams.initialEntry.pluginExtensions);
@@ -318,31 +316,15 @@ function archiveTestSession(params: {
 }
 
 function createGatewayApi(runtime: PluginRuntime) {
-  const handlers = new Map<string, GatewayHandler>();
-  const registerControlUiDescriptor = vi.fn();
-  const registerGatewayMethod = vi.fn(
-    (method: string, handler: GatewayHandler, _options?: { scope?: string }) => {
-      handlers.set(method, handler);
-    },
-  );
+  let provider: SessionCatalogProvider | undefined;
+  const registerSessionCatalog = vi.fn((candidate: SessionCatalogProvider) => {
+    provider = candidate;
+  });
   const api = {
     runtime,
-    session: { controls: { registerControlUiDescriptor } },
-    registerGatewayMethod,
+    registerSessionCatalog,
   } as unknown as OpenClawPluginApi;
-  return { api, handlers, registerControlUiDescriptor, registerGatewayMethod };
-}
-
-async function callGatewayHandler(
-  handler: GatewayHandler | undefined,
-  params: unknown,
-  respond = vi.fn(),
-) {
-  if (!handler) {
-    throw new Error("Gateway handler was not registered");
-  }
-  await handler({ params, respond } as unknown as GatewayRequestHandlerOptions);
-  return respond;
+  return { api, getProvider: () => provider, registerSessionCatalog };
 }
 
 beforeEach(() => {
@@ -651,7 +633,7 @@ describe("Codex supervision catalog", () => {
     );
   });
 
-  it("revokes catalog reads and writes when supervision is disabled live", async () => {
+  it("keeps catalog reads and writes available when supervision is disabled live", async () => {
     let pluginConfig: unknown = { supervision: { enabled: true } };
     commandRpcMocks.codexControlRequest.mockResolvedValue({ data: [] });
     const control = createCodexSessionCatalogControl({
@@ -662,18 +644,11 @@ describe("Codex supervision catalog", () => {
     await expect(control.listPage({})).resolves.toEqual({ sessions: [] });
     pluginConfig = { supervision: { enabled: false } };
 
-    expect(() => control.assertEnabled()).toThrow("Codex session supervision is disabled");
-    await expect(control.listPage({})).rejects.toThrow("Codex session supervision is disabled");
-    await expect(control.readThread("thread-1")).rejects.toThrow(
-      "Codex session supervision is disabled",
-    );
-    await expect(control.archiveThread("thread-1")).rejects.toThrow(
-      "Codex session supervision is disabled",
-    );
-    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledOnce();
+    await expect(control.listPage({})).resolves.toEqual({ sessions: [] });
+    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(2);
   });
 
-  it("revokes an in-flight catalog before requesting another native page", async () => {
+  it("keeps an in-flight catalog independent of supervision changes", async () => {
     let pluginConfig: unknown = { supervision: { enabled: true } };
     commandRpcMocks.codexControlRequest.mockImplementation(async () => {
       pluginConfig = { supervision: { enabled: false } };
@@ -687,10 +662,13 @@ describe("Codex supervision catalog", () => {
       getRuntimeConfig: () => config,
     });
 
-    await expect(control.listPage({ limit: 10, searchTerm: "match" })).rejects.toThrow(
-      "Codex session supervision is disabled",
-    );
-    expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledOnce();
+    commandRpcMocks.codexControlRequest.mockImplementationOnce(async () => {
+      pluginConfig = { supervision: { enabled: false } };
+      return { data: [] };
+    });
+    await expect(control.listPage({ limit: 10, searchTerm: "match" })).resolves.toEqual({
+      sessions: [],
+    });
   });
 
   it("keeps paired-node catalogs non-archived and metadata-only", async () => {
@@ -1119,28 +1097,17 @@ describe("Codex supervision catalog", () => {
       },
       error: "cursors may contain at most 100 hosts",
     },
-  ])("rejects $name at the Gateway boundary", async ({ params: requestParams, error }) => {
+  ])("rejects $name at the provider boundary", async ({ params: requestParams, error }) => {
     const control = createControl();
     const { runtime } = createRuntime();
-    const { api, handlers } = createGatewayApi(runtime);
-    registerCodexSessionCatalogGateway({
+    const { api, getProvider } = createGatewayApi(runtime);
+    registerCodexSessionCatalog({
       api,
       bindingStore: createCodexTestBindingStore(),
       control,
       getRuntimeConfig: () => config,
     });
-
-    const respond = await callGatewayHandler(
-      handlers.get(CODEX_SESSION_CATALOG_METHOD),
-      requestParams,
-    );
-
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      { error },
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
-    expect(control.assertEnabled).not.toHaveBeenCalled();
+    await expect(getProvider()?.list(requestParams as never)).rejects.toThrow(error);
     expect(control.listPage).not.toHaveBeenCalled();
     expect(runtime.nodes.list).not.toHaveBeenCalled();
   });
@@ -2022,55 +1989,6 @@ describe("Codex supervision actions", () => {
     },
   );
 
-  it("does not restore a mapped session when supervision is disabled during source revalidation", async () => {
-    const { runtime, entries, patchSessionEntry } = createRuntime();
-    const { api } = createGatewayApi(runtime);
-    const sessionKey = supervisionSessionKey("thread-1");
-    const sessionId = "openclaw-session-existing";
-    entries.push({
-      sessionKey,
-      entry: { ...adoptedEntry({ sourceThreadId: "thread-1", sessionId }), archivedAt: 123 },
-    });
-    const bindingStore = createCodexTestBindingStore();
-    await seedSupervisionBinding({
-      bindingStore,
-      sessionId,
-      sessionKey,
-      sourceThreadId: "thread-1",
-    });
-    let supervisionEnabled = true;
-    let finishRead: ((thread: CodexThread) => void) | undefined;
-    const readThread = vi.fn(
-      async () =>
-        await new Promise<CodexThread>((resolve) => {
-          finishRead = resolve;
-        }),
-    );
-    const control = createEligibleControl({
-      assertEnabled: vi.fn(() => {
-        if (!supervisionEnabled) {
-          throw new Error("Codex session supervision is disabled");
-        }
-      }),
-      readThread,
-    });
-
-    const continuing = continueLocalCodexSession({
-      api,
-      bindingStore,
-      config,
-      control,
-      threadId: "thread-1",
-    });
-    await vi.waitFor(() => expect(readThread).toHaveBeenCalledOnce());
-    supervisionEnabled = false;
-    finishRead?.(idleThread());
-
-    await expect(continuing).rejects.toThrow("Codex session supervision is disabled");
-    expect(patchSessionEntry).not.toHaveBeenCalled();
-    expect(entries[0]?.entry.archivedAt).toBe(123);
-  });
-
   it("fails closed when a mapped session generation changes before restore", async () => {
     const { runtime, entries, createSessionEntry, patchSessionEntry } = createRuntime();
     const { api } = createGatewayApi(runtime);
@@ -2453,15 +2371,20 @@ describe("Codex supervision actions", () => {
     expect(commandRpcMocks.codexControlRequest).not.toHaveBeenCalled();
   });
 
-  it("stops a pinned archive when supervision permission is revoked live", async () => {
+  it("finishes a pinned archive when supervision config changes", async () => {
     let pluginConfig: unknown = { supervision: { enabled: true } };
+    let listCalls = 0;
     pinnedConnectionMocks.request.mockImplementation(async (request: { method: string }) => {
       if (request.method === "thread/list") {
-        return { data: [idleThread({ source: "cli" })] };
+        listCalls += 1;
+        return listCalls === 1 ? { data: [idleThread({ source: "cli" })] } : { data: [] };
       }
       if (request.method === "thread/read") {
         pluginConfig = { supervision: { enabled: false } };
         return { thread: idleThread() };
+      }
+      if (request.method === "thread/archive") {
+        return {};
       }
       throw new Error(`unexpected method: ${request.method}`);
     });
@@ -2470,12 +2393,12 @@ describe("Codex supervision actions", () => {
       getRuntimeConfig: () => config,
     });
 
-    await expect(archiveTestSession({ control })).rejects.toThrow(
-      "Codex session supervision is disabled",
-    );
+    await expect(archiveTestSession({ control })).resolves.toEqual({ archived: true });
     expect(pinnedConnectionMocks.request.mock.calls.map(([request]) => request.method)).toEqual([
       "thread/list",
       "thread/read",
+      "thread/list",
+      "thread/archive",
     ]);
     expect(pinnedConnectionMocks.releaseClient).toHaveBeenCalledWith(pinnedConnectionMocks.client);
   });
@@ -2660,77 +2583,77 @@ describe("Codex supervision actions", () => {
     expect(control.archiveThread).toHaveBeenCalledWith("thread-1");
   });
 
-  it("requires archive confirmation and rejects paired-node mutations at Gateway handlers", async () => {
+  it("registers generic actions and rejects paired-node mutations", async () => {
     const { runtime, createSessionEntry } = createRuntime();
-    const { api, handlers, registerControlUiDescriptor, registerGatewayMethod } =
-      createGatewayApi(runtime);
+    const { api, getProvider, registerSessionCatalog } = createGatewayApi(runtime);
     const control = createEligibleControl();
-    registerCodexSessionCatalogGateway({
+    registerCodexSessionCatalog({
       api,
       bindingStore: createCodexTestBindingStore(),
       control,
       getRuntimeConfig: () => config,
     });
-
-    expect(registerControlUiDescriptor).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "sessions", requiredScopes: ["operator.write"] }),
-    );
-    for (const method of [
-      CODEX_SESSION_CATALOG_METHOD,
-      CODEX_SESSION_READ_METHOD,
-      CODEX_SESSION_CONTINUE_METHOD,
-      CODEX_SESSION_ARCHIVE_METHOD,
-    ]) {
-      expect(registerGatewayMethod).toHaveBeenCalledWith(method, expect.any(Function), {
-        scope: "operator.write",
-      });
-    }
-
-    const archivedRespond = await callGatewayHandler(handlers.get(CODEX_SESSION_CATALOG_METHOD), {
-      archived: true,
-    });
-    expect(archivedRespond).toHaveBeenCalledWith(
-      false,
-      { error: "unknown Codex session catalog parameter: archived" },
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
-
-    const unconfirmedArchive = await callGatewayHandler(
-      handlers.get(CODEX_SESSION_ARCHIVE_METHOD),
-      { hostId: CODEX_LOCAL_SESSION_HOST_ID, threadId: "thread-1" },
-    );
-    expect(unconfirmedArchive).toHaveBeenCalledWith(
-      false,
-      {
-        error:
-          "confirmNoOtherRunner=true is required because Codex client and runner activity is process-local",
-      },
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
-    expect(control.readThread).not.toHaveBeenCalled();
-
-    const confirmedArchive = await callGatewayHandler(handlers.get(CODEX_SESSION_ARCHIVE_METHOD), {
-      hostId: CODEX_LOCAL_SESSION_HOST_ID,
-      threadId: "thread-1",
-      confirmNoOtherRunner: true,
-    });
-    expect(confirmedArchive).toHaveBeenCalledWith(true, { archived: true });
-
-    for (const method of [CODEX_SESSION_CONTINUE_METHOD, CODEX_SESSION_ARCHIVE_METHOD]) {
-      const respond = await callGatewayHandler(handlers.get(method), {
+    expect(registerSessionCatalog).toHaveBeenCalledOnce();
+    const provider = getProvider();
+    await expect(
+      provider?.archive?.({
+        hostId: CODEX_LOCAL_SESSION_HOST_ID,
+        threadId: "thread-1",
+        confirmNoOtherRunner: false,
+      } as never),
+    ).rejects.toThrow("requires confirmation");
+    await expect(
+      provider?.archive?.({
+        hostId: CODEX_LOCAL_SESSION_HOST_ID,
+        threadId: "thread-1",
+        confirmNoOtherRunner: true,
+      }),
+    ).resolves.toEqual({ ok: true });
+    await expect(
+      provider?.archive?.({
         hostId: "node:devbox",
         threadId: "thread-remote",
-        ...(method === CODEX_SESSION_ARCHIVE_METHOD ? { confirmNoOtherRunner: true } : {}),
-      });
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        { error: "paired-node Codex sessions are view-only" },
-        expect.objectContaining({ code: "INVALID_REQUEST" }),
-      );
-    }
+        confirmNoOtherRunner: true,
+      }),
+    ).rejects.toThrow("paired-node Codex sessions are view-only");
+    await expect(
+      provider?.continueSession?.({
+        hostId: "node:devbox",
+        threadId: "thread-remote",
+      }),
+    ).rejects.toThrow("paired-node Codex sessions are view-only");
     expect(control.readThread).toHaveBeenCalledOnce();
     expect(control.archiveThread).toHaveBeenCalledOnce();
     expect(createSessionEntry).not.toHaveBeenCalled();
+  });
+
+  it("marks not-loaded local interactive sessions as actionable", async () => {
+    const { runtime } = createRuntime();
+    const { api, getProvider } = createGatewayApi(runtime);
+    registerCodexSessionCatalog({
+      api,
+      bindingStore: createCodexTestBindingStore(),
+      control: createEligibleControl({
+        listPage: vi.fn(async () => ({
+          sessions: [
+            {
+              threadId: "thread-1",
+              status: "notLoaded",
+              source: "cli",
+              archived: false,
+            },
+          ],
+        })),
+      }),
+      getRuntimeConfig: () => config,
+    });
+
+    await expect(getProvider()?.list({})).resolves.toMatchObject([
+      {
+        hostId: CODEX_LOCAL_SESSION_HOST_ID,
+        sessions: [{ threadId: "thread-1", canContinue: true, canArchive: true }],
+      },
+    ]);
   });
 
   it("reads local transcript turns one bounded App Server page at a time", async () => {

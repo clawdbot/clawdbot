@@ -96,7 +96,12 @@ function resolveChunkModeForProvider(
   const accounts = cfgSection.accounts;
   if (accounts && typeof accounts === "object") {
     const direct = resolveAccountEntry(accounts, normalizedAccountId);
-    const directMode = resolveChannelStreamingChunkMode(direct);
+    // Flat `chunkMode` is the canonical schema shape for channels without a
+    // nested streaming config (signal, irc, googlechat, whatsapp, SDK plugins),
+    // so it stays a first-class read here, not legacy compat. Core must not
+    // hardcode per-channel gating; nested-only channels reject flat keys in
+    // their strict schemas, so validated runtime config never carries them.
+    const directMode = resolveChannelStreamingChunkMode(direct) ?? direct?.chunkMode;
     if (directMode) {
       return directMode;
     }

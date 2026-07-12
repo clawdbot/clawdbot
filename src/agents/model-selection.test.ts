@@ -129,6 +129,7 @@ vi.mock("./provider-model-normalization.runtime.js", () => ({
 vi.mock("../plugins/provider-public-artifacts.js", () => ({
   resolveBundledProviderPolicySurface:
     providerPolicySurfaceMock.resolveBundledProviderPolicySurface,
+  resolveProviderPolicySurface: providerPolicySurfaceMock.resolveBundledProviderPolicySurface,
 }));
 
 vi.mock("./model-selection-cli.js", () => ({

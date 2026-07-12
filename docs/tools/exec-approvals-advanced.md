@@ -328,9 +328,9 @@ Native-client-specific routing:
 - Google Chat native cards preserve the manual `/approve` fallback in message text, but card button
   callbacks carry only opaque action tokens; the approval id and decision are recovered from
   server-side pending state.
-- WhatsApp emoji approvals handle both exec and plugin prompts only when the matching top-level
-  forwarding family is enabled and routes to WhatsApp; target-only WhatsApp forwarding stays on the
-  shared forwarding path unless it matches the same native origin target.
+- WhatsApp emoji approvals handle both exec and plugin prompts when the matching top-level
+  forwarding family routes to WhatsApp. Native-origin prompts bind directly; shared target-mode
+  delivery binds the same typed approval metadata to the accepted WhatsApp message receipt.
 - Signal reaction approvals handle both exec and plugin prompts only when the matching top-level
   forwarding family is enabled and routes to Signal. Direct same-chat Signal exec approvals can
   suppress the local `/approve` fallback without explicit approvers; Signal reaction resolution
@@ -340,9 +340,10 @@ Native-client-specific routing:
   include `com.openclaw.approval` custom event content on the first prompt event so OpenClaw-aware
   Matrix clients can read structured approval state while stock clients keep the plain-text
   `/approve` fallback.
-- Native Discord approval buttons route by approval id kind: `plugin:` ids go straight to plugin
-  approvals, everything else goes to exec approvals. Native Telegram approval buttons follow the
-  same bounded exec-to-plugin fallback as `/approve`.
+- Native Discord and Telegram approval buttons carry an explicit exec or plugin owner kind in
+  transport-private callback data and resolve only that owner. Older `/approve` controls that lack
+  a kind remain a bounded compatibility path: they try only owner kinds the actor may approve,
+  continue only after an approval-not-found result, and never infer ownership from the approval ID.
 - The requester does not need to be an approver.
 - If no operator UI or configured approval client can accept the request, the prompt falls back to
   `askFallback`.

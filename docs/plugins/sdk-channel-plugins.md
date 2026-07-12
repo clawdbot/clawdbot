@@ -311,6 +311,11 @@ Other approval helpers:
 - Preserve the delivered approval id kind end-to-end. Native clients should
   not guess or rewrite exec vs plugin approval routing from channel-local
   state.
+- Pass that explicit `approvalKind` to `resolveApprovalOverGateway`. This uses
+  the canonical `approval.resolve` service and returns the recorded winner when
+  another surface answers first. The older explicit `resolveMethod` input
+  remains for command-backed controls; new native actions must not use it or
+  infer kind from an ID.
 - Different approval kinds can intentionally expose different native
   surfaces. Current bundled examples: Matrix keeps the same native DM/channel
   routing and reaction UX for exec and plugin approvals, while still letting
@@ -329,6 +334,7 @@ For hot channel entrypoints, prefer these narrower subpaths over the broader
 - `openclaw/plugin-sdk/approval-client-runtime`
 - `openclaw/plugin-sdk/approval-delivery-runtime`
 - `openclaw/plugin-sdk/approval-gateway-runtime`
+- `openclaw/plugin-sdk/approval-reference-runtime`
 - `openclaw/plugin-sdk/approval-handler-adapter-runtime`
 - `openclaw/plugin-sdk/approval-handler-runtime`
 - `openclaw/plugin-sdk/approval-native-runtime`

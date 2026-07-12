@@ -186,6 +186,7 @@ function bindObservedConversation(params: {
       conversation,
       messageId,
       approvalId: params.target.approvalId,
+      approvalKind: params.target.approvalKind,
       allowedDecisions: params.target.allowedDecisions,
       ttlMs,
     });
@@ -217,6 +218,7 @@ function bindObservedApprovalPrompt(params: {
     conversation,
     messageId,
     approvalId: binding.approvalId,
+    approvalKind: binding.approvalKind,
     allowedDecisions: binding.allowedDecisions,
     expiresAtMs,
   };

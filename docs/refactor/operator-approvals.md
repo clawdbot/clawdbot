@@ -44,7 +44,7 @@ Inline actions and deep links coexist. There is no approval-mode toggle.
 | Plugin node gate  | `src/gateway/node-invoke-plugin-policy.ts`                                                                                                                      | Creates and broadcasts directly through the plugin manager, duplicating part of the server-method lifecycle.                                                                                 |
 | Gateway authority | `src/gateway/server-aux-handlers.ts`, `src/gateway/exec-approval-manager.ts`, `src/gateway/server-methods/approval-shared.ts`                                   | Separate exec and plugin managers use process-local maps. Terminal entries survive for 15 seconds. First-answer-wins holds only inside one process.                                          |
 | Gateway protocol  | `packages/gateway-protocol/src/schema/exec-approvals.ts`, `packages/gateway-protocol/src/schema/plugin-approvals.ts`, `src/gateway/methods/core-descriptors.ts` | Exec has pending-only `get`; plugin has no `get`; no kind-agnostic terminal lookup exists for a deep link.                                                                                   |
-| Delivery          | `src/infra/exec-approval-channel-runtime.ts`, `src/infra/approval-native-runtime.ts`, `src/infra/approval-handler-runtime.ts`                                   | Already supports origin routing, approver DMs, replay, native handlers, and terminal cleanup. It needs durable source state, not another router.                                             |
+| Delivery          | `src/infra/exec-approval-channel-runtime.ts`, `src/infra/approval-native-runtime.ts`, `src/infra/approval-handler-runtime.ts`                                   | Supports origin routing, approver DMs, pending replay, native handlers, and in-process terminal cleanup. PR 5 adds durable terminal reconciliation.                                          |
 | Portable actions  | `src/interactive/payload.ts`, `src/plugin-sdk/interactive-runtime.ts`, `src/plugin-sdk/approval-reply-runtime.ts`                                               | Approval buttons are command actions containing `/approve ...`; URL and Web App targets are untyped button fields.                                                                           |
 | Telegram          | `extensions/telegram/src/approval-handler.runtime.ts`, `extensions/telegram/src/button-types.ts`                                                                | The renderer parses command text to recognize approval semantics before producing private callback data.                                                                                     |
 | Control UI        | `ui/src/app/exec-approval.ts`, `ui/src/app/overlays.ts`, `ui/src/components/exec-approval.ts`                                                                   | Approval UI is a global modal. `ui/src/app-route-paths.ts` and `ui/src/app-routes.ts` use exact routes and rewrite unknown paths to Chat.                                                    |
@@ -95,7 +95,8 @@ Add one `operator_approvals` table to the shared state database.
 
 | Column                                             | Purpose                                                                                                                                       |
 | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `approval_id`                                      | Globally unique stable locator. Keep existing exec IDs and `plugin:` IDs for protocol compatibility, but never infer kind from the prefix.    |
+| `approval_id`                                      | Globally unique canonical ID. Keep existing exec IDs and `plugin:` IDs for protocol compatibility, but never infer kind from the prefix.      |
+| `resolution_ref`                                   | Unique full SHA-256 base64url locator for transport callbacks that cannot carry the canonical ID. It is not authorization or a public URL ID. |
 | `kind`                                             | Closed `exec \| plugin` discriminator.                                                                                                        |
 | `status`                                           | Closed `pending \| allowed \| denied \| expired \| cancelled` state.                                                                          |
 | `presentation_json`                                | Validated, kind-tagged reviewer projection. Raw runtime requests, command bindings, and callback payloads remain process-local.               |
@@ -112,6 +113,7 @@ Add one `operator_approvals` table to the shared state database.
 
 Required indexes:
 
+- unique `(resolution_ref)`; inserts also reject cross-column `approval_id`/`resolution_ref` ambiguity
 - `(status, expires_at_ms)`
 - `(source_session_key, created_at_ms DESC)`
 - `(resolved_at_ms)` for retention pruning
@@ -159,10 +161,10 @@ Malformed HTTP/RPC input that cannot be authenticated or identify an approval is
 
 Add kind-agnostic reviewer methods:
 
-| Method                              | Contract                                                                                    |
-| ----------------------------------- | ------------------------------------------------------------------------------------------- |
-| `approval.get { id }`               | Returns a visible pending or retained terminal projection.                                  |
-| `approval.resolve { id, decision }` | Runs authorization, allowed-decision validation, deadline reconciliation, and terminal CAS. |
+| Method                                    | Contract                                                                                                                                                                                                            |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `approval.get { id }`                     | Returns a visible pending or retained terminal projection.                                                                                                                                                          |
+| `approval.resolve { id, kind, decision }` | Accepts the canonical ID or fixed-size transport reference, then runs authorization, kind and allowed-decision validation, deadline reconciliation, and terminal CAS. The response always carries the canonical ID. |
 
 Kind-specific request validation remains in `exec.approval.request` and `plugin.approval.request`. Existing `exec.approval.get/list/waitDecision/resolve` and `plugin.approval.list/waitDecision/resolve` become protocol-boundary adapters to the canonical service because they are shipped Gateway API. Internal callers migrate to the service in the same change.
 
@@ -190,7 +192,7 @@ PR 1 preserves the shipped event names, payloads, and existing record-level reci
 - `plugin.approval.requested`
 - `plugin.approval.resolved`
 
-Those legacy events can contain the full runtime request, so they must not be fanned out to every approval-scoped client. PR 3 adds tagged lifecycle fields (`status`, `sourceSessionKey`, `urlPath`, terminal metadata, and a presentation-level `kind`) through the sanitized lifecycle projection instead of widening legacy event delivery.
+Those legacy events can contain the full runtime request, so they must not be fanned out to every approval-scoped client. PR 5 adds tagged lifecycle fields (`status`, `sourceSessionKey`, `urlPath`, terminal metadata, and a presentation-level `kind`) through the sanitized lifecycle projection instead of widening legacy event delivery.
 
 Add an approval-scoped `session.approval` projection event. Publish the canonical event once with the persisted audience keys; exact-session subscribers receive the same event for each matching key:
 
@@ -217,7 +219,7 @@ type MessagePresentationAction =
   | { type: "web-app"; url: string };
 ```
 
-Core builds typed decision actions and a separate Review link. Channels encode an approval action into their own callback format and send resolution to the canonical service. They must not parse `/approve` text or infer kind from an ID prefix.
+Core builds typed decision actions and a separate Review link when an approved absolute Control UI origin is available. Channels encode an approval action into their own callback format and send resolution to the canonical service. A callback uses the exact canonical ID when it fits; otherwise it uses the row's unique full-digest `resolution_ref`. The reference is only a compact lookup key: normal Gateway authentication, record authorization, explicit kind, allowed-decision validation, deadline reconciliation, and first-answer CAS still apply. Channels must not truncate IDs, resolve hash prefixes, parse `/approve` text, or infer kind from an ID prefix.
 
 Keep `button.url`, `button.webApp`, and command-backed approval controls as deprecated plugin SDK compatibility inputs. Normalize them at the SDK boundary; migrate every bundled internal caller in the same PR. `/approve {id} {decision}` remains a text fallback and CLI/chat command, not the button semantic contract.
 
@@ -268,7 +270,7 @@ Record-level rules:
   never inferred from a matching client name.
 - Audience membership changes presentation only. It never widens authorization.
 
-`approval.get` exposes only the sanitized reviewer projection and omits internal source/audience routing keys. The PR 3 `session.approval` event carries its one destination `sessionKey` plus `sourceSessionKey` after the Gateway applies the persisted audience snapshot server-side. Existing exec/plugin events keep their historical payload and restricted recipients until consumers migrate. The executable request, command binding, and continuation remain only in the process-local waiter. The durable row contains the safe presentation plus lifecycle, routing, and audit metadata; it never stores raw environment values, credentials, auth headers, or channel callback data.
+`approval.get` exposes only the sanitized reviewer projection and omits internal source/audience routing keys. The PR 5 `session.approval` event carries its one destination `sessionKey` plus `sourceSessionKey` after the Gateway applies the persisted audience snapshot server-side. Existing exec/plugin events keep their historical payload and restricted recipients until consumers migrate. The executable request, command binding, and continuation remain only in the process-local waiter. The durable row contains the safe presentation plus lifecycle, routing, and audit metadata; it never stores raw environment values, credentials, auth headers, or channel callback data.
 
 ## Audience projection
 
@@ -287,6 +289,22 @@ The registry source is `src/agents/subagent-registry-read.ts`; ownership fields 
 Requested and terminal projections use the same persisted audience even if focus/controller ownership changes while the approval is pending. This guarantees that every surface that displayed the request receives terminal cleanup. Resolution always targets the source approval ID; audience sessions never receive cloned approval state.
 
 Do not write transcript messages, inject system prompts, start owner turns, or emit `sessions.changed` solely for an approval.
+
+## Delivered-surface convergence
+
+Native approval handlers already retain their delivered message entries long enough to replace or retire active controls. Generic forwarded approval messages currently discard the `MessageReceipt`, so a decision on another surface can leave their old controls looking pending. PR 5 closes that gap with an `operator_approval_deliveries` child table in the shared state database.
+
+Each row stores the approval ID, a unique delivery ID, channel/account/exact route, a bounded JSON-validated channel-private message locator, delivery timestamps, and terminalization state. It never stores callback data, decision tokens, or raw approval requests. The channel owns locator encoding and message mutation; core owns canonical status, target selection, retry policy, and fallback terminal text.
+
+Delivery registration and terminal resolution race safely:
+
+1. After a pending send returns its receipt, insert the delivery locator and read the parent approval status in one transaction.
+2. If the parent is already terminal, schedule immediate terminalization instead of leaving the late delivery pending.
+3. Every committed terminal transition separately schedules all unfinalized delivery rows; droppable broadcasts are not the trigger.
+4. A channel terminalizer reports `replaced`, `retired`, or `unsupported`. Replaced suppresses a duplicate terminal message; retired sends the existing terminal follow-up; unsupported or failure falls back without rolling back the approval CAS.
+5. Startup retries terminal approvals with unfinished deliveries, making cleanup resilient to Gateway restart.
+
+This transport lifecycle is an optional delivery adapter hook, not a renderer or model-facing message action. QQ C2C/group messages currently have no edit, delete, or keyboard-clear API; that adapter remains unsupported and can only show canonical truth after a later click until the transport gains a mutation API.
 
 ## Restart, timeout, and route semantics
 
@@ -340,18 +358,32 @@ Do not silently change them in the storage PR. The strict-semantics PR must upda
 - First-answer-wins, idempotency, expiry, authorization, and consumption tests.
 - No UI or channel behavior change yet.
 
-### PR 2: deep link and typed actions
+### PR 2: typed actions and channel callbacks
 
-- Standalone Control UI approval page and base-path-aware startup routing.
 - Typed approval, URL, and Web App actions.
 - Core presentation builders and plugin SDK exports.
-- Telegram migration first; migrate other bundled parsers that infer approval semantics from command text.
-- Gateway-authored URL builder and native/mobile payload support.
-- UI, SDK, Telegram, and reconnect tests.
+- Transport-private callback encoding with explicit owner kind.
+- Durable fixed-size callback references for canonical IDs beyond transport limits.
+- Bundled channel migration away from command-text and approval-ID inference.
+- Canonical first-answer truth on the clicked surface and best-effort active-native terminal updates; durable reconciliation stays in PR 5.
+- SDK and bundled-channel tests.
 
-### PR 3: propagation and fail-closed behavior
+### PR 3: Control UI deep link
+
+- Standalone authenticated approval page and base-path-aware startup routing.
+- Gateway-authored URL payload and pending-state polling until lifecycle events ship.
+- Mobile-width, reconnect, competing-answer, reload, and mounted-path proof.
+
+### PR 4: native clients
+
+- iOS, watchOS, and Android review surfaces use kind-aware `approval.get/resolve`.
+- Canonical first-answer terminal truth replaces local attempted-decision state.
+- Native unit, build, and platform proof.
+
+### PR 5: propagation and fail-closed behavior
 
 - `session.approval` request/terminal delivery from the audience snapshot persisted in PR 1.
+- Durable forwarded-delivery locators and canonical terminal cleanup across every delivered surface, including restart replay.
 - Migrate `node-invoke-plugin-policy.ts` and the embedded plugin broker away from duplicate authority.
 - Strict timeout/malformed/no-route semantics and compatibility docs.
 - Multi-surface and nested-subagent end-to-end proof.
@@ -394,10 +426,10 @@ Track:
 - startup-orphan cancellations;
 - audience size.
 
-A committed transition is success even if later event delivery fails. Delivery failure is logged separately and repaired through list/get replay.
+A committed transition is success even if later event delivery fails. Delivery failure is logged separately; PR 5 repairs remote state through durable delivery replay and canonical lookup.
 
 ## Open decisions
 
-1. **Externally reachable Control UI origin.** `src/gateway/control-ui-links.ts` can derive loopback, LAN, tailnet, and custom-bind URLs, but `allowedOrigins` is an authorization allowlist, not a canonical navigation origin. Recommended: add narrowly scoped `gateway.controlUi.publicUrl` only after confirming existing Tailscale/device-pair public URL seams cannot supply the target. Never let a channel guess the origin.
-2. **Strict timeout compatibility cutover.** The target is fail-closed, but `askFallback` and plugin `timeoutBehavior: "allow"` are shipped contracts. Recommended: make the behavior change in PR 3 with explicit owner/security approval, changelog, docs, and a migration/deprecation decision rather than hiding it in PR 1.
+1. **Externally reachable Control UI origin.** Every snapshot carries the stable relative `urlPath`. An absolute URL may be advertised only from a cached Tailscale Serve/Funnel location after Gateway exposure succeeds; `allowedOrigins`, request Host headers, `gateway.remote.url`, and display-only loopback/LAN candidates are not canonical origins. Telegram can use its authenticated Mini App wrapper to retain the approval path through bootstrap. Arbitrary reverse proxies remain relative-only until a separately reviewed explicit public-URL contract exists. Never let a channel guess the origin.
+2. **Strict timeout compatibility cutover.** The target is fail-closed, but `askFallback` and plugin `timeoutBehavior: "allow"` are shipped contracts. Recommended: make the behavior change in PR 5 with explicit owner/security approval, changelog, docs, and a migration/deprecation decision rather than hiding it in PR 1.
 3. **Gatewayless embedded mode.** Recommended: keep it local-only initially, then make it a client of the canonical service when a Gateway exists. Do not advertise a deep link that no server can resolve.

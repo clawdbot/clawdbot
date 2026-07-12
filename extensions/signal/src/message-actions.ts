@@ -96,7 +96,7 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
 
     return { actions: Array.from(actions) };
   },
-  supportsAction: ({ action }) => action !== "send",
+  supportsAction: ({ action }) => action === "react",
 
   handleAction: async ({ action, params, cfg, accountId, toolContext }) => {
     if (action === "send") {

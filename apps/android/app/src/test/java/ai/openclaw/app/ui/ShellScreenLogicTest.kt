@@ -224,6 +224,21 @@ class ShellScreenLogicTest {
   }
 
   @Test
+  fun homeAttentionRowsDoNotClaimUnknownProvidersAreUnavailable() {
+    val rows =
+      homeAttentionRows(
+        isConnected = true,
+        pendingApprovals = 0,
+        channelsSummary = emptyChannels(),
+        nodesDevicesSummary = emptyNodesDevices(),
+        readyProviderCount = 0,
+        unknownProviderCount = 1,
+      )
+
+    assertEquals(emptyList<String>(), rows.map { it.title })
+  }
+
+  @Test
   fun skillWorkshopSummaryPrioritizesPendingAndHeldProposals() {
     assertEquals(
       "2 pending",

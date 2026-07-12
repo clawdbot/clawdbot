@@ -14,6 +14,7 @@ import { listSessionEntries, upsertSessionEntry } from "openclaw/plugin-sdk/sess
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildTelegramApprovalCallbackData } from "./approval-callback-data.js";
 import {
   resolveTelegramConversationBaseSessionKey,
   resolveTelegramConversationRoute,
@@ -1013,7 +1014,7 @@ describe("createTelegramBot", () => {
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-group-1");
   });
 
-  it("clears approval buttons without re-editing callback message text", async () => {
+  it("replaces legacy approval controls with a visible terminal receipt", async () => {
     onSpy.mockClear();
     editMessageReplyMarkupSpy.mockClear();
     editMessageTextSpy.mockClear();
@@ -1066,15 +1067,19 @@ describe("createTelegramBot", () => {
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
-    expect(editMessageReplyMarkupSpy).toHaveBeenCalledTimes(1);
-    const [chatId, messageId, replyMarkup] = mockCall(
-      editMessageReplyMarkupSpy as unknown as MockCallSource,
+    expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
+    const [chatId, messageId, terminalText, editOptions] = mockCall(
+      editMessageTextSpy as unknown as MockCallSource,
       0,
-      "edit reply markup",
+      "edit terminal approval message",
     );
     expect(chatId).toBe(1234);
     expect(messageId).toBe(21);
-    expect(replyMarkup).toEqual({ reply_markup: { inline_keyboard: [] } });
+    expect(terminalText).toContain("✅ Approval resolved here");
+    expect(terminalText).toContain("Result: Allowed once");
+    expect(terminalText).toContain("ID: 138e9b8c");
+    expect(editOptions).toEqual({ reply_markup: { inline_keyboard: [] } });
+    expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
     const approvalCall = execApprovalCall();
     const execApprovals = requireRecord(
       execApprovalTelegramConfig(approvalCall).execApprovals,
@@ -1084,11 +1089,10 @@ describe("createTelegramBot", () => {
     expect(execApprovals.approvers).toEqual(["9"]);
     expect(execApprovals.target).toBe("dm");
     expect(approvalCall.approvalId).toBe("138e9b8c");
+    expect(approvalCall.approvalKind).toBe("exec");
     expect(approvalCall.decision).toBe("allow-once");
-    expect(approvalCall.allowPluginFallback).toBe(true);
     expect(approvalCall.senderId).toBe("9");
     expect(replySpy).not.toHaveBeenCalled();
-    expect(editMessageTextSpy).not.toHaveBeenCalled();
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-approve-style");
   });
 
@@ -1136,15 +1140,436 @@ describe("createTelegramBot", () => {
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
-    expect(editMessageReplyMarkupSpy).toHaveBeenCalledTimes(1);
+    expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
+    expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-approve-capability-free");
   });
 
-  it("resolves opaque plugin approval callbacks through the shared approval resolver", async () => {
+  it("uses explicit ownership and renders canonical truth on a losing typed surface", async () => {
     onSpy.mockClear();
     editMessageReplyMarkupSpy.mockClear();
     editMessageTextSpy.mockClear();
     resolveExecApprovalSpy.mockClear();
+    resolveExecApprovalSpy.mockResolvedValueOnce({
+      applied: false,
+      approval: {
+        id: "plugin:id-owned-by-exec",
+        urlPath: "/approve/plugin%3Aid-owned-by-exec",
+        createdAtMs: 1,
+        expiresAtMs: 60_000,
+        resolvedAtMs: 2,
+        reason: "user",
+        status: "allowed",
+        decision: "allow-once",
+        presentation: {
+          kind: "exec",
+          commandText: "echo canonical",
+          commandPreview: "echo canonical",
+          allowedDecisions: ["allow-once", "deny"],
+        },
+      },
+    });
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          execApprovals: {
+            enabled: true,
+            approvers: ["9"],
+            target: "dm",
+          },
+        },
+      },
+    });
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = getTelegramCallbackHandlerForTests();
+    const callbackData = buildTelegramApprovalCallbackData({
+      type: "approval",
+      approvalId: "plugin:id-owned-by-exec",
+      approvalKind: "exec",
+      decision: "deny",
+    });
+    if (!callbackData) {
+      throw new Error("Expected typed approval callback data");
+    }
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-typed-approval-loser",
+        data: callbackData,
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 24,
+          text: "Approval required.",
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(execApprovalCall()).toMatchObject({
+      approvalId: "plugin:id-owned-by-exec",
+      approvalKind: "exec",
+      decision: "deny",
+      senderId: "9",
+    });
+    expect(editMessageTextSpy).toHaveBeenCalledWith(
+      1234,
+      24,
+      [
+        "ℹ️ Approval already resolved",
+        "Canonical result: Allowed once",
+        "ID: plugin:id-owned-by-exec",
+        "",
+        "Command:",
+        "echo canonical",
+      ].join("\n"),
+      { reply_markup: { inline_keyboard: [] } },
+    );
+    expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-typed-approval-loser");
+  });
+
+  it("sends a canonical terminal receipt when the clicked approval message cannot be edited", async () => {
+    onSpy.mockClear();
+    editMessageReplyMarkupSpy.mockClear();
+    editMessageTextSpy.mockClear();
+    sendMessageSpy.mockClear();
+    resolveExecApprovalSpy.mockClear();
+    editMessageTextSpy.mockRejectedValueOnce(new Error("Bad Request: message can't be edited"));
+    resolveExecApprovalSpy.mockResolvedValueOnce({
+      applied: true,
+      approval: {
+        id: "fallback-receipt-id",
+        urlPath: "/approve/fallback-receipt-id",
+        createdAtMs: 1,
+        expiresAtMs: 60_000,
+        resolvedAtMs: 2,
+        reason: "user",
+        status: "denied",
+        decision: "deny",
+        presentation: {
+          kind: "exec",
+          commandText: "echo denied",
+          commandPreview: "echo denied",
+          allowedDecisions: ["allow-once", "deny"],
+        },
+      },
+    });
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          execApprovals: {
+            enabled: true,
+            approvers: ["9"],
+            target: "dm",
+          },
+        },
+      },
+    });
+    createTelegramBot({ token: "tok" });
+    const callbackData = buildTelegramApprovalCallbackData({
+      type: "approval",
+      approvalId: "fallback-receipt-id",
+      approvalKind: "exec",
+      decision: "deny",
+    });
+    if (!callbackData) {
+      throw new Error("Expected typed approval callback data");
+    }
+
+    await getTelegramCallbackHandlerForTests()({
+      callbackQuery: {
+        id: "cbq-terminal-edit-fallback",
+        data: callbackData,
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 25,
+          text: "Approval required.",
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    const terminalText = [
+      "✅ Approval resolved here",
+      "Canonical result: Denied",
+      "ID: fallback-receipt-id",
+      "",
+      "Command:",
+      "echo denied",
+    ].join("\n");
+    expect(editMessageTextSpy).toHaveBeenCalledWith(1234, 25, terminalText, {
+      reply_markup: { inline_keyboard: [] },
+    });
+    expect(editMessageReplyMarkupSpy).toHaveBeenCalledWith(1234, 25, {
+      reply_markup: { inline_keyboard: [] },
+    });
+    expect(sendMessageSpy).toHaveBeenCalledWith(1234, terminalText, undefined);
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-terminal-edit-fallback");
+  });
+
+  it("consumes malformed callbacks in the reserved approval namespace", async () => {
+    onSpy.mockClear();
+    editMessageReplyMarkupSpy.mockClear();
+    editMessageTextSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
+    replySpy.mockClear();
+    resolveExecApprovalSpy.mockClear();
+    const pluginHandler = vi.fn(async () => ({ handled: true }));
+    registerPluginInteractiveHandler("reserved-approval-test", {
+      channel: "telegram",
+      namespace: "tga1",
+      handler: pluginHandler as never,
+    });
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          execApprovals: {
+            enabled: true,
+            approvers: ["9"],
+            target: "dm",
+          },
+        },
+      },
+    });
+    createTelegramBot({ token: "tok" });
+
+    await getTelegramCallbackHandlerForTests()({
+      callbackQuery: {
+        id: "cbq-malformed-reserved-approval",
+        data: "tga1:e:x:req-1",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 26,
+          text: "Approval required.",
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(editMessageTextSpy).toHaveBeenCalledWith(
+      1234,
+      26,
+      "ℹ️ Approval action unavailable\nThis button is invalid or no longer actionable.",
+      { reply_markup: { inline_keyboard: [] } },
+    );
+    expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
+    expect(resolveExecApprovalSpy).not.toHaveBeenCalled();
+    expect(pluginHandler).not.toHaveBeenCalled();
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-malformed-reserved-approval");
+  });
+
+  it("terminalizes a stale legacy click from the canonical record without retrying owners", async () => {
+    onSpy.mockClear();
+    editMessageReplyMarkupSpy.mockClear();
+    editMessageTextSpy.mockClear();
+    resolveExecApprovalSpy.mockClear();
+    const alreadyResolved = Object.assign(new Error("approval already resolved"), {
+      gatewayCode: "INVALID_REQUEST",
+      details: { reason: "APPROVAL_ALREADY_RESOLVED" },
+    });
+    resolveExecApprovalSpy.mockRejectedValueOnce(alreadyResolved).mockResolvedValueOnce({
+      applied: false,
+      approval: {
+        id: "stale-legacy-id",
+        urlPath: "/approve/stale-legacy-id",
+        createdAtMs: 1,
+        expiresAtMs: 60_000,
+        resolvedAtMs: 2,
+        reason: "user",
+        status: "denied",
+        decision: "deny",
+        presentation: {
+          kind: "exec",
+          commandText: "echo denied",
+          allowedDecisions: ["allow-once", "deny"],
+        },
+      },
+    });
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          execApprovals: {
+            enabled: true,
+            approvers: ["9"],
+            target: "dm",
+          },
+        },
+      },
+    });
+    createTelegramBot({ token: "tok" });
+
+    await getTelegramCallbackHandlerForTests()({
+      callbackQuery: {
+        id: "cbq-stale-legacy",
+        data: "/approve stale-legacy-id allow-once",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 25,
+          text: "Approval required.",
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(resolveExecApprovalSpy).toHaveBeenCalledTimes(2);
+    expect(execApprovalCall(0)).toMatchObject({
+      approvalId: "stale-legacy-id",
+      approvalKind: "exec",
+    });
+    expect(execApprovalCall(1)).toMatchObject({
+      approvalId: "stale-legacy-id",
+      approvalKind: "exec",
+    });
+    expect(editMessageTextSpy).toHaveBeenCalledWith(
+      1234,
+      25,
+      expect.stringContaining("Canonical result: Denied"),
+      { reply_markup: { inline_keyboard: [] } },
+    );
+    expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-stale-legacy");
+  });
+
+  it("renders neutral terminal copy when a stale legacy record cannot be fetched", async () => {
+    onSpy.mockClear();
+    editMessageReplyMarkupSpy.mockClear();
+    editMessageTextSpy.mockClear();
+    resolveExecApprovalSpy.mockClear();
+    const alreadyResolved = Object.assign(new Error("approval already resolved"), {
+      gatewayCode: "INVALID_REQUEST",
+      details: { reason: "APPROVAL_ALREADY_RESOLVED" },
+    });
+    resolveExecApprovalSpy
+      .mockRejectedValueOnce(alreadyResolved)
+      .mockRejectedValueOnce(new Error("unknown or expired approval id"));
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          execApprovals: {
+            enabled: true,
+            approvers: ["9"],
+            target: "dm",
+          },
+        },
+      },
+    });
+    createTelegramBot({ token: "tok" });
+
+    await getTelegramCallbackHandlerForTests()({
+      callbackQuery: {
+        id: "cbq-stale-legacy-neutral",
+        data: "/approve stale-neutral-id deny",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 26,
+          text: "Approval required.",
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(resolveExecApprovalSpy).toHaveBeenCalledTimes(2);
+    expect(editMessageTextSpy).toHaveBeenCalledWith(
+      1234,
+      26,
+      expect.stringContaining(
+        "It was already resolved or expired; the canonical decision is unavailable here.",
+      ),
+      { reply_markup: { inline_keyboard: [] } },
+    );
+    expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
+  });
+
+  it("retries a stale legacy click when canonical convergence fails transiently", async () => {
+    onSpy.mockClear();
+    editMessageReplyMarkupSpy.mockClear();
+    editMessageTextSpy.mockClear();
+    resolveExecApprovalSpy.mockClear();
+    const alreadyResolved = Object.assign(new Error("approval already resolved"), {
+      gatewayCode: "INVALID_REQUEST",
+      details: { reason: "APPROVAL_ALREADY_RESOLVED" },
+    });
+    resolveExecApprovalSpy
+      .mockRejectedValueOnce(alreadyResolved)
+      .mockRejectedValueOnce(new Error("gateway unavailable"));
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          execApprovals: {
+            enabled: true,
+            approvers: ["9"],
+            target: "dm",
+          },
+        },
+      },
+    });
+    createTelegramBot({ token: "tok" });
+
+    await expect(
+      getTelegramCallbackHandlerForTests()({
+        callbackQuery: {
+          id: "cbq-stale-legacy-retry",
+          data: "/approve stale-retry-id deny",
+          from: { id: 9, first_name: "Ada", username: "ada_bot" },
+          message: {
+            chat: { id: 1234, type: "private" },
+            date: 1736380800,
+            message_id: 27,
+            text: "Approval required.",
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      }),
+    ).rejects.toThrow("gateway unavailable");
+
+    expect(resolveExecApprovalSpy).toHaveBeenCalledTimes(2);
+    expect(editMessageTextSpy).not.toHaveBeenCalled();
+    expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-stale-legacy-retry");
+  });
+
+  it("resolves legacy opaque plugin ids without inferring kind from id spelling", async () => {
+    onSpy.mockClear();
+    editMessageReplyMarkupSpy.mockClear();
+    editMessageTextSpy.mockClear();
+    resolveExecApprovalSpy.mockClear();
+    resolveExecApprovalSpy.mockRejectedValueOnce(new Error("unknown or expired approval id"));
 
     loadConfig.mockReturnValue({
       channels: {
@@ -1170,7 +1595,7 @@ describe("createTelegramBot", () => {
     await callbackHandler({
       callbackQuery: {
         id: "cbq-plugin-approve",
-        data: "/approve plugin:138e9b8c allow-once",
+        data: "/approve opaque-plugin-approval-id allow-once",
         from: { id: 9, first_name: "Ada", username: "ada_bot" },
         message: {
           chat: { id: 1234, type: "private" },
@@ -1191,11 +1616,24 @@ describe("createTelegramBot", () => {
     expect(execApprovals.enabled).toBe(true);
     expect(execApprovals.approvers).toEqual(["9"]);
     expect(execApprovals.target).toBe("dm");
-    expect(approvalCall.approvalId).toBe("plugin:138e9b8c");
+    expect(approvalCall.approvalId).toBe("opaque-plugin-approval-id");
+    expect(approvalCall.approvalKind).toBe("exec");
     expect(approvalCall.decision).toBe("allow-once");
-    expect(approvalCall.allowPluginFallback).toBe(true);
     expect(approvalCall.senderId).toBe("9");
-    expect(editMessageReplyMarkupSpy).toHaveBeenCalledTimes(1);
+    expect(execApprovalCall(1)).toMatchObject({
+      approvalId: "opaque-plugin-approval-id",
+      approvalKind: "plugin",
+      decision: "allow-once",
+      senderId: "9",
+    });
+    expect(resolveExecApprovalSpy).toHaveBeenCalledTimes(2);
+    expect(editMessageTextSpy).toHaveBeenCalledWith(
+      1234,
+      24,
+      expect.stringContaining("✅ Approval resolved here"),
+      { reply_markup: { inline_keyboard: [] } },
+    );
+    expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-plugin-approve");
   });
 
@@ -1343,7 +1781,7 @@ describe("createTelegramBot", () => {
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-approve-error");
   });
 
-  it("allows exec approval callbacks from target-only Telegram recipients", async () => {
+  it("allows target-only exec resolution despite a misleading plugin id prefix", async () => {
     onSpy.mockClear();
     editMessageReplyMarkupSpy.mockClear();
     editMessageTextSpy.mockClear();
@@ -1375,7 +1813,7 @@ describe("createTelegramBot", () => {
     await callbackHandler({
       callbackQuery: {
         id: "cbq-approve-target",
-        data: "/approve 138e9b8c allow-once",
+        data: "/approve plugin:misleading-exec-id allow-once",
         from: { id: 9, first_name: "Ada", username: "ada_bot" },
         message: {
           chat: { id: 1234, type: "private" },
@@ -1392,15 +1830,22 @@ describe("createTelegramBot", () => {
     const execApprovals = execApprovalTargetConfig(approvalCall);
     expect(execApprovals.enabled).toBe(true);
     expect(execApprovals.mode).toBe("targets");
-    expect(approvalCall.approvalId).toBe("138e9b8c");
+    expect(approvalCall.approvalId).toBe("plugin:misleading-exec-id");
+    expect(approvalCall.approvalKind).toBe("exec");
     expect(approvalCall.decision).toBe("allow-once");
-    expect(approvalCall.allowPluginFallback).toBe(false);
     expect(approvalCall.senderId).toBe("9");
-    expect(editMessageReplyMarkupSpy).toHaveBeenCalledTimes(1);
+    expect(resolveExecApprovalSpy).toHaveBeenCalledTimes(1);
+    expect(editMessageTextSpy).toHaveBeenCalledWith(
+      1234,
+      23,
+      expect.stringContaining("✅ Approval resolved here"),
+      { reply_markup: { inline_keyboard: [] } },
+    );
+    expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-approve-target");
   });
 
-  it("drops target-only approval not-found misses without clearing legacy fallback buttons", async () => {
+  it("preserves ambiguous target-only stale callbacks for another approver", async () => {
     onSpy.mockClear();
     editMessageReplyMarkupSpy.mockClear();
     editMessageTextSpy.mockClear();
@@ -1453,23 +1898,27 @@ describe("createTelegramBot", () => {
     expect(execApprovals.enabled).toBe(true);
     expect(execApprovals.mode).toBe("targets");
     expect(approvalCall.approvalId).toBe("138e9b8c");
+    expect(approvalCall.approvalKind).toBe("exec");
     expect(approvalCall.decision).toBe("allow-once");
-    expect(approvalCall.allowPluginFallback).toBe(false);
     expect(approvalCall.senderId).toBe("9");
+    expect(resolveExecApprovalSpy).toHaveBeenCalledTimes(1);
+    expect(editMessageTextSpy).not.toHaveBeenCalled();
     expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
     expect(replySpy).not.toHaveBeenCalled();
     expect(sendMessageSpy).not.toHaveBeenCalled();
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-legacy-plugin-fallback-blocked");
   });
 
-  it("drops expired approval callbacks for configured approvers after clearing buttons", async () => {
+  it("renders a terminal no-longer-pending receipt for expired legacy callbacks", async () => {
     onSpy.mockClear();
     editMessageReplyMarkupSpy.mockClear();
     editMessageTextSpy.mockClear();
     resolveExecApprovalSpy.mockClear();
     replySpy.mockClear();
     sendMessageSpy.mockClear();
-    resolveExecApprovalSpy.mockRejectedValueOnce(new Error("unknown or expired approval id"));
+    resolveExecApprovalSpy
+      .mockRejectedValueOnce(new Error("unknown or expired approval id"))
+      .mockRejectedValueOnce(new Error("unknown or expired approval id"));
 
     loadConfig.mockReturnValue({
       channels: {
@@ -1510,19 +1959,29 @@ describe("createTelegramBot", () => {
 
     const approvalCall = execApprovalCall();
     expect(approvalCall.approvalId).toBe("138e9b8c");
+    expect(approvalCall.approvalKind).toBe("exec");
     expect(approvalCall.decision).toBe("allow-once");
-    expect(approvalCall.allowPluginFallback).toBe(true);
     expect(approvalCall.senderId).toBe("9");
-    expect(editMessageReplyMarkupSpy).toHaveBeenCalledTimes(1);
+    expect(resolveExecApprovalSpy).toHaveBeenCalledTimes(2);
+    expect(execApprovalCall(1).approvalKind).toBe("plugin");
+    expect(editMessageTextSpy).toHaveBeenCalledWith(
+      1234,
+      26,
+      expect.stringContaining("ℹ️ Approval no longer pending"),
+      { reply_markup: { inline_keyboard: [] } },
+    );
+    expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
     expect(replySpy).not.toHaveBeenCalled();
     expect(sendMessageSpy).not.toHaveBeenCalled();
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-expired-approval");
   });
 
-  it("keeps plugin approval callback buttons for target-only recipients", async () => {
+  it("does not call canonical resolution with a guessed kind after a legacy miss", async () => {
     onSpy.mockClear();
     editMessageReplyMarkupSpy.mockClear();
     editMessageTextSpy.mockClear();
+    resolveExecApprovalSpy.mockClear();
+    resolveExecApprovalSpy.mockRejectedValueOnce(new Error("unknown or expired approval id"));
 
     loadConfig.mockReturnValue({
       approvals: {
@@ -1564,6 +2023,13 @@ describe("createTelegramBot", () => {
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
+    expect(execApprovalCall()).toMatchObject({
+      approvalId: "plugin:138e9b8c",
+      approvalKind: "exec",
+      decision: "allow-once",
+      senderId: "9",
+    });
+    expect(resolveExecApprovalSpy).toHaveBeenCalledTimes(1);
     expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
     expect(editMessageTextSpy).not.toHaveBeenCalled();
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-plugin-approve-blocked");

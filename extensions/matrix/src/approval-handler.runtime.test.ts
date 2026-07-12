@@ -7,8 +7,22 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { matrixApprovalNativeRuntime } from "./approval-handler.runtime.js";
 import {
   clearMatrixApprovalReactionTargetsForTest,
-  resolveMatrixApprovalReactionTargetWithPersistence,
+  resolveMatrixApprovalReactionTargetWithPersistence as resolveMatrixApprovalReactionTargetWithPersistenceRaw,
 } from "./approval-reactions.js";
+
+type ResolveTargetParams = Parameters<
+  typeof resolveMatrixApprovalReactionTargetWithPersistenceRaw
+>[0];
+
+function resolveMatrixApprovalReactionTargetWithPersistence(
+  params: Omit<ResolveTargetParams, "accountId"> & { accountId?: string },
+) {
+  const { accountId = "default", ...target } = params;
+  return resolveMatrixApprovalReactionTargetWithPersistenceRaw({
+    ...target,
+    accountId,
+  });
+}
 
 type MatrixDeliverPendingParams = Parameters<
   typeof matrixApprovalNativeRuntime.transport.deliverPending
@@ -316,6 +330,7 @@ describe("matrixApprovalNativeRuntime", () => {
         }),
       ).toEqual({
         approvalId: "req-1",
+        approvalKind: "exec",
         decision: "allow-once",
       });
     });
@@ -511,6 +526,7 @@ describe("matrixApprovalNativeRuntime", () => {
     });
 
     expect(binding).toEqual({
+      accountId: "default",
       roomId: "!room:example.org",
       eventId: "$primary",
     });
@@ -522,6 +538,7 @@ describe("matrixApprovalNativeRuntime", () => {
       }),
     ).toEqual({
       approvalId: "req-1",
+      approvalKind: "exec",
       decision: "allow-once",
     });
     expect(

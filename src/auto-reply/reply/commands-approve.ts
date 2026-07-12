@@ -84,38 +84,26 @@ function formatApprovalSubmitError(error: unknown): string {
   return formatErrorMessage(error);
 }
 
-type ApprovalMethod = "exec.approval.resolve" | "plugin.approval.resolve";
+type ApprovalKind = "exec" | "plugin";
+type ApproveCommandBehavior =
+  | { kind: "allow" }
+  | { kind: "ignore" }
+  | { kind: "reply"; text: string };
 
-function resolveApprovalMethods(params: {
-  approvalId: string;
+function resolveAuthorizedApprovalKinds(params: {
   execAuthorization: ReturnType<typeof resolveApprovalCommandAuthorization>;
   pluginAuthorization: ReturnType<typeof resolveApprovalCommandAuthorization>;
-}): ApprovalMethod[] {
-  if (params.approvalId.startsWith("plugin:")) {
-    return params.pluginAuthorization.authorized ? ["plugin.approval.resolve"] : [];
-  }
-  if (params.execAuthorization.authorized && params.pluginAuthorization.authorized) {
-    return ["exec.approval.resolve", "plugin.approval.resolve"];
-  }
-  if (params.execAuthorization.authorized) {
-    return ["exec.approval.resolve"];
-  }
-  if (params.pluginAuthorization.authorized) {
-    return ["plugin.approval.resolve"];
-  }
-  return [];
+}): ApprovalKind[] {
+  return [
+    ...(params.execAuthorization.authorized ? (["exec"] as const) : []),
+    ...(params.pluginAuthorization.authorized ? (["plugin"] as const) : []),
+  ];
 }
 
 function resolveApprovalAuthorizationError(params: {
-  approvalId: string;
   execAuthorization: ReturnType<typeof resolveApprovalCommandAuthorization>;
   pluginAuthorization: ReturnType<typeof resolveApprovalCommandAuthorization>;
 }): string {
-  if (params.approvalId.startsWith("plugin:")) {
-    return (
-      params.pluginAuthorization.reason ?? "❌ You are not authorized to approve this request."
-    );
-  }
   return (
     params.execAuthorization.reason ??
     params.pluginAuthorization.reason ??
@@ -136,27 +124,11 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
     return { shouldContinue: false, reply: { text: parsed.error } };
   }
 
-  const isPluginId = parsed.id.startsWith("plugin:");
   const effectiveAccountId = resolveChannelAccountId({
     cfg: params.cfg,
     ctx: params.ctx,
     command: params.command,
   });
-  const approvalCapability = resolveChannelApprovalCapability(
-    getChannelPlugin(params.command.channel),
-  );
-  const approveCommandBehavior = approvalCapability?.resolveApproveCommandBehavior?.({
-    cfg: params.cfg,
-    accountId: effectiveAccountId,
-    senderId: params.command.senderId,
-    approvalKind: isPluginId ? "plugin" : "exec",
-  });
-  if (approveCommandBehavior?.kind === "ignore") {
-    return { shouldContinue: false };
-  }
-  if (approveCommandBehavior?.kind === "reply") {
-    return { shouldContinue: false, reply: { text: approveCommandBehavior.text } };
-  }
   const execApprovalAuthorization = resolveApprovalCommandAuthorization({
     cfg: params.cfg,
     channel: params.command.channel,
@@ -190,29 +162,62 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
     return missingScope;
   }
 
+  const approvalCapability = resolveChannelApprovalCapability(
+    getChannelPlugin(params.command.channel),
+  );
+  const commandBehaviors = new Map<ApprovalKind, ApproveCommandBehavior | undefined>();
+  for (const approvalKind of ["exec", "plugin"] as const) {
+    commandBehaviors.set(
+      approvalKind,
+      approvalCapability?.resolveApproveCommandBehavior?.({
+        cfg: params.cfg,
+        accountId: effectiveAccountId,
+        senderId: params.command.senderId,
+        approvalKind,
+      }),
+    );
+  }
+  const blockedCommandResult = (): Awaited<ReturnType<CommandHandler>> => {
+    const replyBehavior = Array.from(commandBehaviors.values()).find(
+      (behavior) => behavior?.kind === "reply",
+    );
+    if (replyBehavior?.kind === "reply") {
+      return { shouldContinue: false, reply: { text: replyBehavior.text } };
+    }
+    if (Array.from(commandBehaviors.values()).some((behavior) => behavior?.kind === "ignore")) {
+      return { shouldContinue: false };
+    }
+    return null;
+  };
+
   const resolvedBy = buildResolvedByLabel(params);
-  const callApprovalMethod = async (method: ApprovalMethod): Promise<void> => {
+  const callApprovalMethod = async (resolveMethod: ApprovalKind): Promise<void> => {
     await resolveApprovalOverGateway({
       cfg: params.cfg,
       approvalId: parsed.id,
       decision: parsed.decision,
       senderId: params.command.senderId,
-      ...(method === "plugin.approval.resolve" ? { resolveMethod: "plugin" as const } : {}),
+      resolveMethod,
       clientDisplayName: `Chat approval (${resolvedBy})`,
     });
   };
 
-  const methods = resolveApprovalMethods({
-    approvalId: parsed.id,
+  const methods = resolveAuthorizedApprovalKinds({
     execAuthorization: execApprovalAuthorization,
     pluginAuthorization: pluginApprovalAuthorization,
+  }).filter((approvalKind) => {
+    const behavior = commandBehaviors.get(approvalKind);
+    return !behavior || behavior.kind === "allow";
   });
   if (methods.length === 0) {
+    const blocked = blockedCommandResult();
+    if (blocked) {
+      return blocked;
+    }
     return {
       shouldContinue: false,
       reply: {
         text: resolveApprovalAuthorizationError({
-          approvalId: parsed.id,
           execAuthorization: execApprovalAuthorization,
           pluginAuthorization: pluginApprovalAuthorization,
         }),
@@ -226,7 +231,17 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
       break;
     } catch (error) {
       const isLastMethod = index === methods.length - 1;
-      if (!isApprovalNotFoundError(error) || isLastMethod) {
+      if (!isApprovalNotFoundError(error)) {
+        return {
+          shouldContinue: false,
+          reply: { text: `❌ Failed to submit approval: ${formatApprovalSubmitError(error)}` },
+        };
+      }
+      if (isLastMethod) {
+        const blocked = blockedCommandResult();
+        if (blocked) {
+          return blocked;
+        }
         return {
           shouldContinue: false,
           reply: { text: `❌ Failed to submit approval: ${formatApprovalSubmitError(error)}` },

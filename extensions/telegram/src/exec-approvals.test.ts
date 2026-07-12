@@ -18,7 +18,6 @@ import {
   isTelegramExecApprovalTargetRecipient,
   resolveTelegramExecApprovalTarget,
   shouldHandleTelegramExecApprovalRequest,
-  shouldEnableTelegramExecApprovalButtons,
   shouldInjectTelegramExecApprovalButtons,
 } from "./exec-approvals.js";
 
@@ -453,34 +452,6 @@ describe("telegram exec approvals", () => {
     expect(shouldInjectTelegramExecApprovalButtons({ cfg: channelCfg, to: "123" })).toBe(false);
     expect(shouldInjectTelegramExecApprovalButtons({ cfg: bothCfg, to: "123" })).toBe(true);
     expect(shouldInjectTelegramExecApprovalButtons({ cfg: bothCfg, to: "-100123" })).toBe(true);
-  });
-
-  it("does not require generic inlineButtons capability to enable exec approval buttons", () => {
-    const cfg = {
-      channels: {
-        telegram: {
-          botToken: "tok",
-          capabilities: ["vision"],
-          execApprovals: { enabled: true, approvers: ["123"], target: "dm" },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(shouldEnableTelegramExecApprovalButtons({ cfg, to: "123" })).toBe(true);
-  });
-
-  it("still respects explicit inlineButtons off for exec approval buttons", () => {
-    const cfg = {
-      channels: {
-        telegram: {
-          botToken: "tok",
-          capabilities: { inlineButtons: "off" },
-          execApprovals: { enabled: true, approvers: ["123"], target: "dm" },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(shouldEnableTelegramExecApprovalButtons({ cfg, to: "123" })).toBe(false);
   });
 
   describe("isTelegramExecApprovalTargetRecipient", () => {

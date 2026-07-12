@@ -281,6 +281,51 @@ describe("worker environment store", () => {
     ).toThrow("owner epoch changed");
   });
 
+  it("allocates globally distinct owner epochs when a session moves environments", () => {
+    const makeReady = (environmentId: string, leaseId: string) => {
+      const bootstrapping = seedBootstrapping(environmentId, leaseId);
+      return store.transition({
+        environmentId,
+        from: bootstrapping.state,
+        to: "ready",
+        patch: readyPatch(),
+      });
+    };
+
+    const firstReady = makeReady("worker-owner-a", "lease-owner-a");
+    const first = store.transition({
+      environmentId: firstReady.environmentId,
+      from: firstReady.state,
+      to: "attached",
+      patch: attachedPatch("shared-session", firstReady.environmentId),
+    });
+    store.transition({
+      environmentId: first.environmentId,
+      from: first.state,
+      to: "idle",
+    });
+    database.db
+      .prepare(
+        `INSERT INTO worker_transcript_commit_heads (
+          session_id, run_epoch, environment_id, next_seq, updated_at_ms
+        ) VALUES (?, ?, ?, 1, ?)`,
+      )
+      .run("shared-session", first.ownerEpoch, first.environmentId, nowMs);
+    database.db
+      .prepare("DELETE FROM worker_environments WHERE environment_id = ?")
+      .run(first.environmentId);
+    const secondReady = makeReady("worker-owner-b", "lease-owner-b");
+    const second = store.transition({
+      environmentId: secondReady.environmentId,
+      from: secondReady.state,
+      to: "attached",
+      patch: attachedPatch("shared-session", secondReady.environmentId),
+    });
+
+    expect(first.ownerEpoch).toBe(2);
+    expect(second.ownerEpoch).toBeGreaterThan(first.ownerEpoch);
+  });
+
   it("rejects illegal, stale, and lease-incomplete transitions", () => {
     createIntent();
     expect(() =>

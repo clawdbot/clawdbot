@@ -75,6 +75,31 @@ export function resolveBundledPluginSourcePublicSurfacePath(params: {
   return null;
 }
 
+/** Resolves a public surface artifact within one installed plugin root. */
+export function resolvePluginRootPublicSurfacePath(params: {
+  pluginRoot: string;
+  artifactBasename: string;
+}): string | null {
+  const artifactBasename = normalizeBundledPluginArtifactSubpath(params.artifactBasename);
+  const pluginRoot = path.resolve(params.pluginRoot);
+  for (const candidate of [
+    path.join(pluginRoot, artifactBasename),
+    path.join(pluginRoot, "dist", artifactBasename),
+  ]) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  const sourceBaseName = artifactBasename.replace(/\.js$/u, "");
+  for (const ext of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
+    const candidate = path.join(pluginRoot, `${sourceBaseName}${ext}`);
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
 function resolvePackageFallbackForBundledDir(params: {
   rootDir: string;
   bundledPluginsDir: string;

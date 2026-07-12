@@ -1208,6 +1208,76 @@ describe("mattermostPlugin", () => {
       ]);
     });
 
+    it("keeps typed URL actions on the normal Mattermost text delivery path", async () => {
+      const renderPresentation = requireMattermostRenderPresentation();
+      const sendPayload = requireMattermostSendPayload();
+      const cfg = createMattermostTestConfig();
+      const presentation = {
+        blocks: [
+          {
+            type: "buttons" as const,
+            buttons: [
+              {
+                label: "Review",
+                action: {
+                  type: "url" as const,
+                  url: "https://example.com/review",
+                },
+              },
+              {
+                label: "Open app",
+                action: {
+                  type: "web-app" as const,
+                  url: "https://example.com/app",
+                },
+              },
+              {
+                label: "Allow",
+                action: {
+                  type: "approval" as const,
+                  approvalId: "approval-1",
+                  approvalKind: "exec" as const,
+                  decision: "allow-once" as const,
+                },
+                value: "/approve approval-1 allow-once",
+              },
+            ],
+          },
+        ],
+      };
+      const payload = { presentation };
+      const rendered = await renderPresentation({
+        payload,
+        presentation,
+        ctx: {
+          cfg,
+          to: "channel:CHAN1",
+          text: "",
+          payload,
+        },
+      });
+
+      expect(rendered).toMatchObject({
+        text: "- Review: https://example.com/review\n- Open app: https://example.com/app\n- Allow",
+      });
+      expect(rendered?.channelData?.mattermost).toBeUndefined();
+
+      await sendPayload({
+        cfg,
+        to: "channel:CHAN1",
+        text: rendered?.text ?? "",
+        payload: rendered!,
+      });
+
+      const options = expectSingleMattermostSend(
+        "channel:CHAN1",
+        "- Review: https://example.com/review\n- Open app: https://example.com/app\n- Allow",
+      );
+      expect(options.buttons).toBeUndefined();
+      expect(JSON.stringify(options)).not.toContain("approval-1");
+      expect(JSON.stringify(options)).not.toContain("/approve");
+    });
+
     it("requires upload success for local media on presentation button payloads", async () => {
       const renderPresentation = requireMattermostRenderPresentation();
       const sendPayload = requireMattermostSendPayload();

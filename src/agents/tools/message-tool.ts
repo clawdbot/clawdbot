@@ -398,6 +398,29 @@ function sanitizePresentationTextFieldsResult(
             }
             suppressionReason ??= sanitized.suppressionReason;
           }
+          const action = sanitizedButton.action;
+          if (action && typeof action === "object" && !Array.isArray(action)) {
+            const sanitizedAction = { ...(action as Record<string, unknown>) };
+            if (
+              (sanitizedAction.type === "url" || sanitizedAction.type === "web-app") &&
+              typeof sanitizedAction.url === "string"
+            ) {
+              const sanitized = sanitizeUserVisibleToolTextResult(sanitizedAction.url, bootPrompt);
+              if (sanitized.text) {
+                sanitizedAction.url = sanitized.text;
+                sanitizedButton.action = sanitizedAction;
+              } else {
+                // Explicit typed actions own the control. If sanitization removes
+                // the target, legacy shadow fields must not become active fallbacks.
+                delete sanitizedButton.action;
+                delete sanitizedButton.value;
+                delete sanitizedButton.url;
+                delete sanitizedButton.webApp;
+                delete sanitizedButton.web_app;
+              }
+              suppressionReason ??= sanitized.suppressionReason;
+            }
+          }
           return sanitizedButton;
         });
       }
@@ -520,26 +543,45 @@ function buildRoutingSchema() {
   };
 }
 
-const presentationActionSchema = Type.Union([
+const presentationCommandActionSchema = Type.Object({
+  type: Type.Literal("command"),
+  command: Type.String(),
+});
+
+const presentationCallbackActionSchema = Type.Object({
+  type: Type.Literal("callback"),
+  value: Type.String(),
+});
+
+const presentationCommandOrCallbackActionSchema = Type.Union([
+  presentationCommandActionSchema,
+  presentationCallbackActionSchema,
+]);
+
+// Approval actions carry server-issued IDs and are runtime-authored only. The
+// message tool exposes the remaining button actions that models may safely author.
+const presentationButtonActionSchema = Type.Union([
+  presentationCommandActionSchema,
+  presentationCallbackActionSchema,
   Type.Object({
-    type: Type.Literal("command"),
-    command: Type.String(),
+    type: Type.Literal("url"),
+    url: Type.String(),
   }),
   Type.Object({
-    type: Type.Literal("callback"),
-    value: Type.String(),
+    type: Type.Literal("web-app"),
+    url: Type.String(),
   }),
 ]);
 
 const presentationOptionSchema = Type.Object({
   label: Type.String(),
-  action: Type.Optional(presentationActionSchema),
+  action: Type.Optional(presentationCommandOrCallbackActionSchema),
   value: Type.Optional(Type.String()),
 });
 
 const presentationButtonSchema = Type.Object({
   label: Type.String(),
-  action: Type.Optional(presentationActionSchema),
+  action: Type.Optional(presentationButtonActionSchema),
   value: Type.Optional(Type.String()),
   url: Type.Optional(Type.String()),
   webApp: Type.Optional(Type.Object({ url: Type.String() })),

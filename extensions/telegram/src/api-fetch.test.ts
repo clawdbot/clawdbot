@@ -78,6 +78,7 @@ function getOwnSymbolValue(
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
 });
@@ -133,7 +134,7 @@ describe("fetchTelegramChatId", () => {
     await fetchTelegramChatId({ token: "abc", chatId: "@user" });
     expect(fetchMock).toHaveBeenCalledWith(
       "https://api.telegram.org/botabc/getChat?chat_id=%40user",
-      undefined,
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
   });
 
@@ -154,7 +155,7 @@ describe("fetchTelegramChatId", () => {
 
     expect(customFetch).toHaveBeenCalledWith(
       "https://api.telegram.org/botabc/getChat?chat_id=%40user",
-      undefined,
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
   });
 
@@ -174,6 +175,46 @@ describe("fetchTelegramChatId", () => {
       }),
     ).resolves.toBeNull();
     expect(cancelCount).toBe(1);
+  });
+
+  it("keeps the getChat timeout active until the response body read settles", async () => {
+    vi.useFakeTimers();
+    let observedSignal: AbortSignal | undefined;
+    let abortReason: unknown;
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      observedSignal = init?.signal ?? undefined;
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            observedSignal?.addEventListener(
+              "abort",
+              () => {
+                abortReason = observedSignal?.reason;
+                controller.error(abortReason);
+              },
+              { once: true },
+            );
+          },
+        }),
+        { headers: { "content-type": "application/json" }, status: 200 },
+      );
+    });
+
+    const lookup = fetchTelegramChatId({
+      token: "abc",
+      chatId: "@user",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    await expect(lookup).resolves.toBeNull();
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(observedSignal).toBeInstanceOf(AbortSignal);
+    expect(observedSignal?.aborted).toBe(true);
+    expect(abortReason).toBeInstanceOf(Error);
+    expect((abortReason as Error).name).toBe("TimeoutError");
+    expect((abortReason as Error).message).toBe("request timed out");
   });
 });
 

@@ -111,6 +111,20 @@ export type AgentRuntimeMessagePresentationAction =
   | {
       type: "callback";
       value: string;
+    }
+  | {
+      type: "approval";
+      approvalId: string;
+      approvalKind: "exec" | "plugin";
+      decision: "allow-once" | "allow-always" | "deny";
+    }
+  | {
+      type: "url";
+      url: string;
+    }
+  | {
+      type: "web-app";
+      url: string;
     };
 
 /** Portable action control exposed to agent runtime reply payloads. */
@@ -119,12 +133,14 @@ export type AgentRuntimeMessagePresentationButton = {
   label: string;
   /** Typed action sent when pressed. */
   action?: AgentRuntimeMessagePresentationAction;
-  /** Legacy opaque callback value sent when pressed. */
+  /** @deprecated Use action. */
   value?: string;
-  /** External URL opened by the button. */
+  /** @deprecated Use an action with type "url". */
   url?: string;
-  /** Channel-native web app URL for renderers that support embedded web apps. */
+  /** @deprecated Use an action with type "web-app". */
   webApp?: { url: string };
+  /** @deprecated Use an action with type "web-app". */
+  web_app?: { url: string };
   /** Higher values are kept first when channel action limits require dropping controls. */
   priority?: number;
   /** Disabled action hint; channels without disabled-state support render fallback text. */
@@ -138,8 +154,8 @@ export type AgentRuntimeMessagePresentationOption = {
   /** User-visible option label. */
   label: string;
   /** Typed action sent when selected. */
-  action?: AgentRuntimeMessagePresentationAction;
-  /** Legacy opaque callback value sent when selected. */
+  action?: Extract<AgentRuntimeMessagePresentationAction, { type: "command" | "callback" }>;
+  /** @deprecated Use action. */
   value?: string;
 };
 

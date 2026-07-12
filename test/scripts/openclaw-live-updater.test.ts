@@ -24,6 +24,7 @@ import {
   maintainMain,
   originMatches,
   parseGatewayLogAudit,
+  prepareGatewaySuspension,
   verifyGatewayReadiness,
 } from "../../.agents/skills/openclaw-live-updater/scripts/update-main.mjs";
 import {
@@ -60,6 +61,10 @@ function maintainFixture(
       warningCount: 0,
       errors: [],
       warnings: [],
+    }),
+    prepareGatewaySuspension: () => ({
+      status: "ready",
+      suspensionId: "fixture-suspension",
     }),
     ...dependencies,
   });
@@ -234,6 +239,31 @@ describe("openclaw live updater", () => {
     ]);
   });
 
+  test("parses ready and busy atomic Gateway suspension responses", () => {
+    expect(
+      prepareGatewaySuspension(
+        "/checkout",
+        (_checkout: string, method: string, params: { requestId: string }) => {
+          expect(method).toBe("gateway.suspend.prepare");
+          expect(params.requestId).toMatch(/^openclaw-live-updater-/u);
+          return JSON.stringify({ status: "ready", suspensionId: "suspension-1" });
+        },
+      ),
+    ).toEqual({ status: "ready", suspensionId: "suspension-1" });
+
+    expect(
+      prepareGatewaySuspension("/checkout", () =>
+        JSON.stringify({
+          status: "busy",
+          reason: "active-work",
+          retryAfterMs: 20_000,
+          activeCount: 1,
+          blockers: [{ kind: "cron-run", count: 1, message: "busy" }],
+        }),
+      ),
+    ).toMatchObject({ status: "busy", activeCount: 1 });
+  });
+
   test("accepts supported OpenClaw GitHub origins", () => {
     expect(originMatches("https://github.com/openclaw/openclaw.git")).toBe(true);
     expect(originMatches("git@github.com:openclaw/openclaw.git")).toBe(true);
@@ -300,6 +330,21 @@ describe("openclaw live updater", () => {
       }),
     ).toEqual({
       dependencyInstall: true,
+      gatewayBuild: true,
+      gatewayProbe: true,
+      gatewayRestart: true,
+      gatewaySelfHeal: false,
+      macAppRebuild: true,
+      macUiVerification: true,
+    });
+    expect(
+      classifyActions(["apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift"], {
+        buildProvenanceKnown: true,
+        buildRequired: true,
+        nodeModulesPresent: true,
+      }),
+    ).toEqual({
+      dependencyInstall: false,
       gatewayBuild: true,
       gatewayProbe: true,
       gatewayRestart: true,
@@ -401,8 +446,8 @@ describe("openclaw live updater", () => {
       warnings: [],
     });
     expect(commands.calls).toEqual([
-      "pnpm install --frozen-lockfile",
       `${process.execPath} dist/index.js gateway stop`,
+      "pnpm install --frozen-lockfile",
       "pnpm build",
       "pnpm openclaw gateway restart",
       "pnpm openclaw gateway status --deep --require-rpc --json",
@@ -448,8 +493,94 @@ describe("openclaw live updater", () => {
     expect(output.actions.gatewayBuild).toBe(true);
     expect(output.actions.dependencyInstall).toBe(true);
     expect(commands.calls).toEqual([
-      "pnpm install --frozen-lockfile",
       `${process.execPath} dist/index.js gateway stop`,
+      "pnpm install --frozen-lockfile",
+      "pnpm build",
+      "pnpm openclaw gateway restart",
+      "pnpm openclaw gateway status --deep --require-rpc --json",
+      "pnpm openclaw health --verbose --json",
+    ]);
+  });
+
+  test("defers a stale build without stopping Gateway when atomic suspension reports active work", () => {
+    const { root, mirror } = makeFixture();
+    mkdirSync(path.join(mirror, "node_modules"));
+    const commands = fakeCommands(mirror);
+
+    const output = maintainFixture(
+      { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
+      {
+        runCommand: commands.runCommand,
+        prepareGatewaySuspension: () => ({
+          status: "busy",
+          reason: "active-work",
+          retryAfterMs: 20_000,
+          activeCount: 1,
+          blockers: [{ kind: "cron-run", count: 1, message: "1 active cron run(s)" }],
+        }),
+      },
+    );
+
+    expect(output).toMatchObject({
+      ok: true,
+      deferred: true,
+      reason: "gateway_active_work",
+      gatewaySuspension: {
+        status: "busy",
+        activeCount: 1,
+        blockers: [{ kind: "cron-run", count: 1 }],
+      },
+    });
+    expect(commands.calls).toEqual([]);
+    expect(inspectBuildState(mirror, git(mirror, "rev-parse", "HEAD")).current).toBe(false);
+  });
+
+  test("resumes a prepared suspension when the managed Gateway stop fails", () => {
+    const { root, mirror } = makeFixture();
+    mkdirSync(path.join(mirror, "node_modules"));
+    const resumed: string[] = [];
+
+    expect(() =>
+      maintainFixture(
+        { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
+        {
+          runCommand(command: string, args: string[]) {
+            if (command === process.execPath && args.includes("stop")) {
+              throw new Error("stop failed");
+            }
+          },
+          resumeGatewaySuspension: (_checkout: string, suspensionId: string) => {
+            resumed.push(suspensionId);
+          },
+        },
+      ),
+    ).toThrow("stop failed");
+    expect(resumed).toEqual(["fixture-suspension"]);
+  });
+
+  test("recovers a stale build only after proving an unavailable Gateway is stopped", () => {
+    const { root, mirror } = makeFixture();
+    mkdirSync(path.join(mirror, "node_modules"));
+    const commands = fakeCommands(mirror);
+
+    const output = maintainFixture(
+      { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
+      {
+        runCommand: commands.runCommand,
+        prepareGatewaySuspension: () => {
+          throw new Error("Gateway unavailable");
+        },
+        proveGatewayStopped: () => ({
+          runtimeStatus: "stopped",
+          port: 18_789,
+          portStatus: "free",
+        }),
+      },
+    );
+
+    expect(output.gatewayLogAudit).toMatchObject({ errorCount: 0 });
+    expect(commands.calls).toEqual([
+      "pnpm install --frozen-lockfile",
       "pnpm build",
       "pnpm openclaw gateway restart",
       "pnpm openclaw gateway status --deep --require-rpc --json",
@@ -620,9 +751,12 @@ describe("openclaw live updater", () => {
       dependencyInstall: true,
       gatewayBuild: false,
       gatewayProbe: true,
+      gatewayRestart: true,
     });
     expect(commands.calls).toEqual([
+      `${process.execPath} dist/index.js gateway stop`,
       "pnpm install --frozen-lockfile",
+      "pnpm openclaw gateway restart",
       "pnpm openclaw gateway status --deep --require-rpc --json",
       "pnpm openclaw health --verbose --json",
     ]);
@@ -704,8 +838,8 @@ describe("openclaw live updater", () => {
       ),
     ).toThrow(/build output does not match/u);
     expect(calls).toEqual([
-      "pnpm install --frozen-lockfile",
       `${process.execPath} dist/index.js gateway stop`,
+      "pnpm install --frozen-lockfile",
       "pnpm build",
     ]);
   });

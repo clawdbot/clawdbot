@@ -53,6 +53,55 @@ function messageRecord(group: MessageGroup, index = 0): Record<string, unknown> 
   return requireRecord(group.messages[index]?.message);
 }
 
+describe("buildChatItems working spark", () => {
+  const hasReadingIndicator = (props: Partial<BuildChatItemsProps>) =>
+    buildChatItems(createProps(props)).some((item) => item.kind === "reading-indicator");
+  const liveTool = (resultReceived: boolean) => ({
+    role: "assistant",
+    toolCallId: "tool-1",
+    content: [{ type: "toolcall", name: "exec", arguments: {} }],
+    timestamp: 1_000,
+    __openclawToolStreamLive: true,
+    __openclawToolStreamResultReceived: resultReceived,
+  });
+
+  it("shows the spark while a run works with nothing streaming", () => {
+    expect(hasReadingIndicator({ runWorking: true })).toBe(true);
+  });
+
+  it("keeps the spark during a background reload with visible content", () => {
+    expect(
+      hasReadingIndicator({
+        runWorking: true,
+        loading: true,
+        messages: [{ role: "assistant", content: "answer", timestamp: 1 }],
+      }),
+    ).toBe(true);
+  });
+
+  it("yields to the initial-load skeleton on an empty thread", () => {
+    expect(hasReadingIndicator({ runWorking: true, loading: true })).toBe(false);
+  });
+
+  it("does not stack the spark under a visible running tool row", () => {
+    expect(hasReadingIndicator({ runWorking: true, toolMessages: [liveTool(false)] })).toBe(false);
+  });
+
+  it("returns the spark once the running tool resolves", () => {
+    expect(hasReadingIndicator({ runWorking: true, toolMessages: [liveTool(true)] })).toBe(true);
+  });
+
+  it("keeps the spark when tool calls are hidden", () => {
+    expect(
+      hasReadingIndicator({
+        runWorking: true,
+        showToolCalls: false,
+        toolMessages: [liveTool(false)],
+      }),
+    ).toBe(true);
+  });
+});
+
 describe("buildChatItems", () => {
   it("keeps consecutive user messages from different senders in separate groups", () => {
     const groups = messageGroups({

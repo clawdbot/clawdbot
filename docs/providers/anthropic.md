@@ -188,9 +188,9 @@ OpenClaw release:
 
 ## Claude sessions across computers
 
-The bundled Anthropic plugin adds a **Claude Sessions** page and a matching
-sidebar section. It discovers non-archived Claude Code sessions on the Gateway
-and on connected node hosts:
+The bundled Anthropic plugin adds a **Claude Code** group to the normal sessions
+sidebar. Rows open in the normal Chat pane. It discovers non-archived Claude
+Code sessions on the Gateway and on connected node hosts:
 
 - Claude CLI sessions come from valid project-index records and current JSONL
   files whose bounded metadata prefix identifies a non-sidechain `sdk-cli`
@@ -205,15 +205,25 @@ enabled by default; a native macOS node advertises the read-only Claude session
 commands when the local `~/.claude/projects/` directory exists. Approve the
 node pairing upgrade when those commands first appear.
 
-The sidebar shows the newest sessions from each host. Open **Claude
-Sessions** and use **Load more** on a host to browse the full catalog without
-turning each sidebar refresh into a full disk scan.
+The sidebar starts with the newest bounded page from each host and refreshes on
+the normal 30-second cadence. Use **Load more sessions** below a catalog group
+to append the next page for every host that has more history; appended rows stay
+visible and are re-fetched to the same depth across refreshes. Catalog clients
+use `sessions.catalog.list`; opening a row uses `sessions.catalog.read`.
 
 Selecting a row reads the newest transcript page first. **Load older transcript
 items** follows an opaque byte cursor and reads another bounded section from the
 JSONL file instead of loading the entire history. Normal user, assistant,
 reasoning, tool-call, and tool-result content is preserved. An individual item
 larger than the node/Gateway safety ceiling is clearly marked as truncated.
+
+For a Gateway-local `claude-cli` row, typing in the normal composer calls
+`sessions.catalog.continue`. OpenClaw re-resolves the local catalog record,
+creates or reuses a model-locked native session, imports at most 200 visible
+items or 512 KiB, and seeds the Claude CLI binding. The first turn resumes with
+`--fork-session`; Claude assigns the fork a new session ID, so later turns use
+the fork and the source session stays untouched. Claude Desktop and paired-node
+rows are view-only.
 
 <Note>
 Claude sessions on paired nodes are read-only. OpenClaw does not modify Claude

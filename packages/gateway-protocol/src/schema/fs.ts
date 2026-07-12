@@ -1,3 +1,4 @@
+import type { Static } from "typebox";
 import { Type } from "typebox";
 import { NonEmptyString } from "./primitives.js";
 
@@ -33,3 +34,9 @@ export const FsListDirResultSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+// Wire types derive directly from local schema consts so public d.ts graphs never
+// pull in the ProtocolSchemas registry.
+export type FsDirEntry = Static<typeof FsDirEntrySchema>;
+export type FsListDirParams = Static<typeof FsListDirParamsSchema>;
+export type FsListDirResult = Static<typeof FsListDirResultSchema>;

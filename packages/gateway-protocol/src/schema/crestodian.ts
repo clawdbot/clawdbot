@@ -1,4 +1,5 @@
 // Gateway Protocol schema module defines Crestodian chat payloads.
+import type { Static } from "typebox";
 import { Type } from "typebox";
 import { NonEmptyString } from "./primitives.js";
 import { WizardStartResultSchema } from "./wizard.js";
@@ -201,3 +202,16 @@ export const CrestodianSetupAuthStartParamsSchema = Type.Object(
 );
 
 export const CrestodianSetupAuthStartResultSchema = WizardStartResultSchema;
+
+// Wire types derive directly from local schema consts so public d.ts graphs never
+// pull in the ProtocolSchemas registry.
+export type CrestodianChatParams = Static<typeof CrestodianChatParamsSchema>;
+export type CrestodianChatResult = Static<typeof CrestodianChatResultSchema>;
+export type CrestodianSetupDetectParams = Static<typeof CrestodianSetupDetectParamsSchema>;
+export type CrestodianSetupDetectResult = Static<typeof CrestodianSetupDetectResultSchema>;
+export type CrestodianSetupActivateParams = Static<typeof CrestodianSetupActivateParamsSchema>;
+export type CrestodianSetupActivateResult = Static<typeof CrestodianSetupActivateResultSchema>;
+export type CrestodianSetupVerifyParams = Static<typeof CrestodianSetupVerifyParamsSchema>;
+export type CrestodianSetupVerifyResult = Static<typeof CrestodianSetupVerifyResultSchema>;
+export type CrestodianSetupAuthStartParams = Static<typeof CrestodianSetupAuthStartParamsSchema>;
+export type CrestodianSetupAuthStartResult = Static<typeof CrestodianSetupAuthStartResultSchema>;

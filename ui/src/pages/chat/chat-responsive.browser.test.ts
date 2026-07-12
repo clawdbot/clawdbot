@@ -404,11 +404,6 @@ function chatHtml(opts: ChatFixtureOptions = {}) {
                           </section>
                         </details>
                       </div>
-                      <div class="agent-chat__composer-progress">
-                        <span class="agent-chat__run-status agent-chat__run-status--in-progress">
-                          ${iconSvg()}<span class="agent-chat__run-status-label">In progress</span>
-                        </span>
-                      </div>
                       <span class="agent-chat__token-count">8</span>
                     </div>
                   </div>
@@ -1307,7 +1302,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             input: rectFor(".agent-chat__input"),
             thread: rectFor(".chat-thread"),
             footer: rectFor(".agent-chat__composer-footer"),
-            progress: rectFor(".agent-chat__composer-progress"),
             textarea: rectFor(".agent-chat__composer-combobox > textarea"),
             meta: rectFor(".agent-chat__composer-meta"),
             model: rectFor(".chat-composer-model-control"),
@@ -1323,7 +1317,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         const input = expectControlRect(controls.input, "composer");
         const thread = expectControlRect(controls.thread, "chat thread");
         const footer = expectControlRect(controls.footer, "composer footer");
-        const progress = expectControlRect(controls.progress, "composer progress");
         const textarea = expectControlRect(controls.textarea, "composer textarea");
         const meta = expectControlRect(controls.meta, "composer metadata");
         const model = expectControlRect(controls.model, "composer model control");
@@ -1332,17 +1325,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         const attach = expectControlRect(controls.attach, "composer attach control");
         const send = expectControlRect(controls.send, "composer send control");
 
-        for (const control of [
-          footer,
-          progress,
-          textarea,
-          meta,
-          model,
-          context,
-          settings,
-          attach,
-          send,
-        ]) {
+        for (const control of [footer, textarea, meta, model, context, settings, attach, send]) {
           expect(control.x).toBeGreaterThanOrEqual(input.x - 1);
           expect(control.x + control.width).toBeLessThanOrEqual(input.x + input.width + 1);
         }
@@ -1356,7 +1339,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         expect(settings.y + settings.height).toBeLessThanOrEqual(footer.y + footer.height + 1);
         expect(model.y).toBeGreaterThanOrEqual(textarea.y);
         expect(context.y).toBeGreaterThanOrEqual(textarea.y);
-        expect(progress.y).toBeGreaterThanOrEqual(textarea.y);
         expect(
           Math.abs(attach.y + attach.height / 2 - (send.y + send.height / 2)),
         ).toBeLessThanOrEqual(2);
@@ -1364,11 +1346,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         expect(model.x).toBeGreaterThanOrEqual(settings.x + settings.width - 1);
         expect(send.x).toBeGreaterThanOrEqual(textarea.x + textarea.width - 1);
         expect(send.x + send.width).toBeLessThanOrEqual(input.x + input.width + 1);
-        expect(progress.x).toBeGreaterThanOrEqual(context.x + context.width - 1);
-        expect(
-          Math.abs(progress.y + progress.height / 2 - (context.y + context.height / 2)),
-        ).toBeLessThanOrEqual(2);
-        expect(rectsOverlap(progress, context)).toBe(false);
         expect(rectsOverlap(model, settings)).toBe(false);
         expect(rectsOverlap(model, send)).toBe(false);
         expect(rectsOverlap(settings, send)).toBe(false);
@@ -1381,7 +1358,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           expect(model.width).toBeLessThanOrEqual(footer.width);
           expect(send.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
           expect(send.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
-          for (const control of [model, settings, context, progress]) {
+          for (const control of [model, settings, context]) {
             expect(
               Math.abs(control.y + control.height / 2 - (settings.y + settings.height / 2)),
             ).toBeLessThanOrEqual(2);

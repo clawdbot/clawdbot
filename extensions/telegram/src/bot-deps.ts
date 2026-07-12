@@ -29,7 +29,10 @@ import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { syncTelegramMenuCommands } from "./bot-native-command-menu.js";
 import { deliverReplies, emitInternalMessageSentHook } from "./bot/delivery.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
-import { resolveTelegramExecApproval } from "./exec-approval-resolver.js";
+import {
+  resolveTelegramApproval,
+  resolveTelegramLegacyApproval,
+} from "./exec-approval-resolver.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import { editMessageTelegram } from "./send.js";
 import { wasSentByBot } from "./sent-message-cache.js";
@@ -56,7 +59,8 @@ export type TelegramBotDeps = {
   listSkillCommandsForAgents: typeof listSkillCommandsForAgents;
   syncTelegramMenuCommands?: typeof syncTelegramMenuCommands;
   wasSentByBot: typeof wasSentByBot;
-  resolveExecApproval?: typeof resolveTelegramExecApproval;
+  resolveApproval?: typeof resolveTelegramApproval;
+  resolveLegacyApproval?: typeof resolveTelegramLegacyApproval;
   createTelegramDraftStream?: typeof createTelegramDraftStream;
   deliverReplies?: typeof deliverReplies;
   deliverInboundReplyWithMessageSendContext?: typeof deliverInboundReplyWithMessageSendContext;
@@ -130,8 +134,11 @@ export const defaultTelegramBotDeps: TelegramBotDeps = {
   get wasSentByBot() {
     return wasSentByBot;
   },
-  get resolveExecApproval() {
-    return resolveTelegramExecApproval;
+  get resolveApproval() {
+    return resolveTelegramApproval;
+  },
+  get resolveLegacyApproval() {
+    return resolveTelegramLegacyApproval;
   },
   get createTelegramDraftStream() {
     return createTelegramDraftStream;

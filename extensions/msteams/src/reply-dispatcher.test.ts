@@ -534,8 +534,8 @@ describe("createMSTeamsReplyDispatcher", () => {
     expect(lastStreamMock).toBeUndefined();
   });
 
-  it("sets disableBlockStreaming=false when blockStreaming=true", () => {
-    const dispatcher = createDispatcher("personal", { blockStreaming: true });
+  it("sets disableBlockStreaming=false when streaming.block.enabled=true", () => {
+    const dispatcher = createDispatcher("personal", { streaming: { block: { enabled: true } } });
 
     expect(dispatcher.replyOptions.disableBlockStreaming).toBe(false);
   });
@@ -558,35 +558,35 @@ describe("createMSTeamsReplyDispatcher", () => {
     expect(sendMSTeamsMessagesMock).toHaveBeenCalledTimes(1);
   });
 
-  it("sets disableBlockStreaming=true when blockStreaming=false", () => {
-    const dispatcher = createDispatcher("personal", { blockStreaming: false });
+  it("sets disableBlockStreaming=true when streaming.block.enabled=false", () => {
+    const dispatcher = createDispatcher("personal", { streaming: { block: { enabled: false } } });
 
     expect(dispatcher.replyOptions.disableBlockStreaming).toBe(true);
   });
 
-  it("leaves disableBlockStreaming undefined when blockStreaming is not set", () => {
+  it("leaves disableBlockStreaming undefined when streaming.block.enabled is not set", () => {
     const dispatcher = createDispatcher("personal", {});
 
     expect(dispatcher.replyOptions.disableBlockStreaming).toBeUndefined();
   });
 
-  it("flushes messages immediately on deliver when blockStreaming is enabled", async () => {
+  it("flushes messages immediately on deliver when block streaming is enabled", async () => {
     renderReplyPayloadsToMessagesMock.mockReturnValue([{ content: "hello" }] as never);
     sendMSTeamsMessagesMock.mockResolvedValue(["id-1"] as never);
 
-    createDispatcher("personal", { blockStreaming: true });
+    createDispatcher("personal", { streaming: { block: { enabled: true } } });
     const options = dispatcherOptions();
 
-    // Call deliver — with blockStreaming enabled it should flush immediately
+    // Call deliver — with block streaming enabled it should flush immediately
     await options.deliver({ text: "block content" });
 
     expect(sendMSTeamsMessagesMock).toHaveBeenCalledTimes(1);
   });
 
-  it("does not flush messages on deliver when blockStreaming is disabled", async () => {
+  it("does not flush messages on deliver when block streaming is disabled", async () => {
     renderReplyPayloadsToMessagesMock.mockReturnValue([{ content: "hello" }] as never);
 
-    createDispatcher("personal", { blockStreaming: false });
+    createDispatcher("personal", { streaming: { block: { enabled: false } } });
     const options = dispatcherOptions();
 
     await options.deliver({ text: "block content" });
@@ -607,7 +607,7 @@ describe("createMSTeamsReplyDispatcher", () => {
 
     const dispatcher = createDispatcher(
       "personal",
-      { blockStreaming: false },
+      { streaming: { block: { enabled: false } } },
       { onSentMessageIds },
     );
     const options = dispatcherOptions();
@@ -632,7 +632,7 @@ describe("createMSTeamsReplyDispatcher", () => {
     renderReplyPayloadsToMessagesMock.mockReturnValue([{ content: "hello" }] as never);
     sendMSTeamsMessagesMock.mockResolvedValue(["id-1"] as never);
 
-    const dispatcher = createDispatcher("personal", { blockStreaming: false });
+    const dispatcher = createDispatcher("personal", { streaming: { block: { enabled: false } } });
     const options = dispatcherOptions();
 
     await options.deliver({ text: "block content" });

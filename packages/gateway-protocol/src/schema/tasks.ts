@@ -1,4 +1,5 @@
 // Gateway Protocol schema module defines protocol validation shapes.
+import type { Static } from "typebox";
 import { Type } from "typebox";
 import { NonEmptyString } from "./primitives.js";
 
@@ -106,3 +107,13 @@ export const TasksCancelResultSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+// Wire types derive directly from local schema consts so public d.ts graphs never
+// pull in the ProtocolSchemas registry.
+export type TaskSummary = Static<typeof TaskSummarySchema>;
+export type TasksListParams = Static<typeof TasksListParamsSchema>;
+export type TasksListResult = Static<typeof TasksListResultSchema>;
+export type TasksGetParams = Static<typeof TasksGetParamsSchema>;
+export type TasksGetResult = Static<typeof TasksGetResultSchema>;
+export type TasksCancelParams = Static<typeof TasksCancelParamsSchema>;
+export type TasksCancelResult = Static<typeof TasksCancelResultSchema>;

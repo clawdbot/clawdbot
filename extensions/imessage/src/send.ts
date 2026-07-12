@@ -68,6 +68,7 @@ type IMessageSendOpts = {
   client?: IMessageRpcClient;
   config: OpenClawConfig;
   account?: ResolvedIMessageAccount;
+  approvalKind?: "exec" | "plugin";
   resolveAttachmentImpl?: (
     mediaUrl: string,
     maxBytes: number,
@@ -922,7 +923,8 @@ export async function sendMessageIMessage(
       : typeof account.config.mediaMaxMb === "number"
         ? account.config.mediaMaxMb * 1024 * 1024
         : 16 * 1024 * 1024;
-  let message = text ? appendIMessageApprovalReactionHintForOutboundMessage(text) : "";
+  let message =
+    text && opts.approvalKind ? appendIMessageApprovalReactionHintForOutboundMessage(text) : text;
   let filePath: string | undefined;
   let mediaContentType: string | undefined;
 
@@ -1174,7 +1176,7 @@ export async function sendMessageIMessage(
         isFromMe: true,
       });
     }
-    if (message && approvalBindingMessageId) {
+    if (message && approvalBindingMessageId && opts.approvalKind) {
       const handleForKey =
         target.kind === "handle" ? normalizeIMessageHandle(target.to) : undefined;
       const conversation: IMessageApprovalConversationKey = {
@@ -1188,6 +1190,7 @@ export async function sendMessageIMessage(
         conversation,
         messageId: approvalBindingMessageId,
         text: message,
+        approvalKind: opts.approvalKind,
       });
     }
     return {

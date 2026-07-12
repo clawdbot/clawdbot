@@ -1,7 +1,12 @@
 import { html, nothing, type TemplateResult } from "lit";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
-import type { GatewayBrowserClient, GatewayHelloOk } from "../../../api/gateway.ts";
+import {
+  GatewayRequestError,
+  type GatewayBrowserClient,
+  type GatewayHelloOk,
+} from "../../../api/gateway.ts";
 import type { ArtifactDownloadResult, SessionWorkspaceListResult } from "../../../api/types.ts";
+import { hasOperatorAdminAccess } from "../../../app/operator-access.ts";
 import {
   normalizeChatWorkspaceDock,
   patchSettings,
@@ -24,7 +29,7 @@ import {
   normalizeAgentId,
 } from "../../../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../../../lib/string-coerce.ts";
-import type { SidebarContent } from "./chat-sidebar.ts";
+import { hasUniformLineEndings, type SidebarContent } from "./chat-sidebar.ts";
 
 export type SessionWorkspaceProps = {
   collapsed: boolean;
@@ -389,12 +394,13 @@ function openFile(
   path: string,
   opts: { line?: number | null; requestPath?: string } = {},
 ) {
+  const requestPath = opts.requestPath ?? path;
   openWorkspaceItem(
     state,
     workspace,
     `file:${path}`,
     (request) =>
-      state.sessions.getFile(request.sessionKey, opts.requestPath ?? path, {
+      state.sessions.getFile(request.sessionKey, requestPath, {
         agentId: request.agentId,
       }),
     (result) => {
@@ -410,6 +416,79 @@ function openFile(
           rawText: file.content,
         };
       }
+      const canEdit =
+        typeof file.hash === "string" &&
+        hasUniformLineEndings(file.content) &&
+        isGatewayMethodAdvertised(state, "sessions.files.set") !== false &&
+        hasOperatorAdminAccess(state.hello?.auth ?? null);
+      const edit = canEdit
+        ? {
+            hash: file.hash!,
+            save: async ({ content, expectedHash }: { content: string; expectedHash: string }) => {
+              try {
+                const saved = await state.sessions.setFile(
+                  result.sessionKey,
+                  requestPath,
+                  content,
+                  {
+                    agentId: workspace.agentId,
+                    expectedHash,
+                  },
+                );
+                const hash = saved?.file.hash;
+                const updatedAtMs = saved?.file.updatedAtMs;
+                return typeof hash === "string"
+                  ? {
+                      ok: true as const,
+                      hash,
+                      ...(typeof updatedAtMs === "number" ? { updatedAtMs } : {}),
+                    }
+                  : { ok: false as const, code: "error" as const, message: "Save failed." };
+              } catch (error) {
+                const details =
+                  error instanceof GatewayRequestError &&
+                  error.details &&
+                  typeof error.details === "object"
+                    ? (error.details as { type?: unknown; currentHash?: unknown })
+                    : null;
+                if (details?.type === "session_file_conflict") {
+                  return {
+                    ok: false as const,
+                    code: "conflict" as const,
+                    ...(typeof details.currentHash === "string"
+                      ? { currentHash: details.currentHash }
+                      : {}),
+                  };
+                }
+                return {
+                  ok: false as const,
+                  code: "error" as const,
+                  message: error instanceof Error ? error.message : String(error),
+                };
+              }
+            },
+            fetchLatest: async () => {
+              const latest = await state.sessions.getFile(result.sessionKey, requestPath, {
+                agentId: workspace.agentId,
+              });
+              const latestFile = latest?.file;
+              if (
+                !latestFile ||
+                typeof latestFile.content !== "string" ||
+                typeof latestFile.hash !== "string"
+              ) {
+                return null;
+              }
+              return {
+                content: latestFile.content,
+                hash: latestFile.hash,
+                // Reloaded content re-passes the uniform-endings gate so a
+                // conflict reload cannot smuggle mixed endings into edit mode.
+                editable: hasUniformLineEndings(latestFile.content),
+              };
+            },
+          }
+        : undefined;
       return {
         kind: "file",
         path: file.workspacePath || file.path || path,
@@ -419,6 +498,7 @@ function openFile(
         language: languageForFile(name),
         line: opts.line ?? null,
         rawText: file.content,
+        ...(edit ? { edit } : {}),
       };
     },
     `Failed to load ${path}`,

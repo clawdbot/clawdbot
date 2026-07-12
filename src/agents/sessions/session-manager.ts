@@ -51,6 +51,7 @@ import {
   publishOwnedSessionFileSnapshot,
 } from "../../config/sessions/transcript-write-context.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ImageContent, Message, TextContent } from "../../llm/types.js";
 import { logWarn } from "../../logger.js";
 import { getAgentDir as getDefaultAgentDir, getSessionsDir } from "../config.js";
@@ -216,6 +217,8 @@ export type SessionEntry =
 export type FileEntry = SessionHeader | SessionEntry;
 
 type AppendPersistenceOptions = {
+  config?: OpenClawConfig;
+  idempotencyLookup?: "scan" | "scan-assistant" | "caller-checked";
   invalidateSerializedPrefixCache?: boolean;
 };
 
@@ -2245,7 +2248,7 @@ export class SessionManager {
     publishSnapshot = true,
   ): void {
     if (this.sqlitePersistence) {
-      this.persistSqliteRecord(entry);
+      this.persistSqliteRecord(entry, options);
       return;
     }
     if (!this.shouldPersist || !this.sessionFile) {
@@ -2319,7 +2322,7 @@ export class SessionManager {
     this.persistRecord(entry, options);
   }
 
-  private persistSqliteRecord(entry: unknown): void {
+  private persistSqliteRecord(entry: unknown, options?: AppendPersistenceOptions): void {
     if (!isIndexedSessionEntry(entry)) {
       return;
     }
@@ -2337,13 +2340,21 @@ export class SessionManager {
       appendTranscriptEventSync(scope, entry);
       return;
     }
-    appendTranscriptMessageSync(scope, {
+    const result = appendTranscriptMessageSync(scope, {
       cwd: this.cwd,
       eventId: entry.id,
+      ...(options?.config ? { config: options.config } : {}),
+      ...(options?.idempotencyLookup ? { idempotencyLookup: options.idempotencyLookup } : {}),
       message: entry.message,
       now: Date.parse(entry.timestamp),
       parentId: entry.parentId,
     });
+    if (
+      options?.idempotencyLookup === "caller-checked" &&
+      (!result?.appended || result.messageId !== entry.id)
+    ) {
+      throw new Error(`Session transcript append was not persisted: ${entry.id}`);
+    }
   }
 
   /**

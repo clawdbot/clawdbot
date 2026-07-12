@@ -129,10 +129,6 @@ export function getMatrixExecApprovalApprovers(params: {
   });
 }
 
-function resolveMatrixApprovalKind(request: ApprovalRequest): ApprovalKind {
-  return request.id.startsWith("plugin:") ? "plugin" : "exec";
-}
-
 export function getMatrixApprovalApprovers(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -213,13 +209,16 @@ export function isMatrixAnyApprovalClientEnabled(params: {
 export function shouldHandleMatrixApprovalRequest(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
+  approvalKind: ApprovalKind;
   request: ApprovalRequest;
 }): boolean {
-  const approvalKind = resolveMatrixApprovalKind(params.request);
+  if (params.approvalKind !== "exec" && params.approvalKind !== "plugin") {
+    return false;
+  }
   if (
     !matchesMatrixRequestAccount({
       ...params,
-      approvalKind,
+      approvalKind: params.approvalKind,
     })
   ) {
     return false;
@@ -230,7 +229,7 @@ export function shouldHandleMatrixApprovalRequest(params: {
       enabled: config?.enabled,
       approverCount: getMatrixApprovalApprovers({
         ...params,
-        approvalKind,
+        approvalKind: params.approvalKind,
       }).length,
     })
   ) {
@@ -289,6 +288,7 @@ export function shouldSuppressLocalMatrixExecApprovalPrompt(params: {
   return shouldHandleMatrixApprovalRequest({
     cfg: params.cfg,
     accountId: params.accountId,
+    approvalKind: metadata.approvalKind,
     request,
   });
 }

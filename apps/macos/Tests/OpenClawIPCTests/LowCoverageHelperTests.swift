@@ -54,8 +54,14 @@ struct LowCoverageHelperTests {
     }
 
     @Test func `shell executor times out`() async {
-        let result = await ShellExecutor.runDetailed(command: ["/bin/sleep", "1"], cwd: nil, env: nil, timeout: 0.05)
-        #expect(result.timedOut == true)
+        for _ in 0..<10 {
+            let result = await ShellExecutor.runDetailed(
+                command: ["/bin/sleep", "1"],
+                cwd: nil,
+                env: nil,
+                timeout: 0.01)
+            #expect(result.timedOut == true)
+        }
     }
 
     @Test func `shell executor drains stdout and stderr`() async {
@@ -75,6 +81,19 @@ struct LowCoverageHelperTests {
         #expect(result.success == true)
         #expect(result.stdout.contains("stdout-1999"))
         #expect(result.stderr.contains("stderr-1999"))
+    }
+
+    @Test func `shell executor finishes when a descendant retains output handles`() async {
+        let startedAt = ContinuousClock.now
+        let result = await ShellExecutor.runDetailed(
+            command: ["/bin/sh", "-c", "sleep 5 & echo ready"],
+            cwd: nil,
+            env: nil,
+            timeout: 1)
+
+        #expect(result.success == true)
+        #expect(result.stdout.contains("ready"))
+        #expect(ContinuousClock.now - startedAt < .seconds(2))
     }
 
     @Test func `node info codable round trip`() throws {

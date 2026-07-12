@@ -5,7 +5,10 @@ import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runti
 import type { NativeCommandSpec } from "openclaw/plugin-sdk/command-auth-native";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { isDiscordExecApprovalClientEnabled } from "../exec-approvals.js";
+import {
+  getDiscordExecApprovalApprovers,
+  isDiscordExecApprovalClientEnabled,
+} from "../exec-approvals.js";
 import type { BaseCommand, BaseMessageInteractiveComponent, Modal } from "../internal/discord.js";
 import { createDiscordVoiceCommand } from "../voice/command.js";
 import {
@@ -85,6 +88,12 @@ export function createDiscordProviderInteractionSurface(params: {
     accountId: params.accountId,
     configOverride: execApprovalsConfig,
   });
+  const approvalActionsEnabled =
+    getDiscordExecApprovalApprovers({
+      cfg: params.cfg,
+      accountId: params.accountId,
+      configOverride: execApprovalsConfig,
+    }).length > 0;
   if (execApprovalsEnabled) {
     registerChannelRuntimeContext({
       channelRuntime: params.channelRuntime,
@@ -124,7 +133,7 @@ export function createDiscordProviderInteractionSurface(params: {
   ];
   const modals: Modal[] = [];
 
-  if (execApprovalsEnabled) {
+  if (approvalActionsEnabled) {
     components.push(
       createExecApprovalButton(
         createDiscordExecApprovalButtonContext({

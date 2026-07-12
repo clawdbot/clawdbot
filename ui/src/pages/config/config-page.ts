@@ -816,7 +816,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     const agentsDefaults = asConfigRecord(asConfigRecord(configObject.agents)?.defaults);
     const model = typeof agentsDefaults?.model === "string" ? agentsDefaults.model : "default";
     const thinkingLevel =
-      typeof agentsDefaults?.thinkingLevel === "string" ? agentsDefaults.thinkingLevel : "off";
+      typeof agentsDefaults?.thinkingDefault === "string" ? agentsDefaults.thinkingDefault : "off";
     const fastMode = agentsDefaults?.fastMode;
     const appConfig = this.context.config.current;
     return renderQuickSettings({
@@ -879,7 +879,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       onSaveConfig: () => void runtimeConfig.save(),
       onApplyConfig: () => void runtimeConfig.apply(),
       onThinkingChange: (level) =>
-        runtimeConfig.patchForm(["agents", "defaults", "thinkingLevel"], level),
+        runtimeConfig.patchForm(["agents", "defaults", "thinkingDefault"], level),
       onFastModeChange: (mode: FastMode) =>
         runtimeConfig.patchForm(["agents", "defaults", "fastMode"], mode),
       onChannelConfigure: () => this.navigate("communications"),

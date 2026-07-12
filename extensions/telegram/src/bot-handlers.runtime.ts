@@ -60,6 +60,16 @@ import { expandTelegramAllowFromWithAccessGroups } from "./access-groups.js";
 import { resolveTelegramAccount, resolveTelegramMediaRuntimeOptions } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
+  hasTelegramApprovalCallbackPrefix,
+  parseTelegramApprovalCallbackData,
+  type TelegramApprovalCallback,
+} from "./approval-callback-data.js";
+import {
+  buildTelegramCanonicalApprovalTerminalText,
+  buildTelegramInvalidApprovalTerminalText,
+  buildTelegramLegacyApprovalTerminalText,
+} from "./approval-terminal.js";
+import {
   normalizeDmAllowFromWithStore,
   firstDefined,
   isSenderAllowed,
@@ -136,11 +146,13 @@ import {
   resolveTelegramConversationRoute,
 } from "./conversation-route.js";
 import { enforceTelegramDmAccess, isTelegramDmAccessAllowed } from "./dm-access.js";
-import { resolveTelegramExecApproval } from "./exec-approval-resolver.js";
+import {
+  resolveTelegramApproval,
+  resolveTelegramLegacyApproval,
+} from "./exec-approval-resolver.js";
 import {
   isTelegramExecApprovalApprover,
   isTelegramExecApprovalAuthorizedSender,
-  shouldEnableTelegramExecApprovalButtons,
 } from "./exec-approvals.js";
 import { isTelegramForumServiceMessage } from "./forum-service-message.js";
 import {
@@ -216,10 +228,30 @@ function hasLegacyPromptContextTimestamp(
   );
 }
 
-function resolvePromptContextTextDedupeKey(message: {
+type TelegramPromptContextMessageForDedupe = {
   body?: unknown;
   timestamp_ms?: unknown;
-}): string | undefined {
+};
+
+function isApprovalAlreadyResolvedError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const record = error as {
+    gatewayCode?: unknown;
+    details?: { reason?: unknown } | null;
+  };
+  const reason = record.details?.reason;
+  return (
+    record.gatewayCode === "APPROVAL_ALREADY_RESOLVED" ||
+    (record.gatewayCode === "INVALID_REQUEST" && reason === "APPROVAL_ALREADY_RESOLVED") ||
+    /approval already resolved/i.test(error.message)
+  );
+}
+
+function resolvePromptContextTextDedupeKey(
+  message: TelegramPromptContextMessageForDedupe,
+): string | undefined {
   if (typeof message.body !== "string") {
     return undefined;
   }
@@ -2875,23 +2907,20 @@ export const registerTelegramHandlers = ({
       const callbackCommandText =
         nativeCallbackCommand ?? (opaqueCallbackData ? "" : genericCallbackText);
       const pluginCallbackData = opaqueCallbackData ?? data;
-      const approvalCallback = parseExecApprovalCommandText(
+      const hasReservedApprovalPrefix = hasTelegramApprovalCallbackPrefix(data);
+      const typedApprovalCallback = parseTelegramApprovalCallbackData(data);
+      const legacyApprovalCallback = parseExecApprovalCommandText(
         nativeCallbackCommand ?? (opaqueCallbackData ? "" : data),
       );
-      const isApprovalCallback = approvalCallback !== null;
+      const isApprovalCallback = hasReservedApprovalPrefix || legacyApprovalCallback !== null;
       const authorizationCfg = telegramDeps.getRuntimeConfig();
       const inlineButtonsScope = resolveTelegramInlineButtonsScope({
         cfg: authorizationCfg,
         accountId,
       });
-      const execApprovalButtonsEnabled =
-        isApprovalCallback &&
-        shouldEnableTelegramExecApprovalButtons({
-          cfg: authorizationCfg,
-          accountId,
-          to: String(chatId),
-        });
-      if (!execApprovalButtonsEnabled) {
+      // Approval callbacks have their own kind-aware authorization below. Keep old
+      // buttons usable after presentation capability changes without weakening auth.
+      if (!isApprovalCallback) {
         if (inlineButtonsScope === "off") {
           return;
         }
@@ -2931,7 +2960,7 @@ export const registerTelegramHandlers = ({
         return;
       }
       const authorizationMode: TelegramEventAuthorizationMode =
-        !isGroup || (!execApprovalButtonsEnabled && inlineButtonsScope === "allowlist")
+        !isGroup || (!isApprovalCallback && inlineButtonsScope === "allowlist")
           ? "callback-allowlist"
           : "callback-scope";
       const senderAuthorization = await authorizeTelegramEventSender({
@@ -2950,6 +2979,231 @@ export const registerTelegramHandlers = ({
       const callbackThreadId = resolvedThreadId ?? dmThreadId;
       const callbackConversationId =
         callbackThreadId != null ? `${chatId}:topic:${callbackThreadId}` : String(chatId);
+      const runtimeCfg = telegramDeps.getRuntimeConfig();
+      const resolveApprovalAuthorizations = () => {
+        const pluginApprovalAuthorizedSender = isTelegramExecApprovalApprover({
+          cfg: runtimeCfg,
+          accountId,
+          senderId,
+        });
+        const execApprovalAuthorizedSender = isTelegramExecApprovalAuthorizedSender({
+          cfg: runtimeCfg,
+          accountId,
+          senderId,
+        });
+        return { execApprovalAuthorizedSender, pluginApprovalAuthorizedSender };
+      };
+      const clearTerminalApprovalButtons = async () => {
+        try {
+          // First-answer-wins returns applied:false to losing surfaces. Their controls
+          // are stale too, so cleanup follows canonical terminal truth, not local authorship.
+          await clearCallbackButtons();
+        } catch (editErr) {
+          const errStr = String(editErr);
+          if (
+            errStr.includes("message is not modified") ||
+            errStr.includes("there is no text in the message to edit")
+          ) {
+            return;
+          }
+          logVerbose(`telegram: failed to clear approval callback buttons: ${errStr}`);
+        }
+      };
+      const terminalizeApprovalMessage = async (text: string) => {
+        try {
+          await editCallbackMessage(text, {
+            reply_markup: { inline_keyboard: [] },
+          });
+          return;
+        } catch (editErr) {
+          const errStr = String(editErr);
+          const alreadyTerminal = errStr.includes("message is not modified");
+          if (!alreadyTerminal) {
+            logVerbose(`telegram: failed to render terminal approval receipt: ${errStr}`);
+          }
+          // Preserve the terminal state even when Telegram no longer permits a text edit.
+          await clearTerminalApprovalButtons();
+          if (alreadyTerminal) {
+            return;
+          }
+        }
+        try {
+          await replyToCallbackChat(text);
+        } catch (sendErr) {
+          logVerbose(`telegram: failed to send terminal approval receipt: ${String(sendErr)}`);
+        }
+      };
+      const resolveCanonicalApproval = async (approvalCallback: TelegramApprovalCallback) =>
+        await (telegramDeps.resolveApproval ?? resolveTelegramApproval)({
+          cfg: runtimeCfg,
+          approvalId: approvalCallback.approvalId,
+          approvalKind: approvalCallback.approvalKind,
+          decision: approvalCallback.decision,
+          senderId,
+        });
+      const terminalizeCanonicalApproval = async (
+        approvalCallback: TelegramApprovalCallback,
+        result: Awaited<ReturnType<typeof resolveCanonicalApproval>>,
+      ) =>
+        await terminalizeApprovalMessage(
+          buildTelegramCanonicalApprovalTerminalText({
+            result,
+            fallbackApprovalId: approvalCallback.approvalId,
+          }),
+        );
+      const handleApprovalCallback = async (approvalCallback: TelegramApprovalCallback) => {
+        const { execApprovalAuthorizedSender, pluginApprovalAuthorizedSender } =
+          resolveApprovalAuthorizations();
+        const authorizedApprovalSender =
+          approvalCallback.approvalKind === "plugin"
+            ? pluginApprovalAuthorizedSender
+            : execApprovalAuthorizedSender || pluginApprovalAuthorizedSender;
+        if (!authorizedApprovalSender) {
+          logVerbose(
+            `Blocked telegram approval callback from ${senderId || "unknown"} (not authorized)`,
+          );
+          return;
+        }
+        try {
+          const result = await resolveCanonicalApproval(approvalCallback);
+          if (!result.applied) {
+            logVerbose(
+              `telegram: approval callback already resolved ${approvalCallback.approvalId} ` +
+                `status=${result.approval.status}`,
+            );
+          }
+          await terminalizeCanonicalApproval(approvalCallback, result);
+        } catch (resolveErr) {
+          const errStr = String(resolveErr);
+          logVerbose(
+            `telegram: failed to resolve approval callback ${approvalCallback.approvalId}: ${errStr}`,
+          );
+          if (isApprovalNotFoundError(resolveErr) || isApprovalAlreadyResolvedError(resolveErr)) {
+            await terminalizeApprovalMessage(
+              buildTelegramLegacyApprovalTerminalText({
+                approvalId: approvalCallback.approvalId,
+                outcome: "no-longer-pending",
+              }),
+            );
+            return;
+          }
+          throw new TelegramRetryableCallbackError(resolveErr);
+        }
+      };
+      const handleLegacyApprovalCallback = async (
+        approvalCallback: NonNullable<typeof legacyApprovalCallback>,
+      ) => {
+        const { execApprovalAuthorizedSender, pluginApprovalAuthorizedSender } =
+          resolveApprovalAuthorizations();
+        const approvalKinds: Array<"exec" | "plugin"> = [];
+        if (execApprovalAuthorizedSender || pluginApprovalAuthorizedSender) {
+          approvalKinds.push("exec");
+        }
+        if (pluginApprovalAuthorizedSender) {
+          approvalKinds.push("plugin");
+        }
+        if (approvalKinds.length === 0) {
+          logVerbose(
+            `Blocked telegram approval callback from ${senderId || "unknown"} (not authorized)`,
+          );
+          return;
+        }
+
+        const resolveLegacy = telegramDeps.resolveLegacyApproval ?? resolveTelegramLegacyApproval;
+        for (const approvalKind of approvalKinds) {
+          const canonicalCallback: TelegramApprovalCallback = {
+            type: "approval",
+            approvalId: approvalCallback.approvalId,
+            approvalKind,
+            decision: approvalCallback.decision,
+          };
+          try {
+            // Legacy command/value callbacks never carried an owner. Probe only adapters
+            // this sender may use, in fixed order independent of approval id spelling.
+            await resolveLegacy({
+              cfg: runtimeCfg,
+              approvalId: approvalCallback.approvalId,
+              approvalKind,
+              decision: approvalCallback.decision,
+              senderId,
+            });
+            await terminalizeApprovalMessage(
+              buildTelegramLegacyApprovalTerminalText({
+                approvalId: approvalCallback.approvalId,
+                decision: approvalCallback.decision,
+                outcome: "resolved-here",
+              }),
+            );
+            return;
+          } catch (resolveErr) {
+            if (isApprovalNotFoundError(resolveErr)) {
+              // Legacy callbacks have no owner kind. The kind-specific adapters are the
+              // lookup: canonical resolve is mutating and must never receive a guessed kind.
+              continue;
+            }
+            if (isApprovalAlreadyResolvedError(resolveErr)) {
+              try {
+                const result = await resolveCanonicalApproval(canonicalCallback);
+                await terminalizeCanonicalApproval(canonicalCallback, result);
+              } catch (canonicalError) {
+                if (
+                  !isApprovalNotFoundError(canonicalError) &&
+                  !isApprovalAlreadyResolvedError(canonicalError)
+                ) {
+                  throw new TelegramRetryableCallbackError(canonicalError);
+                }
+                logVerbose(
+                  `telegram: canonical approval lookup failed after stale legacy callback ` +
+                    `${approvalCallback.approvalId}: ${String(canonicalError)}`,
+                );
+                await terminalizeApprovalMessage(
+                  buildTelegramLegacyApprovalTerminalText({
+                    approvalId: approvalCallback.approvalId,
+                    outcome: "no-longer-pending",
+                  }),
+                );
+              }
+              return;
+            }
+            logVerbose(
+              `telegram: failed to resolve approval callback ${approvalCallback.approvalId}: ${String(resolveErr)}`,
+            );
+            throw new TelegramRetryableCallbackError(resolveErr);
+          }
+        }
+
+        logVerbose(`telegram: approval callback not found ${approvalCallback.approvalId}`);
+        if (!pluginApprovalAuthorizedSender) {
+          // Legacy callbacks carry no owner kind. An exec-only reviewer cannot
+          // clear controls that may still belong to a plugin approval.
+          return;
+        }
+        await terminalizeApprovalMessage(
+          buildTelegramLegacyApprovalTerminalText({
+            approvalId: approvalCallback.approvalId,
+            outcome: pluginApprovalAuthorizedSender ? "no-longer-pending" : "not-actionable",
+          }),
+        );
+      };
+
+      if (typedApprovalCallback) {
+        await handleApprovalCallback(typedApprovalCallback);
+        return;
+      }
+      if (hasReservedApprovalPrefix) {
+        const { execApprovalAuthorizedSender, pluginApprovalAuthorizedSender } =
+          resolveApprovalAuthorizations();
+        if (!execApprovalAuthorizedSender && !pluginApprovalAuthorizedSender) {
+          logVerbose(
+            `Blocked malformed telegram approval callback from ${senderId || "unknown"} (not authorized)`,
+          );
+          return;
+        }
+        logVerbose(`telegram: consumed malformed reserved approval callback from ${senderId}`);
+        await terminalizeApprovalMessage(buildTelegramInvalidApprovalTerminalText());
+        return;
+      }
+
       const pluginBindingApproval = parsePluginBindingApprovalCustomId(data);
       if (pluginBindingApproval) {
         let resolved: Awaited<ReturnType<typeof resolvePluginConversationBindingApproval>>;
@@ -2966,7 +3220,6 @@ export const registerTelegramHandlers = ({
         await replyToCallbackChat(buildPluginBindingResolvedText(resolved));
         return;
       }
-      const runtimeCfg = eventAuthContext.cfg;
       const pluginCallback = await dispatchTelegramPluginInteractiveHandler({
         data: pluginCallbackData,
         callbackId: callback.id,
@@ -3130,68 +3383,8 @@ export const registerTelegramHandlers = ({
         return;
       }
 
-      if (approvalCallback) {
-        const isPluginApproval = approvalCallback.approvalId.startsWith("plugin:");
-        const pluginApprovalAuthorizedSender = isTelegramExecApprovalApprover({
-          cfg: runtimeCfg,
-          accountId,
-          senderId,
-        });
-        const execApprovalAuthorizedSender = isTelegramExecApprovalAuthorizedSender({
-          cfg: runtimeCfg,
-          accountId,
-          senderId,
-        });
-        const authorizedApprovalSender = isPluginApproval
-          ? pluginApprovalAuthorizedSender
-          : execApprovalAuthorizedSender || pluginApprovalAuthorizedSender;
-        if (!authorizedApprovalSender) {
-          logVerbose(
-            `Blocked telegram approval callback from ${senderId || "unknown"} (not authorized)`,
-          );
-          return;
-        }
-        try {
-          // Resolve approval callbacks directly so Telegram approvers are not forced through
-          // the generic chat-command authorization path.
-          await (telegramDeps.resolveExecApproval ?? resolveTelegramExecApproval)({
-            cfg: runtimeCfg,
-            approvalId: approvalCallback.approvalId,
-            decision: approvalCallback.decision,
-            senderId,
-            allowPluginFallback: pluginApprovalAuthorizedSender,
-          });
-        } catch (resolveErr) {
-          const errStr = String(resolveErr);
-          logVerbose(
-            `telegram: failed to resolve approval callback ${approvalCallback.approvalId}: ${errStr}`,
-          );
-          if (isApprovalNotFoundError(resolveErr)) {
-            if (isPluginApproval || pluginApprovalAuthorizedSender) {
-              try {
-                await clearCallbackButtons();
-              } catch (editErr) {
-                logVerbose(
-                  `telegram: failed to clear expired approval callback buttons: ${String(editErr)}`,
-                );
-              }
-            }
-            return;
-          }
-          throw new TelegramRetryableCallbackError(resolveErr);
-        }
-        try {
-          await clearCallbackButtons();
-        } catch (editErr) {
-          const errStr = String(editErr);
-          if (
-            errStr.includes("message is not modified") ||
-            errStr.includes("there is no text in the message to edit")
-          ) {
-            return;
-          }
-          logVerbose(`telegram: failed to clear approval callback buttons: ${errStr}`);
-        }
+      if (legacyApprovalCallback) {
+        await handleLegacyApprovalCallback(legacyApprovalCallback);
         return;
       }
 

@@ -9,11 +9,9 @@ import {
   validatePluginApprovalResolveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
+import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "../../infra/plugin-approval-canonical-decisions.js";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
-import {
-  resolvePluginApprovalRequestAllowedDecisions,
-  resolvePluginApprovalTimeoutMs,
-} from "../../infra/plugin-approvals.js";
+import { resolvePluginApprovalTimeoutMs } from "../../infra/plugin-approvals.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import {
   bindApprovalRequesterMetadata,
@@ -84,7 +82,7 @@ export function createPluginApprovalHandlers(
         toolCallId: p.toolCallId ?? null,
         ...(Array.isArray(p.allowedDecisions)
           ? {
-              allowedDecisions: resolvePluginApprovalRequestAllowedDecisions({
+              allowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions({
                 allowedDecisions: p.allowedDecisions,
               }),
             }
@@ -177,12 +175,14 @@ export function createPluginApprovalHandlers(
         client,
         exposeAmbiguousPrefixError: false,
         validateDecision: (snapshot) =>
-          resolvePluginApprovalRequestAllowedDecisions(snapshot.request).includes(decision)
+          resolveCanonicalPluginApprovalRequestAllowedDecisions(snapshot.request).includes(decision)
             ? null
             : {
                 message: `${decision} is unavailable for this plugin approval`,
                 details: {
-                  allowedDecisions: resolvePluginApprovalRequestAllowedDecisions(snapshot.request),
+                  allowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions(
+                    snapshot.request,
+                  ),
                 },
               },
         resolvedEventName: "plugin.approval.resolved",

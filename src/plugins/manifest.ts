@@ -2016,6 +2016,10 @@ export type OpenClawPackageCompat = {
   pluginApi?: string;
 };
 
+export type OpenClawPackageBuild = {
+  bundledDist?: boolean;
+};
+
 export type OpenClawPackageManifest = {
   extensions?: string[];
   runtimeExtensions?: string[];
@@ -2030,6 +2034,7 @@ export type OpenClawPackageManifest = {
   compat?: OpenClawPackageCompat;
   install?: PluginPackageInstall;
   startup?: OpenClawPackageStartup;
+  build?: OpenClawPackageBuild;
 };
 
 export const DEFAULT_PLUGIN_ENTRY_CANDIDATES = [

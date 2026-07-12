@@ -63,7 +63,10 @@ export type WorkerEnvironmentTransitionPatch = {
   lastError?: string | null;
   credential?: CredentialInput;
 };
-type WorkerDb = Pick<StateDatabase, "worker_environment_credentials" | "worker_environments">;
+type WorkerDb = Pick<
+  StateDatabase,
+  "worker_environment_credentials" | "worker_environments" | "worker_transcript_commit_heads"
+>;
 type Row = Selectable<WorkerEnvironments>;
 type RowUpdate = Updateable<WorkerEnvironments>;
 type CredentialRow = Selectable<WorkerEnvironmentCredentials>;
@@ -284,6 +287,25 @@ function nextOwnerEpoch(ownerEpoch: number): number {
     throw new Error("Worker environment owner epoch is exhausted");
   }
   return next;
+}
+function nextGlobalOwnerEpoch(db: DatabaseSync): number {
+  // Transcript commit identity is (session, epoch, seq), so an ownership
+  // generation may never be reused when a session moves between environments.
+  const latestEnvironment = executeSqliteQueryTakeFirstSync(
+    db,
+    query(db)
+      .selectFrom("worker_environments")
+      .select(({ fn }) => fn.max<number>("owner_epoch").as("owner_epoch")),
+  );
+  const latestTranscriptCommit = executeSqliteQueryTakeFirstSync(
+    db,
+    query(db)
+      .selectFrom("worker_transcript_commit_heads")
+      .select(({ fn }) => fn.max<number>("run_epoch").as("run_epoch")),
+  );
+  return nextOwnerEpoch(
+    Math.max(latestEnvironment?.owner_epoch ?? 0, latestTranscriptCommit?.run_epoch ?? 0),
+  );
 }
 function fromRow(row: Row): WorkerEnvironmentRecord {
   const record = {
@@ -684,11 +706,9 @@ export function createWorkerEnvironmentStore(
             to === "orphaned");
         const ownerEpoch = acceptsBootstrapReceipt
           ? Math.max(1, current.ownerEpoch)
-          : acceptsAttachedCredential
-            ? nextOwnerEpoch(current.ownerEpoch)
-            : ownerEndingTransition
-              ? nextOwnerEpoch(current.ownerEpoch)
-              : current.ownerEpoch;
+          : acceptsAttachedCredential || ownerEndingTransition
+            ? nextGlobalOwnerEpoch(db)
+            : current.ownerEpoch;
         const record = update(db, environmentId, from, {
           lease_id: leaseId,
           ssh_host: sshEndpoint?.host ?? null,

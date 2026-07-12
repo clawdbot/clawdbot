@@ -4,6 +4,7 @@ import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import { loadPluginManifestRegistry, type PluginManifestRegistry } from "./manifest-registry.js";
 import {
   resolveDirectBundledProviderPolicySurface,
+  resolveTrustedExternalProviderPolicySurface,
   type BundledProviderPolicySurface,
 } from "./provider-policy-surface.js";
 
@@ -77,4 +78,37 @@ export function resolveBundledProviderPolicySurface(
     return null;
   }
   return resolveDirectBundledProviderPolicySurface(ownerPluginId);
+}
+
+/** Resolves provider policy hooks from bundled or trusted official plugin artifacts. */
+export function resolveProviderPolicySurface(
+  providerId: string,
+  options: { manifestRegistry?: Pick<PluginManifestRegistry, "plugins"> } = {},
+): BundledProviderPolicySurface | null {
+  const bundledSurface = resolveBundledProviderPolicySurface(providerId, options);
+  if (bundledSurface) {
+    return bundledSurface;
+  }
+  const normalizedProviderId = normalizeProviderId(providerId);
+  if (!normalizedProviderId || !options.manifestRegistry) {
+    return null;
+  }
+  for (const plugin of options.manifestRegistry.plugins.toSorted((left, right) =>
+    left.id.localeCompare(right.id),
+  )) {
+    if (
+      pluginOwnsProviderPolicyRef(plugin, normalizedProviderId) &&
+      plugin.trustedOfficialInstall === true
+    ) {
+      const surface = resolveTrustedExternalProviderPolicySurface({
+        pluginId: plugin.id,
+        pluginRoot: plugin.rootDir,
+        trustedOfficialInstall: plugin.trustedOfficialInstall,
+      });
+      if (surface) {
+        return surface;
+      }
+    }
+  }
+  return null;
 }

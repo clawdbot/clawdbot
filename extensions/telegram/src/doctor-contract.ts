@@ -10,8 +10,8 @@ import {
   hasLegacyAccountStreamingAliases,
   hasLegacyStreamingAliases,
   normalizeLegacyChannelAliases,
+  resolveLegacyAliasStreamingMode,
 } from "openclaw/plugin-sdk/runtime-doctor";
-import { resolveTelegramPreviewStreamMode } from "./preview-streaming.js";
 
 function hasLegacyTelegramStreamingAliases(value: unknown): boolean {
   return hasLegacyStreamingAliases(value, { includePreviewChunk: true });
@@ -330,7 +330,9 @@ export function normalizeCompatibilityConfig({
     changes,
     resolveStreamingOptions: (entry) => ({
       includePreviewChunk: true,
-      resolvedMode: resolveTelegramPreviewStreamMode(entry),
+      // Runtime mode resolution dropped legacy streamMode reads; the doctor
+      // resolver keeps them so migration preserves configured intent.
+      resolvedMode: resolveLegacyAliasStreamingMode(entry, "partial"),
     }),
   });
   updated = aliases.entry;

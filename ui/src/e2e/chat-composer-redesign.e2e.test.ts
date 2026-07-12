@@ -361,7 +361,15 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
         "idempotencyKey" in sendRequest.params
           ? String(sendRequest.params.idempotencyKey)
           : "";
+      // Pre-first-token: the thread shows the working spark; the composer
+      // renders no visible run status (sr-only announcement only).
+      const spark = page.locator(".chat-reading-indicator");
+      await expect.poll(() => spark.isVisible()).toBe(true);
       await gateway.resolveDeferred("chat.send", { runId, status: "started" });
+      await expect.poll(() => spark.isVisible()).toBe(true);
+      const announcement = composer.locator(".agent-chat__run-status-announcement");
+      await expect.poll(() => announcement.textContent()).toContain("Rosita is");
+      await expect.poll(() => composer.locator(".agent-chat__composer-run-status").count()).toBe(0);
       await gateway.emitGatewayEvent("chat", {
         deltaText: "Working on it.",
         message: {
@@ -373,49 +381,26 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
         sessionKey: "main",
         state: "delta",
       });
-      const progress = composer.locator(".agent-chat__composer-run-status .agent-chat__run-status");
-      await expect.poll(() => progress.isVisible()).toBe(true);
-      await expect.poll(() => progress.textContent()).toContain("Rosita is responding");
-      await expect
-        .poll(() =>
-          progress.evaluate((node) => node.closest(".agent-chat__composer-controls") != null),
-        )
-        .toBe(true);
-      const [
-        activeSettingsBox,
-        activeSplitViewBox,
-        activeProgressBox,
-        activeModelBox,
-        activeChatContentBox,
-      ] = await Promise.all([
-        settings.boundingBox(),
-        splitView.boundingBox(),
-        progress.boundingBox(),
-        model.boundingBox(),
-        chatContent.boundingBox(),
-      ]);
+      // Streaming content replaces the spark as the working signal.
+      await expect.poll(() => page.getByText("Working on it.").first().isVisible()).toBe(true);
+      await expect.poll(() => spark.count()).toBe(0);
+      await expect.poll(() => announcement.textContent()).toContain("Rosita is responding");
+      const [activeSettingsBox, activeSplitViewBox, activeModelBox, activeChatContentBox] =
+        await Promise.all([
+          settings.boundingBox(),
+          splitView.boundingBox(),
+          model.boundingBox(),
+          chatContent.boundingBox(),
+        ]);
       expect(activeSettingsBox).not.toBeNull();
       expect(activeSplitViewBox).not.toBeNull();
-      expect(activeProgressBox).not.toBeNull();
       expect(activeModelBox).not.toBeNull();
       expect(activeChatContentBox).not.toBeNull();
-      if (
-        !activeSettingsBox ||
-        !activeSplitViewBox ||
-        !activeProgressBox ||
-        !activeModelBox ||
-        !activeChatContentBox
-      ) {
+      if (!activeSettingsBox || !activeSplitViewBox || !activeModelBox || !activeChatContentBox) {
         throw new Error("expected chat content and composer controls to have layout boxes");
       }
-      expect(activeProgressBox.x).toBeGreaterThanOrEqual(
-        activeSettingsBox.x + activeSettingsBox.width - 1,
-      );
-      expect(
-        activeProgressBox.x - (activeSettingsBox.x + activeSettingsBox.width),
-      ).toBeLessThanOrEqual(8);
       expect(activeModelBox.x).toBeGreaterThanOrEqual(
-        activeProgressBox.x + activeProgressBox.width - 1,
+        activeSettingsBox.x + activeSettingsBox.width - 1,
       );
       // The opener lives in the floating toggle cluster pinned to the
       // top-right corner of the chat area. The cluster's right edge hugs the
@@ -433,14 +418,6 @@ describeControlUiE2e("Control UI chat composer redesign", () => {
         ),
       ).toBeLessThanOrEqual(24);
       expect(Math.abs(activeSplitViewBox.y - activeChatContentBox.y)).toBeLessThanOrEqual(24);
-      expect(
-        Math.abs(
-          activeProgressBox.y +
-            activeProgressBox.height / 2 -
-            (activeSettingsBox.y + activeSettingsBox.height / 2),
-        ),
-      ).toBeLessThanOrEqual(2);
-      await expect.poll(() => progress.textContent()).toContain("Rosita is responding");
       const stop = page.getByRole("button", { name: "Stop generating" });
       await expect.poll(() => stop.isVisible()).toBe(true);
       await stop.click();

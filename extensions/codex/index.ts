@@ -40,7 +40,7 @@ import {
   createCodexSessionCatalogControl,
   createCodexSessionCatalogNodeHostCommands,
   createCodexSessionCatalogNodeInvokePolicies,
-  registerCodexSessionCatalogGateway,
+  registerCodexSessionCatalog,
 } from "./src/session-catalog.js";
 import {
   CODEX_SUPERVISION_COMPAT_TOOL_NAMES,
@@ -97,23 +97,23 @@ export default definePluginEntry({
       }),
     );
     registerCodexCliMetadata(api);
+    const sessionCatalogControl = createCodexSessionCatalogControl({
+      getPluginConfig: resolveCurrentPluginConfig,
+      getRuntimeConfig: resolveCurrentConfig,
+    });
+    registerCodexSessionCatalog({
+      api,
+      bindingStore,
+      control: sessionCatalogControl,
+      getRuntimeConfig: resolveCurrentConfig,
+    });
+    for (const command of createCodexSessionCatalogNodeHostCommands(sessionCatalogControl)) {
+      api.registerNodeHostCommand(command);
+    }
+    for (const policy of createCodexSessionCatalogNodeInvokePolicies()) {
+      api.registerNodeInvokePolicy(policy);
+    }
     if (readCodexPluginConfig(resolveCurrentPluginConfig()).supervision?.enabled === true) {
-      const sessionCatalogControl = createCodexSessionCatalogControl({
-        getPluginConfig: resolveCurrentPluginConfig,
-        getRuntimeConfig: resolveCurrentConfig,
-      });
-      registerCodexSessionCatalogGateway({
-        api,
-        bindingStore,
-        control: sessionCatalogControl,
-        getRuntimeConfig: resolveCurrentConfig,
-      });
-      for (const command of createCodexSessionCatalogNodeHostCommands(sessionCatalogControl)) {
-        api.registerNodeHostCommand(command);
-      }
-      for (const policy of createCodexSessionCatalogNodeInvokePolicies()) {
-        api.registerNodeInvokePolicy(policy);
-      }
       api.registerTool(
         (context) => {
           if (context.senderIsOwner !== true) {

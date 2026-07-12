@@ -20,6 +20,7 @@ const profileMocks = vi.hoisted(() => ({
 vi.mock("./cell-profile.js", () => profileMocks);
 
 import {
+  __test as containersTestApi,
   createFleetContainerRuntime,
   type CellContainerProfile,
   type FleetContainerCommandExecutor,
@@ -185,6 +186,12 @@ describe("fleet container runtime", () => {
       memory: "2147483648",
       cpus: "2",
       pidsLimit: 512,
+      storageOpt: {},
+      capDrop: [],
+      securityOpt: [],
+      init: undefined,
+      restartPolicy: undefined,
+      portBindings: [],
       user: "1000:1000",
       usernsMode: "keep-id",
     });
@@ -267,6 +274,7 @@ describe("fleet container runtime", () => {
           { id: "container-a", name: "peer-a" },
           { id: "container-b", name: "peer-b" },
         ],
+        internal: false,
       });
       expect(executor).toHaveBeenCalledWith(
         runtimeName,
@@ -285,7 +293,7 @@ describe("fleet container runtime", () => {
 
     await expect(
       createFleetContainerRuntime(executor).inspectNetwork("docker", "openclaw-cell-acme-net"),
-    ).resolves.toEqual({ kind: "ok", labels: {}, attachedContainers: [] });
+    ).resolves.toEqual({ kind: "ok", labels: {}, attachedContainers: [], internal: false });
   });
 
   it("distinguishes missing networks from unavailable runtimes", async () => {
@@ -405,16 +413,20 @@ describe("fleet container runtime", () => {
     const stream = vi.fn<FleetContainerStreamExecutor>(async () => ({ code: 0, signal: null }));
     const runtime = createFleetContainerRuntime(successfulExecutor(), stream);
 
-    await expect(runtime.logs("podman", "cell-acme", options)).resolves.toBeUndefined();
+    await expect(
+      runtime.logs("podman", "cell-acme", { ...options, redactValues: ["secret"] }),
+    ).resolves.toBeUndefined();
 
-    expect(stream).toHaveBeenCalledWith("podman", expectedArgs);
+    expect(stream).toHaveBeenCalledWith("podman", expectedArgs, { redactValues: ["secret"] });
   });
 
   it.each(["", "-1h", "10 m", "10m\n"])("rejects unsafe --since value %o", async (since) => {
     const stream = vi.fn<FleetContainerStreamExecutor>(async () => ({ code: 0, signal: null }));
     const runtime = createFleetContainerRuntime(successfulExecutor(), stream);
 
-    await expect(runtime.logs("docker", "cell-acme", { since })).rejects.toThrow(/--since/iu);
+    await expect(runtime.logs("docker", "cell-acme", { since, redactValues: [] })).rejects.toThrow(
+      /--since/iu,
+    );
     expect(stream).not.toHaveBeenCalled();
   });
 
@@ -428,34 +440,43 @@ describe("fleet container runtime", () => {
       .mockResolvedValueOnce({ code: null, signal: "SIGTERM" })
       .mockResolvedValueOnce({ code: null, signal: "SIGTERM" });
 
-    await expect(runtime.logs("podman", "cell-acme", {})).rejects.toThrow(
+    await expect(runtime.logs("podman", "cell-acme", { redactValues: [] })).rejects.toThrow(
       /podman logs failed with exit code 7/iu,
     );
-    await expect(runtime.logs("podman", "cell-acme", { follow: true })).resolves.toBeUndefined();
-    await expect(runtime.logs("podman", "cell-acme", {})).rejects.toThrow(
+    await expect(
+      runtime.logs("podman", "cell-acme", { follow: true, redactValues: [] }),
+    ).resolves.toBeUndefined();
+    await expect(runtime.logs("podman", "cell-acme", { redactValues: [] })).rejects.toThrow(
       /podman logs failed with exit code 130/iu,
     );
     // A forwarded termination signal ends a follow stream cleanly but fails a bounded read.
-    await expect(runtime.logs("podman", "cell-acme", { follow: true })).resolves.toBeUndefined();
-    await expect(runtime.logs("podman", "cell-acme", {})).rejects.toThrow(
+    await expect(
+      runtime.logs("podman", "cell-acme", { follow: true, redactValues: [] }),
+    ).resolves.toBeUndefined();
+    await expect(runtime.logs("podman", "cell-acme", { redactValues: [] })).rejects.toThrow(
       /podman logs failed with signal SIGTERM/iu,
     );
     // Crash signals are never masked as operator stops, even while following.
     stream.mockResolvedValueOnce({ code: null, signal: "SIGSEGV" });
-    await expect(runtime.logs("podman", "cell-acme", { follow: true })).rejects.toThrow(
-      /podman logs failed with signal SIGSEGV/iu,
-    );
+    await expect(
+      runtime.logs("podman", "cell-acme", { follow: true, redactValues: [] }),
+    ).rejects.toThrow(/podman logs failed with signal SIGSEGV/iu);
   });
 
   it("creates and removes a labeled per-cell network", async () => {
     const executor = successfulExecutor();
     const runtime = createFleetContainerRuntime(executor);
 
-    await runtime.createNetwork("podman", "openclaw-cell-acme-net", {
-      "openclaw.fleet.tenant": "acme",
-      "openclaw.fleet.attempt": "attempt-id",
-      "openclaw.fleet.owner": "owner-id",
-    });
+    await runtime.createNetwork(
+      "podman",
+      "openclaw-cell-acme-net",
+      {
+        "openclaw.fleet.tenant": "acme",
+        "openclaw.fleet.attempt": "attempt-id",
+        "openclaw.fleet.owner": "owner-id",
+      },
+      { internal: false },
+    );
     await runtime.removeNetwork("podman", "openclaw-cell-acme-net");
 
     expect(executor.mock.calls.map(([, args]) => args)).toEqual([
@@ -474,5 +495,111 @@ describe("fleet container runtime", () => {
       ],
       ["network", "rm", "openclaw-cell-acme-net"],
     ]);
+  });
+
+  it.each([
+    [true, true],
+    [false, false],
+  ] as const)("sets internal=%s on network create", async (internal, expected) => {
+    const executor = successfulExecutor();
+    const runtime = createFleetContainerRuntime(executor);
+    await runtime.createNetwork("podman", "openclaw-cell-acme-net", {}, { internal });
+    expect(executor.mock.calls[0]?.[1].includes("--internal")).toBe(expected);
+  });
+
+  it("redacts secrets from streamed log output, including across chunk boundaries", () => {
+    const written: string[] = [];
+    const target = { write: (text: string) => written.push(text) } as unknown as NodeJS.WriteStream;
+    const writer = containersTestApi.createRedactingStreamWriter(target, ["gw-secret-token"]);
+    writer.write(Buffer.from("boot ok\ntoken=gw-sec"));
+    writer.write(Buffer.from("ret-token done\ntail without newline"));
+    writer.flush();
+    const output = written.join("");
+    expect(output).toContain("token=<redacted> done");
+    expect(output).toContain("tail without newline");
+    expect(output).not.toContain("gw-secret-token");
+  });
+
+  it("never splits a secret across a forced long-line flush", () => {
+    const written: string[] = [];
+    const target = { write: (text: string) => written.push(text) } as unknown as NodeJS.WriteStream;
+    const writer = containersTestApi.createRedactingStreamWriter(target, ["gw-secret-token"]);
+    // An unterminated line ending exactly in a secret prefix at the flush point.
+    writer.write(Buffer.from(`${"x".repeat(64 * 1024)}gw-sec`));
+    writer.write(Buffer.from("ret-token trailing"));
+    writer.flush();
+    const output = written.join("");
+    expect(output).toContain("<redacted> trailing");
+    expect(output).not.toContain("gw-secret-token");
+  });
+
+  it("parses hardened inspect fields and Docker network internal state", async () => {
+    const executor = vi.fn<FleetContainerCommandExecutor>(async (_runtime, args) =>
+      args[0] === "network"
+        ? {
+            stdout: JSON.stringify([{ Labels: {}, Containers: {}, Internal: true }]),
+            stderr: "",
+            code: 0,
+          }
+        : {
+            stdout: JSON.stringify([
+              {
+                Image: "sha256:image",
+                State: { Status: "running", Running: true },
+                Config: { Env: [], Labels: {} },
+                // Podman reports null EffectiveCaps when every capability is dropped.
+                EffectiveCaps: null,
+                HostConfig: {
+                  Memory: 1,
+                  NanoCpus: 1_000_000_000,
+                  PidsLimit: 1,
+                  StorageOpt: { size: "10g" },
+                  CapDrop: ["ALL"],
+                  SecurityOpt: ["no-new-privileges"],
+                  Init: true,
+                  RestartPolicy: { Name: "unless-stopped" },
+                  PortBindings: { "18789/tcp": [{ HostIp: "127.0.0.1", HostPort: "19100" }] },
+                },
+              },
+            ]),
+            stderr: "",
+            code: 0,
+          },
+    );
+    const runtime = createFleetContainerRuntime(executor);
+    await expect(runtime.inspect("docker", "cell-acme")).resolves.toMatchObject({
+      storageOpt: { size: "10g" },
+      capDrop: ["ALL"],
+      effectiveCaps: [],
+      securityOpt: ["no-new-privileges"],
+      init: true,
+      restartPolicy: "unless-stopped",
+      portBindings: [{ containerPort: "18789/tcp", hostIp: "127.0.0.1", hostPort: "19100" }],
+    });
+    await expect(runtime.inspectNetwork("docker", "net-acme")).resolves.toMatchObject({
+      internal: true,
+    });
+  });
+
+  it("fails closed on invalid hardened inspect field shapes", async () => {
+    const executor = vi.fn<FleetContainerCommandExecutor>(async () => ({
+      stdout: JSON.stringify([
+        {
+          Image: "sha256:image",
+          State: { Status: "running", Running: true },
+          Config: { Env: [], Labels: {} },
+          HostConfig: { Memory: 1, NanoCpus: 1, PidsLimit: 1, StorageOpt: { size: 10 } },
+        },
+      ]),
+      stderr: "",
+      code: 0,
+    }));
+    await expect(
+      createFleetContainerRuntime(executor).inspect("docker", "cell-acme"),
+    ).resolves.toEqual({
+      kind: "unavailable",
+      state: "unknown",
+      error: "container inspect returned an invalid response",
+    });
   });
 });

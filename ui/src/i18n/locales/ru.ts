@@ -480,6 +480,7 @@ export const ru: TranslationMap = {
     noEvents: "Событий пока нет.",
   },
   quickSettings: {
+    language: "Язык",
     appearance: {
       lobsterVisits: "Визиты омара",
       lobsterVisitsOn: "Заглядывает время от времени",
@@ -613,10 +614,10 @@ export const ru: TranslationMap = {
   tabs: {
     agents: "Агенты",
     activity: "Активность",
-    overview: "Обзор",
     workboard: "Рабочая доска",
     worktrees: "Рабочие деревья",
     channels: "Каналы",
+    connection: "Подключение",
     sessions: "Сеансы",
     usage: "Использование",
     cron: "Задания Cron",
@@ -643,10 +644,10 @@ export const ru: TranslationMap = {
   subtitles: {
     agents: "Рабочие пространства, инструменты, идентификаторы.",
     activity: "Сводки активности инструментов в локальном браузере.",
-    overview: "Состояние, точки входа, работоспособность.",
     workboard: "Очередь задач агента и передача сеанса.",
     worktrees: "Изолированные копии для задач агентов и снимки восстановления.",
     channels: "Каналы и настройки.",
+    connection: "Адрес Gateway, учётные данные и статус рукопожатия.",
     sessions: "Активные сеансы и значения по умолчанию.",
     usage: "Использование API и расходы.",
     cron: "Пробуждения и повторяющиеся запуски.",
@@ -938,150 +939,6 @@ export const ru: TranslationMap = {
     unavailableTitle: "Plugin panel unavailable",
     unavailableSubtitle:
       "The plugin that owns this tab is not active on the connected gateway, or it did not provide a panel.",
-  },
-  codexSessions: {
-    eyebrow: "Парк Codex",
-    title: "Сеансы на всех ваших компьютерах",
-    interactiveSubtitle:
-      "Запустите ветку Chat, выбор модели для которой остается под управлением Codex App Server, архивируйте подходящие локальные сеансы с подтверждением и просматривайте сеансы сопряженных компьютеров.",
-    summaryLabel: "Сводка сеансов Codex",
-    summary: {
-      sessions: "сеансы",
-      onlineHosts: "в сети",
-      hosts: "хосты",
-    },
-    searchLabel: "Поиск сеансов Codex",
-    searchPlaceholder: "Поиск по названиям сеансов",
-    refresh: "Обновить",
-    disconnected: "Повторно подключитесь к Gateway, чтобы обновить сеансы Codex.",
-    partial: "Недоступные хосты: {count}. Остальные хосты по-прежнему доступны.",
-    loading: "Загрузка сеансов Codex…",
-    loadMore: "Загрузить ещё",
-    loadingMore: "Загрузка…",
-    untitled: "Сеанс Codex без названия",
-    threadId: "Ветка",
-    actions: {
-      continue: "Продолжить",
-      continueAsBranch: "Продолжить как ветку",
-      openChat: "Открыть Chat",
-      continuing: "Продолжение…",
-      archive: "Архивировать",
-      readTranscript: "Прочитано",
-      readTranscriptLabel: "Прочитать расшифровку для {title}",
-      continueLabel: "Продолжить {title}",
-      continueAsBranchLabel: "Продолжить {title} как ветку",
-      openChatLabel: "Открыть Chat для {title}",
-      continueAsBranchHint:
-        "Создать Chat из сохраненной видимой истории. При первом сообщении Codex App Server выбирает модель и провайдера для нового потока harness. Дальнейший выбор остается под управлением Codex; OpenClaw никогда не подставляет другую среду выполнения, модель или резервный вариант. Источник остается нетронутым, а выполняемая работа может отсутствовать.",
-      archiveLabel: "Архивировать {title}",
-      archiveConfirmation:
-        "Архивировать {title} и все порожденные дочерние сеансы? Подтвердите, что их не использует другой клиент Codex или runner OpenClaw. Архивация при активном другом runner может прервать его работу.",
-      active: "Для активных сеансов нельзя запускать ветку или архивировать их.",
-      archiveActivityUnknownHint:
-        "Активность неизвестна, потому что статус локален для процесса. Архивируйте только после подтверждения, что этот сеанс не использует другой клиент Codex или runner.",
-      statusUnavailable: "Этим сеансом Codex нельзя управлять в его текущем состоянии.",
-      hostOffline: "Повторно подключите этот компьютер, прежде чем управлять его сеансами Codex.",
-      gatewayOffline: "Повторно подключитесь к gateway, прежде чем управлять сеансами Codex.",
-      remoteReadOnly: "Сеансы сопряженного компьютера пока доступны только для просмотра.",
-    },
-    status: {
-      active: "Активно",
-      idle: "Бездействует",
-      archived: "В архиве",
-      storedActivityUnknown: "Сохранено / активность неизвестна",
-      systemError: "Системная ошибка",
-      unknown: "Неизвестно",
-    },
-    host: {
-      gateway: "Gateway",
-      node: "Узел",
-      connected: "Подключено",
-      offline: "Не в сети",
-      unavailable: "Каталог сеансов недоступен",
-      sessionCount: "{count} показано",
-    },
-    empty: {
-      title: "Хосты Codex не найдены",
-      supervisionSubtitle:
-        "Включите надзор Codex на Gateway или сопряжённом компьютере, затем обновите это представление.",
-      search: "Ни один сеанс на этом хосте не соответствует поиску.",
-      nonArchived: "На этом хосте нет неархивированных сеансов.",
-    },
-    sidebar: {
-      title: "Сеансы Codex",
-      unavailable: "Сеансы Codex недоступны",
-      viewAll: "Просмотреть все сеансы Codex",
-      truncated: "Больше сеансов доступно в полном каталоге.",
-    },
-    transcript: {
-      eyebrow: "Расшифровка Codex",
-      back: "Все сеансы Codex",
-      you: "Вы",
-      reasoning: "Рассуждение",
-      command: "Команда",
-      fileChange: "Изменение файла",
-      item: "Элемент Codex",
-      details: "Полные сведения",
-      loading: "Загрузка расшифровки…",
-      loadMore: "Загрузить более старые элементы расшифровки",
-    },
-  },
-  claudeSessions: {
-    eyebrow: "Парк Claude",
-    title: "Сеансы Claude на ваших компьютерах",
-    subtitle:
-      "Просматривайте неархивированные сеансы Claude CLI и Claude Desktop и читайте их постраничные локальные транскрипты.",
-    summaryLabel: "Сводка сеанса Claude",
-    summary: {
-      sessions: "сеансы",
-      onlineHosts: "в сети",
-      hosts: "хосты",
-    },
-    searchLabel: "Поиск сеансов Claude",
-    searchPlaceholder: "Поиск по названиям сеансов",
-    refresh: "Обновить",
-    disconnected: "Повторно подключитесь к Gateway, чтобы обновить сеансы Claude.",
-    partial: "Недоступные хосты: {count}. Остальные хосты по-прежнему доступны.",
-    loading: "Загрузка сеансов Claude…",
-    loadMore: "Загрузить ещё",
-    loadingMore: "Загрузка…",
-    untitled: "Сеанс Claude без названия",
-    sessionId: "Сеанс",
-    stored: "Сохранён",
-    read: "Прочитано",
-    readLabel: "Прочитать расшифровку для {title}",
-    host: {
-      gateway: "Gateway",
-      node: "Узел",
-      connected: "Подключено",
-      offline: "Не в сети",
-      unavailable: "Каталог сеансов недоступен",
-      sessionCount: "{count} показано",
-    },
-    empty: {
-      title: "Сеансы Claude не найдены",
-      subtitle:
-        "Установите и используйте Claude CLI или Claude Desktop, затем обновите это представление.",
-      search: "Ни один сеанс на этом хосте не соответствует поиску.",
-      nonArchived: "На этом хосте нет неархивированных сеансов.",
-    },
-    sidebar: {
-      title: "Сеансы Claude",
-      viewAll: "Показать все сеансы Claude",
-      truncated: "Больше сеансов доступно в полном каталоге.",
-    },
-    transcript: {
-      eyebrow: "Транскрипт Claude",
-      back: "Все сеансы Claude",
-      you: "Вы",
-      reasoning: "Рассуждение",
-      toolCall: "Вызов инструмента",
-      toolResult: "Результат инструмента",
-      item: "Элемент Claude",
-      details: "Полные сведения",
-      loading: "Загрузка расшифровки…",
-      loadMore: "Загрузить более старые элементы расшифровки",
-    },
   },
   logbook: {
     duration: {
@@ -1437,7 +1294,12 @@ export const ru: TranslationMap = {
     eventUnarchived: "Разархивировано",
     eventStale: "Устаревший сеанс",
   },
-  overview: {
+  connection: {
+    lostTitle: "Соединение с Gateway потеряно",
+    reconnecting: "Повторное подключение…",
+    offlineHint:
+      "Обновления в реальном времени и действия приостановлены до восстановления соединения.",
+    retryNow: "Повторить сейчас",
     access: {
       title: "Доступ к шлюзу",
       subtitle: "Где подключается панель мониторинга и как она проходит аутентификацию.",
@@ -1446,7 +1308,6 @@ export const ru: TranslationMap = {
       password: "Пароль (не сохраняется)",
       passwordPlaceholder: "системный или общий пароль",
       sessionKey: "Ключ сеанса по умолчанию",
-      language: "Язык",
       connectHint: "Нажмите «Подключиться», чтобы применить изменения подключения.",
       trustedProxy: "Аутентификация выполнена через доверенный прокси.",
       showToken: "Показать токен",
@@ -1463,131 +1324,49 @@ export const ru: TranslationMap = {
       uptime: "Время работы",
       tickInterval: "Интервал тика",
       lastChannelsRefresh: "Последнее обновление каналов",
-      channelsHint:
-        "Используйте «Каналы», чтобы подключить WhatsApp, Telegram, Discord, Signal или iMessage.",
     },
-    stats: {
-      instances: "Экземпляры",
-      instancesHint: "Сигналы присутствия за последние 5 минут.",
-      sessions: "Сеансы",
-      sessionsHint: "Недавние ключи сеансов, отслеживаемые шлюзом.",
-      cron: "Cron",
-      cronNext: "Следующее пробуждение {time}",
-    },
-    notes: {
-      title: "Заметки",
-      subtitle: "Краткие напоминания для настроек удаленного управления.",
-      tailscaleTitle: "Tailscale serve",
-      tailscaleText:
-        "Предпочитайте режим serve, чтобы держать шлюз на loopback с аутентификацией tailnet.",
-      sessionTitle: "Гигиена сеансов",
-      sessionText: "Используйте /new или sessions.patch, чтобы сбросить контекст.",
-      cronTitle: "Напоминания Cron",
-      cronText: "Используйте изолированные сеансы для повторяющихся запусков.",
-    },
-    auth: {
-      required:
-        "Этот шлюз требует аутентификации. Добавьте токен или пароль, затем нажмите Connect.",
-      failed:
-        "Ошибка аутентификации. Снова скопируйте URL с токеном с помощью {command} или обновите токен, затем нажмите Connect.",
-    },
-    pairing: {
-      hint: "Этому устройству требуется подтверждение сопряжения от хоста шлюза.",
-      scopeUpgradeTitle: "Расширение области доступа ожидает подтверждения.",
-      scopeUpgradeSummary:
-        "Это устройство уже сопряжено, но запрошенная более широкая область доступа ожидает подтверждения.",
-      roleUpgradeTitle: "Повышение роли ожидает подтверждения.",
-      roleUpgradeSummary:
-        "Это устройство уже сопряжено, но запрошенное изменение роли ожидает подтверждения.",
-      metadataUpgradeTitle: "Изменение метаданных устройства ожидает подтверждения.",
-      metadataUpgradeSummary:
-        "Это устройство уже сопряжено, но изменение метаданных ожидает подтверждения.",
-      mobileHint:
-        "На мобильном устройстве? Скопируйте полный URL (включая #token=...) из openclaw dashboard --no-open на настольном компьютере.",
-      docsTitle: "Документация по сопряжению устройств (откроется в новой вкладке)",
-      docsLink: "Документация: сопряжение устройств",
-    },
-    insecure: {
-      hint: "Эта страница использует HTTP, поэтому браузер блокирует идентификацию устройства. Используйте HTTPS (Tailscale Serve) или откройте {url} на хосте шлюза.",
-      stayHttp: "Если необходимо остаться на HTTP, задайте {config} (только токен).",
-    },
-    connection: {
+    help: {
       title: "Как подключиться",
       step1: "Запустите gateway на хост-машине:",
       step2: "Получите URL панели мониторинга с токеном:",
       step3: "Вставьте WebSocket URL и токен выше или откройте URL с токеном напрямую.",
-      step4: "Или создайте многоразовый токен:",
-      docsHint: "Для удаленного доступа рекомендуется Tailscale Serve. ",
       docsLink: "Читать документацию →",
-      authDocsTitle: "Документация по аутентификации Control UI (откроется в новой вкладке)",
-      authDocsLink: "Документация: аутентификация Control UI",
-      tailscaleDocsTitle: "Документация Tailscale Serve (откроется в новой вкладке)",
-      tailscaleDocsLink: "Документация: Tailscale Serve",
-      insecureHttpDocsTitle: "Документация по небезопасному HTTP (откроется в новой вкладке)",
-      insecureHttpDocsLink: "Документация: небезопасный HTTP",
       copyCommand: "Копировать команду",
       copyCommandAria: "Копировать команду: {command}",
     },
-    cards: {
-      cost: "Стоимость",
+  },
+  attention: {
+    cronFailed: "Сбой заданий cron: {count}",
+    cronOverdue: "Просрочено заданий cron: {count}",
+    modelAuthExpired: "Срок авторизации модели истёк: {providers}",
+    modelAuthExpiring: "Срок авторизации модели скоро истечёт: {providers}",
+  },
+  palette: {
+    placeholder: "Поиск чатов и команд…",
+    noResults: "Нет результатов",
+    categories: {
+      search: "Поиск",
+      navigation: "Навигация",
       skills: "Навыки",
-      recentSessions: "Недавние сеансы",
-      modelAuth: "Аутентификация модели",
-      modelAuthOk: "{count} в порядке",
-      modelAuthExpired: "{count} истекло",
-      modelAuthExpiring: "{count} истекает",
-      modelAuthProviders: "{count} провайдеров",
-      modelAuthUsageLeft: "осталось {pct}%",
-      modelAuthExpiresIn: "истекает {when}",
-      modelAuthAttentionExpiredTitle: "Срок действия авторизации модели истек",
-      modelAuthAttentionExpiringTitle: "Срок действия авторизации модели скоро истечет",
-      modelAuthAttentionExpiredDesc:
-        "{providers} — повторно авторизуйтесь с помощью openclaw models auth",
-      modelAuthAttentionExpiringEntry: "{provider} ({when})",
     },
-    attention: {
-      title: "Внимание",
+    items: {
+      sessions: "Сеансы",
+      scheduled: "Запланировано",
+      skills: "Навыки",
+      plugins: "Плагины",
+      settings: "Настройки",
+      agents: "Агенты",
+      shellCommand: "Shell Command",
+      debugMode: "Режим отладки",
     },
-    eventLog: {
-      title: "Журнал событий",
+    descriptions: {
+      shellCommand: "Запустить shell",
+      debugMode: "Переключить отладку",
     },
-    logTail: {
-      title: "Журналы шлюза",
-    },
-    quickActions: {
-      newSession: "Новый сеанс",
-      automation: "Автоматизация",
-      refreshAll: "Обновить все",
-      terminal: "Терминал",
-    },
-    palette: {
-      placeholder: "Введите команду…",
-      noResults: "Нет результатов",
-      categories: {
-        search: "Поиск",
-        navigation: "Навигация",
-        skills: "Навыки",
-      },
-      items: {
-        overview: "Обзор",
-        sessions: "Сеансы",
-        scheduled: "Запланировано",
-        skills: "Навыки",
-        plugins: "Плагины",
-        settings: "Настройки",
-        agents: "Агенты",
-        shellCommand: "Shell Command",
-        debugMode: "Режим отладки",
-      },
-      descriptions: {
-        shellCommand: "Запустить shell",
-        debugMode: "Переключить отладку",
-      },
-      footer: {
-        navigate: "навигация",
-        select: "выбрать",
-        close: "закрыть",
-      },
+    footer: {
+      navigate: "навигация",
+      select: "выбрать",
+      close: "закрыть",
     },
   },
   dreaming: {
@@ -2103,16 +1882,14 @@ export const ru: TranslationMap = {
       },
     },
   },
-  connection: {
-    lostTitle: "Соединение с Gateway потеряно",
-    reconnecting: "Повторное подключение…",
-    offlineHint:
-      "Обновления в реальном времени и действия приостановлены до восстановления соединения.",
-    retryNow: "Повторить сейчас",
-  },
   chat: {
     disconnected: "Отключено от gateway.",
     archivedSessionDisabled: "Восстановите этот сеанс, чтобы отправлять сообщения.",
+    loadOlder: "Загрузить более ранние",
+    catalog: {
+      remoteViewOnly: "Этот сеанс находится на сопряжённом узле и доступен только для просмотра.",
+      unsupportedViewOnly: "Этот внешний источник сеансов доступен только для просмотра.",
+    },
     taskSuggestions: {
       eyebrow: "Предлагаемая следующая задача",
       start: "Начать в рабочем дереве",

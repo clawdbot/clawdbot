@@ -46,6 +46,10 @@ import {
 } from "../../agents/model-selection.js";
 import { OPENAI_PROVIDER_ID } from "../../agents/openai-routing.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
+import {
+  readUtilityModelSetting,
+  resolveUtilityModelRefForAgent,
+} from "../../agents/utility-model.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { requestExitAfterOneShotOutput } from "../../cli/one-shot-exit.js";
 import { createConfigIO } from "../../config/config.js";
@@ -149,6 +153,8 @@ type StatusProviderUseRef = {
   provider: string;
   model: string;
   allowCodexRuntimeFallback: boolean;
+  /** Text uses get per-model route analysis; image auth stays provider-wide. */
+  routeScope: "text" | "image";
 };
 
 type StatusProviderUse = {
@@ -378,6 +384,23 @@ export async function modelsStatusCommand(
     const fallbacks = agentFallbacksOverride ?? defaultsFallbacks;
     const imageModel = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.imageModel) ?? "";
     const imageFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.imageModel);
+    // Narration/titles ride the utility model on a plain API auth path that can
+    // differ from the primary's (e.g. OAuth primary, api_key utility); show the
+    // resolved ref so a broken utility credential is inspectable here.
+    const utilitySetting = readUtilityModelSetting(cfg, workspaceAgentId);
+    const utilityModelRef = resolveUtilityModelRefForAgent({ cfg, agentId: workspaceAgentId });
+    // resolveUtilityModelRefForAgent never falls back to the primary model: an
+    // unset setting yields the provider-declared default or undefined, so a
+    // non-null auto result really is a provider default (unlike the runtime's
+    // simple-completion selection, which does fall back to the primary).
+    const utilityModelSource =
+      utilitySetting.kind === "explicit"
+        ? "config"
+        : utilitySetting.kind === "disabled"
+          ? "disabled"
+          : utilityModelRef
+            ? "provider-default"
+            : "none";
     const aliases = Object.entries(cfg.agents?.defaults?.models ?? {}).reduce<
       Record<string, string>
     >((acc, [key, entry]) => {
@@ -435,7 +458,11 @@ export async function modelsStatusCommand(
     );
     const providersFromModels = new Set<string>();
     const providerUseRefs: StatusProviderUseRef[] = [];
-    const addProviderUse = (raw: string | undefined, allowCodexRuntimeFallback: boolean) => {
+    const addProviderUse = (
+      raw: string | undefined,
+      allowCodexRuntimeFallback: boolean,
+      routeScope: StatusProviderUseRef["routeScope"],
+    ) => {
       const ref = resolveStatusModelRef(raw);
       if (ref?.provider) {
         const provider = normalizeProviderId(ref.provider);
@@ -443,21 +470,40 @@ export async function modelsStatusCommand(
           provider,
           model: ref.model,
           allowCodexRuntimeFallback,
+          routeScope,
         });
       }
     };
-    for (const raw of [defaultLabel, ...fallbacks, imageModel, ...imageFallbacks, ...allowed]) {
+    for (const raw of [
+      defaultLabel,
+      ...fallbacks,
+      imageModel,
+      ...imageFallbacks,
+      utilityModelRef ?? "",
+      ...allowed,
+    ]) {
       const ref = resolveStatusModelRef(raw);
       if (ref?.provider) {
         providersFromModels.add(normalizeProviderId(ref.provider));
       }
     }
     for (const raw of [defaultLabel, ...fallbacks]) {
-      addProviderUse(raw, true);
+      addProviderUse(raw, true, "text");
     }
     for (const raw of [imageModel, ...imageFallbacks]) {
-      addProviderUse(raw, false);
+      addProviderUse(raw, false, "image");
     }
+    // Utility completions (narration/titles) are a text-route auth consumer in
+    // their own right: an OAuth-healthy primary does not prove the utility's
+    // plain API path, so the ref gets full route analysis without inheriting
+    // the primary's codex-runtime fallback.
+    addProviderUse(utilityModelRef, false, "text");
+    // Display the canonical provider/model: utilityModel accepts aliases, and
+    // route issues/probes always report the resolved ref.
+    const resolvedUtilityRef = utilityModelRef ? resolveStatusModelRef(utilityModelRef) : undefined;
+    const utilityModelDisplayRef = resolvedUtilityRef
+      ? modelKey(normalizeProviderId(resolvedUtilityRef.provider), resolvedUtilityRef.model)
+      : (utilityModelRef ?? null);
 
     const providersFromEnv = new Set<string>();
     // Use the shared provider-env registry so `models status` stays aligned with
@@ -536,12 +582,13 @@ export async function modelsStatusCommand(
         };
         // Image tools own their provider auth behavior. The text-route artifact
         // must not reinterpret image auth as an OpenAI text transport.
-        const rawEvaluation: ModelAuthAvailabilityEvaluation = usage.allowCodexRuntimeFallback
-          ? resolver.evaluateModelAuth(usage.provider, ref)
-          : {
-              availability: resolver.resolveProviderAuthAvailability(usage.provider, ref),
-              routeResolution: null,
-            };
+        const rawEvaluation: ModelAuthAvailabilityEvaluation =
+          usage.routeScope === "text"
+            ? resolver.evaluateModelAuth(usage.provider, ref)
+            : {
+                availability: resolver.resolveProviderAuthAvailability(usage.provider, ref),
+                routeResolution: null,
+              };
         const routeAuth: StatusProviderRouteAuth = (() => {
           if (rawEvaluation.routeResolution?.kind === "incompatible") {
             return {
@@ -934,6 +981,18 @@ export async function modelsStatusCommand(
         },
       ];
     });
+    // Utility (or duplicate fallback) refs can repeat a configured model;
+    // identical diagnostics collapse while genuinely different evaluations
+    // for the same model (e.g. codex-fallback vs plain route) stay separate.
+    const seenRouteIssues = new Set<string>();
+    const dedupedModelRouteIssues = modelRouteIssues.filter((issue) => {
+      const key = JSON.stringify(issue);
+      if (seenRouteIssues.has(key)) {
+        return false;
+      }
+      seenRouteIssues.add(key);
+      return true;
+    });
     const missingProvidersInUse = Array.from(
       new Set(
         providerUses
@@ -979,6 +1038,9 @@ export async function modelsStatusCommand(
       ...fallbacks,
       imageModel,
       ...imageFallbacks,
+      // Probe the configured utility model itself; an arbitrary catalog model
+      // from the same provider can sit on a different auth route.
+      utilityModelRef ?? "",
       ...allowed,
     ].filter(Boolean);
     const resolvedCandidates = rawCandidates
@@ -1105,7 +1167,7 @@ export async function modelsStatusCommand(
       };
       const routeAuthHealth = new Set(providerUses.map(resolveRouteAuthHealth));
       const hasExpiredOrMissing =
-        modelRouteIssues.some(
+        dedupedModelRouteIssues.some(
           (issue) => issue.kind === "incompatible" || issue.kind === "indeterminate",
         ) ||
         routeAuthHealth.has("missing") ||
@@ -1131,6 +1193,7 @@ export async function modelsStatusCommand(
         fallbacks,
         imageModel: imageModel || null,
         imageFallbacks,
+        utilityModel: { ref: utilityModelDisplayRef, source: utilityModelSource },
         ...(agentId
           ? {
               modelConfig: {
@@ -1149,7 +1212,7 @@ export async function modelsStatusCommand(
           },
           providersWithOAuth: providersWithOauth,
           missingProvidersInUse,
-          modelRouteIssues,
+          modelRouteIssues: dedupedModelRouteIssues,
           runtimeAuthRoutes,
           providers: providerAuth,
           unusableProfiles,
@@ -1206,6 +1269,17 @@ export async function modelsStatusCommand(
         rich,
         fallbacks.length ? theme.warn : theme.muted,
         fallbacks.length ? fallbacks.join(", ") : "-",
+      )}`,
+    );
+    runtime.log(
+      `${label("Utility model")}${colorize(rich, theme.muted, ":")} ${colorize(
+        rich,
+        utilityModelDisplayRef ? theme.success : theme.muted,
+        utilityModelDisplayRef
+          ? `${utilityModelDisplayRef}${utilityModelSource === "provider-default" ? " (provider default)" : ""}`
+          : utilityModelSource === "disabled"
+            ? "off"
+            : "-",
       )}`,
     );
     runtime.log(
@@ -1353,10 +1427,10 @@ export async function modelsStatusCommand(
       }
     }
 
-    if (modelRouteIssues.length > 0) {
+    if (dedupedModelRouteIssues.length > 0) {
       runtime.log("");
       runtime.log(colorize(rich, theme.heading, "Model route issues"));
-      for (const issue of modelRouteIssues) {
+      for (const issue of dedupedModelRouteIssues) {
         const modelRef = `${issue.provider}/${issue.model}`;
         if (issue.kind === "incompatible") {
           runtime.log(`- ${theme.heading(modelRef)} [${issue.code}] ${issue.message}`);
@@ -1378,7 +1452,7 @@ export async function modelsStatusCommand(
       runtime.log("");
       runtime.log(colorize(rich, theme.heading, "Missing auth"));
       for (const provider of missingProvidersInUse) {
-        const requiresSubscription = modelRouteIssues.some(
+        const requiresSubscription = dedupedModelRouteIssues.some(
           (issue) =>
             issue.kind === "missing-auth" &&
             issue.provider === provider &&

@@ -6,10 +6,6 @@ import {
   resolveMergedAccountConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-core";
-import {
-  resolveChannelStreamingBlockEnabled,
-  resolveChannelStreamingChunkMode,
-} from "openclaw/plugin-sdk/channel-outbound";
 import type { WhatsAppAccountConfig } from "./account-types.js";
 
 function resolveWhatsAppDefaultAccountSharedConfig(
@@ -72,7 +68,8 @@ export function resolveMergedWhatsAppAccountConfig(params: {
   return {
     accountId,
     ...merged,
-    chunkMode: resolveChannelStreamingChunkMode(merged) ?? merged.chunkMode,
-    blockStreaming: resolveChannelStreamingBlockEnabled(merged) ?? merged.blockStreaming,
+    // WhatsApp has no nested streaming schema; the flat keys are canonical.
+    chunkMode: merged.chunkMode,
+    blockStreaming: merged.blockStreaming,
   };
 }

@@ -1086,6 +1086,7 @@ export function createCliJsonlStreamingParser(params: {
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
   onCommentaryText?: (text: string) => void;
+  onSessionId?: (sessionId: string) => void;
 }) {
   let lineBuffer = "";
   let assistantText = "";
@@ -1135,9 +1136,12 @@ export function createCliJsonlStreamingParser(params: {
     if (parseErrorText) {
       return;
     }
-    sessionId = pickCliSessionId(parsed, params.backend) ?? sessionId;
-    if (!sessionId && typeof parsed.thread_id === "string") {
-      sessionId = parsed.thread_id.trim();
+    const parsedSessionId =
+      pickCliSessionId(parsed, params.backend) ??
+      (!sessionId && typeof parsed.thread_id === "string" ? parsed.thread_id.trim() : undefined);
+    if (parsedSessionId && parsedSessionId !== sessionId) {
+      sessionId = parsedSessionId;
+      params.onSessionId?.(parsedSessionId);
     }
     const nextUsage = readCliUsage(parsed);
     const shouldUseUsage =

@@ -39,6 +39,13 @@ function runningInspection(
     memory: "2147483648",
     cpus: "2",
     pidsLimit: 512,
+    storageOpt: {},
+    capDrop: ["ALL"],
+    effectiveCaps: undefined,
+    securityOpt: ["no-new-privileges"],
+    init: true,
+    restartPolicy: "unless-stopped",
+    portBindings: [{ containerPort: "18789/tcp", hostIp: "127.0.0.1", hostPort: "19100" }],
     ...overrides,
   };
 }
@@ -62,11 +69,12 @@ function createContainerMock(
   const run = vi.fn<FleetContainerRuntime["run"]>(async () => undefined);
   const pull = vi.fn<FleetContainerRuntime["pull"]>(async () => undefined);
   const createNetwork = vi.fn<FleetContainerRuntime["createNetwork"]>(
-    async (_runtime, name, labels) => {
+    async (_runtime, name, labels, options) => {
       networks.set(name, {
         kind: "ok",
         labels: { ...labels },
         attachedContainers: [],
+        internal: options.internal,
       });
     },
   );
@@ -157,11 +165,16 @@ describe("fleet service", () => {
     expect(containers.run).toHaveBeenCalledOnce();
     const [profile, start] = containers.run.mock.calls[0] ?? [];
     expect(start).toBe(false);
-    expect(containers.createNetwork).toHaveBeenCalledWith("docker", "openclaw-cell-acme-net", {
-      "openclaw.fleet.tenant": "acme",
-      "openclaw.fleet.owner": cellOwnerId(path.join(root, "fleet", "cells", "acme")),
-      "openclaw.fleet.attempt": expect.stringMatching(/^[a-f0-9]{32}$/u),
-    });
+    expect(containers.createNetwork).toHaveBeenCalledWith(
+      "docker",
+      "openclaw-cell-acme-net",
+      {
+        "openclaw.fleet.tenant": "acme",
+        "openclaw.fleet.owner": cellOwnerId(path.join(root, "fleet", "cells", "acme")),
+        "openclaw.fleet.attempt": expect.stringMatching(/^[a-f0-9]{32}$/u),
+      },
+      { internal: false },
+    );
     expect(containers.start).toHaveBeenCalledWith("docker", "openclaw-cell-acme");
     expect(profile?.networkName).toBe("openclaw-cell-acme-net");
     expect(containers.createNetwork.mock.invocationCallOrder[0] ?? -1).toBeLessThan(
@@ -206,6 +219,45 @@ describe("fleet service", () => {
     });
 
     expect(result.token).toMatch(/^[a-f0-9]{32}$/u);
+  });
+
+  it("threads disk and Podman internal networking into provisioning", async () => {
+    const containers = createContainerMock();
+    const service = createFleetService({ env, containers: containers.runtime, now: () => 1000 });
+    await service.create({
+      tenant: "acme",
+      runtime: "podman",
+      disk: "10g",
+      network: "internal",
+      gatewayToken: "token",
+    });
+    expect(containers.run.mock.calls[0]?.[0]).toMatchObject({ diskSize: "10g" });
+    expect(containers.createNetwork).toHaveBeenCalledWith(
+      "podman",
+      "openclaw-cell-acme-net",
+      expect.any(Object),
+      { internal: true },
+    );
+  });
+
+  it("rejects Docker internal networking before reservation", async () => {
+    const containers = createContainerMock();
+    const service = createFleetService({ env, containers: containers.runtime });
+    await expect(
+      service.create({ tenant: "acme", network: "internal", gatewayToken: "token" }),
+    ).rejects.toThrow(/Docker cannot publish loopback ports/iu);
+    expect(getFleetCell(env, "acme")).toBeUndefined();
+    expect(containers.createNetwork).not.toHaveBeenCalled();
+  });
+
+  it("wraps unsupported disk errors after rolling back the reservation", async () => {
+    const containers = createContainerMock();
+    containers.run.mockRejectedValue(new Error("--storage-opt is supported only with pquota"));
+    const service = createFleetService({ env, containers: containers.runtime });
+    await expect(
+      service.create({ tenant: "acme", disk: "10g", gatewayToken: "token" }),
+    ).rejects.toThrow(/Fleet cannot enforce --disk.*XFS/iu);
+    expect(getFleetCell(env, "acme")).toBeUndefined();
   });
 
   it("rejects a remote runtime before registry or filesystem mutation", async () => {
@@ -323,6 +375,7 @@ describe("fleet service", () => {
       follow: true,
       tail: 100,
       since: "10m",
+      redactValues: ["old-token"],
     });
   });
 
@@ -367,9 +420,12 @@ describe("fleet service", () => {
     });
     await service.create({ tenant: "acme", gatewayToken: "old-token" });
     containers.run.mockClear();
+    // The disk limit replays from the fleet label because Podman inspect has no
+    // HostConfig.StorageOpt; the label is the cross-runtime carrier.
+    const diskLabels = { ...fleetLabels(), "openclaw.fleet.disk-limit": "10g" };
     containers.inspect
-      .mockResolvedValue(runningInspection())
-      .mockResolvedValueOnce(runningInspection())
+      .mockResolvedValue(runningInspection({ labels: diskLabels }))
+      .mockResolvedValueOnce(runningInspection({ labels: diskLabels }))
       .mockResolvedValueOnce(runningInspection({ labels: fleetLabels("acme", NEXT_ATTEMPT_ID) }));
 
     const result = await service.upgrade("acme", "ghcr.io/openclaw/openclaw:v2");
@@ -391,6 +447,7 @@ describe("fleet service", () => {
       memory: "2147483648",
       cpus: "2",
       pidsLimit: 512,
+      diskSize: "10g",
       networkName: "openclaw-cell-acme-net",
       environment: {
         HOME: "/home/node",
@@ -578,6 +635,7 @@ describe("fleet service", () => {
         { id: "cell-id", name: "openclaw-cell-acme" },
         { id: "peer-id", name: "unexpected-peer" },
       ],
+      internal: false,
     });
 
     await expect(service.upgrade("acme")).rejects.toThrow(/unexpected containers/iu);
@@ -660,6 +718,7 @@ describe("fleet service", () => {
         kind: "ok",
         labels: fleetLabels(),
         attachedContainers: [],
+        internal: false,
       })
       .mockResolvedValueOnce({ kind: "missing" });
     const service = createFleetService({
@@ -754,6 +813,7 @@ describe("fleet service", () => {
       kind: "ok",
       labels: {},
       attachedContainers: [],
+      internal: false,
     });
     const service = createFleetService({ env, containers: containers.runtime, now: () => 1000 });
 

@@ -29,6 +29,7 @@ internal object AndroidScreenshotFixture {
         available = true,
         supportsVision = true,
         supportsAudio = true,
+        supportsVideo = true,
         supportsDocuments = true,
         supportsReasoning = true,
         contextTokens = 200_000,

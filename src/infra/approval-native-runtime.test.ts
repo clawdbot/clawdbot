@@ -196,7 +196,7 @@ describe("createChannelNativeApprovalRuntime", () => {
     });
 
     await runtime.handleRequested({
-      id: "plugin:req-1",
+      id: "opaque-request-1",
       request: {
         title: "Plugin approval",
         description: "Allow access",
@@ -205,13 +205,13 @@ describe("createChannelNativeApprovalRuntime", () => {
       expiresAtMs: 60_000,
     });
     await runtime.handleResolved({
-      id: "plugin:req-1",
+      id: "opaque-request-1",
       decision: "allow-once",
       ts: 1,
     });
 
     const pendingCall = mockCallArg(buildPendingContent);
-    expect(requireRecord(pendingCall.request).id).toBe("plugin:req-1");
+    expect(requireRecord(pendingCall.request).id).toBe("opaque-request-1");
     expect(pendingCall.approvalKind).toBe("plugin");
     expect(typeof pendingCall.nowMs).toBe("number");
 
@@ -221,7 +221,7 @@ describe("createChannelNativeApprovalRuntime", () => {
       target: { to: "plugin:secondary" },
       reason: "preferred",
     });
-    expect(requireRecord(prepareCall.request).id).toBe("plugin:req-1");
+    expect(requireRecord(prepareCall.request).id).toBe("opaque-request-1");
     expect(prepareCall.approvalKind).toBe("plugin");
     expect(prepareCall.pendingContent).toBe("pending plugin");
 
@@ -232,7 +232,7 @@ describe("createChannelNativeApprovalRuntime", () => {
       reason: "preferred",
     });
     expect(deliverCall.preparedTarget).toEqual({ chatId: "plugin:secondary" });
-    expect(requireRecord(deliverCall.request).id).toBe("plugin:req-1");
+    expect(requireRecord(deliverCall.request).id).toBe("opaque-request-1");
     expect(deliverCall.approvalKind).toBe("plugin");
     expect(deliverCall.pendingContent).toBe("pending plugin");
 
@@ -240,22 +240,55 @@ describe("createChannelNativeApprovalRuntime", () => {
     expect(capabilitiesCall.cfg).toEqual({});
     expect(capabilitiesCall.accountId).toBe("secondary");
     expect(capabilitiesCall.approvalKind).toBe("plugin");
-    expect(requireRecord(capabilitiesCall.request).id).toBe("plugin:req-1");
+    expect(requireRecord(capabilitiesCall.request).id).toBe("opaque-request-1");
 
     const dmTargetsCall = mockCallArg(resolveApproverDmTargets);
     expect(dmTargetsCall.cfg).toEqual({});
     expect(dmTargetsCall.accountId).toBe("secondary");
     expect(dmTargetsCall.approvalKind).toBe("plugin");
-    expect(requireRecord(dmTargetsCall.request).id).toBe("plugin:req-1");
+    expect(requireRecord(dmTargetsCall.request).id).toBe("opaque-request-1");
 
     const resolvedCall = mockCallArg(finalizeResolved);
-    expect(requireRecord(resolvedCall.request).id).toBe("plugin:req-1");
+    expect(requireRecord(resolvedCall.request).id).toBe("opaque-request-1");
     expect(requireRecord(resolvedCall.resolved)).toEqual({
-      id: "plugin:req-1",
+      id: "opaque-request-1",
       decision: "allow-once",
       ts: 1,
     });
     expect(resolvedCall.entries).toEqual([{ chatId: "plugin:secondary", messageId: "m1" }]);
+  });
+
+  it("honors the deprecated approval kind compatibility override", async () => {
+    const resolveApprovalKind = vi.fn().mockReturnValue("exec");
+    const buildPendingContent = vi.fn().mockResolvedValue("pending");
+    const runtime = createChannelNativeApprovalRuntime({
+      label: "test/native-runtime-legacy-kind",
+      clientDisplayName: "Test",
+      cfg: {} as never,
+      resolveApprovalKind,
+      isConfigured: () => true,
+      shouldHandle: () => true,
+      buildPendingContent,
+      prepareTarget: async () => null,
+      deliverTarget: async () => null,
+      finalizeResolved: async () => {},
+    });
+
+    const request = {
+      id: "legacy-owned-id",
+      request: {
+        title: "Plugin approval",
+        description: "Allow access",
+      },
+      createdAtMs: 0,
+      expiresAtMs: 60_000,
+    } as const;
+    await runtime.handleRequested(request);
+
+    expect(resolveApprovalKind).toHaveBeenCalledWith(request);
+    expect(buildPendingContent).toHaveBeenCalledWith(
+      expect.objectContaining({ request, approvalKind: "exec" }),
+    );
   });
 
   it("sends route notices over least-privilege gateway calls", async () => {

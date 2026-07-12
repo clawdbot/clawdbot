@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { scanNodeHostedSkills } from "./skills.js";
+import { resolveNodeHostedSkillDirectory, scanNodeHostedSkills } from "./skills.js";
 
 const roots: string[] = [];
 
@@ -33,6 +33,31 @@ afterEach(() => {
 });
 
 describe("scanNodeHostedSkills", () => {
+  it("resolves a matching node skill locator against a custom state directory", () => {
+    const stateDir = createRoot();
+    const skillDir = path.join(stateDir, "skills", "profile-skill");
+    writeSkill(path.join(stateDir, "skills"), "profile-skill", "Profile skill");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
+    expect(resolveNodeHostedSkillDirectory("node://node-1/skills/profile-skill", "node-1")).toBe(
+      fs.realpathSync(skillDir),
+    );
+    expect(() =>
+      resolveNodeHostedSkillDirectory("node://node-2/skills/profile-skill", "node-1"),
+    ).toThrow("invalid for this node");
+    expect(() =>
+      resolveNodeHostedSkillDirectory("node://node-1/skills/../profile-skill", "node-1"),
+    ).toThrow("invalid for this node");
+    if (process.platform !== "win32") {
+      const outsideDir = path.join(stateDir, "outside");
+      writeSkill(stateDir, "outside", "Outside");
+      fs.symlinkSync(outsideDir, path.join(stateDir, "skills", "escape"));
+      expect(() =>
+        resolveNodeHostedSkillDirectory("node://node-1/skills/escape", "node-1"),
+      ).toThrow("unavailable");
+    }
+  });
+
   it("uses the active OpenClaw profile skills directory by default", () => {
     const stateDir = createRoot();
     const content = writeSkill(path.join(stateDir, "skills"), "profile-skill", "Profile skill");

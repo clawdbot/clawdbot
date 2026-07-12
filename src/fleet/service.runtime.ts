@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import { backupFleetCell, restoreFleetCell } from "./backup.runtime.js";
 import {
   buildCellEnvironment,
   cellAuthSecretDir,
@@ -16,6 +17,7 @@ import {
   parseEnvAssignments,
   validateCellContainerProfile,
   validateFleetImage,
+  validateDiskSize,
   validateTenantId,
   type CellContainerProfile,
   type FleetContainerRuntimeName,
@@ -25,6 +27,7 @@ import {
   type FleetContainerInspectResult,
   type FleetContainerRuntime,
 } from "./containers.runtime.js";
+import { runFleetDoctor } from "./doctor.runtime.js";
 import {
   deleteFleetCell,
   listFleetCells,
@@ -35,6 +38,7 @@ import {
   assertCurrentReservation,
   assertManagedInspection,
   assertManagedNetwork,
+  buildProfileBaseFromInspection,
   cleanupFailedCreateContainer,
   cleanupFailedCreateNetwork,
   detectHostSelinux,
@@ -43,14 +47,14 @@ import {
   prepareCellDirectories,
   probeCellHealth,
   readHostIdentity,
-  rebuildInspectedEnvironment,
+  requireInspectedAttemptId,
+  requireInspectedGatewayToken,
   requireCell,
-  requirePidsLimit,
-  requirePositiveResource,
   resolveContainerUser,
   resolvePurgeTarget,
   restorePreviousCell,
   withFleetCellOperation,
+  verifyReplacementHealthy,
 } from "./service-support.runtime.js";
 
 const OFFICIAL_IMAGE_UID = 1_000;
@@ -69,6 +73,8 @@ export type FleetCreateOptions = {
   memory?: string;
   cpus?: string;
   pidsLimit?: number;
+  disk?: string;
+  network?: "bridge" | "internal";
   env?: string[];
   gatewayToken?: string;
   start?: boolean;
@@ -169,6 +175,9 @@ export function createFleetService(options: FleetServiceOptions = {}) {
       const tenantId = validateTenantId(createOptions.tenant);
       const image = validateFleetImage(createOptions.image ?? DEFAULT_FLEET_IMAGE);
       const runtime = createOptions.runtime ?? "docker";
+      const network = createOptions.network ?? "bridge";
+      const diskSize =
+        createOptions.disk === undefined ? undefined : validateDiskSize(createOptions.disk);
       const { gatewayToken } = createOptions;
       if (gatewayToken !== undefined && !gatewayToken.trim()) {
         throw new Error("Gateway token must not be empty.");
@@ -177,6 +186,11 @@ export function createFleetService(options: FleetServiceOptions = {}) {
       const environment = buildCellEnvironment(token, parseEnvAssignments(createOptions.env ?? []));
       const attemptId = generateAttemptId();
       await containers.assertLocal(runtime);
+      if (network === "internal" && runtime === "docker") {
+        throw new Error(
+          "Docker cannot publish loopback ports for containers on --internal networks, so the cell Gateway's 127.0.0.1 port would be unreachable and health-gated operations would always fail. Use --runtime podman for internal cells, or keep the default bridge network and enforce Docker egress policy with host firewall rules (DOCKER-USER chain).",
+        );
+      }
       return await withFleetCellOperation({
         env,
         tenantId,
@@ -221,6 +235,7 @@ export function createFleetService(options: FleetServiceOptions = {}) {
               attemptId,
               memory: createOptions.memory ?? "2g",
               cpus: createOptions.cpus ?? "2",
+              ...(diskSize ? { diskSize } : {}),
               pidsLimit: createOptions.pidsLimit ?? 512,
               environment,
               ...(containerUser ? { containerUser } : {}),
@@ -233,11 +248,16 @@ export function createFleetService(options: FleetServiceOptions = {}) {
             const started = createOptions.start !== false;
             networkAttempted = true;
             checkpoint();
-            await containers.createNetwork(runtime, profile.networkName, {
-              [FLEET_TENANT_LABEL]: tenantId,
-              [FLEET_OWNER_LABEL]: profile.ownerId,
-              [FLEET_ATTEMPT_LABEL]: attemptId,
-            });
+            await containers.createNetwork(
+              runtime,
+              profile.networkName,
+              {
+                [FLEET_TENANT_LABEL]: tenantId,
+                [FLEET_OWNER_LABEL]: profile.ownerId,
+                [FLEET_ATTEMPT_LABEL]: attemptId,
+              },
+              { internal: network === "internal" },
+            );
             assertCurrentReservation(env, record);
             containerAttempted = true;
             checkpoint();
@@ -293,6 +313,16 @@ export function createFleetService(options: FleetServiceOptions = {}) {
               } catch {
                 // Preserve the provisioning error; a stale reservation remains recoverable via fleet list/rm.
               }
+            }
+            if (
+              diskSize &&
+              error instanceof Error &&
+              /storage[ -]?opt|pquota|backingfs/iu.test(error.message)
+            ) {
+              throw new Error(
+                `Fleet cannot enforce --disk on this container storage backend: ${error.message}. --disk requires Docker overlay2 on XFS with the pquota mount option (or btrfs/zfs storage drivers), or Podman overlay storage on XFS. Retry without --disk or move container storage to a supported filesystem.`,
+                { cause: error },
+              );
             }
             throw error;
           }
@@ -415,13 +445,17 @@ export function createFleetService(options: FleetServiceOptions = {}) {
     async logs(logOptions: FleetLogsOptions): Promise<void> {
       const record = requireCell(env, validateTenantId(logOptions.tenant));
       await containers.assertLocal(record.runtime);
-      const inspection = await containers.inspect(record.runtime, record.containerName);
-      // Ownership must be proven before inheriting stdio; never stream a foreign name-squatting container.
-      assertManagedInspection(record, inspection);
+      // Ownership must be proven before streaming; never stream a foreign name-squatting container.
+      const inspection = assertManagedInspection(
+        record,
+        await containers.inspect(record.runtime, record.containerName),
+      );
+      const gatewayCredential = inspection.environment.OPENCLAW_GATEWAY_TOKEN;
       await containers.logs(record.runtime, record.containerName, {
         follow: logOptions.follow,
         tail: logOptions.tail,
         since: logOptions.since,
+        redactValues: gatewayCredential ? [gatewayCredential] : [],
       });
     },
 
@@ -443,43 +477,24 @@ export function createFleetService(options: FleetServiceOptions = {}) {
           );
           const image = explicitImage ?? validateFleetImage(record.image);
           // The token is intentionally absent from SQLite; capture container env before removal and replay it.
-          const { OPENCLAW_GATEWAY_TOKEN: token } = inspection.environment;
-          if (!token) {
-            throw new Error(
-              "Cannot upgrade cell: existing container has no Gateway token environment.",
-            );
-          }
+          const token = requireInspectedGatewayToken(inspection, "upgrade");
           const containerUser = await resolveContainerUser({
             runtime: record.runtime,
             containers,
             hostIdentity: readHostIdentity(getuid, getgid),
             user: inspection.user,
           });
-          const previousAttemptId = inspection.labels[FLEET_ATTEMPT_LABEL];
-          if (!previousAttemptId || !/^[a-f0-9]{32}$/u.test(previousAttemptId)) {
-            throw new Error("Cannot upgrade cell: container attempt label is missing or invalid.");
-          }
+          const previousAttemptId = requireInspectedAttemptId(inspection, "upgrade");
           const nextAttemptId = generateAttemptId();
-          const profileBase = {
-            tenantId: record.tenantId,
-            containerName: record.containerName,
-            networkName: cellNetworkName(record.tenantId),
-            runtime: record.runtime,
-            hostPort: record.hostPort,
-            dataDir: record.dataDir,
-            authSecretDir: cellAuthSecretDir(resolveStateDir(env), record.tenantId),
-            ownerId: cellOwnerId(record.dataDir),
-            memory: requirePositiveResource(inspection.memory, "memory"),
-            cpus: requirePositiveResource(inspection.cpus, "CPU"),
-            pidsLimit: requirePidsLimit(inspection.pidsLimit),
-            environment: rebuildInspectedEnvironment(
-              inspection.environment,
-              inspection.labels,
-              token,
-            ),
-            ...(containerUser ? { containerUser } : {}),
+          const profileBase = buildProfileBaseFromInspection({
+            record,
+            stateDir: resolveStateDir(env),
+            inspection,
+            containerUser,
             selinuxRelabel: await selinuxEnabled(),
-          } satisfies Omit<CellContainerProfile, "image" | "attemptId">;
+            token,
+            context: "upgrade",
+          });
           const oldProfile: CellContainerProfile = {
             ...profileBase,
             image: inspection.imageId,
@@ -513,30 +528,18 @@ export function createFleetService(options: FleetServiceOptions = {}) {
             // "running" briefly before crashing. Commit only after the replacement answers
             // /healthz (the image's compose health contract): exit/restart-loop fails fast,
             // and the deadline restores the old cell instead of leaving a dead replacement.
-            const verifyDeadline = now() + UPGRADE_VERIFY_TIMEOUT_MS;
-            for (;;) {
-              const replacement = await containers.inspect(record.runtime, record.containerName);
-              if (
-                replacement.kind !== "ok" ||
-                replacement.labels[FLEET_ATTEMPT_LABEL] !== nextAttemptId ||
-                !replacement.running
-              ) {
-                throw new Error(
-                  replacement.kind === "ok"
-                    ? "Replacement cell container is not running after upgrade."
-                    : "Replacement cell container could not be verified after upgrade.",
-                );
-              }
-              const health = await probeCellHealth({ port: record.hostPort, fetchImpl });
-              if (health.status === "ok") {
-                break;
-              }
-              if (now() >= verifyDeadline) {
-                throw new Error("Replacement cell container did not become healthy after upgrade.");
-              }
-              checkpoint();
-              await sleep(UPGRADE_VERIFY_POLL_MS);
-            }
+            await verifyReplacementHealthy({
+              containers,
+              record,
+              attemptId: nextAttemptId,
+              fetchImpl,
+              now,
+              sleep,
+              checkpoint,
+              timeoutMs: UPGRADE_VERIFY_TIMEOUT_MS,
+              pollMs: UPGRADE_VERIFY_POLL_MS,
+              context: "upgrade",
+            });
             checkpoint();
             updateImage(env, record.tenantId, image);
           } catch (error) {
@@ -564,6 +567,60 @@ export function createFleetService(options: FleetServiceOptions = {}) {
           return { tenant: record.tenantId, action: "upgrade", image };
         },
       });
+    },
+
+    async backup(params: { tenant: string; out?: string; maxBytes?: number }) {
+      const tenantId = validateTenantId(params.tenant);
+      return await withFleetCellOperation({
+        env,
+        tenantId,
+        operationName: "backup",
+        operation: async (checkpoint) => {
+          checkpoint();
+          const record = requireCell(env, tenantId);
+          return await backupFleetCell({
+            record,
+            stateDir: resolveStateDir(env),
+            containers,
+            now,
+            checkpoint,
+            out: params.out,
+            maxBytes: params.maxBytes,
+          });
+        },
+      });
+    },
+
+    async restore(params: { tenant: string; from: string; force?: boolean; maxBytes?: number }) {
+      const tenantId = validateTenantId(params.tenant);
+      return await withFleetCellOperation({
+        env,
+        tenantId,
+        operationName: "restore",
+        operation: async (checkpoint) => {
+          const record = requireCell(env, tenantId);
+          return await restoreFleetCell({
+            record,
+            stateDir: resolveStateDir(env),
+            containers,
+            fetchImpl,
+            now,
+            sleep,
+            checkpoint,
+            generateToken,
+            generateAttemptId,
+            hostIdentity: readHostIdentity(getuid, getgid),
+            selinuxRelabel: await selinuxEnabled(),
+            from: params.from,
+            force: params.force,
+            maxBytes: params.maxBytes,
+          });
+        },
+      });
+    },
+
+    async doctor(tenant?: string) {
+      return await runFleetDoctor({ env, containers, fetchImpl, tenant, getuid, getgid });
     },
 
     async remove(params: {

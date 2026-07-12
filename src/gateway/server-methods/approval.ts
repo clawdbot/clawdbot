@@ -30,6 +30,7 @@ import {
 } from "../operator-approval-authorization.js";
 import {
   getOperatorApprovalDetailed,
+  getOperatorApprovalDetailedByLocator,
   type OperatorApprovalRecord,
   type OperatorApprovalResolver,
 } from "../operator-approval-store.js";
@@ -149,6 +150,7 @@ function loadVisibleApproval(params: {
   id: string;
   client: GatewayClient | null;
   allowApprovalRuntime?: boolean;
+  allowTransportRef?: boolean;
   execApprovalManager: ExecApprovalManager;
   pluginApprovalManager: ExecApprovalManager<PluginApprovalRequestPayload>;
   databaseOptions?: OpenClawStateDatabaseOptions;
@@ -169,22 +171,22 @@ function loadVisibleApproval(params: {
     !canAccessOperatorApproval({
       client: params.client,
       allowApprovalRuntime: params.allowApprovalRuntime,
-      binding: {
-        requestedByConnId: liveRecord.requestedByConnId,
-        requestedByDeviceId: liveRecord.requestedByDeviceId,
-        requestedByClientId: liveRecord.requestedByClientId,
-        reviewerDeviceIds: liveRecord.approvalReviewerDeviceIds,
-      },
+      binding: { reviewerDeviceIds: liveRecord.approvalReviewerDeviceIds },
     })
   ) {
     return null;
   }
   let lookup: ReturnType<typeof getOperatorApprovalDetailed>;
   try {
-    lookup = getOperatorApprovalDetailed({
-      id: params.id,
-      databaseOptions: params.databaseOptions,
-    });
+    lookup = params.allowTransportRef
+      ? getOperatorApprovalDetailedByLocator({
+          locator: params.id,
+          databaseOptions: params.databaseOptions,
+        })
+      : getOperatorApprovalDetailed({
+          id: params.id,
+          databaseOptions: params.databaseOptions,
+        });
   } catch (error) {
     const corrupt = { outcome: "corrupt", id: params.id } as const;
     params.execApprovalManager.reconcileDurableLookup(corrupt);
@@ -196,11 +198,7 @@ function loadVisibleApproval(params: {
       !canAccessOperatorApproval({
         client: params.client,
         allowApprovalRuntime: params.allowApprovalRuntime,
-        binding: {
-          requestedByDeviceId: lookup.record.requester.deviceId,
-          requestedByClientId: lookup.record.requester.clientId,
-          reviewerDeviceIds: lookup.record.reviewerDeviceIds,
-        },
+        binding: { reviewerDeviceIds: lookup.record.reviewerDeviceIds },
       })
     ) {
       return null;
@@ -213,7 +211,7 @@ function loadVisibleApproval(params: {
   }
   const missing = {
     outcome: lookup.outcome === "corrupt" ? "corrupt" : "missing",
-    id: params.id,
+    id: lookup.outcome === "corrupt" ? (lookup.id ?? params.id) : params.id,
   } as const;
   params.execApprovalManager.reconcileDurableLookup(missing);
   params.pluginApprovalManager.reconcileDurableLookup(missing);
@@ -251,6 +249,21 @@ function broadcastResolvedEvent(params: {
   params.context.broadcast(params.eventName, params.event, { dropIfSlow: true });
 }
 
+async function runResolutionSideEffect(params: {
+  context: GatewayRequestContext;
+  approvalKind: "exec" | "plugin";
+  effect: "broadcast" | "forwarder" | "ios-push";
+  run: () => void | Promise<void>;
+}): Promise<void> {
+  try {
+    await params.run();
+  } catch (error) {
+    params.context.logGateway?.error?.(
+      `${params.approvalKind} approvals: unified resolve ${params.effect} failed: ${String(error)}`,
+    );
+  }
+}
+
 async function publishAppliedResolution(params: {
   record: OperatorApprovalRecord;
   liveRecord: ExecApprovalRecord<ApprovalRequest>;
@@ -269,26 +282,33 @@ async function publishAppliedResolution(params: {
       ts,
       request: params.liveRecord.request as ExecApprovalRequestPayload,
     };
-    broadcastResolvedEvent({
+    await runResolutionSideEffect({
       context: params.context,
-      eventName: "exec.approval.resolved",
-      event,
-      liveRecord: params.liveRecord,
+      approvalKind: "exec",
+      effect: "broadcast",
+      run: () =>
+        broadcastResolvedEvent({
+          context: params.context,
+          eventName: "exec.approval.resolved",
+          event,
+          liveRecord: params.liveRecord,
+        }),
     });
-    const followUps = [
-      params.forwarder ? () => params.forwarder!.handleResolved(event) : null,
-      params.iosPushDelivery?.handleResolved
-        ? () => params.iosPushDelivery!.handleResolved!(event)
-        : null,
-    ].filter((entry): entry is () => Promise<void> => Boolean(entry));
-    for (const followUp of followUps) {
-      try {
-        await followUp();
-      } catch (error) {
-        params.context.logGateway?.error?.(
-          `exec approvals: unified resolve follow-up failed: ${String(error)}`,
-        );
-      }
+    if (params.forwarder) {
+      await runResolutionSideEffect({
+        context: params.context,
+        approvalKind: "exec",
+        effect: "forwarder",
+        run: () => params.forwarder!.handleResolved(event),
+      });
+    }
+    if (params.iosPushDelivery?.handleResolved) {
+      await runResolutionSideEffect({
+        context: params.context,
+        approvalKind: "exec",
+        effect: "ios-push",
+        run: () => params.iosPushDelivery!.handleResolved!(event),
+      });
     }
     return;
   }
@@ -300,18 +320,25 @@ async function publishAppliedResolution(params: {
     ts,
     request: params.liveRecord.request as PluginApprovalRequestPayload,
   };
-  broadcastResolvedEvent({
+  await runResolutionSideEffect({
     context: params.context,
-    eventName: "plugin.approval.resolved",
-    event,
-    liveRecord: params.liveRecord,
+    approvalKind: "plugin",
+    effect: "broadcast",
+    run: () =>
+      broadcastResolvedEvent({
+        context: params.context,
+        eventName: "plugin.approval.resolved",
+        event,
+        liveRecord: params.liveRecord,
+      }),
   });
-  try {
-    await params.forwarder?.handlePluginApprovalResolved?.(event);
-  } catch (error) {
-    params.context.logGateway?.error?.(
-      `plugin approvals: unified resolve follow-up failed: ${String(error)}`,
-    );
+  if (params.forwarder?.handlePluginApprovalResolved) {
+    await runResolutionSideEffect({
+      context: params.context,
+      approvalKind: "plugin",
+      effect: "forwarder",
+      run: () => params.forwarder!.handlePluginApprovalResolved!(event),
+    });
   }
 }
 
@@ -472,6 +499,7 @@ export function createApprovalHandlers(
               id,
               client,
               allowApprovalRuntime: true,
+              allowTransportRef: true,
               execApprovalManager: params.execApprovalManager,
               pluginApprovalManager: params.pluginApprovalManager,
               databaseOptions: params.databaseOptions,
@@ -509,8 +537,6 @@ export function createApprovalHandlers(
         (requestedDecision !== null &&
           record.presentation.allowedDecisions.includes(requestedDecision));
       const kindMatches = resolveParams?.kind === record.presentation.kind;
-      // Ambiguous verdicts consume the first-answer slot as a denial. Leaving
-      // the approval retryable would let a later surface release authority.
       const forceMalformedDeny = !validParams || !kindMatches || !decisionAllowed;
       let resolution:
         | ApplyApprovalDecisionResult<ExecApprovalRequestPayload>
@@ -555,16 +581,22 @@ export function createApprovalHandlers(
         respondApprovalNotFound(respond);
         return;
       }
+      respond(true, { applied: resolution.applied, approval }, undefined);
       if (resolution.applied && resolution.liveRecord) {
-        await publishAppliedResolution({
+        // SQLite CAS is canonical. Never make the winning surface wait for
+        // best-effort channel, push, or legacy-event reconciliation.
+        void publishAppliedResolution({
           record: terminalRecord,
           liveRecord: resolution.liveRecord,
           context,
           forwarder: params.forwarder,
           iosPushDelivery: params.iosPushDelivery,
+        }).catch((error: unknown) => {
+          context.logGateway?.error?.(
+            `${terminalRecord.kind} approvals: unified resolve publication failed: ${String(error)}`,
+          );
         });
       }
-      respond(true, { applied: resolution.applied, approval }, undefined);
     },
   };
 }

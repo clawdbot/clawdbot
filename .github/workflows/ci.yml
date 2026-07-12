@@ -1051,9 +1051,9 @@ jobs:
         run: |
           if [[ "$COMPATIBILITY_TARGET" == "true" ]]; then
             # Frozen targets can contain timing-sensitive tests fixed on current main.
-            # Let their browser helpers use their 10-second waits. Do not retry whole
-            # legacy files: several rely on one-shot mocked browser globals.
-            pnpm --dir ui test --testTimeout=10000
+            # Give legacy browser fixtures enough headroom on shared hosted runners.
+            # Do not retry whole files: several rely on one-shot mocked browser globals.
+            pnpm --dir ui test --testTimeout=30000
           else
             pnpm --dir ui test
           fi

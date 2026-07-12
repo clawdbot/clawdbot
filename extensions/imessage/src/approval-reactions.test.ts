@@ -1,14 +1,20 @@
 // Imessage tests cover approval reactions plugin behavior.
+import { buildTypedExecApprovalPendingReplyPayload } from "openclaw/plugin-sdk/approval-reply-runtime";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  addIMessageApprovalReactionHintToStructuredPayload,
   appendIMessageApprovalReactionHintForOutboundMessage,
+  buildIMessageApprovalConversationKeyForTarget,
   buildIMessageApprovalReactionHint,
   clearIMessageApprovalReactionTargetsForTest,
   extractIMessageApprovalPromptBinding,
+  handleIMessageApprovalReaction,
   listPendingIMessageApprovalReactionPollTargets,
   maybeResolveIMessageApprovalReaction,
+  registerIMessageApprovalReactionTargetForDeliveredPayload,
   registerIMessageApprovalReactionTargetForOutboundMessage,
-  registerIMessageApprovalReactionTarget,
+  registerIMessageApprovalReactionTarget as registerIMessageApprovalReactionTargetRaw,
   resolveIMessageApprovalReactionTargetWithPersistence,
 } from "./approval-reactions.js";
 import type { IMessagePayload } from "./monitor/types.js";
@@ -18,10 +24,31 @@ const resolverMocks = vi.hoisted(() => ({
   isApprovalNotFoundError: vi.fn(() => false),
 }));
 
+type IMessageTargetParams = Parameters<typeof registerIMessageApprovalReactionTargetRaw>[0];
+
+function registerIMessageApprovalReactionTarget(
+  params: Omit<IMessageTargetParams, "approvalKind"> & {
+    approvalKind?: IMessageTargetParams["approvalKind"];
+  },
+) {
+  return registerIMessageApprovalReactionTargetRaw({
+    ...params,
+    approvalKind: params.approvalKind ?? "exec",
+  });
+}
+
 vi.mock("./approval-resolver.js", () => ({
   resolveIMessageApproval: resolverMocks.resolveIMessageApproval,
   isApprovalNotFoundError: resolverMocks.isApprovalNotFoundError,
 }));
+
+function requireExecApprovalMetadata(payload: ReplyPayload): Record<string, unknown> {
+  const value = payload.channelData?.execApproval;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Expected exec approval metadata");
+  }
+  return value as Record<string, unknown>;
+}
 
 function buildTapbackReactionPayload(overrides: Partial<IMessagePayload>): IMessagePayload {
   return {
@@ -37,7 +64,15 @@ describe("iMessage approval reactions", () => {
   beforeEach(() => {
     clearIMessageApprovalReactionTargetsForTest();
     resolverMocks.resolveIMessageApproval.mockReset();
-    resolverMocks.resolveIMessageApproval.mockResolvedValue(undefined);
+    resolverMocks.resolveIMessageApproval.mockImplementation(
+      async ({ decision }: { decision: "allow-once" | "allow-always" | "deny" }) => ({
+        applied: true,
+        approval:
+          decision === "deny"
+            ? { status: "denied", decision, reason: "user" }
+            : { status: "allowed", decision, reason: "user" },
+      }),
+    );
     resolverMocks.isApprovalNotFoundError.mockReset();
     resolverMocks.isApprovalNotFoundError.mockReturnValue(false);
   });
@@ -72,6 +107,341 @@ describe("iMessage approval reactions", () => {
     expect(appendIMessageApprovalReactionHintForOutboundMessage(prompt)).toBe(prompt);
   });
 
+  it("uses typed metadata to prepare shared forwarded prompts", () => {
+    const payload: ReplyPayload = {
+      text: [
+        "🛡️ Plugin approval required",
+        "ID: plugin:shared-1",
+        "Reply with: /approve plugin:shared-1 allow-once|deny",
+      ].join("\n"),
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Allow Once",
+                action: {
+                  type: "approval",
+                  approvalId: "plugin:shared-1",
+                  approvalKind: "plugin",
+                  decision: "allow-once",
+                },
+              },
+              {
+                label: "Deny",
+                action: {
+                  type: "approval",
+                  approvalId: "plugin:shared-1",
+                  approvalKind: "plugin",
+                  decision: "deny",
+                },
+              },
+            ],
+          },
+        ],
+      },
+      channelData: {
+        execApproval: {
+          approvalId: "plugin:shared-1",
+          approvalSlug: "shared-1",
+          approvalKind: "plugin",
+          allowedDecisions: ["allow-once", "deny"],
+        },
+      },
+    };
+
+    const prepared = addIMessageApprovalReactionHintToStructuredPayload({
+      payload,
+      approvalKind: "plugin",
+    });
+    expect(prepared?.text).toBe(
+      [
+        "🛡️ Plugin approval required",
+        "ID: plugin:shared-1",
+        "",
+        "React with:",
+        "",
+        "👍 Allow Once",
+        "👎 Deny",
+        "",
+        "Reply with: /approve plugin:shared-1 allow-once|deny",
+      ].join("\n"),
+    );
+    expect(prepared?.channelData?.imessageApprovalReactionBindingV1).toEqual({
+      version: 1,
+      approvalId: "plugin:shared-1",
+      approvalSlug: "shared-1",
+      approvalKind: "plugin",
+      allowedDecisions: ["allow-once", "deny"],
+    });
+    expect(
+      addIMessageApprovalReactionHintToStructuredPayload({
+        payload,
+        approvalKind: "exec",
+      }),
+    ).toBeNull();
+  });
+
+  it("binds delivered shared prompts from typed metadata and stable GUIDs", async () => {
+    const payload = addIMessageApprovalReactionHintToStructuredPayload({
+      approvalKind: "exec",
+      payload: buildTypedExecApprovalPendingReplyPayload({
+        approvalId: "exec-shared-1",
+        approvalSlug: "shared-1",
+        command: "echo shared",
+        host: "gateway",
+        allowedDecisions: ["allow-once", "deny"],
+      }),
+    });
+    if (!payload) {
+      throw new Error("Expected typed iMessage approval payload");
+    }
+
+    expect(
+      registerIMessageApprovalReactionTargetForDeliveredPayload({
+        accountId: "default",
+        target: { channel: "imessage", to: "+15551230000" },
+        payload,
+        results: [
+          {
+            channel: "imessage",
+            messageId: "42",
+            meta: {
+              imessageMessageGuid: "p:0/shared-guid",
+              imessageVisibleText: payload.text,
+            },
+            receipt: {
+              primaryPlatformMessageId: "42",
+              platformMessageIds: ["42"],
+              parts: [{ platformMessageId: "42", kind: "text", index: 0 }],
+              sentAt: 1_000,
+            },
+          },
+        ],
+      }),
+    ).toBe(true);
+
+    await expect(
+      resolveIMessageApprovalReactionTargetWithPersistence({
+        accountId: "default",
+        conversation: { handle: "+15551230000" },
+        messageId: "p:0/shared-guid",
+        reactionKey: "👎",
+      }),
+    ).resolves.toEqual({
+      approvalId: "exec-shared-1",
+      approvalKind: "exec",
+      decision: "deny",
+    });
+    await expect(
+      resolveIMessageApprovalReactionTargetWithPersistence({
+        accountId: "default",
+        conversation: { handle: "+15551230000" },
+        messageId: "42",
+        reactionKey: "👎",
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it("binds approval reactions when outbound chunking splits the visible prompt", async () => {
+    const payload = addIMessageApprovalReactionHintToStructuredPayload({
+      approvalKind: "exec",
+      payload: buildTypedExecApprovalPendingReplyPayload({
+        approvalId: "exec-chunked-1",
+        approvalSlug: "chunked-1",
+        command: "echo chunked",
+        host: "gateway",
+        allowedDecisions: ["allow-once", "deny"],
+      }),
+    });
+    if (!payload?.text) {
+      throw new Error("Expected typed iMessage approval payload");
+    }
+    const visibleText = payload.text;
+    const bodyIndex = visibleText.indexOf("Approval required.");
+    if (bodyIndex < 1) {
+      throw new Error("Expected approval body after reaction hint");
+    }
+
+    expect(
+      registerIMessageApprovalReactionTargetForDeliveredPayload({
+        accountId: "default",
+        target: { channel: "imessage", to: "+15551230000" },
+        payload,
+        results: [
+          {
+            channel: "imessage",
+            messageId: "41",
+            meta: {
+              imessageMessageGuid: "p:0/chunked-guid-1",
+              imessageVisibleText: visibleText.slice(0, bodyIndex),
+            },
+          },
+          {
+            channel: "imessage",
+            messageId: "42",
+            meta: {
+              imessageMessageGuid: "p:0/chunked-guid-2",
+              imessageVisibleText: visibleText.slice(bodyIndex),
+            },
+          },
+        ],
+      }),
+    ).toBe(true);
+
+    await expect(
+      resolveIMessageApprovalReactionTargetWithPersistence({
+        accountId: "default",
+        conversation: { handle: "+15551230000" },
+        messageId: "p:0/chunked-guid-1",
+        reactionKey: "👎",
+      }),
+    ).resolves.toEqual({
+      approvalId: "exec-chunked-1",
+      approvalKind: "exec",
+      decision: "deny",
+    });
+  });
+
+  it("fails closed when typed metadata and approval actions disagree", () => {
+    const buildPayload = () =>
+      buildTypedExecApprovalPendingReplyPayload({
+        approvalId: "exec-strict-1",
+        approvalSlug: "strict-1",
+        command: "echo strict",
+        host: "gateway",
+        allowedDecisions: ["allow-once", "deny"],
+      });
+    const missingKind = buildPayload();
+    delete requireExecApprovalMetadata(missingKind).approvalKind;
+    expect(
+      addIMessageApprovalReactionHintToStructuredPayload({
+        payload: missingKind,
+        approvalKind: "exec",
+      }),
+    ).toBeNull();
+
+    const mismatchedAction = buildPayload();
+    const buttons = mismatchedAction.presentation?.blocks.find((block) => block.type === "buttons");
+    if (!buttons || buttons.type !== "buttons" || !buttons.buttons[0]?.action) {
+      throw new Error("Expected typed approval buttons");
+    }
+    buttons.buttons[0].action = {
+      type: "approval",
+      approvalId: "exec-other",
+      approvalKind: "exec",
+      decision: "allow-once",
+    };
+    expect(
+      addIMessageApprovalReactionHintToStructuredPayload({
+        payload: mismatchedAction,
+        approvalKind: "exec",
+      }),
+    ).toBeNull();
+
+    const duplicateDecision = buildPayload();
+    requireExecApprovalMetadata(duplicateDecision).allowedDecisions = [
+      "allow-once",
+      "allow-once",
+      "deny",
+    ];
+    expect(
+      addIMessageApprovalReactionHintToStructuredPayload({
+        payload: duplicateDecision,
+        approvalKind: "exec",
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects delivered shared prompts without the exact private GUID and visible binding", () => {
+    const payload: ReplyPayload = {
+      text: [
+        "🔒 Exec approval required",
+        "ID: exec-shared-2",
+        "Reply with: /approve exec-shared-2 allow-once|deny",
+      ].join("\n"),
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Allow Once",
+                action: {
+                  type: "approval",
+                  approvalId: "exec-shared-2",
+                  approvalKind: "exec",
+                  decision: "allow-once",
+                },
+              },
+              {
+                label: "Deny",
+                action: {
+                  type: "approval",
+                  approvalId: "exec-shared-2",
+                  approvalKind: "exec",
+                  decision: "deny",
+                },
+              },
+            ],
+          },
+        ],
+      },
+      channelData: {
+        execApproval: {
+          approvalId: "exec-shared-2",
+          approvalSlug: "shared-2",
+          approvalKind: "exec",
+          allowedDecisions: ["allow-once", "deny"],
+        },
+      },
+    };
+    const prepared = addIMessageApprovalReactionHintToStructuredPayload({
+      payload,
+      approvalKind: "exec",
+    });
+    if (!prepared?.text) {
+      throw new Error("Expected typed iMessage approval payload");
+    }
+
+    expect(
+      registerIMessageApprovalReactionTargetForDeliveredPayload({
+        accountId: "default",
+        target: { channel: "imessage", to: "+15551230000" },
+        payload: prepared,
+        results: [
+          {
+            channel: "imessage",
+            messageId: "p:0/guessed-guid",
+            meta: { imessageVisibleText: prepared.text },
+          },
+          {
+            channel: "imessage",
+            messageId: "42",
+            meta: {
+              imessageMessageGuid: "p:0/real-guid",
+              imessageVisibleText: prepared.text.replace("exec-shared-2", "exec-other"),
+            },
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  it("derives reaction conversation keys from every supported target form", () => {
+    expect(buildIMessageApprovalConversationKeyForTarget("+1 (555) 123-0000")).toEqual({
+      handle: "+15551230000",
+    });
+    expect(buildIMessageApprovalConversationKeyForTarget("chat_id:42")).toEqual({ chatId: 42 });
+    expect(buildIMessageApprovalConversationKeyForTarget("chat_guid:iMessage;+;group-1")).toEqual({
+      chatGuid: "iMessage;+;group-1",
+    });
+    expect(
+      buildIMessageApprovalConversationKeyForTarget("chat_identifier:group@example.com"),
+    ).toEqual({ chatIdentifier: "group@example.com" });
+  });
+
   it("exposes allow-always as the shared infinity reaction choice", () => {
     expect(buildIMessageApprovalReactionHint(["allow-once", "allow-always", "deny"])).toBe(
       "React with:\n\n👍 Allow Once\n♾️ Allow Always\n👎 Deny",
@@ -89,6 +459,7 @@ describe("iMessage approval reactions", () => {
       }),
     ).toEqual({
       approvalId: "exec-allow-always",
+      approvalKind: "exec",
       allowedDecisions: ["allow-always"],
     });
 
@@ -101,8 +472,22 @@ describe("iMessage approval reactions", () => {
       }),
     ).resolves.toEqual({
       approvalId: "exec-allow-always",
+      approvalKind: "exec",
       decision: "allow-always",
     });
+  });
+
+  it("rejects reaction targets without an explicit approval kind", () => {
+    expect(
+      registerIMessageApprovalReactionTargetRaw({
+        accountId: "default",
+        conversation: { handle: "+15551230000" },
+        messageId: "msg-missing-kind",
+        approvalId: "exec-missing-kind",
+        approvalKind: undefined as unknown as "exec",
+        allowedDecisions: ["allow-once"],
+      }),
+    ).toBeNull();
   });
 
   it("resolves a registered reaction target keyed by handle", async () => {
@@ -123,6 +508,7 @@ describe("iMessage approval reactions", () => {
       }),
     ).resolves.toEqual({
       approvalId: "exec-1",
+      approvalKind: "exec",
       decision: "deny",
     });
   });
@@ -210,6 +596,7 @@ describe("iMessage approval reactions", () => {
       conversation: { chatGuid: "iMessage;+;chat42" },
       messageId: "msg-group-1",
       approvalId: "plugin:abc",
+      approvalKind: "plugin",
       allowedDecisions: ["allow-once", "allow-always", "deny"],
     });
 
@@ -222,6 +609,7 @@ describe("iMessage approval reactions", () => {
       }),
     ).resolves.toEqual({
       approvalId: "plugin:abc",
+      approvalKind: "plugin",
       decision: "allow-once",
     });
   });
@@ -237,6 +625,7 @@ describe("iMessage approval reactions", () => {
       ),
     ).toEqual({
       approvalId: "plugin:abc",
+      approvalKind: "plugin",
       allowedDecisions: ["allow-once", "allow-always", "deny"],
     });
 
@@ -245,6 +634,7 @@ describe("iMessage approval reactions", () => {
         accountId: "default",
         conversation: { handle: "+15551230000" },
         messageId: "prompt-message",
+        approvalKind: "exec",
         text: [
           "Exec approval required",
           "ID: exec-1",
@@ -263,6 +653,7 @@ describe("iMessage approval reactions", () => {
       }),
     ).resolves.toEqual({
       approvalId: "exec-1",
+      approvalKind: "exec",
       decision: "deny",
     });
 
@@ -286,6 +677,7 @@ describe("iMessage approval reactions", () => {
         accountId: "default",
         conversation: { handle: "+15551230000" },
         messageId: "help-message",
+        approvalKind: "exec",
         text: "Run /approve task-7 allow-once when you're ready.",
       }),
     ).toBe(false);
@@ -293,6 +685,22 @@ describe("iMessage approval reactions", () => {
     expect(
       extractIMessageApprovalPromptBinding("Run /approve task-7 allow-once when you're ready."),
     ).toBeNull();
+  });
+
+  it("rejects outbound prompt bindings whose approval kind does not match", () => {
+    expect(
+      registerIMessageApprovalReactionTargetForOutboundMessage({
+        accountId: "default",
+        conversation: { handle: "+15551230000" },
+        messageId: "mismatched-prompt-message",
+        approvalKind: "exec",
+        text: [
+          "Plugin approval required",
+          "ID: plugin:abc",
+          "Reply with: /approve plugin:abc allow-once|deny",
+        ].join("\n"),
+      }),
+    ).toBe(false);
   });
 
   it("escapes `$` sequences in approvalId when interpolating into outbound text", () => {
@@ -307,6 +715,7 @@ describe("iMessage approval reactions", () => {
     ].join("\n");
     expect(extractIMessageApprovalPromptBinding(text)).toEqual({
       approvalId: "exec-1abc",
+      approvalKind: "exec",
       allowedDecisions: ["allow-once"],
     });
   });
@@ -416,6 +825,7 @@ describe("iMessage approval reactions", () => {
     expect(resolverMocks.resolveIMessageApproval).toHaveBeenCalledWith({
       cfg,
       approvalId: "exec-service-prefix",
+      approvalKind: "exec",
       decision: "allow-once",
       senderId: "+15551230000",
       gatewayUrl: undefined,
@@ -458,6 +868,7 @@ describe("iMessage approval reactions", () => {
     expect(resolverMocks.resolveIMessageApproval).toHaveBeenCalledWith({
       cfg,
       approvalId: "exec-prefixed",
+      approvalKind: "exec",
       decision: "allow-once",
       senderId: "+15551230000",
       gatewayUrl: undefined,
@@ -514,6 +925,7 @@ describe("iMessage approval reactions", () => {
     expect(resolverMocks.resolveIMessageApproval).toHaveBeenCalledWith({
       cfg,
       approvalId: "exec-dm",
+      approvalKind: "exec",
       decision: "allow-once",
       senderId: "+15551230000",
       gatewayUrl: undefined,
@@ -556,6 +968,7 @@ describe("iMessage approval reactions", () => {
       conversation: { handle: "+15551230000" },
       messageId: "approval-message",
       approvalId: "plugin:abc",
+      approvalKind: "plugin",
       allowedDecisions: ["allow-once", "allow-always", "deny"],
     });
 
@@ -579,6 +992,7 @@ describe("iMessage approval reactions", () => {
     expect(resolverMocks.resolveIMessageApproval).toHaveBeenCalledWith({
       cfg,
       approvalId: "plugin:abc",
+      approvalKind: "plugin",
       decision: "allow-once",
       senderId: "+15551230000",
       gatewayUrl: undefined,
@@ -617,6 +1031,7 @@ describe("iMessage approval reactions", () => {
     expect(resolverMocks.resolveIMessageApproval).toHaveBeenCalledWith({
       cfg,
       approvalId: "exec-group",
+      approvalKind: "exec",
       decision: "deny",
       senderId: "+15551239999",
       gatewayUrl: undefined,
@@ -706,6 +1121,48 @@ describe("iMessage approval reactions", () => {
         accountId: "default",
         conversation: { handle: "+15551230000" },
         messageId: "expired-message",
+        reactionKey: "👍",
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it("clears a losing surface and reports the canonical first-answer outcome", async () => {
+    registerIMessageApprovalReactionTarget({
+      accountId: "default",
+      conversation: { handle: "+15551230000" },
+      messageId: "already-resolved-message",
+      approvalId: "exec-already-resolved",
+      allowedDecisions: ["allow-once", "deny"],
+    });
+    resolverMocks.resolveIMessageApproval.mockResolvedValueOnce({
+      applied: false,
+      approval: { status: "denied", decision: "deny", reason: "user" },
+    });
+    const logVerboseMessage = vi.fn();
+
+    await expect(
+      handleIMessageApprovalReaction({
+        cfg: { channels: { imessage: { allowFrom: ["+15551230000"] } } },
+        accountId: "default",
+        message: buildTapbackReactionPayload({
+          sender: "+15551230000",
+          reaction_emoji: "👍",
+          reacted_to_guid: "already-resolved-message",
+        }),
+        bodyText: "",
+        logVerboseMessage,
+      }),
+    ).resolves.toEqual({ handled: true, stopPolling: true, stopPollingReason: "resolved" });
+
+    expect(logVerboseMessage).toHaveBeenCalledWith(
+      "imessage: approval reaction already resolved id=exec-already-resolved sender=+15551230000 status=denied decision=deny reason=user via messageId=already-resolved-message",
+    );
+    expect(logVerboseMessage.mock.calls.flat().join(" ")).not.toContain("decision=allow-once");
+    await expect(
+      resolveIMessageApprovalReactionTargetWithPersistence({
+        accountId: "default",
+        conversation: { handle: "+15551230000" },
+        messageId: "already-resolved-message",
         reactionKey: "👍",
       }),
     ).resolves.toBeNull();

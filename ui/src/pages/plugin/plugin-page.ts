@@ -6,10 +6,9 @@ import type { RouteId } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveEmbedSandbox } from "../../lib/chat/tool-display.ts";
-import { searchForSession } from "../../lib/sessions/navigation.ts";
 import { OpenClawLightDomContentsElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import { pluginTabKey, pluginTabSearch } from "./route.ts";
+import { pluginTabKey } from "./route.ts";
 
 /**
  * Bundled plugin tab views ship with the Control UI and render natively; every
@@ -26,15 +25,10 @@ type BundledPluginTabView = {
       allowExternalEmbedUrls: boolean;
     };
     onRequestUpdate?: () => void;
-    onContinueSession?: (sessionKey: string) => void;
     // L5: custom widgets need the gateway HTTP base (iframe src) and the session
     // key (prompt dispatch). Bundled views that don't use them ignore these.
     basePath?: string;
     sessionKey?: string;
-    selectedHostId?: string;
-    selectedThreadId?: string;
-    onOpenSession?: (hostId: string, threadId: string) => void;
-    onCloseSession?: () => void;
   }) => unknown;
   stop: (host: object) => void;
 };
@@ -48,20 +42,6 @@ const BUNDLED_TAB_VIEWS: Record<string, () => Promise<BundledPluginTabView>> = {
     ]);
     return { render: view.renderWorkspace, stop: controller.stopWorkspace };
   },
-  "codex/sessions": async () => {
-    const [view, controller] = await Promise.all([
-      import("./codex-sessions-view.ts"),
-      import("./codex-sessions-controller.ts"),
-    ]);
-    return { render: view.renderCodexSessions, stop: controller.stopCodexSessionsPolling };
-  },
-  "anthropic/sessions": async () => {
-    const [view, controller] = await Promise.all([
-      import("./claude-sessions-view.ts"),
-      import("./claude-sessions-controller.ts"),
-    ]);
-    return { render: view.renderClaudeSessions, stop: controller.stopClaudeSessionsPolling };
-  },
   "logbook/logbook": async () => {
     const [view, controller] = await Promise.all([
       import("./logbook-view.ts"),
@@ -74,8 +54,6 @@ const BUNDLED_TAB_VIEWS: Record<string, () => Promise<BundledPluginTabView>> = {
 export class PluginPage extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) pluginId = "";
   @property({ attribute: false }) tabId = "";
-  @property({ attribute: false }) hostId = "";
-  @property({ attribute: false }) threadId = "";
 
   @consume({ context: applicationContext, subscribe: true })
   private context?: ApplicationContext<RouteId>;
@@ -197,25 +175,8 @@ export class PluginPage extends OpenClawLightDomContentsElement {
             }
           : undefined,
         onRequestUpdate: () => this.requestUpdate(),
-        onContinueSession: (sessionKey) =>
-          context.navigate("chat", { search: searchForSession(sessionKey) }),
         basePath: context.basePath,
         sessionKey: snapshot.sessionKey,
-        selectedHostId: this.hostId,
-        selectedThreadId: this.threadId,
-        onOpenSession: (hostId, threadId) =>
-          context.navigate("plugin", {
-            search: pluginTabSearch({
-              pluginId: this.pluginId,
-              id: this.tabId,
-              hostId,
-              threadId,
-            }),
-          }),
-        onCloseSession: () =>
-          context.navigate("plugin", {
-            search: pluginTabSearch({ pluginId: this.pluginId, id: this.tabId }),
-          }),
       });
     }
     if (info?.path) {

@@ -1,4 +1,5 @@
 // Gateway Protocol schema module defines protocol validation shapes.
+import type { Static } from "typebox";
 import { Type } from "typebox";
 import { internalProtocolField } from "./internal-fields.js";
 import { InputProvenanceSchema, NonEmptyString, SessionLabelString } from "./primitives.js";
@@ -327,3 +328,13 @@ export const WakeParamsSchema = Type.Object(
   },
   { additionalProperties: true }, // external wake senders may attach opaque metadata
 );
+
+// Wire types derive directly from local schema consts so public d.ts graphs never
+// pull in the ProtocolSchemas registry.
+export type AgentEvent = Static<typeof AgentEventSchema>;
+export type AgentIdentityParams = Static<typeof AgentIdentityParamsSchema>;
+export type AgentIdentityResult = Static<typeof AgentIdentityResultSchema>;
+export type MessageActionParams = Static<typeof MessageActionParamsSchema>;
+export type PollParams = Static<typeof PollParamsSchema>;
+export type AgentWaitParams = Static<typeof AgentWaitParamsSchema>;
+export type WakeParams = Static<typeof WakeParamsSchema>;

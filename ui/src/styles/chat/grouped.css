@@ -312,7 +312,7 @@ img.chat-avatar {
   box-shadow: none;
 }
 
-/* Keep the typing dots on the same left edge as the flat text column. */
+/* Keep the working spark on the same left edge as the flat text column. */
 .chat-group.assistant .chat-bubble.chat-reading-indicator {
   padding: 10px 0;
 }

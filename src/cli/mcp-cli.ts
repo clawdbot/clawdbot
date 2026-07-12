@@ -1261,6 +1261,7 @@ export function registerMcpCli(program: Command) {
             clientCert: resolved.clientCert,
             clientKey: resolved.clientKey,
             resourceUrl: resolved.url,
+            timeoutMs: resolved.requestTimeoutMs,
           }),
           headers: withoutMcpAuthorizationHeader(resolved.headers),
           resourceUrl: resolved.url,

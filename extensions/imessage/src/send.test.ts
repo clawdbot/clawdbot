@@ -1217,6 +1217,7 @@ describe("sendMessageIMessage receipts", () => {
 
     const result = await sendMessageIMessage("chat_id:42", approvalText, {
       config: IMESSAGE_TEST_CFG,
+      approvalKind: "exec",
       client,
       dbPath: "/Users/me/Library/Messages/chat.db",
       resolveSentMessageGuidImpl,
@@ -1233,6 +1234,7 @@ describe("sendMessageIMessage receipts", () => {
       }),
     ).resolves.toEqual({
       approvalId: "approval-123",
+      approvalKind: "exec",
       decision: "allow-once",
     });
     expect(resolveSentMessageGuidImpl).toHaveBeenCalledWith({

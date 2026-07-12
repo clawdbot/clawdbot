@@ -601,6 +601,10 @@ describe("plugin-sdk subpath exports", () => {
       "markImplicitSameChatApprovalAuthorization",
       "resolveApprovalApprovers",
     ]);
+    expectSourceContract("approval-reference-runtime", {
+      mentions: ["buildApprovalResolutionRef"],
+      omits: ["resolveApprovalOverGateway", "withOperatorApprovalsGatewayClient"],
+    });
     expectSourceMentions("reply-chunking", [
       "chunkText",
       "chunkTextWithMode",

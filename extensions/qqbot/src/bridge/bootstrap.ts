@@ -23,6 +23,7 @@
  * vitest (which resolves bare specifiers via `resolve.alias`, not Node CJS).
  */
 
+import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   hasConfiguredSecretInput,
@@ -98,22 +99,22 @@ function createBuiltinAdapter(): PlatformAdapter {
       return normalizeResolvedSecretInputString(params) ?? undefined;
     },
 
-    async resolveApproval(approvalId: string, decision: string): Promise<boolean> {
+    async resolveApproval(params): Promise<ApprovalResolveResult> {
       try {
         const { getRuntimeConfig } = await import("openclaw/plugin-sdk/runtime-config-snapshot");
         const { resolveApprovalOverGateway } =
           await import("openclaw/plugin-sdk/approval-gateway-runtime");
         const cfg = getRuntimeConfig();
-        await resolveApprovalOverGateway({
+        return await resolveApprovalOverGateway({
           cfg,
-          approvalId,
-          decision: decision as "allow-once" | "allow-always" | "deny",
+          approvalId: params.approvalId,
+          approvalKind: params.approvalKind,
+          decision: params.decision,
           clientDisplayName: "QQBot Approval Handler",
         });
-        return true;
       } catch (err) {
         getBridgeLogger().error(`[qqbot] resolveApproval failed: ${String(err)}`);
-        return false;
+        throw err;
       }
     },
   };

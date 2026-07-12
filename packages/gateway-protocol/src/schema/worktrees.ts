@@ -1,3 +1,4 @@
+import type { Static } from "typebox";
 import { Type } from "typebox";
 import { NonEmptyString } from "./primitives.js";
 
@@ -84,3 +85,18 @@ export const WorktreesGcResultSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+// Wire types derive directly from local schema consts so public d.ts graphs never
+// pull in the ProtocolSchemas registry.
+export type WorktreeRecord = Static<typeof WorktreeRecordSchema>;
+export type WorktreesListParams = Static<typeof WorktreesListParamsSchema>;
+export type WorktreesListResult = Static<typeof WorktreesListResultSchema>;
+export type WorktreesCreateParams = Static<typeof WorktreesCreateParamsSchema>;
+export type WorktreesRemoveParams = Static<typeof WorktreesRemoveParamsSchema>;
+export type WorktreesRemoveResult = Static<typeof WorktreesRemoveResultSchema>;
+export type WorktreesRestoreParams = Static<typeof WorktreesRestoreParamsSchema>;
+export type WorktreesGcParams = Static<typeof WorktreesGcParamsSchema>;
+export type WorktreesGcResult = Static<typeof WorktreesGcResultSchema>;
+export type WorktreeBranch = Static<typeof WorktreeBranchSchema>;
+export type WorktreesBranchesParams = Static<typeof WorktreesBranchesParamsSchema>;
+export type WorktreesBranchesResult = Static<typeof WorktreesBranchesResultSchema>;

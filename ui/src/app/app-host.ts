@@ -965,8 +965,6 @@ class OpenClawShell extends OpenClawLightDomElement {
                 .basePath=${context.basePath}
                 .activeRouteId=${activeRoute}
                 .activePluginTabId=${activePluginTabId}
-                .activePluginHostId=${activePluginRef?.hostId ?? ""}
-                .activePluginThreadId=${activePluginRef?.threadId ?? ""}
                 .enabledRouteIds=${this.enabledRouteIds()}
                 .sessionKey=${this.activeSessionKey}
                 .connected=${gatewaySnapshot.connected}

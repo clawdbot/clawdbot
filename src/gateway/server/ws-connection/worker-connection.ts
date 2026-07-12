@@ -8,14 +8,18 @@ import {
   type WorkerHeartbeatResult,
   type WorkerHelloOk,
   type WorkerProtocolCloseReason,
+  type WorkerTranscriptCommitErrorReason,
+  type WorkerTranscriptCommitErrorShape,
   WORKER_HEARTBEAT_INTERVAL_MS,
   WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH,
   WORKER_PROTOCOL_MAX_METHOD_LENGTH,
   WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
   WORKER_PROTOCOL_METHODS,
+  WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE,
   validateRequestFrame,
   validateWorkerConnectRequestFrame,
   validateWorkerHeartbeatParams,
+  validateWorkerTranscriptCommitParams,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_STARTUP_RETRY_AFTER_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { rawDataToString } from "../../../infra/ws.js";
@@ -26,10 +30,14 @@ import type { GatewayWsClient, WsHandshakePhase } from "../ws-types.js";
 
 export type WorkerConnectionService = Pick<
   WorkerEnvironmentService,
-  "admitWorker" | "validateWorkerConnection"
+  "admitWorker" | "commitTranscript" | "validateWorkerConnection"
 >;
 
-type WorkerRespond = (ok: boolean, payload?: unknown, error?: WorkerErrorShape) => void;
+type WorkerRespond = (
+  ok: boolean,
+  payload?: unknown,
+  error?: WorkerErrorShape | WorkerTranscriptCommitErrorShape,
+) => void;
 type WorkerLogger = { warn(message: string): void };
 const MAX_QUEUED_WORKER_FRAMES = 16;
 
@@ -97,20 +105,54 @@ function rejectWorkerRequest(params: {
   queueMicrotask(() => params.close(1008, params.reason));
 }
 
+function workerTranscriptCommitError(
+  reason: WorkerTranscriptCommitErrorReason,
+): WorkerTranscriptCommitErrorShape {
+  return {
+    code: ErrorCodes.INVALID_REQUEST,
+    message: "worker transcript commit rejected",
+    details: { reason },
+  };
+}
+
 /** Closed worker dispatcher. It never calls the generic gateway method registry. */
-function dispatchWorkerRequest(params: {
+async function dispatchWorkerRequest(params: {
   request: RequestFrame;
   identity: WorkerConnectionIdentity;
   service: WorkerConnectionService | undefined;
   respond: WorkerRespond;
   close(code: number, reason: WorkerProtocolCloseReason): void;
   warn(message: string): void;
-}): void {
-  const ownershipFailure = params.service
-    ? params.service.validateWorkerConnection(params.identity)
-    : "environment-unavailable";
+}): Promise<void> {
+  const service = params.service;
+  if (!service) {
+    rejectWorkerRequest({ ...params, reason: "environment-unavailable" });
+    return;
+  }
+  const ownershipFailure = service.validateWorkerConnection(params.identity);
   if (ownershipFailure) {
     rejectWorkerRequest({ ...params, reason: ownershipFailure });
+    return;
+  }
+  if (params.request.method === WORKER_PROTOCOL_METHODS[1]) {
+    if (!params.identity.protocolFeatures.includes(WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE)) {
+      rejectWorkerRequest({ ...params, reason: "method-not-allowed" });
+      return;
+    }
+    if (!validateWorkerTranscriptCommitParams(params.request.params)) {
+      params.respond(false, undefined, workerTranscriptCommitError("invalid-batch"));
+      return;
+    }
+    const outcome = await service.commitTranscript(params.identity, params.request.params);
+    if (outcome.ok) {
+      params.respond(true, outcome.result);
+      return;
+    }
+    if ("closeReason" in outcome) {
+      rejectWorkerRequest({ ...params, reason: outcome.closeReason });
+      return;
+    }
+    params.respond(false, undefined, workerTranscriptCommitError(outcome.reason));
     return;
   }
   if (params.request.method !== WORKER_PROTOCOL_METHODS[0]) {
@@ -298,14 +340,17 @@ export function attachWorkerWsMessageHandler(params: WorkerWsMessageHandlerParam
       closeWorker(1008, "invalid-frame");
       return;
     }
-    if (parsed.method === WORKER_PROTOCOL_METHODS[0]) {
-      params.setLastFrameMeta({ type: "req", method: WORKER_PROTOCOL_METHODS[0] });
+    if (
+      parsed.method === WORKER_PROTOCOL_METHODS[0] ||
+      parsed.method === WORKER_PROTOCOL_METHODS[1]
+    ) {
+      params.setLastFrameMeta({ type: "req", method: parsed.method });
     }
     if (!client.worker) {
       closeWorker(1008, "environment-unavailable");
       return;
     }
-    dispatchWorkerRequest({
+    await dispatchWorkerRequest({
       request: parsed,
       identity: client.worker,
       service: params.service,

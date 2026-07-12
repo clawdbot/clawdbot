@@ -17,6 +17,8 @@ import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.VoiceNoteRecorderState
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
 import ai.openclaw.app.ui.copyGatewayDiagnosticsReport
+import ai.openclaw.app.ui.design.AgentAvatarSource
+import ai.openclaw.app.ui.design.ClawAgentAvatar
 import ai.openclaw.app.ui.design.ClawListItem
 import ai.openclaw.app.ui.design.ClawLoadingState
 import ai.openclaw.app.ui.design.ClawPanel
@@ -27,6 +29,7 @@ import ai.openclaw.app.ui.design.ClawStatus
 import ai.openclaw.app.ui.design.ClawStatusPill
 import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.design.OpenClawMascot
+import ai.openclaw.app.ui.design.agentAvatarSource
 import ai.openclaw.app.ui.gatewayDiagnosticsEndpoint
 import ai.openclaw.app.ui.gatewayStatusForDisplay
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -499,6 +502,7 @@ private fun ChatAgentSelector(
     agents.forEach { agent ->
       ChatSessionChip(
         text = chatAgentChipText(agent),
+        avatarSource = agentAvatarSource(agent),
         active = agent.id == activeAgentId,
         onClick = { onSelectAgent(agent.id) },
       )
@@ -577,6 +581,7 @@ private fun ChatSessionSwitcher(
 @Composable
 private fun ChatSessionChip(
   text: String,
+  avatarSource: AgentAvatarSource? = null,
   active: Boolean,
   onClick: () -> Unit,
 ) {
@@ -588,13 +593,25 @@ private fun ChatSessionChip(
     contentColor = ClawTheme.colors.text,
     border = BorderStroke(1.dp, if (active) ClawTheme.colors.borderStrong else ClawTheme.colors.border.copy(alpha = 0.7f)),
   ) {
-    Text(
-      text = text,
-      modifier = Modifier.padding(horizontal = 11.dp, vertical = 7.dp),
-      style = ClawTheme.type.caption,
-      maxLines = 1,
-      overflow = TextOverflow.Ellipsis,
-    )
+    Row(
+      modifier =
+        Modifier.padding(
+          horizontal = if (avatarSource == null) 11.dp else 8.dp,
+          vertical = if (avatarSource == null) 7.dp else 5.dp,
+        ),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+      if (avatarSource != null) {
+        ClawAgentAvatar(source = avatarSource, size = 20.dp) {}
+      }
+      Text(
+        text = text,
+        style = ClawTheme.type.caption,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+      )
+    }
   }
 }
 

@@ -199,6 +199,8 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     replacement: "channels.<id>.streaming.*",
     docsPath: "/channels/channel-routing",
     tests: ["src/commands/doctor/shared/channel-legacy-config-migrate.test.ts"],
+    notes:
+      "Runtime no longer reads the flat aliases (src/channels/streaming.ts is nested-only); doctor keeps this migration to move shipped configs during upgrade. Channels without a nested streaming schema (signal, irc, googlechat, whatsapp) still treat flat keys as canonical.",
   }),
   deprecatedCompatRecord({
     code: "doctor-webchat-channel-config",

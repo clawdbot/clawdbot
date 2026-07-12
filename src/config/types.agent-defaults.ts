@@ -156,6 +156,8 @@ export type CliBackendConfig = {
   sessionArgs?: string[];
   /** Alternate args to use when resuming a session (use {sessionId} placeholder). */
   resumeArgs?: string[];
+  /** Argument appended to one explicitly forked resume invocation. */
+  forkArg?: string;
   /** When to pass session ids. */
   sessionMode?: "always" | "existing" | "none";
   /** JSON fields to read session id from (in order). */

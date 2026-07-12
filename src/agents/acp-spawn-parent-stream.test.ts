@@ -991,7 +991,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
     relay.dispose();
   });
 
-  it("applies legacy account streamMode opt-outs", () => {
+  it("applies account streaming mode opt-outs", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-account-stream-mode-off",
       parentSessionKey: "agent:main:main",
@@ -1008,7 +1008,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
             },
             accounts: {
               work: {
-                streamMode: "off",
+                streaming: { mode: "off" },
               },
             },
           },

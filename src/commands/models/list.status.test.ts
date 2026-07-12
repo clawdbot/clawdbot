@@ -54,6 +54,7 @@ const mocks = vi.hoisted(() => {
     resolveAgentExplicitModelPrimary: vi.fn().mockReturnValue(undefined),
     resolveAgentEffectiveModelPrimary: vi.fn().mockReturnValue(undefined),
     resolveAgentModelFallbacksOverride: vi.fn().mockReturnValue(undefined),
+    resolveAgentConfig: vi.fn().mockReturnValue(undefined),
     listAgentIds: vi.fn().mockReturnValue(["main", "jeremiah"]),
     listAgentEntries: vi.fn().mockReturnValue([{ id: "main" }, { id: "jeremiah" }]),
     ensureAuthProfileStore: vi.fn().mockReturnValue(store),
@@ -167,6 +168,7 @@ vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentExplicitModelPrimary: mocks.resolveAgentExplicitModelPrimary,
   resolveAgentEffectiveModelPrimary: mocks.resolveAgentEffectiveModelPrimary,
   resolveAgentModelFallbacksOverride: mocks.resolveAgentModelFallbacksOverride,
+  resolveAgentConfig: mocks.resolveAgentConfig,
   listAgentIds: mocks.listAgentIds,
   listAgentEntries: mocks.listAgentEntries,
 }));
@@ -421,6 +423,7 @@ async function withOpenAIStatusFixture<T>(
     agentRuntime?: string;
     catalog?: unknown[];
     routeVariants?: unknown[];
+    utilityModel?: string;
   },
   run: () => Promise<T>,
 ): Promise<T> {
@@ -441,6 +444,9 @@ async function withOpenAIStatusFixture<T>(
     agents: {
       defaults: {
         model: { primary: params.primary, fallbacks: params.fallbacks ?? [] },
+        // Route tests target the configured primary/fallback models; keep the
+        // derived utility model out unless a test opts in explicitly.
+        utilityModel: params.utilityModel ?? "",
         models: Object.fromEntries(
           Object.keys(configuredModels).map((model) => [
             model,
@@ -577,6 +583,90 @@ describe("modelsStatusCommand auth overview", () => {
     expect((payload.auth.providersWithOAuth as string[]).some((e) => e.startsWith("openai"))).toBe(
       true,
     );
+  });
+
+  it("reports the resolved utility model in JSON output", async () => {
+    const originalLoadConfig = mocks.loadConfig.getMockImplementation();
+    const baseConfig = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-6", fallbacks: [] },
+        },
+      },
+      models: { providers: {} },
+      env: { shellEnv: { enabled: true } },
+    };
+    try {
+      mocks.loadConfig.mockReturnValue({
+        ...baseConfig,
+        agents: {
+          defaults: { ...baseConfig.agents.defaults, utilityModel: "openai/gpt-5.6-luna" },
+        },
+      });
+      const explicitRuntime = createRuntime();
+      await modelsStatusCommand({ json: true }, explicitRuntime as never);
+      expect(parseFirstJsonLog(explicitRuntime).utilityModel).toEqual({
+        ref: "openai/gpt-5.6-luna",
+        source: "config",
+      });
+
+      mocks.loadConfig.mockReturnValue({
+        ...baseConfig,
+        agents: {
+          defaults: { ...baseConfig.agents.defaults, utilityModel: "" },
+        },
+      });
+      const disabledRuntime = createRuntime();
+      await modelsStatusCommand({ json: true }, disabledRuntime as never);
+      expect(parseFirstJsonLog(disabledRuntime).utilityModel).toEqual({
+        ref: null,
+        source: "disabled",
+      });
+
+      // The utility model is a real runtime auth consumer: a provider that only
+      // narration/titles use must enter the route/auth analysis instead of
+      // staying invisible to `models status`.
+      mocks.loadConfig.mockReturnValue({
+        ...baseConfig,
+        agents: {
+          defaults: { ...baseConfig.agents.defaults, utilityModel: "mistral/mistral-small" },
+        },
+      });
+      const missingAuthRuntime = createRuntime();
+      await modelsStatusCommand({ json: true }, missingAuthRuntime as never);
+      const missingPayload = parseFirstJsonLog(missingAuthRuntime);
+      expect(missingPayload.utilityModel).toEqual({
+        ref: "mistral/mistral-small",
+        source: "config",
+      });
+      expect(missingPayload.auth.modelRouteIssues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ provider: "mistral", model: "mistral-small" }),
+        ]),
+      );
+
+      // Aliases are valid utilityModel input; the report shows the canonical ref.
+      mocks.loadConfig.mockReturnValue({
+        ...baseConfig,
+        agents: {
+          defaults: {
+            ...baseConfig.agents.defaults,
+            models: { "anthropic/claude-opus-4-6": { alias: "Opus" } },
+            utilityModel: "Opus",
+          },
+        },
+      });
+      const aliasRuntime = createRuntime();
+      await modelsStatusCommand({ json: true }, aliasRuntime as never);
+      expect(parseFirstJsonLog(aliasRuntime).utilityModel).toEqual({
+        ref: "anthropic/claude-opus-4-6",
+        source: "config",
+      });
+    } finally {
+      if (originalLoadConfig) {
+        mocks.loadConfig.mockImplementation(originalLoadConfig);
+      }
+    }
   });
 
   it("honors OPENCLAW_AGENT_DIR when no --agent override is provided", async () => {
@@ -724,6 +814,39 @@ describe("modelsStatusCommand auth overview", () => {
       },
     ]);
     expect(localRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("flags a utility model whose route needs api-key auth despite an OAuth-healthy primary", async () => {
+    const localRuntime = createRuntime();
+    await withOpenAIStatusFixture(
+      {
+        primary: "openai/gpt-5.5",
+        utilityModel: "openai/gpt-5.6",
+        profiles: {
+          "openai:default": {
+            type: "oauth",
+            provider: "openai",
+            access: "oauth-access",
+            refresh: "oauth-refresh",
+            expires: Date.now() + 60_000,
+          },
+        },
+      },
+      async () => {
+        await modelsStatusCommand({ json: true, check: true }, localRuntime as never);
+      },
+    );
+    const payload = parseFirstJsonLog(localRuntime);
+    expect(payload.utilityModel).toEqual({ ref: "openai/gpt-5.6", source: "config" });
+    expect(payload.auth.modelRouteIssues).toEqual([
+      {
+        kind: "missing-auth",
+        provider: "openai",
+        model: "gpt-5.6",
+        authRequirement: "api-key",
+        message: "No usable api-key authentication is available for openai/gpt-5.6.",
+      },
+    ]);
   });
 
   it("reports incompatible model routes separately in JSON and text", async () => {

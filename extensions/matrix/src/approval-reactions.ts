@@ -1,6 +1,7 @@
 // Matrix plugin module implements approval reactions behavior.
 import { createApprovalReactionTargetStore } from "openclaw/plugin-sdk/approval-reaction-runtime";
 import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-runtime";
+import { normalizeAccountId, normalizeOptionalAccountId } from "openclaw/plugin-sdk/routing";
 import { getOptionalMatrixRuntime } from "./runtime.js";
 
 // Matrix keeps its own reaction emoji set (checkmark/cross render reliably across
@@ -38,12 +39,33 @@ type MatrixApprovalReactionBinding = {
 
 type MatrixApprovalReactionResolution = {
   approvalId: string;
+  approvalKind: "exec" | "plugin";
   decision: ExecApprovalReplyDecision;
 };
 
 type MatrixApprovalReactionTarget = {
+  accountId: string;
   approvalId: string;
+  approvalKind: "exec" | "plugin";
+  roomId: string;
+  eventId: string;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
+};
+
+type PersistedMatrixApprovalReactionTarget = {
+  version: 1;
+  target: MatrixApprovalReactionTarget;
+};
+
+type IndexedMatrixApprovalReactionTarget = {
+  target: MatrixApprovalReactionTarget;
+  expiresAtMs: number;
+};
+
+export type MatrixApprovalReactionTargetRef = {
+  accountId: string;
+  roomId: string;
+  eventId: string;
 };
 
 function reportPersistentApprovalReactionError(error: unknown): void {
@@ -58,13 +80,38 @@ function reportPersistentApprovalReactionError(error: unknown): void {
 
 function readPersistedTarget(target: unknown): MatrixApprovalReactionTarget | null {
   const value = target as Partial<MatrixApprovalReactionTarget> | null | undefined;
-  if (!value || typeof value.approvalId !== "string" || !Array.isArray(value.allowedDecisions)) {
+  const accountId =
+    typeof value?.accountId === "string" ? normalizeOptionalAccountId(value.accountId) : undefined;
+  const approvalId = typeof value?.approvalId === "string" ? value.approvalId.trim() : "";
+  const roomId = typeof value?.roomId === "string" ? value.roomId.trim() : "";
+  const eventId = typeof value?.eventId === "string" ? value.eventId.trim() : "";
+  if (
+    !value ||
+    !accountId ||
+    !approvalId ||
+    !Array.isArray(value.allowedDecisions) ||
+    !roomId ||
+    !eventId ||
+    (value.approvalKind !== "exec" && value.approvalKind !== "plugin")
+  ) {
     return null;
   }
   return {
-    approvalId: value.approvalId,
+    accountId,
+    approvalId,
+    approvalKind: value.approvalKind,
+    roomId,
+    eventId,
     allowedDecisions: value.allowedDecisions,
   };
+}
+
+function openPersistentMatrixApprovalReactionStore() {
+  return getOptionalMatrixRuntime()?.state.openKeyedStore<PersistedMatrixApprovalReactionTarget>({
+    namespace: PERSISTENT_NAMESPACE,
+    maxEntries: PERSISTENT_MAX_ENTRIES,
+    defaultTtlMs: DEFAULT_REACTION_TARGET_TTL_MS,
+  });
 }
 
 const matrixApprovalReactionTargets =
@@ -72,18 +119,37 @@ const matrixApprovalReactionTargets =
     namespace: PERSISTENT_NAMESPACE,
     maxEntries: PERSISTENT_MAX_ENTRIES,
     defaultTtlMs: DEFAULT_REACTION_TARGET_TTL_MS,
-    openStore: (storeParams) => getOptionalMatrixRuntime()?.state.openKeyedStore(storeParams),
+    openStore: openPersistentMatrixApprovalReactionStore,
     logPersistentError: reportPersistentApprovalReactionError,
     readPersistedTarget,
   });
 
-function buildReactionTargetKey(roomId: string, eventId: string): string | null {
+const matrixApprovalReactionTargetIndex = new Map<string, IndexedMatrixApprovalReactionTarget>();
+
+function pruneMatrixApprovalReactionTargetIndex(): void {
+  const nowMs = Date.now();
+  for (const [key, entry] of matrixApprovalReactionTargetIndex) {
+    if (entry.expiresAtMs <= nowMs) {
+      matrixApprovalReactionTargetIndex.delete(key);
+    }
+  }
+  while (matrixApprovalReactionTargetIndex.size > PERSISTENT_MAX_ENTRIES) {
+    const oldestKey = matrixApprovalReactionTargetIndex.keys().next().value;
+    if (!oldestKey) {
+      return;
+    }
+    matrixApprovalReactionTargetIndex.delete(oldestKey);
+  }
+}
+
+function buildReactionTargetKey(accountId: string, roomId: string, eventId: string): string | null {
+  const normalizedAccountId = normalizeAccountId(accountId);
   const normalizedRoomId = roomId.trim();
   const normalizedEventId = eventId.trim();
-  if (!normalizedRoomId || !normalizedEventId) {
+  if (!normalizedAccountId || !normalizedRoomId || !normalizedEventId) {
     return null;
   }
-  return `${normalizedRoomId}:${normalizedEventId}`;
+  return JSON.stringify([normalizedAccountId, normalizedRoomId, normalizedEventId]);
 }
 
 export function listMatrixApprovalReactionBindings(
@@ -130,13 +196,16 @@ function resolveMatrixApprovalReactionDecision(
 }
 
 export function registerMatrixApprovalReactionTarget(params: {
+  accountId: string;
   roomId: string;
   eventId: string;
   approvalId: string;
+  approvalKind: "exec" | "plugin";
   allowedDecisions: readonly ExecApprovalReplyDecision[];
   ttlMs?: number;
 }): void {
-  const key = buildReactionTargetKey(params.roomId, params.eventId);
+  const accountId = normalizeAccountId(params.accountId);
+  const key = buildReactionTargetKey(accountId, params.roomId, params.eventId);
   const approvalId = params.approvalId.trim();
   const allowedDecisions = Array.from(
     new Set(
@@ -146,25 +215,103 @@ export function registerMatrixApprovalReactionTarget(params: {
       ),
     ),
   );
-  if (!key || !approvalId || allowedDecisions.length === 0) {
+  if (
+    !key ||
+    !approvalId ||
+    (params.approvalKind !== "exec" && params.approvalKind !== "plugin") ||
+    allowedDecisions.length === 0
+  ) {
     return;
   }
-  matrixApprovalReactionTargets.register(
-    key,
-    { approvalId, allowedDecisions },
-    { ttlMs: params.ttlMs },
-  );
+  const ttlMs = Math.max(1, params.ttlMs ?? DEFAULT_REACTION_TARGET_TTL_MS);
+  const target = {
+    accountId,
+    approvalId,
+    approvalKind: params.approvalKind,
+    roomId: params.roomId.trim(),
+    eventId: params.eventId.trim(),
+    allowedDecisions,
+  };
+  matrixApprovalReactionTargetIndex.delete(key);
+  matrixApprovalReactionTargetIndex.set(key, {
+    target,
+    expiresAtMs: Date.now() + ttlMs,
+  });
+  pruneMatrixApprovalReactionTargetIndex();
+  matrixApprovalReactionTargets.register(key, target, { ttlMs });
 }
 
 export function unregisterMatrixApprovalReactionTarget(params: {
+  accountId: string;
   roomId: string;
   eventId: string;
 }): void {
-  const key = buildReactionTargetKey(params.roomId, params.eventId);
+  const key = buildReactionTargetKey(params.accountId, params.roomId, params.eventId);
   if (!key) {
     return;
   }
+  matrixApprovalReactionTargetIndex.delete(key);
   matrixApprovalReactionTargets.delete(key);
+}
+
+/** Retires every Matrix reaction anchor bound to one canonical approval. */
+export async function unregisterMatrixApprovalReactionTargetsForApproval(params: {
+  accountId: string;
+  approvalId: string;
+  approvalKind: "exec" | "plugin";
+}): Promise<MatrixApprovalReactionTargetRef[]> {
+  const accountId = normalizeAccountId(params.accountId);
+  const approvalId = params.approvalId.trim();
+  if (!approvalId) {
+    return [];
+  }
+  pruneMatrixApprovalReactionTargetIndex();
+  const matches = new Map<string, MatrixApprovalReactionTarget>();
+  for (const [key, entry] of matrixApprovalReactionTargetIndex) {
+    if (
+      entry.target.approvalId === approvalId &&
+      entry.target.accountId === accountId &&
+      entry.target.approvalKind === params.approvalKind
+    ) {
+      matches.set(key, entry.target);
+    }
+  }
+
+  let persistentStore: ReturnType<typeof openPersistentMatrixApprovalReactionStore> = undefined;
+  try {
+    persistentStore = openPersistentMatrixApprovalReactionStore();
+    for (const entry of (await persistentStore?.entries()) ?? []) {
+      if (entry.value.version !== 1) {
+        continue;
+      }
+      const target = readPersistedTarget(entry.value.target);
+      if (
+        target?.approvalId === approvalId &&
+        target.accountId === accountId &&
+        target.approvalKind === params.approvalKind &&
+        buildReactionTargetKey(target.accountId, target.roomId, target.eventId) === entry.key
+      ) {
+        matches.set(entry.key, target);
+      }
+    }
+  } catch (error) {
+    reportPersistentApprovalReactionError(error);
+  }
+
+  const persistentDeletes: Promise<boolean>[] = [];
+  for (const [key] of matches) {
+    matrixApprovalReactionTargetIndex.delete(key);
+    matrixApprovalReactionTargets.delete(key);
+    if (persistentStore) {
+      persistentDeletes.push(persistentStore.delete(key));
+    }
+  }
+  await Promise.allSettled(persistentDeletes);
+  return Array.from(matches.values(), ({ accountId: ownerAccountId, roomId, eventId }) => ({
+    accountId: ownerAccountId,
+    roomId,
+    eventId,
+  }));
 }
 
 function resolveTarget(params: {
@@ -184,25 +331,45 @@ function resolveTarget(params: {
   }
   return {
     approvalId: target.approvalId,
+    approvalKind: target.approvalKind,
     decision,
   };
 }
 
 export async function resolveMatrixApprovalReactionTargetWithPersistence(params: {
+  accountId: string;
   roomId: string;
   eventId: string;
   reactionKey: string;
 }): Promise<MatrixApprovalReactionResolution | null> {
-  const key = buildReactionTargetKey(params.roomId, params.eventId);
+  const accountId = normalizeAccountId(params.accountId);
+  const key = buildReactionTargetKey(accountId, params.roomId, params.eventId);
   if (!key) {
     return null;
   }
+  const target = await matrixApprovalReactionTargets.lookup(key);
+  if (
+    target &&
+    (target.accountId !== accountId ||
+      buildReactionTargetKey(target.accountId, target.roomId, target.eventId) !== key)
+  ) {
+    return null;
+  }
+  if (target) {
+    matrixApprovalReactionTargetIndex.delete(key);
+    matrixApprovalReactionTargetIndex.set(key, {
+      target,
+      expiresAtMs: Date.now() + DEFAULT_REACTION_TARGET_TTL_MS,
+    });
+    pruneMatrixApprovalReactionTargetIndex();
+  }
   return resolveTarget({
-    target: await matrixApprovalReactionTargets.lookup(key),
+    target,
     reactionKey: params.reactionKey,
   });
 }
 
 export function clearMatrixApprovalReactionTargetsForTest(): void {
+  matrixApprovalReactionTargetIndex.clear();
   matrixApprovalReactionTargets.clearForTest();
 }

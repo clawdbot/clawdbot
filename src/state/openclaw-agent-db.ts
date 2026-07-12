@@ -831,13 +831,18 @@ export function runOpenClawAgentWriteTransaction<T>(
   > = {},
 ): T {
   const database = openOpenClawAgentDatabase(options);
+  const enteredNestedTransaction = database.db.isTransaction;
   const result = runSqliteImmediateTransactionSync(database.db, () => operation(database), {
     busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
     databaseLabel: database.path,
     ...transactionOptions,
     operationLabel: transactionOptions.operationLabel ?? "agent.write",
   });
-  ensureOpenClawAgentDatabasePermissions(database.path, options);
+  // The outer owner repairs permissions after COMMIT; nested savepoint callers
+  // must not add filesystem work while that transaction is still open.
+  if (!enteredNestedTransaction) {
+    ensureOpenClawAgentDatabasePermissions(database.path, options);
+  }
   return result;
 }
 

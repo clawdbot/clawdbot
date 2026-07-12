@@ -57,6 +57,7 @@ import {
   createChatAbortMarker,
   createSessionMessageSubscriberRegistry,
   createToolEventRecipientRegistry,
+  resolveChatErrorKindFromError,
   type AgentEventHandlerOptions,
 } from "./server-chat.js";
 import { loadGatewaySessionRow } from "./server-chat.load-gateway-session-row.runtime.js";
@@ -3826,7 +3827,82 @@ describe("agent event handler", () => {
     ).toHaveLength(0);
   });
 
-  it("adds detected errorKind to chat lifecycle error payloads", () => {
+  it.each([
+    {
+      name: "groq tpm 413",
+      error: new Error("Request too large: too many tokens per minute (TPM)"),
+      expected: "rate_limit",
+    },
+    {
+      name: "quota exceeded",
+      error: new Error("quota exceeded"),
+      expected: "rate_limit",
+    },
+    {
+      name: "resource_exhausted",
+      error: new Error("resource_exhausted"),
+      expected: "rate_limit",
+    },
+    {
+      name: "http 429",
+      error: Object.assign(new Error("Too many requests"), { code: 429 }),
+      expected: "rate_limit",
+    },
+    {
+      name: "fetch failed",
+      error: new Error("fetch failed"),
+      expected: "timeout",
+    },
+    {
+      name: "socket hang up",
+      error: new Error("socket hang up"),
+      expected: "timeout",
+    },
+    {
+      name: "etimedout",
+      error: Object.assign(new Error("request timed out"), { code: "ETIMEDOUT" }),
+      expected: "timeout",
+    },
+    {
+      name: "context overflow",
+      error: new Error("context length exceeded"),
+      expected: "context_length",
+    },
+    {
+      name: "refusal_policy",
+      error: new Error("Unhandled stop reason: refusal_policy"),
+      expected: "refusal",
+    },
+    {
+      name: "content_filter",
+      error: new Error("content_filter blocked the response"),
+      expected: "refusal",
+    },
+    {
+      name: "plain error",
+      error: new Error("plain provider failure"),
+      expected: undefined,
+    },
+    {
+      name: "http 500 is not a timeout",
+      error: Object.assign(new Error("Internal server error"), { status: 500 }),
+      expected: undefined,
+    },
+    {
+      name: "rate limit beats timeout text",
+      error: new Error("Rate limit exceeded, timeout: 30s"),
+      expected: "rate_limit",
+    },
+    {
+      name: "undefined error",
+      error: undefined,
+      expected: undefined,
+    },
+  ] as const)("classifies chat errorKind for $name", ({ error, expected }) => {
+    expect(resolveChatErrorKindFromError(error)).toBe(expected);
+  });
+
+  it("adds classified errorKind to chat lifecycle error payloads", () => {
     const { broadcast, nodeSendToSession, handler } = createHarness({
       resolveSessionKeyForRun: () => "session-detected-error",
       lifecycleErrorRetryGraceMs: 0,

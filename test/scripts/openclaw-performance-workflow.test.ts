@@ -104,6 +104,20 @@ describe("OpenClaw performance workflow", () => {
     expect(workflow).toContain("Kova live OpenAI GPT 5.6 agent turn");
   });
 
+  it("pins the OCM release archive and checksum", () => {
+    const workflow = readFileSync(WORKFLOW, "utf8");
+    const installRun = findStep("Install OCM and Kova").run ?? "";
+
+    expect(workflow).toContain("OCM_VERSION: v0.2.25");
+    expect(workflow).toContain(
+      "OCM_LINUX_X64_SHA256: 57530199d21eb5bfa29695749928b40fd2869484c7edff69b7c65bfc84f2f1aa",
+    );
+    expect(installRun).toContain(
+      '"https://github.com/shakkernerd/ocm/releases/download/${OCM_VERSION}/ocm-x86_64-unknown-linux-gnu.tar.gz"',
+    );
+    expect(installRun).toContain('echo "${OCM_LINUX_X64_SHA256}  ${ocm_archive}" | sha256sum -c -');
+  });
+
   it("resolves each target once before benchmark and publication fan out", () => {
     const workflow = readWorkflow();
     const resolveTarget = findStep("Resolve OpenClaw target ref", "resolve_target");

@@ -2,6 +2,7 @@
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
   executeSqliteQuerySync,
@@ -149,6 +150,54 @@ function ensureColumn(db: DatabaseSync, tableName: string, columnSql: string): b
   // State migrations are additive here; destructive or shape-changing repairs belong in doctor.
   db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnSql};`);
   return true;
+}
+
+function ensureOperatorApprovalResolutionRefs(db: DatabaseSync): void {
+  if (!tableExists(db, "operator_approvals")) {
+    return;
+  }
+  runSqliteImmediateTransactionSync(db, () => {
+    ensureColumn(db, "operator_approvals", "resolution_ref TEXT");
+    const rows = db
+      .prepare("SELECT approval_id, kind, resolution_ref FROM operator_approvals")
+      .all() as Array<{
+      approval_id?: unknown;
+      kind?: unknown;
+      resolution_ref?: unknown;
+    }>;
+    const update = db.prepare(
+      "UPDATE operator_approvals SET resolution_ref = ? WHERE approval_id = ?",
+    );
+    for (const row of rows) {
+      if (typeof row.approval_id !== "string" || (row.kind !== "exec" && row.kind !== "plugin")) {
+        throw new Error("operator approval row cannot be assigned a transport reference");
+      }
+      const resolutionRef = buildApprovalResolutionRef({
+        approvalId: row.approval_id,
+        approvalKind: row.kind,
+      });
+      if (row.resolution_ref !== resolutionRef) {
+        update.run(resolutionRef, row.approval_id);
+      }
+    }
+    const namespaceConflict = db
+      .prepare(
+        `SELECT canonical.approval_id
+         FROM operator_approvals AS canonical
+         JOIN operator_approvals AS referenced
+           ON canonical.approval_id = referenced.resolution_ref
+         WHERE canonical.approval_id <> referenced.approval_id
+         LIMIT 1`,
+      )
+      .get();
+    if (namespaceConflict) {
+      throw new Error("operator approval ids conflict with durable transport references");
+    }
+    db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_operator_approvals_resolution_ref
+        ON operator_approvals(resolution_ref);
+    `);
+  });
 }
 
 function repairLegacyTaskAgentAttribution(db: DatabaseSync): void {
@@ -1396,6 +1445,7 @@ function ensureAdditiveStateColumns(db: DatabaseSync, pathname: string): void {
     "worker_environments",
     "teardown_terminal_state TEXT CHECK (teardown_terminal_state IN ('destroyed', 'failed'))",
   );
+  ensureOperatorApprovalResolutionRefs(db);
 }
 
 function ensureSchema(db: DatabaseSync, pathname: string): void {

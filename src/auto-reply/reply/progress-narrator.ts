@@ -11,7 +11,10 @@ import { isChannelProgressDraftWorkToolName, isCommandToolName } from "../../cha
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import type { TextContent } from "../../llm/types.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
+
+const narratorLog = createSubsystemLogger("auto-reply/progress-narrator");
 
 const MIN_EVENTS_PER_NARRATION = 4;
 const MIN_INTERVAL_MS = 12_000;
@@ -109,7 +112,7 @@ async function generateNarrationWithUtilityModel(params: {
   prepared: NonNullable<Awaited<ReturnType<typeof prepareNarrationModel>>>;
   input: ProgressNarrationInput;
   abortSignal?: AbortSignal;
-}): Promise<string | null> {
+}): Promise<{ text: string | null; error?: string }> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), NARRATION_TIMEOUT_MS);
   const onOuterAbort = () => controller.abort();
@@ -136,20 +139,19 @@ async function generateNarrationWithUtilityModel(params: {
       },
     });
     if (result.stopReason === "error") {
-      logVerbose(
-        `progress-narrator: completion failed: ${result.errorMessage?.trim() || "unknown error"}`,
-      );
-      return null;
+      const error = result.errorMessage?.trim() || "unknown error";
+      logVerbose(`progress-narrator: completion failed: ${error}`);
+      return { text: null, error };
     }
     const text = result.content
       .filter(isTextContentBlock)
       .map((block) => block.text)
       .join("")
       .trim();
-    return text || null;
+    return { text: text || null };
   } catch (err) {
     logVerbose(`progress-narrator: completion failed: ${String(err)}`);
-    return null;
+    return { text: null, error: String(err) };
   } finally {
     clearTimeout(timeout);
     params.abortSignal?.removeEventListener("abort", onOuterAbort);
@@ -199,6 +201,8 @@ export function createProgressNarrator(params: {
   let consecutiveFailures = 0;
   let lastText = "";
   let preparedPromise: ReturnType<typeof prepareNarrationModel> | undefined;
+  let lastFailure: string | undefined;
+  let utilityModelLabel: string | undefined;
 
   const generate =
     params.generate ??
@@ -209,13 +213,17 @@ export function createProgressNarrator(params: {
         disabled = true;
         return null;
       }
-      return await generateNarrationWithUtilityModel({
+      const { provider, modelId, profileId } = prepared.selection;
+      utilityModelLabel = `${provider}/${modelId}${profileId ? ` via ${profileId}` : ""}`;
+      const outcome = await generateNarrationWithUtilityModel({
         cfg: params.cfg,
         agentId: params.agentId,
         prepared,
         input,
         abortSignal: params.abortSignal,
       });
+      lastFailure = outcome.error;
+      return outcome.text;
     });
 
   // Stopping mid-turn must clear any rendered narration so the channel draft
@@ -290,6 +298,14 @@ export function createProgressNarrator(params: {
         if (!text) {
           consecutiveFailures += 1;
           if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+            // A dead utility-model credential otherwise degrades silently to raw
+            // tool lines; per-attempt detail is verbose-only, so emit one warn
+            // per turn naming the model/profile operators must repair.
+            narratorLog.warn(
+              `narration disabled after ${consecutiveFailures} consecutive failures` +
+                (utilityModelLabel ? ` (${utilityModelLabel})` : "") +
+                (lastFailure ? `: ${lastFailure}` : ""),
+            );
             disableNarration();
           }
           return;

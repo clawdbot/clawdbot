@@ -777,6 +777,7 @@ export interface OperatorApprovals {
   requested_by_client_id: string | null;
   requested_by_device_id: string | null;
   requested_by_device_token_auth: Generated<number>;
+  resolution_ref: string;
   resolved_at_ms: number | null;
   resolver_id: string | null;
   resolver_kind: string | null;
@@ -1136,6 +1137,25 @@ export interface WorkerEnvironments {
   updated_at_ms: number;
 }
 
+export interface WorkerTranscriptCommitHeads {
+  environment_id: string;
+  next_seq: number;
+  run_epoch: number;
+  session_id: string;
+  updated_at_ms: number;
+}
+
+export interface WorkerTranscriptCommits {
+  created_at_ms: number;
+  request_hash: string;
+  result_json: string | null;
+  run_epoch: number;
+  seq: number;
+  session_id: string;
+  state: string;
+  updated_at_ms: number;
+}
+
 export interface WorkspaceSetupState {
   bootstrap_seeded_at: string | null;
   setup_completed_at: string | null;
@@ -1239,6 +1259,8 @@ export interface DB {
   web_push_vapid_keys: WebPushVapidKeys;
   worker_environment_credentials: WorkerEnvironmentCredentials;
   worker_environments: WorkerEnvironments;
+  worker_transcript_commit_heads: WorkerTranscriptCommitHeads;
+  worker_transcript_commits: WorkerTranscriptCommits;
   workspace_setup_state: WorkspaceSetupState;
   worktrees: Worktrees;
 }

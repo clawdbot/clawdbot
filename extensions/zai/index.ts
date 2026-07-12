@@ -36,6 +36,7 @@ import { detectZaiEndpoint, type ZaiEndpointId } from "./detect.js";
 import { zaiMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { buildZaiModelDefinition, resolveZaiBaseUrl } from "./model-definitions.js";
 import { applyZaiConfig, applyZaiProviderConfig, resolveZaiModelId } from "./onboard.js";
+import { isGlm52ModelId, resolveThinkingProfile } from "./provider-policy-api.js";
 
 const PROVIDER_ID = "zai";
 const GLM5_TEMPLATE_MODEL_ID = "glm-4.7";
@@ -126,10 +127,6 @@ function shouldPreserveZaiThinking(extraParams?: Record<string, unknown>): boole
 
 function isDisabledThinkingLevel(thinkingLevel: ProviderWrapStreamFnContext["thinkingLevel"]) {
   return thinkingLevel === "off";
-}
-
-function isGlm52ModelId(modelId?: string | null): boolean {
-  return normalizeLowercaseStringOrEmpty(modelId).startsWith("glm-5.2");
 }
 
 function mapThinkingLevelToZaiReasoningEffort(
@@ -394,24 +391,7 @@ export default definePluginEntry({
       }),
       prepareExtraParams: (ctx) => defaultToolStreamExtraParams(ctx.extraParams),
       wrapStreamFn: (ctx) => wrapZaiStreamFn(ctx),
-      resolveThinkingProfile: (ctx) =>
-        isGlm52ModelId(ctx.modelId)
-          ? {
-              levels: [
-                { id: "off", label: "off" },
-                { id: "low", label: "low" },
-                { id: "high", label: "high" },
-                { id: "max", label: "max" },
-              ],
-              defaultLevel: "off",
-            }
-          : {
-              levels: [
-                { id: "off", label: "off" },
-                { id: "low", label: "on" },
-              ],
-              defaultLevel: "off",
-            },
+      resolveThinkingProfile,
       isModernModelRef: ({ modelId }) => {
         const lower = normalizeLowercaseStringOrEmpty(modelId);
         return (

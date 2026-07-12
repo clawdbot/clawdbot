@@ -624,6 +624,23 @@
   color: var(--muted);
 }
 
+.chat-tool-card__detail-link {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.chat-tool-card__detail-link:hover,
+.chat-tool-card__detail-link:focus-visible {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .chat-tool-card__block {
   margin-top: 8px;
   min-width: 0;
@@ -985,61 +1002,42 @@
   padding: 0 12px 10px 12px;
 }
 
-/* Reading Indicator: bubble chrome and sizing come from .chat-bubble and
-   .chat-bubble.chat-reading-indicator (components.css). */
+/* Reading indicator = working spark: pulsing brand mark where the reply will
+   materialize while the agent works with nothing visibly streaming. Bubble
+   chrome and sizing come from .chat-bubble.chat-reading-indicator
+   (components.css). Filled, not stroked: it reads as a solid star at 16px. */
 .chat-reading-indicator {
   display: inline-flex;
-}
-
-.chat-reading-indicator__dots {
-  display: inline-flex;
   align-items: center;
-  gap: 4px;
-  height: 12px;
+  color: var(--accent);
 }
 
-.chat-reading-indicator__dots span {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: var(--radius-full);
-  background: var(--muted);
-  opacity: 0.6;
-  transform: translateY(0);
-  animation: chatReadingDot 1.2s ease-in-out infinite;
+.chat-reading-indicator svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+  stroke: none;
+  animation: chatWorkingSparkPulse 1.6s ease-in-out infinite;
   will-change: transform, opacity;
 }
 
-.chat-reading-indicator__dots span:nth-child(1) {
-  animation-delay: 0s;
-}
-
-.chat-reading-indicator__dots span:nth-child(2) {
-  animation-delay: 0.15s;
-}
-
-.chat-reading-indicator__dots span:nth-child(3) {
-  animation-delay: 0.3s;
-}
-
-@keyframes chatReadingDot {
+@keyframes chatWorkingSparkPulse {
   0%,
-  80%,
   100% {
     opacity: 0.4;
-    transform: translateY(0);
+    transform: scale(0.86);
   }
 
-  40% {
+  50% {
     opacity: 1;
-    transform: translateY(-3px);
+    transform: scale(1);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .chat-reading-indicator__dots span {
+  .chat-reading-indicator svg {
     animation: none;
-    opacity: 0.6;
+    opacity: 0.85;
   }
 }
 

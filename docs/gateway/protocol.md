@@ -176,8 +176,12 @@ verifies a hash-at-rest, short-lived credential bound to the environment, bundle
 hash, owner epoch, RPC-set version, expiry, and one nullable session; it
 separately checks the current version and feature set. Success returns minimal
 `worker-hello-ok`; feature negotiation is independent of the general protocol
-version. Frames stay under 64 KiB. Initially only `worker.heartbeat` is allowed,
-with ownership and expiry rechecked on each RPC.
+version. Frames stay under 64 KiB. The closed allowlist contains
+`worker.heartbeat` and `worker.transcript.commit` for ordered semantic message batches. Transcript
+commits use owner-epoch fencing, a gateway-owned session binding, base-leaf
+compare-and-swap, and durable sequence replay; the gateway generates transcript
+entry and parent IDs through the normal session writer. Ownership and expiry are
+rechecked on each RPC.
 
 ### Client capabilities
 
@@ -846,6 +850,10 @@ context.
   `provider/*` entries. Without an allowlist, the response uses explicit
   `models.providers.<provider>.models` entries, falling back to the full
   catalog only when no configured model rows exist.
+- `"provider-config"`: source-authored `models.providers.*.models` inventory,
+  independent of picker allowlists. Rows include public model capabilities and
+  route-aware availability, but omit provider endpoints, auth material, and
+  runtime request configuration.
 - `"all"`: full gateway catalog, bypassing `agents.defaults.models`. Use for
   diagnostics/discovery UIs, not normal model pickers.
 

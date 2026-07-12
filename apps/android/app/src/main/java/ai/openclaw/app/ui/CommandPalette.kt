@@ -65,7 +65,7 @@ internal fun CommandPalette(
 ) {
   val isConnected by viewModel.isConnected.collectAsState()
   val sessions by viewModel.chatSessions.collectAsState()
-  val models by viewModel.modelCatalog.collectAsState()
+  val models by viewModel.providerModelCatalog.collectAsState()
   val providers by viewModel.modelAuthProviders.collectAsState()
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
   var query by rememberSaveable { mutableStateOf("") }
@@ -302,8 +302,10 @@ internal fun providerCommandSubtitle(
   models: List<GatewayModelSummary>,
 ): String {
   if (!isConnected) return "Connect Gateway to view providers"
-  val readyProviderCount = providerRows(providers = providers, models = models).count { it.ready }
+  val rows = providerRows(providers = providers, models = models)
+  val readyProviderCount = rows.count { it.ready }
   if (readyProviderCount > 0) return "$readyProviderCount providers ready"
+  if (rows.any { it.availability == ProviderAvailability.Unknown }) return "Provider availability unknown"
   return "No ready providers"
 }
 

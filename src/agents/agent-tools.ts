@@ -44,6 +44,7 @@ import {
   createSandboxedEditTool,
   createSandboxedReadTool,
   createSandboxedWriteTool,
+  wrapReadToolWithSkillContent,
   getToolParamsRecord,
   wrapToolMemoryFlushAppendOnlyWrite,
   wrapToolWorkspaceRootGuard,
@@ -717,13 +718,17 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             modelContextWindowTokens: options?.modelContextWindowTokens,
             imageSanitization,
           });
+          const guarded = workspaceOnly
+            ? wrapToolWorkspaceRootGuardWithOptions(sandboxed, sandboxRoot, {
+                additionalContainerMounts: readOnlySandboxReadMounts(sandbox),
+                containerWorkdir: sandbox.containerWorkdir,
+              })
+            : sandboxed;
           base.push(
-            workspaceOnly
-              ? wrapToolWorkspaceRootGuardWithOptions(sandboxed, sandboxRoot, {
-                  additionalContainerMounts: readOnlySandboxReadMounts(sandbox),
-                  containerWorkdir: sandbox.containerWorkdir,
-                })
-              : sandboxed,
+            wrapReadToolWithSkillContent(guarded, options?.skillsSnapshot?.resolvedSkills, {
+              modelContextWindowTokens: options?.modelContextWindowTokens,
+              imageSanitization,
+            }),
           );
           continue;
         }
@@ -732,12 +737,16 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
           modelContextWindowTokens: options?.modelContextWindowTokens,
           imageSanitization,
         });
+        const guarded = workspaceOnly
+          ? wrapToolWorkspaceRootGuardWithOptions(wrapped, codingRoot, {
+              additionalRoots: skillReadRoots,
+            })
+          : wrapped;
         base.push(
-          workspaceOnly
-            ? wrapToolWorkspaceRootGuardWithOptions(wrapped, codingRoot, {
-                additionalRoots: skillReadRoots,
-              })
-            : wrapped,
+          wrapReadToolWithSkillContent(guarded, options?.skillsSnapshot?.resolvedSkills, {
+            modelContextWindowTokens: options?.modelContextWindowTokens,
+            imageSanitization,
+          }),
         );
         continue;
       }

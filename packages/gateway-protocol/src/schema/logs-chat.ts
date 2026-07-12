@@ -235,3 +235,13 @@ export const ChatEventSchema = Type.Union([
   ChatAbortedEventSchema,
   ChatErrorEventSchema,
 ]);
+
+// Wire types derive directly from local schema consts so public d.ts graphs never
+// pull in the ProtocolSchemas registry.
+export type ChatMetadataParams = Static<typeof ChatMetadataParamsSchema>;
+export type ChatToolTitlesParams = Static<typeof ChatToolTitlesParamsSchema>;
+export type LogsTailParams = Static<typeof LogsTailParamsSchema>;
+export type LogsTailResult = Static<typeof LogsTailResultSchema>;
+export type ChatAbortParams = Static<typeof ChatAbortParamsSchema>;
+export type ChatInjectParams = Static<typeof ChatInjectParamsSchema>;
+export type ChatEvent = Static<typeof ChatEventSchema>;

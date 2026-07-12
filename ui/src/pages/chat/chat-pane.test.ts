@@ -2,6 +2,9 @@
 
 import { describe, expect, it, vi } from "vitest";
 import type {
+  SessionCatalogSession,
+  SessionsCatalogListResult,
+  SessionsCatalogReadResult,
   TaskSuggestion,
   TaskSuggestionEvent,
   TaskSuggestionsAcceptResult,
@@ -9,6 +12,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { buildCatalogSessionKey, type CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import "./chat-pane.ts";
 import type { ChatPageHost } from "./chat-state.ts";
@@ -32,6 +36,8 @@ type TestChatPane = HTMLElement & {
   taskSuggestions: TaskSuggestion[];
   onPaneSessionChange?: (paneId: string, sessionKey: string) => void;
   sessionKey: string;
+  catalogSession: SessionCatalogSession | null;
+  loadCatalogSession: (key: CatalogSessionKey, older: boolean) => Promise<void>;
 };
 
 const suggestion: TaskSuggestion = {
@@ -268,6 +274,79 @@ describe("chat pane session creation lifecycle", () => {
     expect(state.lastError).toBeNull();
     expect(state.chatError).toBeNull();
     expect(requestUpdate).not.toHaveBeenCalled();
+  });
+});
+
+describe("chat pane catalog session lifecycle", () => {
+  it("finds continuation metadata on a later catalog page", async () => {
+    const key = {
+      catalogId: "codex",
+      hostId: "gateway:local",
+      threadId: "thread-101",
+    } satisfies CatalogSessionKey;
+    const selectedSession: SessionCatalogSession = {
+      threadId: key.threadId,
+      status: "idle",
+      archived: false,
+      canContinue: true,
+      canArchive: true,
+    };
+    const firstPage: SessionsCatalogListResult = {
+      catalogs: [
+        {
+          id: key.catalogId,
+          label: "Codex",
+          capabilities: { continueSession: true, archive: true },
+          hosts: [
+            {
+              hostId: key.hostId,
+              label: "Gateway",
+              kind: "gateway",
+              connected: true,
+              sessions: [],
+              nextCursor: "page-2",
+            },
+          ],
+        },
+      ],
+    };
+    const secondPage: SessionsCatalogListResult = {
+      catalogs: [
+        {
+          ...firstPage.catalogs[0]!,
+          hosts: [{ ...firstPage.catalogs[0]!.hosts[0]!, sessions: [selectedSession] }],
+        },
+      ],
+    };
+    const transcript: SessionsCatalogReadResult = {
+      hostId: key.hostId,
+      threadId: key.threadId,
+      items: [],
+    };
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(firstPage)
+      .mockResolvedValueOnce(secondPage)
+      .mockResolvedValueOnce(transcript);
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    pane.sessionKey = buildCatalogSessionKey(key);
+
+    await pane.loadCatalogSession(key, false);
+
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.catalog.list", {
+      catalogId: key.catalogId,
+      hostIds: [key.hostId],
+      limitPerHost: 100,
+      cursors: { [key.hostId]: "page-2" },
+    });
+    expect(request).toHaveBeenNthCalledWith(3, "sessions.catalog.read", {
+      catalogId: key.catalogId,
+      hostId: key.hostId,
+      threadId: key.threadId,
+      limit: 50,
+    });
+    expect(pane.catalogSession).toEqual(selectedSession);
   });
 });
 

@@ -1,6 +1,7 @@
 // Resolves provider thinking-level policy from plugin metadata.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { resolveBundledProviderPolicySurface } from "./provider-public-artifacts.js";
+import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import { resolveProviderPolicySurface } from "./provider-public-artifacts.js";
 import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderThinkingProfile,
@@ -57,6 +58,16 @@ function resolveActiveThinkingProvider(providerId: string): ThinkingProviderPlug
   return undefined;
 }
 
+function resolveProviderPublicPolicySurface(providerId: string) {
+  const metadataSnapshot = getCurrentPluginMetadataSnapshot({
+    allowScopedSnapshot: true,
+    allowWorkspaceScopedSnapshot: true,
+  });
+  return resolveProviderPolicySurface(providerId, {
+    manifestRegistry: metadataSnapshot?.manifestRegistry,
+  });
+}
+
 type ThinkingHookParams<TContext> = {
   provider: string;
   context: TContext;
@@ -86,7 +97,7 @@ export function resolveProviderThinkingProfile(
   if (activeProfile !== undefined) {
     return activeProfile;
   }
-  return resolveBundledProviderPolicySurface(params.provider)?.resolveThinkingProfile?.(
+  return resolveProviderPublicPolicySurface(params.provider)?.resolveThinkingProfile?.(
     params.context,
   );
 }

@@ -448,7 +448,7 @@ describe("createPluginApprovalHandlers", () => {
         {
           title: "T",
           description: "D",
-          allowedDecisions: ["allow-once", "deny", "allow-once"],
+          allowedDecisions: ["allow-once", "allow-once"],
           twoPhase: true,
         },
         { respond },

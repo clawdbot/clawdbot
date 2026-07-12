@@ -597,7 +597,7 @@ function rewriteInteractive(interactive: InteractiveReply): InteractiveReply {
           ...block,
           options: block.options.map((option) => ({
             ...option,
-            ...(option.action ? { action: rewritePresentationAction(option.action) } : {}),
+            ...(option.action ? { action: rewriteSelectPresentationAction(option.action) } : {}),
             ...(option.value ? { value: rewriteCodexDiagnosticsCommandPrefix(option.value) } : {}),
           })),
         };
@@ -614,10 +614,27 @@ function rewritePresentationAction(action: MessagePresentationAction): MessagePr
       command: rewriteCodexDiagnosticsCommandPrefix(action.command),
     };
   }
-  return {
-    type: "callback",
-    value: rewriteCodexDiagnosticsCommandPrefix(action.value),
-  };
+  if (action.type === "callback") {
+    return {
+      type: "callback",
+      value: rewriteCodexDiagnosticsCommandPrefix(action.value),
+    };
+  }
+  return action;
+}
+
+function rewriteSelectPresentationAction(
+  action: Extract<MessagePresentationAction, { type: "command" | "callback" }>,
+): Extract<MessagePresentationAction, { type: "command" | "callback" }> {
+  return action.type === "command"
+    ? {
+        type: "command",
+        command: rewriteCodexDiagnosticsCommandPrefix(action.command),
+      }
+    : {
+        type: "callback",
+        value: rewriteCodexDiagnosticsCommandPrefix(action.value),
+      };
 }
 
 function rewriteCodexDiagnosticsCommandPrefix(value: string): string {

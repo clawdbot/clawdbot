@@ -520,6 +520,7 @@ export function buildCliArgs(params: {
   imagePaths?: string[];
   promptArg?: string;
   useResume: boolean;
+  forkResume?: boolean;
   sendSystemPromptOnResume?: boolean;
 }): string[] {
   const args: string[] = [...params.baseArgs];
@@ -561,6 +562,12 @@ export function buildCliArgs(params: {
     } else if (params.backend.sessionArg) {
       args.push(params.backend.sessionArg, params.sessionId);
     }
+  }
+  if (params.useResume && params.forkResume) {
+    if (!params.backend.forkArg) {
+      throw new Error("CLI backend does not support forked session resume");
+    }
+    args.push(params.backend.forkArg);
   }
   if (params.promptArg !== undefined) {
     let replacedPromptPlaceholder = false;

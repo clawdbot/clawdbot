@@ -38,10 +38,15 @@ vi.mock("./exec-approval-surface.js", () => ({
 }));
 
 import {
+  buildApprovalPresentation,
+  buildApprovalPresentationFromActionDescriptors,
   buildExecApprovalActionDescriptors,
   buildExecApprovalCommandText,
   buildExecApprovalPendingReplyPayload,
   buildExecApprovalUnavailableReplyPayload,
+  buildTypedApprovalActionDescriptors,
+  buildTypedApprovalPresentation,
+  buildTypedExecApprovalPendingReplyPayload,
   getExecApprovalApproverDmNoticeText,
   getExecApprovalReplyMetadata,
   parseExecApprovalCommandText,
@@ -254,7 +259,7 @@ describe("exec approval reply helpers", () => {
   });
 
   it("builds pending reply payloads with trimmed warning text and slug fallback", () => {
-    const payload = buildExecApprovalPendingReplyPayload({
+    const payload = buildTypedExecApprovalPendingReplyPayload({
       warningText: "  Heads up.  ",
       approvalId: "req-1",
       approvalSlug: "slug-1",
@@ -284,28 +289,31 @@ describe("exec approval reply helpers", () => {
             {
               label: "Allow Once",
               action: {
-                type: "command",
-                command: "/approve req-1 allow-once",
+                type: "approval",
+                approvalId: "req-1",
+                approvalKind: "exec",
+                decision: "allow-once",
               },
-              value: "/approve req-1 allow-once",
               style: "success",
             },
             {
               label: "Allow Always",
               action: {
-                type: "command",
-                command: "/approve req-1 allow-always",
+                type: "approval",
+                approvalId: "req-1",
+                approvalKind: "exec",
+                decision: "allow-always",
               },
-              value: "/approve req-1 allow-always",
               style: "primary",
             },
             {
               label: "Deny",
               action: {
-                type: "command",
-                command: "/approve req-1 deny",
+                type: "approval",
+                approvalId: "req-1",
+                approvalKind: "exec",
+                decision: "deny",
               },
-              value: "/approve req-1 deny",
               style: "danger",
             },
           ],
@@ -318,6 +326,32 @@ describe("exec approval reply helpers", () => {
     expect(payload.text).toContain("```sh\necho ok\n```");
     expect(payload.text).toContain("Host: gateway\nNode: node-1\nCWD: /tmp/work\nExpires in: 2s");
     expect(payload.text).toContain("Full id: `req-1`");
+  });
+
+  it("preserves shipped command/value controls in the legacy pending builder", () => {
+    const payload = buildExecApprovalPendingReplyPayload({
+      approvalId: "req-legacy",
+      approvalSlug: "legacy",
+      allowedDecisions: ["deny"],
+      command: "echo legacy",
+      host: "gateway",
+    });
+
+    expect(payload.presentation).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Deny",
+              action: { type: "command", command: "/approve req-legacy deny" },
+              value: "/approve req-legacy deny",
+              style: "danger",
+            },
+          ],
+        },
+      ],
+    });
   });
 
   it("compacts structured cwd paths in pending reply payloads", () => {
@@ -333,8 +367,8 @@ describe("exec approval reply helpers", () => {
     expect(payload.text).not.toContain("C:\\Users\\alice");
   });
 
-  it("omits allow-always actions when allow-always is unavailable", () => {
-    const payload = buildExecApprovalPendingReplyPayload({
+  it("omits allow-always actions when the effective policy requires approval every time", () => {
+    const payload = buildTypedExecApprovalPendingReplyPayload({
       approvalId: "req-ask-always",
       approvalSlug: "slug-always",
       ask: "always",
@@ -361,19 +395,21 @@ describe("exec approval reply helpers", () => {
             {
               label: "Allow Once",
               action: {
-                type: "command",
-                command: "/approve req-ask-always allow-once",
+                type: "approval",
+                approvalId: "req-ask-always",
+                approvalKind: "exec",
+                decision: "allow-once",
               },
-              value: "/approve req-ask-always allow-once",
               style: "success",
             },
             {
               label: "Deny",
               action: {
-                type: "command",
-                command: "/approve req-ask-always deny",
+                type: "approval",
+                approvalId: "req-ask-always",
+                approvalKind: "exec",
+                decision: "deny",
               },
-              value: "/approve req-ask-always deny",
               style: "danger",
             },
           ],
@@ -468,6 +504,146 @@ describe("exec approval reply helpers", () => {
         label: "Deny",
         style: "danger",
         command: "/approve req-1 deny",
+      },
+    ]);
+
+    expect(
+      buildApprovalPresentation({
+        approvalId: "req-1",
+        allowedDecisions: ["deny"],
+      }),
+    ).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Deny",
+              action: { type: "command", command: "/approve req-1 deny" },
+              value: "/approve req-1 deny",
+              style: "danger",
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(
+      buildApprovalPresentationFromActionDescriptors([
+        {
+          decision: "deny",
+          label: "Deny",
+          style: "danger",
+          command: "/approve legacy-id deny",
+        },
+      ]),
+    ).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Deny",
+              action: { type: "command", command: "/approve legacy-id deny" },
+              value: "/approve legacy-id deny",
+              style: "danger",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("builds typed descriptors and presentations only through named typed builders", () => {
+    expect(
+      buildTypedApprovalActionDescriptors({
+        approvalCommandId: "opaque-id",
+        approvalKind: "plugin",
+        allowedDecisions: ["deny"],
+      }),
+    ).toEqual([
+      {
+        decision: "deny",
+        label: "Deny",
+        style: "danger",
+        action: {
+          type: "approval",
+          approvalId: "opaque-id",
+          approvalKind: "plugin",
+          decision: "deny",
+        },
+        command: "/approve opaque-id deny",
+      },
+    ]);
+
+    expect(
+      buildTypedApprovalPresentation({
+        approvalId: "opaque-id",
+        approvalKind: "plugin",
+        allowedDecisions: ["deny"],
+      }),
+    ).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Deny",
+              action: {
+                type: "approval",
+                approvalId: "opaque-id",
+                approvalKind: "plugin",
+                decision: "deny",
+              },
+              style: "danger",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it.each([".", "..", "\uD800", "\uDC00", "broken-\uD800"])(
+    "refuses malformed typed approval identity %j",
+    (approvalId) => {
+      expect(
+        buildTypedApprovalActionDescriptors({
+          approvalCommandId: approvalId,
+          approvalKind: "exec",
+          allowedDecisions: ["deny"],
+        }),
+      ).toEqual([]);
+      expect(
+        buildTypedApprovalPresentation({
+          approvalId,
+          approvalKind: "exec",
+          allowedDecisions: ["deny"],
+        }),
+      ).toBeUndefined();
+      expect(
+        buildTypedExecApprovalPendingReplyPayload({
+          approvalId,
+          approvalSlug: "safe-slug",
+          allowedDecisions: ["deny"],
+          command: "echo safe",
+          host: "gateway",
+        }).presentation,
+      ).toBeUndefined();
+    },
+  );
+
+  it("preserves protocol-valid boundary whitespace in typed approval actions", () => {
+    const approvalId = "\uFEFF";
+
+    expect(
+      buildTypedApprovalActionDescriptors({
+        approvalCommandId: approvalId,
+        approvalKind: "exec",
+        allowedDecisions: ["deny"],
+      }),
+    ).toMatchObject([
+      {
+        action: { type: "approval", approvalId, approvalKind: "exec", decision: "deny" },
       },
     ]);
   });

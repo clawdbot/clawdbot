@@ -11,6 +11,22 @@ export {
 import { Compile, type Validator as TypeBoxValidator } from "typebox/compile";
 import type { ValidationError } from "./validation-errors.js";
 export { formatValidationErrors, type ValidationError } from "./validation-errors.js";
+export type {
+  SessionCatalog,
+  SessionCatalogCapabilities,
+  SessionCatalogDescriptor,
+  SessionCatalogHost,
+  SessionCatalogSession,
+  SessionCatalogTranscriptItem,
+  SessionsCatalogArchiveParams,
+  SessionsCatalogArchiveResult,
+  SessionsCatalogContinueParams,
+  SessionsCatalogContinueResult,
+  SessionsCatalogListParams,
+  SessionsCatalogListResult,
+  SessionsCatalogReadParams,
+  SessionsCatalogReadResult,
+} from "./schema/sessions-catalog.js";
 import {
   type AgentEvent,
   AgentEventSchema,
@@ -405,6 +421,20 @@ import {
   type WorkerHelloOk,
   type WorkerProtocolCloseReason,
   WorkerProtocolCloseReasonSchema,
+  type WorkerTranscriptCommitErrorReason,
+  WorkerTranscriptCommitErrorReasonSchema,
+  type WorkerTranscriptCommitErrorShape,
+  WorkerTranscriptCommitErrorShapeSchema,
+  type WorkerTranscriptCommitParams,
+  WorkerTranscriptCommitParamsSchema,
+  type WorkerTranscriptCommitRequestFrame,
+  WorkerTranscriptCommitRequestFrameSchema,
+  type WorkerTranscriptCommitResponseFrame,
+  WorkerTranscriptCommitResponseFrameSchema,
+  type WorkerTranscriptCommitResult,
+  WorkerTranscriptCommitResultSchema,
+  type WorkerTranscriptMessage,
+  WorkerTranscriptMessageSchema,
   WORKER_HEARTBEAT_INTERVAL_MS,
   WORKER_PROTOCOL_FEATURES,
   WORKER_PROTOCOL_MAX_FEATURE_LENGTH,
@@ -415,6 +445,10 @@ import {
   WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
   WORKER_PROTOCOL_METHODS,
   WORKER_RPC_SET_VERSION,
+  WORKER_TRANSCRIPT_MAX_BATCH_MESSAGES,
+  WORKER_TRANSCRIPT_MAX_CONTENT_PARTS,
+  WORKER_TRANSCRIPT_MAX_JSON_DEPTH,
+  WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE,
   type SystemInfoParams,
   SystemInfoParamsSchema,
   type SystemInfoResult,
@@ -528,7 +562,6 @@ import {
   WebPushTestParamsSchema,
   type PresenceEntry,
   PresenceEntrySchema,
-  ProtocolSchemas,
   type RequestFrame,
   RequestFrameSchema,
   type ResponseFrame,
@@ -599,12 +632,34 @@ import {
   SessionsFilesGetParamsSchema,
   type SessionsFilesGetResult,
   SessionsFilesGetResultSchema,
+  type SessionsFilesSetParams,
+  SessionsFilesSetParamsSchema,
+  type SessionsFilesSetResult,
+  SessionsFilesSetResultSchema,
   type SessionsFilesListParams,
   SessionsFilesListParamsSchema,
   type SessionsFilesListResult,
   SessionsFilesListResultSchema,
   type SessionsListParams,
   SessionsListParamsSchema,
+  SessionCatalogSchema,
+  SessionCatalogCapabilitiesSchema,
+  SessionCatalogDescriptorSchema,
+  SessionCatalogHostSchema,
+  SessionCatalogSessionSchema,
+  SessionCatalogTranscriptItemSchema,
+  type SessionsCatalogArchiveParams,
+  SessionsCatalogArchiveParamsSchema,
+  SessionsCatalogArchiveResultSchema,
+  type SessionsCatalogContinueParams,
+  SessionsCatalogContinueParamsSchema,
+  SessionsCatalogContinueResultSchema,
+  type SessionsCatalogListParams,
+  SessionsCatalogListParamsSchema,
+  SessionsCatalogListResultSchema,
+  type SessionsCatalogReadParams,
+  SessionsCatalogReadParamsSchema,
+  SessionsCatalogReadResultSchema,
   type SessionsMessagesSubscribeParams,
   SessionsMessagesSubscribeParamsSchema,
   type SessionsMessagesUnsubscribeParams,
@@ -827,7 +882,10 @@ export type ProtocolValidator<T = unknown> = ((data: unknown) => data is T) & {
 
 // Defer TypeBox compilation until the first validation call. Importing this
 // module is common in CLIs/tests, so eager compilation would add startup cost.
-function lazyCompile<T = unknown>(schema: unknown): ProtocolValidator<T> {
+function lazyCompile<T = unknown>(
+  schema: unknown,
+  precheck?: (data: unknown) => ValidationError | undefined,
+): ProtocolValidator<T> {
   let compiled: TypeBoxValidator | undefined;
   let errors: ValidationError[] | null = null;
 
@@ -837,6 +895,11 @@ function lazyCompile<T = unknown>(schema: unknown): ProtocolValidator<T> {
   };
 
   const validate = ((data: unknown): data is T => {
+    const precheckError = precheck?.(data);
+    if (precheckError) {
+      errors = [precheckError];
+      return false;
+    }
     const current = getCompiled();
     const valid = current.Check(data);
     errors = valid ? null : ([...current.Errors(data)] as ValidationError[]);
@@ -875,6 +938,56 @@ export const validateWorkerConnectRequestFrame = lazyCompile<WorkerConnectReques
 );
 export const validateWorkerHeartbeatParams = lazyCompile<WorkerHeartbeatParams>(
   WorkerHeartbeatParamsSchema,
+);
+
+function checkWorkerTranscriptCommitJson(data: unknown): ValidationError | undefined {
+  const stack: Array<{ depth: number; value: unknown }> = [{ depth: 0, value: data }];
+  const seen = new WeakSet<object>();
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current) {
+      break;
+    }
+    if (current.depth > WORKER_TRANSCRIPT_MAX_JSON_DEPTH) {
+      return {
+        keyword: "maxDepth",
+        params: { limit: WORKER_TRANSCRIPT_MAX_JSON_DEPTH },
+        message: `must not exceed JSON nesting depth ${WORKER_TRANSCRIPT_MAX_JSON_DEPTH}`,
+      };
+    }
+    if (
+      current.value === null ||
+      typeof current.value === "string" ||
+      typeof current.value === "boolean"
+    ) {
+      continue;
+    }
+    if (typeof current.value === "number") {
+      if (!Number.isFinite(current.value)) {
+        return { keyword: "finite", message: "must contain only finite JSON numbers" };
+      }
+      continue;
+    }
+    if (typeof current.value !== "object") {
+      return { keyword: "jsonValue", message: "must contain only JSON values" };
+    }
+    if (seen.has(current.value)) {
+      return { keyword: "acyclic", message: "must be an acyclic JSON value" };
+    }
+    seen.add(current.value);
+    const values = Array.isArray(current.value)
+      ? current.value
+      : Object.values(current.value as Record<string, unknown>);
+    for (const value of values) {
+      stack.push({ depth: current.depth + 1, value });
+    }
+  }
+  return undefined;
+}
+
+export const validateWorkerTranscriptCommitParams = lazyCompile<WorkerTranscriptCommitParams>(
+  WorkerTranscriptCommitParamsSchema,
+  checkWorkerTranscriptCommitJson,
 );
 export const validateGatewaySuspendPrepareParams = lazyCompile<GatewaySuspendPrepareParams>(
   GatewaySuspendPrepareParamsSchema,
@@ -1020,6 +1133,18 @@ export const validateSecretsResolveResult = lazyCompile<SecretsResolveResult>(
   SecretsResolveResultSchema,
 );
 export const validateSessionsListParams = lazyCompile<SessionsListParams>(SessionsListParamsSchema);
+export const validateSessionsCatalogListParams = lazyCompile<SessionsCatalogListParams>(
+  SessionsCatalogListParamsSchema,
+);
+export const validateSessionsCatalogReadParams = lazyCompile<SessionsCatalogReadParams>(
+  SessionsCatalogReadParamsSchema,
+);
+export const validateSessionsCatalogContinueParams = lazyCompile<SessionsCatalogContinueParams>(
+  SessionsCatalogContinueParamsSchema,
+);
+export const validateSessionsCatalogArchiveParams = lazyCompile<SessionsCatalogArchiveParams>(
+  SessionsCatalogArchiveParamsSchema,
+);
 export const validateSessionsCleanupParams = lazyCompile<SessionsCleanupParams>(
   SessionsCleanupParamsSchema,
 );
@@ -1037,6 +1162,9 @@ export const validateSessionsFilesListParams = lazyCompile<SessionsFilesListPara
 );
 export const validateSessionsFilesGetParams = lazyCompile<SessionsFilesGetParams>(
   SessionsFilesGetParamsSchema,
+);
+export const validateSessionsFilesSetParams = lazyCompile<SessionsFilesSetParams>(
+  SessionsFilesSetParamsSchema,
 );
 export const validateSessionsDiffParams = lazyCompile<SessionsDiffParams>(SessionsDiffParamsSchema);
 export const validateSessionsCreateParams = lazyCompile<SessionsCreateParams>(
@@ -1471,6 +1599,13 @@ export {
   WorkerHeartbeatRequestFrameSchema,
   WorkerHeartbeatResponseFrameSchema,
   WorkerProtocolCloseReasonSchema,
+  WorkerTranscriptCommitErrorReasonSchema,
+  WorkerTranscriptCommitErrorShapeSchema,
+  WorkerTranscriptCommitParamsSchema,
+  WorkerTranscriptCommitRequestFrameSchema,
+  WorkerTranscriptCommitResponseFrameSchema,
+  WorkerTranscriptCommitResultSchema,
+  WorkerTranscriptMessageSchema,
   WORKER_HEARTBEAT_INTERVAL_MS,
   WORKER_PROTOCOL_FEATURES,
   WORKER_PROTOCOL_MAX_FEATURE_LENGTH,
@@ -1481,6 +1616,10 @@ export {
   WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
   WORKER_PROTOCOL_METHODS,
   WORKER_RPC_SET_VERSION,
+  WORKER_TRANSCRIPT_MAX_BATCH_MESSAGES,
+  WORKER_TRANSCRIPT_MAX_CONTENT_PARTS,
+  WORKER_TRANSCRIPT_MAX_JSON_DEPTH,
+  WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE,
   EnvironmentStatusSchema,
   WorkerEnvironmentStateSchema,
   WorkerTunnelStatusSchema,
@@ -1531,6 +1670,20 @@ export {
   NodePendingEnqueueParamsSchema,
   NodePendingEnqueueResultSchema,
   SessionsListParamsSchema,
+  SessionCatalogCapabilitiesSchema,
+  SessionCatalogDescriptorSchema,
+  SessionCatalogSessionSchema,
+  SessionCatalogHostSchema,
+  SessionCatalogSchema,
+  SessionCatalogTranscriptItemSchema,
+  SessionsCatalogListParamsSchema,
+  SessionsCatalogListResultSchema,
+  SessionsCatalogReadParamsSchema,
+  SessionsCatalogReadResultSchema,
+  SessionsCatalogContinueParamsSchema,
+  SessionsCatalogContinueResultSchema,
+  SessionsCatalogArchiveParamsSchema,
+  SessionsCatalogArchiveResultSchema,
   SessionsCleanupParamsSchema,
   SessionsPreviewParamsSchema,
   SessionsDescribeParamsSchema,
@@ -1542,6 +1695,8 @@ export {
   SessionFileRelevanceSchema,
   SessionsFilesGetParamsSchema,
   SessionsFilesGetResultSchema,
+  SessionsFilesSetParamsSchema,
+  SessionsFilesSetResultSchema,
   SessionsFilesListParamsSchema,
   SessionsFilesListResultSchema,
   SessionDiffFileSchema,
@@ -1817,7 +1972,6 @@ export {
   FsDirEntrySchema,
   FsListDirParamsSchema,
   FsListDirResultSchema,
-  ProtocolSchemas,
   MIN_CLIENT_PROTOCOL_VERSION,
   MIN_NODE_PROTOCOL_VERSION,
   MIN_PROBE_PROTOCOL_VERSION,
@@ -1842,6 +1996,13 @@ export type {
   WorkerHeartbeatResponseFrame,
   WorkerHelloOk,
   WorkerProtocolCloseReason,
+  WorkerTranscriptCommitErrorReason,
+  WorkerTranscriptCommitErrorShape,
+  WorkerTranscriptCommitParams,
+  WorkerTranscriptCommitRequestFrame,
+  WorkerTranscriptCommitResponseFrame,
+  WorkerTranscriptCommitResult,
+  WorkerTranscriptMessage,
   GatewaySuspendTaskBlocker,
   GatewaySuspendBlocker,
   GatewaySuspendPrepareParams,
@@ -1962,6 +2123,8 @@ export type {
   SessionsFilesListResult,
   SessionsFilesGetParams,
   SessionsFilesGetResult,
+  SessionsFilesSetParams,
+  SessionsFilesSetResult,
   SessionDiffFile,
   SessionDiffFileStatus,
   SessionsDiffParams,

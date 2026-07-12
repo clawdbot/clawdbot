@@ -1011,6 +1011,7 @@ describe("parseCliOutput", () => {
 describe("createCliJsonlStreamingParser", () => {
   it("streams Claude stream-json deltas for an explicit backend dialect", () => {
     const deltas: Array<{ text: string; delta: string; sessionId?: string }> = [];
+    const sessionIds: string[] = [];
     const parser = createCliJsonlStreamingParser({
       backend: {
         command: "local-cli",
@@ -1020,6 +1021,7 @@ describe("createCliJsonlStreamingParser", () => {
       },
       providerId: "local-cli",
       onAssistantDelta: (delta) => deltas.push(delta),
+      onSessionId: (sessionId) => sessionIds.push(sessionId),
     });
 
     parser.push(
@@ -1039,6 +1041,7 @@ describe("createCliJsonlStreamingParser", () => {
     expect(deltas).toEqual([
       { text: "hello", delta: "hello", sessionId: "session-stream", usage: undefined },
     ]);
+    expect(sessionIds).toEqual(["session-stream"]);
   });
 
   it("uses streamed Claude assistant text when no result envelope arrives", () => {

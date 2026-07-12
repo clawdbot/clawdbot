@@ -38,6 +38,13 @@ function runningInspection(
     memory: "2147483648",
     cpus: "2",
     pidsLimit: 512,
+    storageOpt: {},
+    capDrop: ["ALL"],
+    effectiveCaps: undefined,
+    securityOpt: ["no-new-privileges"],
+    init: true,
+    restartPolicy: "unless-stopped",
+    portBindings: [{ containerPort: "18789/tcp", hostIp: "127.0.0.1", hostPort: "19100" }],
     ...overrides,
   };
 }
@@ -61,11 +68,12 @@ function createContainerMock(
   const run = vi.fn<FleetContainerRuntime["run"]>(async () => undefined);
   const pull = vi.fn<FleetContainerRuntime["pull"]>(async () => undefined);
   const createNetwork = vi.fn<FleetContainerRuntime["createNetwork"]>(
-    async (_runtime, name, labels) => {
+    async (_runtime, name, labels, options) => {
       networks.set(name, {
         kind: "ok",
         labels: { ...labels },
         attachedContainers: [],
+        internal: options.internal,
       });
     },
   );
@@ -328,6 +336,7 @@ describe("fleet service filesystem and removal", () => {
         "openclaw.fleet.owner": "11111111111111111111111111111111",
       },
       attachedContainers: [],
+      internal: false,
     });
     containers.remove.mockClear();
 
@@ -348,6 +357,7 @@ describe("fleet service filesystem and removal", () => {
       kind: "ok",
       labels: fleetLabels(),
       attachedContainers: [{ id: "peer-id", name: "unexpected-peer" }],
+      internal: false,
     });
     containers.remove.mockClear();
 

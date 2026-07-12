@@ -1,4 +1,5 @@
 // Gateway Protocol schema module defines Gateway host system information.
+import type { Static } from "typebox";
 import { Type } from "typebox";
 
 /** Empty request payload for Gateway host system information. */
@@ -29,3 +30,8 @@ export const SystemInfoResultSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+// Wire types derive directly from local schema consts so public d.ts graphs never
+// pull in the ProtocolSchemas registry.
+export type SystemInfoParams = Static<typeof SystemInfoParamsSchema>;
+export type SystemInfoResult = Static<typeof SystemInfoResultSchema>;

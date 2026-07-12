@@ -8,11 +8,20 @@ import {
   isSupportedRealtimeVoiceActivationName,
   normalizeRealtimeVoiceActivationNamePrefix,
 } from "openclaw/plugin-sdk/realtime-voice";
-import { asObjectRecord, normalizeLegacyChannelAliases } from "openclaw/plugin-sdk/runtime-doctor";
-import { resolveDiscordPreviewStreamMode } from "./preview-streaming.js";
+import {
+  asObjectRecord,
+  hasLegacyAccountStreamingAliases,
+  hasLegacyStreamingAliases,
+  normalizeLegacyChannelAliases,
+  resolveLegacyAliasStreamingMode,
+} from "openclaw/plugin-sdk/runtime-doctor";
 
 const LEGACY_TTS_PROVIDER_KEYS = ["openai", "elevenlabs", "microsoft", "edge"] as const;
 type AgentBindingConfig = NonNullable<OpenClawConfig["bindings"]>[number];
+
+function hasLegacyDiscordStreamingAliases(value: unknown): boolean {
+  return hasLegacyStreamingAliases(value, { includePreviewChunk: true });
+}
 
 function hasLegacyTtsProviderKeys(value: unknown): boolean {
   const tts = asObjectRecord(value);
@@ -466,6 +475,18 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
       'channels.discord.accounts.<id>.voice.realtime.wakeNames entries longer than two words are unsupported; use one- or two-word activation names. Run "openclaw doctor --fix".',
     match: hasUnsupportedDiscordAccountRealtimeWakeNames,
   },
+  {
+    path: ["channels", "discord"],
+    message:
+      'channels.discord.streamMode, channels.discord.streaming (scalar), chunkMode, blockStreaming, draftChunk, and blockStreamingCoalesce are legacy; use channels.discord.streaming.{mode,chunkMode,preview.chunk,block.enabled,block.coalesce}. Run "openclaw doctor --fix".',
+    match: hasLegacyDiscordStreamingAliases,
+  },
+  {
+    path: ["channels", "discord", "accounts"],
+    message:
+      'channels.discord.accounts.<id>.streamMode, streaming (scalar), chunkMode, blockStreaming, draftChunk, and blockStreamingCoalesce are legacy; use channels.discord.accounts.<id>.streaming.{mode,chunkMode,preview.chunk,block.enabled,block.coalesce}. Run "openclaw doctor --fix".',
+    match: (value) => hasLegacyAccountStreamingAliases(value, hasLegacyDiscordStreamingAliases),
+  },
 ];
 
 export function normalizeCompatibilityConfig({
@@ -490,7 +511,9 @@ export function normalizeCompatibilityConfig({
     normalizeDm: true,
     normalizeAccountDm: true,
     resolveStreamingOptions: (entry) => ({
-      resolvedMode: resolveDiscordPreviewStreamMode(entry),
+      // Runtime mode resolution dropped legacy streamMode reads; the doctor
+      // resolver keeps them so migration preserves configured intent.
+      resolvedMode: resolveLegacyAliasStreamingMode(entry, "off"),
       includePreviewChunk: true,
     }),
     normalizeAccountExtra: ({ account, pathPrefix }) => {

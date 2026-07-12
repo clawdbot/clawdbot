@@ -9,7 +9,13 @@
     "test": "vitest run --config vitest.config.ts"
   },
   "dependencies": {
+    "@codemirror/commands": "6.10.4",
+    "@codemirror/language": "6.12.4",
+    "@codemirror/language-data": "6.5.2",
+    "@codemirror/state": "6.7.1",
+    "@codemirror/view": "6.43.6",
     "@create-markdown/preview": "2.0.3",
+    "@lezer/highlight": "1.2.3",
     "@lit/context": "1.1.6",
     "@noble/ed25519": "3.1.0",
     "@openclaw/libterminal": "0.3.1",

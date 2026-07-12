@@ -306,6 +306,71 @@ describe("plugin registry runtime config scope", () => {
     expect(createSessionEntry).toHaveBeenCalledTimes(2);
   });
 
+  it("limits CLI session creation to the owning plugin namespace", async () => {
+    const runtime = createPluginRuntime();
+    const createSessionEntry = vi.fn(async (params) => ({
+      key: params.key,
+      agentId: "main",
+      sessionId: "session-1",
+      entry: { sessionId: "session-1", updatedAt: 1 },
+    }));
+    runtime.agent.session.createSessionEntry = createSessionEntry;
+    const pluginRegistry = createTestRegistry(runtime);
+    const record = createPluginRecord({
+      id: "anthropic",
+      source: "/plugins/anthropic/index.js",
+      origin: "bundled",
+      enabled: true,
+      configSchema: false,
+    });
+    const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
+    api.registerCliBackend({ id: "claude-cli", config: { command: "claude" } });
+    api.registerAgentHarness({
+      id: "anthropic-harness",
+      label: "Anthropic",
+      supports: () => ({ supported: true }),
+      runAttempt: async () => {
+        throw new Error("unused");
+      },
+    });
+    const initialEntry = {
+      cliBackendId: "claude-cli",
+      model: "claude-opus-4-8",
+      modelSelectionLocked: true as const,
+      cliSessionBinding: { sessionId: "source", forkNextResume: true as const },
+    };
+
+    await expect(
+      api.runtime.agent.session.createSessionEntry({
+        cfg: {},
+        key: "plugin:anthropic:catalog-adopt:claude:source",
+        initialEntry,
+      }),
+    ).resolves.toEqual(expect.objectContaining({ sessionId: "session-1" }));
+    expect(createSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        initialEntry: expect.objectContaining({ pluginOwnerId: "anthropic" }),
+      }),
+    );
+    await expect(
+      api.runtime.agent.session.createSessionEntry({
+        cfg: {},
+        key: "agent:main:ordinary",
+        initialEntry,
+      }),
+    ).rejects.toThrow('must start with "plugin:anthropic:"');
+    await expect(
+      api.runtime.agent.session.createSessionEntry({
+        cfg: {},
+        key: "agent:main:ordinary",
+        initialEntry: {
+          ...initialEntry,
+          agentHarnessId: "anthropic-harness",
+        } as never,
+      }),
+    ).rejects.toThrow("requires exactly one runtime owner");
+  });
+
   it("limits locked harness session mutation and execution to the harness owner", async () => {
     const reservedKey = "agent:main:harness:codex:thread-1";
     const ordinaryKey = "agent:main:ordinary";

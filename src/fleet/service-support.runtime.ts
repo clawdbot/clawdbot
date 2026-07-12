@@ -6,9 +6,11 @@ import { replaceFileAtomic } from "../infra/replace-file.js";
 import { isRecord } from "../utils.js";
 import {
   buildCellEnvironment,
+  cellAuthSecretDir,
   cellNetworkName,
   cellOwnerId,
   FLEET_ATTEMPT_LABEL,
+  FLEET_DISK_LIMIT_LABEL,
   FLEET_ENV_KEYS_LABEL,
   FLEET_OWNER_LABEL,
   FLEET_TENANT_LABEL,
@@ -339,17 +341,46 @@ export function assertCurrentReservation(env: NodeJS.ProcessEnv, expected: Fleet
   }
 }
 
-export function requirePositiveResource(value: string, label: string): string {
+export function requirePositiveResource(
+  value: string,
+  label: string,
+  context: "upgrade" | "restore" = "upgrade",
+): string {
   const parsed = Number(value);
   if (!value.trim() || !Number.isFinite(parsed) || parsed <= 0) {
-    throw new Error(`Cannot upgrade cell: inspected ${label} limit is missing or invalid.`);
+    throw new Error(`Cannot ${context} cell: inspected ${label} limit is missing or invalid.`);
   }
   return value;
 }
 
-export function requirePidsLimit(value: number | undefined): number {
+export function requireInspectedGatewayToken(
+  inspection: Extract<FleetContainerInspectResult, { kind: "ok" }>,
+  context: "upgrade" | "restore",
+): string {
+  const gatewayCredential = inspection.environment.OPENCLAW_GATEWAY_TOKEN;
+  if (!gatewayCredential) {
+    throw new Error(`Cannot ${context} cell: existing container has no Gateway token environment.`);
+  }
+  return gatewayCredential;
+}
+
+export function requireInspectedAttemptId(
+  inspection: Extract<FleetContainerInspectResult, { kind: "ok" }>,
+  context: "upgrade" | "restore",
+): string {
+  const attemptId = inspection.labels[FLEET_ATTEMPT_LABEL];
+  if (!attemptId || !/^[a-f0-9]{32}$/u.test(attemptId)) {
+    throw new Error(`Cannot ${context} cell: container attempt label is missing or invalid.`);
+  }
+  return attemptId;
+}
+
+export function requirePidsLimit(
+  value: number | undefined,
+  context: "upgrade" | "restore" = "upgrade",
+): number {
   if (value === undefined || !Number.isSafeInteger(value) || value < 1) {
-    throw new Error("Cannot upgrade cell: inspected PID limit is missing or invalid.");
+    throw new Error(`Cannot ${context} cell: inspected PID limit is missing or invalid.`);
   }
   return value;
 }
@@ -358,23 +389,106 @@ export function rebuildInspectedEnvironment(
   environment: Readonly<Record<string, string>>,
   labels: Readonly<Record<string, string>>,
   token: string,
+  context: "upgrade" | "restore" = "upgrade",
 ): Record<string, string> {
   const encodedKeys = labels[FLEET_ENV_KEYS_LABEL];
   if (encodedKeys === undefined) {
-    throw new Error("Cannot upgrade cell: user environment provenance label is missing.");
+    throw new Error(`Cannot ${context} cell: user environment provenance label is missing.`);
   }
   const keys = encodedKeys ? encodedKeys.split(",") : [];
   if (new Set(keys).size !== keys.length || keys.toSorted().join(",") !== encodedKeys) {
-    throw new Error("Cannot upgrade cell: user environment provenance label is invalid.");
+    throw new Error(`Cannot ${context} cell: user environment provenance label is invalid.`);
   }
   const assignments = keys.map((key) => {
     const value = environment[key];
     if (value === undefined) {
-      throw new Error(`Cannot upgrade cell: inspected environment is missing ${key}.`);
+      throw new Error(`Cannot ${context} cell: inspected environment is missing ${key}.`);
     }
     return `${key}=${value}`;
   });
   return buildCellEnvironment(token, parseEnvAssignments(assignments));
+}
+
+export function buildProfileBaseFromInspection(params: {
+  record: FleetCellRecord;
+  stateDir: string;
+  inspection: Extract<FleetContainerInspectResult, { kind: "ok" }>;
+  containerUser: CellContainerProfile["containerUser"];
+  selinuxRelabel: boolean;
+  token: string;
+  context: "upgrade" | "restore";
+}): Omit<CellContainerProfile, "image" | "attemptId"> {
+  return {
+    tenantId: params.record.tenantId,
+    containerName: params.record.containerName,
+    networkName: cellNetworkName(params.record.tenantId),
+    runtime: params.record.runtime,
+    hostPort: params.record.hostPort,
+    dataDir: params.record.dataDir,
+    authSecretDir: cellAuthSecretDir(params.stateDir, params.record.tenantId),
+    ownerId: cellOwnerId(params.record.dataDir),
+    memory: requirePositiveResource(params.inspection.memory, "memory", params.context),
+    cpus: requirePositiveResource(params.inspection.cpus, "CPU", params.context),
+    pidsLimit: requirePidsLimit(params.inspection.pidsLimit, params.context),
+    // Replay the disk limit from the fleet-owned label, not HostConfig.StorageOpt:
+    // Podman's inspect schema has no StorageOpt field (verified live), so relying
+    // on it would silently drop a Podman cell's quota on upgrade/restore.
+    ...(params.inspection.labels[FLEET_DISK_LIMIT_LABEL] !== undefined
+      ? { diskSize: params.inspection.labels[FLEET_DISK_LIMIT_LABEL] }
+      : {}),
+    environment: rebuildInspectedEnvironment(
+      params.inspection.environment,
+      params.inspection.labels,
+      params.token,
+      params.context,
+    ),
+    ...(params.containerUser ? { containerUser: params.containerUser } : {}),
+    selinuxRelabel: params.selinuxRelabel,
+  };
+}
+
+export async function verifyReplacementHealthy(params: {
+  containers: FleetContainerRuntime;
+  record: FleetCellRecord;
+  attemptId: string;
+  fetchImpl: typeof fetch;
+  now: () => number;
+  sleep: (ms: number) => Promise<void>;
+  checkpoint: () => void;
+  timeoutMs: number;
+  pollMs: number;
+  context: "upgrade" | "restore";
+}): Promise<void> {
+  const deadline = params.now() + params.timeoutMs;
+  for (;;) {
+    const replacement = await params.containers.inspect(
+      params.record.runtime,
+      params.record.containerName,
+    );
+    if (
+      replacement.kind !== "ok" ||
+      replacement.labels[FLEET_ATTEMPT_LABEL] !== params.attemptId ||
+      !replacement.running
+    ) {
+      throw new Error(
+        replacement.kind === "ok"
+          ? `Replacement cell container is not running after ${params.context}.`
+          : `Replacement cell container could not be verified after ${params.context}.`,
+      );
+    }
+    const health = await probeCellHealth({
+      port: params.record.hostPort,
+      fetchImpl: params.fetchImpl,
+    });
+    if (health.status === "ok") {
+      return;
+    }
+    if (params.now() >= deadline) {
+      throw new Error(`Replacement cell container did not become healthy after ${params.context}.`);
+    }
+    params.checkpoint();
+    await params.sleep(params.pollMs);
+  }
 }
 
 export async function cleanupFailedCreateContainer(

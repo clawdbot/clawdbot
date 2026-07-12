@@ -2470,6 +2470,13 @@
       "kind": "html-attribute",
       "name": "aria-label",
       "path": "ui/src/pages/chat/components/chat-sidebar.ts",
+      "text": "Edit file"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/pages/chat/components/chat-sidebar.ts",
       "text": "Next match"
     },
     {
@@ -2505,6 +2512,20 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/chat/components/chat-sidebar.ts",
+      "text": "Discard"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/chat/components/chat-sidebar.ts",
+      "text": "Loading…"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/chat/components/chat-sidebar.ts",
       "text": "No content available"
     },
     {
@@ -2513,6 +2534,20 @@
       "name": "text",
       "path": "ui/src/pages/chat/components/chat-sidebar.ts",
       "text": "No previewable markdown content."
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/chat/components/chat-sidebar.ts",
+      "text": "Overwrite"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/chat/components/chat-sidebar.ts",
+      "text": "Reload"
     },
     {
       "count": 1,
@@ -2583,6 +2618,13 @@
       "name": "aria-label",
       "path": "ui/src/pages/chat/components/chat-tool-cards.ts",
       "text": "Open tool details in side panel"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "title",
+      "path": "ui/src/pages/chat/components/chat-tool-cards.ts",
+      "text": "Open file"
     },
     {
       "count": 1,
@@ -3645,6 +3687,20 @@
       "count": 1,
       "kind": "html-attribute",
       "name": "placeholder",
+      "path": "ui/src/pages/connection/view.ts",
+      "text": "ws://100.x.y.z:18789"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "placeholder",
+      "path": "ui/src/pages/connection/view.ts",
+      "text": "OPENCLAW_GATEWAY_TOKEN"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
       "path": "ui/src/pages/cron/view.ts",
       "text": "+1555... or chat id"
     },
@@ -4214,48 +4270,6 @@
       "name": "text",
       "path": "ui/src/pages/nodes/view.ts",
       "text": "Use default"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "description",
-      "path": "ui/src/pages/overview/overview-page.ts",
-      "text": "This connection does not have the operator.read scope. Some features may be unavailable."
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "title",
-      "path": "ui/src/pages/overview/overview-page.ts",
-      "text": "Gateway Error"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "title",
-      "path": "ui/src/pages/overview/overview-page.ts",
-      "text": "Missing operator.read scope"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "title",
-      "path": "ui/src/pages/overview/overview-page.ts",
-      "text": "Skills with missing dependencies"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "placeholder",
-      "path": "ui/src/pages/overview/view.ts",
-      "text": "OPENCLAW_GATEWAY_TOKEN"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "placeholder",
-      "path": "ui/src/pages/overview/view.ts",
-      "text": "ws://100.x.y.z:18789"
     },
     {
       "count": 1,

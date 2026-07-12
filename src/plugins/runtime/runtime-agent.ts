@@ -24,6 +24,7 @@ import {
   patchSessionEntry as patchAccessorSessionEntry,
   replaceSessionEntry,
   rollbackAgentHarnessSessionEntryLifecycle,
+  rollbackPluginOwnedSessionEntryLifecycle,
   type SessionAccessScope,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
@@ -183,6 +184,8 @@ async function createSessionEntry(
     key: params.key,
     ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
   });
+  const cliInitial = "cliBackendId" in params.initialEntry ? params.initialEntry : undefined;
+  const harnessInitial = "agentHarnessId" in params.initialEntry ? params.initialEntry : undefined;
   const identities = new Set([target.canonicalKey, ...target.storeKeys]);
   return await runExclusiveSessionLifecycleMutation({
     scope: target.storePath,
@@ -237,8 +240,16 @@ async function createSessionEntry(
           const expectedSpawnedCwd = params.spawnedCwd?.trim() || undefined;
           const initialEntryMatches =
             matchingEntry.initializationPending === true &&
-            matchingEntry.agentHarnessId === params.initialEntry.agentHarnessId &&
+            matchingEntry.agentHarnessId === harnessInitial?.agentHarnessId &&
+            matchingEntry.pluginOwnerId === cliInitial?.pluginOwnerId &&
             matchingEntry.modelSelectionLocked === params.initialEntry.modelSelectionLocked &&
+            (!cliInitial ||
+              (matchingEntry.providerOverride === cliInitial.cliBackendId &&
+                matchingEntry.modelOverride === cliInitial.model &&
+                isDeepStrictEqual(
+                  matchingEntry.cliSessionBindings?.[cliInitial.cliBackendId],
+                  cliInitial.cliSessionBinding,
+                ))) &&
             matchingEntry.spawnedCwd === expectedSpawnedCwd &&
             isDeepStrictEqual(matchingEntry.pluginExtensions, params.initialEntry.pluginExtensions);
           if (!initialEntryMatches) {
@@ -266,10 +277,28 @@ async function createSessionEntry(
             ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
             ...(params.label !== undefined ? { label: params.label } : {}),
             ...(params.spawnedCwd !== undefined ? { spawnedCwd: params.spawnedCwd } : {}),
-            initialEntry: afterCreate
-              ? { ...params.initialEntry, initializationPending: true }
-              : params.initialEntry,
-            authorizedAgentHarnessId: params.initialEntry.agentHarnessId,
+            initialEntry: {
+              ...(harnessInitial ? { agentHarnessId: harnessInitial.agentHarnessId } : {}),
+              ...(cliInitial
+                ? {
+                    pluginOwnerId: cliInitial.pluginOwnerId,
+                    providerOverride: cliInitial.cliBackendId,
+                    modelOverride: cliInitial.model,
+                    cliSessionBindings: {
+                      [cliInitial.cliBackendId]: cliInitial.cliSessionBinding,
+                    },
+                  }
+                : {}),
+              ...(params.initialEntry.modelSelectionLocked === true
+                ? { modelSelectionLocked: true }
+                : {}),
+              ...(params.initialEntry.pluginExtensions
+                ? { pluginExtensions: params.initialEntry.pluginExtensions }
+                : {}),
+              ...(afterCreate ? { initializationPending: true } : {}),
+            },
+            ...(harnessInitial ? { authorizedAgentHarnessId: harnessInitial.agentHarnessId } : {}),
+            ...(cliInitial?.pluginOwnerId ? { authorizedPluginId: cliInitial.pluginOwnerId } : {}),
             commandSource: "plugin-runtime",
             ...(afterCreate ? { afterCreate: runAfterCreate } : {}),
           });
@@ -346,11 +375,16 @@ async function createSessionEntry(
               storeKeys: [callbackContext.key],
             },
           };
-          // Locked rows require the narrow harness rollback capability. Unlocked
+          // Locked rows require owner-specific rollback capabilities. Unlocked
           // initializers stay on the ordinary guarded lifecycle deletion path.
           const rolledBack =
             expectedEntry.modelSelectionLocked === true
-              ? await rollbackAgentHarnessSessionEntryLifecycle(rollbackParams)
+              ? expectedEntry.agentHarnessId
+                ? await rollbackAgentHarnessSessionEntryLifecycle(rollbackParams)
+                : await rollbackPluginOwnedSessionEntryLifecycle({
+                    ...rollbackParams,
+                    expectedPluginOwnerId: cliInitial?.pluginOwnerId ?? "",
+                  })
               : await deleteSessionEntryLifecycle(rollbackParams);
           if (!rolledBack.deleted) {
             throw new Error(`created session ${callbackContext.key} changed before rollback`, {

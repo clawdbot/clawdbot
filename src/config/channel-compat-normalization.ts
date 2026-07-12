@@ -30,6 +30,43 @@ export function asObjectRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+function parseAliasStreamingMode(value: unknown): "off" | "partial" | "block" | "progress" | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const normalized = value.trim().toLowerCase();
+  return normalized === "off" ||
+    normalized === "partial" ||
+    normalized === "block" ||
+    normalized === "progress"
+    ? normalized
+    : null;
+}
+
+/**
+ * Doctor-only stream mode resolution across nested and legacy alias keys.
+ *
+ * Runtime helpers no longer read `streamMode`, so doctor contracts use this to
+ * preserve legacy intent (nested mode > scalar string > streamMode > scalar
+ * boolean) while migrating flat aliases into `streaming.mode`.
+ */
+export function resolveLegacyAliasStreamingMode(
+  entry: Record<string, unknown>,
+  defaultMode: "off" | "partial" | "block" | "progress",
+): "off" | "partial" | "block" | "progress" {
+  const nestedMode = asObjectRecord(entry.streaming)?.mode;
+  const parsed =
+    parseAliasStreamingMode(nestedMode ?? entry.streaming) ??
+    parseAliasStreamingMode(entry.streamMode);
+  if (parsed) {
+    return parsed;
+  }
+  if (typeof entry.streaming === "boolean") {
+    return entry.streaming ? "partial" : "off";
+  }
+  return defaultMode;
+}
+
 /** Checks whether any account entry still carries a channel-specific legacy alias. */
 export function hasLegacyAccountStreamingAliases(
   value: unknown,
@@ -88,6 +125,7 @@ export function normalizeLegacyStreamingAliases(
   const preview = ensureNestedRecord(streaming, "preview");
 
   // Only fill `streaming.mode` when the modern nested field is absent.
+  let movedStreamMode = false;
   if (
     (hadLegacyStreamMode ||
       typeof beforeStreaming === "boolean" ||
@@ -96,6 +134,7 @@ export function normalizeLegacyStreamingAliases(
   ) {
     streaming.mode = params.resolvedMode;
     if (hadLegacyStreamMode) {
+      movedStreamMode = true;
       params.changes.push(
         `Moved ${params.pathPrefix}.streamMode → ${params.pathPrefix}.streaming.mode (${params.resolvedMode}).`,
       );
@@ -111,55 +150,58 @@ export function normalizeLegacyStreamingAliases(
     changed = true;
   }
   if (hadLegacyStreamMode) {
+    if (!movedStreamMode) {
+      // Every mutation needs a change message: doctor discards mutations with
+      // empty change lists, which would leave the schema-invalid flat key in
+      // the persisted config forever.
+      params.changes.push(
+        `Removed ${params.pathPrefix}.streamMode (${params.pathPrefix}.streaming.mode already set).`,
+      );
+    }
     delete updated.streamMode;
     changed = true;
   }
-  if (updated.chunkMode !== undefined && streaming.chunkMode === undefined) {
-    streaming.chunkMode = updated.chunkMode;
-    delete updated.chunkMode;
-    params.changes.push(
-      `Moved ${params.pathPrefix}.chunkMode → ${params.pathPrefix}.streaming.chunkMode.`,
-    );
+  // Each flat alias either moves into the nested slot or, when the nested
+  // value is already set, is removed outright. Leaving the flat key in place
+  // would keep the config schema-invalid after `doctor --fix` because runtime
+  // schemas no longer accept these aliases.
+  const moveOrRemoveAlias = (
+    flatKey: string,
+    target: Record<string, unknown>,
+    slot: string,
+    nestedPath: string,
+  ) => {
+    if (updated[flatKey] === undefined) {
+      return;
+    }
+    const nested = `${params.pathPrefix}.streaming.${nestedPath}`;
+    if (target[slot] === undefined) {
+      target[slot] = updated[flatKey];
+      params.changes.push(`Moved ${params.pathPrefix}.${flatKey} → ${nested}.`);
+    } else {
+      params.changes.push(`Removed ${params.pathPrefix}.${flatKey} (${nested} already set).`);
+    }
+    delete updated[flatKey];
     changed = true;
+  };
+  moveOrRemoveAlias("chunkMode", streaming, "chunkMode", "chunkMode");
+  moveOrRemoveAlias("blockStreaming", block, "enabled", "block.enabled");
+  if (params.includePreviewChunk === true) {
+    moveOrRemoveAlias("draftChunk", preview, "chunk", "preview.chunk");
   }
-  if (updated.blockStreaming !== undefined && block.enabled === undefined) {
-    block.enabled = updated.blockStreaming;
-    delete updated.blockStreaming;
-    params.changes.push(
-      `Moved ${params.pathPrefix}.blockStreaming → ${params.pathPrefix}.streaming.block.enabled.`,
-    );
-    changed = true;
-  }
-  if (
-    params.includePreviewChunk === true &&
-    updated.draftChunk !== undefined &&
-    preview.chunk === undefined
-  ) {
-    preview.chunk = updated.draftChunk;
-    delete updated.draftChunk;
-    params.changes.push(
-      `Moved ${params.pathPrefix}.draftChunk → ${params.pathPrefix}.streaming.preview.chunk.`,
-    );
-    changed = true;
-  }
-  if (updated.blockStreamingCoalesce !== undefined && block.coalesce === undefined) {
-    block.coalesce = updated.blockStreamingCoalesce;
-    delete updated.blockStreamingCoalesce;
-    params.changes.push(
-      `Moved ${params.pathPrefix}.blockStreamingCoalesce → ${params.pathPrefix}.streaming.block.coalesce.`,
-    );
-    changed = true;
-  }
-  if (
-    updated.nativeStreaming !== undefined &&
-    streaming.nativeTransport === undefined &&
-    params.resolvedNativeTransport !== undefined
-  ) {
-    streaming.nativeTransport = params.resolvedNativeTransport;
+  moveOrRemoveAlias("blockStreamingCoalesce", block, "coalesce", "block.coalesce");
+  if (updated.nativeStreaming !== undefined && params.resolvedNativeTransport !== undefined) {
+    if (streaming.nativeTransport === undefined) {
+      streaming.nativeTransport = params.resolvedNativeTransport;
+      params.changes.push(
+        `Moved ${params.pathPrefix}.nativeStreaming → ${params.pathPrefix}.streaming.nativeTransport.`,
+      );
+    } else {
+      params.changes.push(
+        `Removed ${params.pathPrefix}.nativeStreaming (${params.pathPrefix}.streaming.nativeTransport already set).`,
+      );
+    }
     delete updated.nativeStreaming;
-    params.changes.push(
-      `Moved ${params.pathPrefix}.nativeStreaming → ${params.pathPrefix}.streaming.nativeTransport.`,
-    );
     changed = true;
   } else if (
     typeof beforeStreaming === "boolean" &&

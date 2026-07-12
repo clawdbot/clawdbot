@@ -3,7 +3,7 @@ title: Codex supervision
 summary: "Architecture and product boundary for supervising native Codex sessions from OpenClaw."
 read_when:
   - Designing Codex session discovery, continuation, or archive behavior
-  - Changing the Codex Sessions Control UI or Gateway RPCs
+  - Changing the native session catalog UI or Gateway RPCs
   - Extending Codex supervision across paired nodes
 ---
 
@@ -21,7 +21,8 @@ Supervisor plugin or second Codex protocol implementation.
 
 ## Product boundary
 
-Enable the feature with:
+The catalog registers whenever the Codex plugin is active. Enable agent-facing
+supervision tools with:
 
 ```text
 plugins.entries.codex.config.supervision.enabled = true
@@ -47,12 +48,13 @@ plan:
 The catalog is the non-archived collection. A row within it can still have an
 idle, active, `notLoaded`, or error turn status.
 
-Supervision remains opt-in. Guided onboarding attempts to install and enable it
+Agent-facing supervision remains opt-in. Guided onboarding attempts to install and enable it
 after native Codex installation detection succeeds and the selected inference
 backend passes its live check, independently of which primary backend the user
 selects. Supervision activates only when that opportunistic plugin setup
 succeeds. An explicit disabled plugin, policy block, or
-`supervision.enabled: false` remains authoritative.
+`supervision.enabled: false` remains authoritative for supervision tools, but
+does not disable the operator session catalog.
 
 ## Ownership
 
@@ -90,7 +92,7 @@ stored threads. Explicit `appServer` connection settings are honored. When
 `homeScope` is unset, the supervision connection resolves it to `"user"` for stdio
 or Unix and `"agent"` for WebSocket. Set `appServer.homeScope: "user"`
 explicitly only when the ordinary harness should also share the native Codex
-home. A Chat created through Codex Sessions is the exception: its private
+home. A Chat adopted from the Codex sidebar group is the exception: its private
 supervision binding keeps source reads, canonical branch creation, and later
 turns on the supervision connection. Live status and ownership remain
 process-local; a thread unknown to OpenClaw's supervision process is `notLoaded`
@@ -102,7 +104,8 @@ or assume that daemon implicitly.
 
 ## Catalog flow
 
-The Gateway method `codex.sessions.list` always requests `archived: false` and
+The generic Gateway method `sessions.catalog.list` dispatches to the `codex`
+catalog provider, which always requests `archived: false` and
 the interactive `cli` and `vscode` source kinds. It combines:
 
 1. Gateway-local `thread/list` results from the supervision App Server,
@@ -173,13 +176,14 @@ The shell namespace is not the in-chat `/codex` runtime namespace. In
 particular, `/codex sessions --host <node>` lists Codex CLI session files on one
 node, `/codex threads` lists App Server threads for the current conversation
 connection, and `/codex resume` or `/codex bind` mutates that conversation's
-binding. Those commands do not replace `codex.sessions.continue`, and there is
+binding. Those commands do not replace `sessions.catalog.continue`, and there is
 no `/codex continue` or `/codex archive` runtime command.
 
 ## Local continuation
 
 For a stored or idle Gateway-local row, the UI calls
-`codex.sessions.continue` with the host and thread ids. The plugin:
+`sessions.catalog.continue` with `catalogId: "codex"` plus the host and thread
+ids. The plugin:
 
 1. Reuses the existing supervised Chat when the source already has one.
 2. Otherwise projects bounded user and assistant history through the source's
@@ -260,7 +264,8 @@ contract.
 
 ## Archive behavior
 
-For a stored or idle Gateway-local row, `codex.sessions.archive` requires
+For a stored or idle Gateway-local row, `sessions.catalog.archive` with
+`catalogId: "codex"` requires
 explicit `confirmNoOtherRunner: true`, freshly reads current process-local
 status, proceeds only for `idle` or `notLoaded`, calls native `thread/archive`,
 and returns success only after Codex accepts the operation. The row then leaves
@@ -280,7 +285,7 @@ An independent client can still own or start work on a row that appears idle or
 that race until Codex has a conditional archive or cross-process lease.
 Paired-node archive is prohibited.
 
-There is no archived view in Codex Sessions. A thread restored with
+There is no archived view in the Codex catalog. A thread restored with
 `thread/unarchive` in another owner-authorized Codex surface becomes eligible
 for the non-archived catalog again.
 
@@ -358,7 +363,7 @@ setting. Transcript-derived fields and reads remain gated by
 Compatibility send never starts or resumes an idle thread. `mode: "start"` is
 always refused; `"auto"` and `"steer"` steer only a readable active turn.
 Interrupt likewise requires an active readable turn. Idle continuation routes
-to Codex Sessions so the full harness owns approvals, tools, and the binding.
+to the native Codex catalog so the full harness owns approvals, tools, and the binding.
 The standalone legacy MCP adapter resolves these same tools from the official
 plugin and is the only path that honors the retained legacy policy environment
 variables.

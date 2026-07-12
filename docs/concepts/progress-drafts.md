@@ -23,7 +23,7 @@ Shelling...
 
 <Note>
   Discord already defaults to `streaming.mode: "progress"` when
-  `channels.discord.streaming.mode`/`streamMode` are unset, so progress drafts
+  `channels.discord.streaming` is unset, so progress drafts
   show up there without any config. Every other channel defaults to `partial`
   or `off`; see [Streaming and chunking](/concepts/streaming#channel-mapping)
   for the full per-channel default table.
@@ -85,8 +85,7 @@ Pick `progress` when users care more about "what is happening" than watching
 answer text stream token by token; `partial` when the answer text itself is
 the progress signal; `block` for larger preview chunks. On Discord and
 Telegram, `streaming.mode: "block"` is still preview streaming, not normal
-block-reply delivery — use `streaming.block.enabled` (or legacy
-`blockStreaming`) for that.
+block-reply delivery — use `streaming.block.enabled` for that.
 
 ## Configure labels
 

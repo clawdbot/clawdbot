@@ -16,7 +16,10 @@ import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderThinkingProfile,
 } from "./provider-thinking.types.js";
-import { loadBundledPluginPublicArtifactModuleSync } from "./public-surface-loader.js";
+import {
+  loadBundledPluginPublicArtifactModuleSync,
+  loadPluginPublicArtifactModuleSync,
+} from "./public-surface-loader.js";
 
 const PROVIDER_POLICY_ARTIFACT_CANDIDATES = ["provider-policy-api.js"] as const;
 const providerPolicySurfaceByPluginId = new Map<string, BundledProviderPolicySurface | null>();
@@ -52,35 +55,64 @@ function hasProviderPolicyHook(
   );
 }
 
-/** Loads policy hooks directly by canonical bundled plugin id. */
-export function resolveDirectBundledProviderPolicySurface(
-  pluginId: string,
-): BundledProviderPolicySurface | null {
-  const cacheKey = `${resolveBundledPluginsDir() ?? ""}\0${pluginId}`;
-  const cached = providerPolicySurfaceByPluginId.get(cacheKey);
+function resolveCachedProviderPolicySurface(params: {
+  cacheKey: string;
+  loadModule: (artifactBasename: string) => Record<string, unknown>;
+  missingSurfacePrefix: string;
+}): BundledProviderPolicySurface | null {
+  const cached = providerPolicySurfaceByPluginId.get(params.cacheKey);
   if (cached !== undefined) {
     return cached;
   }
   for (const artifactBasename of PROVIDER_POLICY_ARTIFACT_CANDIDATES) {
     try {
-      const mod = loadBundledPluginPublicArtifactModuleSync<Record<string, unknown>>({
-        dirName: pluginId,
-        artifactBasename,
-      });
+      const mod = params.loadModule(artifactBasename);
       if (hasProviderPolicyHook(mod)) {
-        providerPolicySurfaceByPluginId.set(cacheKey, mod);
+        providerPolicySurfaceByPluginId.set(params.cacheKey, mod);
         return mod;
       }
     } catch (error) {
-      if (
-        error instanceof Error &&
-        error.message.startsWith("Unable to resolve bundled plugin public surface ")
-      ) {
+      if (error instanceof Error && error.message.startsWith(params.missingSurfacePrefix)) {
         continue;
       }
       throw error;
     }
   }
-  providerPolicySurfaceByPluginId.set(cacheKey, null);
+  providerPolicySurfaceByPluginId.set(params.cacheKey, null);
   return null;
+}
+
+/** Loads policy hooks directly by canonical bundled plugin id. */
+export function resolveDirectBundledProviderPolicySurface(
+  pluginId: string,
+): BundledProviderPolicySurface | null {
+  return resolveCachedProviderPolicySurface({
+    cacheKey: `${resolveBundledPluginsDir() ?? ""}\0${pluginId}`,
+    loadModule: (artifactBasename) =>
+      loadBundledPluginPublicArtifactModuleSync<Record<string, unknown>>({
+        dirName: pluginId,
+        artifactBasename,
+      }),
+    missingSurfacePrefix: "Unable to resolve bundled plugin public surface ",
+  });
+}
+
+/** Loads policy hooks from a host-verified official external plugin install. */
+export function resolveTrustedExternalProviderPolicySurface(params: {
+  pluginId: string;
+  pluginRoot: string;
+  trustedOfficialInstall?: boolean;
+}): BundledProviderPolicySurface | null {
+  if (params.trustedOfficialInstall !== true) {
+    return null;
+  }
+  return resolveCachedProviderPolicySurface({
+    cacheKey: `${params.pluginRoot}\0${params.pluginId}`,
+    loadModule: (artifactBasename) =>
+      loadPluginPublicArtifactModuleSync<Record<string, unknown>>({
+        pluginRoot: params.pluginRoot,
+        artifactBasename,
+      }),
+    missingSurfacePrefix: "Unable to resolve plugin public surface ",
+  });
 }

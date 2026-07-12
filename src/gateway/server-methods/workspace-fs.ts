@@ -1,6 +1,6 @@
-// Shared read-only workspace filesystem access for gateway file browsers.
+// Shared workspace filesystem access for gateway file browsers and editors.
 // All entry points route through fs-safe roots (realpathed root, symlink and
-// hardlink rejection) so no caller can read or list outside a workspace root.
+// hardlink rejection) so no caller can access files outside a workspace root.
 import path from "node:path";
 import { root as fsSafeRoot, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
 
@@ -74,6 +74,33 @@ export async function readWorkspaceFile(
     if (err instanceof FsSafeError && err.code === "too-large") {
       return "too-large";
     }
+    return undefined;
+  }
+}
+
+export async function writeWorkspaceFile(
+  rootDir: string,
+  browserPath: string,
+  content: string,
+): Promise<true | undefined> {
+  const workspaceRoot = await openWorkspaceRoot(rootDir);
+  if (!workspaceRoot) {
+    return undefined;
+  }
+  await workspaceRoot.write(browserPath, content, { encoding: "utf8" });
+  return true;
+}
+
+export function decodeUtf8Strict(buffer: Buffer): string | undefined {
+  // NUL bytes are valid UTF-8 but mark binary payloads we refuse to inline.
+  if (buffer.includes(0)) {
+    return undefined;
+  }
+  try {
+    // ignoreBOM keeps a leading BOM in the decoded string so editor saves
+    // round-trip the original bytes instead of silently dropping it.
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(buffer);
+  } catch {
     return undefined;
   }
 }

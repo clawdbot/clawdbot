@@ -636,7 +636,7 @@ async function prewarmConfiguredPrimaryModelWithTimeout(
   params: {
     cfg: OpenClawConfig;
     workspaceDir?: string;
-    log: { warn: (msg: string) => void };
+    log: { warn: (msg: string) => void; debug?: (msg: string) => void };
     timeoutMs?: number;
   },
   prewarm: typeof prewarmConfiguredPrimaryModel = prewarmConfiguredPrimaryModel,
@@ -653,7 +653,7 @@ async function prewarmConfiguredPrimaryModelWithTimeout(
     ref: false,
   }).then(() => {
     if (!settled) {
-      params.log.warn(
+      params.log.debug?.(
         `startup model warmup timed out after ${params.timeoutMs ?? PRIMARY_MODEL_PREWARM_TIMEOUT_MS}ms; continuing without waiting`,
       );
     }
@@ -665,7 +665,7 @@ function schedulePrimaryModelPrewarm(
   params: {
     cfg: OpenClawConfig;
     workspaceDir?: string;
-    log: { warn: (msg: string) => void };
+    log: { warn: (msg: string) => void; debug?: (msg: string) => void };
     startupTrace?: GatewayStartupTrace;
   },
   prewarm: typeof prewarmConfiguredPrimaryModel = prewarmConfiguredPrimaryModel,

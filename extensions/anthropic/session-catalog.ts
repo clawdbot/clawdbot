@@ -1,25 +1,29 @@
+import { createHash } from "node:crypto";
 import { statSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  ErrorCodes,
-  errorShape,
-  type GatewayRequestHandlerOptions,
-} from "openclaw/plugin-sdk/gateway-runtime";
+import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { listAgentIds, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   OpenClawPluginApi,
   OpenClawPluginNodeHostCommand,
   OpenClawPluginNodeInvokePolicy,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import type {
+  SessionCatalogHost,
+  SessionCatalogProvider,
+  SessionCatalogTranscriptItem,
+} from "openclaw/plugin-sdk/session-catalog";
+import { withSessionTranscriptWriteLock } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 export const CLAUDE_SESSIONS_LIST_COMMAND = "anthropic.claude.sessions.list.v1";
 export const CLAUDE_SESSION_READ_COMMAND = "anthropic.claude.sessions.read.v1";
-export const CLAUDE_SESSION_CATALOG_METHOD = "anthropic.sessions.list";
-export const CLAUDE_SESSION_READ_METHOD = "anthropic.sessions.read";
+import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_MODEL_REF } from "./cli-constants.js";
 
 const CLAUDE_SESSIONS_CAPABILITY = "claude-sessions";
 const CLAUDE_LOCAL_SESSION_HOST_ID = "gateway:local";
@@ -41,6 +45,9 @@ const MAX_TRANSCRIPT_ITEM_BYTES = 4 * 1024 * 1024;
 const MAX_TRANSCRIPT_PAGE_BYTES = 20 * 1024 * 1024;
 const MAX_TRANSCRIPT_TEXT_LENGTH = 1_000_000;
 const NODE_INVOKE_TIMEOUT_MS = 30_000;
+const CLAUDE_ADOPTED_SESSION_KEY_PREFIX = "plugin:anthropic:catalog-adopt:claude:";
+const CLAUDE_HISTORY_IMPORT_MAX_ITEMS = 200;
+const CLAUDE_HISTORY_IMPORT_MAX_BYTES = 512 * 1024;
 
 type ClaudeSessionSource = "claude-cli" | "claude-desktop";
 
@@ -198,8 +205,12 @@ function desktopSessionsDir(homeDir: string): string {
   return path.join(homeDir, "Library", "Application Support", "Claude", "claude-code-sessions");
 }
 
+function currentHomeDir(env: NodeJS.ProcessEnv = process.env): string {
+  return env.HOME?.trim() || env.USERPROFILE?.trim() || os.homedir();
+}
+
 function claudeProjectsAvailable(env: NodeJS.ProcessEnv): boolean {
-  const homeDir = env.HOME?.trim() || env.USERPROFILE?.trim() || os.homedir();
+  const homeDir = currentHomeDir(env);
   try {
     return statSync(projectsDir(homeDir)).isDirectory();
   } catch {
@@ -473,7 +484,7 @@ async function discoverCliRecords(
   }
 }
 
-async function listClaudeSessions(homeDir = os.homedir()): Promise<CatalogRecord[]> {
+async function listClaudeSessions(homeDir = currentHomeDir()): Promise<CatalogRecord[]> {
   const [indexed, desktop] = await Promise.all([
     readIndexRecords(homeDir),
     readDesktopMetadata(homeDir),
@@ -579,7 +590,7 @@ function readListParams(value: unknown): {
 
 export async function listLocalClaudeSessionPage(
   value: unknown,
-  homeDir = os.homedir(),
+  homeDir = currentHomeDir(),
 ): Promise<ClaudeSessionCatalogPage> {
   const params = readListParams(value);
   const offset = decodeOffset(params.cursor, "catalog");
@@ -734,7 +745,7 @@ function readTranscriptParams(
 
 export async function readLocalClaudeTranscriptPage(
   value: unknown,
-  homeDir = os.homedir(),
+  homeDir = currentHomeDir(),
 ): Promise<Omit<ClaudeSessionTranscriptPage, "hostId" | "label">> {
   const params = readTranscriptParams(value);
   const filePath = (await listClaudeSessions(homeDir)).find(
@@ -1187,62 +1198,294 @@ export function createClaudeSessionNodeInvokePolicies(): OpenClawPluginNodeInvok
   ];
 }
 
-export function registerClaudeSessionCatalog(api: OpenClawPluginApi): void {
-  api.session.controls.registerControlUiDescriptor({
-    surface: "tab",
-    id: "sessions",
-    label: "Claude Sessions",
-    description: "Claude CLI and Desktop sessions on this Gateway and paired nodes.",
-    icon: "terminal",
-    group: "control",
-    requiredScopes: ["operator.write"],
+function adoptedSessionKey(threadId: string): string {
+  return `${CLAUDE_ADOPTED_SESSION_KEY_PREFIX}${createHash("sha256").update(threadId).digest("hex")}`;
+}
+
+function currentConfig(api: OpenClawPluginApi): OpenClawConfig {
+  return (api.runtime.config?.current?.() as OpenClawConfig | undefined) ?? api.config;
+}
+
+function listAdoptedClaudeSessions(api: OpenClawPluginApi): Map<string, string> {
+  const config = currentConfig(api);
+  const defaultAgentId = resolveDefaultAgentId(config);
+  const agentIds = [
+    defaultAgentId,
+    ...listAgentIds(config).filter((agentId) => agentId !== defaultAgentId),
+  ];
+  const adopted = new Map<string, string>();
+  for (const { sessionKey, entry } of agentIds.flatMap((agentId) =>
+    api.runtime.agent.session.listSessionEntries({ agentId }),
+  )) {
+    const marker = entry.pluginExtensions?.anthropic?.sessionCatalog;
+    if (
+      entry.pluginOwnerId !== api.id ||
+      entry.modelSelectionLocked !== true ||
+      !isRecord(marker) ||
+      typeof marker.sourceThreadId !== "string"
+    ) {
+      continue;
+    }
+    adopted.set(marker.sourceThreadId, sessionKey);
+  }
+  return adopted;
+}
+
+async function readBoundedClaudeHistory(threadId: string): Promise<ClaudeTranscriptItem[]> {
+  const items: ClaudeTranscriptItem[] = [];
+  let cursor: string | undefined;
+  let bytes = 0;
+  while (items.length < CLAUDE_HISTORY_IMPORT_MAX_ITEMS) {
+    const page = await readLocalClaudeTranscriptPage({
+      threadId,
+      limit: Math.min(MAX_TRANSCRIPT_LIMIT, CLAUDE_HISTORY_IMPORT_MAX_ITEMS - items.length),
+      ...(cursor ? { cursor } : {}),
+    });
+    for (const item of page.items) {
+      const itemBytes = Buffer.byteLength(JSON.stringify(item), "utf8");
+      if (items.length > 0 && bytes + itemBytes > CLAUDE_HISTORY_IMPORT_MAX_BYTES) {
+        return items;
+      }
+      items.push(item);
+      bytes += itemBytes;
+    }
+    if (!page.nextCursor || page.nextCursor === cursor) {
+      break;
+    }
+    cursor = page.nextCursor;
+  }
+  return items;
+}
+
+function importedClaudeMessage(
+  item: ClaudeTranscriptItem,
+  fallbackTimestamp: number,
+): AgentMessage {
+  const timestamp = item.timestamp ? Date.parse(item.timestamp) : fallbackTimestamp;
+  const text = item.text?.trim() || "[Unsupported Claude transcript item]";
+  if (item.type === "userMessage") {
+    return { role: "user", content: text, timestamp } as AgentMessage;
+  }
+  const prefix =
+    item.type === "reasoning"
+      ? "Thinking\n\n"
+      : item.type === "toolCall"
+        ? "Tool call\n\n"
+        : item.type === "toolResult"
+          ? "Tool result\n\n"
+          : "";
+  return {
+    role: "assistant",
+    content: [{ type: "text", text: `${prefix}${text}` }],
+    timestamp,
+    api: "anthropic-messages",
+    provider: CLAUDE_CLI_BACKEND_ID,
+    model: "native-history",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+  } as AgentMessage;
+}
+
+async function importClaudeHistory(params: {
+  threadId: string;
+  sessionFile: string;
+  sessionId: string;
+  sessionKey: string;
+  agentId: string;
+  cwd?: string;
+  config: OpenClawConfig;
+}): Promise<void> {
+  const items = (await readBoundedClaudeHistory(params.threadId)).toReversed();
+  await withSessionTranscriptWriteLock(params, async (transcript) => {
+    for (const [index, item] of items.entries()) {
+      // The idempotency key rides on the message so recovery re-imports dedupe
+      // against the transcript instead of appending duplicate history.
+      const message = {
+        ...(importedClaudeMessage(item, Date.now() + index) as unknown as Record<string, unknown>),
+        idempotencyKey: `claude-catalog:${params.threadId}:${item.uuid ?? index}`,
+      } as unknown as AgentMessage;
+      await transcript.appendMessage({
+        message,
+        idempotencyLookup: "scan",
+        cwd: params.cwd,
+      });
+    }
   });
-  api.registerGatewayMethod(
-    CLAUDE_SESSION_CATALOG_METHOD,
-    async ({ params, respond }: GatewayRequestHandlerOptions) => {
-      try {
-        respond(true, await listClaudeSessionCatalog({ runtime: api.runtime, query: params }));
-      } catch (error) {
-        if (error instanceof ClaudeCatalogParamsError) {
-          respond(
-            false,
-            { error: error.message },
-            errorShape(ErrorCodes.INVALID_REQUEST, error.message),
-          );
-          return;
-        }
-        const message = "Claude session catalog request failed";
-        respond(false, { error: message }, errorShape(ErrorCodes.UNAVAILABLE, message));
+}
+
+const claudeContinueOperations = new Map<string, Promise<{ sessionKey: string }>>();
+
+async function continueClaudeSession(
+  api: OpenClawPluginApi,
+  hostId: string,
+  threadId: string,
+): Promise<{ sessionKey: string }> {
+  if (hostId !== CLAUDE_LOCAL_SESSION_HOST_ID) {
+    throw new ClaudeCatalogParamsError("paired-node Claude sessions are view-only");
+  }
+  const existing = listAdoptedClaudeSessions(api).get(threadId);
+  if (existing) {
+    return { sessionKey: existing };
+  }
+  const pending = claudeContinueOperations.get(threadId);
+  if (pending) {
+    return await pending;
+  }
+  const operation = (async () => {
+    const record = (await listClaudeSessions()).find(
+      (candidate) => candidate.threadId === threadId,
+    );
+    if (!record || record.source !== "claude-cli") {
+      throw new ClaudeCatalogParamsError("only local Claude CLI sessions can be continued");
+    }
+    const source = await fs.stat(record.filePath).catch(() => undefined);
+    if (!source?.isFile()) {
+      throw new ClaudeCatalogParamsError("Claude session transcript is unavailable");
+    }
+    const config = currentConfig(api);
+    const model = CLAUDE_CLI_DEFAULT_MODEL_REF.slice(`${CLAUDE_CLI_BACKEND_ID}/`.length);
+    const marker = { sourceThreadId: threadId };
+    try {
+      const created = await api.runtime.agent.session.createSessionEntry({
+        cfg: config,
+        key: adoptedSessionKey(threadId),
+        agentId: resolveDefaultAgentId(config),
+        recoverMatchingInitialEntry: true,
+        ...(record.name ? { label: record.name } : {}),
+        ...(record.cwd ? { spawnedCwd: record.cwd } : {}),
+        initialEntry: {
+          cliBackendId: CLAUDE_CLI_BACKEND_ID,
+          model,
+          modelSelectionLocked: true,
+          pluginOwnerId: api.id,
+          cliSessionBinding: { sessionId: threadId, forceReuse: true, forkNextResume: true },
+          pluginExtensions: { anthropic: { sessionCatalog: marker } },
+        },
+        afterCreate: async (entry) => {
+          if (!entry.entry.sessionFile) {
+            throw new Error("Claude session creation did not produce a transcript file");
+          }
+          await importClaudeHistory({
+            threadId,
+            sessionFile: entry.entry.sessionFile,
+            sessionId: entry.sessionId,
+            sessionKey: entry.key,
+            agentId: entry.agentId,
+            ...(record.cwd ? { cwd: record.cwd } : {}),
+            config,
+          });
+          return { pluginExtensions: { anthropic: { sessionCatalog: marker } } };
+        },
+      });
+      return { sessionKey: created.key };
+    } catch (error) {
+      const raced = listAdoptedClaudeSessions(api).get(threadId);
+      if (raced) {
+        return { sessionKey: raced };
       }
+      throw error;
+    }
+  })();
+  claudeContinueOperations.set(threadId, operation);
+  try {
+    return await operation;
+  } finally {
+    if (claudeContinueOperations.get(threadId) === operation) {
+      claudeContinueOperations.delete(threadId);
+    }
+  }
+}
+
+function toGenericClaudeItem(item: ClaudeTranscriptItem): SessionCatalogTranscriptItem {
+  const allowed = new Set<SessionCatalogTranscriptItem["type"]>([
+    "userMessage",
+    "agentMessage",
+    "reasoning",
+    "toolCall",
+    "toolResult",
+    "other",
+  ]);
+  const type = allowed.has(item.type as SessionCatalogTranscriptItem["type"])
+    ? (item.type as SessionCatalogTranscriptItem["type"])
+    : "other";
+  return {
+    ...(item.uuid ? { id: item.uuid } : {}),
+    type,
+    ...(item.text ? { text: item.text } : {}),
+    ...(item.timestamp ? { timestamp: item.timestamp } : {}),
+    ...(item.model ? { model: item.model } : {}),
+    ...(item.truncated ? { truncated: true } : {}),
+    ...(item.content !== undefined
+      ? { raw: item.content as SessionCatalogTranscriptItem["raw"] }
+      : {}),
+  };
+}
+
+function toGenericClaudeHost(
+  host: ClaudeSessionCatalogHost,
+  adopted: ReadonlyMap<string, string>,
+): SessionCatalogHost {
+  return {
+    hostId: host.hostId,
+    label: host.label,
+    kind: host.kind,
+    connected: host.connected,
+    ...(host.nodeId ? { nodeId: host.nodeId } : {}),
+    sessions: host.sessions.map((session) => {
+      const localCli =
+        host.hostId === CLAUDE_LOCAL_SESSION_HOST_ID && session.source === "claude-cli";
+      const openClawSessionKey = localCli ? adopted.get(session.threadId) : undefined;
+      return {
+        threadId: session.threadId,
+        ...(session.name ? { name: session.name } : {}),
+        ...(session.cwd ? { cwd: session.cwd } : {}),
+        status: session.status,
+        ...(session.createdAt !== undefined ? { createdAt: session.createdAt } : {}),
+        ...(session.updatedAt !== undefined ? { updatedAt: session.updatedAt } : {}),
+        ...(session.recencyAt != null ? { recencyAt: session.recencyAt } : {}),
+        source: session.source,
+        modelProvider: session.modelProvider,
+        ...(session.cliVersion ? { cliVersion: session.cliVersion } : {}),
+        ...(session.gitBranch ? { gitBranch: session.gitBranch } : {}),
+        archived: session.archived,
+        ...(openClawSessionKey ? { openClawSessionKey } : {}),
+        canContinue: localCli,
+        canArchive: false,
+      };
+    }),
+    ...(host.nextCursor ? { nextCursor: host.nextCursor } : {}),
+    ...(host.error ? { error: host.error } : {}),
+  };
+}
+
+export function registerClaudeSessionCatalog(api: OpenClawPluginApi): void {
+  const provider: SessionCatalogProvider = {
+    id: "claude",
+    label: "Claude Code",
+    list: async (query) => {
+      const adopted = listAdoptedClaudeSessions(api);
+      const result = await listClaudeSessionCatalog({ runtime: api.runtime, query });
+      return result.hosts.map((host) => toGenericClaudeHost(host, adopted));
     },
-    { scope: "operator.write" },
-  );
-  api.registerGatewayMethod(
-    CLAUDE_SESSION_READ_METHOD,
-    async ({ params, respond }: GatewayRequestHandlerOptions) => {
-      try {
-        if (!isRecord(params)) {
-          throw new ClaudeCatalogParamsError("Claude session read parameters must be an object");
-        }
-        const hostId = optionalString(params.hostId, 256);
-        const read = readTranscriptParams(params, { includeHostId: true });
-        if (!hostId) {
-          throw new ClaudeCatalogParamsError("hostId is invalid");
-        }
-        respond(true, await readClaudeSessionTranscript({ runtime: api.runtime, hostId, ...read }));
-      } catch (error) {
-        if (error instanceof ClaudeCatalogParamsError) {
-          respond(
-            false,
-            { error: error.message },
-            errorShape(ErrorCodes.INVALID_REQUEST, error.message),
-          );
-          return;
-        }
-        const message = "Claude session transcript could not be read";
-        respond(false, { error: message }, errorShape(ErrorCodes.UNAVAILABLE, message));
-      }
+    read: async (request) => {
+      const page = await readClaudeSessionTranscript({
+        runtime: api.runtime,
+        hostId: request.hostId,
+        threadId: request.threadId,
+        cursor: request.cursor,
+        limit: request.limit ?? DEFAULT_TRANSCRIPT_LIMIT,
+      });
+      return { ...page, items: page.items.map(toGenericClaudeItem) };
     },
-    { scope: "operator.write" },
-  );
+    continueSession: async (request) =>
+      await continueClaudeSession(api, request.hostId, request.threadId),
+  };
+  api.registerSessionCatalog(provider);
 }

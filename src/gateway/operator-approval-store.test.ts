@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -23,6 +24,7 @@ import {
   forceDenyOperatorApproval,
   getOperatorApproval,
   getOperatorApprovalDetailed,
+  getOperatorApprovalDetailedByLocator,
   insertOperatorApproval,
   listPendingOperatorApprovals,
   OPERATOR_APPROVAL_MAX_AUDIENCE_SESSION_KEYS,
@@ -123,6 +125,10 @@ describe("operator approval store", () => {
     }
     expect(inserted.record).toMatchObject({
       id: "round-trip",
+      resolutionRef: buildApprovalResolutionRef({
+        approvalId: "round-trip",
+        approvalKind: "exec",
+      }),
       kind: "exec",
       status: "pending",
       presentation: {
@@ -160,6 +166,13 @@ describe("operator approval store", () => {
     expect(getOperatorApproval({ id: "round-trip", nowMs: 2_000, databaseOptions })).toEqual(
       inserted.record,
     );
+    expect(
+      getOperatorApprovalDetailedByLocator({
+        locator: inserted.record.resolutionRef,
+        nowMs: 2_000,
+        databaseOptions,
+      }),
+    ).toEqual({ outcome: "found", record: inserted.record });
     expect(listPendingOperatorApprovals({ nowMs: 2_000, databaseOptions })).toEqual([
       inserted.record,
       expect.objectContaining({ id: "plugin", kind: "plugin" }),
@@ -269,6 +282,77 @@ describe("operator approval store", () => {
         }),
       ).toThrow(/approval id/);
     }
+  });
+
+  it("keeps canonical ids and transport references in disjoint lookup namespaces", () => {
+    const databaseOptions = createDatabaseOptions();
+    const inserted = insertOperatorApproval({
+      approval: approval("namespace-owner"),
+      databaseOptions,
+    });
+    if (inserted.outcome !== "inserted") {
+      throw new Error("expected approval insert");
+    }
+
+    expect(
+      insertOperatorApproval({
+        approval: approval(inserted.record.resolutionRef, { createdAtMs: 1_001 }),
+        databaseOptions,
+      }),
+    ).toEqual({ outcome: "conflict" });
+    expect(
+      getOperatorApprovalDetailedByLocator({
+        locator: inserted.record.resolutionRef,
+        nowMs: 2_000,
+        databaseOptions,
+      }),
+    ).toEqual({ outcome: "found", record: inserted.record });
+
+    const futureId = "namespace-future-owner";
+    const futureRef = buildApprovalResolutionRef({ approvalId: futureId, approvalKind: "exec" });
+    expect(
+      insertOperatorApproval({
+        approval: approval(futureRef, { createdAtMs: 1_002 }),
+        databaseOptions,
+      }),
+    ).toMatchObject({ outcome: "inserted" });
+    expect(
+      insertOperatorApproval({
+        approval: approval(futureId, { createdAtMs: 1_003 }),
+        databaseOptions,
+      }),
+    ).toEqual({ outcome: "conflict" });
+  });
+
+  it("prunes retained terminal rows before checking locator namespace conflicts", () => {
+    const databaseOptions = createDatabaseOptions();
+    const inserted = insertOperatorApproval({
+      approval: approval("expired-namespace-owner"),
+      databaseOptions,
+    });
+    if (inserted.outcome !== "inserted") {
+      throw new Error("expected approval insert");
+    }
+    forceDenyOperatorApproval({
+      id: inserted.record.id,
+      status: "cancelled",
+      reason: "run-aborted",
+      resolver: { kind: "system", id: null },
+      nowMs: 2_000,
+      databaseOptions,
+    });
+    const createdAtMs = OPERATOR_APPROVAL_TERMINAL_RETENTION_MS + 3_000;
+
+    expect(
+      insertOperatorApproval({
+        approval: approval(inserted.record.resolutionRef, {
+          createdAtMs,
+          expiresAtMs: createdAtMs + 10_000,
+        }),
+        databaseOptions,
+      }),
+    ).toMatchObject({ outcome: "inserted" });
+    expect(rawApprovalRow(databaseOptions, inserted.record.id)).toBeUndefined();
   });
 
   it("returns the first terminal answer and distinguishes same and conflicting retries", () => {

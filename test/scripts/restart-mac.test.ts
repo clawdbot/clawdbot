@@ -340,6 +340,14 @@ describe("scripts/restart-mac.sh", () => {
     expect(script).not.toContain("lsof -iTCP:${GATEWAY_PORT} -sTCP:LISTEN | head -n 5 || true");
   });
 
+  it("avoids login-shell noise and early-exit pipe warnings", () => {
+    const script = readFileSync(restartScriptPath, "utf8");
+
+    expect(script).not.toContain("bash -lc");
+    expect(script).not.toContain(`printf '%s\\n' "\${job}" | /usr/bin/awk`);
+    expect(script).toContain("/usr/bin/awk -F ' = '");
+  });
+
   it("keeps the default restart log scoped to the current worktree lock", () => {
     const script = readFileSync(restartScriptPath, "utf8");
 

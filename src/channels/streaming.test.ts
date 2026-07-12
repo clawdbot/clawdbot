@@ -2,6 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   buildChannelProgressDraftLine,
   formatChannelProgressDraftText,
+  resolveChannelPreviewStreamMode,
+  resolveChannelStreamingBlockCoalesce,
+  resolveChannelStreamingBlockEnabled,
+  resolveChannelStreamingChunkMode,
+  resolveChannelStreamingNativeTransport,
+  resolveChannelStreamingPreviewChunk,
   resolveChannelStreamingProgressNarration,
 } from "./streaming.js";
 
@@ -85,6 +91,54 @@ describe("buildChannelProgressDraftLine", () => {
       status: "exit 2",
     });
     expect(line?.text).not.toContain("command false");
+  });
+});
+
+describe("streaming config resolution", () => {
+  // Legacy flat aliases are doctor-migrated (`openclaw doctor --fix`); runtime
+  // resolution reads only the canonical nested streaming shape.
+  it("ignores legacy flat streaming keys", () => {
+    const legacyEntry = {
+      streamMode: "block",
+      chunkMode: "newline",
+      blockStreaming: true,
+      draftChunk: { minChars: 10 },
+      blockStreamingCoalesce: { idleMs: 5 },
+      nativeStreaming: false,
+    } as never;
+
+    expect(resolveChannelPreviewStreamMode(legacyEntry, "partial")).toBe("partial");
+    expect(resolveChannelStreamingChunkMode(legacyEntry)).toBeUndefined();
+    expect(resolveChannelStreamingBlockEnabled(legacyEntry)).toBeUndefined();
+    expect(resolveChannelStreamingPreviewChunk(legacyEntry)).toBeUndefined();
+    expect(resolveChannelStreamingBlockCoalesce(legacyEntry)).toBeUndefined();
+    expect(resolveChannelStreamingNativeTransport(legacyEntry)).toBeUndefined();
+  });
+
+  it("resolves the canonical nested streaming shape", () => {
+    const entry = {
+      streaming: {
+        mode: "block",
+        chunkMode: "newline",
+        preview: { chunk: { minChars: 10 } },
+        block: { enabled: true, coalesce: { idleMs: 5 } },
+        nativeTransport: false,
+      },
+    };
+
+    expect(resolveChannelPreviewStreamMode(entry, "partial")).toBe("block");
+    expect(resolveChannelStreamingChunkMode(entry)).toBe("newline");
+    expect(resolveChannelStreamingBlockEnabled(entry)).toBe(true);
+    expect(resolveChannelStreamingPreviewChunk(entry)).toEqual({ minChars: 10 });
+    expect(resolveChannelStreamingBlockCoalesce(entry)).toEqual({ idleMs: 5 });
+    expect(resolveChannelStreamingNativeTransport(entry)).toBe(false);
+  });
+
+  it("keeps scalar streaming support for channels whose schema allows it", () => {
+    // Mattermost's schema accepts a scalar mode string or boolean as canonical.
+    expect(resolveChannelPreviewStreamMode({ streaming: "block" }, "partial")).toBe("block");
+    expect(resolveChannelPreviewStreamMode({ streaming: true }, "off")).toBe("partial");
+    expect(resolveChannelPreviewStreamMode({ streaming: false }, "partial")).toBe("off");
   });
 });
 
