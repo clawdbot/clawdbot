@@ -60,17 +60,18 @@ export function toStringOrEmpty(value: unknown) {
   return "";
 }
 
-/** Coerce route numeric values from numbers or decimal strings. */
-export function toNumber(value: unknown) {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
+/** Return a canonical HTTP origin, or null when the route value is absent or invalid. */
+export function readHttpOrigin(value: unknown): string | null {
+  const raw = toStringOrEmpty(value);
+  if (!raw) {
+    return null;
   }
-  const normalized = typeof value === "string" ? normalizeOptionalString(value) : undefined;
-  if (normalized) {
-    const parsed = Number(normalized);
-    return Number.isFinite(parsed) ? parsed : undefined;
+  try {
+    const url = new URL(raw);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.origin : null;
+  } catch {
+    return null;
   }
-  return undefined;
 }
 
 /** Coerce route boolean values from booleans or common string forms. */
