@@ -105,9 +105,27 @@ export async function captureScreenshot(opts: {
     async (send) => {
       await send("Page.enable");
 
-      // Background surface captures can stall until CDP times out; activate to force a frame.
-      // Ignore protocol rejection so browsers that already capture correctly still proceed.
-      await send("Page.bringToFront").catch(() => {});
+      // Background surface captures can stall until CDP times out under headless
+      // Chrome, so activating the tab forces a frame there (#100857). On a HEADED
+      // browser the same activation steals the user's visible tab on every
+      // screenshot — the highest-frequency agent operation (#105357). Only skip
+      // activation when we can confirm the browser is headed; keep activating (the
+      // safe default) whenever detection is unavailable so the headless stall is
+      // never reintroduced.
+      let shouldActivateTab = true;
+      try {
+        const version = (await send("Browser.getVersion")) as { userAgent?: unknown };
+        const userAgent = typeof version?.userAgent === "string" ? version.userAgent : "";
+        if (userAgent && !/headless/i.test(userAgent)) {
+          shouldActivateTab = false;
+        }
+      } catch {
+        // Detection failed — keep the safe default and activate.
+      }
+      if (shouldActivateTab) {
+        // Ignore protocol rejection so browsers that already capture correctly still proceed.
+        await send("Page.bringToFront").catch(() => {});
+      }
 
       // For full-page captures, temporarily expand the viewport to the content
       // size so the entire page is within the viewport bounds.  We save the

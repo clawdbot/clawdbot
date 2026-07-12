@@ -14,6 +14,7 @@ const sentMessages = vi.hoisted(() => {
 // can return different values for the "emulated tab" vs "non-emulated tab" tests.
 const mockState = vi.hoisted(() => ({
   bringToFrontError: undefined as Error | undefined,
+  userAgent: undefined as string | undefined,
   emulationCleared: false,
   emulatedTab: true,
   viewport: { w: 800, h: 600, dpr: 2, sw: 800, sh: 600 } as Record<string, unknown>,
@@ -29,6 +30,11 @@ vi.mock("./cdp.helpers.js", () => ({
     ) => {
       const send = (method: string, params?: Record<string, unknown>) => {
         sentMessages.push({ method, params });
+        if (method === "Browser.getVersion") {
+          return Promise.resolve(
+            mockState.userAgent === undefined ? {} : { userAgent: mockState.userAgent },
+          );
+        }
         if (method === "Page.bringToFront" && mockState.bringToFrontError) {
           return Promise.reject(mockState.bringToFrontError);
         }
@@ -94,6 +100,7 @@ const localProfile: ResolvedBrowserProfile = {
 beforeEach(() => {
   sentMessages.length = 0;
   mockState.bringToFrontError = undefined;
+  mockState.userAgent = undefined;
   mockState.emulationCleared = false;
   mockState.emulatedTab = true;
   mockState.viewport = { w: 800, h: 600, dpr: 2, sw: 800, sh: 600 };
@@ -137,6 +144,39 @@ describe("CDP screenshot params", () => {
     await captureScreenshot({ wsUrl: "ws://localhost:9222/devtools/page/X" });
 
     requireSentMessage("Page.captureScreenshot");
+  });
+
+  it("does not steal focus on a headed browser (#105357)", async () => {
+    mockState.userAgent =
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36";
+
+    await captureScreenshot({ wsUrl: "ws://localhost:9222/devtools/page/X", format: "png" });
+
+    const methods = sentMessages.map((message) => message.method);
+    expect(methods).not.toContain("Page.bringToFront");
+    expect(methods).toContain("Page.captureScreenshot");
+  });
+
+  it("still activates the tab on a headless browser (#105357)", async () => {
+    mockState.userAgent =
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/146.0.0.0 Safari/537.36";
+
+    await captureScreenshot({ wsUrl: "ws://localhost:9222/devtools/page/X", format: "png" });
+
+    const methods = sentMessages.map((message) => message.method);
+    expect(methods).toContain("Page.bringToFront");
+    expect(methods.indexOf("Page.bringToFront")).toBeLessThan(
+      methods.indexOf("Page.captureScreenshot"),
+    );
+  });
+
+  it("activates when headed detection is unavailable (safe default, #105357)", async () => {
+    mockState.userAgent = undefined; // Browser.getVersion returns no userAgent
+
+    await captureScreenshot({ wsUrl: "ws://localhost:9222/devtools/page/X", format: "png" });
+
+    const methods = sentMessages.map((message) => message.method);
+    expect(methods).toContain("Page.bringToFront");
   });
 
   it("uses the requested timeout as the raw CDP command timeout", async () => {
