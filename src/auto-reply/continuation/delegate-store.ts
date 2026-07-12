@@ -84,6 +84,7 @@ const PendingDelegateStateSchema = z
     targetSessionKeys: z.array(z.string().min(1)).optional(),
     fanoutMode: z.enum(CONTINUATION_DELEGATE_FANOUT_MODES).optional(),
     traceparent: TraceparentStateSchema,
+    traceparentProvenance: z.literal("internal").optional(),
     model: z.string().min(1).optional(),
     releasedAt: z.number().int().nonnegative().optional(),
     childSessionKey: z.string().min(1).optional(),
@@ -195,7 +196,7 @@ function buildDelegateState(delegate: PendingContinuationDelegate): PendingDeleg
     ...(targetSessionKey ? { targetSessionKey } : {}),
     ...(targetSessionKeys.length > 0 ? { targetSessionKeys } : {}),
     ...(delegate.fanoutMode ? { fanoutMode: delegate.fanoutMode } : {}),
-    ...(traceparent ? { traceparent } : {}),
+    ...(traceparent ? { traceparent, traceparentProvenance: "internal" as const } : {}),
     ...(delegate.model ? { model: delegate.model } : {}),
     ...(delegate.chainTokensFold !== undefined
       ? { chainTokensFold: delegate.chainTokensFold }
@@ -499,7 +500,9 @@ function flowToDelegate(
       ? { targetSessionKeys: state.targetSessionKeys }
       : {}),
     ...(state.fanoutMode ? { fanoutMode: state.fanoutMode } : {}),
-    ...(state.traceparent ? { traceparent: state.traceparent } : {}),
+    ...(state.traceparent && state.traceparentProvenance === "internal"
+      ? { traceparent: state.traceparent }
+      : {}),
     ...(state.model ? { model: state.model } : {}),
     ...(state.chainTokensFold !== undefined ? { chainTokensFold: state.chainTokensFold } : {}),
     ...(state.persistedChainState ? { persistedChainState: state.persistedChainState } : {}),

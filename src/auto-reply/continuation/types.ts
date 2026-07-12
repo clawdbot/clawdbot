@@ -31,7 +31,6 @@ export type ContinuationSignal =
   | {
       kind: "work";
       delayMs?: number;
-      traceparent?: string;
     }
   | {
       kind: "delegate";
@@ -43,7 +42,6 @@ export type ContinuationSignal =
       targetSessionKey?: string;
       targetSessionKeys?: string[];
       fanoutMode?: ContinuationDelegateFanoutMode;
-      traceparent?: string;
       /**
        * Optional provider/model override for the spawned delegate. Omitted =>
        * the delegate inherits the dispatching session's model (existing
@@ -208,6 +206,7 @@ export type StagedPostCompactionDelegate = {
 export type ContinueWorkRequest = {
   reason: string;
   delaySeconds: number;
+  /** Runtime-captured diagnostic context. Never populated from model/tool arguments. */
   traceparent?: string;
 };
 

@@ -56,6 +56,10 @@ import {
   getAgentEventLifecycleGeneration,
   registerAgentRunContext,
 } from "../../infra/agent-events.js";
+import {
+  formatActiveContinuationTraceparent,
+  resolveContinuationTraceparent,
+} from "../../infra/continuation-tracer.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -1869,6 +1873,9 @@ export function createFollowupRunner(params: {
           sessionKey: continuationSessionKey,
         });
         if (extraction.signal?.kind === "work") {
+          const internalBracketTraceparent =
+            resolveContinuationTraceparent(run.traceparent) ??
+            formatActiveContinuationTraceparent();
           if (extraction.fromBracket) {
             for (let i = continuationPayloads.length - 1; i >= 0; i--) {
               const payload = continuationPayloads[i];
@@ -1889,9 +1896,7 @@ export function createFollowupRunner(params: {
               ...(extraction.signal.delayMs !== undefined
                 ? { delaySeconds: extraction.signal.delayMs / 1000 }
                 : {}),
-              ...(extraction.signal.traceparent
-                ? { traceparent: extraction.signal.traceparent }
-                : {}),
+              ...(internalBracketTraceparent ? { traceparent: internalBracketTraceparent } : {}),
             },
           ];
         }

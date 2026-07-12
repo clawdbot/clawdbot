@@ -103,6 +103,8 @@ type QueuedSessionDeliveryPayloadMetadata = {
    * with a different verb set.
    */
   traceparent?: string;
+  /** Runtime-owned provenance marker for post-compaction continuation trace context. */
+  traceparentProvenance?: "internal";
   /**
    * Descriptor-stub attachment references for sibling enrichment runtime.
    * This is the address-recipient shape; broadcast mode uses the same substrate
@@ -175,12 +177,19 @@ function buildEntryId(idempotencyKey?: string): string {
 function normalizeQueuedTraceparent(
   payload: QueuedSessionDeliveryPayload,
 ): QueuedSessionDeliveryPayload {
-  const normalizedTraceparent = normalizeDiagnosticTraceparent(payload.traceparent);
+  const normalizedTraceparent =
+    payload.kind !== "postCompactionDelegate" || payload.traceparentProvenance === "internal"
+      ? normalizeDiagnosticTraceparent(payload.traceparent)
+      : undefined;
   const normalizedPayload: QueuedSessionDeliveryPayload = { ...payload };
   if (normalizedTraceparent) {
     normalizedPayload.traceparent = normalizedTraceparent;
+    if (payload.kind === "postCompactionDelegate") {
+      normalizedPayload.traceparentProvenance = "internal";
+    }
   } else {
     delete normalizedPayload.traceparent;
+    delete normalizedPayload.traceparentProvenance;
   }
   return normalizedPayload;
 }
@@ -226,7 +235,12 @@ export function buildPostCompactionDelegateDeliveryPayload(params: {
       : {}),
     ...(params.delegate.fanoutMode ? { fanoutMode: params.delegate.fanoutMode } : {}),
     ...(params.delegate.model ? { model: params.delegate.model } : {}),
-    ...(params.delegate.traceparent ? { traceparent: params.delegate.traceparent } : {}),
+    ...(params.delegate.traceparentProvenance === "internal" && params.delegate.traceparent
+      ? {
+          traceparent: params.delegate.traceparent,
+          traceparentProvenance: "internal" as const,
+        }
+      : {}),
     ...(params.delegate.flowId ? { sourceFlowId: params.delegate.flowId } : {}),
     ...(params.delegate.expectedRevision !== undefined
       ? { sourceExpectedRevision: params.delegate.expectedRevision }

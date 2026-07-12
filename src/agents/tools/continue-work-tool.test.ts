@@ -39,6 +39,7 @@ vi.mock("../../auto-reply/continuation/config.js", () => ({
 }));
 
 const ACTIVE_TRACEPARENT = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-00";
+const ATTACKER_TRACEPARENT = "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01";
 const ACTIVE_TRACE_CONTEXT: DiagnosticTraceContext = {
   traceId: "0af7651916cd43dd8448eb211c80319c",
   spanId: "b7ad6b7169203331",
@@ -206,6 +207,7 @@ describe("continue_work tool", () => {
         traceparent: request.traceparent,
       });
     });
+
     const tool = makeTool({ requestContinuation });
 
     const result = (
@@ -233,6 +235,25 @@ describe("continue_work tool", () => {
       statusCalls: [{ status: "OK", message: undefined }],
       ended: true,
     });
+  });
+
+  it("ignores a syntactically valid hidden model traceparent", async () => {
+    const requestContinuation = vi.fn();
+    const tool = makeTool({ requestContinuation });
+
+    await runWithDiagnosticTraceContext(ACTIVE_TRACE_CONTEXT, () =>
+      tool.execute("call-hidden-traceparent", {
+        reason: "Continue with internal context.",
+        traceparent: ATTACKER_TRACEPARENT,
+      }),
+    );
+
+    expect(requestContinuation).toHaveBeenCalledWith({
+      reason: "Continue with internal context.",
+      delaySeconds: 0,
+      traceparent: ACTIVE_TRACEPARENT,
+    });
+    expect(ACTIVE_TRACEPARENT).not.toBe(ATTACKER_TRACEPARENT);
   });
 
   it("auto-picks the active runtime trace context when traceparent is omitted", async () => {

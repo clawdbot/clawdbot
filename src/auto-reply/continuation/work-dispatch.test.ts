@@ -709,6 +709,37 @@ describe("durable continuation_work dispatch", () => {
     );
   });
 
+  it("does not forward an unmarked persisted traceparent to work fire spans", async () => {
+    const sessionKey = "agent:main:untrusted-work-fire-traceparent";
+    const attackerTraceparent = "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01";
+    mockSessionStore[sessionKey] = { sessionKey };
+    enqueuePendingWork({
+      sessionKey,
+      hop: 1,
+      delayMs: 1_000,
+      electedAt: Date.now(),
+      dueAt: Date.now() + 1_000,
+      maxChainLength: 8,
+      reason: "untrusted trace work fire",
+      traceparent: attackerTraceparent,
+    });
+    const flow = [...mockFlows.values()].find((candidate) => candidate.ownerKey === sessionKey);
+    if (!flow) {
+      throw new Error("expected queued continuation work flow");
+    }
+    const state = { ...(flow.stateJson as Record<string, unknown>) };
+    delete state.traceparentProvenance;
+    flow.stateJson = state;
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await dispatchPendingContinuationWork({ sessionKey });
+
+    expect(emitContinuationWorkFireSpanMock).toHaveBeenCalledWith(
+      expect.not.objectContaining({ traceparent: attackerTraceparent }),
+    );
+    expect(capturedReplyTraceparents).not.toContain(attackerTraceparent);
+  });
+
   it("does not replay a turn when the durable delivered-mark loses the revision race (#1144)", async () => {
     const sessionKey = "agent:main:delivered-mark-race";
     mockSessionStore[sessionKey] = { sessionKey };

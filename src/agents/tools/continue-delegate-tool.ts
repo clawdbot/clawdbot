@@ -17,10 +17,7 @@ import {
   hasCrossSessionDelegateTargeting,
   normalizeContinuationTargetKeys,
 } from "../../auto-reply/continuation/targeting.js";
-import {
-  formatActiveContinuationTraceparent,
-  resolveContinuationTraceparent,
-} from "../../infra/continuation-tracer.js";
+import { formatActiveContinuationTraceparent } from "../../infra/continuation-tracer.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { optionalStringEnum } from "../schema/typebox.js";
@@ -195,10 +192,9 @@ export function createContinueDelegateTool(opts: { agentSessionKey?: string }): 
         ...(targetSessionKeys && targetSessionKeys.length > 0 ? { targetSessionKeys } : {}),
         ...(fanoutMode ? { fanoutMode: fanoutMode as (typeof FANOUT_MODES)[number] } : {}),
       };
-      const requestedTraceparent = readStringParam(params, "traceparent");
-      const traceparent =
-        resolveContinuationTraceparent(requestedTraceparent) ??
-        formatActiveContinuationTraceparent();
+      // Trace context is runtime-owned. Ignore hidden/raw `traceparent` input
+      // just like the public schema does, and capture only the active context.
+      const traceparent = formatActiveContinuationTraceparent();
       const traceContextFields = traceparent ? { traceparent } : {};
 
       const modelOverride = normalizeToolModelOverride(readStringParam(params, "model"));

@@ -58,7 +58,7 @@ describe("extractContinuationSignal", () => {
     expect(result.workReason).toBe("more to do");
   });
 
-  it("preserves tool-call traceparent on continue_work signals", () => {
+  it("keeps tool-call traceparent out of the merged model-facing signal", () => {
     const traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
     const result = extractContinuationSignal({
       payloads: [{ text: "Normal reply." }],
@@ -66,7 +66,8 @@ describe("extractContinuationSignal", () => {
       enabled: true,
     });
 
-    expect(result.signal).toEqual({ kind: "work", delayMs: 15_000, traceparent });
+    expect(result.signal).toEqual({ kind: "work", delayMs: 15_000 });
+    expect(result.signal).not.toHaveProperty("traceparent");
     expect(result.fromBracket).toBe(false);
     expect(result.workReason).toBe("more to do");
   });

@@ -287,7 +287,7 @@ describe("parseContinuationSignal", () => {
     expect(result?.kind === "delegate" ? result.silentWake : undefined).toBeUndefined();
   });
 
-  it("parses traceparent directive options on bracket delegates", () => {
+  it("consumes but ignores model-supplied traceparent directive options", () => {
     const result = parseContinuationSignal(
       `[[CONTINUE_DELEGATE: traced handoff | silent-wake | target=agent:main:root | traceparent=${VALID_TRACEPARENT}]]`,
     );
@@ -297,7 +297,6 @@ describe("parseContinuationSignal", () => {
       task: "traced handoff",
       silentWake: true,
       targetSessionKey: "agent:main:root",
-      traceparent: VALID_TRACEPARENT,
     });
   });
 

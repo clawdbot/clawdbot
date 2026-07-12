@@ -65,7 +65,9 @@ export function stagePostCompactionDelegate(
     ...(delegate.targetSessionKey ? { targetSessionKey: delegate.targetSessionKey } : {}),
     ...(delegate.targetSessionKeys ? { targetSessionKeys: delegate.targetSessionKeys } : {}),
     ...(delegate.fanoutMode ? { fanoutMode: delegate.fanoutMode } : {}),
-    ...(delegate.traceparent ? { traceparent: delegate.traceparent } : {}),
+    ...(delegate.traceparent && delegate.traceparentProvenance === "internal"
+      ? { traceparent: delegate.traceparent }
+      : {}),
     ...(delegate.model ? { model: delegate.model } : {}),
   });
 }
@@ -95,6 +97,7 @@ export function consumeStagedPostCompactionDelegates(
     }
     if (d.traceparent) {
       delegate.traceparent = d.traceparent;
+      delegate.traceparentProvenance = "internal";
     }
     if (d.model) {
       delegate.model = d.model;

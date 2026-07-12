@@ -16,6 +16,7 @@ import { loadSessionStore } from "../../config/sessions/store-load.js";
 import { resolveSessionStoreEntry, updateSessionStore } from "../../config/sessions/store.js";
 import type { SessionEntry, SessionPostCompactionDelegate } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveContinuationTraceparent } from "../../infra/continuation-tracer.js";
 import { generateChainId } from "../../infra/secure-random.js";
 import {
   drainPendingSessionDeliveries,
@@ -212,6 +213,10 @@ export function normalizePostCompactionDelegate(
   const silentWake = legacySilentWake ? true : delegate.silentWake === true;
   const silent = legacySilentWake ? true : delegate.silent === true || silentWake;
   const firstArmedAt = delegate.firstArmedAt ?? delegate.createdAt;
+  const internalTraceparent =
+    delegate.traceparentProvenance === "internal"
+      ? resolveContinuationTraceparent(delegate.traceparent)
+      : undefined;
 
   return {
     task: delegate.task,
@@ -224,7 +229,12 @@ export function normalizePostCompactionDelegate(
       ? { targetSessionKeys: delegate.targetSessionKeys }
       : {}),
     ...(delegate.fanoutMode ? { fanoutMode: delegate.fanoutMode } : {}),
-    ...(delegate.traceparent ? { traceparent: delegate.traceparent } : {}),
+    ...(internalTraceparent
+      ? {
+          traceparent: internalTraceparent,
+          traceparentProvenance: "internal" as const,
+        }
+      : {}),
     ...(delegate.model ? { model: delegate.model } : {}),
   };
 }
@@ -437,11 +447,12 @@ function maybeFinalizePreviouslyAcceptedSourceBackedDelivery(params: {
       `[continuation:post-compaction-source-accept-not-committed] flowId=${entry.sourceFlowId}`,
     );
   }
+  const entryTraceparent = resolveQueuedPostCompactionTraceparent(entry);
   deps.enqueueSystemEvent(
     `[continuation:compaction-delegate-spawned] Post-compaction shard dispatched: ${entry.task}`,
     {
       sessionKey: entry.sessionKey,
-      ...(entry.traceparent ? { traceparent: entry.traceparent } : {}),
+      ...(entryTraceparent ? { traceparent: entryTraceparent } : {}),
     },
   );
   deps.log(
@@ -560,14 +571,33 @@ function isPostCompactionDelegateEntry(
   return entry.kind === "postCompactionDelegate";
 }
 
+function resolveQueuedPostCompactionTraceparent(
+  entry: QueuedPostCompactionDelegateDelivery,
+): string | undefined {
+  return entry.traceparentProvenance === "internal"
+    ? resolveContinuationTraceparent(entry.traceparent)
+    : undefined;
+}
+
 function applyReleaseTraceparent(
   delegate: SessionPostCompactionDelegate,
   releaseTraceparent: string | undefined,
 ): SessionPostCompactionDelegate {
-  if (!releaseTraceparent || delegate.traceparent) {
+  if (delegate.traceparentProvenance === "internal" && delegate.traceparent) {
     return delegate;
   }
-  return { ...delegate, traceparent: releaseTraceparent };
+  const resolvedReleaseTraceparent = resolveContinuationTraceparent(releaseTraceparent);
+  if (!resolvedReleaseTraceparent) {
+    const normalized = { ...delegate };
+    delete normalized.traceparent;
+    delete normalized.traceparentProvenance;
+    return normalized;
+  }
+  return {
+    ...delegate,
+    traceparent: resolvedReleaseTraceparent,
+    traceparentProvenance: "internal",
+  };
 }
 
 export async function deliverQueuedPostCompactionDelegate(
@@ -576,6 +606,7 @@ export async function deliverQueuedPostCompactionDelegate(
   },
   deps: PostCompactionDelegateDeliveryDeps = defaultPostCompactionDelegateDeliveryDeps,
 ): Promise<void> {
+  const entryTraceparent = resolveQueuedPostCompactionTraceparent(params.entry);
   const cfg = deps.getRuntimeConfig();
   const agentId = deps.resolveSessionAgentId({
     sessionKey: params.entry.sessionKey,
@@ -616,7 +647,7 @@ export async function deliverQueuedPostCompactionDelegate(
       `[continuation] Post-compaction delegate rejected: chain length ${maxCompactionChainLength} reached. Task: ${params.entry.task}`,
       {
         sessionKey: params.entry.sessionKey,
-        ...(params.entry.traceparent ? { traceparent: params.entry.traceparent } : {}),
+        ...(entryTraceparent ? { traceparent: entryTraceparent } : {}),
       },
     );
     failSourceBackedPostCompactionDelivery(
@@ -635,7 +666,7 @@ export async function deliverQueuedPostCompactionDelegate(
       `[continuation] Post-compaction delegate rejected: cost cap exceeded (${compactionChainTokens} > ${compactionCostCapTokens}). Task: ${params.entry.task}`,
       {
         sessionKey: params.entry.sessionKey,
-        ...(params.entry.traceparent ? { traceparent: params.entry.traceparent } : {}),
+        ...(entryTraceparent ? { traceparent: entryTraceparent } : {}),
       },
     );
     failSourceBackedPostCompactionDelivery(
@@ -657,7 +688,7 @@ export async function deliverQueuedPostCompactionDelegate(
       `[continuation] Post-compaction delegate rejected: cross-session targeting was disabled at delivery time. Task: ${params.entry.task}`,
       {
         sessionKey: params.entry.sessionKey,
-        ...(params.entry.traceparent ? { traceparent: params.entry.traceparent } : {}),
+        ...(entryTraceparent ? { traceparent: entryTraceparent } : {}),
       },
     );
     failSourceBackedPostCompactionDelivery(
@@ -727,7 +758,7 @@ export async function deliverQueuedPostCompactionDelegate(
         chainId: persistedChain.chainId,
       },
       ...(params.entry.model ? { model: params.entry.model } : {}),
-      ...(params.entry.traceparent ? { traceparent: params.entry.traceparent } : {}),
+      ...(entryTraceparent ? { traceparent: entryTraceparent } : {}),
     },
     {
       agentSessionKey: params.entry.sessionKey,
@@ -773,7 +804,7 @@ export async function deliverQueuedPostCompactionDelegate(
     `[continuation:compaction-delegate-spawned] Post-compaction shard dispatched: ${params.entry.task}`,
     {
       sessionKey: params.entry.sessionKey,
-      ...(params.entry.traceparent ? { traceparent: params.entry.traceparent } : {}),
+      ...(entryTraceparent ? { traceparent: entryTraceparent } : {}),
     },
   );
 }
@@ -811,6 +842,7 @@ export async function dispatchPostCompactionDelegates(
   params: DispatchPostCompactionDelegatesParams,
   deps: PostCompactionDelegateDispatchDeps = defaultPostCompactionDelegateDispatchDeps,
 ): Promise<DispatchPostCompactionDelegatesResult> {
+  const internalReleaseTraceparent = resolveContinuationTraceparent(params.releaseTraceparent);
   const stagedCompactionDelegates = deps.consumeStagedPostCompactionDelegates(params.sessionKey);
   // Capture the claim handles immediately: consumeStagedPostCompactionDelegates
   // now claims TaskFlow rows to `running` (not `finished`), and we finalize ONLY
@@ -843,7 +875,7 @@ export async function dispatchPostCompactionDelegates(
   ].map((delegate) => {
     const normalized = applyReleaseTraceparent(
       normalizePostCompactionDelegate(delegate),
-      params.releaseTraceparent,
+      internalReleaseTraceparent,
     );
     if (delegate.flowId) {
       normalized.flowId = delegate.flowId;
@@ -1026,7 +1058,7 @@ export async function dispatchPostCompactionDelegates(
   }
   deps.enqueueSystemEvent(lifecycleEvent, {
     sessionKey: params.sessionKey,
-    ...(params.releaseTraceparent ? { traceparent: params.releaseTraceparent } : {}),
+    ...(internalReleaseTraceparent ? { traceparent: internalReleaseTraceparent } : {}),
   });
 
   if (queuedEntryIds.length > 0) {

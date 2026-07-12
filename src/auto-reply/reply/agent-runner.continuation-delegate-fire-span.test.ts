@@ -243,6 +243,7 @@ function createContinuationRun(params?: {
   config?: Record<string, unknown>;
   sessionEntry?: SessionEntry;
   messageProvider?: string;
+  traceparent?: string;
 }) {
   const sessionKey = params?.sessionKey ?? "continuation-delegate-fire-span";
   const messageProvider = params?.messageProvider ?? "discord";
@@ -269,6 +270,7 @@ function createContinuationRun(params?: {
     run: {
       sessionId: "session",
       sessionKey,
+      ...(params?.traceparent ? { traceparent: params.traceparent } : {}),
       messageProvider,
       sessionFile: "/tmp/session.jsonl",
       workspaceDir: "/tmp",
@@ -345,11 +347,16 @@ describe("runReplyAgent :: continuation.delegate.fire span", () => {
     const { tracer, spans } = createRecordingTracer();
     setContinuationTracer(tracer);
 
-    const run = createContinuationRun({ sessionKey: "continuation-delegate-fire-bracket" });
+    const internalTraceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+    const attackerTraceparent = "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01";
+    const run = createContinuationRun({
+      sessionKey: "continuation-delegate-fire-bracket",
+      traceparent: internalTraceparent,
+    });
     runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [
         {
-          text: "Reply\n[[CONTINUE_DELEGATE: inspect logs +1s | traceparent=00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01]]",
+          text: `Reply\n[[CONTINUE_DELEGATE: inspect logs +1s | traceparent=${attackerTraceparent}]]`,
         },
       ],
       meta: { agentMeta: { usage: { input: 1, output: 1 } } },
@@ -382,7 +389,8 @@ describe("runReplyAgent :: continuation.delegate.fire span", () => {
     expect(typeof dispatchChainId).toBe("string");
     expect(dispatchChainId as string).toMatch(UUID_REGEX);
     expect(fire.attributes["chain.id"]).toBe(dispatchChainId);
-    expect(dispatch.traceparent).toBe("00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01");
+    expect(dispatch.traceparent).toBe(internalTraceparent);
+    expect(dispatch.traceparent).not.toBe(attackerTraceparent);
     expect(dispatch.attributes["delay.ms"]).toBe(1_000);
     expect(dispatch.attributes["delegate.delivery"]).toBe("timer");
     expect(fire.attributes["delay.ms"]).toBe(1_000);

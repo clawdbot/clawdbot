@@ -1,5 +1,4 @@
 /** Silent-reply and heartbeat tokens plus helpers for suppressing token-only model output. */
-import { normalizeDiagnosticTraceparent } from "../infra/diagnostic-trace-context-pure.js";
 import { escapeRegExp } from "../shared/regexp.js";
 import {
   CONTINUATION_DELEGATE_FANOUT_MODES,
@@ -354,7 +353,6 @@ type DelegateDirectiveState = {
   targetSessionKey?: string;
   targetSessionKeys?: string[];
   fanoutMode?: "tree" | "all";
-  traceparent?: string;
   model?: string;
 };
 
@@ -450,10 +448,8 @@ function parseDelegateDirective(
   }
 
   if (assignment.key === "traceparent" || assignment.key === "trace_parent") {
-    const traceparent = normalizeDiagnosticTraceparent(assignment.value);
-    if (traceparent) {
-      state.traceparent = traceparent;
-    }
+    // Diagnostic context is runtime-owned. Consume the legacy/hidden directive
+    // so it cannot become task text, but never let model output choose tracing.
     return { status: "applied" };
   }
 
@@ -555,7 +551,6 @@ export function parseContinuationSignal(text: string | undefined): ContinuationS
       targetSessionKey,
       targetSessionKeys,
       fanoutMode,
-      traceparent,
       model,
     } = parsedBody.directives;
 
@@ -584,7 +579,6 @@ export function parseContinuationSignal(text: string | undefined): ContinuationS
         ...(targetSessionKey ? { targetSessionKey } : {}),
         ...(targetSessionKeys && targetSessionKeys.length > 0 ? { targetSessionKeys } : {}),
         ...(fanoutMode ? { fanoutMode } : {}),
-        ...(traceparent ? { traceparent } : {}),
         ...(model ? { model } : {}),
       };
     }

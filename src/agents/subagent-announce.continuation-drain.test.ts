@@ -1449,7 +1449,8 @@ describe("subagent-announce continuation drain (F7)", () => {
     });
   });
 
-  it("persists traceparent on durable delayed bracket delegates (#1159)", async () => {
+  it("persists only the internal traceparent on durable delayed bracket delegates (#1159)", async () => {
+    const attackerTraceparent = "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01";
     loadSessionStoreMock.mockImplementation(
       () =>
         ({
@@ -1476,7 +1477,8 @@ describe("subagent-announce continuation drain (F7)", () => {
       startedAt: 10,
       endedAt: 20,
       outcome: { status: "ok" },
-      roundOneReply: `Research result.\n[[CONTINUE_DELEGATE: keep working +30s | traceparent=${validTraceparent}]]`,
+      traceparent: validTraceparent,
+      roundOneReply: `Research result.\n[[CONTINUE_DELEGATE: keep working +30s | traceparent=${attackerTraceparent}]]`,
     });
 
     expect(enqueuePendingDelegateMock).toHaveBeenCalledTimes(1);
@@ -1486,6 +1488,10 @@ describe("subagent-announce continuation drain (F7)", () => {
       traceparent: validTraceparent,
       spawnRequesterSessionKey: "agent:main:main",
     });
+    const enqueued = enqueuePendingDelegateMock.mock.calls[0]?.[1] as
+      | { traceparent?: string }
+      | undefined;
+    expect(enqueued?.traceparent).not.toBe(attackerTraceparent);
     expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 

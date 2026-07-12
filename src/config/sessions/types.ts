@@ -232,6 +232,8 @@ export type SessionPostCompactionDelegate = {
   targetSessionKeys?: string[];
   fanoutMode?: "tree" | "all";
   traceparent?: string;
+  /** Persisted proof that traceparent came from a runtime-owned capture boundary. */
+  traceparentProvenance?: "internal";
   /** Optional provider/model override forwarded to the released delegate; omitted => inherit parent. */
   model?: string;
   /**

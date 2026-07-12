@@ -50,6 +50,7 @@ import { emitAgentEvent } from "../../infra/agent-events.js";
 import {
   emitContinuationCompactionReleasedSpan,
   emitContinuationDisabledSpan,
+  formatActiveContinuationTraceparent,
   resolveContinuationTraceparent,
   startContinuationDelegateSpan,
 } from "../../infra/continuation-tracer.js";
@@ -2095,7 +2096,6 @@ export async function runReplyAgent(replyParams: {
         ? {
             reason: firstWorkRequest.reason,
             delaySeconds: firstWorkRequest.delaySeconds,
-            ...(firstWorkRequest.traceparent ? { traceparent: firstWorkRequest.traceparent } : {}),
           }
         : undefined,
       enabled: continuationFeatureEnabled,
@@ -2103,6 +2103,10 @@ export async function runReplyAgent(replyParams: {
     });
     const effectiveContinuationSignal = continuationExtraction.signal;
     const continuationWorkReason = continuationExtraction.workReason;
+    const internalBracketTraceparent = continuationExtraction.fromBracket
+      ? (resolveContinuationTraceparent(followupRun.run.traceparent) ??
+        formatActiveContinuationTraceparent())
+      : undefined;
 
     const usage = runResult.meta?.agentMeta?.usage;
     const hasBillableUsageBuckets =
@@ -3047,8 +3051,11 @@ export async function runReplyAgent(replyParams: {
         ...(effectiveContinuationSignal.fanoutMode
           ? { fanoutMode: effectiveContinuationSignal.fanoutMode }
           : {}),
-        ...(effectiveContinuationSignal.traceparent
-          ? { traceparent: effectiveContinuationSignal.traceparent }
+        ...(internalBracketTraceparent
+          ? {
+              traceparent: internalBracketTraceparent,
+              traceparentProvenance: "internal" as const,
+            }
           : {}),
         ...(effectiveContinuationSignal.model ? { model: effectiveContinuationSignal.model } : {}),
       });
@@ -3371,9 +3378,7 @@ export async function runReplyAgent(replyParams: {
               );
               if (!rejectedDelayedTarget) {
                 const clampedDelay = Math.max(minDelayMs, Math.min(maxDelayMs, delegateDelayMs));
-                const outboundTraceparent = resolveContinuationTraceparent(
-                  effectiveContinuationSignal.traceparent,
-                );
+                const outboundTraceparent = internalBracketTraceparent;
                 const delegateMode = effectiveContinuationSignal.silentWake
                   ? "silent-wake"
                   : effectiveContinuationSignal.silent
@@ -3422,9 +3427,7 @@ export async function runReplyAgent(replyParams: {
                 ...(effectiveContinuationSignal.fanoutMode
                   ? { fanoutMode: effectiveContinuationSignal.fanoutMode }
                   : {}),
-                ...(effectiveContinuationSignal.traceparent
-                  ? { traceparent: effectiveContinuationSignal.traceparent }
-                  : {}),
+                ...(internalBracketTraceparent ? { traceparent: internalBracketTraceparent } : {}),
               });
             }
           } else {
@@ -3440,8 +3443,8 @@ export async function runReplyAgent(replyParams: {
                     {
                       reason: continuationWorkReason ?? "",
                       delaySeconds: (effectiveContinuationSignal.delayMs ?? defaultDelayMs) / 1000,
-                      ...(effectiveContinuationSignal.traceparent
-                        ? { traceparent: effectiveContinuationSignal.traceparent }
+                      ...(internalBracketTraceparent
+                        ? { traceparent: internalBracketTraceparent }
                         : {}),
                     },
                   ];

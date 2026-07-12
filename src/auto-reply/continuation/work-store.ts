@@ -8,6 +8,7 @@
  */
 
 import { z } from "zod";
+import { normalizeDiagnosticTraceparent } from "../../infra/diagnostic-trace-context-pure.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { TaskFlowRecord } from "../../tasks/task-flow-registry.types.js";
 import {
@@ -41,6 +42,7 @@ const PendingWorkStateSchema = z.object({
   parentRunId: z.string().optional(),
   chainId: z.string().optional(),
   traceparent: z.string().optional(),
+  traceparentProvenance: z.literal("internal").optional(),
   // Finalization anchor + provenance. Origin identity is audit-only and must
   // stay separate from parentRunId so same-session work never becomes orphan-
   // reap eligible through its electing run.
@@ -196,7 +198,9 @@ function workToRuntime(
     ...(state.reason ? { reason: state.reason } : {}),
     ...(state.parentRunId ? { parentRunId: state.parentRunId } : {}),
     ...(state.chainId ? { chainId: state.chainId } : {}),
-    ...(state.traceparent ? { traceparent: state.traceparent } : {}),
+    ...(state.traceparent && state.traceparentProvenance === "internal"
+      ? { traceparent: state.traceparent }
+      : {}),
     ...(state.anchorPending !== undefined ? { anchorPending: state.anchorPending } : {}),
     ...(state.anchorFinalizedAt !== undefined
       ? { anchorFinalizedAt: state.anchorFinalizedAt }
@@ -218,6 +222,7 @@ function workToRuntime(
 }
 
 export function enqueuePendingWork(work: PendingContinuationWork): PendingContinuationWork | null {
+  const traceparent = normalizeDiagnosticTraceparent(work.traceparent);
   const state: PendingWorkState = {
     kind: "continuation_work",
     sessionKey: work.sessionKey,
@@ -234,7 +239,7 @@ export function enqueuePendingWork(work: PendingContinuationWork): PendingContin
     ...(work.reason ? { reason: work.reason } : {}),
     ...(work.parentRunId ? { parentRunId: work.parentRunId } : {}),
     ...(work.chainId ? { chainId: work.chainId } : {}),
-    ...(work.traceparent ? { traceparent: work.traceparent } : {}),
+    ...(traceparent ? { traceparent, traceparentProvenance: "internal" as const } : {}),
     ...(work.originRunId ? { originRunId: work.originRunId } : {}),
     ...(work.originTurnId ? { originTurnId: work.originTurnId } : {}),
     // #1135: a continue_work captured during an active turn parks on the

@@ -59,7 +59,12 @@ function delegate(
     ...(overrides?.firstArmedAt != null ? { firstArmedAt: overrides.firstArmedAt } : {}),
     ...(overrides?.silent != null ? { silent: overrides.silent } : {}),
     ...(overrides?.silentWake != null ? { silentWake: overrides.silentWake } : {}),
-    ...(overrides?.traceparent ? { traceparent: overrides.traceparent } : {}),
+    ...(overrides?.traceparent
+      ? {
+          traceparent: overrides.traceparent,
+          traceparentProvenance: overrides.traceparentProvenance ?? ("internal" as const),
+        }
+      : {}),
     ...(overrides?.model ? { model: overrides.model } : {}),
   };
 }
@@ -168,6 +173,9 @@ function createQueuedEntry(
     enqueuedAt: 1,
     retryCount: 0,
     ...overrides,
+    ...(overrides?.traceparent && overrides.traceparentProvenance === undefined
+      ? { traceparentProvenance: "internal" as const }
+      : {}),
   };
 }
 
@@ -507,6 +515,7 @@ describe("post-compaction delegate dispatch extraction", () => {
         delegate: {
           ...normalizePostCompactionDelegate(delegate("persisted")),
           traceparent: VALID_TRACEPARENT,
+          traceparentProvenance: "internal",
         },
         sequence: 0,
         compactionCount: 8,
@@ -516,6 +525,7 @@ describe("post-compaction delegate dispatch extraction", () => {
         delegate: {
           ...normalizePostCompactionDelegate(delegate("staged")),
           traceparent: VALID_TRACEPARENT,
+          traceparentProvenance: "internal",
         },
         sequence: 1,
         compactionCount: 8,
@@ -631,8 +641,44 @@ describe("post-compaction delegate dispatch extraction", () => {
     await flushMicrotasks();
 
     expect(enqueuePostCompactionDelegateDelivery.mock.calls[0]?.[0]).toMatchObject({
-      delegate: expect.objectContaining({ traceparent: delegateTraceparent }),
+      delegate: expect.objectContaining({
+        traceparent: delegateTraceparent,
+        traceparentProvenance: "internal",
+      }),
     });
+  });
+
+  it("replaces an unmarked persisted traceparent with the internal release context", async () => {
+    const attackerTraceparent = "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      pendingPostCompactionDelegates: [
+        { task: "persisted", createdAt: 1, traceparent: attackerTraceparent },
+      ],
+    };
+    const { deps, enqueuePostCompactionDelegateDelivery } = createDispatchDeps();
+
+    await dispatchPostCompactionDelegates(
+      {
+        cfg,
+        compactionCount: 9,
+        followupRun: createFollowupRun(),
+        postCompactionDelegatesToPreserve: [],
+        releaseTraceparent: VALID_TRACEPARENT,
+        sessionEntry,
+        sessionKey: "main",
+      },
+      deps,
+    );
+    await flushMicrotasks();
+
+    const queuedDelegate = enqueuePostCompactionDelegateDelivery.mock.calls[0]?.[0]?.delegate;
+    expect(queuedDelegate).toMatchObject({
+      traceparent: VALID_TRACEPARENT,
+      traceparentProvenance: "internal",
+    });
+    expect(queuedDelegate?.traceparent).not.toBe(attackerTraceparent);
   });
 
   it("surfaces post-compaction context read failures to the fresh session", async () => {
@@ -1147,6 +1193,28 @@ describe("post-compaction delegate dispatch extraction", () => {
       expect(enqueueSystemEvent).toHaveBeenCalledWith(
         "[continuation:compaction-delegate-spawned] Post-compaction shard dispatched: queued delegate",
         { sessionKey: "main", traceparent },
+      );
+    });
+  });
+
+  it("does not trust an unmarked queued post-compaction traceparent", async () => {
+    await withTempDir({ prefix: "openclaw-post-compaction-delivery-" }, async (tempDir) => {
+      const storePath = path.join(tempDir, "sessions.json");
+      const attackerTraceparent = "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01";
+      await seedSessionStore(storePath, { main: { sessionId: "session", updatedAt: Date.now() } });
+      const { deps, enqueueSystemEvent, spawnSubagentDirect } = createDeliveryDeps({ storePath });
+      const entry = createQueuedEntry();
+      entry.traceparent = attackerTraceparent;
+
+      await deliverQueuedPostCompactionDelegate({ entry }, deps);
+
+      expect(spawnSubagentDirect).toHaveBeenCalledWith(
+        expect.not.objectContaining({ traceparent: attackerTraceparent }),
+        expect.any(Object),
+      );
+      expect(enqueueSystemEvent).toHaveBeenCalledWith(
+        "[continuation:compaction-delegate-spawned] Post-compaction shard dispatched: queued delegate",
+        { sessionKey: "main" },
       );
     });
   });

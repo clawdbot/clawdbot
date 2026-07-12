@@ -349,6 +349,18 @@ describe("delegate store — TaskFlow-backed", () => {
     });
   });
 
+  it("ignores an unmarked persisted traceparent", () => {
+    queueRawPendingFlow("session-1", {
+      kind: "continuation_delegate",
+      task: "attacker traced task",
+      traceparent: VALID_TRACEPARENT,
+    });
+
+    const delegate = expectDefined(consumePendingDelegates("session-1").at(0), "delegate");
+    expect(delegate.task).toBe("attacker traced task");
+    expect(delegate.traceparent).toBeUndefined();
+  });
+
   it("omits traceparent when the TaskFlow row has no carrier", () => {
     enqueuePendingDelegate("session-1", { task: "untraced task" });
 

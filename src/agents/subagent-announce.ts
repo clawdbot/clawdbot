@@ -25,6 +25,7 @@ import {
 } from "../auto-reply/tokens.js";
 import { resolveAgentIdFromSessionKey, resolveStorePath } from "../config/sessions.js";
 import { updateSessionEntry } from "../config/sessions/session-accessor.js";
+import { resolveContinuationTraceparent } from "../infra/continuation-tracer.js";
 import { generateChainId } from "../infra/secure-random.js";
 import { logWarn } from "../logger.js";
 import { defaultRuntime } from "../runtime.js";
@@ -574,6 +575,7 @@ async function scheduleSubagentSelfContinuationWork(params: {
   childSessionKey: string;
   childRunId: string;
   delayMs?: number;
+  traceparent?: string;
   cfg: ReturnType<typeof subagentAnnounceDeps.getRuntimeConfig>;
 }): Promise<void> {
   try {
@@ -613,7 +615,13 @@ async function scheduleSubagentSelfContinuationWork(params: {
     const result = await scheduleContinuationWorkBatch({
       sessionKey: params.childSessionKey,
       chainState: loadContinuationChainState(childEntry),
-      requests: [{ reason: "subagent self-continuation (CONTINUE_WORK token)", delaySeconds }],
+      requests: [
+        {
+          reason: "subagent self-continuation (CONTINUE_WORK token)",
+          delaySeconds,
+          ...(params.traceparent ? { traceparent: params.traceparent } : {}),
+        },
+      ],
       config,
       originRunId: params.childRunId,
       originTurnId: params.childSessionKey,
@@ -1357,16 +1365,19 @@ export async function runSubagentAnnounceFlow(params: {
         // spawn-init/turn-1 path already armed the wake from the run payloads it
         // is a no-op (#952).
         const workSignal = continuationResult.signal;
+        const internalWorkTraceparent = resolveContinuationTraceparent(params.traceparent);
         findings = continuationResult.text || "(no output)";
         await scheduleSubagentSelfContinuationWork({
           childSessionKey: params.childSessionKey,
           childRunId: params.childRunId,
           ...(workSignal.delayMs !== undefined ? { delayMs: workSignal.delayMs } : {}),
+          ...(internalWorkTraceparent ? { traceparent: internalWorkTraceparent } : {}),
           cfg,
         });
       } else if (continuationResult.signal?.kind === "delegate") {
         findings = continuationResult.text || "(no output)";
         const chainSignal = continuationResult.signal;
+        const internalChainTraceparent = resolveContinuationTraceparent(params.traceparent);
         const chainTask = chainSignal.task;
         const chainDelayMs = chainSignal.delayMs;
         const parentWasSilent = params.silentAnnounce === true;
@@ -1391,7 +1402,12 @@ export async function runSubagentAnnounceFlow(params: {
               ? { targetSessionKeys: chainSignal.targetSessionKeys }
               : {}),
             ...(chainSignal.fanoutMode ? { fanoutMode: chainSignal.fanoutMode } : {}),
-            ...(chainSignal.traceparent ? { traceparent: chainSignal.traceparent } : {}),
+            ...(internalChainTraceparent
+              ? {
+                  traceparent: internalChainTraceparent,
+                  traceparentProvenance: "internal" as const,
+                }
+              : {}),
             ...(chainSignal.model ? { model: chainSignal.model } : {}),
           });
           const { enqueueSystemEvent } = await import("../infra/system-events.js");
@@ -1575,7 +1591,7 @@ export async function runSubagentAnnounceFlow(params: {
                     ? { targetSessionKeys: chainSignal.targetSessionKeys }
                     : {}),
                   ...(chainSignal.fanoutMode ? { fanoutMode: chainSignal.fanoutMode } : {}),
-                  ...(chainSignal.traceparent ? { traceparent: chainSignal.traceparent } : {}),
+                  ...(internalChainTraceparent ? { traceparent: internalChainTraceparent } : {}),
                   ...(chainSignal.model ? { model: chainSignal.model } : {}),
                   spawnRequesterSessionKey: targetRequesterSessionKey,
                   ...(targetRequesterOrigin?.channel
