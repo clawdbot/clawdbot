@@ -498,16 +498,26 @@ function resolveSignalNativeReplyOptions(params: {
     return {};
   }
   const payloadReplyToId = normalizeOptionalString(params.payload.replyToId);
-  const contextReplyToId = normalizeOptionalString(params.replyContext?.replyToId);
-  if (!payloadReplyToId || !contextReplyToId || payloadReplyToId !== contextReplyToId) {
+  const isExplicitCurrentReply =
+    params.payload.replyToTag === true || params.payload.replyToCurrent === true;
+  if (
+    !payloadReplyToId &&
+    !isExplicitCurrentReply &&
+    params.replyContext?.allowImplicitCurrentMessage === false
+  ) {
     return {};
   }
+  const contextReplyToId = normalizeOptionalString(params.replyContext?.replyToId);
+  if (!contextReplyToId || (payloadReplyToId && payloadReplyToId !== contextReplyToId)) {
+    return {};
+  }
+  const replyToId = payloadReplyToId ?? contextReplyToId;
   const replyToAuthor = normalizeOptionalString(params.replyContext?.author);
   if (!replyToAuthor) {
-    return { replyToId: payloadReplyToId };
+    return { replyToId };
   }
   return {
-    replyToId: payloadReplyToId,
+    replyToId,
     replyToAuthor,
     replyToBody: params.replyContext?.body ?? "",
   };

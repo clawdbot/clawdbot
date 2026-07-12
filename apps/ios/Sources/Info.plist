@@ -70,6 +70,8 @@
 	<string>OpenClaw uses the microphone for realtime chat, voice wake, push-to-talk, and voice notes.</string>
 	<key>NSMotionUsageDescription</key>
 	<string>OpenClaw may use motion data to support device-aware interactions and automations.</string>
+	<key>NSHealthShareUsageDescription</key>
+	<string>After you enable Health Summaries, OpenClaw reads steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>OpenClaw lets your assistant read photos you allow and lets you choose photos to share.</string>
 	<key>NSRemindersFullAccessUsageDescription</key>

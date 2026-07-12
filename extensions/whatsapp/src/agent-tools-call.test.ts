@@ -5,11 +5,15 @@ import path from "node:path";
 import type { OpenClawPluginApi, OpenClawPluginToolContext } from "openclaw/plugin-sdk/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWhatsAppCallTool, testing } from "./agent-tools-call.js";
-import {
-  getRegisteredWhatsAppConnectionController,
-  registerWhatsAppConnectionController,
-  unregisterWhatsAppConnectionController,
-} from "./connection-controller-registry.js";
+
+const runtimeContextMocks = vi.hoisted(() => ({
+  controllers: new Map<string, unknown>(),
+}));
+
+vi.mock("./connection-controller-runtime-context.js", () => ({
+  getWhatsAppConnectionController: (accountId: string) =>
+    runtimeContextMocks.controllers.get(accountId) ?? null,
+}));
 
 function createApi(params?: {
   speech?: Partial<
@@ -62,6 +66,7 @@ describe("WhatsApp call tool", () => {
   let stateDir: string;
 
   beforeEach(async () => {
+    runtimeContextMocks.controllers.clear();
     stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-whatsapp-call-test-"));
   });
 
@@ -176,7 +181,7 @@ describe("WhatsApp call tool", () => {
         }) as never,
       getSelfIdentity: () => null,
     };
-    registerWhatsAppConnectionController("default", controller);
+    runtimeContextMocks.controllers.set("default", controller);
     try {
       await expect(
         testing.resolveRequesterE164({
@@ -185,9 +190,8 @@ describe("WhatsApp call tool", () => {
           requesterSenderId: "123456789@lid",
         }),
       ).resolves.toBe("+15551234567");
-      expect(getRegisteredWhatsAppConnectionController("default")).toBe(controller);
     } finally {
-      unregisterWhatsAppConnectionController("default", controller);
+      runtimeContextMocks.controllers.delete("default");
     }
   });
 
@@ -198,7 +202,7 @@ describe("WhatsApp call tool", () => {
       getCurrentSock: () => null,
       getSelfIdentity: () => ({ e164: "+15551234567" }),
     };
-    registerWhatsAppConnectionController("default", controller);
+    runtimeContextMocks.controllers.set("default", controller);
     try {
       const tool = testing.createWhatsAppCallToolWithDependencies(createApi(), createContext(), {
         detectMeowCaller: async () => true,
@@ -208,7 +212,7 @@ describe("WhatsApp call tool", () => {
         tool?.execute("call-self", { action: "call", message: "Hello" }),
       ).rejects.toThrow("WhatsApp cannot call the linked account itself");
     } finally {
-      unregisterWhatsAppConnectionController("default", controller);
+      runtimeContextMocks.controllers.delete("default");
     }
   });
 

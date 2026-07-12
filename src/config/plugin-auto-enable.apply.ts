@@ -69,6 +69,16 @@ function stableFingerprintValue(value: unknown): string {
     .join(",")}}`;
 }
 
+/** Fingerprints mutable config inputs used by plugin auto-enable detection. */
+export function fingerprintPluginAutoEnableConfig(config: OpenClawConfig): string {
+  return hashRuntimeConfigValue(config);
+}
+
+/** Fingerprints mutable environment inputs used by plugin auto-enable detection. */
+export function fingerprintPluginAutoEnableEnv(env: NodeJS.ProcessEnv): string {
+  return stableFingerprintValue(env);
+}
+
 function createPluginAutoEnableCacheEntry(params: {
   config: OpenClawConfig;
   discovery: PluginDiscoveryResult;
@@ -77,9 +87,9 @@ function createPluginAutoEnableCacheEntry(params: {
   result: PluginAutoEnableResult;
 }): PluginAutoEnableCacheEntry {
   return {
-    configFingerprint: hashRuntimeConfigValue(params.config),
+    configFingerprint: fingerprintPluginAutoEnableConfig(params.config),
     discoveryFingerprint: stableFingerprintValue(params.discovery.candidates),
-    envFingerprint: stableFingerprintValue(params.env),
+    envFingerprint: fingerprintPluginAutoEnableEnv(params.env),
     registryFingerprint: stableFingerprintValue(params.manifestRegistry.plugins),
     result: params.result,
   };
@@ -93,9 +103,9 @@ function isPluginAutoEnableCacheEntryFresh(params: {
   manifestRegistry: PluginManifestRegistry;
 }): boolean {
   return (
-    params.entry.configFingerprint === hashRuntimeConfigValue(params.config) &&
+    params.entry.configFingerprint === fingerprintPluginAutoEnableConfig(params.config) &&
     params.entry.discoveryFingerprint === stableFingerprintValue(params.discovery.candidates) &&
-    params.entry.envFingerprint === stableFingerprintValue(params.env) &&
+    params.entry.envFingerprint === fingerprintPluginAutoEnableEnv(params.env) &&
     params.entry.registryFingerprint === stableFingerprintValue(params.manifestRegistry.plugins)
   );
 }

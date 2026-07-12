@@ -15,7 +15,7 @@ function resolveMaxExitedRecords(value?: number): number {
   return Math.max(1, Math.floor(value));
 }
 
-export type RunRegistry = {
+type RunRegistry = {
   add: (record: RunRecord) => void;
   get: (runId: string) => RunRecord | undefined;
   updateState: (

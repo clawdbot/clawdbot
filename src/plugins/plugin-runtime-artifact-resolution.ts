@@ -97,7 +97,7 @@ function resolvePackageLocalDistRuntimeArtifact(params: {
   return null;
 }
 
-export function resolvePreferredBuiltRuntimeArtifact(params: {
+function resolvePreferredBuiltRuntimeArtifact(params: {
   source: string;
   rootDir: string;
   origin: PluginOrigin;

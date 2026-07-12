@@ -5,6 +5,7 @@ import { EDITOR_IDS, EDITOR_LABELS, type EditorId } from "../lib/editor-links.ts
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
 import { activateMenuShortcut, menuShortcutHint } from "./menu-shortcuts.ts";
+import { promoteToPopoverTopLayer } from "./menu-surface.ts";
 
 export type SessionMenuData = {
   key: string;
@@ -80,16 +81,7 @@ class SessionMenu extends OpenClawLightDomElement {
     // which paints below the sidebar resizer divider (z-index 20); promoting
     // the menu to the popover top layer keeps app chrome from bleeding
     // through it (same pattern as openclaw-native-link-menu).
-    this.setAttribute("popover", "manual");
-    if (typeof this.showPopover === "function") {
-      try {
-        this.showPopover();
-        return;
-      } catch {
-        // Fall through to in-flow rendering when the top-layer API is unavailable.
-      }
-    }
-    this.removeAttribute("popover");
+    promoteToPopoverTopLayer(this);
   }
 
   override disconnectedCallback() {

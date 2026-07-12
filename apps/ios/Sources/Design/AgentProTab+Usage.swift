@@ -68,7 +68,7 @@ extension AgentProTab {
             VStack(alignment: .leading, spacing: 3) {
                 Text(day.date)
                     .font(OpenClawType.subheadSemiBold)
-                Text("\(Self.compactNumber(day.totalTokens ?? 0)) tokens")
+                Text(verbatim: Self.tokenCountText(day.totalTokens ?? 0))
                     .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
             }
@@ -79,5 +79,11 @@ extension AgentProTab {
         }
         .padding(.vertical, 10)
         .padding(.horizontal, 14)
+    }
+
+    private static func tokenCountText(_ count: Int) -> String {
+        String(
+            format: String(localized: "%@ tokens"),
+            self.compactNumber(count))
     }
 }

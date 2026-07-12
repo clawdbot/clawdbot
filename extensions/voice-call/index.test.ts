@@ -268,6 +268,33 @@ describe("voice-call plugin", () => {
     ];
   });
 
+  it("defaults canonical plugin config to an enabled mock runtime", async () => {
+    const { service } = setup({});
+
+    await service?.start(createServiceContext());
+
+    expect(createVoiceCallRuntime).toHaveBeenCalledTimes(1);
+    expect(firstRuntimeConfig()).toMatchObject({
+      enabled: true,
+      provider: "mock",
+    });
+  });
+
+  it.each([
+    ["provider log", { enabled: true, provider: "log" }],
+    [
+      "twilio.from",
+      {
+        enabled: true,
+        provider: "mock",
+        twilio: { from: "+15550001234" },
+      },
+    ],
+  ])("rejects legacy %s config instead of normalizing it at runtime", (_label, config) => {
+    expect(() => setup(config)).toThrow();
+    expect(createVoiceCallRuntime).not.toHaveBeenCalled();
+  });
+
   it("reuses a started runtime across plugin registration contexts", async () => {
     const first = setup({ provider: "mock" });
     const second = setup({ provider: "mock" });
@@ -735,40 +762,6 @@ describe("voice-call plugin", () => {
     expect(error?.message).toContain("last state=completed");
     expect(error?.message).toContain("endReason=completed");
     expect(error?.message).not.toContain("endedAt=");
-  });
-
-  it("normalizes legacy config through runtime creation and warns to run doctor", async () => {
-    const { methods } = setup({
-      enabled: true,
-      provider: "log",
-      twilio: {
-        from: "+15550001234",
-      },
-      streaming: {
-        enabled: true,
-        sttProvider: "openai",
-        openaiApiKey: "sk-test", // pragma: allowlist secret
-      },
-    });
-    const handler = methods.get("voicecall.status") as
-      | ((ctx: {
-          params: Record<string, unknown>;
-          respond: ReturnType<typeof vi.fn>;
-        }) => Promise<void>)
-      | undefined;
-    const respond = vi.fn();
-
-    await handler?.({ params: { callId: "call-1" }, respond });
-
-    expect(vi.mocked(createVoiceCallRuntime)).toHaveBeenCalledTimes(1);
-    const runtimeConfig = firstRuntimeConfig();
-    expect(runtimeConfig?.enabled).toBe(true);
-    expect(runtimeConfig?.provider).toBe("mock");
-    expect(runtimeConfig?.fromNumber).toBe("+15550001234");
-    expect(runtimeConfig?.streaming?.enabled).toBe(true);
-    expect(runtimeConfig?.streaming?.provider).toBe("openai");
-    expect(runtimeConfig?.streaming?.providers?.openai?.apiKey).toBe("sk-test");
-    expectWarningIncludes('Run "openclaw doctor --fix"');
   });
 
   it("freezes the invoking agent on tool-created calls", async () => {

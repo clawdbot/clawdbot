@@ -133,6 +133,7 @@ Skills own workflows; root owns hard policy and routing.
 - Use `$openclaw-testing` for test/CI choice and `$crabbox` for remote/full/E2E proof.
 - At task start, if code changes, tests, builds, typechecks, lint fan-out, Docker, packaging, E2E, or live proof are likely, classify source trust and immediately pre-warm the safe Crabbox backend in a background command session. Trusted maintainer code defaults to Blacksmith Testbox; untrusted contributor/fork code uses secretless fork CI or sanitized direct AWS Crabbox under the rule above. Continue inspection/editing while it hydrates; sync the current checkout for every run, reuse the lease, then stop it before handoff.
 - Warm Testbox from the task checkout; ownership is checkout-path scoped; `--reclaim` only for intentional transfer.
+- One Testbox lease, one active command; never sync/reclaim during a run.
 - Testbox `--reclaim` does not retarget the remote checkout; never cross repos.
 - Base/head changed: stop and rewarm Testbox; never override stale lease checks.
 - Compound Testbox commands: `bash -lc`, never `sh -lc`; job env uses Bash `declare`.
@@ -146,6 +147,8 @@ Skills own workflows; root owns hard policy and routing.
 - Crabbox wrapper `stop` has no `--timing-json`; use `node scripts/crabbox-wrapper.mjs stop --provider <provider> --id <id>`.
 - Repo-native PR worktree may omit `node_modules`; prove remotely, then use `git commit --no-verify`, not `scripts/committer`.
 - Parallel agents share the checkout; never switch its branch while sibling work runs.
+- Testbox status: `blacksmith testbox status --id <tbx_id>`; no `--json` flag.
+- QA CLI `--output-dir` must be repo-relative.
 - Full suites, changed gates, builds, typechecks, lint fan-out, Docker/package/E2E/live/cross-OS proof, or anything computationally intensive: Crabbox/Testbox.
 - If an allowed local fallback fans out or becomes expensive, stop it and move the work to the pre-warmed remote box.
 - Before handoff/push: prove touched surface. Before landing to `main`: issue proof plus appropriate full/broad proof unless scope is clearly narrow.
@@ -164,6 +167,7 @@ Skills own workflows; root owns hard policy and routing.
 - Use `$openclaw-pr-maintainer` immediately for maintainer-side OpenClaw issue/PR review, triage, duplicates, labels, comments, close, land, or evidence. Contributor PR creation/refresh follows the requested contributor workflow; linked refs alone do not require maintainer archive tooling.
 - Issue/PR start: `git status -sb`; if clean, `git pull --ff-only`; if dirty, yell before pull/rebase.
 - PR refs: `gh pr view/diff` or `gh api`, not web search. Prefer `gitcrawl` for maintainer discovery; missing/stale `gitcrawl` falls through to live `gh`, not contributor setup. Verify live with `gh` before mutation.
+- `gh pr view` takes the branch positionally; no `--head` flag.
 - zsh: quote `gh api` endpoints containing `?` or brackets; otherwise glob expansion corrupts the invocation.
 - GitHub Actions: resolve workflow files from `.github/workflows` or API; never infer filenames from display names.
 - zsh: quote command globs; unmatched patterns abort before the tool runs.
@@ -171,8 +175,14 @@ Skills own workflows; root owns hard policy and routing.
 - `scripts/pr` artifacts: preserve template enum values; validate before prepare.
 - `scripts/pr` subcommands require a PR number; no subcommand `--help` placeholder.
 - `scripts/pr` review: checkout main baseline, then PR, before artifact validation.
+- PR head changed: rerun `scripts/pr review-init`; checkout alone leaves stale guard SHA.
 - `rg`: options before `--`; use `--` before patterns starting with `-`.
 - `gh --jq` is not standalone `jq`; pipe JSON to `jq` for variables or `--arg`.
+- `gh api --paginate '<endpoint>' | jq -s ...`; gh `--slurp` may emit nothing and forbids `--jq`/`--template`.
+- Main-bound workflow dispatch: resolve server `main` SHA immediately before dispatch; retry if identity fails after `main` advances.
+- `gh run view --json` uses `attempt`, not `attemptNumber`.
+- Crabbox stop: no `--timing-json`; use `node scripts/crabbox-wrapper.mjs stop --provider <provider> --id <id>`.
+- macOS `find` has no `-printf`; use `-print0` plus `stat`.
 - Actions checkout refs: use full 40-char SHAs; short SHAs resolve as branches/tags.
 - zsh Git object paths: use `${sha}:path`; `$sha:path` invokes parameter modifiers.
 - Bare issue/PR URL/number: inspect live and take the efficient maintainer path; switch branches/refs when useful.
@@ -203,7 +213,9 @@ Skills own workflows; root owns hard policy and routing.
 - PR artifacts/screenshots: attach to PR/comment/external artifact store. Never push screenshots, videos, proof images, or proof assets to OpenClaw or any product repo branch, including temp artifact branches. Use Crabbox artifact publishing plus the manifest URL. Do not commit `.github/pr-assets`.
 - CI polling: exact SHA, relevant checks only, minimal fields. Skip routine noise (`Auto response`, `Labeler`, docs agents, performance/stale). Logs only after failure/completion or concrete need.
 - Trusted-workflow release-branch CI: pass `target_ref` + `release_candidate_ref`; never `release_gate` (requires workflow head == target).
-- Agent PR landing to `main`: use only the repo-native `scripts/pr` wrapper: run `scripts/pr review-init <PR>`, follow its emitted checkout/guard guidance, initialize and complete review artifacts with `scripts/pr review-artifacts-init <PR>`, validate them with `scripts/pr review-validate-artifacts <PR>`, then run `OPENCLAW_TESTBOX=1 scripts/pr prepare-run <PR>` and `scripts/pr merge-run <PR>`. The Testbox flag is mandatory for agents so prepare verifies hosted CI/Testbox on the current head or reuses a patch-identical pre-rebase run green within 24 hours instead of running full gates locally. For owner-approved reviewed fork code without hosted Testbox, use `OPENCLAW_PR_GATES_REMOTE=testbox` instead. Do not rebase only because `main` advanced; merge drift is advisory unless strict drift is explicitly enabled, while GitHub still blocks conflicts. Do not idle on `auto-response` or `check-docs`.
+- Agent PR landing to `main`: use only the repo-native `scripts/pr` wrapper: run `scripts/pr review-init <PR>`, follow its emitted checkout/guard guidance, initialize and complete review artifacts with `scripts/pr review-artifacts-init <PR>`, validate them with `scripts/pr review-validate-artifacts <PR>`, then run `OPENCLAW_TESTBOX=1 scripts/pr prepare-run <PR>` and `scripts/pr merge-run <PR>`. The Testbox flag is mandatory for agents so prepare verifies hosted CI/Testbox on the current head or reuses a patch-identical pre-rebase run green within 24 hours instead of running full gates locally. `prepare-run` fails fast; invoke only after exact-head CI is complete and green. For owner-approved reviewed fork code without hosted Testbox, use `OPENCLAW_PR_GATES_REMOTE=testbox` instead. Do not rebase only because `main` advanced; merge drift is advisory unless strict drift is explicitly enabled, while GitHub still blocks conflicts. Do not idle on `auto-response` or `check-docs`.
+- Non-main PRs: do not run `scripts/pr prepare-run` or `merge-run`; they diff against `main`. Use review artifacts, exact base-head CI, revalidate `headRefOid`, then `gh pr merge --match-head-commit <verified-sha>`.
+- Merge guard shells: start `set -euo pipefail`; a failed `[[ ... ]]` alone does not stop a later merge command.
 - After `scripts/pr merge-run` removes its worktree, `cd` to a persistent repo before follow-up commands.
 - `scripts/pr` review JSON: land-ready recommendation `READY FOR /prepare-pr`, `issueValidation.status=valid`; never `APPROVE`.
 
@@ -254,7 +266,7 @@ Skills own workflows; root owns hard policy and routing.
 - Prefer injection and narrow `*.runtime.ts` mocks over broad barrels or `openclaw/plugin-sdk/*`.
 - Do not edit baseline/inventory/ignore/snapshot/expected-failure files to silence checks without explicit approval.
 - Do not run independent `pnpm test`/Vitest commands concurrently in one worktree; Vitest cache races with `ENOTEMPTY`. Group one command or use distinct `OPENCLAW_VITEST_FS_MODULE_CACHE_PATH`.
-- Test workers max 16. Memory pressure: `OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test`.
+- Vitest rejects Jest `--runInBand`; use `OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test` for serial proof. Test workers max 16.
 - Live: `OPENCLAW_LIVE_TEST=1 pnpm test:live`; verbose `OPENCLAW_LIVE_TEST_QUIET=0`.
 - Guide: `docs/reference/test.md`.
 

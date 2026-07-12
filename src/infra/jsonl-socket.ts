@@ -117,4 +117,3 @@ export const testApi = {
   requestJsonlSocketWithMaxLineBytes,
   resolveJsonlSocketTimeoutMs,
 };
-export { testApi as __test__ };

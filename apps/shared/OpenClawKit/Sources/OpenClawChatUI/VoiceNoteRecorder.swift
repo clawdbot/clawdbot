@@ -173,7 +173,9 @@ public final class OpenClawVoiceNoteRecorder {
             try? FileManager.default.removeItem(at: fileURL)
             self.capture.cancel()
             self.onRecordingActiveChanged?(false)
-            self.fail(message: String(localized: "Could not start recording: \(error.localizedDescription)"))
+            self.fail(message: String(
+                format: String(localized: "Could not start recording: %@"),
+                error.localizedDescription))
             return false
         }
 

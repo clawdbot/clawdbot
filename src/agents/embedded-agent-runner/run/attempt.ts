@@ -1953,6 +1953,13 @@ export async function runEmbeddedAttempt(
         disableTools: params.disableTools || isRawModelRun,
         toolsAllow: params.toolsAllow,
       });
+    const bundleMetadataSnapshot = getCurrentAttemptPluginMetadataSnapshot();
+    // Scoped registries are partial views. Bundle discovery can skip its own scan only when
+    // the attempt snapshot covers every plugin; otherwise MCP/LSP bundles can disappear.
+    const bundleManifestRegistry =
+      bundleMetadataSnapshot?.pluginIds === undefined
+        ? bundleMetadataSnapshot?.manifestRegistry
+        : undefined;
     const bundleMcpSessionRuntime = bundleMcpEnabled
       ? await getOrCreateSessionMcpRuntime({
           sessionId: params.sessionId,
@@ -1960,6 +1967,7 @@ export async function runEmbeddedAttempt(
           workspaceDir: effectiveWorkspace,
           agentDir,
           cfg: params.config,
+          manifestRegistry: bundleManifestRegistry,
         })
       : undefined;
     bundleMcpRuntime = bundleMcpSessionRuntime
@@ -1982,6 +1990,7 @@ export async function runEmbeddedAttempt(
       ? await createBundleLspToolRuntime({
           workspaceDir: effectiveWorkspace,
           cfg: params.config,
+          manifestRegistry: bundleManifestRegistry,
           reservedToolNames: [
             ...tools.map((tool) => tool.name),
             ...(clientTools?.map((tool) => tool.function.name) ?? []),
@@ -2642,7 +2651,9 @@ export async function runEmbeddedAttempt(
         params.model.api === "openai-chatgpt-responses";
 
       await prewarmSessionFile(params.sessionFile);
-      const preparedUserTurnMessage = await params.userTurnTranscriptRecorder?.resolveMessage();
+      const preparedUserTurnMessage = params.skipPreparedUserTurnMessage
+        ? undefined
+        : await params.userTurnTranscriptRecorder?.resolveMessage();
       sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
         agentId: sessionAgentId,
         sessionKey: params.sessionKey,
@@ -3031,6 +3042,10 @@ export async function runEmbeddedAttempt(
           sessionManager.resetLeaf();
         }
         replayTrailingEntriesForOrphanRepair(sessionManager, orphanRepair.trailingEntries);
+        // Suppression assumes the canonical user turn still exists. Orphan repair
+        // removed it, so the replacement prompt must become the one durable copy.
+        sessionManager.clearNextUserMessagePersistenceSuppression?.();
+        params.onUserMessagePersistenceInvalidated?.();
         activeSession.agent.state.messages = sessionManager.buildSessionContext().messages;
       }
       // Single source for the per-message timestamp prefix (issue #3658):

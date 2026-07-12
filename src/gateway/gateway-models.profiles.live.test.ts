@@ -35,7 +35,6 @@ import {
   DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT,
   DEFAULT_SMALL_LIVE_MODEL_LIMIT,
   getHighSignalLiveModelPriorityIndex,
-  getHighSignalLiveModelProviders,
   isHighSignalLiveModelRef,
   isSmallLiveModelRef,
   listPrioritizedHighSignalLiveModelRefs,
@@ -181,6 +180,12 @@ function providerFilterList(): string[] | undefined {
     : undefined;
 }
 
+function listHighSignalLiveModelProviders(): string[] {
+  return [...new Set(listPrioritizedHighSignalLiveModelRefs().map((ref) => ref.provider))].toSorted(
+    (left, right) => left.localeCompare(right),
+  );
+}
+
 function providerListFromExplicitModelFilter(params: {
   modelFilter: Set<string> | null;
   providerFilter: Set<string> | null;
@@ -218,7 +223,7 @@ function providerScopedModelRegistryProviders(params: {
             listPrioritizedSmallLiveModelRefs().map((ref) => normalizeProviderId(ref.provider)),
           ),
         ].toSorted((left, right) => left.localeCompare(right))
-      : getHighSignalLiveModelProviders();
+      : listHighSignalLiveModelProviders();
     return providers.filter((provider) =>
       params.providerFilter ? params.providerFilter.has(provider) : true,
     );
@@ -1541,7 +1546,7 @@ describe("providerScopedModelRegistryProviders", () => {
         modelFilter: null,
         providerFilter: null,
       }),
-    ).toEqual(getHighSignalLiveModelProviders());
+    ).toEqual(listHighSignalLiveModelProviders());
   });
 
   it("intersects default modern sweeps with provider filters", () => {

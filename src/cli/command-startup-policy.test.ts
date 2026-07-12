@@ -240,6 +240,14 @@ describe("command-startup-policy", () => {
     expect(resolvePolicy({ commandPath: ["mcp", "serve"] }).suppressDoctorStdout).toBe(true);
   });
 
+  it("reserves stdout for the node worker protocol", () => {
+    const policy = resolvePolicy({ commandPath: ["node", "worker"] });
+
+    expect(policy.hideBanner).toBe(true);
+    expect(policy.loadPlugins).toBe(false);
+    expect(policy.suppressDoctorStdout).toBe(true);
+  });
+
   it("suppresses startup stdout for the bare acp protocol", () => {
     expect(resolvePolicy({ commandPath: ["acp"] }).suppressDoctorStdout).toBe(true);
   });

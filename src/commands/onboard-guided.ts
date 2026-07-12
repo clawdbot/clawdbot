@@ -229,7 +229,7 @@ async function runGuidedOnboardingFlow(
   const onboardHelpers = await import("./onboard-helpers.js");
   const prompter = await (deps.createPrompter?.() ??
     import("../wizard/clack-prompter.js").then(({ createClackPrompter }) => createClackPrompter()));
-  onboardHelpers.printWizardHeader(runtime);
+  await onboardHelpers.printWizardHeader(runtime);
   await prompter.intro(t("wizard.guided.intro"));
   await prompter.note(t("wizard.guided.escapeHatches"), t("wizard.guided.welcomeTitle"));
 

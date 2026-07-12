@@ -825,7 +825,9 @@ struct ChatLinkPreview: View {
             self.model.expanded = true
         } label: {
             HStack(spacing: 6) {
-                Text("Preview · \(self.domain)")
+                Text(verbatim: String(
+                    format: String(localized: "Preview · %@"),
+                    self.domain))
                     .font(OpenClawChatTypography.captionSemiBold)
                     .foregroundStyle(OpenClawChatTheme.assistantText.opacity(0.65))
                     .lineLimit(1)
@@ -843,7 +845,10 @@ struct ChatLinkPreview: View {
                     .strokeBorder(OpenClawChatTheme.divider, lineWidth: 1))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Expand link preview for \(self.domain)")
+        .accessibilityLabel(
+            String(
+                format: String(localized: "Expand link preview for %@"),
+                self.domain))
     }
 
     private var expandedCard: some View {
@@ -898,7 +903,10 @@ struct ChatLinkPreview: View {
                     .strokeBorder(OpenClawChatTheme.divider, lineWidth: 1))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Open \(self.domain)")
+        .accessibilityLabel(
+            String(
+                format: String(localized: "Open %@"),
+                self.domain))
     }
 
     private var domain: String {

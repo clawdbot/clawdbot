@@ -16,7 +16,7 @@ struct AgentWorkspaceFilesScreen: View {
                 if let headerLeadingAction {
                     OpenClawAdaptiveHeaderRow(
                         title: "Files",
-                        subtitle: self.agentId,
+                        subtitle: .verbatim(self.agentId),
                         titleFont: OpenClawType.title3SemiBold,
                         subtitleFont: OpenClawType.subheadMedium)
                     {
@@ -137,7 +137,10 @@ struct AgentWorkspaceDirectoryList: View {
                 if self.loadingMore {
                     ProgressView()
                 } else {
-                    Text("\(self.entries.count) of \(self.totalEntries)")
+                    Text(verbatim: String(
+                        format: String(localized: "%1$@ of %2$@"),
+                        self.entries.count.formatted(),
+                        self.totalEntries.formatted()))
                         .font(OpenClawType.caption)
                         .foregroundStyle(.secondary)
                 }

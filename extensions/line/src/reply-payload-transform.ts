@@ -107,15 +107,19 @@ export function parseLineDirectives(payload: ReplyPayload): ReplyPayload {
       const yesAction = parseConfirmAction(yesPart);
       const noAction = parseConfirmAction(noPart);
 
-      lineData.templateMessage = {
-        type: "confirm",
-        text: question,
-        confirmLabel: yesAction.label,
-        confirmData: yesAction.data,
-        cancelLabel: noAction.label,
-        cancelData: noAction.data,
-        altText: question,
-      };
+      // LINE rejects a confirm template with an empty question or action label (HTTP 400),
+      // dropping the whole message; skip the template when a required field is blank.
+      if (question && yesAction.label && noAction.label) {
+        lineData.templateMessage = {
+          type: "confirm",
+          text: question,
+          confirmLabel: yesAction.label,
+          confirmData: yesAction.data,
+          cancelLabel: noAction.label,
+          cancelData: noAction.data,
+          altText: question,
+        };
+      }
     }
     text = text.replace(confirmMatch[0], "").trim();
   }
@@ -129,47 +133,52 @@ export function parseLineDirectives(payload: ReplyPayload): ReplyPayload {
       const bodyText = expectDefined(parts[1], "buttons text field");
       const actionsStr = expectDefined(parts[2], "buttons actions field");
 
-      const actions = actionsStr.split(",").map((actionStr) => {
-        const trimmed = actionStr.trim();
-        const colonIndex = (() => {
-          const index = trimmed.indexOf(":");
-          if (index === -1) {
-            return -1;
+      const actions = actionsStr
+        .split(",")
+        .map((actionStr) => {
+          const trimmed = actionStr.trim();
+          const colonIndex = (() => {
+            const index = trimmed.indexOf(":");
+            if (index === -1) {
+              return -1;
+            }
+            const lower = normalizeLowercaseStringOrEmpty(trimmed);
+            if (lower.startsWith("http://") || lower.startsWith("https://")) {
+              return -1;
+            }
+            return index;
+          })();
+
+          let label: string;
+          let data: string;
+
+          if (colonIndex === -1) {
+            label = trimmed;
+            data = trimmed;
+          } else {
+            label = trimmed.slice(0, colonIndex).trim();
+            data = trimmed.slice(colonIndex + 1).trim();
           }
-          const lower = normalizeLowercaseStringOrEmpty(trimmed);
-          if (lower.startsWith("http://") || lower.startsWith("https://")) {
-            return -1;
+
+          if (data.startsWith("http://") || data.startsWith("https://")) {
+            return { type: "uri" as const, label, uri: data };
           }
-          return index;
-        })();
+          if (data.includes("=")) {
+            return { type: "postback" as const, label, data };
+          }
+          return { type: "message" as const, label, data: data || label };
+        })
+        .filter((action) => action.label);
 
-        let label: string;
-        let data: string;
-
-        if (colonIndex === -1) {
-          label = trimmed;
-          data = trimmed;
-        } else {
-          label = trimmed.slice(0, colonIndex).trim();
-          data = trimmed.slice(colonIndex + 1).trim();
-        }
-
-        if (data.startsWith("http://") || data.startsWith("https://")) {
-          return { type: "uri" as const, label, uri: data };
-        }
-        if (data.includes("=")) {
-          return { type: "postback" as const, label, data };
-        }
-        return { type: "message" as const, label, data: data || label };
-      });
-
-      if (actions.length > 0) {
+      // LINE accepts an omitted title but rejects an explicit empty title and requires text.
+      // Omit the optional field so a valid text-only button template still reaches the user.
+      if (actions.length > 0 && bodyText) {
         lineData.templateMessage = {
           type: "buttons",
-          title,
+          ...(title ? { title } : {}),
           text: bodyText,
           actions: actions.slice(0, 4),
-          altText: `${title}: ${bodyText}`,
+          altText: title ? `${title}: ${bodyText}` : bodyText,
         };
       }
     }

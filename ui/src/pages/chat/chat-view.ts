@@ -3,7 +3,10 @@ import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { styleMap } from "lit/directives/style-map.js";
 import type { TaskSuggestion } from "../../../../packages/gateway-protocol/src/index.js";
-import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
+import type {
+  ControlUiSessionBranch,
+  ControlUiSessionPullRequest,
+} from "../../../../src/gateway/control-ui-contract.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { ChatSendShortcut } from "../../app/settings.ts";
 import { icons } from "../../components/icons.ts";
@@ -198,6 +201,7 @@ export type ChatProps = {
   onAcceptTaskSuggestion?: (suggestion: TaskSuggestion) => void;
   onDismissTaskSuggestion?: (suggestion: TaskSuggestion) => void;
   pullRequests?: ControlUiSessionPullRequest[];
+  pullRequestsBranch?: ControlUiSessionBranch;
   pullRequestsRateLimited?: boolean;
   pullRequestsExpanded?: boolean;
   onExpandPullRequests?: () => void;
@@ -550,6 +554,7 @@ export function renderChat(props: ChatProps) {
               })}
               ${renderChatPullRequests({
                 pullRequests: props.pullRequests ?? [],
+                branch: props.pullRequestsBranch,
                 rateLimited: props.pullRequestsRateLimited === true,
                 expanded: props.pullRequestsExpanded === true,
                 onExpand: () => props.onExpandPullRequests?.(),

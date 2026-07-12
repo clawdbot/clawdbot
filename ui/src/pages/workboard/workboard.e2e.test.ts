@@ -426,6 +426,26 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
         status: "todo",
         title: createdCard.title,
       });
+      expect(await createDialog.getByLabel("Title").isDisabled()).toBe(true);
+      expect(await createDialog.getByLabel("Notes").isDisabled()).toBe(true);
+      expect(await createDialog.getByLabel("Labels").isDisabled()).toBe(true);
+      expect(
+        await createDialog.locator(".workboard-select__trigger[aria-disabled='true']").count(),
+      ).toBe(4);
+      const pendingCancelButtons = createDialog.getByRole("button", {
+        name: "Cancel",
+        exact: true,
+      });
+      expect(await pendingCancelButtons.count()).toBe(2);
+      expect(await pendingCancelButtons.first().isDisabled()).toBe(true);
+      expect(await pendingCancelButtons.last().isDisabled()).toBe(true);
+      expect(await createDialog.locator(".workboard-template-strip button:disabled").count()).toBe(
+        5,
+      );
+      await writable.page.keyboard.press("Escape");
+      await expect.poll(() => createDialog.isVisible()).toBe(true);
+      await writable.page.locator(".workboard-modal").click({ position: { x: 4, y: 4 } });
+      await expect.poll(() => createDialog.isVisible()).toBe(true);
       await writableGateway.resolveDeferred("workboard.cards.create", { card: createdCard });
       await cardInColumn(writable.page, "Todo", createdCard.title).waitFor({ state: "visible" });
       await captureScreenshot(writable.page, artifacts, "03-created-card");

@@ -184,4 +184,3 @@ export const testing = {
   resolveTrustedOpenClawCommand,
   shouldFailPackageTelegramRun,
 };
-export { testing as __testing };

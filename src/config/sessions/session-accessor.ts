@@ -67,7 +67,6 @@ import {
   rollbackSqliteAgentHarnessSessionEntryLifecycle,
   rollbackSqlitePluginOwnedSessionEntryLifecycle,
   resetSqliteSessionEntryLifecycle,
-  updateSqliteSessionEntry,
   upsertSqliteSessionEntry,
   withSqliteTranscriptWriteLock,
   withSqliteTranscriptWriteTransaction,
@@ -1513,7 +1512,7 @@ export async function updateSessionEntry(
   ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null,
   options: SessionEntryUpdateOptions = {},
 ): Promise<SessionEntry | null> {
-  return await updateSqliteSessionEntry(scope, update, options);
+  return await patchSqliteSessionEntry(scope, update, options);
 }
 
 export type RecordInboundSessionMetaParams = {

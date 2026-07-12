@@ -1095,7 +1095,7 @@ extension GatewayConnectionController {
         // An explicit target owns suppression until its queued handoff exits. Otherwise a
         // foreground reconnect can replace it while reset or permission work is suspended.
         self.pendingAutoConnectSuppressionGeneration = suppressionGeneration
-        appModel.gatewayStatusText = "Connecting…"
+        appModel.setGatewayConnectionProgress(reconnecting: false)
         let task = Task { [weak self, weak appModel] in
             guard let self, let appModel else { return }
             defer {
@@ -1281,22 +1281,43 @@ extension GatewayConnectionController {
         switch failure {
         case .endpointUnreachable:
             if host.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".")).hasSuffix(".ts.net") {
-                String(localized: """
-                Can't reach gateway at \(host):\(port). \
-                Verify Tailscale Serve is enabled and publishes this Gateway.
-                """)
+                String(
+                    format: String(localized: """
+                    Can't reach gateway at %1$@:%2$@. \
+                    Verify Tailscale Serve is enabled and publishes this Gateway.
+                    """),
+                    host,
+                    String(port))
             } else {
-                String(localized: "Can't reach gateway at \(host):\(port). Check Tailscale or LAN.")
+                String(
+                    format: String(
+                        localized: "Can't reach gateway at %1$@:%2$@. Check Tailscale or LAN."),
+                    host,
+                    String(port))
             }
         case .tlsHandshakeTimeout:
-            "TLS fingerprint verification timed out for \(host):\(port). "
-                + "Secure endpoint was reached, but TLS did not finish in time."
+            String(
+                format: String(localized: """
+                TLS fingerprint verification timed out for %1$@:%2$@. \
+                Secure endpoint was reached, but TLS did not finish in time.
+                """),
+                host,
+                String(port))
         case .tlsUnavailable:
-            "No secure gateway endpoint was detected at \(host):\(port). "
-                + "Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address "
-                + "with Unencrypted selected."
+            String(
+                format: String(localized: """
+                No secure gateway endpoint was detected at %1$@:%2$@. \
+                Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address \
+                with Unencrypted selected.
+                """),
+                host,
+                String(port))
         case .certificateUnavailable:
-            "Could not read the TLS certificate from \(host):\(port)."
+            String(
+                format: String(
+                    localized: "Could not read the TLS certificate from %1$@:%2$@."),
+                host,
+                String(port))
         }
     }
 

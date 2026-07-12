@@ -157,4 +157,47 @@ describeControlUiE2e("session pull request chips", () => {
       .poll(() => chips.first().locator(".chat-pr__number").textContent())
       .toBe("#103469");
   });
+
+  it("offers a Create PR row with the stale warning while rate limited pre-PR", async () => {
+    const context = await newBrowserContext();
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "controlUi.sessionPullRequests"],
+      methodResponses: {
+        "controlUi.sessionPullRequests": {
+          pullRequests: [],
+          branch: {
+            owner: "openclaw",
+            repo: "openclaw",
+            branch: "claude/cloud-workers-live-events",
+            additions: 2819,
+            deletions: 205,
+            createUrl:
+              "https://github.com/openclaw/openclaw/pull/new/claude/cloud-workers-live-events",
+          },
+          rateLimited: true,
+        },
+      },
+    });
+    await page.goto(`${server.baseUrl}chat`);
+
+    const row = page.locator('.chat-pr[data-state="branch"]');
+    await expect.poll(() => row.count()).toBe(1);
+    await expect.poll(() => row.locator(".chat-pr__repo").textContent()).toBe("openclaw");
+    await expect
+      .poll(() => row.locator(".chat-pr__branch").textContent())
+      .toBe("claude/cloud-workers-live-events");
+    // Locale-formatted diff stats, sized like the PR the branch would open.
+    await expect.poll(() => row.locator(".chat-pr__additions").textContent()).toBe("+2,819");
+    await expect.poll(() => row.locator(".chat-pr__deletions").textContent()).toBe("−205");
+    // While rate limited "no PR found" is unreliable, so the warning shows.
+    await expect.poll(() => row.locator(".chat-pr__warning").count()).toBe(1);
+    const create = row.locator(".chat-pr__create");
+    await expect.poll(() => create.textContent()).toContain("Create PR");
+    await expect
+      .poll(() => create.getAttribute("href"))
+      .toBe("https://github.com/openclaw/openclaw/pull/new/claude/cloud-workers-live-events");
+    // No dismiss control: the row reflects the checkout itself.
+    await expect.poll(() => row.locator(".chat-pr__dismiss").count()).toBe(0);
+  });
 });

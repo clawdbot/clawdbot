@@ -109,8 +109,10 @@ export type QuickSettingsProps = {
 
   // Pending config changes
   configDirty?: boolean;
+  configLoading?: boolean;
   configSaving?: boolean;
   configApplying?: boolean;
+  configUpdating?: boolean;
   configReady?: boolean;
   onResetConfig?: () => void;
   onSaveConfig?: () => void;
@@ -370,8 +372,18 @@ function renderGeneralCard(props: QuickSettingsProps) {
   `;
 }
 
+function isConfigBusy(props: QuickSettingsProps): boolean {
+  return (
+    props.configLoading === true ||
+    props.configSaving === true ||
+    props.configApplying === true ||
+    props.configUpdating === true
+  );
+}
+
 function renderModelCard(props: QuickSettingsProps) {
   const fastMode = formatFastModeValue(props.fastMode);
+  const configBusy = isConfigBusy(props);
   return html`
     <div class="qs-card qs-card--model">
       ${renderCardHeader(icons.brain, t("quickSettings.model.title"))}
@@ -392,6 +404,7 @@ function renderModelCard(props: QuickSettingsProps) {
                   class="qs-segmented__btn ${level === props.thinkingLevel
                     ? "qs-segmented__btn--active"
                     : ""}"
+                  ?disabled=${configBusy}
                   @click=${() => props.onThinkingChange?.(level)}
                 >
                   ${t(`quickSettings.model.thinkingLevels.${level}`)}
@@ -413,6 +426,7 @@ function renderModelCard(props: QuickSettingsProps) {
               ([value, labelKey]) => html`
                 <button
                   class="qs-segmented__btn ${fastMode === value ? "qs-segmented__btn--active" : ""}"
+                  ?disabled=${configBusy}
                   @click=${() =>
                     fastMode === value
                       ? undefined
@@ -526,6 +540,7 @@ function renderSecurityCard(props: QuickSettingsProps) {
   const toolProfiles = TOOL_PROFILES.includes(normalizedToolProfile)
     ? TOOL_PROFILES
     : [...TOOL_PROFILES, normalizedToolProfile];
+  const configBusy = isConfigBusy(props);
 
   return html`
     <div class="qs-card qs-card--security">
@@ -555,6 +570,7 @@ function renderSecurityCard(props: QuickSettingsProps) {
             <input
               type="checkbox"
               .checked=${browserEnabled}
+              ?disabled=${configBusy}
               @change=${(event: Event) =>
                 props.onBrowserEnabledToggle?.((event.currentTarget as HTMLInputElement).checked)}
             />
@@ -574,6 +590,7 @@ function renderSecurityCard(props: QuickSettingsProps) {
                   normalizedToolProfile
                     ? "qs-segmented__btn--active"
                     : ""}"
+                  ?disabled=${configBusy}
                   @click=${() => props.onToolProfileChange?.(profile)}
                 >
                   ${profile}
@@ -1103,11 +1120,8 @@ function renderPendingChangesBar(props: QuickSettingsProps) {
   if (props.configDirty !== true) {
     return nothing;
   }
-  const canCommit =
-    props.connected &&
-    props.configReady === true &&
-    props.configSaving !== true &&
-    props.configApplying !== true;
+  const configBusy = isConfigBusy(props);
+  const canCommit = props.connected && props.configReady === true && !configBusy;
 
   return html`
     <div class="qs-card qs-card--span-all qs-pending" aria-live="polite">
@@ -1116,11 +1130,7 @@ function renderPendingChangesBar(props: QuickSettingsProps) {
         <span class="qs-pending__hint muted">${t("quickSettings.pending.hint")}</span>
       </div>
       <div class="qs-pending__actions">
-        <button
-          class="btn btn--sm"
-          ?disabled=${props.configSaving === true || props.configApplying === true}
-          @click=${props.onResetConfig}
-        >
+        <button class="btn btn--sm" ?disabled=${configBusy} @click=${props.onResetConfig}>
           ${t("quickSettings.pending.discard")}
         </button>
         <button class="btn btn--sm primary" ?disabled=${!canCommit} @click=${props.onSaveConfig}>

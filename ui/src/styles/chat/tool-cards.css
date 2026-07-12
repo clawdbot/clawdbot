@@ -1002,12 +1002,42 @@
   padding: 0 12px 10px 12px;
 }
 
-/* Reading indicator = working claw: the brand pincer where the reply will
-   materialize while the agent works with nothing visibly streaming. Bubble
-   chrome and sizing come from .chat-bubble.chat-reading-indicator
-   (components.css). Filled silhouette; 18px because the claw is denser than
-   a star glyph. */
+/* Completed-turn work rollup: slim "Worked for X" disclosure standing in for
+   the turn's intermediate tool/commentary groups. Sits snug above the final
+   reply, aligned with the message column via a gutter matching the avatar. */
+.chat-group--work {
+  padding-bottom: 8px;
+}
+
+.chat-work-group__gutter {
+  flex: 0 0 36px;
+}
+
+.chat-thread--direct .chat-work-group__gutter {
+  display: none;
+}
+
+.chat-work-group .chat-activity-group__label {
+  color: var(--muted);
+}
+
+.chat-work-group .chat-activity-group__summary--error .chat-activity-group__label {
+  color: inherit;
+}
+
+/* Reading indicator = working claw: the brand pincer shadowboxes where the
+   reply will materialize while the agent works with nothing visibly
+   streaming. Bubble chrome and sizing come from
+   .chat-bubble.chat-reading-indicator (components.css). Filled silhouette;
+   18px because the claw is denser than a star glyph. No opacity fade: the
+   claw stays solid and the motion carries the "working" signal. One cycle =
+   jab, jab, cross; the jaw snaps shut on every impact and a pow star pops on
+   the cross. --claw-cycle drives all three animations so stance variants
+   only retune the tempo. */
 .chat-reading-indicator {
+  --claw-cycle: 2.4s;
+
+  position: relative;
   display: inline-flex;
   align-items: center;
   color: var(--accent);
@@ -1018,50 +1048,156 @@
   height: 18px;
   fill: currentColor;
   stroke: none;
-  animation: chatWorkingClawBreath 2.8s ease-in-out infinite;
-  will-change: opacity;
-}
-
-/* The upper jaw hinges at the palm joint. Rest is slightly open — the open
-   notch is what reads "claw" at 18px — and the pinch is a brief blip late in
-   the cycle, mirroring the favicon mascot's snap timing (mostly still). */
-.chat-reading-indicator svg .claw-icon__jaw {
-  transform-box: view-box;
-  transform-origin: 8.6px 11px;
-  transform: rotate(-8deg);
-  animation: chatWorkingClawSnap 2.8s ease-in-out infinite;
+  animation: chatWorkingClawCombo var(--claw-cycle) ease-out infinite;
   will-change: transform;
 }
 
-@keyframes chatWorkingClawBreath {
+/* The upper jaw hinges at the palm joint. Rest is slightly open — the open
+   notch is what reads "claw" at 18px — and the jaw snaps shut exactly on the
+   combo's impact frames (keyframe percentages must stay in lockstep with
+   chatWorkingClawCombo). */
+.chat-reading-indicator svg .claw-icon__jaw {
+  transform-box: view-box;
+  transform-origin: 8.6px 11px;
+  transform: rotate(-10deg);
+  animation: chatWorkingClawJaw var(--claw-cycle) ease-out infinite;
+  will-change: transform;
+}
+
+/* Pow star: pops at the cross impact (46-58% of the combo cycle). */
+.chat-reading-indicator::after {
+  content: "✦";
+  position: absolute;
+  right: -14px;
+  top: -2px;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--accent);
+  opacity: 0;
+  animation: chatWorkingClawPow var(--claw-cycle) ease-out infinite;
+  pointer-events: none;
+}
+
+/* Jab 1 at 12-16%, jab 2 at 26-30%, big wind-up, cross at 46-52%. */
+@keyframes chatWorkingClawCombo {
   0%,
-  100% {
-    opacity: 0.55;
+  8% {
+    transform: translateX(0);
   }
 
-  50% {
-    opacity: 1;
+  12% {
+    transform: translateX(-2px);
+  }
+
+  16% {
+    transform: translateX(5px);
+  }
+
+  22%,
+  26% {
+    transform: translateX(-2px);
+  }
+
+  30% {
+    transform: translateX(5px);
+  }
+
+  38% {
+    transform: translateX(0);
+  }
+
+  46% {
+    transform: translateX(-3px) rotate(-6deg);
+  }
+
+  52% {
+    transform: translateX(8px) rotate(4deg);
+  }
+
+  62%,
+  100% {
+    transform: translateX(0);
   }
 }
 
-@keyframes chatWorkingClawSnap {
+@keyframes chatWorkingClawJaw {
   0%,
-  70%,
+  8% {
+    transform: rotate(-10deg);
+  }
+
+  12% {
+    transform: rotate(-16deg);
+  }
+
+  16% {
+    transform: rotate(4deg);
+  }
+
+  22%,
+  26% {
+    transform: rotate(-16deg);
+  }
+
+  30% {
+    transform: rotate(4deg);
+  }
+
+  38% {
+    transform: rotate(-10deg);
+  }
+
+  46% {
+    transform: rotate(-18deg);
+  }
+
+  52% {
+    transform: rotate(6deg);
+  }
+
+  62%,
   100% {
-    transform: rotate(-8deg);
+    transform: rotate(-10deg);
+  }
+}
+
+@keyframes chatWorkingClawPow {
+  0%,
+  46% {
+    opacity: 0;
+    transform: scale(0.4);
   }
 
-  78% {
-    transform: rotate(3deg);
+  52% {
+    opacity: 1;
+    transform: scale(1.2);
   }
 
-  86% {
-    transform: rotate(-11deg);
+  58%,
+  100% {
+    opacity: 0;
+    transform: scale(1.5);
   }
+}
 
-  94% {
-    transform: rotate(-8deg);
-  }
+/* Seeded stance variants (see punchStanceClass in chat-message.ts): the
+   southpaw fights mirrored, the flurry fighter runs the combo double-time,
+   the rare haymaker is a slow heavyweight with a bigger pow. */
+.chat-reading-indicator--southpaw {
+  transform: scaleX(-1);
+}
+
+.chat-reading-indicator--flurry {
+  --claw-cycle: 1.3s;
+}
+
+.chat-reading-indicator--haymaker {
+  --claw-cycle: 3.8s;
+}
+
+.chat-reading-indicator--haymaker::after {
+  font-size: 15px;
+  right: -17px;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1070,8 +1206,8 @@
     animation: none;
   }
 
-  .chat-reading-indicator svg {
-    opacity: 0.85;
+  .chat-reading-indicator::after {
+    content: none;
   }
 }
 

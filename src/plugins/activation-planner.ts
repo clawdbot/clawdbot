@@ -51,7 +51,7 @@ export type PluginActivationPlanEntry = {
   reasons: readonly PluginActivationPlannerReason[];
 };
 
-export type PluginActivationPlan = {
+type PluginActivationPlan = {
   trigger: PluginActivationPlannerTrigger;
   pluginIds: readonly string[];
   entries: readonly PluginActivationPlanEntry[];

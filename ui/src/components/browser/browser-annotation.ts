@@ -150,7 +150,7 @@ export function buildAnnotationPrompt(params: {
 
 export const ANNOTATION_STROKE_COLOR = "#e0442d";
 
-export function annotationStrokeWidth(imageWidth: number): number {
+function annotationStrokeWidth(imageWidth: number): number {
   return Math.max(4, Math.round(imageWidth * 0.005));
 }
 

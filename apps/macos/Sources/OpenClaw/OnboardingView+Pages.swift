@@ -748,12 +748,18 @@ extension OnboardingView {
     }
 
     func cliPage() -> some View {
-        onboardingPage {
+        let remoteMode = self.state.connectionMode == .remote
+        let detail = if remoteMode {
+            "OpenClaw is installing the matching runtime for this Mac node. " +
+                "It will connect to your selected Gateway without starting another one here."
+        } else {
+            "OpenClaw is setting up its background service on this Mac. " +
+                "This usually takes under a minute — no Terminal, no administrator password."
+        }
+        return onboardingPage {
             Text("Getting things ready")
                 .font(.largeTitle.weight(.semibold))
-            Text(
-                "OpenClaw is setting up its background service on this Mac. " +
-                    "This usually takes under a minute — no Terminal, no administrator password.")
+            Text(detail)
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -769,12 +775,16 @@ extension OnboardingView {
                     state: self.installStepStateForInstall,
                     monospacedDetail: self.cliInstalled && self.cliInstallLocation != nil)
                 self.installStepRow(
-                    title: "Start the background service",
-                    detail: "Runs quietly and starts again after a restart.",
+                    title: remoteMode ? "Prepare the Mac node" : "Start the background service",
+                    detail: remoteMode
+                        ? "Runs inside the app and uses its macOS permissions."
+                        : "Runs quietly and starts again after a restart.",
                     state: self.installStepStateForService)
                 self.installStepRow(
                     title: "Ready for the next step",
-                    detail: "Once the service answers, you’ll connect your AI.",
+                    detail: remoteMode
+                        ? "Once ready, this Mac connects to your selected Gateway."
+                        : "Once the service answers, you’ll connect your AI.",
                     state: self.cliInstalled ? .done : .pending)
 
                 if self.installFailed {

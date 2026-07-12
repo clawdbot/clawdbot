@@ -2,6 +2,11 @@
  * Runtime SDK subpath for plugin doctor migrations, compat checks, and uninstall helpers.
  */
 export { collectProviderDangerousNameMatchingScopes } from "../config/dangerous-name-matching.js";
+export { defineChannelAliasMigration } from "../config/channel-alias-migration.js";
+export type {
+  ChannelAliasMigrationSpec,
+  StreamingAliasMode,
+} from "../config/channel-alias-migration.js";
 export {
   asObjectRecord,
   hasLegacyAccountStreamingAliases,

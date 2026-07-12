@@ -91,13 +91,6 @@ for (const key of HIGH_SIGNAL_LIVE_MODEL_PRIORITY) {
   }
 }
 
-/** Return providers represented in the high-signal live model priority list. */
-export function getHighSignalLiveModelProviders(): string[] {
-  return [...HIGH_SIGNAL_LIVE_MODEL_IDS_BY_PROVIDER.keys()].toSorted((left, right) =>
-    left.localeCompare(right),
-  );
-}
-
 function isHighSignalClaudeModelId(id: string): boolean {
   const normalized = id.replace(/[_.]/g, "-");
   if (!/\bclaude\b/i.test(normalized)) {

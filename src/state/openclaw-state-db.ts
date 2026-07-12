@@ -16,6 +16,10 @@ import {
   type CanonicalSqliteUniqueIndex,
 } from "../infra/sqlite-index-schema.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
+import {
+  assertSqliteSchemaContains,
+  type SqliteSchemaCompatibility,
+} from "../infra/sqlite-schema-contract.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import {
   createNewerSqliteSchemaVersionError,
@@ -59,6 +63,35 @@ const OPENCLAW_STATE_CANONICAL_UNIQUE_INDEXES = [
     `,
   },
 ] as const satisfies readonly CanonicalSqliteUniqueIndex[];
+const OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY = {
+  allowedColumnDefinitions: {
+    "commitments.attempts": ["attempts INTEGER NOT NULL DEFAULT 0"],
+    "commitments.confidence": ["confidence REAL NOT NULL DEFAULT 0"],
+    "commitments.created_at_ms": ["created_at_ms INTEGER NOT NULL DEFAULT 0"],
+    "commitments.dedupe_key": ["dedupe_key TEXT NOT NULL DEFAULT ''"],
+    "commitments.due_timezone": ["due_timezone TEXT NOT NULL DEFAULT 'UTC'"],
+    "commitments.kind": ["kind TEXT NOT NULL DEFAULT 'followup'"],
+    "commitments.reason": ["reason TEXT NOT NULL DEFAULT ''"],
+    "commitments.sensitivity": ["sensitivity TEXT NOT NULL DEFAULT 'normal'"],
+    "commitments.source": ["source TEXT NOT NULL DEFAULT 'unknown'"],
+    "commitments.suggested_text": ["suggested_text TEXT NOT NULL DEFAULT ''"],
+    "cron_jobs.created_at_ms": ["created_at_ms INTEGER NOT NULL DEFAULT 0"],
+    "cron_jobs.enabled": ["enabled INTEGER NOT NULL DEFAULT 1"],
+    "cron_jobs.name": ["name TEXT NOT NULL DEFAULT ''"],
+    "cron_jobs.payload_kind": ["payload_kind TEXT NOT NULL DEFAULT 'message'"],
+    "cron_jobs.schedule_kind": ["schedule_kind TEXT NOT NULL DEFAULT 'manual'"],
+    "cron_jobs.session_target": ["session_target TEXT NOT NULL DEFAULT 'main'"],
+    "cron_jobs.wake_mode": ["wake_mode TEXT NOT NULL DEFAULT 'auto'"],
+    "cron_run_logs.created_at": ["created_at INTEGER NOT NULL DEFAULT 0"],
+    "cron_run_logs.entry_json": ["entry_json TEXT NOT NULL DEFAULT '{}'"],
+    "current_conversation_bindings.conversation_kind": [
+      "conversation_kind TEXT NOT NULL DEFAULT 'channel'",
+    ],
+    "current_conversation_bindings.target_agent_id": [
+      "target_agent_id TEXT NOT NULL DEFAULT 'main'",
+    ],
+  },
+} satisfies SqliteSchemaCompatibility;
 
 /** Open shared SQLite database handle plus WAL maintenance lifecycle. */
 export type OpenClawStateDatabase = {
@@ -135,6 +168,12 @@ export function assertOpenClawStateDatabaseForMaintenance(
       `OpenClaw state database ${options.pathname} metadata schema version ${schemaVersion} does not match ${OPENCLAW_STATE_SCHEMA_VERSION}; run openclaw doctor --fix before compacting it.`,
     );
   }
+  assertSqliteSchemaContains(
+    database,
+    options.pathname,
+    OPENCLAW_STATE_SCHEMA_SQL,
+    OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
+  );
 }
 
 const stateDbLog = createSubsystemLogger("state/db");

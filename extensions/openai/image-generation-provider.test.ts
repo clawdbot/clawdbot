@@ -1,4 +1,5 @@
 // Openai tests cover image generation provider plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIImageGenerationProvider } from "./image-generation-provider.js";
 
@@ -726,6 +727,35 @@ describe("openai image generation provider", () => {
     expect(body.model).toBe("gpt-image-1");
     expect(body.size).toBe("2048x1152");
     expect(result.metadata).toBeUndefined();
+  });
+
+  it("falls back to the provider baseUrl when the model catalog is omitted", async () => {
+    mockGeneratedPngResponse();
+
+    const provider = buildOpenAIImageGenerationProvider();
+    // Plugin-scoped runtime snapshots can carry a built-in provider overlay
+    // before its model catalog is present.
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://openai-compatible.example.com/v1",
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const result = await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-2",
+      prompt: "Create an image through a provider overlay",
+      cfg,
+    });
+
+    expect(httpConfigCall().baseUrl).toBe("https://openai-compatible.example.com/v1");
+    expect(jsonRequestCall().url).toBe(
+      "https://openai-compatible.example.com/v1/images/generations",
+    );
+    expect(result.images).toHaveLength(1);
   });
 
   it("forwards output and OpenAI-only options on direct generations", async () => {

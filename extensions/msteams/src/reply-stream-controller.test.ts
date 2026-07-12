@@ -8,6 +8,7 @@ function makeStream() {
   return {
     emit: vi.fn(),
     update: vi.fn(),
+    clearText: vi.fn(),
     close: vi.fn<() => Promise<StreamCloseResult>>(async () => ({ id: "stream-final" })),
     canceled: false,
   };
@@ -52,6 +53,32 @@ describe("createTeamsReplyStreamController", () => {
     expect(stream.emit).toHaveBeenNthCalledWith(1, "Here's one for you:\nThe morning");
     expect(stream.emit).toHaveBeenNthCalledWith(2, " light");
     expect(stream.emit).toHaveBeenNthCalledWith(3, " breaks");
+  });
+
+  it("keeps the next chunk after cumulative trailing whitespace is normalized", () => {
+    const stream = makeStream();
+    const ctrl = makeController({ stream });
+
+    ctrl.onPartialReply({ text: "Intro\n\n " });
+    ctrl.onPartialReply({ text: "Intro\n\nNext" });
+
+    expect(stream.emit).toHaveBeenNthCalledWith(1, "Intro\n\n ");
+    expect(stream.emit).toHaveBeenNthCalledWith(2, "Next");
+  });
+
+  it("falls back and closes the stream for non-whitespace rewrites", async () => {
+    const stream = makeStream();
+    const ctrl = makeController({ stream });
+
+    ctrl.onPartialReply({ text: "abcde" });
+    ctrl.onPartialReply({ text: "abXYZ" });
+
+    expect(stream.emit).toHaveBeenCalledTimes(1);
+    expect(stream.emit).toHaveBeenCalledWith("abcde");
+    expect(ctrl.preparePayload({ text: "abXYZ" })).toEqual({ text: "abXYZ" });
+    await ctrl.finalize();
+    expect(stream.clearText).toHaveBeenCalledTimes(1);
+    expect(stream.close).toHaveBeenCalled();
   });
 
   it("ignores duplicate or out-of-order partial replies that don't extend the text", () => {

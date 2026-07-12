@@ -6,7 +6,7 @@ export type McpAppCsp = {
 };
 
 export const MCP_APP_SANDBOX_PATH = "/mcp-app-sandbox";
-export const MCP_APP_SANDBOX_PORT_OFFSET = 1;
+const MCP_APP_SANDBOX_PORT_OFFSET = 1;
 const MCP_APP_SANDBOX_CSP_QUERY = "csp";
 const MCP_APP_SANDBOX_CSP_MAX_JSON_BYTES = 5 * 1024;
 const MCP_APP_SANDBOX_CSP_MAX_HEADER_BYTES = 6 * 1024;

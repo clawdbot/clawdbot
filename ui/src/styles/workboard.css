@@ -538,6 +538,11 @@
   white-space: normal;
 }
 
+.workboard-select--disabled .workboard-select__trigger {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 .workboard-field--wide {
   grid-column: 1 / -1;
 }

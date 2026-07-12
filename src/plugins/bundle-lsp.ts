@@ -15,6 +15,7 @@ import {
   mergeBundlePathLists,
   normalizeBundlePathList,
 } from "./bundle-manifest.js";
+import type { PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginBundleFormat } from "./manifest-types.js";
 
 /** LSP server config block loaded from plugin bundle metadata. */
@@ -150,10 +151,12 @@ export function inspectBundleLspRuntimeSupport(params: {
 export function loadEnabledBundleLspConfig(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
 }): { config: BundleLspConfig; diagnostics: Array<{ pluginId: string; message: string }> } {
   return loadEnabledBundleConfig({
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
+    manifestRegistry: params.manifestRegistry,
     createEmptyConfig: () => ({ lspServers: {} }),
     loadBundleConfig: loadBundleLspConfig,
     createDiagnostic: (pluginId, message) => ({ pluginId, message }),

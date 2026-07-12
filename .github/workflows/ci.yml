@@ -1600,7 +1600,7 @@ jobs:
               if pnpm run --silent 2>/dev/null | grep -q '^  deadcode:dependencies$'; then
                 pnpm deadcode:dependencies
                 pnpm deadcode:unused-files
-                pnpm deadcode:report:ci:ts-unused
+                pnpm deadcode:exports
               else
                 pnpm deadcode:ci
               fi
@@ -1625,14 +1625,6 @@ jobs:
               exit 1
               ;;
           esac
-
-      - name: Upload deadcode reports
-        if: ${{ always() && matrix.task == 'dependencies' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: deadcode-reports
-          path: .artifacts/deadcode
-          if-no-files-found: ignore
 
   check-additional-shard:
     permissions:

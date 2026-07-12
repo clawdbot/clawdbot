@@ -17,7 +17,10 @@ import {
   deleteSqliteTranscript,
   replaceSqliteTranscriptEvents,
 } from "./session-accessor.sqlite.js";
-import { extractTranscriptIndexEntry } from "./session-transcript-index.js";
+import {
+  extractTranscriptIndexEntry,
+  listSessionsNeedingTranscriptIndexReconcile,
+} from "./session-transcript-index.js";
 import {
   resetSessionTranscriptSearchForTest,
   searchSessionTranscripts,
@@ -233,6 +236,38 @@ describe("searchSessionTranscripts", () => {
     const result = search("historic");
     expect(result.indexing).toBe(false);
     expect(result.hits).toHaveLength(1);
+  });
+
+  it("detects missing, dirty, and lagging transcript index watermarks", async () => {
+    await appendUserMessage("session-1", "agent:main:main", "indexed message");
+    const { db, kysely } = agentKysely();
+    const pending = () => listSessionsNeedingTranscriptIndexReconcile(db);
+
+    expect(pending()).toEqual([]);
+
+    executeSqliteQuerySync(
+      db,
+      kysely
+        .updateTable("session_transcript_index_state")
+        .set({ needs_rebuild: 1 })
+        .where("session_id", "=", "session-1"),
+    );
+    expect(pending()).toEqual(["session-1"]);
+
+    executeSqliteQuerySync(
+      db,
+      kysely
+        .updateTable("session_transcript_index_state")
+        .set({ indexed_seq: -1, needs_rebuild: 0 })
+        .where("session_id", "=", "session-1"),
+    );
+    expect(pending()).toEqual(["session-1"]);
+
+    executeSqliteQuerySync(
+      db,
+      kysely.deleteFrom("session_transcript_index_state").where("session_id", "=", "session-1"),
+    );
+    expect(pending()).toEqual(["session-1"]);
   });
 
   it("sweeps orphaned index rows during reconcile", async () => {

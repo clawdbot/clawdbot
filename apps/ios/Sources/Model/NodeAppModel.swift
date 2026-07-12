@@ -22,6 +22,7 @@ private struct GatewayRelayIdentityResponse: Decodable {
 
 private struct WatchChatPreview {
     var items: [OpenClawWatchChatItem]
+    var status: OpenClawWatchAppStatus?
     var statusText: String?
 }
 
@@ -360,7 +361,13 @@ final class NodeAppModel {
     let screen: ScreenController
     private let camera: any CameraServicing
     private let screenRecorder: any ScreenRecordingServicing
-    var gatewayStatusText: String = "Offline"
+    private var watchGatewayConnectionStatus: OpenClawWatchAppStatusCode?
+    var gatewayStatusText: String = "Offline" {
+        didSet {
+            self.watchGatewayConnectionStatus = nil
+        }
+    }
+
     var nodeStatusText: String = "Offline"
     var operatorStatusText: String = "Offline"
     private(set) var isAppleReviewDemoModeEnabled: Bool = false
@@ -389,7 +396,7 @@ final class NodeAppModel {
 
     private var operatorGatewayProblem: GatewayConnectionProblem?
     var gatewayDisplayStatusText: String {
-        self.lastGatewayProblem?.statusText ?? self.gatewayStatusText
+        self.lastGatewayProblem?.localizedStatusText ?? self.gatewayStatusText
     }
 
     private var mainSessionBaseKey: String = "main"
@@ -485,6 +492,7 @@ final class NodeAppModel {
     private let calendarService: any CalendarServicing
     private let remindersService: any RemindersServicing
     private let motionService: any MotionServicing
+    private let healthSummaryService: any HealthSummaryServicing
     private let watchMessagingService: any WatchMessagingServicing
     #if DEBUG
     @ObservationIgnored private var testAgentRequestHandler: ((AgentDeepLink) async throws -> Void)?
@@ -763,6 +771,7 @@ final class NodeAppModel {
         calendarService: any CalendarServicing = CalendarService(),
         remindersService: any RemindersServicing = RemindersService(),
         motionService: any MotionServicing = MotionService(),
+        healthSummaryService: any HealthSummaryServicing = HealthSummaryService(),
         watchMessagingService: any WatchMessagingServicing = WatchMessagingService(),
         talkMode: TalkModeManager = TalkModeManager(),
         voiceNoteRecorder: OpenClawVoiceNoteRecorder = OpenClawVoiceNoteRecorder(),
@@ -779,6 +788,7 @@ final class NodeAppModel {
         self.calendarService = calendarService
         self.remindersService = remindersService
         self.motionService = motionService
+        self.healthSummaryService = healthSummaryService
         self.watchMessagingService = watchMessagingService
         self.talkMode = talkMode
         self.voiceNoteRecorder = voiceNoteRecorder
@@ -1917,7 +1927,7 @@ final class NodeAppModel {
                     guard !self.isLocalGatewayFixtureEnabled else { return }
                     self.setOperatorConnected(false)
                     self.gatewayConnected = false
-                    self.gatewayStatusText = "Reconnecting…"
+                    self.setGatewayConnectionProgress(reconnecting: true)
                     self.talkMode.updateGatewayConnected(false)
                 }
             })
@@ -2620,6 +2630,20 @@ final class NodeAppModel {
         }
     }
 
+    private func handleHealthInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        guard let params = try? Self.decodeParams(OpenClawHealthSummaryParams.self, from: req.paramsJSON) else {
+            return BridgeInvokeResponse(
+                id: req.id,
+                ok: false,
+                error: OpenClawNodeError(
+                    code: .invalidRequest,
+                    message: "INVALID_REQUEST: period must be today"))
+        }
+        let payload = try await self.healthSummaryService.summary(params: params)
+        let json = try Self.encodePayload(payload)
+        return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+    }
+
     private func handleTalkInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         try Task.checkCancellation()
         switch req.command {
@@ -2984,6 +3008,11 @@ extension NodeAppModel {
         ]) { [weak self] req in
             guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
             return try await self.handleMotionInvoke(req)
+        }
+
+        register([OpenClawHealthCommand.summary.rawValue]) { [weak self] req in
+            guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
+            return try await self.handleHealthInvoke(req)
         }
 
         register([
@@ -3562,7 +3591,7 @@ extension NodeAppModel {
         guard !self.isLocalGatewayFixtureEnabled else { return }
         setOperatorConnected(false)
         self.gatewayConnected = false
-        self.gatewayStatusText = "Reconnecting…"
+        self.setGatewayConnectionProgress(reconnecting: true)
         self.talkMode.updateGatewayConnected(false)
         self.applyGatewayConnectConfig(
             cfg,
@@ -3640,7 +3669,7 @@ extension NodeAppModel {
 extension NodeAppModel {
     func resumeGatewayAfterTargetReview(_ config: GatewayConnectConfig) {
         let generation = self.beginGatewayConnectAttempt()
-        self.gatewayStatusText = "Connecting…"
+        self.setGatewayConnectionProgress(reconnecting: false)
         // Reapply the exact suspended route only after teardown; a newer target invalidates the generation.
         Task { [weak self] in
             guard let self else { return }
@@ -3735,7 +3764,9 @@ extension NodeAppModel {
         }
         if problem.needsPairingApproval || problem.pauseReconnect {
             LiveActivityManager.shared.showAttention(
-                statusText: problem.needsPairingApproval ? "Approval needed" : "Action required",
+                statusText: problem.needsPairingApproval
+                    ? String(localized: "Approval needed")
+                    : String(localized: "Action required"),
                 agentName: self.activeAgentName,
                 sessionKey: self.mainSessionKey)
         }
@@ -3752,7 +3783,9 @@ extension NodeAppModel {
         }
         if problem.needsPairingApproval || problem.pauseReconnect {
             LiveActivityManager.shared.showAttention(
-                statusText: problem.needsPairingApproval ? "Approval needed" : "Action required",
+                statusText: problem.needsPairingApproval
+                    ? String(localized: "Approval needed")
+                    : String(localized: "Action required"),
                 agentName: self.activeAgentName,
                 sessionKey: self.mainSessionKey)
         }
@@ -4413,11 +4446,13 @@ extension NodeAppModel {
                   generation: context.routeGeneration,
                   stableID: context.stableID)
         else { return }
-        self.gatewayStatusText = (attempt == 0) ? "Connecting…" : "Reconnecting…"
+        self.setGatewayConnectionProgress(reconnecting: attempt != 0)
         self.gatewayServerName = nil
         self.gatewayRemoteAddress = nil
         LiveActivityManager.shared.showConnecting(
-            statusText: (attempt == 0) ? "Connecting..." : "Reconnecting...",
+            statusText: (attempt == 0)
+                ? String(localized: "Connecting...")
+                : String(localized: "Reconnecting..."),
             agentName: self.activeAgentName,
             sessionKey: self.mainSessionKey)
     }
@@ -5672,8 +5707,9 @@ extension NodeAppModel {
         approvalId: String,
         gatewayStableID: String,
         decision: OpenClawWatchExecApprovalDecision?,
+        outcome: OpenClawWatchExecApprovalOutcome,
+        outcomeText: String,
         resolvedAtMs: Int64? = nil,
-        outcomeText: String? = nil,
         source: String,
         syncSnapshots: Bool = true) async
     {
@@ -5687,6 +5723,7 @@ extension NodeAppModel {
             approvalId: approvalID,
             gatewayStableID: gatewayStableID,
             decision: decision,
+            outcome: outcome,
             resolvedAtMs: resolvedAtMs ?? Int64(Date().timeIntervalSince1970 * 1000),
             source: source,
             outcomeText: outcomeText)
@@ -5711,18 +5748,23 @@ extension NodeAppModel {
         source: String,
         syncSnapshots: Bool = true) async
     {
-        switch terminal.verdict {
-        case .allowOnce, .allowAlways, .deny:
+        if let outcome = Self.watchExecApprovalOutcome(for: terminal.verdict) {
             await self.publishWatchExecApprovalResolved(
                 approvalId: terminal.id,
                 gatewayStableID: gatewayStableID,
                 decision: terminal.decision.flatMap(OpenClawWatchExecApprovalDecision.init(rawValue:)),
-                resolvedAtMs: terminal.resolvedAtMs,
+                outcome: outcome,
                 outcomeText: Self.execApprovalTerminalText(
                     terminal,
                     alreadyResolved: source == "another-reviewer"),
+                resolvedAtMs: terminal.resolvedAtMs,
                 source: source,
                 syncSnapshots: syncSnapshots)
+            return
+        }
+        switch terminal.verdict {
+        case .allowOnce, .allowAlways, .deny:
+            preconditionFailure("terminal decision outcome must be mapped")
         case .expired:
             await self.publishWatchExecApprovalExpired(
                 approvalId: terminal.id,
@@ -5741,6 +5783,21 @@ extension NodeAppModel {
                 gatewayStableID: gatewayStableID,
                 reason: .resolved,
                 syncSnapshots: syncSnapshots)
+        }
+    }
+
+    private static func watchExecApprovalOutcome(
+        for verdict: ExecApprovalTerminalVerdict) -> OpenClawWatchExecApprovalOutcome?
+    {
+        switch verdict {
+        case .allowOnce:
+            .allowedOnce
+        case .allowAlways:
+            .allowedAlways
+        case .deny:
+            .denied
+        case .expired, .cancelled, .resolvedUnknown:
+            nil
         }
     }
 
@@ -5847,6 +5904,7 @@ extension NodeAppModel {
                 guard self.isOperatorGatewayConnected else {
                     return WatchChatPreview(
                         items: [],
+                        status: OpenClawWatchAppStatus(code: .chatConnectIPhone),
                         statusText: "Connect iPhone chat to read messages")
                 }
                 payload = try await IOSGatewayChatTransport(gateway: self.operatorSession)
@@ -5856,10 +5914,16 @@ extension NodeAppModel {
             let items = Self.makeWatchChatItems(from: payload.messages ?? [])
             return WatchChatPreview(
                 items: items,
+                status: items.isEmpty
+                    ? OpenClawWatchAppStatus(code: .chatNoMessages)
+                    : nil,
                 statusText: items.isEmpty ? "No chat messages yet" : nil)
         } catch {
             GatewayDiagnostics.log("watch app snapshot: chat preview failed error=\(error.localizedDescription)")
-            return WatchChatPreview(items: [], statusText: "Chat unavailable")
+            return WatchChatPreview(
+                items: [],
+                status: OpenClawWatchAppStatus(code: .chatUnavailable),
+                statusText: "Chat unavailable")
         }
     }
 
@@ -6011,6 +6075,7 @@ extension NodeAppModel {
             ? displayStatusText
             : self.operatorStatusText
         return OpenClawWatchAppSnapshotMessage(
+            gatewayStatus: self.makeWatchGatewayStatus(connected: watchGatewayConnected),
             gatewayStatusText: watchGatewayStatusText,
             gatewayConnected: watchGatewayConnected,
             agentName: self.chatAgentName,
@@ -6018,15 +6083,138 @@ extension NodeAppModel {
             agentAvatarText: self.chatAgentAvatarText,
             sessionKey: self.chatSessionKey,
             gatewayStableID: self.currentWatchChatGatewayStableID(),
+            talkStatus: self.makeWatchTalkStatus(),
             talkStatusText: self.talkMode.statusText,
             talkEnabled: self.talkMode.isEnabled,
             talkListening: self.talkMode.isListening,
             talkSpeaking: self.talkMode.isSpeaking,
             pendingApprovalCount: self.watchExecApprovalPromptsByID.count,
             chatItems: chatPreview?.items,
+            chatStatus: chatPreview?.status,
             chatStatusText: chatPreview?.statusText,
             sentAtMs: Int64(Date().timeIntervalSince1970 * 1000),
             snapshotId: UUID().uuidString)
+    }
+
+    private func makeWatchGatewayStatus(connected: Bool) -> OpenClawWatchAppStatus {
+        if connected {
+            return OpenClawWatchAppStatus(code: .gatewayConnected)
+        }
+        if let problem = self.lastGatewayProblem {
+            return Self.makeWatchGatewayProblemStatus(problem)
+        }
+        if let watchGatewayConnectionStatus {
+            return OpenClawWatchAppStatus(code: watchGatewayConnectionStatus)
+        }
+        let statusText = self.gatewayStatusText == "Connected"
+            ? self.operatorStatusText
+            : self.gatewayStatusText
+        if statusText == "Offline" {
+            return OpenClawWatchAppStatus(code: .gatewayOffline)
+        }
+        return OpenClawWatchAppStatus(code: .legacy, verbatim: statusText)
+    }
+
+    func setGatewayConnectionProgress(reconnecting: Bool) {
+        self.gatewayStatusText = reconnecting ? "Reconnecting…" : "Connecting…"
+        self.watchGatewayConnectionStatus = reconnecting
+            ? .gatewayReconnecting
+            : .gatewayConnecting
+    }
+
+    private static func makeWatchGatewayProblemStatus(
+        _ problem: GatewayConnectionProblem) -> OpenClawWatchAppStatus
+    {
+        let requestID: String? = switch problem.kind {
+        case .pairingRequired, .pairingRoleUpgradeRequired, .pairingScopeUpgradeRequired,
+             .pairingMetadataUpgradeRequired, .protocolMismatch:
+            problem.requestId
+        default:
+            nil
+        }
+        let code: OpenClawWatchAppStatusCode = requestID != nil
+            ? .gatewayProblemWithRequestID
+            : .gatewayProblem
+        let requestArguments = requestID.map { [$0] } ?? []
+        return switch problem.titlePresentation {
+        case let .localized(key):
+            OpenClawWatchAppStatus(
+                code: code,
+                localizationKey: key,
+                arguments: requestArguments)
+        case let .localizedFormat(key, arguments):
+            OpenClawWatchAppStatus(
+                code: code,
+                localizationKey: key,
+                arguments: arguments + requestArguments)
+        case let .verbatim(value):
+            OpenClawWatchAppStatus(
+                code: code,
+                arguments: requestArguments,
+                verbatim: value)
+        }
+    }
+
+    private func makeWatchTalkStatus() -> OpenClawWatchAppStatus {
+        if self.talkMode.isSpeaking {
+            return OpenClawWatchAppStatus(code: .talkSpeaking)
+        }
+        if self.talkMode.isListening {
+            return OpenClawWatchAppStatus(code: .talkListening)
+        }
+        if self.talkMode.hasActivePushToTalkSession {
+            return self.makeWatchTalkPresentationStatus()
+        }
+        switch self.talkMode.watchPresentation {
+        case .localized, .verbatim:
+            return self.makeWatchTalkPresentationStatus()
+        case .phase:
+            break
+        }
+        if !self.talkMode.isEnabled {
+            return OpenClawWatchAppStatus(code: .talkOff)
+        }
+        if !self.talkMode.isGatewayConnected {
+            return OpenClawWatchAppStatus(code: .talkOffline)
+        }
+        switch self.talkMode.gatewayTalkPermissionState {
+        case .unknown, .ready:
+            break
+        case let .missingScope(scope):
+            return OpenClawWatchAppStatus(code: .talkPermissionRequired, arguments: [scope])
+        case .requestingUpgrade:
+            return OpenClawWatchAppStatus(code: .talkRequestingApproval)
+        case .upgradeRequested:
+            return OpenClawWatchAppStatus(code: .talkApprovalRequested)
+        case let .requestFailed(message), let .loadFailed(message):
+            return OpenClawWatchAppStatus(code: .talkFailure, verbatim: message)
+        case .apiKeyMissing:
+            return OpenClawWatchAppStatus(code: .talkAPIKeyMissing)
+        }
+        return self.makeWatchTalkPresentationStatus()
+    }
+
+    private func makeWatchTalkPresentationStatus() -> OpenClawWatchAppStatus {
+        switch self.talkMode.watchPresentation {
+        case let .localized(key):
+            return OpenClawWatchAppStatus(code: .talkFailure, localizationKey: key)
+        case .phase:
+            break
+        case let .verbatim(value):
+            return OpenClawWatchAppStatus(code: .talkFailure, verbatim: value)
+        }
+        return switch self.talkMode.phase {
+        case .connecting:
+            OpenClawWatchAppStatus(code: .talkConnecting)
+        case .thinking:
+            OpenClawWatchAppStatus(code: .talkThinking)
+        case .listening:
+            OpenClawWatchAppStatus(code: .talkListening)
+        case .speaking:
+            OpenClawWatchAppStatus(code: .talkSpeaking)
+        case .idle:
+            OpenClawWatchAppStatus(code: .talkReady)
+        }
     }
 
     private func handleWatchAppCommand(_ event: WatchAppCommandEvent) async {
@@ -9331,7 +9519,7 @@ extension NodeAppModel {
             }
             self.setOperatorConnected(false)
             self.gatewayConnected = false
-            self.gatewayStatusText = "Reconnecting…"
+            self.setGatewayConnectionProgress(reconnecting: true)
             self.talkMode.updateGatewayConnected(false)
             self.applyGatewayConnectConfig(cfg, expectedGeneration: generation)
             appliedReconnect = true

@@ -28,6 +28,7 @@ vi.mock("../adapter/index.js", () => ({
 
 import {
   QQBOT_MEDIA_SSRF_POLICY,
+  QQBOT_REMOTE_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
   checkFileSize,
   downloadFile,
   fileExistsAsync,
@@ -95,6 +96,7 @@ describe("qqbot file-utils downloadFile", () => {
       url: "https://media.qq.com/assets/photo.png",
       filePathHint: "photo.png",
       ssrfPolicy: QQBOT_MEDIA_SSRF_POLICY,
+      responseHeaderTimeoutMs: QQBOT_REMOTE_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
     });
     expect(QQBOT_MEDIA_SSRF_POLICY).toEqual({
       hostnameAllowlist: [

@@ -6,6 +6,7 @@ import type {
 } from "@modelcontextprotocol/sdk/types.js";
 import type { TSchema } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 /** Materialized MCP tools plus diagnostics and cleanup handle for one run. */
@@ -113,6 +114,7 @@ export type SessionMcpRuntimeManager = {
     workspaceDir: string;
     agentDir?: string;
     cfg?: OpenClawConfig;
+    manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
   }) => Promise<SessionMcpRuntime>;
   bindSessionKey: (sessionKey: string, sessionId: string) => void;
   resolveSessionId: (sessionKey: string) => string | undefined;

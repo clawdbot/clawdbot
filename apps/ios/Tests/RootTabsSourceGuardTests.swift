@@ -31,8 +31,8 @@ struct RootTabsSourceGuardTests {
         #expect(source.contains(".safeAreaPadding(.top, 8)"))
         #expect(source.contains("Self.sidebarShowButtonAccessibilityIdentifier"))
         #expect(source.contains("Self.sidebarHideButtonAccessibilityIdentifier"))
-        #expect(source.contains("accessibilityLabel: \"Hide Sidebar\""))
-        #expect(source.contains("accessibilityLabel: \"Show Sidebar\""))
+        #expect(source.contains("accessibilityLabel: .localized(\"Hide Sidebar\")"))
+        #expect(source.contains("accessibilityLabel: .localized(\"Show Sidebar\")"))
         #expect(source.contains("action: { self.hideSidebar() }"))
         #expect(source.contains("action: { self.showSidebar() }"))
         #expect(!source.contains("private var collapsedSidebarRail: some View"))
@@ -1005,7 +1005,7 @@ extension RootTabsSourceGuardTests {
             from: matchingOwnerGuard,
             to: "self.appSnapshot = merged")
         #expect(ownerMatchedMerge.contains("merged.chatItems = self.appSnapshot?.chatItems"))
-        #expect(ownerMatchedMerge.contains("merged.chatStatusText = self.appSnapshot?.chatStatusText"))
+        #expect(ownerMatchedMerge.contains("merged.chatStatus = self.appSnapshot?.chatStatus"))
     }
 
     @Test func `watch generic prompts wait for the active gateway owner`() throws {
@@ -1116,13 +1116,12 @@ extension RootTabsSourceGuardTests {
         #expect(snapshotConsume.contains("recordKey.gatewayID == WatchGatewayID.key(snapshotGatewayID)"))
         #expect(snapshotConsume.contains(
             "Self.gatewayIDsMatch(approval.gatewayStableID, snapshotGatewayID)"))
-        #expect(snapshotConsume.contains("Approval resolved elsewhere"))
+        #expect(snapshotConsume.contains("WatchExecApprovalOutcome(code: .resolvedElsewhere)"))
         #expect(snapshotConsume.contains("authoritativeOutcome: false"))
         #expect(terminalConsumes.components(separatedBy: "self.recordExecApprovalTerminal(").count == 3)
         #expect(terminalConsumes.contains("func terminalExecApprovalOutcomeText("))
         #expect(terminalHelpers.contains("WatchApprovalID.key(tombstone.approvalId) == key.approvalID"))
         #expect(terminalHelpers.contains("WatchGatewayID.key(tombstone.gatewayStableID) == key.gatewayID"))
-        #expect(terminalHelpers.contains("maxExecApprovalTerminalOutcomeCharacters"))
         #expect(terminalHelpers.contains("maxExecApprovalTerminalTombstones"))
         #expect(terminalHelpers.contains("upgraded.recordedAt = Date()"))
         #expect(source.contains("execApprovalTerminalTombstoneLifetime: TimeInterval"))

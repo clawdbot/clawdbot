@@ -3,7 +3,10 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { jsonResult as json } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
 import {
@@ -14,11 +17,7 @@ import {
 import { createVoiceCallRuntime, type VoiceCallRuntime } from "./runtime-entry.js";
 import { registerVoiceCallCli } from "./src/cli.js";
 import {
-  formatVoiceCallLegacyConfigWarnings,
-  normalizeVoiceCallLegacyConfigInput,
-  parseVoiceCallPluginConfig,
-} from "./src/config-compat.js";
-import {
+  VoiceCallConfigSchema,
   resolveVoiceCallConfig,
   validateProviderConfig,
   type VoiceCallConfig,
@@ -32,12 +31,12 @@ const VOICE_CALL_READ_METHOD_SCOPE = { scope: "operator.read" as const };
 
 const voiceCallConfigSchema = {
   parse(value: unknown): VoiceCallConfig {
-    const normalized = normalizeVoiceCallLegacyConfigInput(value);
-    const enabled = typeof normalized.enabled === "boolean" ? normalized.enabled : true;
-    return parseVoiceCallPluginConfig({
-      ...normalized,
+    const config = asOptionalRecord(value) ?? {};
+    const enabled = typeof config.enabled === "boolean" ? config.enabled : true;
+    return VoiceCallConfigSchema.parse({
+      ...config,
       enabled,
-      provider: normalized.provider ?? (enabled ? "mock" : undefined),
+      provider: config.provider ?? (enabled ? "mock" : undefined),
     });
   },
   uiHints: {
@@ -289,16 +288,6 @@ export default definePluginEntry({
   register(api: OpenClawPluginApi) {
     const config = resolveVoiceCallConfig(voiceCallConfigSchema.parse(api.pluginConfig));
     const validation = validateProviderConfig(config);
-
-    if (api.pluginConfig && typeof api.pluginConfig === "object") {
-      for (const warning of formatVoiceCallLegacyConfigWarnings({
-        value: api.pluginConfig,
-        configPathPrefix: "plugins.entries.voice-call.config",
-        doctorFixCommand: "openclaw doctor --fix",
-      })) {
-        api.logger.warn(warning);
-      }
-    }
 
     const runtimeState = getVoiceCallRuntimeGlobalState();
     const continueOperationStore = createVoiceCallContinueOperationStore({

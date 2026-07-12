@@ -99,6 +99,24 @@ private actor CoordinatorDrainSnapshotProbe {
     }
 }
 
+private actor CoordinatorNodeHostWorkerProbe: MacNodeHostWorking {
+    private var stopCount = 0
+
+    func start(command _: [String]) async throws -> MacNodeHostManifest {
+        MacNodeHostManifest(version: "test", caps: [], commands: [], pathEnv: "/usr/bin:/bin")
+    }
+
+    func supports(_: String) async -> Bool { false }
+    func invoke(_ request: BridgeInvokeRequest) async -> BridgeInvokeResponse {
+        BridgeInvokeResponse(id: request.id, ok: false)
+    }
+
+    func setRoute(_: GatewayNodeSessionRoute?, authorityGeneration _: UInt64) async -> Bool { true }
+    func publishInventory(ifCurrentRoute _: GatewayNodeSessionRoute) async {}
+    func stop() async { self.stopCount += 1 }
+    func stops() -> Int { self.stopCount }
+}
+
 struct MacNodeModeCoordinatorTests {
     private func waitUntil(
         _ description: String,
@@ -123,6 +141,29 @@ struct MacNodeModeCoordinatorTests {
         #expect(!MacNodeModeCoordinator.endpointAttemptIsCurrent(
             capturedGeneration: 7,
             currentGeneration: 8))
+    }
+
+    @Test @MainActor func `config and CLI changes restart startup scoped node host worker`() async throws {
+        let worker = CoordinatorNodeHostWorkerProbe()
+        let session = GatewayNodeSession()
+        let coordinator = MacNodeModeCoordinator(
+            session: session,
+            runtime: MacNodeRuntime(nodeHostWorker: worker),
+            nodeHostWorker: worker,
+            observeNotifications: true)
+        _ = coordinator
+
+        NotificationCenter.default.post(name: .openclawConfigDidChange, object: nil)
+
+        try await self.waitUntil("node-host worker restart") {
+            await worker.stops() == 1
+        }
+
+        NotificationCenter.default.post(name: .openclawCLIInstalled, object: nil)
+
+        try await self.waitUntil("node-host worker restart") {
+            await worker.stops() == 2
+        }
     }
 
     @Test func `paused node state requires route disconnect`() {
@@ -420,7 +461,7 @@ struct MacNodeModeCoordinatorTests {
             isExistingInstallation: false) == .primary)
     }
 
-    @Test func `remote mode does not advertise browser proxy`() {
+    @Test func `native manifest excludes CLI-owned node commands`() {
         let caps = MacNodeModeCoordinator.resolvedCaps(
             browserControlEnabled: true,
             cameraEnabled: false,
@@ -433,10 +474,11 @@ struct MacNodeModeCoordinatorTests {
         #expect(!commands.contains(OpenClawBrowserCommand.proxy.rawValue))
         #expect(commands.contains(OpenClawCanvasCommand.present.rawValue))
         #expect(commands.contains(OpenClawSystemCommand.notify.rawValue))
-        #expect(commands.contains(OpenClawFileSystemCommand.listDir.rawValue))
+        #expect(!commands.contains(OpenClawFileSystemCommand.listDir.rawValue))
+        #expect(!commands.contains(OpenClawSystemCommand.run.rawValue))
     }
 
-    @Test func `local mode advertises browser proxy when enabled`() {
+    @Test func `local native manifest leaves browser proxy to the CLI worker`() {
         let caps = MacNodeModeCoordinator.resolvedCaps(
             browserControlEnabled: true,
             cameraEnabled: false,
@@ -445,8 +487,8 @@ struct MacNodeModeCoordinatorTests {
             connectionMode: .local)
         let commands = MacNodeModeCoordinator.resolvedCommands(caps: caps)
 
-        #expect(caps.contains(OpenClawCapability.browser.rawValue))
-        #expect(commands.contains(OpenClawBrowserCommand.proxy.rawValue))
+        #expect(!caps.contains(OpenClawCapability.browser.rawValue))
+        #expect(!commands.contains(OpenClawBrowserCommand.proxy.rawValue))
     }
 
     @Test func `local mode omits native session catalogs`() {

@@ -6,10 +6,13 @@ import { extractToolCards } from "../../lib/chat/tool-cards.ts";
 import {
   buildCachedChatItems,
   buildChatItems,
+  coalesceStreamRuns,
+  collapseCompletedTurnWork,
   getExpandedToolCards,
   resetChatThreadState,
   syncToolCardExpansionState,
   type BuildChatItemsProps,
+  type WorkGroupRenderItem,
 } from "./chat-thread.ts";
 
 const SENDER_METADATA_BLOCK =
@@ -61,6 +64,195 @@ function messageAt(group: MessageGroup, index: number) {
 function messageRecord(group: MessageGroup, index = 0): Record<string, unknown> {
   return requireRecord(group.messages[index]?.message);
 }
+
+describe("collapseCompletedTurnWork", () => {
+  const collapsedItems = (props: Partial<BuildChatItemsProps>, runWorking = false) =>
+    collapseCompletedTurnWork(coalesceStreamRuns(buildChatItems(createProps(props))), {
+      runWorking,
+    });
+
+  function requireWorkGroup(value: unknown): WorkGroupRenderItem {
+    const record = requireRecord(value);
+    expect(record.kind).toBe("work-group");
+    return value as WorkGroupRenderItem;
+  }
+
+  const toolResult = (id: string, timestamp: number, isError = false) => ({
+    role: "toolResult",
+    toolCallId: id,
+    toolName: "bash",
+    isError,
+    content: isError ? "boom" : "ok",
+    timestamp,
+  });
+
+  it("collapses a completed turn's work behind one worked-for rollup", () => {
+    const items = collapsedItems({
+      messages: [
+        { role: "user", content: "do it", timestamp: 1_000 },
+        { role: "assistant", content: "Checking…", timestamp: 2_000 },
+        toolResult("call-1", 3_000),
+        { role: "assistant", content: "All done.", timestamp: 10_000 },
+      ],
+    });
+
+    expect(items.map((item) => item.kind)).toEqual(["group", "work-group", "group"]);
+    const work = requireWorkGroup(items[1]);
+    expect(work.groups).toHaveLength(2);
+    expect(work.durationMs).toBe(9_000);
+    expect(work.hasError).toBe(false);
+    expect(requireGroup(items[2]).role).toBe("assistant");
+  });
+
+  it("keeps the trailing turn expanded while the run works", () => {
+    const items = collapsedItems(
+      {
+        runWorking: true,
+        messages: [
+          { role: "user", content: "do it", timestamp: 1_000 },
+          toolResult("call-1", 2_000),
+        ],
+      },
+      true,
+    );
+
+    expect(items.some((item) => item.kind === "work-group")).toBe(false);
+  });
+
+  it("collapses reply-less turns only once the run is idle", () => {
+    const messages = [
+      { role: "user", content: "do it", timestamp: 1_000 },
+      toolResult("call-1", 2_000),
+    ];
+
+    // Mid-run the executing turn can trail a queued send, so reply-less turns
+    // stay expanded until the run reaches terminal.
+    expect(collapsedItems({ messages }, true).some((item) => item.kind === "work-group")).toBe(
+      false,
+    );
+
+    const idle = collapsedItems({ messages });
+    expect(idle.map((item) => item.kind)).toEqual(["group", "work-group"]);
+    expect(requireWorkGroup(idle[1]).durationMs).toBe(1_000);
+  });
+
+  it("flags failed work in turns that never replied", () => {
+    const items = collapsedItems({
+      messages: [
+        { role: "user", content: "go", timestamp: 1_000 },
+        toolResult("call-1", 2_000, true),
+      ],
+    });
+
+    expect(requireWorkGroup(items[1]).hasError).toBe(true);
+  });
+
+  it("does not flag errors once the turn recovered with a reply", () => {
+    const items = collapsedItems({
+      messages: [
+        { role: "user", content: "go", timestamp: 1_000 },
+        toolResult("call-1", 2_000, true),
+        { role: "assistant", content: "Recovered via another route.", timestamp: 3_000 },
+      ],
+    });
+
+    expect(requireWorkGroup(items[1]).hasError).toBe(false);
+  });
+
+  it("keeps work after the final reply visible", () => {
+    const items = collapsedItems({
+      messages: [
+        { role: "user", content: "go", timestamp: 1_000 },
+        toolResult("call-1", 2_000),
+        { role: "assistant", content: "Done.", timestamp: 3_000 },
+        toolResult("call-2", 4_000),
+      ],
+    });
+
+    expect(items.map((item) => item.kind)).toEqual(["group", "work-group", "group", "group"]);
+    expect(requireGroup(items[3]).role).toBe("tool");
+  });
+
+  it("does not collapse across dividers", () => {
+    const items = collapsedItems({
+      messages: [
+        { role: "user", content: "go", timestamp: 1_000 },
+        toolResult("call-1", 2_000),
+        {
+          role: "system",
+          content: "",
+          timestamp: 3_000,
+          __openclaw: { kind: "compaction", id: "c1" },
+        },
+        { role: "assistant", content: "Done.", timestamp: 4_000 },
+      ],
+    });
+
+    expect(items.some((item) => item.kind === "work-group")).toBe(false);
+    expect(items.some((item) => item.kind === "divider")).toBe(true);
+  });
+
+  it("keeps attachment-only final replies outside the work rollup", () => {
+    const items = collapsedItems({
+      messages: [
+        { role: "user", content: "render it", timestamp: 1_000 },
+        toolResult("call-1", 2_000),
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "image",
+              url: "/media/screenshot.png",
+              source: { type: "url", url: "/media/screenshot.png" },
+            },
+          ],
+          timestamp: 3_000,
+        },
+      ],
+    });
+
+    expect(items.map((item) => item.kind)).toEqual(["group", "work-group", "group"]);
+    expect(requireGroup(items[2]).role).toBe("assistant");
+  });
+
+  it("keeps search matches visible instead of folding them into a rollup", () => {
+    const items = collapseCompletedTurnWork(
+      coalesceStreamRuns(
+        buildChatItems(
+          createProps({
+            messages: [
+              { role: "user", content: "do it", timestamp: 1_000 },
+              toolResult("call-1", 2_000),
+              { role: "assistant", content: "All done.", timestamp: 3_000 },
+            ],
+            searchOpen: true,
+            searchQuery: "ok",
+          }),
+        ),
+      ),
+      { runWorking: false, searchActive: true },
+    );
+
+    expect(items.some((item) => item.kind === "work-group")).toBe(false);
+  });
+
+  it("collapses each completed turn independently", () => {
+    const items = collapsedItems({
+      messages: [
+        { role: "user", content: "first", timestamp: 1_000 },
+        toolResult("call-1", 2_000),
+        { role: "assistant", content: "First done.", timestamp: 3_000 },
+        { role: "user", content: "second", timestamp: 4_000 },
+        toolResult("call-2", 5_000),
+        { role: "assistant", content: "Second done.", timestamp: 6_000 },
+      ],
+    });
+
+    const workGroups = items.filter((item) => item.kind === "work-group");
+    expect(workGroups).toHaveLength(2);
+    expect(new Set(workGroups.map((item) => item.key)).size).toBe(2);
+  });
+});
 
 describe("buildChatItems working spark", () => {
   const hasReadingIndicator = (props: Partial<BuildChatItemsProps>) =>
@@ -1432,6 +1624,23 @@ describe("buildChatItems", () => {
     expect(groups.map((group) => group.role)).toEqual(["assistant", "user"]);
     expect(messageRecord(groupAt(groups, 1)).content).toStrictEqual([
       { type: "text", text: "first visible send" },
+    ]);
+  });
+
+  it("keeps steerable queued sends out of the thread until sending starts", () => {
+    const queued = {
+      id: "pending-send-1",
+      text: "wait above the composer",
+      createdAt: 2,
+      sendSubmittedAtMs: 10,
+    };
+
+    expect(messageGroups({ queue: [{ ...queued, sendState: "waiting-idle" }] })).toStrictEqual([]);
+
+    const groups = messageGroups({ queue: [{ ...queued, sendState: "sending" }] });
+    expect(groups).toHaveLength(1);
+    expect(messageRecord(groupAt(groups, 0)).content).toStrictEqual([
+      { type: "text", text: "wait above the composer" },
     ]);
   });
 

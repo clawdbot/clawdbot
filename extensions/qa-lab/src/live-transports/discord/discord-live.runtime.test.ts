@@ -610,31 +610,32 @@ describe("discord live qa runtime", () => {
     }
   });
 
-  it("uses the Discord API helper timeout for identity probes", async () => {
-    const controller = new AbortController();
-    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
+  it("aborts Discord identity probes after the API helper timeout", async () => {
+    vi.useFakeTimers();
     let signal: AbortSignal | undefined;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (_input: string | URL | globalThis.Request, init?: RequestInit) => {
-        signal = init?.signal as AbortSignal | undefined;
-        return new Response(JSON.stringify({ id: "423456789012345678" }), {
-          status: 200,
-          headers: {
-            "content-type": "application/json",
-          },
-        });
-      }),
-    );
+    try {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((_input: string | URL | globalThis.Request, init?: RequestInit) => {
+          signal = init?.signal as AbortSignal | undefined;
+          return new Promise<Response>((_resolve, reject) => {
+            signal?.addEventListener("abort", () => reject(new Error("request aborted")), {
+              once: true,
+            });
+          });
+        }),
+      );
 
-    await expect(testing.getCurrentDiscordUser("token")).resolves.toEqual({
-      id: "423456789012345678",
-    });
-    expect(timeoutSpy).toHaveBeenCalledWith(15_000);
-    expect(signal).toBe(controller.signal);
-    expect(signal?.aborted).toBe(false);
-    controller.abort();
-    expect(signal?.aborted).toBe(true);
+      const request = testing.getCurrentDiscordUser("token");
+      const rejection = expect(request).rejects.toBeInstanceOf(Error);
+      await vi.advanceTimersByTimeAsync(14_999);
+      expect(signal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await rejection;
+      expect(signal?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("retries Discord REST requests after a 429 rate limit", async () => {

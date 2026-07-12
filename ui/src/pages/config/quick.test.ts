@@ -341,6 +341,39 @@ describe("renderQuickSettings", () => {
     expect(onApplyConfig).toHaveBeenCalledTimes(1);
   });
 
+  it("locks config-backed quick controls while a config operation is pending", () => {
+    const container = document.createElement("div");
+
+    for (const pending of [
+      { configLoading: true },
+      { configSaving: true },
+      { configApplying: true },
+      { configUpdating: true },
+    ]) {
+      render(renderQuickSettings(createProps({ configDirty: true, ...pending })), container);
+
+      const thinkingRow = expectRowByLabel(container, "Thinking");
+      const fastModeRow = expectRowByLabel(container, "Fast mode");
+      const browserRow = expectRowByLabel(container, "Browser enabled");
+      const toolProfileRow = expectRowByLabel(container, "Tool profile");
+      expect([...thinkingRow.querySelectorAll("button")].every((button) => button.disabled)).toBe(
+        true,
+      );
+      expect([...fastModeRow.querySelectorAll("button")].every((button) => button.disabled)).toBe(
+        true,
+      );
+      expect(browserRow.querySelector("input")?.hasAttribute("disabled")).toBe(true);
+      expect(
+        [...toolProfileRow.querySelectorAll("button")].every((button) => button.disabled),
+      ).toBe(true);
+      expect(
+        [...container.querySelectorAll<HTMLButtonElement>(".qs-pending__actions button")].every(
+          (button) => button.disabled,
+        ),
+      ).toBe(true);
+    }
+  });
+
   it("disables commit actions until the config is ready", () => {
     const container = document.createElement("div");
 

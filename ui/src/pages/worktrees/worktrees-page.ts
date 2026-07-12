@@ -260,6 +260,11 @@ class WorktreesPage extends OpenClawLightDomElement {
   }
 
   private toggleCreate() {
+    // A successful create closes and resets this shared draft, so the submitted
+    // snapshot must stay atomic until its request settles.
+    if (this.creating) {
+      return;
+    }
     this.createOpen = !this.createOpen;
     if (this.createOpen && !this.createRepoRoot) {
       const agents = this.context.agents.state.agentsList;
@@ -346,6 +351,7 @@ class WorktreesPage extends OpenClawLightDomElement {
           ${t("worktrees.repo")}
           <input
             type="text"
+            ?disabled=${this.creating}
             .value=${this.createRepoRoot}
             @change=${(event: Event) => {
               this.createRepoRoot = (event.target as HTMLInputElement).value;
@@ -358,6 +364,7 @@ class WorktreesPage extends OpenClawLightDomElement {
           ${t("worktrees.name")}
           <input
             type="text"
+            ?disabled=${this.creating}
             placeholder=${t("newSession.worktreeNamePlaceholder")}
             .value=${this.createName}
             @input=${(event: Event) => {
@@ -369,6 +376,7 @@ class WorktreesPage extends OpenClawLightDomElement {
           ${t("newSession.baseBranch")}
           <input
             type="text"
+            ?disabled=${this.creating}
             list="worktrees-create-branches"
             .value=${this.createBaseRef}
             @input=${(event: Event) => {
@@ -399,7 +407,7 @@ class WorktreesPage extends OpenClawLightDomElement {
             <div class="card-sub">${t("worktrees.subtitle")}</div>
           </div>
           <div class="row" style="gap: 8px;">
-            <button class="btn" @click=${() => this.toggleCreate()}>
+            <button class="btn" ?disabled=${this.creating} @click=${() => this.toggleCreate()}>
               ${t("worktrees.newWorktree")}
             </button>
             <button class="btn" ?disabled=${this.operationPending} @click=${() => void this.gc()}>

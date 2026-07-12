@@ -1445,7 +1445,8 @@ export const usageHandlers: GatewayRequestHandlers = {
 
     for (const [entryIndex, merged] of mergedEntries.entries()) {
       const agentId = merged.agentId;
-      const usage = usageByEntryIndex[entryIndex];
+      // A cold or stale cache intentionally yields null until its background refresh completes.
+      const usage = usageByEntryIndex[entryIndex] ?? null;
 
       if (usage) {
         addCostUsageTotals(aggregateTotals, usage);
@@ -1594,7 +1595,7 @@ export const usageHandlers: GatewayRequestHandlers = {
           providerOverride: merged.storeEntry?.providerOverride,
           modelProvider: merged.storeEntry?.modelProvider,
           model: merged.storeEntry?.model,
-          usage: expectDefined(usage, "session usage summary"),
+          usage,
           contextWeight: includeContextWeight
             ? (merged.storeEntry?.systemPromptReport ?? null)
             : undefined,

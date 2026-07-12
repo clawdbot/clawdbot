@@ -123,6 +123,127 @@
   background: var(--accent-2-subtle);
 }
 
+/* --- Transcript search: server-backed message content, separate from roster filters --- */
+.sessions-transcript-search {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.sessions-transcript-search__title {
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.sessions-transcript-search__form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sessions-transcript-search__input input {
+  min-height: 34px;
+}
+
+.sessions-transcript-search__status:empty {
+  display: none;
+}
+
+.sessions-transcript-search__status,
+.sessions-transcript-search__results {
+  display: grid;
+  gap: 8px;
+}
+
+.sessions-transcript-search__notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0;
+}
+
+.sessions-transcript-search__empty {
+  padding: 10px 12px;
+  color: var(--muted);
+  background: var(--card);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+}
+
+.sessions-transcript-search__summary,
+.sessions-transcript-search__result-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.sessions-transcript-search__summary {
+  font-size: 12px;
+}
+
+.sessions-transcript-search__list {
+  display: grid;
+  gap: 6px;
+  max-height: 380px;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.sessions-transcript-search__result {
+  display: grid;
+  gap: 5px;
+  width: 100%;
+  padding: 10px 12px;
+  color: var(--text);
+  text-align: left;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  transition: border-color var(--duration-fast) ease;
+}
+
+.sessions-transcript-search__result:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+.sessions-transcript-search__result:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.sessions-transcript-search__result-header > strong {
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sessions-transcript-search__snippet {
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.sessions-transcript-search__key {
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* --- Toolbar: search + filters + grouping in one strip --- */
 .sessions-toolbar {
   display: flex;
@@ -1155,6 +1276,18 @@ input.session-override-field__control {
 
   .sessions-toolbar {
     align-items: stretch;
+  }
+
+  .sessions-transcript-search__form {
+    flex-wrap: wrap;
+  }
+
+  .sessions-transcript-search__input {
+    flex-basis: 100%;
+  }
+
+  .sessions-transcript-search__form .btn {
+    flex: 1 1 auto;
   }
 
   .sessions-toolbar__search {

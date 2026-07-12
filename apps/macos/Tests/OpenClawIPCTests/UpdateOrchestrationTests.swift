@@ -99,6 +99,22 @@ struct UpdateOrchestrationTests {
             launchAgentWriteDisabled: false))
     }
 
+    @Test func `CLI management follows configured node modes`() {
+        #expect(CLIInstallPrompter.shouldManageCLI(connectionMode: .local))
+        #expect(CLIInstallPrompter.shouldManageCLI(connectionMode: .remote))
+        #expect(!CLIInstallPrompter.shouldManageCLI(connectionMode: .unconfigured))
+
+        #expect(CLIInstallPrompter.shouldRestartManagedGateway(
+            requested: true,
+            connectionMode: .local))
+        #expect(!CLIInstallPrompter.shouldRestartManagedGateway(
+            requested: true,
+            connectionMode: .remote))
+        #expect(!CLIInstallPrompter.shouldRestartManagedGateway(
+            requested: false,
+            connectionMode: .local))
+    }
+
     @Test func `managed repair only upgrades`() {
         #expect(CLIInstallPrompter.isManagedUpgrade(found: "2026.7.1", required: "2026.7.2"))
         #expect(!CLIInstallPrompter.isManagedUpgrade(found: "2026.7.2", required: "2026.7.1"))

@@ -11,16 +11,16 @@ export const CODE_MODE_EXEC_TOOL_NAME = "exec";
 /** Model-visible Code Mode wait tool name. */
 export const CODE_MODE_WAIT_TOOL_NAME = "wait";
 /** Direct tools whose structured results cannot cross the JSON-only guest bridge. */
-export const CODE_MODE_DIRECT_TOOL_NAMES: ReadonlySet<string> = new Set(["computer"]);
+const CODE_MODE_DIRECT_TOOL_NAMES: ReadonlySet<string> = new Set(["computer"]);
 /** Hook metadata kind for Code Mode exec tools. */
 const CODE_MODE_EXEC_TOOL_KIND = "code_mode_exec";
 
 /** Hook metadata kind type for Code Mode exec tools. */
 type CodeModeExecToolKind = typeof CODE_MODE_EXEC_TOOL_KIND;
 /** Source language accepted by the Code Mode exec tool. */
-export type CodeModeExecToolInputKind = "javascript" | "typescript";
+type CodeModeExecToolInputKind = "javascript" | "typescript";
 /** Metadata attached to before-tool-call events for Code Mode exec. */
-export type CodeModeExecHookMetadata = {
+type CodeModeExecHookMetadata = {
   toolKind: CodeModeExecToolKind;
   toolInputKind?: CodeModeExecToolInputKind;
 };

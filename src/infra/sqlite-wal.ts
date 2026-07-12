@@ -11,11 +11,6 @@ import { isSqliteLockError } from "./sqlite-transaction.js";
 // checkpoints so state databases do not accumulate unbounded WAL files.
 export const DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS = 30 * 60 * 1000;
-/**
- * @deprecated Use DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS.
- * Periodic checkpoints default to PASSIVE.
- */
-export const DEFAULT_SQLITE_WAL_TRUNCATE_INTERVAL_MS = DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS;
 // 512 pages (~2MB at 4KB pages) per periodic pass keeps page release strictly
 // bounded so maintenance can never behave like a blocking full VACUUM.
 const INCREMENTAL_VACUUM_MAX_PAGES_PER_PASS = 512;

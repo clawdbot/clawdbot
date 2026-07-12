@@ -245,6 +245,11 @@ vi.mock("./components/chat-message.ts", () => ({
     }
     return group;
   },
+  renderWorkGroupSummary: () => {
+    const summary = document.createElement("div");
+    summary.className = "chat-work-group";
+    return summary;
+  },
 }));
 
 vi.mock("../../lib/agents/tools-effective.ts", () => ({

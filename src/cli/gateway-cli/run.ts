@@ -52,6 +52,7 @@ import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logg
 import { withDiagnosticPhase } from "../../logging/diagnostic-phase.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
+import { printClawBanner } from "../claw-banner.js";
 import { formatCliCommand } from "../command-format.js";
 import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
 import { withProgress } from "../progress.js";
@@ -599,6 +600,12 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
   const rawStreamPath = toOptionString(opts.rawStreamPath);
   if (rawStreamPath) {
     process.env.OPENCLAW_RAW_STREAM_PATH = rawStreamPath;
+  }
+
+  // Foreground TTY runs get the banner before the module-loading spinner;
+  // managed/piped runs (launchd, tests, logs) stay banner-free.
+  if (process.stdout.isTTY) {
+    await printClawBanner(defaultRuntime);
   }
 
   const startupTrace = createGatewayCliStartupTrace();

@@ -31,20 +31,12 @@ public struct Logger: Sendable {
         print("[\(level.rawValue.uppercased())] \(ts) | \(message)")
     }
 
-    public func trace(_ msg: String) {
-        self.log(.trace, msg)
-    }
-
     public func debug(_ msg: String) {
         self.log(.debug, msg)
     }
 
     public func info(_ msg: String) {
         self.log(.info, msg)
-    }
-
-    public func warn(_ msg: String) {
-        self.log(.warn, msg)
     }
 
     public func error(_ msg: String) {

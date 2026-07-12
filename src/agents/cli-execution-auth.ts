@@ -9,7 +9,7 @@ import { resolveCliBackendConfig } from "./cli-backends.js";
 const GOOGLE_GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
 const GOOGLE_PROVIDER_ID = "google";
 
-export type CliExecutionAuthProfileSelection = {
+type CliExecutionAuthProfileSelection = {
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
 };

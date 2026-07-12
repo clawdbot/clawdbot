@@ -58,7 +58,6 @@ import {
   buildOpenAICodexProviderHooks,
 } from "./openai-chatgpt-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import { resolveModelRoutes } from "./provider-policy-api.js";
 import {
   buildOpenAIResponsesProviderHooks,
   buildOpenAISyntheticCatalogEntry,
@@ -585,17 +584,11 @@ function resolveAuthoredOpenAICompletionsRoute(params: {
   if (effectiveApi !== "openai-completions") {
     return undefined;
   }
-  const resolution = resolveModelRoutes({
-    provider: params.provider,
-    modelId: params.modelId,
-    ...configuredRoute,
-    env: process.env,
-  });
-  if (resolution.kind !== "routes") {
-    return undefined;
-  }
-  const route = resolution.routes.find((candidate) => candidate.api === "openai-completions");
-  return route ? { api: "openai-completions", baseUrl: route.baseUrl } : undefined;
+  const baseUrl =
+    normalizeOptionalString(configuredRoute.configuredModel?.baseUrl) ??
+    normalizeOptionalString(configuredRoute.configuredProvider.baseUrl) ??
+    resolveOpenAIDefaultBaseUrl(process.env);
+  return { api: "openai-completions", baseUrl };
 }
 
 function isOpenAIProvider(provider: string | undefined): boolean {

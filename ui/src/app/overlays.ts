@@ -34,6 +34,7 @@ type ApplicationStatusBanner = {
 export type ApplicationOverlaySnapshot = {
   updateAvailable: UpdateAvailable | null;
   updateRunning: boolean;
+  updateReconciliationPending: boolean;
   updateStatusBanner: ApplicationStatusBanner | null;
   approvalQueue: readonly ExecApprovalRequest[];
   approvalBusy: boolean;
@@ -202,6 +203,7 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
   let snapshot: ApplicationOverlaySnapshot = {
     updateAvailable: null,
     updateRunning: false,
+    updateReconciliationPending: false,
     updateStatusBanner: null,
     approvalQueue: [],
     approvalBusy: false,
@@ -251,6 +253,9 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
     snapshot = {
       updateAvailable: snapshot.updateAvailable,
       updateRunning: snapshot.updateRunning,
+      // The update RPC can finish before its restart handoff. Keep consumers
+      // locked until the replacement Gateway reports the authoritative result.
+      updateReconciliationPending: pendingUpdateHandoff || pendingUpdateExpectedVersion !== null,
       updateStatusBanner: snapshot.updateStatusBanner,
       approvalQueue: promptState.execApprovalQueue,
       approvalBusy: promptState.execApprovalBusy,

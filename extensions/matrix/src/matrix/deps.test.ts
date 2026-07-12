@@ -253,6 +253,37 @@ describe("runFixedCommandWithTimeout", () => {
     expect(result.stderr).toBe("b".repeat(MATRIX_COMMAND_OUTPUT_TAIL_BYTES));
   });
 
+  it("keeps bounded stdout and stderr tails on UTF-8 character boundaries", async () => {
+    const suffix = "z".repeat(MATRIX_COMMAND_OUTPUT_TAIL_BYTES - 2);
+    const result = await runFixedCommandWithTimeout({
+      argv: [
+        process.execPath,
+        "-e",
+        [
+          'const prefix = "a".repeat(10);',
+          `const suffix = "z".repeat(${MATRIX_COMMAND_OUTPUT_TAIL_BYTES - 2});`,
+          "const payload = `${prefix}🙂${suffix}`;",
+          "process.stdout.write(payload);",
+          "process.stderr.write(payload);",
+        ].join(""),
+      ],
+      cwd: process.cwd(),
+      timeoutMs: 10_000,
+    });
+
+    expect(result.code).toBe(0);
+    expect(Buffer.byteLength(result.stdout, "utf8")).toBeLessThanOrEqual(
+      MATRIX_COMMAND_OUTPUT_TAIL_BYTES,
+    );
+    expect(Buffer.byteLength(result.stderr, "utf8")).toBeLessThanOrEqual(
+      MATRIX_COMMAND_OUTPUT_TAIL_BYTES,
+    );
+    expect(result.stdout).toBe(suffix);
+    expect(result.stderr).toBe(suffix);
+    expect(result.stdout).not.toContain("\uFFFD");
+    expect(result.stderr).not.toContain("\uFFFD");
+  });
+
   it("settles real child stream errors after child close and terminates once", async () => {
     const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
 

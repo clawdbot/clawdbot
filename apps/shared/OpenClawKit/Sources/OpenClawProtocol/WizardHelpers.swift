@@ -39,16 +39,6 @@ public func parseWizardDeviceCode(
         message: raw?["message"]?.value as? String)
 }
 
-public func decodeWizardStep(_ raw: [String: AnyCodable]?) -> WizardStep? {
-    guard let raw else { return nil }
-    do {
-        let data = try JSONEncoder().encode(raw)
-        return try JSONDecoder().decode(WizardStep.self, from: data)
-    } catch {
-        return nil
-    }
-}
-
 public func parseWizardOptions(_ raw: [[String: AnyCodable]]?) -> [WizardOption] {
     guard let raw else { return [] }
     return raw.map { entry in

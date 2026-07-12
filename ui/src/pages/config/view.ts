@@ -1456,19 +1456,16 @@ export function renderConfig(props: ConfigProps) {
       ? computeRawDiff(viewState, props.originalRaw, props.raw)
       : [];
   const hasChanges = formMode === "form" ? diff.length > 0 : hasRawChanges;
+  const configBusy = props.loading || props.saving || props.applying || props.updating;
 
   // Save/apply buttons require actual changes to be enabled.
   // Note: formUnsafe warns about unsupported schema paths but shouldn't block saving.
   const canSaveForm = Boolean(props.formValue) && !props.loading && Boolean(analysis.schema);
   const canSave =
-    props.connected && !props.saving && hasChanges && (formMode === "raw" ? true : canSaveForm);
+    props.connected && !configBusy && hasChanges && (formMode === "raw" ? true : canSaveForm);
   const canApply =
-    props.connected &&
-    !props.applying &&
-    !props.updating &&
-    hasChanges &&
-    (formMode === "raw" ? true : canSaveForm);
-  const canUpdate = props.connected && !props.applying && !props.updating;
+    props.connected && !configBusy && hasChanges && (formMode === "raw" ? true : canSaveForm);
+  const canUpdate = props.connected && !configBusy;
   const renderActionButtonContent = (busy: boolean, label: string, busyLabel: string) =>
     busy
       ? html`<span class="config-action-spinner" aria-hidden="true">${icons.loader}</span
@@ -1541,10 +1538,14 @@ export function renderConfig(props: ConfigProps) {
                     </button>
                   `
                 : nothing}
-              <button class="btn btn--sm" ?disabled=${props.loading} @click=${props.onReload}>
+              <button class="btn btn--sm" ?disabled=${configBusy} @click=${props.onReload}>
                 ${props.loading ? t("common.loading") : t("common.reload")}
               </button>
-              <button class="btn btn--sm" ?disabled=${!hasChanges} @click=${props.onReset}>
+              <button
+                class="btn btn--sm"
+                ?disabled=${configBusy || !hasChanges}
+                @click=${props.onReset}
+              >
                 ${t("configView.clear")}
               </button>
               <button
@@ -1869,7 +1870,7 @@ export function renderConfig(props: ConfigProps) {
                           uiHints: props.uiHints,
                           value: props.formValue,
                           rawAvailable,
-                          disabled: props.loading || !props.formValue,
+                          disabled: configBusy || !props.formValue,
                           unsupportedPaths: analysis.unsupportedPaths,
                           onPatch: props.onFormPatch,
                           searchQuery: props.searchQuery,
@@ -1953,6 +1954,7 @@ export function renderConfig(props: ConfigProps) {
                               <textarea
                                 placeholder=${t("configView.rawConfig")}
                                 .value=${props.raw}
+                                ?disabled=${configBusy}
                                 @input=${(e: Event) => {
                                   props.onRawChange((e.target as HTMLTextAreaElement).value);
                                 }}

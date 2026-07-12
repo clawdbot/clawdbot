@@ -1700,6 +1700,10 @@ html.openclaw-native-nav .topbar .topbar-nav-toggle {
   box-shadow: var(--shadow-lg);
 }
 
+/* Popover hosts live in the top layer so menus escape in-page stacking
+   contexts (e.g. the sidebar resizer above the nav); the host itself must
+   stay a zero-size shell around its fixed-position menu. */
+openclaw-menu-surface[popover],
 openclaw-native-link-menu[popover],
 openclaw-session-menu[popover] {
   width: 0;

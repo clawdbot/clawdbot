@@ -61,29 +61,29 @@ extension RootTabs {
 
         var title: String {
             switch self {
-            case .chat: "Chat"
-            case .talk: "Talk"
-            case .overview: "Overview"
-            case .activity: "Activity"
-            case .agents: "Agents"
-            case .workboard: "Workboard"
-            case .skillWorkshop: "Skill Workshop"
-            case .instances: "Instances"
-            case .sessions: "Sessions"
-            case .files: "Files"
-            case .dreaming: "Dreaming"
-            case .usage: "Usage"
-            case .cron: "Cron Jobs"
-            case .terminal: "Terminal"
-            case .docs: "Docs"
-            case .settings: "Settings"
-            case .gateway: "Settings / Gateway"
+            case .chat: String(localized: "Chat")
+            case .talk: String(localized: "Talk")
+            case .overview: String(localized: "Overview")
+            case .activity: String(localized: "Activity")
+            case .agents: String(localized: "Agents")
+            case .workboard: String(localized: "Workboard")
+            case .skillWorkshop: String(localized: "Skill Workshop")
+            case .instances: String(localized: "Instances")
+            case .sessions: String(localized: "Sessions")
+            case .files: String(localized: "Files")
+            case .dreaming: String(localized: "Dreaming")
+            case .usage: String(localized: "Usage")
+            case .cron: String(localized: "Cron Jobs")
+            case .terminal: String(localized: "Terminal")
+            case .docs: String(localized: "Docs")
+            case .settings: String(localized: "Settings")
+            case .gateway: String(localized: "Settings / Gateway")
             }
         }
 
         var sidebarTitle: String {
             switch self {
-            case .gateway: "Connection"
+            case .gateway: String(localized: "Connection")
             default: self.title
             }
         }

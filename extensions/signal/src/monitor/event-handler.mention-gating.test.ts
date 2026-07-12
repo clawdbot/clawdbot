@@ -43,10 +43,12 @@ const [
   { createBaseSignalEventHandlerDeps, createSignalReceiveEvent },
   { createSignalEventHandler },
   { renderSignalMentions },
+  { clearSignalReplyAuthorsForTest, resolveSignalReplyContextWithPersistence },
 ] = await Promise.all([
   import("./event-handler.test-harness.js"),
   import("./event-handler.js"),
   import("./mentions.js"),
+  import("../reply-authors.js"),
 ]);
 
 type GroupEventOpts = {
@@ -122,8 +124,9 @@ async function expectSkippedGroupHistory(opts: GroupEventOpts, expectedBody: str
 }
 
 describe("signal mention gating", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     capturedCtx = undefined;
+    await clearSignalReplyAuthorsForTest();
   });
 
   it("drops group messages without mention when requireMention is configured", async () => {
@@ -181,6 +184,34 @@ describe("signal mention gating", () => {
     const entry = expectDefined(entries[0], "Signal group history entry");
     expect(entry.sender).toBe("Alice");
     expect(entry.body).toBe("hello from alice");
+  });
+
+  it("records edited target reply authors for skipped group messages", async () => {
+    const { handler } = createMentionGatedHistoryHandler();
+
+    await handler(
+      createSignalReceiveEvent({
+        timestamp: 1700000000999,
+        editMessage: {
+          targetSentTimestamp: 1700000000000,
+          dataMessage: {
+            timestamp: 1700000000999,
+            message: "edited without mention",
+            attachments: [],
+            groupInfo: { groupId: "g1", groupName: "Test Group" },
+          },
+        },
+      }),
+    );
+
+    expect(capturedCtx).toBeUndefined();
+    await expect(
+      resolveSignalReplyContextWithPersistence({
+        accountId: "default",
+        to: "group:g1",
+        replyToId: "1700000000000",
+      }),
+    ).resolves.toEqual({ author: "+15550001111", body: "edited without mention" });
   });
 
   it("records attachment placeholder in pending history for skipped attachment-only group messages", async () => {

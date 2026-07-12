@@ -394,6 +394,34 @@ struct TalkModeManagerTests {
         #expect(manager._test_gatewayTalkActiveModeSubtitle() == nil)
     }
 
+    @Test func `realtime failures remain visible on the watch`() {
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+
+        manager._test_handleRealtimeRelayStatus("Realtime disconnected")
+        #expect(manager.watchPresentation == .localized("Realtime disconnected"))
+
+        manager._test_handleRealtimeRelayStatus("Backend rejected realtime request")
+        #expect(manager.watchPresentation == .verbatim("Backend rejected realtime request"))
+
+        manager._test_handleRealtimeRelayStatus("Reconnecting")
+        #expect(manager.phase == .connecting)
+        #expect(manager.watchPresentation == .phase)
+    }
+
+    @Test func `WebRTC progress remains semantic on the watch`() {
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+
+        manager._test_handleRealtimeRelayStatus("Connecting")
+        #expect(manager.phase == .connecting)
+        #expect(manager.watchPresentation == .phase)
+
+        for status in ["Asking OpenClaw", "Still asking OpenClaw", "Updating OpenClaw"] {
+            manager._test_handleRealtimeRelayStatus(status)
+            #expect(manager.phase == .thinking)
+            #expect(manager.watchPresentation == .phase)
+        }
+    }
+
     @Test func `relay close restarts enabled continuous realtime`() {
         let manager = TalkModeManager(allowSimulatorCapture: true)
         manager._test_prepareEnabledRealtimeSessionForClose()
@@ -582,6 +610,20 @@ struct TalkModeManagerTests {
         #expect(TalkModeManager._test_realtimeRestartDelayNanoseconds(attempt: 1) == 500_000_000)
         #expect(TalkModeManager._test_realtimeRestartDelayNanoseconds(attempt: 2) == 2_000_000_000)
         #expect(TalkModeManager._test_realtimeRestartDelayNanoseconds(attempt: 3) == nil)
+    }
+
+    @Test @MainActor func `speech restart clears only the presentation revision it owns`() {
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+        manager._test_markSpeechErrorStatusPendingRestart("Spracherkennungsfehler")
+        manager._test_restoreListeningStatusAfterSpeechErrorRestart()
+        #expect(manager.statusText == String(localized: "Listening"))
+        #expect(manager.phase == .listening)
+
+        manager._test_markSpeechErrorStatusPendingRestart("Spracherkennungsfehler")
+        manager.statusText = "Neue Statusmeldung"
+        manager._test_restoreListeningStatusAfterSpeechErrorRestart()
+        #expect(manager.statusText == "Neue Statusmeldung")
+        #expect(manager.phase == .idle)
     }
 
     @Test func `keeps provider web socket realtime transport on gateway relay`() {

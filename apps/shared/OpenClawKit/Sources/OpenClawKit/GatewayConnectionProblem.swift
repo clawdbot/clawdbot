@@ -1,6 +1,12 @@
 import Foundation
 
 public struct GatewayConnectionProblem: Equatable, Sendable {
+    public enum PresentationText: Equatable, Sendable {
+        case localized(String)
+        case localizedFormat(String, [String])
+        case verbatim(String)
+    }
+
     public enum Kind: String, Equatable, Sendable {
         case gatewayAuthTokenMissing
         case gatewayAuthTokenMismatch
@@ -51,6 +57,9 @@ public struct GatewayConnectionProblem: Equatable, Sendable {
     public let title: String
     public let message: String
     public let actionLabel: String?
+    public let titlePresentation: PresentationText
+    public let messagePresentation: PresentationText
+    public let actionLabelPresentation: PresentationText?
     public let actionCommand: String?
     public let docsURL: URL?
     public let requestId: String?
@@ -68,6 +77,9 @@ public struct GatewayConnectionProblem: Equatable, Sendable {
         title: String,
         message: String,
         actionLabel: String? = nil,
+        titlePresentation: PresentationText? = nil,
+        messagePresentation: PresentationText? = nil,
+        actionLabelPresentation: PresentationText? = nil,
         actionCommand: String? = nil,
         docsURL: URL? = nil,
         requestId: String? = nil,
@@ -84,6 +96,10 @@ public struct GatewayConnectionProblem: Equatable, Sendable {
         self.title = title
         self.message = message
         self.actionLabel = Self.trimmedOrNil(actionLabel)
+        self.titlePresentation = titlePresentation ?? .localized(title)
+        self.messagePresentation = messagePresentation ?? .localized(message)
+        self.actionLabelPresentation = actionLabelPresentation
+            ?? self.actionLabel.map(PresentationText.localized)
         self.actionCommand = Self.trimmedOrNil(actionCommand)
         self.docsURL = docsURL
         self.requestId = Self.trimmedOrNil(requestId)
@@ -650,7 +666,9 @@ public enum GatewayConnectionProblemMapper {
             preconditionFailure("Unexpected device identity auth detail")
         }
     }
+}
 
+extension GatewayConnectionProblemMapper {
     private static func map(_ responseError: GatewayResponseError) -> GatewayConnectionProblem? {
         let code = responseError.code.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         if code == "NOT_PAIRED" || responseError.detailsReason == "not-paired" {
@@ -683,12 +701,23 @@ public enum GatewayConnectionProblemMapper {
                 : " This device could not verify the new certificate."
             let message = "The saved TLS certificate pin for \(failure.host) "
                 + "no longer matches the gateway certificate.\(trustedSuffix)"
+            // Keep the extraction keys contiguous for the native localization inventory.
+            // swiftlint:disable line_length
+            let messagePresentation: GatewayConnectionProblem.PresentationText = failure.systemTrustOk
+                ? .localizedFormat(
+                    "The saved TLS certificate pin for %@ no longer matches the gateway certificate. The new certificate is trusted by this device; this is commonly caused by certificate rotation.",
+                    [failure.host])
+                : .localizedFormat(
+                    "The saved TLS certificate pin for %@ no longer matches the gateway certificate. This device could not verify the new certificate.",
+                    [failure.host])
+            // swiftlint:enable line_length
             return GatewayConnectionProblem(
                 kind: .tlsPinMismatch,
                 owner: failure.systemTrustOk ? .network : .unknown,
                 title: "Gateway certificate changed",
                 message: message,
                 actionLabel: "Review certificate",
+                messagePresentation: messagePresentation,
                 actionCommand: nil,
                 docsURL: URL(string: "https://docs.openclaw.ai/gateway/troubleshooting"),
                 retryable: false,
@@ -705,6 +734,9 @@ public enum GatewayConnectionProblemMapper {
                 title: "Gateway certificate unavailable",
                 message: "OpenClaw could not read the gateway certificate for \(failure.host).",
                 actionLabel: "Retry",
+                messagePresentation: .localizedFormat(
+                    "OpenClaw could not read the gateway certificate for %@.",
+                    [failure.host]),
                 actionCommand: nil,
                 docsURL: URL(string: "https://docs.openclaw.ai/gateway/troubleshooting"),
                 retryable: true,
@@ -717,6 +749,9 @@ public enum GatewayConnectionProblemMapper {
                 title: "Gateway certificate is not trusted",
                 message: "This device does not trust the TLS certificate presented by \(failure.host).",
                 actionLabel: "Check certificate",
+                messagePresentation: .localizedFormat(
+                    "This device does not trust the TLS certificate presented by %@.",
+                    [failure.host]),
                 actionCommand: nil,
                 docsURL: URL(string: "https://docs.openclaw.ai/gateway/troubleshooting"),
                 retryable: false,
@@ -987,6 +1022,16 @@ public enum GatewayConnectionProblemMapper {
             title: defaults.title,
             message: defaults.message,
             actionLabel: defaults.actionLabel,
+            titlePresentation: authError.titleOverride == nil
+                ? .localized(defaults.title)
+                : .verbatim(defaults.title),
+            messagePresentation: authError.userMessageOverride == nil
+                && defaults.message != authError.message
+                ? .localized(defaults.message)
+                : .verbatim(defaults.message),
+            actionLabelPresentation: authError.actionLabel == nil
+                ? defaults.actionLabel.map(GatewayConnectionProblem.PresentationText.localized)
+                : defaults.actionLabel.map(GatewayConnectionProblem.PresentationText.verbatim),
             actionCommand: defaults.actionCommand,
             docsURL: defaults.docsURL,
             requestId: defaults.requestId,

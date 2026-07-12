@@ -67,6 +67,7 @@ export function createMessageReceiveContext<TMessage>(params: {
   onAck?: () => Promise<void> | void;
   onNack?: (error: unknown) => Promise<void> | void;
 }): MessageReceiveContext<TMessage> {
+  let nackInFlight: Promise<void> | undefined;
   const ctx: MessageReceiveContext<TMessage> = {
     id: params.id,
     channel: params.channel,
@@ -88,9 +89,24 @@ export function createMessageReceiveContext<TMessage>(params: {
       delete ctx.nackErrorMessage;
     },
     nack: async (error) => {
-      await params.onNack?.(error);
-      ctx.ackState = "nacked";
-      ctx.nackErrorMessage = normalizeAckErrorMessage(error);
+      // Share overlapping callbacks; clear rejected work so a later call can retry.
+      if (ctx.ackState === "nacked") {
+        return;
+      }
+      if (nackInFlight) {
+        await nackInFlight;
+        return;
+      }
+      nackInFlight = (async () => {
+        await params.onNack?.(error);
+        ctx.ackState = "nacked";
+        ctx.nackErrorMessage = normalizeAckErrorMessage(error);
+      })();
+      try {
+        await nackInFlight;
+      } finally {
+        nackInFlight = undefined;
+      }
     },
   };
   return ctx;

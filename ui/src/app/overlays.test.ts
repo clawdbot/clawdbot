@@ -259,6 +259,27 @@ describe("application update overlays", () => {
       text: "Update installed. A gateway restart is already in progress; status will refresh after it reconnects.",
     });
     expect(overlays.snapshot.updateRunning).toBe(false);
+    expect(overlays.snapshot.updateReconciliationPending).toBe(true);
+    overlays.dispose();
+  });
+
+  it("keeps reconciliation pending after a managed-service handoff starts", async () => {
+    const request = vi.fn<RequestFn>().mockResolvedValue({
+      ok: true,
+      handoff: { status: "started" },
+      result: {
+        status: "skipped",
+        reason: "managed-service-handoff-started",
+        after: { version: "2.0.0" },
+      },
+    });
+    const harness = createGatewayHarness(client(request));
+    const overlays = createApplicationOverlays(harness.gateway);
+
+    await overlays.runUpdate();
+
+    expect(overlays.snapshot.updateRunning).toBe(false);
+    expect(overlays.snapshot.updateReconciliationPending).toBe(true);
     overlays.dispose();
   });
 
@@ -314,6 +335,7 @@ describe("application update overlays", () => {
 
       expect(statusRequests).toBe(2);
       expect(overlays.snapshot.updateStatusBanner).toBeNull();
+      expect(overlays.snapshot.updateReconciliationPending).toBe(false);
     } finally {
       overlays.dispose();
       vi.useRealTimers();

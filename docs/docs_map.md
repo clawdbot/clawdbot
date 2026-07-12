@@ -2868,6 +2868,17 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Index lifecycle
   - H2: Session search vs. memory search
 
+## concepts/session-state.md
+
+- Route: /concepts/session-state
+- Headings:
+  - H2: The signal log
+  - H2: Watchers
+  - H2: Notices: one, not many
+  - H2: Reconciling
+  - H2: Storage and limits
+  - H2: Related
+
 ## concepts/session-tool.md
 
 - Route: /concepts/session-tool
@@ -5158,6 +5169,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: What it does
   - H2: Requirements
   - H2: Quick start (pair + connect)
+  - H2: Health summaries
   - H2: Review command approvals
   - H2: Optional direct Apple Watch node
   - H2: Relay-backed push for official builds

@@ -338,7 +338,9 @@ struct SettingsProTab: View {
                     .font(OpenClawType.subhead)
             }
             .confirmationDialog(
-                    "Forget \(self.pendingForgetGateway?.name ?? "gateway")?",
+                    String(
+                        format: String(localized: "Forget %@?"),
+                        self.pendingForgetGateway?.name ?? String(localized: "gateway")),
                     isPresented: Binding(
                         get: { self.pendingForgetGateway != nil },
                         set: {
@@ -361,10 +363,14 @@ struct SettingsProTab: View {
                         .font(OpenClawType.subheadSemiBold)
                 }
                 } message: {
+                    // Keep the extraction key contiguous for the native localization inventory.
+                    // swiftlint:disable line_length
                     Text(
-                        "This removes saved credentials, device access, TLS trust, " +
-                            "and cached chats for this gateway.")
+                        String(
+                            localized:
+                            "This removes saved credentials, device access, TLS trust, and cached chats for this gateway."))
                         .font(OpenClawType.subhead)
+                    // swiftlint:enable line_length
                 }
     }
 

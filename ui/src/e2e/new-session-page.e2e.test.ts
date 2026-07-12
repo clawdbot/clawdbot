@@ -542,9 +542,18 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
             ),
         )
         .toEqual(["Gateway · local", "MacBook", "Offline node", "Old node"]);
-      expect(await roots.getByRole("button", { name: "MacBook" }).isEnabled()).toBe(true);
-      expect(await roots.getByRole("button", { name: "Offline node" }).isDisabled()).toBe(true);
-      expect(await roots.getByRole("button", { name: "Old node" }).isDisabled()).toBe(true);
+      const macbookRoot = roots.getByRole("button", { name: "MacBook" });
+      const offlineRoot = roots.getByRole("button", { name: "Offline node" });
+      const oldRoot = roots.getByRole("button", { name: "Old node" });
+      expect(await macbookRoot.isEnabled()).toBe(true);
+      expect(await macbookRoot.getAttribute("title")).toBeNull();
+      // Disabled rows explain themselves: offline vs. node without browse support.
+      expect(await offlineRoot.isDisabled()).toBe(true);
+      expect(await offlineRoot.getAttribute("title")).toBe("Device is offline");
+      expect(await oldRoot.isDisabled()).toBe(true);
+      expect(await oldRoot.getAttribute("title")).toBe(
+        "This device doesn't support folder browsing",
+      );
 
       await roots.getByRole("button", { name: "MacBook" }).click();
       await roots.getByRole("button", { name: "Projects" }).click();

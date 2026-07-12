@@ -40,6 +40,25 @@ import Testing
         #expect(cmd.prefix(2).elementsEqual([openclawPath.path, "gateway"]))
     }
 
+    @Test func `source checkout entrypoint wins when package bin link is absent`() throws {
+        let defaults = self.makeLocalDefaults()
+        let tmp = try makeTempDirForTests()
+        let sourceEntrypoint = tmp.appendingPathComponent("openclaw.mjs")
+        let staleGlobalBin = tmp.appendingPathComponent("global/bin")
+        try makeExecutableForTests(at: sourceEntrypoint)
+        try makeExecutableForTests(at: staleGlobalBin.appendingPathComponent("openclaw"))
+
+        let cmd = CommandResolver.openclawCommand(
+            subcommand: "node",
+            extraArgs: ["worker"],
+            defaults: defaults,
+            configRoot: [:],
+            searchPaths: [staleGlobalBin.path],
+            projectRoot: tmp)
+
+        #expect(cmd == [sourceEntrypoint.path, "node", "worker"])
+    }
+
     @Test func `falls back to node and script`() throws {
         let defaults = self.makeLocalDefaults()
 

@@ -182,8 +182,8 @@ extension AgentProTab {
     func directHeader(for route: AgentRoute, title: String, subtitle: String) -> some View {
         if let headerLeadingAction = self.directHeaderLeadingAction(for: route) {
             OpenClawAdaptiveHeaderRow(
-                title: title,
-                subtitle: subtitle,
+                title: .localized(title),
+                subtitle: .localized(subtitle),
                 titleFont: OpenClawType.title3SemiBold,
                 subtitleFont: OpenClawType.subheadMedium)
             {

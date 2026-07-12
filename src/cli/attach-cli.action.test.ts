@@ -117,6 +117,13 @@ describe("openclaw attach (action)", () => {
     expect(gatewayCalls.find((c) => c.method === "attach.grant")).toBeUndefined();
   });
 
+  it.each(["0x10", "1.5", "1e3"])("rejects malformed --ttl %s before minting", async (ttl) => {
+    await runAttach("--ttl", ttl, "--print-config");
+    expect(exitCode).toBe(1);
+    expect(logs.join("\n")).toContain("--ttl must be a positive integer of milliseconds");
+    expect(gatewayCalls.find((c) => c.method === "attach.grant")).toBeUndefined();
+  });
+
   it("rejects an empty --ttl rather than silently defaulting", async () => {
     await runAttach("--ttl", "", "--print-config");
     expect(exitCode).toBe(1);

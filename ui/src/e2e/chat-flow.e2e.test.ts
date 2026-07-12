@@ -1776,6 +1776,46 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("keeps a steerable queued message above the composer while a run is active", async () => {
+    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+
+      const activePrompt = "keep this run active";
+      await page.locator(".agent-chat__composer-combobox textarea").fill(activePrompt);
+      await page.getByRole("button", { name: "Send message" }).click();
+
+      await gateway.waitForRequest("chat.send");
+      await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
+
+      const queuedPrompt = "show this only above the composer";
+      await page.locator(".agent-chat__composer-combobox textarea").fill(queuedPrompt);
+      await page.getByRole("button", { name: "Queue message" }).click();
+
+      const queue = page.locator(".chat-queue");
+      await queue.getByText("Waiting for current run").waitFor({ timeout: 10_000 });
+      await queue.getByText(queuedPrompt).waitFor({ timeout: 10_000 });
+      expect(await page.locator(".chat-thread").getByText(queuedPrompt).count()).toBe(0);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+      if (artifactDir) {
+        await page.screenshot({
+          path: `${artifactDir}/steer-queue-composer-only.png`,
+          fullPage: true,
+        });
+      }
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
   it("scrolls a delayed pending send into view before the ACK resolves", async () => {
     const context = await newBrowserContext({
       locale: "en-US",

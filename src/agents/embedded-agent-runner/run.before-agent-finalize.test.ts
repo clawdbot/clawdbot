@@ -10,6 +10,7 @@ import {
   useOpenAIPlatformAuthFixture,
   warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
+import { REASONING_ONLY_RETRY_INSTRUCTION } from "./run/incomplete-turn.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
@@ -129,6 +130,46 @@ describe("runEmbeddedAgent before_agent_finalize", () => {
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("replaces an incomplete-turn continuation with a finalize revision", async () => {
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: [],
+          lastAssistant: {
+            role: "assistant",
+            stopReason: "end_turn",
+            provider: "openai",
+            model: "gpt-5.5",
+            content: [
+              {
+                type: "thinking",
+                thinking: "internal reasoning",
+                thinkingSignature: JSON.stringify({ id: "rs_before_finalize", type: "reasoning" }),
+              },
+            ],
+          } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
+      )
+      .mockResolvedValueOnce(
+        finalAnswerAttempt("Visible draft.", {
+          beforeAgentFinalizeRevisionReason: "Tighten the recovered answer.",
+        }),
+      )
+      .mockResolvedValueOnce(finalAnswerAttempt("Revised recovered answer."));
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-before-finalize-after-incomplete-turn",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
+    expect(attemptCall(1).prompt).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
+    expect(attemptCall(2).prompt).toContain("Tighten the recovered answer.");
+    expect(attemptCall(2).prompt).not.toBe(REASONING_ONLY_RETRY_INSTRUCTION);
   });
 
   it("does not retry finalize revisions after a timed-out attempt", async () => {

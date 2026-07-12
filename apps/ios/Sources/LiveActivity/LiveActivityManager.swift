@@ -17,11 +17,16 @@ final class LiveActivityManager {
         self.hydrateCurrentAndPruneDuplicates()
     }
 
-    func showConnecting(statusText: String = "Connecting...", agentName: String, sessionKey: String) {
+    func showConnecting(
+        statusText: String = String(localized: "Connecting..."),
+        agentName: String,
+        sessionKey: String)
+    {
+        let presentation = Self.connectingPresentation(statusText: statusText)
         self.hydrateCurrentAndPruneDuplicates()
 
         if self.currentActivity != nil {
-            self.handleConnecting(statusText: statusText)
+            self.handleConnecting(presentation: presentation)
             return
         }
 
@@ -33,7 +38,7 @@ final class LiveActivityManager {
 
         self.activityStartDate = .now
         let attributes = OpenClawActivityAttributes(agentName: agentName, sessionKey: sessionKey)
-        let state = self.connectingState(statusText: statusText)
+        let state = self.connectingState(presentation: presentation)
 
         do {
             let activity = try Activity.request(
@@ -50,6 +55,7 @@ final class LiveActivityManager {
     }
 
     func showAttention(statusText: String, agentName: String, sessionKey: String) {
+        let presentation = Self.attentionPresentation(statusText: statusText)
         self.hydrateCurrentAndPruneDuplicates()
 
         if self.currentActivity == nil {
@@ -63,7 +69,7 @@ final class LiveActivityManager {
             do {
                 let activity = try Activity.request(
                     attributes: attributes,
-                    content: ActivityContent(state: self.attentionState(statusText: statusText), staleDate: nil),
+                    content: ActivityContent(state: self.attentionState(presentation: presentation), staleDate: nil),
                     pushType: nil)
                 self.currentActivity = activity
                 self.logger.info("started attention live activity id=\(activity.id, privacy: .public)")
@@ -74,12 +80,12 @@ final class LiveActivityManager {
             return
         }
 
-        self.updateCurrent(state: self.attentionState(statusText: statusText), staleDate: nil)
+        self.updateCurrent(state: self.attentionState(presentation: presentation), staleDate: nil)
     }
 
-    func handleConnecting(statusText: String = "Connecting...") {
+    private func handleConnecting(presentation: StatusPresentation) {
         self.updateCurrent(
-            state: self.connectingState(statusText: statusText),
+            state: self.connectingState(presentation: presentation),
             staleDate: Date().addingTimeInterval(self.connectingStaleSeconds))
     }
 
@@ -109,7 +115,7 @@ final class LiveActivityManager {
         let candidates = active.filter { activity in
             let state = activity.content.state
             guard activity.activityState == .active else { return false }
-            guard !state.isIdle, !state.isDisconnected else { return false }
+            guard state.status != .idle, state.status != .disconnected else { return false }
             return now.timeIntervalSince(state.startedAt) < self.hydrationStaleSeconds
         }
 
@@ -152,30 +158,56 @@ final class LiveActivityManager {
         }
     }
 
-    private func connectingState(statusText: String = "Connecting...") -> OpenClawActivityAttributes.ContentState {
+    private struct StatusPresentation {
+        let status: OpenClawActivityAttributes.ContentState.Status
+        let verbatimDetail: String?
+    }
+
+    /// Existing callers still pass rendered app copy. Collapse known values here so
+    /// ActivityKit persists semantics; only unknown external detail remains verbatim.
+    private static func connectingPresentation(statusText: String) -> StatusPresentation {
+        if statusText == String(localized: "Connecting...") || statusText == "Connecting..." {
+            return StatusPresentation(status: .connecting, verbatimDetail: nil)
+        }
+        if statusText == String(localized: "Reconnecting...") || statusText == "Reconnecting..." {
+            return StatusPresentation(status: .reconnecting, verbatimDetail: nil)
+        }
+        return StatusPresentation(status: .connecting, verbatimDetail: self.normalizedDetail(statusText))
+    }
+
+    private static func attentionPresentation(statusText: String) -> StatusPresentation {
+        if statusText == String(localized: "Approval needed") || statusText == "Approval needed" {
+            return StatusPresentation(status: .approvalNeeded, verbatimDetail: nil)
+        }
+        if statusText == String(localized: "Action required") || statusText == "Action required" {
+            return StatusPresentation(status: .actionRequired, verbatimDetail: nil)
+        }
+        return StatusPresentation(status: .attention, verbatimDetail: self.normalizedDetail(statusText))
+    }
+
+    private static func normalizedDetail(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func connectingState(presentation: StatusPresentation) -> OpenClawActivityAttributes.ContentState {
         OpenClawActivityAttributes.ContentState(
-            statusText: statusText,
-            isIdle: false,
-            isDisconnected: false,
-            isConnecting: true,
+            status: presentation.status,
+            verbatimDetail: presentation.verbatimDetail,
             startedAt: self.activityStartDate)
     }
 
-    private func attentionState(statusText: String) -> OpenClawActivityAttributes.ContentState {
+    private func attentionState(presentation: StatusPresentation) -> OpenClawActivityAttributes.ContentState {
         OpenClawActivityAttributes.ContentState(
-            statusText: statusText,
-            isIdle: false,
-            isDisconnected: false,
-            isConnecting: false,
+            status: presentation.status,
+            verbatimDetail: presentation.verbatimDetail,
             startedAt: self.activityStartDate)
     }
 
     private func disconnectedState() -> OpenClawActivityAttributes.ContentState {
         OpenClawActivityAttributes.ContentState(
-            statusText: "Disconnected",
-            isIdle: false,
-            isDisconnected: true,
-            isConnecting: false,
+            status: .disconnected,
+            verbatimDetail: nil,
             startedAt: self.activityStartDate)
     }
 }

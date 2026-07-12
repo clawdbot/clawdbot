@@ -80,7 +80,7 @@ function describeBloat(label: string, stats: SqliteBloatStats): string | null {
   return null;
 }
 
-export function collectSqliteBloatWarnings(deps?: { env?: NodeJS.ProcessEnv }): string[] {
+function collectSqliteBloatWarnings(deps?: { env?: NodeJS.ProcessEnv }): string[] {
   const env = deps?.env ?? process.env;
   const warnings: string[] = [];
   const statePath = resolveOpenClawStateSqlitePath(env);

@@ -29,7 +29,8 @@ has no macOS app asset, use the newest one that does, or build from source with
 
 1. Install and launch **OpenClaw.app**.
 2. Pick **This Mac** for a local Gateway, or connect to a remote Gateway.
-3. Local mode: wait while the app installs its user-space runtime and Gateway.
+3. Wait while the app installs the matching CLI runtime. In local mode it also
+   installs and starts the Gateway.
 4. Establish inference with a live model check. After it passes, Crestodian
    handles the remaining setup.
 5. Complete the macOS permission checklist and send the onboarding test message.
@@ -75,16 +76,22 @@ When the app runs against a local Gateway and a Chrome-family profile with cooki
 | Local  | This Mac should run the Gateway and keep it alive with launchd.                | [Gateway on macOS](/platforms/mac/bundled-gateway) |
 | Remote | Another host runs the Gateway; this Mac controls it over SSH, LAN, or Tailnet. | [Remote control](/platforms/mac/remote)            |
 
-Local mode needs an installed `openclaw` CLI. On a fresh Mac, the app installs
-the matching CLI and runtime automatically before starting the Gateway wizard.
+Both modes need an installed `openclaw` CLI because the app reuses its node-host
+runtime. On a fresh Mac, the app installs the matching CLI automatically; local
+mode then starts the Gateway wizard, while remote mode connects to the selected
+Gateway without starting a second local Gateway.
 See [Gateway on macOS](/platforms/mac/bundled-gateway) for manual recovery.
 
 ## What the app owns
 
 - Menu bar status, notifications, health, and WebChat.
 - macOS permission prompts for screen, microphone, speech, automation, and accessibility.
-- Local node tools: Canvas, camera/screen capture, notifications, and `system.run`.
+- One Mac node that combines native Canvas, camera/screen capture, notifications,
+  location, and computer control with the CLI node host's system, browser,
+  plugin, skill, and MCP commands.
 - Exec approval prompts for Mac-hosted commands.
+- App-context execution for approved shell commands, preserving the app's macOS
+  permission attribution while the CLI runtime owns shared node policy.
 - Remote-mode SSH tunnels or direct Gateway connections.
 
 The app does **not** replace the Gateway or general CLI docs. Gateway

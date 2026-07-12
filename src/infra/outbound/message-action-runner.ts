@@ -1302,6 +1302,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     forceDocument: sendPayload.forceDocument,
     bestEffort: sendPayload.bestEffort,
     replyToId: resolvedReplyToId ?? undefined,
+    replyToIdSource: resolvedReplyToId ? (replyToIsExplicit ? "explicit" : "implicit") : undefined,
     threadId: resolvedThreadId ?? undefined,
   });
 

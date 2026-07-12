@@ -1232,6 +1232,14 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   color: #7c3aed;
 }
 
+.chat-pr[data-state="branch"] .chat-pr__icon {
+  color: var(--muted);
+}
+
+.chat-pr__link--static {
+  cursor: default;
+}
+
 .chat-pr__icon svg,
 .chat-pr__warning svg {
   width: 15px;
@@ -1432,6 +1440,23 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   display: grid;
   place-items: center;
   color: var(--warn);
+}
+
+.chat-pr__create {
+  flex: 0 0 auto;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.chat-pr__create:hover {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
 .chat-pr__dismiss {

@@ -340,19 +340,22 @@ struct RootTabs: View {
             self.sidebarHorizontalSeparator
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("OpenClaw \(self.sidebarGatewayStatusTitle)")
+        .accessibilityLabel(
+            String(
+                format: String(localized: "OpenClaw %@"),
+                self.sidebarGatewayStatusTitle))
     }
 
     private var sidebarGatewayStatusTitle: String {
         switch self.gatewayStatus {
         case .connected:
-            "Online"
+            String(localized: "Online")
         case .connecting:
-            "Connecting"
+            String(localized: "Connecting")
         case .error:
-            "Needs attention"
+            String(localized: "Needs attention")
         case .disconnected:
-            "Offline"
+            String(localized: "Offline")
         }
     }
 
@@ -613,13 +616,13 @@ struct RootTabs: View {
         if self.isSidebarVisible {
             return OpenClawSidebarHeaderAction(
                 systemName: "sidebar.left",
-                accessibilityLabel: "Hide Sidebar",
+                accessibilityLabel: .localized("Hide Sidebar"),
                 accessibilityIdentifier: Self.sidebarHideButtonAccessibilityIdentifier,
                 action: { self.hideSidebar() })
         }
         return OpenClawSidebarHeaderAction(
             systemName: "sidebar.left",
-            accessibilityLabel: "Show Sidebar",
+            accessibilityLabel: .localized("Show Sidebar"),
             accessibilityIdentifier: Self.sidebarShowButtonAccessibilityIdentifier,
             action: { self.showSidebar() })
     }
@@ -628,7 +631,10 @@ struct RootTabs: View {
         guard !self.usesSidebarTabs, let phoneChatReturn else { return nil }
         return OpenClawSidebarHeaderAction(
             systemName: "chevron.left",
-            accessibilityLabel: "Back to \(phoneChatReturn.destination.title)",
+            accessibilityLabel: .verbatim(
+                String(
+                    format: String(localized: "Back to %@"),
+                    phoneChatReturn.destination.title)),
             accessibilityIdentifier: "OpenClawChatBackToControlDetailButton",
             action: { self.openPhoneControlDetail(phoneChatReturn.destination) })
     }

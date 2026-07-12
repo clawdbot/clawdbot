@@ -23,7 +23,9 @@ extension OpenClawChatViewModel {
                 try Data(contentsOf: fileURL)
             }.value
         } catch {
-            self.errorText = String(localized: "Could not attach voice note: \(error.localizedDescription)")
+            self.errorText = String(
+                format: String(localized: "Could not attach voice note: %@"),
+                error.localizedDescription)
             return
         }
 
@@ -74,7 +76,7 @@ extension OpenClawChatViewModel {
             return UTType(mimeType: mimeType) ?? .data
         }()
         guard uti.conforms(to: .image) else {
-            self.errorText = "Only image attachments are supported right now"
+            self.errorText = String(localized: "Only image attachments are supported right now")
             return
         }
 
@@ -84,12 +86,17 @@ extension OpenClawChatViewModel {
                 try ChatImageProcessor.processForUpload(data: data)
             }.value
         } catch {
-            self.errorText = "Could not process \(fileName): \(error.localizedDescription)"
+            self.errorText = String(
+                format: String(localized: "Could not process %1$@: %2$@"),
+                fileName,
+                error.localizedDescription)
             return
         }
 
         if processed.count > Self.maxAttachmentBytes {
-            self.errorText = "Attachment \(fileName) exceeds 5 MB limit after resizing"
+            self.errorText = String(
+                format: String(localized: "Attachment %@ exceeds 5 MB limit after resizing"),
+                fileName)
             return
         }
 

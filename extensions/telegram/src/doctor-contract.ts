@@ -5,17 +5,14 @@ import type {
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
-import {
-  asObjectRecord,
-  hasLegacyAccountStreamingAliases,
-  hasLegacyStreamingAliases,
-  normalizeLegacyChannelAliases,
-  resolveLegacyAliasStreamingMode,
-} from "openclaw/plugin-sdk/runtime-doctor";
+import { asObjectRecord, defineChannelAliasMigration } from "openclaw/plugin-sdk/runtime-doctor";
 
-function hasLegacyTelegramStreamingAliases(value: unknown): boolean {
-  return hasLegacyStreamingAliases(value, { includePreviewChunk: true });
-}
+const streamingAliasMigration = defineChannelAliasMigration({
+  channelId: "telegram",
+  // Runtime mode resolution dropped legacy streamMode reads; the doctor
+  // resolver keeps them so migration preserves configured intent.
+  streaming: { defaultMode: "partial", includePreviewChunk: true },
+});
 
 function hasRetiredTelegramDmConfig(value: unknown): boolean {
   const entry = asObjectRecord(value);
@@ -241,18 +238,7 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
       'channels.telegram.accounts.<id>.includeGroupHistoryContext was removed; Telegram group history is always on for groups and bounded by historyLimit. Run "openclaw doctor --fix".',
     match: hasRetiredTelegramAccountGroupHistoryContextConfig,
   },
-  {
-    path: ["channels", "telegram"],
-    message:
-      "channels.telegram.streamMode, channels.telegram.streaming (scalar), chunkMode, blockStreaming, draftChunk, and blockStreamingCoalesce are legacy; use channels.telegram.streaming.{mode,chunkMode,preview.chunk,block.enabled,block.coalesce}.",
-    match: hasLegacyTelegramStreamingAliases,
-  },
-  {
-    path: ["channels", "telegram", "accounts"],
-    message:
-      "channels.telegram.accounts.<id>.streamMode, streaming (scalar), chunkMode, blockStreaming, draftChunk, and blockStreamingCoalesce are legacy; use channels.telegram.accounts.<id>.streaming.{mode,chunkMode,preview.chunk,block.enabled,block.coalesce}.",
-    match: (value) => hasLegacyAccountStreamingAliases(value, hasLegacyTelegramStreamingAliases),
-  },
+  ...streamingAliasMigration.legacyConfigRules,
 ];
 
 export function normalizeCompatibilityConfig({
@@ -260,14 +246,17 @@ export function normalizeCompatibilityConfig({
 }: {
   cfg: OpenClawConfig;
 }): ChannelDoctorConfigMutation {
-  const rawEntry = asObjectRecord((cfg.channels as Record<string, unknown> | undefined)?.telegram);
+  const changes: string[] = [];
+  const aliases = streamingAliasMigration.normalizeChannelConfig({ cfg, changes });
+  const rawEntry = asObjectRecord(
+    (aliases.config.channels as Record<string, unknown> | undefined)?.telegram,
+  );
   if (!rawEntry) {
     return { config: cfg, changes: [] };
   }
 
-  const changes: string[] = [];
   let updated = rawEntry;
-  let changed = false;
+  let changed = aliases.config !== cfg;
   const rootGroupHistoryContextMode = updated.includeGroupHistoryContext;
   const rootGroupHistoryLimitBeforeMigration =
     typeof updated.historyLimit === "number"
@@ -324,20 +313,6 @@ export function normalizeCompatibilityConfig({
     }
   }
 
-  const aliases = normalizeLegacyChannelAliases({
-    entry: updated,
-    pathPrefix: "channels.telegram",
-    changes,
-    resolveStreamingOptions: (entry) => ({
-      includePreviewChunk: true,
-      // Runtime mode resolution dropped legacy streamMode reads; the doctor
-      // resolver keeps them so migration preserves configured intent.
-      resolvedMode: resolveLegacyAliasStreamingMode(entry, "partial"),
-    }),
-  });
-  updated = aliases.entry;
-  changed = changed || aliases.changed;
-
   const accounts = asObjectRecord(updated.accounts);
   if (accounts) {
     let accountsChanged = false;
@@ -389,9 +364,9 @@ export function normalizeCompatibilityConfig({
   }
   return {
     config: {
-      ...cfg,
+      ...aliases.config,
       channels: {
-        ...cfg.channels,
+        ...aliases.config.channels,
         telegram: updated as unknown as NonNullable<OpenClawConfig["channels"]>["telegram"],
       } as OpenClawConfig["channels"],
     },

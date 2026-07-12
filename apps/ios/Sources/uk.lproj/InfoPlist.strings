@@ -1,0 +1,29 @@
+"CFBundleDisplayName" = "$(OPENCLAW_APP_DISPLAY_NAME)";
+/* OpenClaw source: "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access." */
+"NSCalendarsFullAccessUsageDescription" = "OpenClaw використовує ваші календарі, щоб показувати події та контекст планування, коли ви надаєте доступ до календаря.";
+/* OpenClaw source: "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access." */
+"NSCalendarsUsageDescription" = "OpenClaw використовує ваші календарі, щоб показувати події та контекст планування, коли ви надаєте доступ до календаря.";
+/* OpenClaw source: "OpenClaw uses your calendars to add events when you enable calendar access." */
+"NSCalendarsWriteOnlyAccessUsageDescription" = "OpenClaw використовує ваші календарі, щоб додавати події, коли ви надаєте доступ до календаря.";
+/* OpenClaw source: "OpenClaw uses the camera when you scan a Gateway setup QR code or ask your paired Gateway or assistant to capture a photo or short video from this iPhone, for example to connect to your Gateway or show your assistant a document, device screen, or workspace." */
+"NSCameraUsageDescription" = "OpenClaw використовує камеру, коли ви скануєте QR-код налаштування Gateway або просите спарений Gateway чи помічника зробити фото або коротке відео з цього iPhone, наприклад щоб підключитися до вашого Gateway або показати помічнику документ, екран пристрою чи робочий простір.";
+/* OpenClaw source: "OpenClaw uses your contacts so you can search and reference people while using the assistant." */
+"NSContactsUsageDescription" = "OpenClaw використовує ваші контакти, щоб ви могли шукати людей і посилатися на них під час використання помічника.";
+/* OpenClaw source: "OpenClaw discovers and connects to your OpenClaw gateway on the local network." */
+"NSLocalNetworkUsageDescription" = "OpenClaw виявляє та підключається до вашого OpenClaw gateway у локальній мережі.";
+/* OpenClaw source: "OpenClaw can share your location in the background when you enable Always." */
+"NSLocationAlwaysAndWhenInUseUsageDescription" = "OpenClaw може ділитися вашим місцезнаходженням у фоновому режимі, коли ви вмикаєте «Завжди».";
+/* OpenClaw source: "OpenClaw uses your location when you allow location sharing." */
+"NSLocationWhenInUseUsageDescription" = "OpenClaw використовує ваше місцезнаходження, коли ви дозволяєте ділитися місцезнаходженням.";
+/* OpenClaw source: "OpenClaw uses the microphone for realtime chat, voice wake, push-to-talk, and voice notes." */
+"NSMicrophoneUsageDescription" = "OpenClaw використовує мікрофон для чату в реальному часі, голосового пробудження, режиму push-to-talk та голосових нотаток.";
+/* OpenClaw source: "OpenClaw may use motion data to support device-aware interactions and automations." */
+"NSMotionUsageDescription" = "OpenClaw може використовувати дані про рух для підтримки взаємодій і автоматизацій з урахуванням пристрою.";
+/* OpenClaw source: "After you enable Health Summaries, OpenClaw reads steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider." */
+"NSHealthShareUsageDescription" = "Після ввімкнення підсумків здоров’я OpenClaw зчитує кроки, сон, пульс у стані спокою та тренування, щоб передавати запитані агреговані дані налаштованому постачальнику ШІ.";
+/* OpenClaw source: "OpenClaw lets your assistant read photos you allow and lets you choose photos to share." */
+"NSPhotoLibraryUsageDescription" = "OpenClaw дає змогу вашому асистенту читати дозволені вами фото й дає вам змогу вибирати фото для надсилання.";
+/* OpenClaw source: "OpenClaw uses your reminders to list, add, and complete tasks when you enable reminders access." */
+"NSRemindersFullAccessUsageDescription" = "OpenClaw використовує ваші нагадування, щоб переглядати, додавати та завершувати завдання, коли ви вмикаєте доступ до нагадувань.";
+/* OpenClaw source: "OpenClaw uses on-device speech recognition for talk mode and voice wake." */
+"NSSpeechRecognitionUsageDescription" = "OpenClaw використовує розпізнавання мовлення на пристрої для режиму розмови та голосової активації.";

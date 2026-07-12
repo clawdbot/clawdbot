@@ -33,7 +33,7 @@ export type PluginCapabilityEntry = {
   ids: string[];
 };
 
-export type PluginShapeSummary = {
+type PluginShapeSummary = {
   shape: PluginInspectShape;
   capabilityMode: "none" | "plain" | "hybrid";
   capabilityCount: number;

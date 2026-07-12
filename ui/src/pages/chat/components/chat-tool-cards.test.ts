@@ -7,18 +7,21 @@ vi.mock("../markdown.ts", async (importOriginal) => await importOriginal());
 vi.mock("../tool-display.ts", () => ({
   formatToolDetail: (display: { detail?: string }) => display.detail,
   resolveToolDisplay: ({ name, args }: { name: string; args?: unknown }) => {
+    const argRecord =
+      args && typeof args === "object" && !Array.isArray(args)
+        ? (args as Record<string, unknown>)
+        : undefined;
     const labels: Record<string, string> = {
       sessions_spawn: "Sub-agent",
       skill_workshop: "Skill Workshop",
       web_search: "Web Search",
     };
     const detail =
-      name === "skill_workshop" &&
-      args &&
-      typeof args === "object" &&
-      typeof (args as { action?: unknown }).action === "string"
-        ? (args as { action: string }).action
-        : undefined;
+      name === "skill_workshop" && typeof argRecord?.action === "string"
+        ? argRecord.action
+        : name === "read" && typeof argRecord?.path === "string"
+          ? argRecord.path
+          : undefined;
     return {
       name,
       label: labels[name] ?? name,

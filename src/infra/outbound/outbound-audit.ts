@@ -38,7 +38,7 @@ type OutboundAuditDeliveryContext = {
   mirror?: DeliveryMirror;
 };
 
-export type OutboundAuditTerminal =
+type OutboundAuditTerminal =
   | {
       outcome: "sent";
       results: readonly OutboundDeliveryResult[];
@@ -63,12 +63,12 @@ export type OutboundAuditTerminal =
       sentBeforeError?: boolean;
     };
 
-export type IndexedOutboundAuditTerminal = {
+type IndexedOutboundAuditTerminal = {
   payloadIndex: number;
   terminal: OutboundAuditTerminal;
 };
 
-export function outboundQueueAuditSourceId(queueId: string, payloadIndex: number): string {
+function outboundQueueAuditSourceId(queueId: string, payloadIndex: number): string {
   return `message:outbound:queue:${queueId}:payload:${payloadIndex}`;
 }
 

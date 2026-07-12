@@ -318,9 +318,20 @@ img.chat-avatar {
   box-shadow: none;
 }
 
-/* Keep the working spark on the same left edge as the flat text column. */
+/* Keep the working claw on the same left edge as the flat text column. */
 .chat-group.assistant .chat-bubble.chat-reading-indicator {
   padding: 10px 0;
+}
+
+/* Working groups skip the avatar (the punching claw is the whole signal);
+   the inset keeps the claw on the text column so the reply materializes
+   exactly where it punched. Direct threads have no avatar indent to match. */
+.chat-group--working .chat-group-messages {
+  padding-left: 46px; /* .chat-avatar 36px + .chat-group gap 10px */
+}
+
+.chat-thread--direct .chat-group--working .chat-group-messages {
+  padding-left: 0;
 }
 
 /* Direct (1:1) threads drop avatars entirely: one agent plus one user makes
@@ -731,5 +742,11 @@ details.msg-meta:not([open]) .msg-meta__details {
   .chat-avatar,
   img.chat-avatar {
     display: none;
+  }
+
+  /* Avatars are hidden at this width, so the working group's avatar-column
+     inset would strand the claw 46px from where the reply text lands. */
+  .chat-group--working .chat-group-messages {
+    padding-left: 0;
   }
 }

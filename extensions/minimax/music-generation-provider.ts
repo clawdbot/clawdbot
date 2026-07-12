@@ -10,10 +10,12 @@ import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runt
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
-  fetchProviderDownloadResponse,
+  executeProviderOperationWithRetry,
+  fetchWithTimeoutGuarded,
   postJsonRequest,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
+  sanitizeConfiguredModelProviderRequest,
   type ProviderOperationDeadline,
 } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
@@ -53,6 +55,11 @@ type MinimaxMusicStreamFrame = {
   base_resp?: MinimaxBaseResp;
 };
 
+type MinimaxRequestPolicy = Pick<
+  Parameters<typeof postJsonRequest>[0],
+  "allowPrivateNetwork" | "dispatcherPolicy"
+>;
+
 function resolveMinimaxMusicBaseUrl(
   cfg: Parameters<typeof resolveApiKeyForProvider>[0]["cfg"],
   providerId: string,
@@ -75,6 +82,18 @@ function assertMinimaxBaseResp(baseResp: MinimaxBaseResp | undefined, context: s
   throw new Error(
     `${context} (${baseResp.status_code}): ${baseResp.status_msg ?? "unknown error"}`,
   );
+}
+
+function resolveMinimaxGuardedRequestOptions(
+  policy: MinimaxRequestPolicy,
+): Parameters<typeof fetchWithTimeoutGuarded>[4] | undefined {
+  if (!policy.allowPrivateNetwork && !policy.dispatcherPolicy) {
+    return undefined;
+  }
+  return {
+    ...(policy.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
+    ...(policy.dispatcherPolicy ? { dispatcherPolicy: policy.dispatcherPolicy } : {}),
+  };
 }
 
 function decodePossibleBinaryWithLimit(data: string, maxBytes: number): Buffer {
@@ -120,25 +139,46 @@ async function downloadTrackFromUrl(params: {
   timeoutMs?: number;
   fetchFn: typeof fetch;
   maxBytes: number;
+  policy: MinimaxRequestPolicy;
 }): Promise<GeneratedMusicAsset> {
-  const response = await fetchProviderDownloadResponse({
-    url: params.url,
-    init: { method: "GET" },
-    timeoutMs: params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-    fetchFn: params.fetchFn,
+  const result = await executeProviderOperationWithRetry({
     provider: "minimax",
-    requestFailedMessage: "MiniMax generated music download failed",
+    stage: "download",
+    operation: async () => {
+      const guardedResult = await fetchWithTimeoutGuarded(
+        params.url,
+        { method: "GET" },
+        params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+        params.fetchFn,
+        resolveMinimaxGuardedRequestOptions(params.policy),
+      );
+      try {
+        await assertOkOrThrowHttpError(
+          guardedResult.response,
+          "MiniMax generated music download failed",
+        );
+      } catch (error) {
+        await guardedResult.release();
+        throw error;
+      }
+      return guardedResult;
+    },
   });
-  const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "audio/mpeg";
-  const ext = extensionForMime(mimeType)?.replace(/^\./u, "") || "mp3";
-  return {
-    buffer: await readResponseWithLimit(response, params.maxBytes, {
-      onOverflow: ({ maxBytes }) =>
-        new Error(`MiniMax generated music download exceeds ${maxBytes} bytes`),
-    }),
-    mimeType,
-    fileName: `track-1.${ext}`,
-  };
+  try {
+    const mimeType =
+      normalizeOptionalString(result.response.headers.get("content-type")) ?? "audio/mpeg";
+    const ext = extensionForMime(mimeType)?.replace(/^\./u, "") || "mp3";
+    return {
+      buffer: await readResponseWithLimit(result.response, params.maxBytes, {
+        onOverflow: ({ maxBytes }) =>
+          new Error(`MiniMax generated music download exceeds ${maxBytes} bytes`),
+      }),
+      mimeType,
+      fileName: `track-1.${ext}`,
+    };
+  } finally {
+    await result.release();
+  }
 }
 
 function createMinimaxMusicTimeoutError(deadline: ProviderOperationDeadline): Error {
@@ -352,14 +392,17 @@ function buildMinimaxMusicProvider(providerId: string): MusicGenerationProvider 
         resolveProviderHttpRequestConfig({
           baseUrl: resolveMinimaxMusicBaseUrl(req.cfg, providerId),
           defaultBaseUrl: DEFAULT_MINIMAX_MUSIC_BASE_URL,
-          allowPrivateNetwork: false,
           defaultHeaders: {
             Authorization: `Bearer ${auth.apiKey}`,
           },
           provider: providerId,
           capability: "audio",
           transport: "http",
+          request: sanitizeConfiguredModelProviderRequest(
+            req.cfg.models?.providers?.[providerId]?.request,
+          ),
         });
+      const requestPolicy: MinimaxRequestPolicy = { allowPrivateNetwork, dispatcherPolicy };
       const jsonHeaders = new Headers(headers);
       jsonHeaders.set("Content-Type", "application/json");
 
@@ -436,6 +479,7 @@ function buildMinimaxMusicProvider(providerId: string): MusicGenerationProvider 
               }),
               fetchFn,
               maxBytes: resolveGeneratedMusicMaxBytes(req),
+              policy: requestPolicy,
             })
           : inlineAudio
             ? (() => {

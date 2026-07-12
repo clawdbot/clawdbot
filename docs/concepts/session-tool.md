@@ -71,6 +71,8 @@ Messages and A2A follow-up replies are marked as inter-session data in the recei
 
 After the target responds, OpenClaw can run a **reply-back loop** where the agents alternate messages (up to `session.agentToAgent.maxPingPongTurns`, range 0-20, default 5). The target agent can reply `REPLY_SKIP` to stop early.
 
+Pass `watch: true` to also register the sender as a state-change watcher of the target: when another actor later sends the target a direct human message or changes its goal, the sender receives a system notice pointing at `session_status` `changesSince`. Registration happens after successful dispatch, targets the session that actually received the message, and starts at its current state version, so only later changes produce notices. The result reports `watched: true` when registration succeeded. See [Session state awareness](/concepts/session-state).
+
 ## Status and orchestration helpers
 
 `session_status` is the lightweight `/status`-equivalent tool for the current or another visible session. It reports usage, time, model/runtime state, and linked background-task context when present. Like `/status`, it can backfill sparse token/cache counters from the latest transcript usage entry, and `model=default` clears a per-session override. Use `sessionKey="current"` for the caller's current session; visible client labels such as `openclaw-tui` are not session keys.
@@ -83,13 +85,9 @@ When route metadata is available, `session_status` also includes a visible `Rout
 
 ## Session state changes
 
-OpenClaw keeps a best-effort signal log for selected session state changes: direct human messages to child sessions, child-run completion or failure, child creation, goal changes, and compaction. Cancelled and timed-out child runs are recorded as failures, with the specific outcome (`cancelled`, `timeout`, or `error`) preserved in the event payload. The log contains metadata and one-line summaries, never message content. Its `stateVersion` is the session's signal-log head, not a transactional change-data-capture version; the session-store mutation and signal append use separate storage, so a failed append is logged without failing the originating turn.
+OpenClaw keeps a durable signal log of material session state changes (direct human messages to watched sessions, child-run outcomes, goal changes, compaction). `sessions_list` rows and `session_status` expose the session's `stateVersion`, and `session_status` accepts `changesSince: <version>` to return the typed events after that version, with exact `historyGap` signaling when the requested version predates retained history. Watchers — spawn parents automatically, `sessions_send watch: true` explicitly — receive one coalesced stale-state notice when another actor changes a watched session.
 
-`sessions_list` includes `stateVersion` on rows with logged changes. `session_status` always returns `stateVersion` in structured details. Pass `changesSince: <previousStateVersion>` to retrieve up to 200 retained events after that version; this read does not acknowledge or advance parent notification cursors. A `historyGap: true` result means the requested version predates retained history, so refresh the whole session state instead of treating the response as an exact delta.
-
-When another actor sends a direct human turn to a watched child or changes its goal, the parent receives a system notice telling it to call `session_status` with its last-seen version. Main-session parents are proactively woken. Nested sub-agent parents receive the notice on their next turn because heartbeat routing cannot target their queue directly. Completion announcements remain the owner for ordinary child-run completion delivery.
-
-History is bounded to 30 days and 50,000 rows, while per-session heads remain monotonic after pruning. Notice delivery uses the gateway's in-memory system-event queue and assumes one gateway process owns delivery for the shared state database. Multiple gateways still share the durable log and `changesSince` reconciliation surface, but v1 does not push notices across processes. Parent notices require an agent-qualified parent session key; under `session.scope="global"` the shared `global` key is ambiguous across agents, so those parents get the durable log and `changesSince` but no proactive notices in v1.
+See [Session state awareness](/concepts/session-state) for the full model: event kinds, watcher registration, the anti-spam notice protocol, reconciliation flow, and current limits.
 
 `sessions_yield` intentionally ends the current turn so the next message can be the follow-up event you are waiting for. Use it after spawning sub-agents when you want completion results to arrive as the next message instead of building poll loops.
 

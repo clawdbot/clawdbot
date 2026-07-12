@@ -72,6 +72,7 @@ type SessionManagerMocks = {
   replacePersistedTranscript: UnknownMock;
   flushPendingToolResults: UnknownMock;
   clearPendingToolResults: UnknownMock;
+  clearNextUserMessagePersistenceSuppression: UnknownMock;
   removeTrailingEntries: UnknownMock;
 };
 type AttemptSpawnWorkspaceHoisted = {
@@ -236,6 +237,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     replacePersistedTranscript: vi.fn(),
     flushPendingToolResults: vi.fn(),
     clearPendingToolResults: vi.fn(),
+    clearNextUserMessagePersistenceSuppression: vi.fn(),
     removeTrailingEntries: vi.fn(() => 0),
   };
   return {
@@ -1106,6 +1108,7 @@ export function resetEmbeddedAttemptHarness(
   hoisted.sessionManager.getEntry.mockReset().mockReturnValue(undefined);
   hoisted.sessionManager.branch.mockReset();
   hoisted.sessionManager.resetLeaf.mockReset();
+  hoisted.sessionManager.clearNextUserMessagePersistenceSuppression.mockReset();
   hoisted.sessionManager.buildSessionContext
     .mockReset()
     .mockReturnValue({ messages: params.sessionMessages ?? [] });

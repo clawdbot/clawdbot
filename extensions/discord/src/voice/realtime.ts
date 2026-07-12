@@ -53,6 +53,7 @@ import {
 } from "./audio.js";
 import { formatVoiceLogPreview } from "./log-preview.js";
 import { formatVoiceIngressPrompt } from "./prompt.js";
+import { mergeRealtimePartialTranscript } from "./realtime-transcript.js";
 import { loadDiscordVoiceSdk } from "./sdk-runtime.js";
 import {
   logVoiceVerbose,
@@ -88,7 +89,6 @@ const DISCORD_REALTIME_DUPLICATE_ERROR_SUPPRESS_MS = 60_000;
 const DISCORD_REALTIME_CONTROL_SPEECH_DEDUPE_MS = 5_000;
 const DISCORD_REALTIME_OUTPUT_PLAYBACK_WATCHDOG_MARGIN_MS = 1_500;
 const DISCORD_REALTIME_WAKE_ACKS = ["Yeah.", "Mm-hmm.", "Got it.", "One sec."];
-const DISCORD_REALTIME_PARTIAL_TRANSCRIPT_MAX_CHARS = 240;
 const REALTIME_PCM16_BYTES_PER_SAMPLE = 2;
 const DISCORD_RAW_PCM_FRAME_BYTES = 3_840;
 const DISCORD_REALTIME_OUTPUT_PREROLL_FRAMES = 25;
@@ -312,15 +312,6 @@ function extractDiscordExactSpeechConsultText(args: unknown): string | undefined
 
 function normalizeControlSpeechText(text: string): string {
   return text.toLowerCase().replace(/\s+/g, " ").trim();
-}
-
-function mergeRealtimePartialTranscript(previous: string, next: string): string {
-  const trimmed = next.trim();
-  if (!trimmed) {
-    return previous;
-  }
-  const merged = trimmed.startsWith(previous) ? trimmed : `${previous}${next}`;
-  return merged.slice(-DISCORD_REALTIME_PARTIAL_TRANSCRIPT_MAX_CHARS);
 }
 
 function resolveDiscordRealtimeWakeNames(params: {

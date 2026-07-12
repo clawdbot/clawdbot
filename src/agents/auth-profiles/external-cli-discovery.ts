@@ -54,9 +54,7 @@ function normalizeStringList(values: Iterable<string | undefined>): string[] {
 }
 
 /** Disables external CLI auth discovery. */
-export function externalCliDiscoveryNone(params?: {
-  config?: OpenClawConfig;
-}): ExternalCliAuthDiscovery {
+function externalCliDiscoveryNone(params?: { config?: OpenClawConfig }): ExternalCliAuthDiscovery {
   return {
     mode: "none",
     allowKeychainPrompt: false,

@@ -1083,15 +1083,59 @@ describe("grouped chat rendering", () => {
     );
   });
 
-  it("renders a reading-indicator-only run as one group with no footer", () => {
+  it("renders a reading-indicator-only run without avatar or footer", () => {
     const container = document.createElement("div");
 
     render(renderStreamGroup([{ kind: "reading-indicator", key: "reading" }]), container);
 
-    expect(container.querySelectorAll(".chat-group.assistant")).toHaveLength(1);
-    expect(container.querySelectorAll(".chat-avatar.assistant")).toHaveLength(1);
+    const group = container.querySelector(".chat-group.assistant");
+    expect(group).not.toBeNull();
+    expect(group?.classList.contains("chat-group--working")).toBe(true);
+    // Working runs are pure claw: the avatar only arrives with stream text.
+    expect(container.querySelectorAll(".chat-avatar.assistant")).toHaveLength(0);
     expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
     expect(container.querySelector(".chat-group-footer")).toBeNull();
+  });
+
+  it("keeps the avatar once a stream part joins the reading indicator", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderStreamGroup([
+        { kind: "stream", key: "stream:s:live", text: "reply", startedAt: 10, isStreaming: true },
+        { kind: "reading-indicator", key: "reading" },
+      ]),
+      container,
+    );
+
+    const group = container.querySelector(".chat-group.assistant");
+    expect(group?.classList.contains("chat-group--working")).toBe(false);
+    expect(container.querySelectorAll(".chat-avatar.assistant")).toHaveLength(1);
+    expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
+  });
+
+  it("seeds a stable punch stance per reading-indicator key", () => {
+    const stanceFor = (key: string) => {
+      const container = document.createElement("div");
+      render(renderStreamGroup([{ kind: "reading-indicator", key }]), container);
+      const bubble = container.querySelector(".chat-reading-indicator");
+      return [...(bubble?.classList ?? [])].filter((cls) =>
+        cls.startsWith("chat-reading-indicator--"),
+      );
+    };
+
+    const first = stanceFor("stream:agent:main:pending");
+    // Stable across re-renders: same key always fights the same style.
+    expect(stanceFor("stream:agent:main:pending")).toEqual(first);
+    // At most one stance modifier; orthodox is the unmarked default.
+    expect(first.length).toBeLessThanOrEqual(1);
+    for (const cls of first) {
+      expect([
+        "chat-reading-indicator--southpaw",
+        "chat-reading-indicator--flurry",
+        "chat-reading-indicator--haymaker",
+      ]).toContain(cls);
+    }
   });
 
   it("renders configured local user names", () => {

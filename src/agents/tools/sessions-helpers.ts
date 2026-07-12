@@ -23,6 +23,7 @@ export {
 import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { parseRawSessionConversationRef } from "../../sessions/session-key-utils.js";
 import type { FastModeSource } from "../../shared/fast-mode.js";
 
 /** Coarse session category used by session list/status tools. */
@@ -157,11 +158,5 @@ export function deriveChannel(params: {
   if (lastChannel) {
     return lastChannel;
   }
-  const parts = params.key.split(":").filter(Boolean);
-  const scope = parts.at(1);
-  const keyChannel = parts.at(0);
-  if (parts.length >= 3 && keyChannel && (scope === "group" || scope === "channel")) {
-    return keyChannel;
-  }
-  return "unknown";
+  return parseRawSessionConversationRef(params.key)?.channel ?? "unknown";
 }

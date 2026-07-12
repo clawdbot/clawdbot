@@ -579,10 +579,3 @@ export function prepareAgentRuntimeAuth(
     attempts: attempts.length > 0 ? attempts : [{ kind: "implicit", plan }],
   };
 }
-
-/** Returns the initial immutable plan for auxiliary consumers. */
-export function prepareAgentRuntimeAuthPlan(
-  params: PrepareAgentRuntimeAuthPlanParams,
-): AgentRuntimeAuthPlan {
-  return prepareAgentRuntimeAuth(params).plan;
-}

@@ -5,6 +5,7 @@ import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { loadNodeHostConfig } from "../../node-host/config.js";
 import { runNodeHost } from "../../node-host/runner.js";
+import { runNodeHostWorker } from "../../node-host/worker.js";
 import { defaultRuntime } from "../../runtime.js";
 import { parsePort } from "../daemon-cli/shared.js";
 import { formatInvalidPortOption } from "../error-format.js";
@@ -45,6 +46,13 @@ export function registerNodeCli(program: Command) {
           ["openclaw node restart", "Restart the installed node host service."],
         ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/node", "docs.openclaw.ai/cli/node")}\n`,
     );
+
+  node
+    .command("worker", { hidden: true })
+    .description("Run the private macOS app node-host worker")
+    .action(async () => {
+      await runNodeHostWorker();
+    });
 
   node
     .command("run")

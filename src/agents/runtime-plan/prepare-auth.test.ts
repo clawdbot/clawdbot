@@ -8,9 +8,12 @@ import {
   agentRuntimeAuthPlanMatchesTarget,
   canRunPreparedAgentRuntimeAuthAttempt,
   prepareAgentRuntimeAuth,
-  prepareAgentRuntimeAuthPlan,
   preparedAgentRuntimeProfileAttemptHasCandidate,
 } from "./prepare-auth.js";
+
+function prepareAgentRuntimeAuthPlan(params: Parameters<typeof prepareAgentRuntimeAuth>[0]) {
+  return prepareAgentRuntimeAuth(params).plan;
+}
 
 function authStore(
   profiles: AuthProfileStore["profiles"],

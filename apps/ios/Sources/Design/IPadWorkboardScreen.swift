@@ -187,10 +187,13 @@ struct IPadWorkboardScreen: View {
     }
 
     private var compactQueueControls: some View {
-        ProCard(radius: OpenClawProMetric.cardRadius) {
+        let count = self.filteredCards.count
+        let countText = String(
+            AttributedString(localized: "^[\(count) card](inflect: true)").characters)
+        return ProCard(radius: OpenClawProMetric.cardRadius) {
             VStack(alignment: .leading, spacing: 9) {
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
-                    Text("\(self.filteredCards.count) cards")
+                    Text(verbatim: countText)
                         .font(OpenClawType.headline)
                     Spacer(minLength: 8)
                     self.compactRefreshButton
@@ -352,7 +355,10 @@ struct IPadWorkboardScreen: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(self.selectedStatus == status ? OpenClawBrand.accent : .primary)
-        .accessibilityLabel("Show \(IPadWorkboardDefaults.label(for: status)) cards")
+        .accessibilityLabel(
+            String(
+                format: String(localized: "Show %@ cards"),
+                IPadWorkboardDefaults.label(for: status)))
     }
 
     private var boardScopeMenu: some View {
@@ -550,11 +556,14 @@ struct IPadWorkboardScreen: View {
                         }
                     }
                 } label: {
-                    Text(self.isCreatingCard ? "Creating..." : "Create")
+                    Text(self.isCreatingCard
+                        ? LocalizedStringKey("Creating...")
+                        : LocalizedStringKey("Create"))
                         .font(OpenClawType.subheadSemiBold)
                 }
                 .disabled(self.isCreatingCard)
-                .accessibilityHint(self.createUnavailableMessage ?? "Creates a workboard card")
+                .accessibilityHint(
+                    self.createUnavailableMessage ?? String(localized: "Creates a workboard card"))
             }
         }
     }
@@ -602,13 +611,13 @@ struct IPadWorkboardScreen: View {
 
     private var createUnavailableMessage: String? {
         if self.isCreatingCard {
-            return "Card creation is already in progress."
+            return String(localized: "Card creation is already in progress.")
         }
         if !self.canWrite {
             return Self.compactWriteUnavailableMessage(canRead: self.canRead)
         }
         if self.trimmedDraftTitle.isEmpty {
-            return "Enter a title to create a card."
+            return String(localized: "Enter a title to create a card.")
         }
         return nil
     }
@@ -627,11 +636,16 @@ struct IPadWorkboardScreen: View {
     }
 
     static func workboardSubtitle(boardScopeLabel: String, selectedStatus: String) -> String {
-        "\(boardScopeLabel) / \(IPadWorkboardDefaults.label(for: selectedStatus))"
+        String(
+            format: String(localized: "%@ / %@"),
+            boardScopeLabel,
+            IPadWorkboardDefaults.label(for: selectedStatus))
     }
 
     static func compactWriteUnavailableMessage(canRead: Bool) -> String {
-        canRead ? "Read-only gateway." : "Connect from Settings to create, move, and dispatch cards."
+        canRead
+            ? String(localized: "Read-only gateway.")
+            : String(localized: "Connect from Settings to create, move, and dispatch cards.")
     }
 
     static func boardScopeOptions(knownBoardIDs: [String], cardBoardIDs: [String]) -> [String] {
@@ -957,15 +971,19 @@ struct IPadWorkboardKanbanColumn: View {
         ProCard(padding: 0, radius: OpenClawProMetric.cardRadius) {
             VStack(spacing: 0) {
                 ProPanelHeader(
-                    title: IPadWorkboardDefaults.label(for: self.status),
+                    title: .localized(IPadWorkboardDefaults.label(for: self.status)),
                     value: "\(self.cards.count)",
                     actionTitle: nil,
                     action: nil)
 
                 if self.cards.isEmpty {
+                    let lane = IPadWorkboardDefaults.label(for: self.status)
                     ProStatusRow(
                         icon: "tray",
-                        title: "No \(IPadWorkboardDefaults.label(for: self.status).lowercased()) cards",
+                        title: .verbatim(
+                            String(
+                                format: String(localized: "No cards in %@"),
+                                lane)),
                         detail: "Cards moved into this lane appear here.",
                         value: "empty",
                         color: .secondary,
@@ -1051,12 +1069,16 @@ private struct IPadWorkboardKanbanCard: View {
                         Button {
                             self.move(status)
                         } label: {
-                            Text("Move to \(IPadWorkboardDefaults.label(for: status))")
+                            Text(verbatim: String(
+                                format: String(localized: "Move to %@"),
+                                IPadWorkboardDefaults.label(for: status)))
                                 .font(OpenClawType.subheadSemiBold)
                         }
                     }
                     Button(action: self.archive) {
-                        Text(self.card.metadata?.archivedAt == nil ? "Archive" : "Unarchive")
+                        Text(self.card.metadata?.archivedAt == nil
+                            ? LocalizedStringKey("Archive")
+                            : LocalizedStringKey("Unarchive"))
                             .font(OpenClawType.subheadSemiBold)
                     }
                 } label: {
@@ -1104,8 +1126,8 @@ private struct IPadWorkboardKanbanCard: View {
             return sessionKey
         }
         return self.card.agentId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-            ? self.card.agentId ?? "Default agent"
-            : "Default agent"
+            ? self.card.agentId ?? String(localized: "Default agent")
+            : String(localized: "Default agent")
     }
 }
 
@@ -1183,7 +1205,9 @@ struct IPadWorkboardQueueRow: View {
                 .tint(OpenClawBrand.accentHot)
             }
             Button(action: self.archive) {
-                Text(self.card.metadata?.archivedAt == nil ? "Archive" : "Unarchive")
+                Text(self.card.metadata?.archivedAt == nil
+                    ? LocalizedStringKey("Archive")
+                    : LocalizedStringKey("Unarchive"))
                     .font(OpenClawType.subheadSemiBold)
             }
             .tint(.secondary)
@@ -1206,12 +1230,16 @@ struct IPadWorkboardQueueRow: View {
             Button {
                 self.move(status)
             } label: {
-                Text("Move to \(IPadWorkboardDefaults.label(for: status))")
+                Text(verbatim: String(
+                    format: String(localized: "Move to %@"),
+                    IPadWorkboardDefaults.label(for: status)))
                     .font(OpenClawType.subheadSemiBold)
             }
         }
         Button(action: self.archive) {
-            Text(self.card.metadata?.archivedAt == nil ? "Archive" : "Unarchive")
+            Text(self.card.metadata?.archivedAt == nil
+                ? LocalizedStringKey("Archive")
+                : LocalizedStringKey("Unarchive"))
                 .font(OpenClawType.subheadSemiBold)
         }
     }
@@ -1253,8 +1281,8 @@ struct IPadWorkboardQueueRow: View {
             return sessionKey
         }
         return self.card.agentId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-            ? self.card.agentId ?? "Default agent"
-            : "Default agent"
+            ? self.card.agentId ?? String(localized: "Default agent")
+            : String(localized: "Default agent")
     }
 }
 
@@ -1309,7 +1337,9 @@ private struct IPadWorkboardCardDetailSheet: View {
                     Button {
                         self.archive()
                     } label: {
-                        Text(self.card.metadata?.archivedAt == nil ? "Archive" : "Unarchive")
+                        Text(self.card.metadata?.archivedAt == nil
+                            ? LocalizedStringKey("Archive")
+                            : LocalizedStringKey("Unarchive"))
                             .font(OpenClawType.subheadSemiBold)
                     }
                     .disabled(!self.canWrite || self.isBusy)
@@ -1363,11 +1393,21 @@ private enum IPadWorkboardDefaults {
     static let statuses = ["todo", "scheduled", "ready", "running", "review", "blocked", "done"]
 
     static func label(for status: String) -> String {
-        status
-            .replacingOccurrences(of: "_", with: " ")
-            .split(separator: " ")
-            .map { $0.prefix(1).uppercased() + $0.dropFirst() }
-            .joined(separator: " ")
+        switch status {
+        case "todo": String(localized: "Todo")
+        case "scheduled": String(localized: "Scheduled")
+        case "ready": String(localized: "Ready")
+        case "running": String(localized: "Running")
+        case "review": String(localized: "Review")
+        case "blocked": String(localized: "Blocked")
+        case "done": String(localized: "Done")
+        default:
+            status
+                .replacingOccurrences(of: "_", with: " ")
+                .split(separator: " ")
+                .map { $0.prefix(1).uppercased() + $0.dropFirst() }
+                .joined(separator: " ")
+        }
     }
 
     static func rank(_ status: String) -> Int {
@@ -1478,20 +1518,25 @@ struct IPadWorkboardDispatchSummary: Decodable {
             startedCount + self.promotedCount + self.reclaimedCount + self.orchestratedCount +
                 self.blockedCount + self.startFailureCount)
         if total == 0, self.startFailureCount == 0, self.blockedCount == 0 {
-            return "No cards dispatched."
+            return String(localized: "No cards dispatched.")
         }
         let outcomes = [
-            Self.outcomeText(self.startedCount, "started"),
-            Self.outcomeText(self.promotedCount, "promoted"),
-            Self.outcomeText(self.reclaimedCount, "reclaimed"),
-            Self.outcomeText(self.orchestratedCount, "orchestrated"),
-            Self.outcomeText(self.blockedCount, "blocked"),
-            Self.outcomeText(self.startFailureCount, "failed"),
+            Self.outcomeText(self.startedCount, .started),
+            Self.outcomeText(self.promotedCount, .promoted),
+            Self.outcomeText(self.reclaimedCount, .reclaimed),
+            Self.outcomeText(self.orchestratedCount, .orchestrated),
+            Self.outcomeText(self.blockedCount, .blocked),
+            Self.outcomeText(self.startFailureCount, .failed),
         ].compactMap(\.self)
         guard !outcomes.isEmpty else {
-            return "\(total) dispatched."
+            return String(
+                format: String(localized: "%@ dispatched."),
+                total.formatted())
         }
-        return "\(total) dispatched: \(outcomes.joined(separator: ", "))."
+        return String(
+            format: String(localized: "%@ dispatched: %@."),
+            total.formatted(),
+            outcomes.joined(separator: ", "))
     }
 
     private static func arrayCount(
@@ -1501,9 +1546,26 @@ struct IPadWorkboardDispatchSummary: Decodable {
         (try? container.decode([IPadWorkboardDispatchEntry].self, forKey: key).count) ?? 0
     }
 
-    private static func outcomeText(_ count: Int, _ label: String) -> String? {
+    private enum Outcome {
+        case started
+        case promoted
+        case reclaimed
+        case orchestrated
+        case blocked
+        case failed
+    }
+
+    private static func outcomeText(_ count: Int, _ outcome: Outcome) -> String? {
         guard count > 0 else { return nil }
-        return "\(count) \(label)"
+        let format = switch outcome {
+        case .started: String(localized: "%@ started")
+        case .promoted: String(localized: "%@ promoted")
+        case .reclaimed: String(localized: "%@ reclaimed")
+        case .orchestrated: String(localized: "%@ orchestrated")
+        case .blocked: String(localized: "%@ blocked")
+        case .failed: String(localized: "%@ failed")
+        }
+        return String(format: format, count.formatted())
     }
 }
 

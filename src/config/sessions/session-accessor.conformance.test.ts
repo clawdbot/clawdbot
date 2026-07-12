@@ -64,7 +64,6 @@ import {
   replaceSqliteTranscriptEvents,
   restoreSqliteCompactionCheckpointSession,
   sqliteTranscriptExists,
-  updateSqliteSessionEntry,
   upsertSqliteSessionEntry,
 } from "./session-accessor.sqlite.js";
 import { parseSqliteSessionFileMarker } from "./sqlite-marker.js";
@@ -201,7 +200,7 @@ const sqliteAdapter: AccessorAdapter = {
   upsertSessionEntry: upsertSqliteSessionEntry,
   replaceSessionEntry: replaceSqliteSessionEntry,
   patchSessionEntry: patchSqliteSessionEntry,
-  updateSessionEntry: updateSqliteSessionEntry,
+  updateSessionEntry: patchSqliteSessionEntry,
   cleanupSessionLifecycleArtifacts: cleanupSqliteSessionLifecycleArtifacts,
   loadTranscriptEvents: loadSqliteTranscriptEvents,
   appendTranscriptEvent: appendSqliteTranscriptEvent,
@@ -735,7 +734,7 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       });
     });
 
-    it("serializes concurrent SQLite entry patches and updates", async () => {
+    it("serializes concurrent SQLite entry patches", async () => {
       const scope = sqliteAdapter.entryScope(paths);
 
       await upsertSqliteSessionEntry(scope, {
@@ -766,30 +765,6 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       expect(loadSqliteSessionEntry(scope)).toMatchObject({
         model: "first",
         providerOverride: "openai",
-      });
-
-      let firstUpdate!: Promise<SessionEntry | null>;
-      let releaseUpdate!: () => void;
-      const updateStarted = new Promise<void>((resolve) => {
-        const blockedUpdate = new Promise<void>((release) => {
-          releaseUpdate = release;
-        });
-        firstUpdate = updateSqliteSessionEntry(scope, async () => {
-          resolve();
-          await blockedUpdate;
-          return { model: "updated" };
-        });
-      });
-      await updateStarted;
-      const secondUpdate = updateSqliteSessionEntry(scope, () => ({
-        providerOverride: "anthropic",
-      }));
-      releaseUpdate();
-      await Promise.all([firstUpdate, secondUpdate]);
-
-      expect(loadSqliteSessionEntry(scope)).toMatchObject({
-        model: "updated",
-        providerOverride: "anthropic",
       });
     });
 
@@ -1507,7 +1482,7 @@ describe("sqlite session normalization", () => {
       staleTranscriptEvent,
     );
 
-    await updateSqliteSessionEntry(scopeFor("agent:main:active"), () => ({ model: "gpt-5.5" }), {
+    await patchSqliteSessionEntry(scopeFor("agent:main:active"), () => ({ model: "gpt-5.5" }), {
       skipMaintenance: true,
     });
     await expect(
@@ -1528,7 +1503,7 @@ describe("sqlite session normalization", () => {
 
     const notify = vi.fn();
     const unsubscribe = onSessionIdentityMutation(notify);
-    await updateSqliteSessionEntry(scopeFor("agent:main:active"), () => ({
+    await patchSqliteSessionEntry(scopeFor("agent:main:active"), () => ({
       providerOverride: "openai",
     }));
     unsubscribe();
@@ -1666,7 +1641,7 @@ describe("sqlite session normalization", () => {
       },
     );
 
-    await updateSqliteSessionEntry(scopeFor("agent:main:active-budget"), () => ({
+    await patchSqliteSessionEntry(scopeFor("agent:main:active-budget"), () => ({
       modelOverride: "gpt-5.5",
     }));
 

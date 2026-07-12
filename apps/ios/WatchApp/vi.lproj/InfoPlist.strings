@@ -1,0 +1,3 @@
+"CFBundleDisplayName" = "OpenClaw";
+/* OpenClaw source: "OpenClaw connects this Apple Watch directly to your Gateway on trusted local networks." */
+"NSLocalNetworkUsageDescription" = "OpenClaw kết nối Apple Watch này trực tiếp với Gateway của bạn trên các mạng cục bộ đáng tin cậy.";

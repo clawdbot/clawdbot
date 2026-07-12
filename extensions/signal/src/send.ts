@@ -21,6 +21,7 @@ import {
 } from "./approval-reactions.js";
 import { signalRpcRequest } from "./client-adapter.js";
 import { markdownToSignalText, type SignalTextStyleRange } from "./format.js";
+import { registerSignalReplyContext } from "./reply-authors.js";
 import { resolveSignalRpcContext } from "./rpc-context.js";
 
 export type SignalSendOpts = {
@@ -363,6 +364,17 @@ export async function sendMessageSignal(
   }
   const timestamp = result?.timestamp;
   const messageId = timestamp ? String(timestamp) : "unknown";
+  const replyAuthor = targetAuthor ?? targetAuthorUuid;
+  if (timestamp && replyAuthor) {
+    await registerSignalReplyContext({
+      accountId: accountInfo.accountId,
+      to,
+      replyToId: messageId,
+      author: replyAuthor,
+      body: message,
+      sourceTimestamp: timestamp,
+    });
+  }
   registerSignalApprovalReactionTargetForOutboundMessage({
     cfg,
     accountId: accountInfo.accountId,

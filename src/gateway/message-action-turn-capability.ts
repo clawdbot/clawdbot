@@ -69,7 +69,7 @@ function evictOldestCapability(): void {
   }
 }
 
-export function sweepExpiredMessageActionTurnCapabilities(nowMs: number = Date.now()): number {
+function sweepExpiredMessageActionTurnCapabilities(nowMs: number = Date.now()): number {
   let removed = 0;
   for (const [token, capability] of capabilitiesByToken) {
     if (nowMs >= capability.expiresAtMs) {

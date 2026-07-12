@@ -103,6 +103,7 @@ final class MacNodeModeCoordinator: NSObject {
     private var lastObservedComputerControlEnabled: Bool
     private let runtime: MacNodeRuntime
     private let session: GatewayNodeSession
+    private let nodeHostWorker: (any MacNodeHostWorking)?
     private let presenceReporter: MacNodePresenceReporter
     private let routeInvalidationHook: (@Sendable () async -> Void)?
     private let refreshEvents: AsyncStream<Void>
@@ -112,11 +113,16 @@ final class MacNodeModeCoordinator: NSObject {
 
     override private convenience init() {
         let session = GatewayNodeSession()
+        let nodeHostWorker = MacNodeHostWorker(session: session) {
+            NotificationCenter.default.post(name: .openclawNodeHostWorkerFailed, object: nil)
+        }
         self.init(
             session: session,
             runtime: MacNodeRuntime(
+                nodeHostWorker: nodeHostWorker,
                 canvasSurfaceUrl: { await session.currentCanvasHostUrl() },
                 refreshCanvasSurfaceUrl: { await session.refreshCanvasHostUrl() }),
+            nodeHostWorker: nodeHostWorker,
             presenceReporter: MacNodePresenceReporter(),
             observeNotifications: true,
             initialPaused: nil,
@@ -127,6 +133,7 @@ final class MacNodeModeCoordinator: NSObject {
     init(
         session: GatewayNodeSession,
         runtime: MacNodeRuntime,
+        nodeHostWorker: (any MacNodeHostWorking)? = nil,
         presenceReporter: MacNodePresenceReporter = MacNodePresenceReporter(),
         observeNotifications: Bool = false,
         initialPaused: Bool? = nil,
@@ -136,6 +143,7 @@ final class MacNodeModeCoordinator: NSObject {
         let refreshEvents = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingNewest(1))
         self.session = session
         self.runtime = runtime
+        self.nodeHostWorker = nodeHostWorker
         self.presenceReporter = presenceReporter
         self.routeInvalidationHook = routeInvalidationHook
         self.refreshEvents = refreshEvents.stream
@@ -160,6 +168,21 @@ final class MacNodeModeCoordinator: NSObject {
             self,
             selector: #selector(self.refreshNodeConfiguration),
             name: .openclawPermissionsChanged,
+            object: nil)
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(self.nodeHostWorkerFailed),
+            name: .openclawNodeHostWorkerFailed,
+            object: nil)
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(self.nodeHostConfigurationChanged),
+            name: .openclawConfigDidChange,
+            object: nil)
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(self.nodeHostConfigurationChanged),
+            name: .openclawCLIInstalled,
             object: nil)
     }
 
@@ -196,11 +219,13 @@ final class MacNodeModeCoordinator: NSObject {
     func stop() {
         self.cancelCoordinatorTasks()
         _ = self.enqueueRouteInvalidation(yieldRefresh: false)
+        Task { await self.nodeHostWorker?.stop() }
     }
 
     func stopAndWait() async {
         self.cancelCoordinatorTasks()
         await self.enqueueRouteInvalidation(yieldRefresh: false).value
+        await self.nodeHostWorker?.stop()
     }
 
     private func cancelCoordinatorTasks() {
@@ -266,7 +291,10 @@ final class MacNodeModeCoordinator: NSObject {
     /// Generation advances synchronously; disconnect then cancels active computer
     /// invokes and runs the held-input release hook before the latest refresh wakes.
     @discardableResult
-    private func enqueueRouteInvalidation(yieldRefresh: Bool) -> Task<Void, Never> {
+    private func enqueueRouteInvalidation(
+        yieldRefresh: Bool,
+        restartNodeHostWorker: Bool = false) -> Task<Void, Never>
+    {
         self.revokeRouteAuthority()
         let invalidationGeneration = self.endpointAttemptGeneration
         let invalidatedRouteAuthorityGeneration = self.routeAuthorityGeneration
@@ -275,7 +303,10 @@ final class MacNodeModeCoordinator: NSObject {
             await previous?.value
             guard let self else { return }
             await self.session.disconnect()
-            await self.invalidateRuntimeRoute()
+            await self.invalidateRuntimeRoute(authorityGeneration: invalidatedRouteAuthorityGeneration)
+            if restartNodeHostWorker {
+                await self.nodeHostWorker?.stop()
+            }
             self.completedRouteAuthorityGeneration = invalidatedRouteAuthorityGeneration
             guard yieldRefresh,
                   invalidationGeneration == self.endpointAttemptGeneration,
@@ -392,9 +423,9 @@ final class MacNodeModeCoordinator: NSObject {
             routeRevision: routeRevision)
     }
 
-    private func invalidateRuntimeRoute() async {
+    private func invalidateRuntimeRoute(authorityGeneration: UInt64) async {
         self.presenceReporter.stop()
-        await self.runtime.setEventSender(nil)
+        _ = await self.nodeHostWorker?.setRoute(nil, authorityGeneration: authorityGeneration)
         await self.runtime.releaseHeldComputerInput()
         await self.routeInvalidationHook?()
     }
@@ -486,7 +517,8 @@ final class MacNodeModeCoordinator: NSObject {
         codexThreadCatalogEnabled: Bool,
         claudeSessionCatalogEnabled: Bool) async throws -> ConnectionAttempt?
     {
-        let caps = self.currentCaps(
+        let workerManifest = try await self.startNodeHostWorkerIfConfigured()
+        let nativeCaps = self.currentCaps(
             browserControlEnabled: browserControlEnabled,
             cameraEnabled: cameraEnabled,
             codexThreadCatalogEnabled: codexThreadCatalogEnabled,
@@ -495,10 +527,13 @@ final class MacNodeModeCoordinator: NSObject {
         // computer.act service is still holding rather than waiting for
         // the idle watchdog. This refresh loop re-runs on the settings
         // change that drops the cap.
-        if !caps.contains(OpenClawCapability.computer.rawValue) {
+        if !nativeCaps.contains(OpenClawCapability.computer.rawValue) {
             await self.runtime.releaseHeldComputerInput()
         }
-        let commands = self.currentCommands(caps: caps)
+        let caps = Self.mergingUnique(nativeCaps, workerManifest?.caps ?? [])
+        let commands = Self.mergingUnique(
+            self.currentCommands(caps: nativeCaps),
+            workerManifest?.commands ?? [])
         let permissions = await self.currentPermissions()
         // TCC queries suspend. An endpoint loss/replacement during that
         // hop must not let this stale continuation install old credentials.
@@ -516,6 +551,7 @@ final class MacNodeModeCoordinator: NSObject {
             scopes: [],
             caps: caps,
             commands: commands,
+            pathEnv: workerManifest?.pathEnv,
             permissions: permissions,
             clientId: "openclaw-macos",
             clientMode: "node",
@@ -566,6 +602,12 @@ final class MacNodeModeCoordinator: NSObject {
                 // Capture this callback's admission before setup suspends. The
                 // sender lease then drops already-captured events after replacement.
                 guard let installedRoute = await self.session.currentRoute() else { return }
+                guard await self.routeAuthorityAllowsInvoke(attempt.routeAuthorityGeneration) else { return }
+                let workerRouteInstalled = await self.nodeHostWorker?.setRoute(
+                    installedRoute,
+                    authorityGeneration: attempt.routeAuthorityGeneration) ?? true
+                guard workerRouteInstalled else { return }
+                await self.nodeHostWorker?.publishInventory(ifCurrentRoute: installedRoute)
                 await self.cancelReconnectProbe()
                 self.logger.info("mac node connected to gateway")
                 let mainSessionKey = await GatewayConnection.shared.mainSessionKey()
@@ -573,13 +615,6 @@ final class MacNodeModeCoordinator: NSObject {
                 let routeStillAuthoritative = await self.routeAuthorityAllowsInvoke(attempt.routeAuthorityGeneration)
                 let currentRoute = await self.session.currentRoute()
                 guard routeStillAuthoritative, currentRoute == installedRoute else { return }
-                await self.runtime.setEventSender { [weak self] event, payload in
-                    guard let self else { return }
-                    await self.session.sendEvent(
-                        event: event,
-                        payloadJSON: payload,
-                        ifCurrentRoute: installedRoute)
-                }
                 await self.presenceReporter.start { [weak self] event, payload in
                     guard let self else { return false }
                     return await self.session.sendEvent(
@@ -590,7 +625,7 @@ final class MacNodeModeCoordinator: NSObject {
             },
             onDisconnected: { [weak self] reason in
                 guard let self else { return }
-                await self.invalidateRuntimeRoute()
+                await self.invalidateRuntimeRoute(authorityGeneration: attempt.routeAuthorityGeneration)
                 await self.scheduleReconnectProbe()
                 self.logger.error("mac node disconnected: \(reason, privacy: .public)")
             },
@@ -637,7 +672,7 @@ final class MacNodeModeCoordinator: NSObject {
                 return await self.runtime.handleInvoke(req)
             },
             onRouteInvalidated: { [weak self] in
-                await self?.invalidateRuntimeRoute()
+                await self?.invalidateRuntimeRoute(authorityGeneration: attempt.routeAuthorityGeneration)
             })
     }
 
@@ -730,38 +765,18 @@ final class MacNodeModeCoordinator: NSObject {
         }
     }
 
-    nonisolated static func resolvedCaps(
-        browserControlEnabled: Bool,
-        cameraEnabled: Bool,
-        computerControlEnabled: Bool,
-        locationMode: OpenClawLocationMode,
-        connectionMode: AppState.ConnectionMode,
-        codexThreadCatalogEnabled: Bool = false,
-        claudeSessionCatalogEnabled: Bool = false) -> [String]
-    {
-        var caps: [String] = [
-            OpenClawCapability.canvas.rawValue,
-            OpenClawCapability.screen.rawValue,
-        ]
-        if browserControlEnabled, connectionMode == .local {
-            caps.append(OpenClawCapability.browser.rawValue)
+    @objc private nonisolated func nodeHostWorkerFailed(_: Notification) {
+        Task { @MainActor [weak self] in
+            self?.enqueueRouteInvalidation(yieldRefresh: true)
         }
-        if cameraEnabled { caps.append(OpenClawCapability.camera.rawValue) }
-        // Advertised only when the operator has enabled Computer Control; the
-        // command is dangerous and stays disarmed until allowlisted on the gateway.
-        if computerControlEnabled {
-            caps.append(OpenClawCapability.computer.rawValue)
+    }
+
+    @objc private nonisolated func nodeHostConfigurationChanged(_: Notification) {
+        Task { @MainActor [weak self] in
+            // Worker code, plugin availability, and its manifest are startup-scoped.
+            // Replace the process before reconnecting so updates cannot leave a stale route.
+            self?.enqueueRouteInvalidation(yieldRefresh: true, restartNodeHostWorker: true)
         }
-        if locationMode != .off { caps.append(OpenClawCapability.location.rawValue) }
-        // A local Gateway already catalogs this user's Codex home. Advertise the
-        // node-owned catalog only when this Mac supplies it to a remote Gateway.
-        if codexThreadCatalogEnabled, connectionMode == .remote {
-            caps.append(MacNodeCodexThreadCatalogContract.capability)
-        }
-        if claudeSessionCatalogEnabled, connectionMode == .remote {
-            caps.append(MacNodeClaudeSessionCatalogContract.capability)
-        }
-        return caps
     }
 
     private func currentCaps(
@@ -788,53 +803,23 @@ final class MacNodeModeCoordinator: NSObject {
         return Dictionary(uniqueKeysWithValues: statuses.map { ($0.key.rawValue, $0.value) })
     }
 
-    nonisolated static func resolvedCommands(caps: [String]) -> [String] {
-        var commands: [String] = [
-            OpenClawCanvasCommand.present.rawValue,
-            OpenClawCanvasCommand.hide.rawValue,
-            OpenClawCanvasCommand.navigate.rawValue,
-            OpenClawCanvasCommand.evalJS.rawValue,
-            OpenClawCanvasCommand.snapshot.rawValue,
-            OpenClawCanvasA2UICommand.push.rawValue,
-            OpenClawCanvasA2UICommand.pushJSONL.rawValue,
-            OpenClawCanvasA2UICommand.reset.rawValue,
-            MacNodeScreenCommand.snapshot.rawValue,
-            MacNodeScreenCommand.record.rawValue,
-            OpenClawSystemCommand.notify.rawValue,
-            OpenClawSystemCommand.which.rawValue,
-            OpenClawSystemCommand.run.rawValue,
-            OpenClawSystemCommand.execApprovalsGet.rawValue,
-            OpenClawSystemCommand.execApprovalsSet.rawValue,
-            OpenClawFileSystemCommand.listDir.rawValue,
-        ]
-
-        let capsSet = Set(caps)
-        if capsSet.contains(OpenClawCapability.browser.rawValue) {
-            commands.append(OpenClawBrowserCommand.proxy.rawValue)
-        }
-        if capsSet.contains(OpenClawCapability.camera.rawValue) {
-            commands.append(OpenClawCameraCommand.list.rawValue)
-            commands.append(OpenClawCameraCommand.snap.rawValue)
-            commands.append(OpenClawCameraCommand.clip.rawValue)
-        }
-        if capsSet.contains(OpenClawCapability.location.rawValue) {
-            commands.append(OpenClawLocationCommand.get.rawValue)
-        }
-        if capsSet.contains(MacNodeCodexThreadCatalogContract.capability) {
-            commands.append(contentsOf: MacNodeCodexThreadCatalogContract.commands)
-        }
-        if capsSet.contains(MacNodeClaudeSessionCatalogContract.capability) {
-            commands.append(contentsOf: MacNodeClaudeSessionCatalogContract.commands)
-        }
-        if capsSet.contains(OpenClawCapability.computer.rawValue) {
-            commands.append(OpenClawComputerCommand.act.rawValue)
-        }
-
-        return commands
-    }
-
     private func currentCommands(caps: [String]) -> [String] {
         Self.resolvedCommands(caps: caps)
+    }
+
+    private func startNodeHostWorkerIfConfigured() async throws -> MacNodeHostManifest? {
+        guard let nodeHostWorker else { return nil }
+        let executable: String
+        if let projectExecutable = CommandResolver.projectOpenClawExecutable() {
+            executable = projectExecutable
+        } else {
+            switch await CLIInstaller.status() {
+            case let .ready(location, _): executable = location
+            case let status:
+                throw MacNodeHostWorker.WorkerError.unavailable(status.message)
+            }
+        }
+        return try await nodeHostWorker.start(command: [executable, "node", "worker"])
     }
 
     nonisolated static func tlsPinStoreKey(for url: URL) -> String {
@@ -913,5 +898,81 @@ final class MacNodeModeCoordinator: NSObject {
             return nil
         }
         return self.tlsSessionCache.sessionBox(url: url, params: params)
+    }
+}
+
+extension MacNodeModeCoordinator {
+    nonisolated static func resolvedCaps(
+        browserControlEnabled: Bool,
+        cameraEnabled: Bool,
+        computerControlEnabled: Bool,
+        locationMode: OpenClawLocationMode,
+        connectionMode: AppState.ConnectionMode,
+        codexThreadCatalogEnabled: Bool = false,
+        claudeSessionCatalogEnabled: Bool = false) -> [String]
+    {
+        var caps: [String] = [
+            OpenClawCapability.canvas.rawValue,
+            OpenClawCapability.screen.rawValue,
+        ]
+        _ = browserControlEnabled
+        if cameraEnabled { caps.append(OpenClawCapability.camera.rawValue) }
+        // Advertised only when the operator has enabled Computer Control; the
+        // command is dangerous and stays disarmed until allowlisted on the gateway.
+        if computerControlEnabled {
+            caps.append(OpenClawCapability.computer.rawValue)
+        }
+        if locationMode != .off { caps.append(OpenClawCapability.location.rawValue) }
+        // A local Gateway already catalogs this user's Codex home. Advertise the
+        // node-owned catalog only when this Mac supplies it to a remote Gateway.
+        if codexThreadCatalogEnabled, connectionMode == .remote {
+            caps.append(MacNodeCodexThreadCatalogContract.capability)
+        }
+        if claudeSessionCatalogEnabled, connectionMode == .remote {
+            caps.append(MacNodeClaudeSessionCatalogContract.capability)
+        }
+        return caps
+    }
+
+    nonisolated static func resolvedCommands(caps: [String]) -> [String] {
+        var commands: [String] = [
+            OpenClawCanvasCommand.present.rawValue,
+            OpenClawCanvasCommand.hide.rawValue,
+            OpenClawCanvasCommand.navigate.rawValue,
+            OpenClawCanvasCommand.evalJS.rawValue,
+            OpenClawCanvasCommand.snapshot.rawValue,
+            OpenClawCanvasA2UICommand.push.rawValue,
+            OpenClawCanvasA2UICommand.pushJSONL.rawValue,
+            OpenClawCanvasA2UICommand.reset.rawValue,
+            MacNodeScreenCommand.snapshot.rawValue,
+            MacNodeScreenCommand.record.rawValue,
+            OpenClawSystemCommand.notify.rawValue,
+        ]
+
+        let capsSet = Set(caps)
+        if capsSet.contains(OpenClawCapability.camera.rawValue) {
+            commands.append(OpenClawCameraCommand.list.rawValue)
+            commands.append(OpenClawCameraCommand.snap.rawValue)
+            commands.append(OpenClawCameraCommand.clip.rawValue)
+        }
+        if capsSet.contains(OpenClawCapability.location.rawValue) {
+            commands.append(OpenClawLocationCommand.get.rawValue)
+        }
+        if capsSet.contains(MacNodeCodexThreadCatalogContract.capability) {
+            commands.append(contentsOf: MacNodeCodexThreadCatalogContract.commands)
+        }
+        if capsSet.contains(MacNodeClaudeSessionCatalogContract.capability) {
+            commands.append(contentsOf: MacNodeClaudeSessionCatalogContract.commands)
+        }
+        if capsSet.contains(OpenClawCapability.computer.rawValue) {
+            commands.append(OpenClawComputerCommand.act.rawValue)
+        }
+
+        return commands
+    }
+
+    nonisolated static func mergingUnique(_ primary: [String], _ additional: [String]) -> [String] {
+        var seen = Set<String>()
+        return (primary + additional).filter { seen.insert($0).inserted }
     }
 }

@@ -118,6 +118,8 @@ describe("terminal ansi helpers", () => {
     expect(visibleWidth("📸 skill")).toBe(8);
     expect(visibleWidth("表")).toBe(2);
     expect(visibleWidth("\u001B[31m📸\u001B[0m")).toBe(2);
+    expect(visibleWidth("\u0007\u007F\u0085")).toBe(0);
+    expect(visibleWidth("a\u001B[31\u0001mb")).toBe(2);
   });
 
   it("keeps emoji zwj sequences as single graphemes", () => {
@@ -165,6 +167,18 @@ describe("terminal ansi helpers", () => {
     expect(truncateToVisibleWidth("[31mab[0m", 1)).toBe("[31ma[0m");
     expect(truncateToVisibleWidth("[31m表文[0m", 1)).toBe("[31m[0m");
     expect(visibleWidth(truncateToVisibleWidth("[31m表文[0m", 1))).toBe(0);
+  });
+
+  it("counts independently executed controls inside atomic CSI sequences", () => {
+    const sequence = "\x1b[31\tm";
+    const truncated = truncateToVisibleWidth(`a${sequence}B`, 2);
+    expect(truncated).toBe(`a${sequence}`);
+    expect(visibleWidth(truncated)).toBe(2);
+    expect(visibleWidth(truncateToVisibleWidth(`a${sequence}B`, 1))).toBe(1);
+
+    const reset = truncateToVisibleWidth("\x1b[31mA\x1b[0\tmB", 1);
+    expect(reset).toBe("\x1b[31mA\x1b[0m");
+    expect(visibleWidth(reset)).toBe(1);
   });
 
   it("reuses the ANSI scanner across truncation calls", () => {

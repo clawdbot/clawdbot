@@ -266,12 +266,17 @@ async function waitForChild(child: ReturnType<typeof spawn>, label: string): Pro
     childStderr += String(chunk);
   });
 
-  const childExit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-    (resolve, reject) => {
-      child.once("error", reject);
-      child.once("exit", (code, signal) => resolve({ code, signal }));
-    },
-  );
+  // The file handshake can complete immediately before this waiter attaches.
+  // Honor an already-observed exit or the test will wait forever for a spent event.
+  const childExit =
+    child.exitCode !== null || child.signalCode !== null
+      ? { code: child.exitCode, signal: child.signalCode }
+      : await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+          (resolve, reject) => {
+            child.once("error", reject);
+            child.once("exit", (code, signal) => resolve({ code, signal }));
+          },
+        );
   if (childExit.code !== 0) {
     throw new Error(
       `${label} child failed code=${String(childExit.code)} signal=${String(childExit.signal)}\nstdout:\n${childStdout}\nstderr:\n${childStderr}`,
@@ -280,6 +285,18 @@ async function waitForChild(child: ReturnType<typeof spawn>, label: string): Pro
 }
 
 describe("session accessor cross-process concurrency", () => {
+  it("observes a child that exited before the waiter attached", async () => {
+    const child = spawn(process.execPath, ["--eval", ""], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    await new Promise<void>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("exit", () => resolve());
+    });
+
+    await waitForChild(child, "already exited");
+  });
+
   it("commits after same-session activity from another process", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-reply-init-"));
     const sessionAccessorUrl = pathToFileURL(

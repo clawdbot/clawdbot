@@ -625,6 +625,26 @@ describe("installSessionToolResultGuard", () => {
     expect((persisted[0] as { content?: unknown } | undefined)?.content).toBe("second");
   });
 
+  it("re-enables the next user write after the canonical entry is removed", () => {
+    const sm = SessionManager.inMemory();
+    const guard = installSessionToolResultGuard(sm, {
+      suppressNextUserMessagePersistence: true,
+    });
+
+    guard.clearNextUserMessagePersistenceSuppression();
+    sm.appendMessage(
+      asAppendMessage({
+        role: "user",
+        content: "replacement",
+        timestamp: Date.now(),
+      }),
+    );
+
+    const persisted = getPersistedMessages(sm);
+    expect(persisted).toHaveLength(1);
+    expect((persisted[0] as { content?: unknown } | undefined)?.content).toBe("replacement");
+  });
+
   it("suppresses assistant error stubs when requested", () => {
     const sm = SessionManager.inMemory();
     installSessionToolResultGuard(sm, {

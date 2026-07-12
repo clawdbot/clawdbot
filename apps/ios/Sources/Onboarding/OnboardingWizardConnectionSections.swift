@@ -126,7 +126,7 @@ struct OnboardingConnectPhaseView: View {
             let actionTitle = self.primaryActionTitle(problem)
             GatewayProblemBanner(
                 problem: problem,
-                primaryActionTitle: actionTitle ?? (problem.retryable ? "Retry" : nil),
+                primaryActionTitle: actionTitle ?? (problem.retryable ? String(localized: "Retry") : nil),
                 onPrimaryAction: {
                     if actionTitle != nil {
                         self.onHandleProblem(problem)
@@ -139,10 +139,10 @@ struct OnboardingConnectPhaseView: View {
             OpenClawNoticeBanner(
                 icon: "exclamationmark.triangle.fill",
                 title: "Connection Failed",
-                message: message,
+                message: .verbatim(message),
                 ownerLabel: "Needs attention",
                 tint: OpenClawBrand.danger,
-                primaryActionTitle: allowsRetry ? "Retry" : nil,
+                primaryActionTitle: allowsRetry ? OpenClawTextValue.localized("Retry") : nil,
                 onPrimaryAction: allowsRetry ? self.onRetry : nil)
         case .ready:
             OpenClawStatusBadge(label: "Ready to Connect", tone: .muted)

@@ -174,6 +174,19 @@ export function buildQaGatewayConfig(params: {
           },
         }
       : providerGatewayModels;
+  const mockMemorySearch =
+    provider.kind === "mock"
+      ? {
+          provider: "openai",
+          model: "text-embedding-3-small",
+          remote: {
+            // Memory embeddings bypass the model runtime, so bind them to the
+            // mock explicitly or a forced runtime can fall through to a live API.
+            baseUrl: providerBaseUrl,
+            apiKey: "test",
+          },
+        }
+      : {};
 
   return {
     plugins: {
@@ -212,6 +225,7 @@ export function buildQaGatewayConfig(params: {
           : {}),
         ...(params.thinkingDefault ? { thinkingDefault: params.thinkingDefault } : {}),
         memorySearch: {
+          ...mockMemorySearch,
           sync: {
             watch: true,
             watchDebounceMs: 25,

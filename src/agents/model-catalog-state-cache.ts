@@ -22,7 +22,7 @@ type CachedAgentModelCatalogPayload = {
   routeVariants?: readonly unknown[];
 };
 
-export type CachedAgentModelCatalogSnapshot = {
+type CachedAgentModelCatalogSnapshot = {
   entries: unknown[];
   routeVariants: unknown[];
 };

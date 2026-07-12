@@ -47,7 +47,11 @@ public struct OpenClawChatWindowShell: View {
                     .font(OpenClawChatTypography.body)
             }
         } message: {
-            Text("This resets the conversation for \(self.activeSessionTitle). The session key stays the same.")
+            Text(verbatim: String(
+                format: String(localized: """
+                This resets the conversation for %@. The session key stays the same.
+                """),
+                self.activeSessionTitle))
                 .font(OpenClawChatTypography.body)
         }
         .onChange(of: self.viewModel.pendingRunCount) { previous, current in
@@ -286,7 +290,9 @@ private struct ChatContextUsageMenu: View {
             Text(self.tokensLine)
                 .font(OpenClawChatTypography.body(size: 13, weight: .regular, relativeTo: .body))
             if let cost = self.usage.totalCost {
-                Text("Session cost \(ChatContextUsageFormatter.cost(cost))")
+                Text(verbatim: String(
+                    format: String(localized: "Session cost %@"),
+                    ChatContextUsageFormatter.cost(cost)))
                     .font(OpenClawChatTypography.body(size: 13, weight: .regular, relativeTo: .body))
             }
             Divider()

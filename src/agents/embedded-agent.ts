@@ -16,7 +16,6 @@ export {
   isEmbeddedAgentRunStreaming,
   queueEmbeddedAgentMessage,
   queueEmbeddedAgentMessageWithOutcome,
-  resolveActiveEmbeddedAgentRunSessionId,
   resolveActiveEmbeddedRunSessionId,
   resolveActiveEmbeddedRunSessionIdBySessionFile,
   resolveEmbeddedSessionLane,

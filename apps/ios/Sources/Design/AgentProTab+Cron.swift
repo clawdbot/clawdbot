@@ -131,7 +131,12 @@ extension AgentProTab {
 
     @MainActor
     func runCronJob(_ job: CronJob) async {
-        await self.runCronAction(job, success: "Queued \(job.name).") {
+        await self.runCronAction(
+            job,
+            success: String(
+                format: String(localized: "Queued %@."),
+                job.name))
+        {
             let params = CronRunParams(id: job.id, mode: "force")
             _ = try await self.requestGateway(method: "cron.run", params: params, timeoutSeconds: 20)
         }
@@ -139,7 +144,12 @@ extension AgentProTab {
 
     @MainActor
     func setCronJob(_ job: CronJob, enabled: Bool) async {
-        await self.runCronAction(job, success: enabled ? "Enabled \(job.name)." : "Paused \(job.name).") {
+        let success = String(
+            format: enabled
+                ? String(localized: "Enabled %@.")
+                : String(localized: "Paused %@."),
+            job.name)
+        await self.runCronAction(job, success: success) {
             let params = CronUpdateParams(id: job.id, patch: CronUpdatePatch(enabled: enabled))
             _ = try await self.requestGateway(method: "cron.update", params: params, timeoutSeconds: 20)
         }

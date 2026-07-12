@@ -52,25 +52,34 @@ type CommandResult = {
 
 let defaultMatrixCryptoRuntimeEnsurePromise: Promise<void> | null = null;
 
-function appendBoundedOutputTail(current: string, chunk: Buffer | string): string {
+function sliceUtf8OutputTail(buffer: Buffer): Buffer {
+  let start = Math.max(0, buffer.byteLength - MATRIX_COMMAND_OUTPUT_TAIL_BYTES);
+  while (start < buffer.byteLength) {
+    const byte = buffer[start];
+    if (byte === undefined || (byte & 0xc0) !== 0x80) {
+      break;
+    }
+    start++;
+  }
+  return buffer.subarray(start);
+}
+
+function appendBoundedOutputTail(current: Buffer, chunk: Buffer | string): Buffer {
   const chunkBuffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
   if (chunkBuffer.byteLength >= MATRIX_COMMAND_OUTPUT_TAIL_BYTES) {
-    return chunkBuffer
-      .subarray(chunkBuffer.byteLength - MATRIX_COMMAND_OUTPUT_TAIL_BYTES)
-      .toString("utf8");
+    return sliceUtf8OutputTail(chunkBuffer);
   }
 
-  const currentBuffer = Buffer.from(current);
-  const nextBytes = currentBuffer.byteLength + chunkBuffer.byteLength;
+  const nextBytes = current.byteLength + chunkBuffer.byteLength;
   if (nextBytes <= MATRIX_COMMAND_OUTPUT_TAIL_BYTES) {
-    return `${current}${chunkBuffer.toString("utf8")}`;
+    return Buffer.concat([current, chunkBuffer], nextBytes);
   }
 
-  const currentTailBytes = MATRIX_COMMAND_OUTPUT_TAIL_BYTES - chunkBuffer.byteLength;
-  const currentTail = currentBuffer.subarray(currentBuffer.byteLength - currentTailBytes);
-  return Buffer.concat([currentTail, chunkBuffer], MATRIX_COMMAND_OUTPUT_TAIL_BYTES).toString(
-    "utf8",
-  );
+  return sliceUtf8OutputTail(Buffer.concat([current, chunkBuffer], nextBytes));
+}
+
+function decodeOutputTail(output: Buffer): string {
+  return sliceUtf8OutputTail(output).toString("utf8");
 }
 
 export async function runFixedCommandWithTimeout(params: {
@@ -96,8 +105,8 @@ export async function runFixedCommandWithTimeout(params: {
       stdio: ["ignore", "pipe", "pipe"],
     });
 
-    let stdout = "";
-    let stderr = "";
+    let stdout: Buffer = Buffer.alloc(0);
+    let stderr: Buffer = Buffer.alloc(0);
     let settled = false;
     let timer: NodeJS.Timeout | null = null;
     let streamKillTimer: NodeJS.Timeout | null = null;
@@ -155,8 +164,8 @@ export async function runFixedCommandWithTimeout(params: {
       }
       finalize({
         code: 124,
-        stdout,
-        stderr: stderr || `command timed out after ${params.timeoutMs}ms`,
+        stdout: decodeOutputTail(stdout),
+        stderr: decodeOutputTail(stderr) || `command timed out after ${params.timeoutMs}ms`,
       });
     }, params.timeoutMs);
 
@@ -166,21 +175,21 @@ export async function runFixedCommandWithTimeout(params: {
       }
       finalize({
         code: 1,
-        stdout,
+        stdout: decodeOutputTail(stdout),
         stderr: err.message,
       });
     });
 
     proc.on("close", (code) => {
       const streamErrorStderr = streamErrorMessage
-        ? stderr
+        ? stderr.byteLength > 0
           ? appendBoundedOutputTail(stderr, `\n${streamErrorMessage}`)
-          : streamErrorMessage
+          : Buffer.from(streamErrorMessage)
         : stderr;
       finalize({
         code: streamErrorMessage ? 1 : (code ?? 1),
-        stdout,
-        stderr: streamErrorStderr,
+        stdout: decodeOutputTail(stdout),
+        stderr: decodeOutputTail(streamErrorStderr),
       });
     });
   });

@@ -10,6 +10,7 @@ import {
   OPENCLAW_STATE_SCHEMA_VERSION,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.generated.js";
 import {
   type DoctorStateSqliteCompactReport,
   runDoctorStateSqliteCompact,
@@ -46,11 +47,7 @@ function seedStateDatabase(params: {
     database.exec(`
       PRAGMA auto_vacuum = NONE;
       PRAGMA journal_mode = WAL;
-      CREATE TABLE schema_meta (
-        meta_key TEXT PRIMARY KEY,
-        role TEXT NOT NULL,
-        schema_version INTEGER NOT NULL
-      );
+      ${OPENCLAW_STATE_SCHEMA_SQL}
       CREATE TABLE compact_payload (
         id INTEGER PRIMARY KEY,
         payload TEXT NOT NULL
@@ -58,7 +55,19 @@ function seedStateDatabase(params: {
       PRAGMA user_version = ${schemaVersion};
     `);
     database
-      .prepare("INSERT INTO schema_meta (meta_key, role, schema_version) VALUES (?, ?, ?)")
+      .prepare(
+        `
+          INSERT INTO schema_meta (
+            meta_key,
+            role,
+            schema_version,
+            agent_id,
+            app_version,
+            created_at,
+            updated_at
+          ) VALUES (?, ?, ?, NULL, NULL, 1, 1)
+        `,
+      )
       .run("primary", params.role ?? "global", schemaVersion);
     if (params.withBloat) {
       const insert = database.prepare("INSERT INTO compact_payload (payload) VALUES (?)");

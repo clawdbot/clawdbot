@@ -1,3 +1,4 @@
+import { promoteToPopoverTopLayer } from "../components/menu-surface.ts";
 import { NativeLinkMenu, type NativeLinkMenuAction } from "../components/native-link-menu.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
 
@@ -160,17 +161,8 @@ export function startNativeLinkRouting(): NativeLinkRouting {
       postNativeLink(postMessage, url, action);
     };
     menu = nextMenu;
-    nextMenu.setAttribute("popover", "manual");
     container.append(nextMenu);
-    if (typeof nextMenu.showPopover === "function") {
-      try {
-        nextMenu.showPopover();
-        return;
-      } catch {
-        // Fall through to an in-dialog element when the top-layer API is unavailable.
-      }
-    }
-    nextMenu.removeAttribute("popover");
+    promoteToPopoverTopLayer(nextMenu);
   };
 
   const handleClick = (event: MouseEvent) => {

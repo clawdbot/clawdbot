@@ -58,7 +58,7 @@ struct CommandSessionRow: View {
                             .frame(width: 7, height: 7)
                             .accessibilityHidden(true)
                     }
-                    Text(self.item.title)
+                    Text(verbatim: self.item.title)
                         .font(OpenClawType.subheadSemiBold)
                         .lineLimit(1)
                         .minimumScaleFactor(0.82)
@@ -69,12 +69,12 @@ struct CommandSessionRow: View {
                             .foregroundStyle(OpenClawBrand.accent)
                             .accessibilityHidden(true)
                     }
-                    Text(self.item.trailing)
+                    Text(verbatim: self.item.trailing)
                         .font(OpenClawType.caption2Medium)
                         .foregroundStyle(.secondary)
                 }
                 HStack(spacing: 8) {
-                    Text(self.item.detail)
+                    Text(verbatim: self.item.detail)
                         .font(OpenClawType.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -98,7 +98,15 @@ struct CommandSessionRow: View {
 
     private var progressLabel: String {
         guard let progress = item.progress else {
-            return self.item.state
+            switch self.item.state {
+            case "offline": return String(localized: "offline")
+            case "off": return String(localized: "off")
+            case "idle": return String(localized: "idle")
+            case "open": return String(localized: "open")
+            case "default": return String(localized: "default")
+            case "recent": return String(localized: "recent")
+            default: return self.item.state
+            }
         }
         if self.item.state == "offline" || self.item.state == "off" || self.item.state == "idle" {
             return self.item.state
@@ -151,13 +159,17 @@ struct CommandSessionActionsModifier: ViewModifier {
                     self.deleteButton
                 } else {
                     self.actionButton(
-                        self.session.pinned == true ? "Unpin" : "Pin",
+                        self.session.pinned == true
+                            ? OpenClawTextValue.localized("Unpin")
+                            : OpenClawTextValue.localized("Pin"),
                         systemImage: self.session.pinned == true ? "pin.slash" : "pin")
                     {
                         self.actions.togglePinned()
                     }
                     self.actionButton(
-                        self.session.unread == true ? "Mark as Read" : "Mark as Unread",
+                        self.session.unread == true
+                            ? OpenClawTextValue.localized("Mark as Read")
+                            : OpenClawTextValue.localized("Mark as Unread"),
                         systemImage: self.session.unread == true ? "envelope.open" : "envelope.badge")
                     {
                         self.actions.toggleUnread()
@@ -181,7 +193,9 @@ struct CommandSessionActionsModifier: ViewModifier {
                 Button {
                     self.commitEditor()
                 } label: {
-                    Text(self.editor == .rename ? "Save" : "Create")
+                    Text(self.editor == .rename
+                        ? LocalizedStringKey("Save")
+                        : LocalizedStringKey("Create"))
                         .font(OpenClawType.subheadSemiBold)
                 }
                 Button(role: .cancel) {
@@ -215,7 +229,7 @@ struct CommandSessionActionsModifier: ViewModifier {
     private var groupMenu: some View {
         Menu {
             ForEach(self.categories, id: \.self) { category in
-                self.actionButton(category, systemImage: "folder") {
+                self.actionButton(.verbatim(category), systemImage: "folder") {
                     self.actions.moveToGroup(category)
                 }
             }
@@ -250,21 +264,29 @@ struct CommandSessionActionsModifier: ViewModifier {
     }
 
     private var editorTitle: String {
-        self.editor == .newGroup ? "New Group" : "Rename Session"
+        self.editor == .newGroup
+            ? String(localized: "New Group")
+            : String(localized: "Rename Session")
     }
 
     private var editorPlaceholder: String {
-        self.editor == .newGroup ? "Group name" : "Session name"
+        self.editor == .newGroup
+            ? String(localized: "Group name")
+            : String(localized: "Session name")
     }
 
     private func actionButton(
-        _ title: String,
+        _ title: OpenClawTextValue,
         systemImage: String,
         action: @escaping () -> Void) -> some View
     {
         Button(action: action) {
-            Label(title, systemImage: systemImage)
-                .font(OpenClawType.subhead)
+            Label {
+                title.text
+                    .font(OpenClawType.subhead)
+            } icon: {
+                Image(systemName: systemImage)
+            }
         }
     }
 
@@ -330,8 +352,8 @@ struct CommandViewMoreRow: View {
 
 struct CommandEmptyStateRow: View {
     let icon: String
-    let title: String
-    let detail: String
+    let title: OpenClawTextValue
+    let detail: OpenClawTextValue
 
     var body: some View {
         HStack(spacing: 10) {
@@ -344,10 +366,10 @@ struct CommandEmptyStateRow: View {
                         .fill(OpenClawBrand.ok.opacity(0.10))
                 }
             VStack(alignment: .leading, spacing: 2) {
-                Text(self.title)
+                self.title.text
                     .font(OpenClawType.subheadSemiBold)
                     .lineLimit(1)
-                Text(self.detail)
+                self.detail.text
                     .font(OpenClawType.caption2Medium)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)

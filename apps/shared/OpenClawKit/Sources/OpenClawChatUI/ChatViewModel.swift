@@ -618,10 +618,6 @@ public final class OpenClawChatViewModel {
         return !trimmed.isEmpty || !self.attachments.isEmpty
     }
 
-    public var canSendDraft: Bool {
-        !self.isSubmittingDraft && !self.isSending && self.hasDraftToSend
-    }
-
     /// True while replacing this model could move an attachment across chats.
     public var isAttachmentOwnerPinned: Bool {
         self.blocksAttachmentOwnerChange

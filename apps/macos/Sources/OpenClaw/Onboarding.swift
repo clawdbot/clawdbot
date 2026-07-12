@@ -642,16 +642,20 @@ struct OnboardingView: View {
     {
         switch mode {
         case .remote:
-            // Remote setup doesn't need local gateway/CLI/workspace setup pages,
-            // but the AI check runs against the remote gateway so a broken
-            // remote model surfaces here, not in the first chat.
-            return [0, 1, 3, 5, 9]
+            // Remote mode skips local Gateway/workspace setup, but its Mac node
+            // still runs the matching CLI node-host runtime inside the app.
+            let setupPages = requiresCLIInstall ? [0, 1, 2, 3, 5] : [0, 1, 3, 5]
+            return setupPages + [9]
         case .unconfigured:
             return [0, 1, 9]
         case .local:
             let setupPages = requiresCLIInstall ? [0, 1, 2, 3, 5] : [0, 1, 3, 5]
             return setupPages + [9]
         }
+    }
+
+    static func shouldActivateLocalGateway(afterCLIInstallFor mode: AppState.ConnectionMode) -> Bool {
+        mode == .local
     }
 
     var selectedConnectionMode: AppState.ConnectionMode {
@@ -668,7 +672,7 @@ struct OnboardingView: View {
     var pageOrder: [Int] {
         Self.pageOrder(
             for: self.state.connectionMode,
-            requiresCLIInstall: self.state.connectionMode == .local && !self.cliInstalled)
+            requiresCLIInstall: !self.cliInstalled)
     }
 
     var pageCount: Int {

@@ -103,6 +103,10 @@ describe("Slack live QA runtime helpers", () => {
           "slack-chart-presentation-native",
           "slack-table-presentation-native",
           "slack-table-invalid-blocks-fallback",
+          "slack-progress-commentary-true",
+          "slack-progress-commentary-false",
+          "slack-progress-commentary-omitted",
+          "slack-progress-commentary-verbose-dedupe",
           "slack-reaction-glyph-native",
           "slack-approval-exec-native",
           "slack-approval-plugin-native",
@@ -111,6 +115,10 @@ describe("Slack live QA runtime helpers", () => {
         ])
         .map((scenario) => scenario.id),
     ).toEqual([
+      "slack-progress-commentary-true",
+      "slack-progress-commentary-false",
+      "slack-progress-commentary-omitted",
+      "slack-progress-commentary-verbose-dedupe",
       "slack-chart-presentation-native",
       "slack-table-presentation-native",
       "slack-table-invalid-blocks-fallback",
@@ -132,6 +140,9 @@ describe("Slack live QA runtime helpers", () => {
     );
     expect(testing.findScenario().map((scenario) => scenario.id)).not.toContain(
       "slack-table-invalid-blocks-fallback",
+    );
+    expect(testing.findScenario().map((scenario) => scenario.id)).not.toContain(
+      "slack-progress-commentary-true",
     );
     expect(testing.findScenario(["slack-codex-approval-exec-native"])[0]?.forcedRuntime).toBe(
       "codex",
@@ -269,6 +280,249 @@ describe("Slack live QA runtime helpers", () => {
     const account = cfg.channels?.slack?.accounts?.sut;
     expect(account?.allowFrom).toEqual(["U_NEVER_ALLOWED"]);
     expect(account?.channels?.C123456789?.users).toEqual(["U_NEVER_ALLOWED"]);
+  });
+
+  it("builds the Slack progress commentary true, false, omitted, and dedupe configs", () => {
+    const buildScenarioConfig = (scenarioId: string) => {
+      const scenario = testing.findScenario([scenarioId])[0];
+      if (!scenario) {
+        throw new Error(`missing Slack QA scenario: ${scenarioId}`);
+      }
+      return testing.buildSlackQaConfig(
+        {
+          agents: {
+            defaults: { verboseDefault: "off" },
+            list: [{ id: "qa", identity: { name: "C-3PO QA" } }],
+          },
+        },
+        {
+          channelId: "C123456789",
+          driverBotUserId: "U999999999",
+          overrides: scenario.configOverrides,
+          sutAccountId: "sut",
+          sutAppToken: "xapp-sut",
+          sutBotToken: "xoxb-sut",
+        },
+      );
+    };
+    const progressConfig = (scenarioId: string) =>
+      buildScenarioConfig(scenarioId).channels?.slack?.accounts?.sut?.streaming?.progress;
+
+    expect(progressConfig("slack-progress-commentary-true")).toMatchObject({
+      commentary: true,
+      toolProgress: false,
+    });
+    expect(progressConfig("slack-progress-commentary-false")).toMatchObject({
+      commentary: false,
+      toolProgress: false,
+    });
+    expect(
+      buildScenarioConfig("slack-progress-commentary-false").agents?.defaults?.verboseDefault,
+    ).toBe("off");
+    const omitted = progressConfig("slack-progress-commentary-omitted");
+    expect(omitted).toMatchObject({ toolProgress: true });
+    expect(Object.hasOwn(omitted ?? {}, "commentary")).toBe(false);
+    expect(
+      buildScenarioConfig("slack-progress-commentary-verbose-dedupe").agents?.defaults
+        ?.verboseDefault,
+    ).toBe("on");
+    expect(buildScenarioConfig("slack-progress-commentary-true").agents?.list?.[0]?.identity).toBe(
+      undefined,
+    );
+  });
+
+  it("verifies progress commentary by Slack message identity", () => {
+    const cases = [
+      {
+        id: "slack-progress-commentary-true",
+        commentaryTs: "2.000000",
+        toolProgress: "absent",
+      },
+      {
+        id: "slack-progress-commentary-false",
+        commentaryTs: undefined,
+        toolProgress: "absent",
+      },
+      {
+        id: "slack-progress-commentary-omitted",
+        commentaryTs: "2.000000",
+        toolProgress: "draft",
+      },
+      {
+        id: "slack-progress-commentary-verbose-dedupe",
+        commentaryTs: "1.500000",
+        toolProgress: "standalone",
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const scenario = testing.findScenario([testCase.id])[0];
+      const run = scenario?.buildRun("U999999999");
+      const input = run && "input" in run ? run.input : "";
+      const commentaryMarker = input.match(/SLACK-QA-COMMENTARY-[0-9A-F]{8}/u)?.[0];
+      const toolMarker = input.match(/SLACK-QA-TOOL-[0-9A-F]{8}/u)?.[0];
+      const finalMarker = input.match(/SLACK-QA-COMMENTARY-DONE-[0-9A-F]{8}/u)?.[0];
+      const verifyObserved = run && "verifyObserved" in run ? run.verifyObserved : undefined;
+      if (!commentaryMarker || !toolMarker || !finalMarker || !verifyObserved) {
+        throw new Error(`missing Slack progress verifier: ${testCase.id}`);
+      }
+      const messages = [
+        {
+          channelId: "C123456789",
+          text: finalMarker,
+          ts: "2.000000",
+        },
+        ...(testCase.commentaryTs
+          ? [
+              {
+                channelId: "C123456789",
+                text: `💬 ${commentaryMarker}`,
+                ts: testCase.commentaryTs,
+              },
+            ]
+          : []),
+        ...(testCase.toolProgress === "absent"
+          ? []
+          : [
+              {
+                channelId: "C123456789",
+                text: `🛠️ Exec ${toolMarker}`,
+                ts: testCase.toolProgress === "draft" ? "2.000000" : "1.750000",
+              },
+            ]),
+      ];
+      expect(
+        verifyObserved({
+          finalMessage: { text: finalMarker, ts: "2.000000" },
+          messages,
+        }),
+      ).toContain("verified");
+    }
+  });
+
+  it("rejects commentary when false and mismatched tool progress", () => {
+    const verify = (
+      scenarioId: string,
+      mutate: (markers: [string, string, string]) => string[],
+      finalText: "echo" | "exact" = "exact",
+    ) => {
+      const scenario = testing.findScenario([scenarioId])[0];
+      const run = scenario?.buildRun("U999999999");
+      const input = run && "input" in run ? run.input : "";
+      const markers = [
+        input.match(/SLACK-QA-COMMENTARY-[0-9A-F]{8}/u)?.[0],
+        input.match(/SLACK-QA-TOOL-[0-9A-F]{8}/u)?.[0],
+        input.match(/SLACK-QA-COMMENTARY-DONE-[0-9A-F]{8}/u)?.[0],
+      ];
+      const verifyObserved = run && "verifyObserved" in run ? run.verifyObserved : undefined;
+      if (markers.some((marker) => !marker) || !verifyObserved) {
+        throw new Error(`missing Slack progress verifier: ${scenarioId}`);
+      }
+      // The some() guard above proves all three markers matched; tuple-narrow so
+      // destructuring in mutate callbacks yields string under indexed-access checks.
+      const completeMarkers = markers as [string, string, string];
+      return () =>
+        verifyObserved({
+          finalMessage: {
+            text:
+              finalText === "exact"
+                ? completeMarkers[2]
+                : `${completeMarkers[0]} ${completeMarkers[2]}`,
+            ts: "2.000000",
+          },
+          messages: mutate(completeMarkers).map((text) => ({
+            channelId: "C123456789",
+            text,
+            ts: "2.000000",
+          })),
+        });
+    };
+
+    expect(
+      verify("slack-progress-commentary-false", ([commentary, , final]) => [commentary, final]),
+    ).toThrow("commentary to stay out");
+    expect(
+      verify("slack-progress-commentary-true", ([commentary, tool, final]) => [
+        commentary,
+        tool,
+        final,
+      ]),
+    ).toThrow("tool progress to stay out");
+    expect(
+      verify("slack-progress-commentary-omitted", ([commentary, , final]) => [commentary, final]),
+    ).toThrow("tool progress on the progress draft");
+    expect(
+      verify(
+        "slack-progress-commentary-true",
+        ([commentary, , final]) => [`${commentary} ${final}`],
+        "echo",
+      ),
+    ).toThrow("only the final marker");
+  });
+
+  it("rejects duplicate durable and draft commentary identities", () => {
+    const scenario = testing.findScenario(["slack-progress-commentary-verbose-dedupe"])[0];
+    const run = scenario?.buildRun("U999999999");
+    const input = run && "input" in run ? run.input : "";
+    const marker = input.match(/SLACK-QA-COMMENTARY-[0-9A-F]{8}/u)?.[0];
+    const finalMarker = input.match(/SLACK-QA-COMMENTARY-DONE-[0-9A-F]{8}/u)?.[0];
+    const verifyObserved = run && "verifyObserved" in run ? run.verifyObserved : undefined;
+    if (!marker || !finalMarker || !verifyObserved) {
+      throw new Error("missing Slack progress dedupe verifier");
+    }
+
+    expect(() =>
+      verifyObserved({
+        finalMessage: { text: finalMarker, ts: "2.000000" },
+        messages: [
+          { channelId: "C123456789", text: `💬 ${marker}`, ts: "1.500000" },
+          { channelId: "C123456789", text: `• ${marker}`, ts: "2.000000" },
+        ],
+      }),
+    ).toThrow("exactly one Slack message identity containing commentary");
+  });
+
+  it("settles complete channel and thread observations after the final reply", async () => {
+    let historyCalls = 0;
+    const observedMessages: Array<{ text: string }> = [];
+    await testing.observeSlackScenarioMessages({
+      channelId: "C123456789",
+      client: {
+        conversations: {
+          history: async () => {
+            historyCalls += 1;
+            return {
+              messages:
+                historyCalls === 1
+                  ? [
+                      { text: "FINAL_MARKER", ts: "3.000000", user: "U999999999" },
+                      { text: "EARLIER_COMMENTARY", ts: "2.000000", user: "U999999999" },
+                    ]
+                  : [
+                      { text: "LATE_DUPLICATE", ts: "4.000000", user: "U999999999" },
+                      { text: "FINAL_MARKER", ts: "3.000000", user: "U999999999" },
+                    ],
+            };
+          },
+          replies: async () => ({
+            messages: [{ text: "THREAD_DUPLICATE", ts: "5.000000", user: "U999999999" }],
+          }),
+        },
+      } as never,
+      matchText: "FINAL_MARKER",
+      observedMessages: observedMessages as never,
+      observationScenarioId: "slack-progress-commentary-verbose-dedupe",
+      observationScenarioTitle: "Slack commentary dedupe",
+      sentTs: "1.000000",
+      settleMs: 10,
+      sutIdentity: { userId: "U999999999" },
+      threadTs: "1.000000",
+    });
+
+    expect(historyCalls).toBeGreaterThanOrEqual(2);
+    expect(new Set(observedMessages.map((message) => message.text))).toEqual(
+      new Set(["FINAL_MARKER", "EARLIER_COMMENTARY", "LATE_DUPLICATE", "THREAD_DUPLICATE"]),
+    );
   });
 
   it("extracts typed Slack approval button values from blocks", () => {

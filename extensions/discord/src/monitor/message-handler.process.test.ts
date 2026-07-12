@@ -2223,6 +2223,7 @@ describe("processDiscordMessage draft streaming", () => {
   });
 
   it("renders narration updates into the Discord progress draft", async () => {
+    vi.useFakeTimers();
     const draftStream = createMockDraftStreamForTest();
 
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
@@ -2230,6 +2231,8 @@ describe("processDiscordMessage draft streaming", () => {
       await params?.replyOptions?.onNarrationUpdate?.({
         text: "Reading the gateway config and restarting agents.",
       });
+      expect(draftStream.update).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(5_000);
       await params?.dispatcher.sendFinalReply({ text: "done" });
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
     });
@@ -2241,7 +2244,7 @@ describe("processDiscordMessage draft streaming", () => {
     await runProcessDiscordMessage(ctx);
 
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
-    expect(updates).toContain("Pinching\n\nReading the gateway config and restarting agents.");
+    expect(updates).toContain("Reading the gateway config and restarting agents.");
     expectFinalWithProgressReceipt("done", "🛠️ 1 tool call");
   });
 

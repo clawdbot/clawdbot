@@ -13,7 +13,7 @@ Availability: iPhone app builds are distributed through Apple channels when enab
 ## What it does
 
 - Connects to a Gateway over WebSocket (LAN or tailnet).
-- Exposes node capabilities: Canvas, Screen snapshot, Camera capture, Location, Talk mode, Voice wake.
+- Exposes node capabilities: Canvas, Screen snapshot, Camera capture, Location, Talk mode, Voice wake, and opt-in Health summaries.
 - Receives `node.invoke` commands and reports node status events.
 - Browses the selected agent's workspace read-only from the Agents surface (Files): directory drill-down, syntax-highlighted text previews, image previews, and share-sheet export. No write operations; previews are size-capped by the gateway.
 - Keeps a small read-only offline cache of recent chat sessions and transcripts per paired gateway: cold opens paint the last known transcript immediately and refresh once the gateway responds, recent chats stay browsable while disconnected, and reset/forget purges the protected local cache.
@@ -87,6 +87,35 @@ This is disabled by default. It applies only to fresh `role: node` pairing with 
 openclaw nodes status
 openclaw gateway call node.list --params "{}"
 ```
+
+## Health summaries
+
+The iOS node can return a read-only, on-device aggregate for `today`. The fixed
+summary includes steps, sleep duration, average resting heart rate, and workout
+count/duration. It never returns individual HealthKit
+samples, sources, metadata, clinical records, or write access.
+
+This surface has two independent opt-ins:
+
+1. In the iOS app, open **Settings -> Permissions -> Privacy & Access -> Health Summaries** and
+   tap **Enable & Share Summaries**. The disclosure explains that the requested
+   aggregate leaves the phone through your Gateway, reaches your configured AI
+   provider, and may remain in chat history.
+2. Add `health.summary` to `gateway.nodes.allowCommands`, then reject and
+   re-approve the changed iPhone node command surface. Keep your Gateway local
+   or tailnet-only; the security audit reports this sensitive command when it is
+   enabled.
+
+Models use the existing `nodes` tool with `action: "invoke"`,
+`invokeCommand: "health.summary"`, and `invokeParamsJson` set to
+`{"period":"today"}`.
+
+HealthKit deliberately does not reveal whether read access was denied. Missing
+metrics therefore mean only that no readable value was returned; they do not
+prove either denial or absence of health data. OpenClaw limits summaries to the
+current calendar day so a limited historical-access window cannot make a
+multi-day total look complete. OpenClaw does not ingest Health data in the
+background and does not use summaries for diagnosis or medical advice.
 
 By default, the Apple Watch companion keeps using the existing iPhone relay and
 does not need a separate Gateway pairing. Pair the Watch with the iPhone in

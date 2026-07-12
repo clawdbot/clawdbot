@@ -108,7 +108,7 @@ export function createConfirmTemplate(
  * Create a button template with title, text, and action buttons
  */
 export function createButtonTemplate(
-  title: string,
+  title: string | undefined,
   text: string,
   actions: Action[],
   options?: {
@@ -120,14 +120,15 @@ export function createButtonTemplate(
     altText?: string;
   },
 ): TemplateMessage {
+  const normalizedTitle = title || undefined;
   const textLimit = resolveTemplateTextLimit({
-    title,
+    title: normalizedTitle,
     thumbnailImageUrl: options?.thumbnailImageUrl,
     textOnlyLimit: 160,
   });
   const template: ButtonsTemplate = {
     type: "buttons",
-    title: truncateTemplateText(title, 40), // LINE limit
+    ...(normalizedTitle ? { title: truncateTemplateText(normalizedTitle, 40) } : {}), // LINE limit
     text: truncateTemplateText(text, textLimit),
     actions: actions.slice(0, 4), // LINE limit: max 4 actions
     thumbnailImageUrl: options?.thumbnailImageUrl,
@@ -141,7 +142,7 @@ export function createButtonTemplate(
     type: "template",
     altText:
       truncateOptionalTemplateText(options?.altText, 400) ??
-      truncateTemplateText(`${title}: ${text}`, 400),
+      truncateTemplateText(normalizedTitle ? `${normalizedTitle}: ${text}` : text, 400),
     template,
   };
 }

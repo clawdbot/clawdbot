@@ -11,6 +11,7 @@ import {
   postJsonRequest,
   readProviderJsonResponse,
   resolveProviderHttpRequestConfig,
+  sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 
 const DEFAULT_MINIMAX_IMAGE_BASE_URL = "https://api.minimax.io";
@@ -138,7 +139,6 @@ function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider 
       } = resolveProviderHttpRequestConfig({
         baseUrl,
         defaultBaseUrl: DEFAULT_MINIMAX_IMAGE_BASE_URL,
-        allowPrivateNetwork: false,
         defaultHeaders: {
           Authorization: `Bearer ${auth.apiKey}`,
           "Content-Type": "application/json",
@@ -146,6 +146,9 @@ function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider 
         provider: providerId,
         capability: "image",
         transport: "http",
+        request: sanitizeConfiguredModelProviderRequest(
+          req.cfg.models?.providers?.[providerId]?.request,
+        ),
       });
 
       const body: Record<string, unknown> = {

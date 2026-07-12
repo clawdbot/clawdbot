@@ -466,6 +466,34 @@ describe("installHooksFromPath", () => {
     expect(fs.existsSync(path.join(hooksDir, "my-hook"))).toBe(false);
   });
 
+  it("rejects an oversized HOOK.md to prevent OOM during frontmatter parsing", async () => {
+    const stateDir = makeTempDir();
+    const workDir = makeTempDir();
+    const hookDir = path.join(workDir, "my-hook");
+    fs.mkdirSync(hookDir, { recursive: true });
+    fs.writeFileSync(path.join(hookDir, "HOOK.md"), "x".repeat(1024 * 1024 + 1), "utf8");
+    fs.writeFileSync(path.join(hookDir, "handler.ts"), "export default async () => {};\n");
+
+    await expect(
+      installHooksFromPath({ path: hookDir, hooksDir: path.join(stateDir, "hooks") }),
+    ).rejects.toThrow(/File exceeds 1048576 bytes/);
+  });
+
+  it.runIf(process.platform !== "win32")("rejects a symlinked HOOK.md", async () => {
+    const stateDir = makeTempDir();
+    const workDir = makeTempDir();
+    const hookDir = path.join(workDir, "my-hook");
+    const externalHookMd = path.join(workDir, "external-HOOK.md");
+    fs.mkdirSync(hookDir, { recursive: true });
+    fs.writeFileSync(externalHookMd, "---\nname: external\n---\n", "utf8");
+    fs.symlinkSync(externalHookMd, path.join(hookDir, "HOOK.md"), "file");
+    fs.writeFileSync(path.join(hookDir, "handler.ts"), "export default async () => {};\n");
+
+    await expect(
+      installHooksFromPath({ path: hookDir, hooksDir: path.join(stateDir, "hooks") }),
+    ).rejects.toThrow(/path must be a regular file/);
+  });
+
   it("classifies hook packages that also declare plugin extensions", async () => {
     const stateDir = makeTempDir();
     const pkgDir = makeTempDir();

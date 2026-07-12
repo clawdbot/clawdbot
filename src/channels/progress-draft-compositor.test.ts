@@ -317,6 +317,35 @@ describe("createChannelProgressDraftCompositor", () => {
     expect(update).toHaveBeenLastCalledWith("Shelling\n\n🛠️ Exec\n🛠️ Wc", expect.anything());
   });
 
+  it("holds narration behind the initial progress delay", async () => {
+    vi.useFakeTimers();
+    try {
+      const update = vi.fn();
+      const progress = createChannelProgressDraftCompositor({
+        entry: { streaming: { mode: "progress" } },
+        mode: "progress",
+        active: true,
+        seed: "test",
+        update,
+      });
+
+      await progress.pushToolProgress("🛠️ Exec");
+      await progress.pushNarrationProgress("Reading the gateway config.");
+
+      expect(update).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS - 1);
+      expect(update).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(update).toHaveBeenCalledWith("Reading the gateway config.", {
+        flush: true,
+        lines: ["🛠️ Exec"],
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("ignores narration once the final reply started and resets it per turn", async () => {
     const update = vi.fn();
     const progress = createChannelProgressDraftCompositor({

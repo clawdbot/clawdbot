@@ -354,4 +354,3 @@ export async function ensureConfigReady(params: {
 export const testApi = {
   resetConfigGuardStateForTests,
 };
-export { testApi as __test__ };

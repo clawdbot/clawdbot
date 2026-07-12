@@ -601,6 +601,9 @@ def produce_services_for_target(target)
   if target.fetch("capabilities").include?("APP_ATTEST")
     services[:app_attest] = "on"
   end
+  if target.fetch("capabilities").include?("HEALTH_KIT")
+    services[:health_kit] = "on"
+  end
   services
 end
 
@@ -717,6 +720,15 @@ def validate_match_profile_capabilities!(target)
     unless app_attest_environments.include?("production")
       UI.user_error!(
         "Provisioning profile #{target.fetch("profileName")} for #{target.fetch("bundleId")} is missing production App Attest entitlement; actual environments: #{app_attest_environments.empty? ? "missing" : app_attest_environments.join(", ")}."
+      )
+    end
+  end
+
+  if capabilities.include?("HEALTH_KIT")
+    health_kit = profile_plist_value(profile_path, "Entitlements:com.apple.developer.healthkit")
+    if health_kit != "true"
+      UI.user_error!(
+        "Provisioning profile #{target.fetch("profileName")} for #{target.fetch("bundleId")} is missing HealthKit entitlement."
       )
     end
   end

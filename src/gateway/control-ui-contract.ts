@@ -62,9 +62,26 @@ export type ControlUiSessionPullRequest = {
   checksUrl?: string;
 };
 
+/**
+ * The session's working branch, resolved from local git only so the pre-PR
+ * "Create PR" row keeps rendering while the GitHub quota is exhausted.
+ */
+export type ControlUiSessionBranch = {
+  owner: string;
+  repo: string;
+  branch: string;
+  /** Working-tree diff vs the merge base with the remote default branch. */
+  additions?: number;
+  deletions?: number;
+  /** GitHub "open a pull request for this branch" page. */
+  createUrl: string;
+};
+
 /** Pull requests detected for a session's git branch, chip row payload. */
 export type ControlUiSessionPullRequests = {
   pullRequests: ControlUiSessionPullRequest[];
+  /** Present when the session's non-default GitHub branch exists on origin. */
+  branch?: ControlUiSessionBranch;
   /** GitHub quota exhausted; entries may be stale until the limit resets. */
   rateLimited: boolean;
 };

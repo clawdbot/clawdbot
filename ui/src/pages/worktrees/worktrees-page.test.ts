@@ -11,7 +11,9 @@ type WorktreesPageTestElement = HTMLElement & {
   error: string | null;
   busyId: string | null;
   creating: boolean;
+  createOpen: boolean;
   createRepoRoot: string;
+  createName: string;
   createBaseRef: string;
   createBranches: string[];
   updateComplete: Promise<boolean>;
@@ -339,6 +341,68 @@ describe("WorktreesPage lifecycle", () => {
     await creating;
     expect(page.creating).toBe(false);
     expect(page.error).toBeNull();
+  });
+
+  it("locks the create draft and its toggle until create settles", async () => {
+    const pendingCreate = deferred<unknown>();
+    const request = vi.fn((method: string) => {
+      if (method === "worktrees.create") {
+        return pendingCreate.promise;
+      }
+      return Promise.resolve({ worktrees: [] });
+    });
+    const page = document.createElement("openclaw-worktrees-page") as WorktreesPageTestElement;
+    page.context = contextWithGateway(
+      gatewayWithClient({ request } as unknown as GatewayBrowserClient),
+    );
+    page.createOpen = true;
+    page.createRepoRoot = "/tmp/repo";
+    page.createName = "submitted-name";
+    page.createBaseRef = "main";
+    document.body.append(page);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("worktrees.list", {}));
+    await vi.waitFor(() => expect(page.loading).toBe(false));
+
+    const toggleButton = Array.from(page.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.trim() === "New worktree",
+    );
+    const creating = page.createWorktree();
+    toggleButton?.click();
+    expect(page.createOpen).toBe(true);
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("worktrees.create", {
+        baseRef: "main",
+        name: "submitted-name",
+        repoRoot: "/tmp/repo",
+      }),
+    );
+    await page.updateComplete;
+
+    const draftInputs = Array.from(
+      page.querySelectorAll<HTMLInputElement>(".worktrees-create input"),
+    );
+    const createButton = page.querySelector<HTMLButtonElement>(".worktrees-create button");
+    expect(draftInputs).toHaveLength(3);
+    expect(draftInputs.every((input) => input.disabled)).toBe(true);
+    expect(createButton?.disabled).toBe(true);
+    expect(toggleButton?.disabled).toBe(true);
+
+    toggleButton?.click();
+    expect(page.createOpen).toBe(true);
+
+    pendingCreate.resolve({});
+    await creating;
+    await page.updateComplete;
+    expect(page.createOpen).toBe(false);
+    expect(toggleButton?.disabled).toBe(false);
+
+    toggleButton?.click();
+    await page.updateComplete;
+    const freshInputs = Array.from(
+      page.querySelectorAll<HTMLInputElement>(".worktrees-create input"),
+    );
+    expect(freshInputs).toHaveLength(3);
+    expect(freshInputs.every((input) => !input.disabled)).toBe(true);
   });
 
   it("uses the current branch when a repository has no remote default", async () => {

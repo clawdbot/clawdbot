@@ -1,4 +1,5 @@
 // Whatsapp plugin module implements dedupe behavior.
+import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import { createClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 
 export const WHATSAPP_INBOUND_DEDUPE_TTL_MS = 20 * 60_000;
@@ -10,64 +11,10 @@ const claimableInboundMessages = createClaimableDedupe({
   ttlMs: WHATSAPP_INBOUND_DEDUPE_TTL_MS,
   memoryMaxSize: RECENT_WEB_MESSAGE_MAX,
 });
-const recentOutboundMessages = createRecentMessageCache({
+const recentOutboundMessages = createDedupeCache({
   ttlMs: RECENT_OUTBOUND_MESSAGE_TTL_MS,
   maxSize: RECENT_OUTBOUND_MESSAGE_MAX,
 });
-
-function createRecentMessageCache(options: { ttlMs: number; maxSize: number }) {
-  const ttlMs = Math.max(0, options.ttlMs);
-  const maxSize = Math.max(0, Math.floor(options.maxSize));
-  const cache = new Map<string, number>();
-
-  const prune = (now: number) => {
-    if (ttlMs > 0) {
-      const cutoff = now - ttlMs;
-      for (const [key, timestamp] of cache) {
-        if (timestamp < cutoff) {
-          cache.delete(key);
-        }
-      }
-    }
-    while (cache.size > maxSize) {
-      const oldest = cache.keys().next().value;
-      if (!oldest) {
-        break;
-      }
-      cache.delete(oldest);
-    }
-  };
-
-  const peek = (key: string | null, now = Date.now()): boolean => {
-    if (!key) {
-      return false;
-    }
-    const timestamp = cache.get(key);
-    if (timestamp === undefined) {
-      return false;
-    }
-    if (ttlMs > 0 && now - timestamp >= ttlMs) {
-      cache.delete(key);
-      return false;
-    }
-    return true;
-  };
-
-  return {
-    check: (key: string | null, now = Date.now()): boolean => {
-      if (!key) {
-        return false;
-      }
-      const existed = peek(key, now);
-      cache.delete(key);
-      cache.set(key, now);
-      prune(now);
-      return existed;
-    },
-    peek,
-    clear: () => cache.clear(),
-  };
-}
 
 export class WhatsAppRetryableInboundError extends Error {
   constructor(message: string, options?: ErrorOptions) {

@@ -289,6 +289,7 @@ public actor GatewayNodeSession {
         let scopes = sorted(options.scopes)
         let caps = sorted(options.caps)
         let commands = sorted(options.commands)
+        let pathEnv = options.pathEnv?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let clientId = options.clientId.trimmingCharacters(in: .whitespacesAndNewlines)
         let clientMode = options.clientMode.trimmingCharacters(in: .whitespacesAndNewlines)
         let clientDisplayName = (options.clientDisplayName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -308,6 +309,7 @@ public actor GatewayNodeSession {
             scopes,
             caps,
             commands,
+            pathEnv,
             clientId,
             clientMode,
             clientDisplayName,
@@ -1309,6 +1311,7 @@ extension GatewayNodeSession {
             type: response.type,
             id: requestId,
             ok: response.ok,
+            payload: response.payload,
             payloadJSON: response.payloadJSON,
             error: response.error)
     }
@@ -1391,6 +1394,9 @@ extension GatewayNodeSession {
         ]
         if let payloadJSON = response.payloadJSON {
             params["payloadJSON"] = AnyCodable(payloadJSON)
+        }
+        if let payload = response.payload {
+            params["payload"] = payload
         }
         if let error = response.error {
             params["error"] = AnyCodable([

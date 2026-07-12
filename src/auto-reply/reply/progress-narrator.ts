@@ -45,7 +45,7 @@ export type ProgressNarrationInput = {
   previousText: string;
 };
 
-export type ProgressNarrator = {
+type ProgressNarrator = {
   noteToolStart: (payload: {
     name?: string;
     phase?: string;

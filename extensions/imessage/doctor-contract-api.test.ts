@@ -54,7 +54,12 @@ describe("imessage normalizeCompatibilityConfig streaming aliases", () => {
       (imessage.accounts as Record<string, Record<string, unknown>>).personal,
       "personal iMessage account",
     );
-    expect(personal.streaming).toEqual({ block: { coalesce: { idleMs: 250 } } });
+    // iMessage deep-merges root+account streaming at runtime
+    // (mergeIMessageStreamingConfig), so migration keeps the account object
+    // account-local instead of seeding root values into it.
+    expect(personal.streaming).toEqual({
+      block: { coalesce: { idleMs: 250 } },
+    });
     expect(personal.blockStreamingCoalesce).toBeUndefined();
     for (const change of [
       "Moved channels.imessage.chunkMode → channels.imessage.streaming.chunkMode.",

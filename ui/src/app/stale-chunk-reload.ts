@@ -38,7 +38,7 @@ export function isStaleChunkImportError(error: unknown): boolean {
   );
 }
 
-export function reloadControlUiDocument(): void {
+function reloadControlUiDocument(): void {
   window.location.reload();
 }
 

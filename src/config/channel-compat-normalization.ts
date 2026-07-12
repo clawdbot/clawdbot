@@ -19,7 +19,6 @@ export type LegacyStreamingAliasOptions = {
   aliasOnlyMode?: string;
   includePreviewChunk?: boolean;
   resolvedNativeTransport?: unknown;
-  offModeLegacyNotice?: (pathPrefix: string) => string;
 };
 
 /** Account-level channel config passed to channel-specific doctor migrations. */
@@ -227,7 +226,10 @@ export function normalizeLegacyStreamingAliases(
   // object without `mode` (Discord defaults to progress only when the whole
   // object is absent). Pin the previous effective mode so migration never
   // changes behavior. Guarded on `changed` so entries with no movable alias
-  // stay a no-op instead of minting a mode-only mutation.
+  // stay a no-op instead of minting a mode-only mutation. Account callers
+  // suppress aliasOnlyMode when a root streaming object exists: the seed in
+  // normalizeLegacyChannelAliases carries the inherited settings instead, and
+  // pinning the absent-object default there would change effective behavior.
   if (
     changed &&
     beforeStreaming === undefined &&
@@ -248,14 +250,39 @@ export function normalizeLegacyStreamingAliases(
     streaming.block = block;
   }
   updated.streaming = streaming;
-  if (
-    hadLegacyStreamMode &&
-    params.resolvedMode === "off" &&
-    params.offModeLegacyNotice !== undefined
-  ) {
-    params.changes.push(params.offModeLegacyNotice(params.pathPrefix));
-  }
   return { entry: updated, changed };
+}
+
+/** Deep-fills record fields missing from target with copies of source values. */
+function fillMissingRecordFields(
+  target: Record<string, unknown>,
+  source: Record<string, unknown>,
+): { value: Record<string, unknown>; filled: boolean } {
+  let filled = false;
+  const value = { ...target };
+  for (const [key, sourceValue] of Object.entries(source)) {
+    if (sourceValue === undefined) {
+      continue;
+    }
+    const existing = value[key];
+    if (existing === undefined) {
+      // Copy so later account-level edits never alias the root config object.
+      value[key] = structuredClone(sourceValue);
+      filled = true;
+      continue;
+    }
+    const existingRecord = asObjectRecord(existing);
+    const sourceRecord = asObjectRecord(sourceValue);
+    if (!existingRecord || !sourceRecord) {
+      continue;
+    }
+    const merged = fillMissingRecordFields(existingRecord, sourceRecord);
+    if (merged.filled) {
+      value[key] = merged.value;
+      filled = true;
+    }
+  }
+  return { value, filled };
 }
 
 /**
@@ -271,6 +298,14 @@ export function normalizeLegacyChannelAliases(params: {
   normalizeDm?: boolean;
   rootDmPromoteAllowFrom?: boolean;
   normalizeAccountDm?: boolean;
+  /**
+   * Set for channels whose runtime account merge replaces the root `streaming`
+   * object wholesale (`streaming` not deep-merged). Doctor then seeds account
+   * objects it materializes with the inherited root settings. Channels that
+   * deep-merge streaming (slack, imessage) must NOT seed: their runtime keeps
+   * composing root+account, and seeded copies would freeze inheritance.
+   */
+  seedAccountStreamingFromRoot?: boolean;
   resolveStreamingOptions: (entry: Record<string, unknown>) => LegacyStreamingAliasOptions;
   normalizeAccountExtra?: (params: NormalizeLegacyChannelAccountParams) => CompatMutationResult;
 }): CompatMutationResult {
@@ -302,6 +337,12 @@ export function normalizeLegacyChannelAliases(params: {
     return { entry: updated, changed };
   }
 
+  // For replace-semantics channels (seedAccountStreamingFromRoot), an account
+  // object materialized by migration must be seeded with the settings the
+  // account previously inherited from the root object, or `doctor --fix`
+  // silently changes effective delivery/preview behavior for that account.
+  const rootStreaming = asObjectRecord(updated.streaming);
+
   let accountsChanged = false;
   const accounts = { ...rawAccounts };
   for (const [accountId, rawAccount] of Object.entries(rawAccounts)) {
@@ -323,14 +364,38 @@ export function normalizeLegacyChannelAliases(params: {
       accountChanged = accountDm.changed;
     }
 
+    const accountStreamingOptions = { ...params.resolveStreamingOptions(accountEntry) };
+    if (rootStreaming) {
+      // Truth table rows 2-3: with a root object to seed from, the account
+      // previously resolved that object's semantics (its mode, or the
+      // object-without-mode default), so pinning absentObjectDefault is wrong.
+      delete accountStreamingOptions.aliasOnlyMode;
+    }
+    const beforeAccountStreaming = accountEntry.streaming;
     const accountStreaming = normalizeLegacyStreamingAliases({
       entry: accountEntry,
       pathPrefix: accountPathPrefix,
       changes: params.changes,
-      ...params.resolveStreamingOptions(accountEntry),
+      ...accountStreamingOptions,
     });
     accountEntry = accountStreaming.entry;
     accountChanged = accountChanged || accountStreaming.changed;
+
+    if (
+      params.seedAccountStreamingFromRoot === true &&
+      accountStreaming.changed &&
+      beforeAccountStreaming === undefined &&
+      rootStreaming
+    ) {
+      const created = asObjectRecord(accountEntry.streaming);
+      const seeded = created ? fillMissingRecordFields(created, rootStreaming) : null;
+      if (seeded?.filled) {
+        accountEntry = { ...accountEntry, streaming: seeded.value };
+        params.changes.push(
+          `Copied ${params.pathPrefix}.streaming into ${accountPathPrefix}.streaming to keep inherited settings while migrating flat streaming keys.`,
+        );
+      }
+    }
 
     const accountExtra = params.normalizeAccountExtra?.({
       account: accountEntry,

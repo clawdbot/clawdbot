@@ -1,5 +1,9 @@
 import Foundation
 
+extension Notification.Name {
+    static let openclawCLIInstalled = Notification.Name("openclaw.cli.installed")
+}
+
 enum CLIInstallBuild {
     static var isDebug: Bool {
         #if DEBUG
@@ -307,6 +311,7 @@ enum CLIInstaller {
             let summary = installedVersion.map { "Installed openclaw \($0)." } ?? "Installed openclaw."
             self.rememberInstallPolicy(target)
             await statusHandler(summary)
+            NotificationCenter.default.post(name: .openclawCLIInstalled, object: nil)
             return true
         }
 

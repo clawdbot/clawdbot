@@ -9,7 +9,7 @@ type SpawnFallback = {
   options: SpawnOptions;
 };
 
-export type SpawnWithFallbackResult = {
+type SpawnWithFallbackResult = {
   child: ChildProcess;
   usedFallback: boolean;
   fallbackLabel?: string;

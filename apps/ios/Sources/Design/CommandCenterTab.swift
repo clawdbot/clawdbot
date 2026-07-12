@@ -120,8 +120,8 @@ struct CommandCenterTab: View {
 
     private var header: some View {
         OpenClawAdaptiveHeaderRow(
-            title: self.headerTitle,
-            subtitle: self.gatewaySubtitle,
+            title: .localized(self.headerTitle),
+            subtitle: .localized(self.gatewaySubtitle),
             titleFont: OpenClawType.title3SemiBold,
             subtitleFont: OpenClawType.caption,
             subtitleLineLimit: 1)
@@ -308,13 +308,13 @@ struct CommandCenterTab: View {
     private var gatewayConnectionText: String {
         switch self.gatewayDisplayState {
         case .connected:
-            "Online"
+            String(localized: "Online")
         case .connecting:
-            "Connecting"
+            String(localized: "Connecting")
         case .error:
-            "Attention"
+            String(localized: "Attention")
         case .disconnected:
-            "Offline"
+            String(localized: "Offline")
         }
     }
 
@@ -334,12 +334,12 @@ struct CommandCenterTab: View {
     private var gatewayAddressText: String {
         self.normalized(self.appModel.gatewayRemoteAddress)
             ?? self.normalized(self.appModel.gatewayServerName)
-            ?? "Unknown"
+            ?? String(localized: "Unknown")
     }
 
     private var gatewayAgentCountText: String {
         guard self.gatewayConnected else { return "—" }
-        return "\(self.appModel.gatewayAgents.count)"
+        return self.appModel.gatewayAgents.count.formatted()
     }
 
     private var defaultChatWorkItem: WorkItem {
@@ -361,7 +361,7 @@ struct CommandCenterTab: View {
     private var defaultChatActivityText: String {
         let activityAt = self.defaultChatSessionEntry?.lastActivityAt ?? self.defaultChatSessionEntry?.updatedAt
         guard let activityAt, activityAt > 0 else {
-            return "No recent activity"
+            return String(localized: "No recent activity")
         }
         return Self.relativeTimeText(forMilliseconds: activityAt)
     }
@@ -567,13 +567,13 @@ struct CommandCenterTab: View {
         let lowercased = trimmed.lowercased()
         guard !trimmed.isEmpty else { return nil }
         if lowercased.contains(":ios-") {
-            return "iOS chat"
+            return String(localized: "iOS chat")
         }
         if lowercased.hasPrefix("telegram:") {
-            return "Telegram chat"
+            return String(localized: "Telegram chat")
         }
         if lowercased.hasPrefix("user:+") {
-            return "Direct chat"
+            return String(localized: "Direct chat")
         }
         if lowercased.hasPrefix("cron:") {
             return Self.humanizedSessionKey(String(trimmed.dropFirst("cron:".count)))
@@ -666,10 +666,16 @@ struct CommandCenterTab: View {
 
     private var gatewaySubtitle: String {
         if let server = normalized(appModel.gatewayServerName) {
-            return "\(self.appModel.activeAgentName) on \(server)"
+            return String(
+                format: String(localized: "%@ on %@"),
+                self.appModel.activeAgentName,
+                server)
         }
         if let address = normalized(appModel.gatewayRemoteAddress) {
-            return "\(self.appModel.activeAgentName) via \(address)"
+            return String(
+                format: String(localized: "%@ via %@"),
+                self.appModel.activeAgentName,
+                address)
         }
         return self.appModel.gatewayDisplayStatusText
     }
@@ -745,7 +751,9 @@ struct CommandSessionsScreen: View {
             Button {
                 self.commitGroupEditor()
             } label: {
-                Text(self.groupEditor == .create ? "Create" : "Save")
+                Text(self.groupEditor == .create
+                    ? LocalizedStringKey("Create")
+                    : LocalizedStringKey("Save"))
                     .font(OpenClawType.subheadSemiBold)
             }
             Button(role: .cancel) {
@@ -771,7 +779,10 @@ struct CommandSessionsScreen: View {
                     .font(OpenClawType.subheadSemiBold)
             }
         } message: { group in
-            Text("Sessions in \u{201C}\(group)\u{201D} move back to Ungrouped.")
+            Text(verbatim: String(
+                format: String(
+                    localized: "Sessions in \u{201C}%@\u{201D} move back to Ungrouped."),
+                group))
                 .font(OpenClawType.caption)
         }
     }
@@ -797,7 +808,9 @@ struct CommandSessionsScreen: View {
         CommandPanel(padding: 0) {
             VStack(spacing: 0) {
                 HStack(spacing: 8) {
-                    Text(self.showArchived ? "Archived sessions" : "Recent sessions")
+                    Text(self.showArchived
+                        ? LocalizedStringKey("Archived sessions")
+                        : LocalizedStringKey("Recent sessions"))
                         .font(OpenClawType.subheadBold)
                     Spacer(minLength: 8)
                     if self.isLoading {
@@ -821,17 +834,18 @@ struct CommandSessionsScreen: View {
                     CommandEmptyStateRow(
                         icon: "exclamationmark.triangle.fill",
                         title: "Sessions unavailable",
-                        detail: loadErrorText)
+                        detail: .verbatim(loadErrorText))
                         .padding(.horizontal, 10)
                         .padding(.bottom, 10)
                 } else if self.visibleSessions.isEmpty {
                     CommandEmptyStateRow(
                         icon: self.appModel
                             .isCommandSessionListAvailable ? "bubble.left.and.text.bubble.right.fill" : "wifi.slash",
-                        title: self.emptyTitle,
-                        detail: self.appModel
-                            .isCommandSessionListAvailable ? self.emptyDetail :
-                            "Connect to the gateway.")
+                        title: .verbatim(self.emptyTitle),
+                        detail: .verbatim(self.appModel
+                            .isCommandSessionListAvailable
+                            ? self.emptyDetail
+                            : String(localized: "Connect to the gateway.")))
                         .padding(.horizontal, 10)
                         .padding(.bottom, 10)
                 } else {
@@ -857,13 +871,16 @@ struct CommandSessionsScreen: View {
 
     private var headerDetail: String {
         if self.isLoading, self.sessions.isEmpty {
-            return self.showArchived ? "Loading archived sessions" : "Loading recent sessions"
+            return self.showArchived
+                ? String(localized: "Loading archived sessions")
+                : String(localized: "Loading recent sessions")
         }
         let count = self.visibleSessions.count
         if count == 0 {
             return self.emptyTitle
         }
-        return "\(count) \(count == 1 ? "session" : "sessions")"
+        return String(
+            AttributedString(localized: "^[\(count) session](inflect: true)").characters)
     }
 
     private var visibleSessions: [OpenClawChatSessionEntry] {
@@ -889,12 +906,18 @@ struct CommandSessionsScreen: View {
     }
 
     private var emptyTitle: String {
-        guard self.appModel.isCommandSessionListAvailable else { return "Gateway offline" }
-        return self.showArchived ? "No archived sessions" : "No recent sessions"
+        guard self.appModel.isCommandSessionListAvailable else {
+            return String(localized: "Gateway offline")
+        }
+        return self.showArchived
+            ? String(localized: "No archived sessions")
+            : String(localized: "No recent sessions")
     }
 
     private var emptyDetail: String {
-        self.showArchived ? "Archived sessions will appear here." : "Start a chat and it will appear here."
+        self.showArchived
+            ? String(localized: "Archived sessions will appear here.")
+            : String(localized: "Start a chat and it will appear here.")
     }
 
     private var refreshID: String {
@@ -943,7 +966,9 @@ struct CommandSessionsScreen: View {
     }
 
     private var groupEditorTitle: String {
-        self.groupEditor == .create ? "New Group" : "Rename Group"
+        self.groupEditor == .create
+            ? String(localized: "New Group")
+            : String(localized: "Rename Group")
     }
 
     private var groupEditorBinding: Binding<Bool> {

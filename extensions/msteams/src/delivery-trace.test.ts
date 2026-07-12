@@ -88,6 +88,7 @@ function createRecordingStream(recorder: WireRecorder, fault?: StreamWriteFault)
       applyFault("stream.update", { text });
       recorder.recordWireCall({ method: "stream.update", payload: { text } });
     },
+    clearText(): void {},
     async close(): Promise<unknown> {
       applyFault("stream.close");
       recorder.recordWireCall({ method: "stream.close", result: { id: "stream-final" } });
@@ -215,8 +216,10 @@ const MSTEAMS_TRACE_CASES: readonly MSTeamsTraceCase[] = [
   },
   {
     // Mid-stream non-cancel write failure latches streamFailed: the streamed
-    // prefix stays visible AND the full reply re-delivers as blocks. The
-    // duplication is the contract (truncation is the worse outcome).
+    // prefix stays visible AND the full reply re-delivers as blocks. A later
+    // segment rewrites the stale stream buffer, then finalize attempts the
+    // closing metadata write after fallback delivery. The duplication is the
+    // contract (truncation is the worse outcome).
     golden: "stream-failure-redeliver-full",
     scenario: "streaming-happy",
     conversationType: "personal",

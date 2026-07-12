@@ -23,6 +23,11 @@ import {
   resolveSignalSender,
 } from "./identity.js";
 import { probeSignal } from "./probe.js";
+import {
+  clearSignalReplyAuthorsForTest,
+  registerSignalReplyContext,
+  resolveSignalReplyContextWithPersistence,
+} from "./reply-authors.js";
 import { clearSignalRuntime } from "./runtime.js";
 import {
   createSignalCliPathTextInput,
@@ -369,15 +374,25 @@ describe("signal outbound", () => {
 
     await expect(
       signalPlugin.outbound?.sendFormattedText?.({
-        cfg: {} as OpenClawConfig,
+        cfg: { channels: { signal: { replyToMode: "first" } } } as OpenClawConfig,
         to: "+15551234567",
         text: "a".repeat(5000),
         deps: { signal: send },
+        replyToId: "1700000000004",
+        replyToIdSource: "implicit",
         onDeliveryResult,
       }),
     ).rejects.toThrow("second Signal chunk failed");
 
     expect(send).toHaveBeenCalledTimes(2);
+    expect(send).toHaveBeenNthCalledWith(
+      2,
+      "+15551234567",
+      expect.any(String),
+      expect.not.objectContaining({
+        replyToId: "1700000000004",
+      }),
+    );
     expect(onDeliveryResult).toHaveBeenCalledTimes(1);
     expect(onDeliveryResult).toHaveBeenCalledWith(
       expect.objectContaining({ channel: "signal", messageId: "signal-1" }),
@@ -573,6 +588,51 @@ describe("signal outbound", () => {
     expect(resolveReplyToMode({ cfg, accountId: "default", chatType: "direct" })).toBe("all");
     expect(resolveReplyToMode({ cfg, accountId: "default", chatType: "group" })).toBe("off");
     expect(resolveReplyToMode({ cfg, accountId: "default" })).toBe("first");
+  });
+
+  it("builds same-conversation reply context for message tool sends", () => {
+    const buildToolContext = signalPlugin.threading?.buildToolContext;
+    if (!buildToolContext) {
+      throw new Error("signal threading.buildToolContext unavailable");
+    }
+
+    const hasRepliedRef = { value: false };
+    const context = buildToolContext({
+      cfg: {
+        channels: {
+          signal: {
+            replyToModeByChatType: { direct: "first" },
+          },
+        },
+      } as OpenClawConfig,
+      accountId: "default",
+      context: {
+        Channel: "signal",
+        To: "signal:+15550001111",
+        ChatType: "direct",
+        CurrentMessageId: "1783831798122",
+        ReplyToId: "1783831798000",
+      },
+      hasRepliedRef,
+    });
+    if (!context) {
+      throw new Error("signal threading tool context unavailable");
+    }
+
+    expect(context).toEqual({
+      currentChannelId: "signal:+15550001111",
+      currentChatType: "direct",
+      currentMessagingTarget: "signal:+15550001111",
+      currentMessageId: "1783831798000",
+      replyToMode: "first",
+      hasRepliedRef,
+    });
+    expect(
+      signalPlugin.threading?.matchesToolContextTarget?.({
+        target: "+15550001111",
+        toolContext: context,
+      }),
+    ).toBe(true);
   });
 
   it("chunks outbound text without requiring Signal runtime initialization", () => {
@@ -929,6 +989,82 @@ describe("signal outbound", () => {
       }),
     ).resolves.toBeNull();
     clearSignalApprovalReactionTargetsForTest();
+  });
+
+  it("resolves only proven direct reply authors", async () => {
+    const replyContext = { to: "signal:+15551234567", replyToId: "1700000000001" };
+    await registerSignalReplyContext({
+      ...replyContext,
+      author: "+15551234567",
+      sourceTimestamp: 100,
+    });
+    await registerSignalReplyContext({
+      ...replyContext,
+      author: "+15550001111",
+      sourceTimestamp: 200,
+    });
+    await registerSignalReplyContext({
+      ...replyContext,
+      author: "+15551234567",
+      sourceTimestamp: 300,
+    });
+    await expect(resolveSignalReplyContextWithPersistence(replyContext)).resolves.toEqual({
+      ambiguous: true,
+    });
+    await clearSignalReplyAuthorsForTest();
+  });
+
+  it("keeps newer reply context when older events arrive out of order", async () => {
+    const replyContext = { to: "signal:+15551234567", replyToId: "1700000000002" };
+    await registerSignalReplyContext({
+      ...replyContext,
+      author: "+15551234567",
+      body: "newer",
+      sourceTimestamp: 200,
+    });
+    await registerSignalReplyContext({
+      ...replyContext,
+      author: "+15551234567",
+      body: "older",
+      sourceTimestamp: 100,
+    });
+
+    await expect(resolveSignalReplyContextWithPersistence(replyContext)).resolves.toEqual({
+      author: "+15551234567",
+      body: "newer",
+    });
+    await clearSignalReplyAuthorsForTest();
+  });
+
+  it("hydrates durable Signal sends with stored native quote context", async () => {
+    await clearSignalReplyAuthorsForTest();
+    await registerSignalReplyContext({
+      to: "signal:+15555550123",
+      replyToId: "1700000000001",
+      author: "+15555550123",
+      body: "original message",
+    });
+    const send = vi.fn(async () => ({ messageId: "signal-text-1" }));
+
+    await signalPlugin.message?.send?.text?.({
+      cfg: {} as OpenClawConfig,
+      to: "signal:+15555550123",
+      text: "reply",
+      replyToId: "1700000000001",
+      deps: { signal: send },
+    } as Parameters<NonNullable<typeof signalPlugin.message.send.text>>[0] & {
+      deps: { signal: typeof send };
+    });
+
+    expect(send).toHaveBeenCalledWith("+15555550123", "reply", {
+      cfg: {},
+      maxBytes: undefined,
+      accountId: undefined,
+      replyToId: "1700000000001",
+      replyToAuthor: "+15555550123",
+      replyToBody: "original message",
+    });
+    await clearSignalReplyAuthorsForTest();
   });
 
   it("declares message adapter durable text and media with receipt proofs", async () => {

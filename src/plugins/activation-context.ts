@@ -33,16 +33,6 @@ export type PluginActivationInputs = {
   autoEnabledReasons: Record<string, string[]>;
 };
 
-export type PluginActivationSnapshot = Pick<
-  PluginActivationInputs,
-  | "rawConfig"
-  | "config"
-  | "normalized"
-  | "activationSourceConfig"
-  | "activationSource"
-  | "autoEnabledReasons"
->;
-
 export type BundledPluginCompatibleActivationInputs = PluginActivationInputs & {
   compatPluginIds: string[];
 };
@@ -191,7 +181,7 @@ function resolvePluginActivationSnapshot(params: {
   workspaceDir?: string;
   applyAutoEnable?: boolean;
   discovery?: PluginDiscoveryResult;
-}): PluginActivationSnapshot {
+}): PluginActivationInputs {
   const env = params.env ?? process.env;
   const rawConfig = params.rawConfig ?? params.resolvedConfig;
   let resolvedConfig = params.resolvedConfig ?? params.rawConfig;

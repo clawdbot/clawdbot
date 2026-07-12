@@ -142,6 +142,9 @@ enum WatchMessagingPayloadCodec {
         if let decision = message.decision {
             payload["decision"] = decision.rawValue
         }
+        if let outcome = message.outcome {
+            payload["outcome"] = outcome.rawValue
+        }
         if let resolvedAtMs = message.resolvedAtMs {
             payload["resolvedAtMs"] = resolvedAtMs
         }
@@ -201,10 +204,12 @@ enum WatchMessagingPayloadCodec {
     {
         var payload: [String: Any] = [
             "type": OpenClawWatchPayloadType.appSnapshot.rawValue,
+            "gatewayStatus": self.encodeAppStatus(message.gatewayStatus),
             "gatewayStatusText": message.gatewayStatusText,
             "gatewayConnected": message.gatewayConnected,
             "agentName": message.agentName,
             "sessionKey": message.sessionKey,
+            "talkStatus": self.encodeAppStatus(message.talkStatus),
             "talkStatusText": message.talkStatusText,
             "talkEnabled": message.talkEnabled,
             "talkListening": message.talkListening,
@@ -236,11 +241,28 @@ enum WatchMessagingPayloadCodec {
                 return encoded
             }
         }
+        if let chatStatus = message.chatStatus {
+            payload["chatStatus"] = self.encodeAppStatus(chatStatus)
+        }
         if let chatStatusText = nonEmpty(message.chatStatusText) {
             payload["chatStatusText"] = chatStatusText
         }
         if let snapshotId = nonEmpty(message.snapshotId) {
             payload["snapshotId"] = snapshotId
+        }
+        return payload
+    }
+
+    private static func encodeAppStatus(_ status: OpenClawWatchAppStatus) -> [String: Any] {
+        var payload: [String: Any] = ["code": status.code.rawValue]
+        if let localizationKey = exactNonEmpty(status.localizationKey) {
+            payload["localizationKey"] = localizationKey
+        }
+        if !status.arguments.isEmpty {
+            payload["arguments"] = status.arguments
+        }
+        if let verbatim = exactNonEmpty(status.verbatim) {
+            payload["verbatim"] = verbatim
         }
         return payload
     }

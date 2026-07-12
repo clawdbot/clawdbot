@@ -41,7 +41,7 @@ export type ProviderModelRouteAuthAttempt =
       allowAuthProfileFallback: false;
     };
 
-export type ProviderModelAuthSourceDecision =
+type ProviderModelAuthSourceDecision =
   | {
       kind: "selected";
       selection: ProviderModelAuthSourceSelection;

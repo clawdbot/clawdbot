@@ -1,0 +1,29 @@
+"CFBundleDisplayName" = "$(OPENCLAW_APP_DISPLAY_NAME)";
+/* OpenClaw source: "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access." */
+"NSCalendarsFullAccessUsageDescription" = "OpenClaw usa tus calendarios para mostrar eventos y contexto de programación cuando activas el acceso al calendario.";
+/* OpenClaw source: "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access." */
+"NSCalendarsUsageDescription" = "OpenClaw usa tus calendarios para mostrar eventos y contexto de programación cuando activas el acceso al calendario.";
+/* OpenClaw source: "OpenClaw uses your calendars to add events when you enable calendar access." */
+"NSCalendarsWriteOnlyAccessUsageDescription" = "OpenClaw usa tus calendarios para agregar eventos cuando activas el acceso al calendario.";
+/* OpenClaw source: "OpenClaw uses the camera when you scan a Gateway setup QR code or ask your paired Gateway or assistant to capture a photo or short video from this iPhone, for example to connect to your Gateway or show your assistant a document, device screen, or workspace." */
+"NSCameraUsageDescription" = "OpenClaw usa la cámara cuando escaneas un código QR de configuración de Gateway o pides a tu Gateway emparejado o asistente que capture una foto o un video corto desde este iPhone, por ejemplo, para conectarte a tu Gateway o mostrarle a tu asistente un documento, la pantalla de un dispositivo o un espacio de trabajo.";
+/* OpenClaw source: "OpenClaw uses your contacts so you can search and reference people while using the assistant." */
+"NSContactsUsageDescription" = "OpenClaw usa tus contactos para que puedas buscar y hacer referencia a personas mientras usas el asistente.";
+/* OpenClaw source: "OpenClaw discovers and connects to your OpenClaw gateway on the local network." */
+"NSLocalNetworkUsageDescription" = "OpenClaw descubre y se conecta a tu gateway de OpenClaw en la red local.";
+/* OpenClaw source: "OpenClaw can share your location in the background when you enable Always." */
+"NSLocationAlwaysAndWhenInUseUsageDescription" = "OpenClaw puede compartir tu ubicación en segundo plano cuando activas Siempre.";
+/* OpenClaw source: "OpenClaw uses your location when you allow location sharing." */
+"NSLocationWhenInUseUsageDescription" = "OpenClaw usa tu ubicación cuando permites compartir la ubicación.";
+/* OpenClaw source: "OpenClaw uses the microphone for realtime chat, voice wake, push-to-talk, and voice notes." */
+"NSMicrophoneUsageDescription" = "OpenClaw usa el micrófono para chat en tiempo real, activación por voz, pulsar para hablar y notas de voz.";
+/* OpenClaw source: "OpenClaw may use motion data to support device-aware interactions and automations." */
+"NSMotionUsageDescription" = "OpenClaw puede usar datos de movimiento para admitir interacciones y automatizaciones conscientes del dispositivo.";
+/* OpenClaw source: "After you enable Health Summaries, OpenClaw reads steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider." */
+"NSHealthShareUsageDescription" = "Después de activar Resúmenes de salud, OpenClaw lee los pasos, el sueño, la frecuencia cardíaca en reposo y los entrenamientos para compartir los datos agregados solicitados con el proveedor de IA que hayas configurado.";
+/* OpenClaw source: "OpenClaw lets your assistant read photos you allow and lets you choose photos to share." */
+"NSPhotoLibraryUsageDescription" = "OpenClaw permite que tu asistente lea las fotos que autorices y te permite elegir fotos para compartir.";
+/* OpenClaw source: "OpenClaw uses your reminders to list, add, and complete tasks when you enable reminders access." */
+"NSRemindersFullAccessUsageDescription" = "OpenClaw usa tus recordatorios para listar, agregar y completar tareas cuando habilitas el acceso a recordatorios.";
+/* OpenClaw source: "OpenClaw uses on-device speech recognition for talk mode and voice wake." */
+"NSSpeechRecognitionUsageDescription" = "OpenClaw usa el reconocimiento de voz en el dispositivo para el modo de conversación y la activación por voz.";

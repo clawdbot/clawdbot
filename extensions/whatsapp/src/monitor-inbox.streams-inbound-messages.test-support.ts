@@ -5,10 +5,6 @@ import type { GroupMetadata, WAMessageKey } from "baileys";
 import "./monitor-inbox.test-harness.js";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  registerWhatsAppConnectionController,
-  unregisterWhatsAppConnectionController,
-} from "./connection-controller-registry.js";
 import { WhatsAppRetryableInboundError } from "./inbound/dedupe.js";
 import {
   readWhatsAppBaileysCacheEntry,
@@ -35,12 +31,18 @@ import type { InboxOnMessage } from "./monitor-inbox.test-harness.js";
 import { lookupInboundMessageMeta } from "./quoted-message.js";
 import { DEFAULT_WHATSAPP_SOCKET_TIMING } from "./socket-timing.js";
 
-const { imageOps, sleepWithAbortMock } = vi.hoisted(() => ({
+const { controllerContexts, imageOps, sleepWithAbortMock } = vi.hoisted(() => ({
+  controllerContexts: new Map<string, unknown>(),
   imageOps: {
     getImageMetadata: vi.fn(),
     resizeToJpeg: vi.fn(),
   },
   sleepWithAbortMock: vi.fn(async (_ms: number, _signal?: AbortSignal) => undefined),
+}));
+
+vi.mock("./connection-controller-runtime-context.js", () => ({
+  WHATSAPP_CONNECTION_CONTROLLER_CAPABILITY: "connection-controller",
+  getWhatsAppConnectionController: (accountId: string) => controllerContexts.get(accountId) ?? null,
 }));
 
 vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
@@ -200,6 +202,7 @@ describe("web monitor inbox", () => {
   installWebMonitorInboxUnitTestHooks();
 
   beforeEach(() => {
+    controllerContexts.clear();
     imageOps.getImageMetadata.mockReset();
     imageOps.getImageMetadata.mockResolvedValue(null);
     imageOps.resizeToJpeg.mockReset();
@@ -1560,22 +1563,12 @@ describe("web monitor inbox", () => {
     await waitForMessageCalls(onMessage, 1);
     const inbound = inboundMessage(onMessage);
 
-    // The mock harness socket exposes user.id = "123@s.whatsapp.net"; the
-    // successor handle must report a self identity that overlaps that JID
-    // so the session-safety guard accepts the fallback.
-    const handleA = {
-      getActiveListener: () => null,
-      getCurrentSock: () => null,
-      getSelfIdentity: () => null,
-    } as never;
-    registerWhatsAppConnectionController(DEFAULT_ACCOUNT_ID, handleA);
-
     // === Simulate health-monitor-driven shutdown of controller A ===
     socketRefA.current = null;
     aShouldRetryDisconnect = false;
-    unregisterWhatsAppConnectionController(DEFAULT_ACCOUNT_ID, handleA);
 
-    // === Successor controller B comes up with its OWN socket and registers ===
+    // The mock harness socket exposes user.id = "123@s.whatsapp.net"; the
+    // successor must report an overlapping identity for the handoff to succeed.
     const sockB = {
       sendMessage: vi.fn(async () => ({ key: { id: "post-restart-msg-id" } })),
     };
@@ -1584,13 +1577,13 @@ describe("web monitor inbox", () => {
       getCurrentSock: () => sockB as never,
       getSelfIdentity: () => ({ jid: "123@s.whatsapp.net", lid: null }),
     } as never;
-    registerWhatsAppConnectionController(DEFAULT_ACCOUNT_ID, handleB);
+    controllerContexts.set(DEFAULT_ACCOUNT_ID, handleB);
 
     try {
       await inbound.reply("pong");
       await inbound.sendMedia({ text: "media after restart" });
 
-      // Captured A reply routed through B via the registry handle.
+      // Captured A reply routed through B via the runtime context.
       expect(sockB.sendMessage).toHaveBeenCalledTimes(2);
       expect(sockB.sendMessage).toHaveBeenNthCalledWith(1, "999@s.whatsapp.net", {
         text: "pong",
@@ -1599,7 +1592,7 @@ describe("web monitor inbox", () => {
         text: "media after restart",
       });
     } finally {
-      unregisterWhatsAppConnectionController(DEFAULT_ACCOUNT_ID, handleB);
+      controllerContexts.delete(DEFAULT_ACCOUNT_ID);
       await listenerA.close();
     }
   });
@@ -1653,14 +1646,14 @@ describe("web monitor inbox", () => {
       getCurrentSock: () => sockB as never,
       getSelfIdentity: () => ({ jid: null, lid: "12300:1@lid", e164: sharedE164 }),
     } as never;
-    registerWhatsAppConnectionController(DEFAULT_ACCOUNT_ID, handleB);
+    controllerContexts.set(DEFAULT_ACCOUNT_ID, handleB);
 
     try {
       await inbound.reply("pong");
       expect(sockB.sendMessage).toHaveBeenCalledTimes(1);
       expect(sockB.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", { text: "pong" });
     } finally {
-      unregisterWhatsAppConnectionController(DEFAULT_ACCOUNT_ID, handleB);
+      controllerContexts.delete(DEFAULT_ACCOUNT_ID);
       await listenerA.close();
     }
   });
@@ -1708,7 +1701,7 @@ describe("web monitor inbox", () => {
       getCurrentSock: () => sockB as never,
       getSelfIdentity: () => ({ jid: "456@s.whatsapp.net", lid: null }),
     } as never;
-    registerWhatsAppConnectionController(DEFAULT_ACCOUNT_ID, handleBMismatch);
+    controllerContexts.set(DEFAULT_ACCOUNT_ID, handleBMismatch);
 
     try {
       await expect(inbound.reply("pong")).rejects.toThrow(
@@ -1718,7 +1711,7 @@ describe("web monitor inbox", () => {
       // The mismatched successor's socket was never used.
       expect(sockB.sendMessage).not.toHaveBeenCalled();
     } finally {
-      unregisterWhatsAppConnectionController(DEFAULT_ACCOUNT_ID, handleBMismatch);
+      controllerContexts.delete(DEFAULT_ACCOUNT_ID);
       await listenerA.close();
     }
   });

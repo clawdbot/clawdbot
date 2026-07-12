@@ -586,17 +586,23 @@ struct OnboardingWizardView: View {
             } footer: {
                 let requestLine: String = {
                     if let id = self.currentProblem?.requestId ?? self.issue.requestId, !id.isEmpty {
-                        return "Request ID: \(id)"
+                        return String(
+                            format: String(localized: "Request ID: %@"),
+                            id)
                     }
-                    return "Request ID: check `openclaw devices list`."
+                    return String(localized: "Request ID: check `openclaw devices list`.")
                 }()
                 let commandLine = self.currentProblem?.actionCommand ?? "openclaw devices approve <requestId>"
-                Text(
-                    "Approve this device on the gateway.\n"
-                        + "1) `\(commandLine)`\n"
-                        + "2) `/pair approve` in your OpenClaw chat\n"
-                        + "\(requestLine)\n"
-                        + "OpenClaw will also retry automatically when you return to this app.")
+                Text(verbatim: String(
+                    format: String(localized: """
+                    Approve this device on the gateway.
+                    1) `%1$@`
+                    2) `/pair approve` in your OpenClaw chat
+                    %2$@
+                    OpenClaw will also retry automatically when you return to this app.
+                    """),
+                    commandLine,
+                    requestLine))
                     .font(OpenClawType.caption)
             }
         }
@@ -1085,8 +1091,8 @@ extension OnboardingWizardView {
         }
 
         if let problem {
-            self.connectMessage = problem.message
-            self.statusLine = problem.message
+            self.connectMessage = problem.localizedMessage
+            self.statusLine = problem.localizedMessage
             return
         }
 

@@ -120,6 +120,23 @@ describe("bundle LSP runtime", () => {
     loadEmbeddedAgentLspConfigMock.mockReset();
   });
 
+  it("reuses the prepared plugin manifest registry for bundle discovery", async () => {
+    loadEmbeddedAgentLspConfigMock.mockReturnValue({ lspServers: {}, diagnostics: [] });
+    const manifestRegistry = { plugins: [] };
+    const { createBundleLspToolRuntime } = await import("./agent-bundle-lsp-runtime.js");
+
+    await createBundleLspToolRuntime({
+      workspaceDir: "/tmp/workspace",
+      manifestRegistry,
+    });
+
+    expect(loadEmbeddedAgentLspConfigMock).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/workspace",
+      cfg: undefined,
+      manifestRegistry,
+    });
+  });
+
   it("starts LSP servers in a disposable process group", async () => {
     configureSingleLspServer();
     const child = new MockChildProcess();

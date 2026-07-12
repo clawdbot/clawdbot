@@ -9,9 +9,62 @@ import WatchKit
     private struct ExecApprovalTerminalTombstone: Codable, Equatable {
         var approvalId: String
         var gatewayStableID: String
-        var outcomeText: String
+        var outcome: WatchExecApprovalOutcome
         var outcomeIsAuthoritative: Bool?
         var recordedAt: Date
+
+        private enum CodingKeys: String, CodingKey {
+            case approvalId
+            case gatewayStableID
+            case outcome
+            case outcomeText
+            case outcomeIsAuthoritative
+            case recordedAt
+        }
+
+        init(
+            approvalId: String,
+            gatewayStableID: String,
+            outcome: WatchExecApprovalOutcome,
+            outcomeIsAuthoritative: Bool?,
+            recordedAt: Date)
+        {
+            self.approvalId = approvalId
+            self.gatewayStableID = gatewayStableID
+            self.outcome = outcome
+            self.outcomeIsAuthoritative = outcomeIsAuthoritative
+            self.recordedAt = recordedAt
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.approvalId = try container.decode(String.self, forKey: .approvalId)
+            self.gatewayStableID = try container.decode(String.self, forKey: .gatewayStableID)
+            self.outcome = try container.decodeIfPresent(
+                WatchExecApprovalOutcome.self,
+                forKey: .outcome) ?? Self.decodeLegacyOutcome(
+                container.decodeIfPresent(String.self, forKey: .outcomeText))
+            self.outcomeIsAuthoritative = try container.decodeIfPresent(
+                Bool.self,
+                forKey: .outcomeIsAuthoritative)
+            self.recordedAt = try container.decode(Date.self, forKey: .recordedAt)
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(self.approvalId, forKey: .approvalId)
+            try container.encode(self.gatewayStableID, forKey: .gatewayStableID)
+            try container.encode(self.outcome, forKey: .outcome)
+            try container.encodeIfPresent(
+                self.outcomeIsAuthoritative,
+                forKey: .outcomeIsAuthoritative)
+            try container.encode(self.recordedAt, forKey: .recordedAt)
+        }
+
+        private static func decodeLegacyOutcome(_ text: String?) -> WatchExecApprovalOutcome {
+            text.flatMap(WatchExecApprovalOutcome.decodeLegacyLocalizedText)
+                ?? WatchExecApprovalOutcome(code: .unavailable)
+        }
     }
 
     private enum DeferredGatewayPayload: Codable {
@@ -95,6 +148,7 @@ import WatchKit
         var expiresAtMs: Int64?
         var risk: String?
         var actions: [WatchPromptAction]?
+        var replyStatus: WatchReplyStatus?
         var replyStatusText: String?
         var replyStatusAt: Date?
         var execApprovals: [WatchExecApprovalRecord]
@@ -103,11 +157,14 @@ import WatchKit
         var lastExecApprovalSnapshotID: String?
         var lastExecApprovalSnapshotGatewayStableID: String?
         var lastExecApprovalSnapshotSentAtMs: Int64?
+        var lastExecApprovalOutcome: WatchExecApprovalOutcome?
         var lastExecApprovalOutcomeText: String?
         var lastExecApprovalOutcomeAt: Date?
         var appSnapshot: WatchAppSnapshotMessage?
         var appSnapshotUpdatedAt: Date?
+        var appSnapshotStatus: WatchAppCommandStatus?
         var appSnapshotStatusText: String?
+        var appCommandStatus: WatchAppCommandStatus?
         var appCommandStatusText: String?
         var deferredGatewayPayloads: [DeferredGatewayPayload]?
         var execApprovalTerminalTombstones: [ExecApprovalTerminalTombstone]?
@@ -116,7 +173,6 @@ import WatchKit
     private static let persistedStateKey = "watch.inbox.state.v2"
     private static let maxDeferredGatewayPayloads = 32
     private static let maxExecApprovalTerminalTombstones = 128
-    private static let maxExecApprovalTerminalOutcomeCharacters = 160
     private static let execApprovalTerminalTombstoneLifetime: TimeInterval = 24 * 60 * 60
     private static let defaultTitle = "OpenClaw"
     private static let defaultBody = "Waiting for messages from your iPhone."
@@ -134,18 +190,18 @@ import WatchKit
     var expiresAtMs: Int64?
     var risk: String?
     var actions: [WatchPromptAction] = []
-    var replyStatusText: String?
+    var replyStatus: WatchReplyStatus?
     var replyStatusAt: Date?
     var isReplySending = false
     var execApprovals: [WatchExecApprovalRecord] = []
     var selectedExecApprovalID: String?
     var selectedExecApprovalGatewayStableID: String?
-    var lastExecApprovalOutcomeText: String?
+    var lastExecApprovalOutcome: WatchExecApprovalOutcome?
     var lastExecApprovalOutcomeAt: Date?
     var appSnapshot: WatchAppSnapshotMessage?
     var appSnapshotUpdatedAt: Date?
-    var appSnapshotStatusText: String?
-    var appCommandStatusText: String?
+    var appSnapshotStatus: WatchAppCommandStatus?
+    var appCommandStatus: WatchAppCommandStatus?
     var chatCompletion: WatchChatCompletionMessage?
     var greetingTextOverride: String?
     var isExecApprovalReviewLoading = false
@@ -164,6 +220,22 @@ import WatchKit
     /// transports. Keep a short owner-scoped history so stale deliveries cannot restore
     /// live decision buttons after the canonical approval has closed.
     private var execApprovalTerminalTombstones: [ExecApprovalTerminalTombstone] = []
+
+    var replyStatusText: String? {
+        self.replyStatus?.localizedText()
+    }
+
+    var lastExecApprovalOutcomeText: String? {
+        self.lastExecApprovalOutcome?.localizedText()
+    }
+
+    var appSnapshotStatusText: String? {
+        self.appSnapshotStatus?.localizedText()
+    }
+
+    var appCommandStatusText: String? {
+        self.appCommandStatus?.localizedText()
+    }
 
     init(
         defaults: UserDefaults = .standard,
@@ -254,22 +326,13 @@ import WatchKit
     }
 
     var gatewaySummaryText: String {
-        guard let appSnapshot else { return "Waiting for iPhone" }
-        return appSnapshot.gatewayConnected ? "Connected" : appSnapshot.gatewayStatusText
+        guard let appSnapshot else { return String(localized: "Waiting for iPhone") }
+        return appSnapshot.gatewayStatus.localizedText()
     }
 
     var talkSummaryText: String {
-        guard let appSnapshot else { return "Not synced" }
-        if appSnapshot.talkListening {
-            return "Listening"
-        }
-        if appSnapshot.talkSpeaking {
-            return "Speaking"
-        }
-        if appSnapshot.talkEnabled {
-            return appSnapshot.talkStatusText.isEmpty ? "Ready" : appSnapshot.talkStatusText
-        }
-        return "Off"
+        guard let appSnapshot else { return String(localized: "Not synced") }
+        return appSnapshot.talkStatus.localizedText()
     }
 
     func beginExecApprovalReviewLoading() {
@@ -278,7 +341,7 @@ import WatchKit
             return
         }
         self.isExecApprovalReviewLoading = true
-        self.execApprovalReviewStatusText = "Loading approval from iPhone…"
+        self.execApprovalReviewStatusText = String(localized: "Loading approval from iPhone…")
         self.execApprovalReviewStatusAt = Date()
     }
 
@@ -324,7 +387,7 @@ import WatchKit
         self.risk = message.risk
         self.actions = message.actions
         self.lastDeliveryKey = deliveryKey
-        self.replyStatusText = nil
+        self.replyStatus = nil
         self.replyStatusAt = nil
         self.isReplySending = false
         self.persistState()
@@ -384,7 +447,7 @@ import WatchKit
             return
         }
         self.markExecApprovalReviewLoaded()
-        self.lastExecApprovalOutcomeText = nil
+        self.lastExecApprovalOutcome = nil
         self.lastExecApprovalOutcomeAt = nil
         if let legacyNotificationIdentifier = Self.legacyExecApprovalNotificationIdentifier(
             for: message.approval),
@@ -398,7 +461,7 @@ import WatchKit
         Task {
             await self.postLocalNotification(
                 identifier: notificationIdentifier,
-                title: "Exec approval required",
+                title: String(localized: "Exec approval required"),
                 body: message.approval.commandPreview ?? message.approval.commandText,
                 risk: message.approval.risk?.rawValue,
                 stillCurrent: {
@@ -504,7 +567,7 @@ import WatchKit
             _ = self.recordExecApprovalTerminal(
                 approvalId: record.approvalID,
                 gatewayStableID: record.approval.gatewayStableID,
-                outcomeText: "Approval resolved elsewhere",
+                outcome: WatchExecApprovalOutcome(code: .resolvedElsewhere),
                 authoritativeOutcome: false)
             return false
         }
@@ -573,13 +636,13 @@ import WatchKit
             if merged.chatItems == nil {
                 merged.chatItems = self.appSnapshot?.chatItems
             }
-            if merged.chatStatusText == nil {
-                merged.chatStatusText = self.appSnapshot?.chatStatusText
+            if merged.chatStatus == nil {
+                merged.chatStatus = self.appSnapshot?.chatStatus
             }
         }
         self.appSnapshot = merged
         self.appSnapshotUpdatedAt = Date()
-        self.appSnapshotStatusText = nil
+        self.appSnapshotStatus = nil
         if !hasExistingAppSnapshot || !Self.gatewayIDsMatch(previousGatewayID, nextGatewayID) {
             self.hasCompletedExecApprovalSnapshotRefreshInSession = false
             if !Self.gatewayIDsMatch(self.gatewayStableID, nextGatewayID) {
@@ -606,19 +669,22 @@ import WatchKit
     }
 
     func markAppSnapshotRequestStarted() {
-        self.appSnapshotStatusText = "Refreshing from iPhone…"
+        self.appSnapshotStatus = WatchAppCommandStatus(command: .refresh, code: .sending)
         self.persistState()
     }
 
     func markAppSnapshotRequestResult(_ result: WatchReplySendResult) {
         if let errorMessage = result.errorMessage, !errorMessage.isEmpty {
-            self.appSnapshotStatusText = "Refresh failed: \(errorMessage)"
+            self.appSnapshotStatus = WatchAppCommandStatus(
+                command: .refresh,
+                code: .failed,
+                detail: errorMessage)
         } else if result.deliveredImmediately {
-            self.appSnapshotStatusText = "Refresh requested"
+            self.appSnapshotStatus = WatchAppCommandStatus(command: .refresh, code: .sent)
         } else if result.queuedForDelivery {
-            self.appSnapshotStatusText = "Refresh queued"
+            self.appSnapshotStatus = WatchAppCommandStatus(command: .refresh, code: .queued)
         } else {
-            self.appSnapshotStatusText = nil
+            self.appSnapshotStatus = nil
         }
         self.persistState()
     }
@@ -639,25 +705,30 @@ import WatchKit
     }
 
     func markAppCommandSending(_ command: WatchAppCommand) {
-        self.appCommandStatusText = "Sending \(Self.commandLabel(command))…"
+        self.appCommandStatus = WatchAppCommandStatus(command: command, code: .sending)
         self.persistState()
     }
 
     func markAppCommandBlocked(_ command: WatchAppCommand, reason: String) {
-        self.appCommandStatusText = "\(Self.commandLabel(command)): \(reason)"
+        self.appCommandStatus = WatchAppCommandStatus(
+            command: command,
+            code: .blocked,
+            detail: reason)
         self.persistState()
     }
 
     func markAppCommandResult(_ result: WatchReplySendResult, command: WatchAppCommand) {
-        let label = Self.commandLabel(command)
         if let errorMessage = result.errorMessage, !errorMessage.isEmpty {
-            self.appCommandStatusText = "\(label) failed: \(errorMessage)"
+            self.appCommandStatus = WatchAppCommandStatus(
+                command: command,
+                code: .failed,
+                detail: errorMessage)
         } else if result.deliveredImmediately {
-            self.appCommandStatusText = "\(label): sent"
+            self.appCommandStatus = WatchAppCommandStatus(command: command, code: .sent)
         } else if result.queuedForDelivery {
-            self.appCommandStatusText = "\(label): queued"
+            self.appCommandStatus = WatchAppCommandStatus(command: command, code: .queued)
         } else {
-            self.appCommandStatusText = "\(label): sent"
+            self.appCommandStatus = WatchAppCommandStatus(command: command, code: .sent)
         }
         self.persistState()
     }
@@ -668,52 +739,43 @@ import WatchKit
 extension WatchInboxStore {
     func consume(execApprovalResolved message: WatchExecApprovalResolvedMessage) {
         guard self.routeGatewayPayload(.execApprovalResolved(message: message)) else { return }
-        let normalizedOutcomeText = message.outcomeText?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let statusText = if let normalizedOutcomeText, !normalizedOutcomeText.isEmpty {
-            normalizedOutcomeText
-        } else {
-            switch message.decision {
-            case .allowOnce:
-                "Allowed once"
-            case .deny:
-                "Denied"
-            case nil:
-                "Approval resolved"
-            }
-        }
-        let terminalOutcomeText = self.recordExecApprovalTerminal(
+        let outcome = WatchExecApprovalOutcome.resolved(
+            outcome: message.outcome,
+            legacyText: message.outcomeText,
+            decision: message.decision,
+            source: message.source)
+        let terminalOutcome = self.recordExecApprovalTerminal(
             approvalId: message.approvalId,
             gatewayStableID: message.gatewayStableID,
-            outcomeText: statusText) ?? statusText
+            outcome: outcome) ?? outcome
         self.removeExecApproval(id: message.approvalId, gatewayStableID: message.gatewayStableID)
         self.markExecApprovalReviewLoaded()
-        self.lastExecApprovalOutcomeText = terminalOutcomeText
+        self.lastExecApprovalOutcome = terminalOutcome
         self.lastExecApprovalOutcomeAt = Date()
         self.persistState()
     }
 
     func consume(execApprovalExpired message: WatchExecApprovalExpiredMessage) {
         guard self.routeGatewayPayload(.execApprovalExpired(message: message)) else { return }
-        let statusText = switch message.reason {
+        let outcome = switch message.reason {
         case .expired:
-            "Approval expired"
+            WatchExecApprovalOutcome(code: .expired)
         case .notFound:
-            "Approval no longer available"
+            WatchExecApprovalOutcome(code: .notFound)
         case .resolved:
-            "Approval resolved elsewhere"
+            WatchExecApprovalOutcome(code: .resolvedElsewhere)
         case .replaced:
-            "Approval replaced"
+            WatchExecApprovalOutcome(code: .replaced)
         case .unavailable:
-            "Approval unavailable"
+            WatchExecApprovalOutcome(code: .unavailable)
         }
-        let terminalOutcomeText = self.recordExecApprovalTerminal(
+        let terminalOutcome = self.recordExecApprovalTerminal(
             approvalId: message.approvalId,
             gatewayStableID: message.gatewayStableID,
-            outcomeText: statusText) ?? statusText
+            outcome: outcome) ?? outcome
         self.removeExecApproval(id: message.approvalId, gatewayStableID: message.gatewayStableID)
         self.markExecApprovalReviewLoaded()
-        self.lastExecApprovalOutcomeText = terminalOutcomeText
+        self.lastExecApprovalOutcome = terminalOutcome
         self.lastExecApprovalOutcomeAt = Date()
         self.persistState()
     }
@@ -734,7 +796,7 @@ extension WatchInboxStore {
             tombstone.recordedAt >= cutoff
                 && WatchApprovalID.key(tombstone.approvalId) == key.approvalID
                 && WatchGatewayID.key(tombstone.gatewayStableID) == key.gatewayID
-        }?.outcomeText
+        }?.outcome.localizedText()
     }
 
     func selectExecApproval(id: String, gatewayStableID: String?) {
@@ -773,7 +835,9 @@ extension WatchInboxStore {
         self.execApprovals[index].isResolving = true
         self.execApprovals[index].pendingDecision = decision
         self.execApprovals[index].activeResolutionAttemptID = attemptID
-        self.execApprovals[index].statusText = "Sending \(Self.decisionLabel(decision))…"
+        self.execApprovals[index].status = WatchExecApprovalStatus(
+            code: .sending,
+            decision: decision)
         self.execApprovals[index].statusAt = Date()
         self.persistState()
         return attemptID
@@ -802,16 +866,22 @@ extension WatchInboxStore {
         switch result.delivery {
         case .delivered:
             self.execApprovals[index].isResolving = true
-            self.execApprovals[index].statusText = "\(Self.decisionLabel(decision)): sent"
+            self.execApprovals[index].status = WatchExecApprovalStatus(
+                code: .sent,
+                decision: decision)
         case .queued:
             self.execApprovals[index].isResolving = true
-            self.execApprovals[index].statusText = "\(Self.decisionLabel(decision)): queued"
+            self.execApprovals[index].status = WatchExecApprovalStatus(
+                code: .queued,
+                decision: decision)
         case .notSent:
             // Only a definitive pre-dispatch failure unlocks locally. Uncertain sends stay
             // frozen until a canonical retry reset or terminal event arrives.
             self.execApprovals[index].isResolving = false
             self.execApprovals[index].activeResolutionAttemptID = nil
-            self.execApprovals[index].statusText = "Couldn't reach iPhone. Tap to retry."
+            self.execApprovals[index].status = WatchExecApprovalStatus(
+                code: .retry,
+                decision: decision)
         }
         self.execApprovals[index].pendingDecision = result.delivery == .notSent ? nil : decision
         self.execApprovals[index].statusAt = Date()
@@ -883,7 +953,7 @@ extension WatchInboxStore {
         let isResolving = resetResolvingState ? false : (existingRecord?.isResolving ?? false)
         let pendingDecision = resetResolvingState ? nil : existingRecord?.pendingDecision
         let activeResolutionAttemptID = resetResolvingState ? nil : existingRecord?.activeResolutionAttemptID
-        let statusText = resetResolvingState ? nil : existingRecord?.statusText
+        let status = resetResolvingState ? nil : existingRecord?.status
         let statusAt = resetResolvingState ? nil : existingRecord?.statusAt
         return WatchExecApprovalRecord(
             approval: approval,
@@ -893,7 +963,7 @@ extension WatchInboxStore {
             isResolving: isResolving,
             pendingDecision: pendingDecision,
             activeResolutionAttemptID: activeResolutionAttemptID,
-            statusText: statusText,
+            status: status,
             statusAt: statusAt)
     }
 
@@ -1109,7 +1179,7 @@ extension WatchInboxStore {
         self.expiresAtMs = nil
         self.risk = nil
         self.actions = []
-        self.replyStatusText = nil
+        self.replyStatus = nil
         self.replyStatusAt = nil
         self.isReplySending = false
 
@@ -1220,8 +1290,8 @@ extension WatchInboxStore {
     private func recordExecApprovalTerminal(
         approvalId: String,
         gatewayStableID: String?,
-        outcomeText: String,
-        authoritativeOutcome: Bool = true) -> String?
+        outcome: WatchExecApprovalOutcome,
+        authoritativeOutcome: Bool = true) -> WatchExecApprovalOutcome?
     {
         guard let exactApprovalID = WatchApprovalID.exact(approvalId),
               let exactGatewayID = WatchGatewayID.exact(gatewayStableID),
@@ -1232,10 +1302,6 @@ extension WatchInboxStore {
             return nil
         }
         self.pruneExecApprovalTerminalTombstones(now: Date())
-        let normalizedOutcomeText = outcomeText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let boundedOutcomeText = String(
-            normalizedOutcomeText.prefix(Self.maxExecApprovalTerminalOutcomeCharacters))
-        guard !boundedOutcomeText.isEmpty else { return nil }
         if let existingIndex = execApprovalTerminalTombstones.lastIndex(where: { tombstone in
             WatchApprovalID.key(tombstone.approvalId) == key.approvalID
                 && WatchGatewayID.key(tombstone.gatewayStableID) == key.gatewayID
@@ -1244,22 +1310,22 @@ extension WatchInboxStore {
                self.execApprovalTerminalTombstones[existingIndex].outcomeIsAuthoritative != true
             {
                 var upgraded = self.execApprovalTerminalTombstones.remove(at: existingIndex)
-                upgraded.outcomeText = boundedOutcomeText
+                upgraded.outcome = outcome
                 upgraded.outcomeIsAuthoritative = true
                 upgraded.recordedAt = Date()
                 self.execApprovalTerminalTombstones.append(upgraded)
-                return upgraded.outcomeText
+                return upgraded.outcome
             }
-            return self.execApprovalTerminalTombstones[existingIndex].outcomeText
+            return self.execApprovalTerminalTombstones[existingIndex].outcome
         }
         self.execApprovalTerminalTombstones.append(ExecApprovalTerminalTombstone(
             approvalId: exactApprovalID,
             gatewayStableID: exactGatewayID,
-            outcomeText: boundedOutcomeText,
+            outcome: outcome,
             outcomeIsAuthoritative: authoritativeOutcome,
             recordedAt: Date()))
         self.pruneExecApprovalTerminalTombstones(now: Date())
-        return boundedOutcomeText
+        return outcome
     }
 
     private func pruneExecApprovalTerminalTombstones(now: Date) {
@@ -1317,7 +1383,8 @@ extension WatchInboxStore {
         self.expiresAtMs = state.expiresAtMs
         self.risk = state.risk
         self.actions = state.actions ?? []
-        self.replyStatusText = state.replyStatusText
+        self.replyStatus = state.replyStatus
+            ?? state.replyStatusText.flatMap(WatchReplyStatus.decodeLegacyLocalizedText)
         self.replyStatusAt = state.replyStatusAt
         let validApprovals = state.execApprovals.filter { record in
             WatchApprovalID.exact(record.approvalID) != nil
@@ -1348,12 +1415,18 @@ extension WatchInboxStore {
         self.lastExecApprovalSnapshotID = state.lastExecApprovalSnapshotID
         self.lastExecApprovalSnapshotGatewayStableID = state.lastExecApprovalSnapshotGatewayStableID
         self.lastExecApprovalSnapshotSentAtMs = state.lastExecApprovalSnapshotSentAtMs
-        self.lastExecApprovalOutcomeText = state.lastExecApprovalOutcomeText
+        self.lastExecApprovalOutcome = state.lastExecApprovalOutcome
+            ?? state.lastExecApprovalOutcomeText.flatMap(
+                WatchExecApprovalOutcome.decodeLegacyLocalizedText)
         self.lastExecApprovalOutcomeAt = state.lastExecApprovalOutcomeAt
         self.appSnapshot = state.appSnapshot
         self.appSnapshotUpdatedAt = state.appSnapshotUpdatedAt
-        self.appSnapshotStatusText = state.appSnapshotStatusText
-        self.appCommandStatusText = state.appCommandStatusText
+        self.appSnapshotStatus = state.appSnapshotStatus
+            ?? state.appSnapshotStatusText.flatMap(
+                WatchAppCommandStatus.decodeLegacyLocalizedText)
+        self.appCommandStatus = state.appCommandStatus
+            ?? state.appCommandStatusText.flatMap(
+                WatchAppCommandStatus.decodeLegacyLocalizedText)
         self.deferredGatewayPayloads = Array(
             (state.deferredGatewayPayloads ?? []).suffix(Self.maxDeferredGatewayPayloads))
         self.execApprovalTerminalTombstones = state.execApprovalTerminalTombstones ?? []
@@ -1414,7 +1487,8 @@ extension WatchInboxStore {
             expiresAtMs: expiresAtMs,
             risk: risk,
             actions: actions,
-            replyStatusText: replyStatusText,
+            replyStatus: replyStatus,
+            replyStatusText: nil,
             replyStatusAt: replyStatusAt,
             execApprovals: execApprovals,
             selectedExecApprovalID: selectedExecApprovalID,
@@ -1422,12 +1496,15 @@ extension WatchInboxStore {
             lastExecApprovalSnapshotID: lastExecApprovalSnapshotID,
             lastExecApprovalSnapshotGatewayStableID: lastExecApprovalSnapshotGatewayStableID,
             lastExecApprovalSnapshotSentAtMs: lastExecApprovalSnapshotSentAtMs,
-            lastExecApprovalOutcomeText: lastExecApprovalOutcomeText,
+            lastExecApprovalOutcome: lastExecApprovalOutcome,
+            lastExecApprovalOutcomeText: nil,
             lastExecApprovalOutcomeAt: lastExecApprovalOutcomeAt,
             appSnapshot: appSnapshot,
             appSnapshotUpdatedAt: appSnapshotUpdatedAt,
-            appSnapshotStatusText: appSnapshotStatusText,
-            appCommandStatusText: appCommandStatusText,
+            appSnapshotStatus: appSnapshotStatus,
+            appSnapshotStatusText: nil,
+            appCommandStatus: appCommandStatus,
+            appCommandStatusText: nil,
             deferredGatewayPayloads: deferredGatewayPayloads,
             execApprovalTerminalTombstones: execApprovalTerminalTombstones)
         guard let data = try? JSONEncoder().encode(state) else { return }
@@ -1478,7 +1555,10 @@ extension WatchInboxStore {
 
     func markReplySending(actionLabel: String) {
         self.isReplySending = true
-        self.replyStatusText = "Sending \(actionLabel)…"
+        self.replyStatus = WatchReplyStatus(
+            code: .sending,
+            actionLabel: actionLabel,
+            detail: nil)
         self.replyStatusAt = Date()
         self.persistState()
     }
@@ -1486,13 +1566,25 @@ extension WatchInboxStore {
     func markReplyResult(_ result: WatchReplySendResult, actionLabel: String) {
         self.isReplySending = false
         if let errorMessage = result.errorMessage, !errorMessage.isEmpty {
-            self.replyStatusText = "Failed: \(errorMessage)"
+            self.replyStatus = WatchReplyStatus(
+                code: .failed,
+                actionLabel: actionLabel,
+                detail: errorMessage)
         } else if result.deliveredImmediately {
-            self.replyStatusText = "\(actionLabel): sent"
+            self.replyStatus = WatchReplyStatus(
+                code: .sent,
+                actionLabel: actionLabel,
+                detail: nil)
         } else if result.queuedForDelivery {
-            self.replyStatusText = "\(actionLabel): queued"
+            self.replyStatus = WatchReplyStatus(
+                code: .queued,
+                actionLabel: actionLabel,
+                detail: nil)
         } else {
-            self.replyStatusText = "\(actionLabel): sent"
+            self.replyStatus = WatchReplyStatus(
+                code: .sent,
+                actionLabel: actionLabel,
+                detail: nil)
         }
         self.replyStatusAt = Date()
         self.persistState()
@@ -1524,30 +1616,6 @@ extension WatchInboxStore {
             return
         }
         WKInterfaceDevice.current().play(self.mapHapticRisk(risk))
-    }
-
-    private static func decisionLabel(_ decision: WatchExecApprovalDecision) -> String {
-        switch decision {
-        case .allowOnce:
-            "Allow Once"
-        case .deny:
-            "Deny"
-        }
-    }
-
-    private static func commandLabel(_ command: WatchAppCommand) -> String {
-        switch command {
-        case .refresh:
-            "Refresh"
-        case .openChat:
-            "Open Chat"
-        case .sendChat:
-            "Chat"
-        case .startTalk:
-            "Start Talk"
-        case .stopTalk:
-            "Stop Talk"
-        }
     }
 
     private static func nowMs() -> Int64 {

@@ -690,6 +690,11 @@ export class ConfigPage extends OpenClawLightDomElement {
               : undefined;
   }
 
+  private isUpdateBusy(): boolean {
+    const update = this.context.overlays.snapshot;
+    return update.updateRunning || update.updateReconciliationPending;
+  }
+
   private renderAdvancedConfig(configObject: Record<string, unknown>) {
     const runtimeConfig = this.context.runtimeConfig;
     const configState = runtimeConfig.state;
@@ -720,7 +725,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       loading: configState.configLoading,
       saving: configState.configSaving,
       applying: configState.configApplying,
-      updating: this.context.overlays.snapshot.updateRunning,
+      updating: this.isUpdateBusy(),
       connected: configState.connected,
       schema: configState.configSchema,
       schemaLoading: configState.configSchemaLoading,
@@ -874,8 +879,10 @@ export class ConfigPage extends OpenClawLightDomElement {
       version:
         appConfig.serverVersion ?? this.context.gateway.snapshot.hello?.server?.version ?? "",
       configDirty: runtimeConfig.state.configFormDirty,
+      configLoading: runtimeConfig.state.configLoading,
       configSaving: runtimeConfig.state.configSaving,
       configApplying: runtimeConfig.state.configApplying,
+      configUpdating: this.isUpdateBusy(),
       configReady: Boolean(runtimeConfig.state.configSnapshot?.hash),
       onResetConfig: () => runtimeConfig.resetDraft(),
       onSaveConfig: () => void runtimeConfig.save(),

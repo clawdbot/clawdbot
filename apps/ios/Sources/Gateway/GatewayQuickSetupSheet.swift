@@ -84,7 +84,7 @@ struct GatewayQuickSetupSheet: View {
                                 Image(systemName: "lock.shield.fill")
                                     .foregroundStyle(OpenClawBrand.warn)
                                 VStack(alignment: .leading, spacing: 3) {
-                                    Text(availability.actionTitle)
+                                    Text(LocalizedStringKey(availability.actionTitle))
                                         .font(OpenClawType.subheadSemiBold)
                                     Text(guidanceText)
                                         .font(OpenClawType.caption)
@@ -369,7 +369,7 @@ private struct GatewayQuickSetupErrorView: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(OpenClawBrand.warn)
                 .padding(.top, 1)
-            Text(self.message)
+            Text(verbatim: self.message)
                 .font(OpenClawType.footnote)
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)

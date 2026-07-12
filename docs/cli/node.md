@@ -11,6 +11,11 @@ title: "Node"
 Run a **headless node host** that connects to the Gateway WebSocket and exposes
 `system.run` / `system.which` on this machine.
 
+On macOS, the menu bar app already embeds this node-host runtime into its own
+node connection and adds native Mac capabilities. Use `openclaw node run` on a
+Mac only when you intentionally want a headless node without the app. Running
+both creates two node identities for the same machine.
+
 ## Why use a node host?
 
 Use a node host when you want agents to **run commands on other machines** in your

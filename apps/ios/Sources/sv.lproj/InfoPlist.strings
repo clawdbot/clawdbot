@@ -1,14 +1,29 @@
-"CFBundleDisplayName" = "OpenClaw";
-"NSLocalNetworkUsageDescription" = "OpenClaw hittar och ansluter till din OpenClaw Gateway i det lokala nätverket.";
-"NSCameraUsageDescription" = "OpenClaw kan ta bilder eller korta videoklipp när du begär det via gatewayen.";
-"NSCalendarsUsageDescription" = "OpenClaw använder dina kalendrar för att visa händelser och schemainformation när du aktiverar kalenderåtkomst.";
-"NSCalendarsFullAccessUsageDescription" = "OpenClaw använder dina kalendrar för att visa händelser och schemainformation när du aktiverar kalenderåtkomst.";
+"CFBundleDisplayName" = "$(OPENCLAW_APP_DISPLAY_NAME)";
+/* OpenClaw source: "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access." */
+"NSCalendarsFullAccessUsageDescription" = "OpenClaw använder dina kalendrar för att visa händelser och schemaläggningssammanhang när du aktiverar kalenderåtkomst.";
+/* OpenClaw source: "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access." */
+"NSCalendarsUsageDescription" = "OpenClaw använder dina kalendrar för att visa händelser och schemaläggningssammanhang när du aktiverar kalenderåtkomst.";
+/* OpenClaw source: "OpenClaw uses your calendars to add events when you enable calendar access." */
 "NSCalendarsWriteOnlyAccessUsageDescription" = "OpenClaw använder dina kalendrar för att lägga till händelser när du aktiverar kalenderåtkomst.";
-"NSContactsUsageDescription" = "OpenClaw använder dina kontakter så att du kan söka efter och hänvisa till personer när du använder assistenten.";
-"NSLocationWhenInUseUsageDescription" = "OpenClaw använder din plats när du tillåter platsdelning.";
+/* OpenClaw source: "OpenClaw uses the camera when you scan a Gateway setup QR code or ask your paired Gateway or assistant to capture a photo or short video from this iPhone, for example to connect to your Gateway or show your assistant a document, device screen, or workspace." */
+"NSCameraUsageDescription" = "OpenClaw använder kameran när du skannar en QR-kod för Gateway-konfiguration eller ber din parkopplade Gateway eller assistent att ta ett foto eller en kort video från denna iPhone, till exempel för att ansluta till din Gateway eller visa din assistent ett dokument, en enhetsskärm eller en arbetsyta.";
+/* OpenClaw source: "OpenClaw uses your contacts so you can search and reference people while using the assistant." */
+"NSContactsUsageDescription" = "OpenClaw använder dina kontakter så att du kan söka efter och referera till personer när du använder assistenten.";
+/* OpenClaw source: "OpenClaw discovers and connects to your OpenClaw gateway on the local network." */
+"NSLocalNetworkUsageDescription" = "OpenClaw hittar och ansluter till din OpenClaw-gateway i det lokala nätverket.";
+/* OpenClaw source: "OpenClaw can share your location in the background when you enable Always." */
 "NSLocationAlwaysAndWhenInUseUsageDescription" = "OpenClaw kan dela din plats i bakgrunden när du aktiverar Alltid.";
-"NSMicrophoneUsageDescription" = "OpenClaw använder mikrofonen för realtidschatt, röstaktivering, tryck-och-prata och röstmeddelanden.";
+/* OpenClaw source: "OpenClaw uses your location when you allow location sharing." */
+"NSLocationWhenInUseUsageDescription" = "OpenClaw använder din plats när du tillåter platsdelning.";
+/* OpenClaw source: "OpenClaw uses the microphone for realtime chat, voice wake, push-to-talk, and voice notes." */
+"NSMicrophoneUsageDescription" = "OpenClaw använder mikrofonen för realtidschatt, röstväckning, tryck-och-tala och röstanteckningar.";
+/* OpenClaw source: "OpenClaw may use motion data to support device-aware interactions and automations." */
 "NSMotionUsageDescription" = "OpenClaw kan använda rörelsedata för att stödja enhetsmedvetna interaktioner och automatiseringar.";
-"NSPhotoLibraryUsageDescription" = "OpenClaw låter din assistent läsa bilder som du tillåter och låter dig välja bilder att dela.";
+/* OpenClaw source: "After you enable Health Summaries, OpenClaw reads steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider." */
+"NSHealthShareUsageDescription" = "När du har aktiverat Hälsosammanfattningar läser OpenClaw steg, sömn, vilopuls och träningspass för att dela begärda sammanställda data med din konfigurerade AI-leverantör.";
+/* OpenClaw source: "OpenClaw lets your assistant read photos you allow and lets you choose photos to share." */
+"NSPhotoLibraryUsageDescription" = "OpenClaw låter din assistent läsa foton du tillåter och låter dig välja foton att dela.";
+/* OpenClaw source: "OpenClaw uses your reminders to list, add, and complete tasks when you enable reminders access." */
 "NSRemindersFullAccessUsageDescription" = "OpenClaw använder dina påminnelser för att lista, lägga till och slutföra uppgifter när du aktiverar åtkomst till påminnelser.";
-"NSSpeechRecognitionUsageDescription" = "OpenClaw använder taligenkänning på enheten för Talk-läge och röstaktivering.";
+/* OpenClaw source: "OpenClaw uses on-device speech recognition for talk mode and voice wake." */
+"NSSpeechRecognitionUsageDescription" = "OpenClaw använder taligenkänning på enheten för talläge och röstaktivering.";

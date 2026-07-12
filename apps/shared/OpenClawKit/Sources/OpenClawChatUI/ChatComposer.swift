@@ -230,7 +230,10 @@ struct OpenClawChatComposer: View {
         }
         .frame(width: 14, height: 14)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Context \(percentage)% used")
+        .accessibilityLabel(
+            String(
+                format: String(localized: "Context %@%% used"),
+                percentage.formatted()))
     }
 
     private var thinkingPicker: some View {

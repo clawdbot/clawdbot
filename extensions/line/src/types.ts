@@ -91,7 +91,7 @@ export type LineTemplateMessagePayload =
     }
   | {
       type: "buttons";
-      title: string;
+      title?: string;
       text: string;
       actions: Array<{
         type: "message" | "uri" | "postback";

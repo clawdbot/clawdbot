@@ -38,6 +38,10 @@ function plistArray(key: string, values: readonly string[]): string {
   return `<key>${key}</key><array>${values.map((value) => `<string>${value}</string>`).join("")}</array>`;
 }
 
+function plistBool(key: string, value: boolean): string {
+  return `<key>${key}</key><${value ? "true" : "false"}/>`;
+}
+
 function plistDict(key: string, body: string): string {
   return `<key>${key}</key><dict>${body}</dict>`;
 }
@@ -61,13 +65,15 @@ const command = process.argv[commandIndex + 1] || "";
 const file = process.argv[commandIndex + 2];
 const keyPath = command.replace(/^Print:/, "").split(":").filter(Boolean);
 const xml = readFileSync(file, "utf8");
-const tokens = [...xml.matchAll(/<key>([^<]*)<\\/key>|<string>([^<]*)<\\/string>|<array>|<\\/array>|<dict>|<\\/dict>/g)];
+const tokens = [...xml.matchAll(/<key>([^<]*)<\\/key>|<string>([^<]*)<\\/string>|<true\\/>|<false\\/>|<array>|<\\/array>|<dict>|<\\/dict>/g)];
 let i = 0;
 function parseValue() {
   const token = tokens[i++];
   if (!token) return undefined;
   const text = token[0];
   if (token[2] !== undefined) return token[2];
+  if (text === "<true/>") return true;
+  if (text === "<false/>") return false;
   if (text === "<dict>") return parseDict();
   if (text === "<array>") {
     const values = [];
@@ -108,6 +114,8 @@ if (Array.isArray(current)) {
   console.log("}");
 } else if (typeof current === "string") {
   console.log(current);
+} else if (typeof current === "boolean") {
+  console.log(current ? "true" : "false");
 } else {
   process.exit(1);
 }
@@ -219,6 +227,7 @@ async function writeValidFixture(
         plistString("com.apple.developer.team-identifier", "FWJYW4S8P8"),
         plistString("aps-environment", "production"),
         plistString("com.apple.developer.devicecheck.appattest-environment", "production"),
+        plistBool("com.apple.developer.healthkit", true),
         plistArray("com.apple.security.application-groups", [
           "group.ai.openclawfoundation.app.shared",
         ]),
@@ -240,6 +249,7 @@ async function writeValidFixture(
             plistString("application-identifier", "FWJYW4S8P8.ai.openclawfoundation.app"),
             plistString("aps-environment", "production"),
             plistArray("com.apple.developer.devicecheck.appattest-environment", ["production"]),
+            plistBool("com.apple.developer.healthkit", true),
             plistArray("com.apple.security.application-groups", [
               "group.ai.openclawfoundation.app.shared",
             ]),

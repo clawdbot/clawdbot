@@ -26,10 +26,10 @@ import {
 
 type TranscriptIndexDatabase = Pick<
   OpenClawAgentKyselyDatabase,
-  "session_transcript_fts" | "session_transcript_index_state" | "transcript_events"
+  "sessions" | "session_transcript_fts" | "session_transcript_index_state" | "transcript_events"
 >;
 
-export type TranscriptIndexEntry = {
+type TranscriptIndexEntry = {
   messageId: string;
   role: "assistant" | "user";
   text: string;
@@ -271,10 +271,7 @@ function applyForwardIndex(
 }
 
 /** Marks one session for lazy rebuild without touching its FTS rows. */
-export function markSessionTranscriptIndexDirtyInTransaction(
-  db: DatabaseSync,
-  sessionId: string,
-): void {
+function markSessionTranscriptIndexDirtyInTransaction(db: DatabaseSync, sessionId: string): void {
   const now = Date.now();
   const watermark = readWatermark(db, sessionId);
   writeWatermark(
@@ -340,20 +337,38 @@ export function rebuildSessionTranscriptIndexInTransaction(
  * behind the newest row. Ordered for deterministic reconcile passes.
  */
 export function listSessionsNeedingTranscriptIndexReconcile(db: DatabaseSync): string[] {
+  const kysely = getIndexKysely(db);
   const rows = executeSqliteQuerySync(
     db,
-    getIndexKysely(db)
-      .selectFrom("transcript_events as te")
-      .leftJoin("session_transcript_index_state as st", "st.session_id", "te.session_id")
-      .select("te.session_id")
-      .groupBy("te.session_id")
-      .having((eb) =>
+    kysely
+      .selectFrom("sessions")
+      .innerJoin("transcript_events as latest", (join) =>
+        join
+          .onRef("latest.session_id", "=", "sessions.session_id")
+          .on((eb) =>
+            eb(
+              "latest.seq",
+              "=",
+              eb
+                .selectFrom("transcript_events as candidate")
+                .select("candidate.seq")
+                .whereRef("candidate.session_id", "=", "sessions.session_id")
+                .orderBy("candidate.seq", "desc")
+                .limit(1),
+            ),
+          ),
+      )
+      .leftJoin("session_transcript_index_state as st", "st.session_id", "sessions.session_id")
+      .select("sessions.session_id")
+      .where((eb) =>
         eb.or([
-          eb(eb.fn.coalesce(eb.fn.max("st.needs_rebuild"), eb.val(1)), "!=", 0),
-          eb(eb.fn.max("te.seq"), ">", eb.fn.coalesce(eb.fn.max("st.indexed_seq"), eb.val(-1))),
+          eb(eb.fn.coalesce("st.needs_rebuild", eb.val(1)), "!=", 0),
+          eb("latest.seq", ">", eb.fn.coalesce("st.indexed_seq", eb.val(-1))),
         ]),
       )
-      .orderBy("te.session_id"),
+      // The transcript PK makes the correlated latest-row lookup one index seek per session.
+      // Grouping transcript_events here made every healthy search rescan the entire history.
+      .orderBy("sessions.session_id"),
   ).rows;
   return rows.flatMap((row) => (typeof row.session_id === "string" ? [row.session_id] : []));
 }

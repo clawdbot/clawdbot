@@ -299,8 +299,10 @@ export function createChannelProgressDraftCompositor(params: {
         return await render();
       }
       narrationText = normalized;
-      await gate.startNow();
-      return await render();
+      // Tool activity owns the delayed start gate. Narration may arrive while
+      // that timer is pending; retain the newest text without flashing a draft
+      // for a turn that finishes inside the grace period.
+      return gate.hasStarted ? await render() : false;
     },
     async pushReasoningProgress(text?: string, options?: { snapshot?: boolean }) {
       if (

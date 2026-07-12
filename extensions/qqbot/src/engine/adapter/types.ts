@@ -17,6 +17,10 @@ export interface FetchMediaOptions {
   maxBytes?: number;
   /** Maximum redirects to follow. */
   maxRedirects?: number;
+  /** Abort the complete remote media request after this many milliseconds. */
+  timeoutMs?: number;
+  /** Abort if final response headers have not arrived after this many milliseconds. */
+  responseHeaderTimeoutMs?: number;
   /** SSRF policy configuration. */
   ssrfPolicy?: SsrfPolicyConfig;
   /** Extra fetch() RequestInit options. */

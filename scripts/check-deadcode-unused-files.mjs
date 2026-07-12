@@ -1,32 +1,20 @@
 #!/usr/bin/env node
-// Runs knip unused-file detection and compares results to the allowlist.
-import { spawn } from "node:child_process";
+// Runs Knip unused-file detection and compares results to the allowlist.
 import { fileURLToPath } from "node:url";
+import {
+  compareStringListToAllowlist,
+  isLikelyRepoFilePath,
+  KNIP_MAX_BUFFER_BYTES,
+  runKnip,
+  uniqueSorted,
+} from "./deadcode-knip-runner.mjs";
 import {
   KNIP_OPTIONAL_UNUSED_FILE_ALLOWLIST,
   KNIP_UNUSED_FILE_ALLOWLIST,
 } from "./deadcode-unused-files.allowlist.mjs";
-import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mjs";
 
-const KNIP_VERSION = "6.8.0";
-/**
- * Timeout for the unused-file knip child process.
- */
-const KNIP_TIMEOUT_MS = 10 * 60 * 1000;
-/**
- * Grace period before force-killing a timed-out knip child process.
- */
-const KNIP_KILL_GRACE_MS = 5_000;
-const KNIP_PROCESS_TREE_EXIT_POLL_MS = 25;
-const KNIP_POST_FORCE_KILL_WAIT_MS = 1_000;
-/**
- * Heartbeat interval used while knip runs without output.
- */
-const KNIP_HEARTBEAT_MS = 60_000;
-/**
- * Maximum buffered knip output retained for diagnostics.
- */
-export const KNIP_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
+export { KNIP_MAX_BUFFER_BYTES };
+
 const KNIP_ARGS = [
   "--config",
   "config/knip.config.ts",
@@ -38,23 +26,7 @@ const KNIP_ARGS = [
   "--no-config-hints",
 ];
 
-function normalizeRepoPath(value) {
-  return value.replaceAll("\\", "/").replace(/^\.\//u, "");
-}
-
-function uniqueSorted(values) {
-  return [...new Set(values.map(normalizeRepoPath))].toSorted((left, right) =>
-    left.localeCompare(right),
-  );
-}
-
-function isLikelyRepoFilePath(value) {
-  return /^(apps|docs|extensions|packages|scripts|src|test|ui)\//u.test(normalizeRepoPath(value));
-}
-
-/**
- * Parses compact knip output into unused file paths.
- */
+/** Parses compact Knip output into unused file paths. */
 export function parseKnipCompactUnusedFiles(output) {
   const files = [];
   let inUnusedFilesSection = false;
@@ -71,10 +43,7 @@ export function parseKnipCompactUnusedFiles(output) {
     }
 
     const separatorIndex = line.lastIndexOf(": ");
-    if (separatorIndex === -1) {
-      continue;
-    }
-    if (sawUnusedFilesSection && !inUnusedFilesSection) {
+    if (separatorIndex === -1 || (sawUnusedFilesSection && !inUnusedFilesSection)) {
       continue;
     }
     const file = line.slice(separatorIndex + 2).trim();
@@ -86,34 +55,15 @@ export function parseKnipCompactUnusedFiles(output) {
   return uniqueSorted(files);
 }
 
-/**
- * Compares detected unused files against the checked-in allowlist.
- */
+/** Compares detected unused files against the checked-in allowlist. */
 export function compareUnusedFilesToAllowlist(
   actualFiles,
   allowlistFiles,
   optionalAllowlistFiles = [],
 ) {
-  const actual = uniqueSorted(actualFiles);
-  const allowed = uniqueSorted(allowlistFiles);
-  const optionalAllowed = uniqueSorted(optionalAllowlistFiles);
-  const allowedOrOptionalSet = new Set([...allowed, ...optionalAllowed]);
-  const actualSet = new Set(actual);
-
-  return {
-    actual,
-    allowed,
-    unexpected: actual.filter((file) => !allowedOrOptionalSet.has(file)),
-    stale: allowed.filter((file) => !actualSet.has(file)),
-    duplicateAllowedCount: allowlistFiles.length - new Set(allowlistFiles).size,
-    allowlistIsSorted:
-      JSON.stringify(allowlistFiles.map(normalizeRepoPath)) === JSON.stringify(allowed),
-  };
+  return compareStringListToAllowlist(actualFiles, allowlistFiles, optionalAllowlistFiles);
 }
 
-/**
- * Formats unused-file allowlist drift for CLI output.
- */
 function formatUnusedFileComparison(comparison) {
   const lines = [];
   if (!comparison.allowlistIsSorted) {
@@ -137,244 +87,12 @@ function formatUnusedFileComparison(comparison) {
   return lines.join("\n");
 }
 
-function spawnErrorCode(error) {
-  return error && typeof error === "object" && "code" in error ? String(error.code) : undefined;
-}
-
-function signalProcessTree(child, signal) {
-  if (!child.pid) {
-    return;
-  }
-  try {
-    if (process.platform === "win32") {
-      process.kill(child.pid, signal);
-    } else {
-      process.kill(-child.pid, signal);
-    }
-  } catch {
-    // The child may have exited between the timeout and signal delivery.
-  }
-}
-
-function processTreeAlive(child) {
-  if (!child.pid) {
-    return false;
-  }
-  if (process.platform === "win32") {
-    return child.exitCode === null && child.signalCode === null;
-  }
-  try {
-    process.kill(-child.pid, 0);
-    return true;
-  } catch (error) {
-    return error?.code === "EPERM";
-  }
-}
-
-async function waitForProcessTreeExit(child, timeoutMs) {
-  const deadlineAt = Date.now() + timeoutMs;
-  while (Date.now() < deadlineAt) {
-    if (!processTreeAlive(child)) {
-      return true;
-    }
-    await new Promise((resolvePoll) => {
-      setTimeout(resolvePoll, KNIP_PROCESS_TREE_EXIT_POLL_MS);
-    });
-  }
-  return !processTreeAlive(child);
-}
-
-/**
- * Runs knip and returns parsed unused-file results.
- */
+/** Runs Knip and returns parsed unused-file results. */
 export async function runKnipUnusedFiles(params = {}) {
-  const run = params.spawnCommand ?? spawn;
-  const timeoutMs = params.timeoutMs ?? KNIP_TIMEOUT_MS;
-  const heartbeatMs = params.heartbeatMs ?? KNIP_HEARTBEAT_MS;
-  const maxBufferBytes = params.maxBufferBytes ?? KNIP_MAX_BUFFER_BYTES;
-  const killGraceMs = params.killGraceMs ?? KNIP_KILL_GRACE_MS;
-  const writeStatus = params.writeStatus ?? ((message) => process.stderr.write(`${message}\n`));
-  const args = [
-    "--config.minimum-release-age=0",
-    "dlx",
-    "--package",
-    `knip@${KNIP_VERSION}`,
-    "knip",
-    ...KNIP_ARGS,
-  ];
-
-  return await new Promise((resolve) => {
-    const startedAt = Date.now();
-    let settled = false;
-    let timedOut = false;
-    let bufferExceeded = false;
-    let outputBytes = 0;
-    const output = [];
-    let killTimer;
-    let exitStatus = null;
-    let exitSignal = null;
-
-    const pnpm = createPnpmRunnerSpawnSpec({
-      detached: process.platform !== "win32",
-      env: params.env,
-      nodeExecPath: params.nodeExecPath,
-      npmExecPath: params.npmExecPath,
-      platform: params.platform,
-      pnpmArgs: args,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const child = run(pnpm.command, pnpm.args, {
-      ...pnpm.options,
-      detached: process.platform !== "win32",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const parentSignalHandlers = [];
-    const cleanupParentSignalHandlers = () => {
-      for (const { signal, handler } of parentSignalHandlers) {
-        process.off(signal, handler);
-      }
-      parentSignalHandlers.length = 0;
-    };
-    const relayParentSignal = (signal) => {
-      const handler = () => {
-        signalProcessTree(child, signal);
-        signalProcessTree(child, "SIGKILL");
-        cleanupParentSignalHandlers();
-        process.kill(process.pid, signal);
-      };
-      parentSignalHandlers.push({ signal, handler });
-      process.once(signal, handler);
-    };
-    if (process.platform !== "win32") {
-      relayParentSignal("SIGINT");
-      relayParentSignal("SIGTERM");
-      relayParentSignal("SIGHUP");
-    }
-
-    const heartbeatTimer = setInterval(() => {
-      writeStatus(
-        `[deadcode] Knip unused-file scan still running after ${Math.round(
-          (Date.now() - startedAt) / 1000,
-        )}s.`,
-      );
-    }, heartbeatMs);
-
-    const timeoutTimer = setTimeout(() => {
-      timedOut = true;
-      clearInterval(heartbeatTimer);
-      writeStatus(
-        `[deadcode] Knip unused-file scan timed out after ${Math.round(timeoutMs / 1000)}s; terminating.`,
-      );
-      signalProcessTree(child, "SIGTERM");
-      killTimer = setTimeout(() => signalProcessTree(child, "SIGKILL"), killGraceMs);
-    }, timeoutMs);
-
-    const finish = (result) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timeoutTimer);
-      clearInterval(heartbeatTimer);
-      clearTimeout(killTimer);
-      cleanupParentSignalHandlers();
-      resolve({
-        ...result,
-        output: output.join(""),
-      });
-    };
-    const finishAfterProcessTreeCleanup = async (result) => {
-      if (processTreeAlive(child)) {
-        await waitForProcessTreeExit(child, killGraceMs);
-      }
-      if (processTreeAlive(child)) {
-        signalProcessTree(child, "SIGKILL");
-        await waitForProcessTreeExit(child, KNIP_POST_FORCE_KILL_WAIT_MS);
-      }
-      finish(result);
-    };
-
-    const appendOutput = (chunk) => {
-      if (settled) {
-        return;
-      }
-      if (bufferExceeded) {
-        return;
-      }
-      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
-      const remainingBytes = maxBufferBytes - outputBytes;
-      if (buffer.length <= remainingBytes) {
-        output.push(buffer.toString("utf8"));
-        outputBytes += buffer.length;
-        return;
-      }
-      if (remainingBytes > 0) {
-        output.push(buffer.subarray(0, remainingBytes).toString("utf8"));
-        outputBytes = maxBufferBytes;
-      }
-      if (!bufferExceeded) {
-        bufferExceeded = true;
-        writeStatus(
-          `[deadcode] Knip unused-file scan exceeded ${maxBufferBytes} output bytes; terminating.`,
-        );
-        child.stdout?.off?.("data", appendOutput);
-        child.stderr?.off?.("data", appendOutput);
-        child.stdout?.destroy?.();
-        child.stderr?.destroy?.();
-        clearInterval(heartbeatTimer);
-        signalProcessTree(child, "SIGTERM");
-        killTimer = setTimeout(() => signalProcessTree(child, "SIGKILL"), killGraceMs);
-      }
-    };
-
-    child.stdout?.on("data", appendOutput);
-    child.stderr?.on("data", appendOutput);
-    child.on("error", (error) =>
-      finish({
-        errorCode: spawnErrorCode(error),
-        errorMessage: error.message,
-        signal: null,
-        status: null,
-      }),
-    );
-    child.on("exit", (status, signal) => {
-      exitStatus = status;
-      exitSignal = signal;
-    });
-    child.on("close", (status, signal) => {
-      exitStatus = exitStatus ?? status;
-      exitSignal = exitSignal ?? signal;
-      const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000);
-      if (timedOut) {
-        void finishAfterProcessTreeCleanup({
-          errorCode: "ETIMEDOUT",
-          errorMessage: `Knip unused-file scan timed out after ${elapsedSeconds}s`,
-          signal: exitSignal,
-          status: exitStatus,
-        });
-        return;
-      }
-      if (bufferExceeded) {
-        void finishAfterProcessTreeCleanup({
-          errorCode: "ENOBUFS",
-          errorMessage: `Knip unused-file scan exceeded ${maxBufferBytes} output bytes`,
-          signal: exitSignal,
-          status: exitStatus,
-        });
-        return;
-      }
-      finish({
-        errorCode: undefined,
-        errorMessage: undefined,
-        signal: exitSignal,
-        status: exitStatus,
-      });
-    });
-  });
+  return await runKnip(KNIP_ARGS, { ...params, scanName: "unused-file scan" });
 }
-/**
- * Checks detected unused files against the current allowlist.
- */
+
+/** Checks detected unused files against the current allowlist. */
 export function checkUnusedFiles(
   output,
   allowlistFiles = KNIP_UNUSED_FILE_ALLOWLIST,

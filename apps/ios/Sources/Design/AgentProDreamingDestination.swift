@@ -65,7 +65,7 @@ struct AgentProDreamingDestination: View {
         if let headerLeadingAction {
             OpenClawAdaptiveHeaderRow(
                 title: "Dreaming",
-                subtitle: self.dreamingDetail,
+                subtitle: .localized(self.dreamingDetail),
                 titleFont: OpenClawType.title3SemiBold,
                 subtitleFont: OpenClawType.subheadMedium)
             {
@@ -86,7 +86,7 @@ struct AgentProDreamingDestination: View {
             self
         }
 
-        var title: String {
+        var title: LocalizedStringResource {
             switch self {
             case .backfill: "Backfill"
             case .repair: "Repair"
@@ -194,8 +194,12 @@ struct AgentProDreamingDestination: View {
                         Button {
                             Task { await self.runDreamAction(action) }
                         } label: {
-                            Label(action.title, systemImage: self.dreamActionBusy == action ? "hourglass" : action.icon)
-                                .font(OpenClawType.captionSemiBold)
+                            Label {
+                                Text(action.title)
+                                    .font(OpenClawType.captionSemiBold)
+                            } icon: {
+                                Image(systemName: self.dreamActionBusy == action ? "hourglass" : action.icon)
+                            }
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
@@ -253,7 +257,10 @@ struct AgentProDreamingDestination: View {
                             icon: "book.closed",
                             title: diary.found ? "Dream diary is empty" : "No dream diary yet",
                             detail: diary.found
-                                ? "\(diary.path) exists but has no readable content."
+                                ? .verbatim(String(
+                                    format: String(
+                                        localized: "%@ exists but has no readable content."),
+                                    diary.path))
                                 : "The gateway did not find DREAMS.md or dreams.md in the active agent workspace.")
                             .padding(14)
                     }
@@ -302,13 +309,16 @@ struct AgentProDreamingDestination: View {
     }
 
     private func dreamDiaryDayView(_ day: DreamDiaryDay) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let count = day.entryCount
+        let entryCountText = String(
+            AttributedString(localized: "^[\(count) entry](inflect: true)").characters)
+        return VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
                 Text(day.title)
                     .font(OpenClawType.subheadSemiBold)
                     .lineLimit(1)
                 Spacer(minLength: 8)
-                Text("\(day.entryCount) \(day.entryCount == 1 ? "entry" : "entries")")
+                Text(verbatim: entryCountText)
                     .font(OpenClawType.caption2SemiBold)
                     .foregroundStyle(OpenClawBrand.accent)
             }
@@ -335,10 +345,10 @@ struct AgentProDreamingDestination: View {
     }
 
     private func dreamingEntriesList(
-        title: String,
+        title: OpenClawTextValue,
         entries: [DreamingEntryLite],
-        emptyTitle: String,
-        emptyDetail: String) -> some View
+        emptyTitle: OpenClawTextValue,
+        emptyDetail: OpenClawTextValue) -> some View
     {
         VStack(alignment: .leading, spacing: 8) {
             ProSectionHeader(title: title)
@@ -382,7 +392,7 @@ struct AgentProDreamingDestination: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
-            Text("\(entry.totalSignalCount)")
+            Text(verbatim: entry.totalSignalCount.formatted())
                 .font(OpenClawType.caption2SemiBold)
                 .foregroundStyle(OpenClawBrand.accent)
                 .lineLimit(1)
@@ -424,7 +434,7 @@ struct AgentProDreamingDestination: View {
         let phases = self.overview?.dreaming?.phases ?? [:]
         return phaseOrder.compactMap { id in
             guard let phase = phases[id] else { return nil }
-            return DreamingPhaseRow(id: id, title: id.capitalized, status: phase)
+            return DreamingPhaseRow(id: id, title: Self.dreamingPhaseTitle(id), status: phase)
         }
     }
 
@@ -457,13 +467,17 @@ struct AgentProDreamingDestination: View {
         .padding(.horizontal, 14)
     }
 
-    private func emptyDetailRow(icon: String, title: String, detail: String) -> some View {
+    private func emptyDetailRow(
+        icon: String,
+        title: OpenClawTextValue,
+        detail: OpenClawTextValue) -> some View
+    {
         HStack(spacing: 12) {
             ProIconBadge(systemName: icon, color: .secondary)
             VStack(alignment: .leading, spacing: 3) {
-                Text(title)
+                title.text
                     .font(OpenClawType.subheadSemiBold)
-                Text(detail)
+                detail.text
                     .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
@@ -495,33 +509,49 @@ struct AgentProDreamingDestination: View {
     }
 
     private func dreamingEntryDetail(_ entry: DreamingEntryLite) -> String {
+        let recallCount = entry.recallCount
+        let groundedCount = entry.groundedCount
         let parts = [
-            entry.promotedAt.map { "promoted \($0)" },
-            entry.lastRecalledAt.map { "recalled \($0)" },
-            "\(entry.recallCount) recalls",
-            "\(entry.groundedCount) grounded",
+            entry.promotedAt.map {
+                String(format: String(localized: "promoted %@"), $0)
+            },
+            entry.lastRecalledAt.map {
+                String(format: String(localized: "recalled %@"), $0)
+            },
+            String(AttributedString(localized: "^[\(recallCount) recall](inflect: true)").characters),
+            String(
+                format: String(localized: "%@ grounded"),
+                groundedCount.formatted()),
         ].compactMap(\.self)
         return parts.joined(separator: " • ")
     }
 
     private func dreamingPhaseDetail(_ phase: DreamingPhaseStatusLite) -> String {
         if let nextRunAtMs = phase.nextRunAtMs {
-            return "Next cycle \(Self.relativeTime(fromMilliseconds: nextRunAtMs))"
+            return String(
+                format: String(localized: "Next cycle %@"),
+                Self.relativeTime(fromMilliseconds: nextRunAtMs))
         }
         if phase.managedCronPresent == true {
-            return "Managed cron is installed."
+            return String(localized: "Managed cron is installed.")
         }
-        return "Managed cron is not installed."
+        return String(localized: "Managed cron is not installed.")
     }
 
     private func dreamingPhaseState(_ phase: DreamingPhaseStatusLite) -> String {
-        if phase.enabled == false { return "off" }
-        return phase.managedCronPresent == true ? "scheduled" : "setup"
+        if phase.enabled == false { return String(localized: "off") }
+        return phase.managedCronPresent == true
+            ? String(localized: "scheduled")
+            : String(localized: "setup")
     }
 
     private func dreamDiaryUpdatedLabel(_ diary: DreamDiaryLite) -> String {
-        guard let updatedAtMs = diary.updatedAtMs else { return "No update timestamp" }
-        return "Updated \(Self.relativeTime(fromMilliseconds: updatedAtMs))"
+        guard let updatedAtMs = diary.updatedAtMs else {
+            return String(localized: "No update timestamp")
+        }
+        return String(
+            format: String(localized: "Updated %@"),
+            Self.relativeTime(fromMilliseconds: updatedAtMs))
     }
 
     @MainActor
@@ -544,23 +574,46 @@ struct AgentProDreamingDestination: View {
     }
 
     private static func dreamActionSummary(action: DreamAction, data: Data) -> String {
+        let actionTitle = String(localized: action.title)
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return "\(action.title) complete."
+            return String(format: String(localized: "%@ complete."), actionTitle)
         }
         let written = json["written"] as? Int
         let replaced = json["replaced"] as? Int
         let removed = json["removedEntries"] as? Int
         let changed = json["changed"] as? Bool
         let parts = [
-            written.map { "\($0) written" },
-            replaced.map { "\($0) replaced" },
-            removed.map { "\($0) removed" },
-            changed.map { $0 ? "artifacts repaired" : "no repair needed" },
+            written.map { count in
+                String(format: String(localized: "%@ written"), count.formatted())
+            },
+            replaced.map { count in
+                String(format: String(localized: "%@ replaced"), count.formatted())
+            },
+            removed.map { count in
+                String(format: String(localized: "%@ removed"), count.formatted())
+            },
+            changed.map {
+                $0
+                    ? String(localized: "artifacts repaired")
+                    : String(localized: "no repair needed")
+            },
         ].compactMap(\.self)
         if parts.isEmpty {
-            return "\(action.title) complete."
+            return String(format: String(localized: "%@ complete."), actionTitle)
         }
-        return "\(action.title): \(parts.joined(separator: ", "))."
+        return String(
+            format: String(localized: "%@: %@."),
+            actionTitle,
+            parts.formatted(.list(type: .and, width: .short)))
+    }
+
+    private static func dreamingPhaseTitle(_ id: String) -> String {
+        switch id {
+        case "light": String(localized: "Light")
+        case "deep": String(localized: "Deep")
+        case "rem": String(localized: "REM")
+        default: id
+        }
     }
 
     private func normalized(_ value: String?) -> String? {

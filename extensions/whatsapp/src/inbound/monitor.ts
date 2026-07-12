@@ -27,7 +27,7 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { maybeResolveWhatsAppApprovalReaction } from "../approval-reactions.js";
 import { readWebSelfIdentityForDecision, WhatsAppAuthUnstableError } from "../auth-store.js";
-import { getRegisteredWhatsAppConnectionController } from "../connection-controller-registry.js";
+import { getWhatsAppConnectionController } from "../connection-controller-runtime-context.js";
 import { getPrimaryIdentityId, identitiesOverlap, resolveComparableIdentity } from "../identity.js";
 import { addWhatsAppImagePreviewFields } from "../image-preview.js";
 import { cacheInboundMessageMeta } from "../quoted-message.js";
@@ -445,7 +445,7 @@ export async function attachWebInboxToSocket(
     if (!self.e164 && !self.jid && !self.lid) {
       return null;
     }
-    const successor = getRegisteredWhatsAppConnectionController(options.accountId);
+    const successor = getWhatsAppConnectionController(options.accountId);
     if (!successor) {
       return null;
     }

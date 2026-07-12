@@ -136,6 +136,18 @@ assert_plist_string() {
   fi
 }
 
+assert_plist_true() {
+  local plist="$1"
+  local key_path="$2"
+  local label="$3"
+  local actual
+  actual="$(plist_value "${plist}" "${key_path}")"
+  if [[ "${actual}" != "true" ]]; then
+    echo "Invalid IPA: ${label}; expected true, got ${actual:-missing}." >&2
+    exit 1
+  fi
+}
+
 assert_plist_key_absent() {
   local plist="$1"
   local key_path="$2"
@@ -214,6 +226,7 @@ assert_plist_string "${entitlements_plist}" "application-identifier" "${EXPECTED
 assert_plist_string "${entitlements_plist}" "com.apple.developer.team-identifier" "${EXPECTED_TEAM_ID}" "signed team identifier mismatch"
 assert_plist_string "${entitlements_plist}" "aps-environment" "production" "signed APNs entitlement mismatch"
 assert_plist_string "${entitlements_plist}" "com.apple.developer.devicecheck.appattest-environment" "production" "signed App Attest entitlement mismatch"
+assert_plist_true "${entitlements_plist}" "com.apple.developer.healthkit" "signed HealthKit entitlement mismatch"
 assert_plist_array_contains "${entitlements_plist}" "com.apple.security.application-groups" "${EXPECTED_APP_GROUP}" "signed App Group entitlement mismatch"
 
 if ! "${SECURITY_BIN}" cms -D -i "${embedded_profile}" >"${profile_plist}" 2>"${tmp_dir}/security.err"; then
@@ -227,6 +240,7 @@ assert_plist_array_contains "${profile_plist}" "TeamIdentifier" "${EXPECTED_TEAM
 assert_plist_string "${profile_plist}" "Entitlements:application-identifier" "${EXPECTED_TEAM_ID}.${EXPECTED_BUNDLE_ID}" "embedded profile application identifier mismatch"
 assert_plist_string "${profile_plist}" "Entitlements:aps-environment" "production" "embedded profile APNs entitlement mismatch"
 assert_plist_array_contains "${profile_plist}" "Entitlements:com.apple.developer.devicecheck.appattest-environment" "production" "embedded profile App Attest entitlement mismatch"
+assert_plist_true "${profile_plist}" "Entitlements:com.apple.developer.healthkit" "embedded profile HealthKit entitlement mismatch"
 assert_plist_array_contains "${profile_plist}" "Entitlements:com.apple.security.application-groups" "${EXPECTED_APP_GROUP}" "embedded profile App Group entitlement mismatch"
 
 echo "Validated iOS App Store IPA: ${IPA_PATH}"

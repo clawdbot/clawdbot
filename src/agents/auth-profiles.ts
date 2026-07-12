@@ -15,7 +15,6 @@ export {
   externalCliDiscoveryForConfigStatus,
   externalCliDiscoveryForProviderAuth,
   externalCliDiscoveryForProviders,
-  externalCliDiscoveryNone,
   externalCliDiscoveryScoped,
   type ExternalCliAuthDiscovery,
 } from "./auth-profiles/external-cli-discovery.js";

@@ -1240,13 +1240,17 @@ export function formatChannelProgressDraftText(params: {
   /** Short narration paragraph; when present it replaces the tool lines. */
   narration?: string;
 }): string {
-  const rawLabel = resolveChannelProgressDraftLabel({
-    entry: params.entry,
-    seed: params.seed,
-    random: params.random,
-  });
-  const resolvedLabel = rawLabel;
   const narration = params.narration ? compactChannelProgressDraftNarration(params.narration) : "";
+  const progress = resolveChannelProgressDraftConfig(params.entry);
+  const hasConfiguredLabel = progress.label !== undefined || progress.labels !== undefined;
+  const resolvedLabel =
+    narration && !hasConfiguredLabel
+      ? undefined
+      : resolveChannelProgressDraftLabel({
+          entry: params.entry,
+          seed: params.seed,
+          random: params.random,
+        });
   if (narration) {
     const formatted = (params.formatLine ?? ((line: string) => line))(narration);
     return resolvedLabel ? `${resolvedLabel}\n\n${formatted}` : formatted;

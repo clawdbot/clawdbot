@@ -426,7 +426,7 @@ struct RootTabsPresentationTests {
     @Test func `talk sidebar destination can receive reveal action`() {
         let action = OpenClawSidebarHeaderAction(
             systemName: "sidebar.left",
-            accessibilityLabel: "Show Sidebar",
+            accessibilityLabel: .verbatim("Show Sidebar"),
             action: {})
         let routed = TalkProTab(headerLeadingAction: action, openSettings: {})
         let embedded = TalkProTab(
@@ -435,7 +435,11 @@ struct RootTabsPresentationTests {
             openSettings: {})
 
         #expect(routed.headerLeadingAction?.systemName == "sidebar.left")
-        #expect(routed.headerLeadingAction?.accessibilityLabel == "Show Sidebar")
+        guard case let .verbatim(accessibilityLabel)? = routed.headerLeadingAction?.accessibilityLabel else {
+            Issue.record("expected routed sidebar action to preserve its verbatim accessibility label")
+            return
+        }
+        #expect(accessibilityLabel == "Show Sidebar")
         #expect(routed.ownsNavigationStack)
         #expect(!embedded.ownsNavigationStack)
     }
@@ -446,6 +450,15 @@ struct RootTabsPresentationTests {
 
         #expect(standalone.ownsNavigationStack)
         #expect(!embedded.ownsNavigationStack)
+    }
+
+    @Test func `localized QR status matcher accepts positional placeholders`() {
+        #expect(SettingsProTab.localizedFormat(
+            "qr loaded. connecting to %1$@:%2$@...",
+            matches: "qr loaded. connecting to gateway.local:18789..."))
+        #expect(!SettingsProTab.localizedFormat(
+            "qr loaded. connecting to %1$@:%2$@...",
+            matches: "qr loaded. connecting to gateway.local..."))
     }
 
     @Test func `settings sidebar route follows navigation top then direct base`() {

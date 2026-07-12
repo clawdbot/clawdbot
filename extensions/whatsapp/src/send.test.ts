@@ -28,13 +28,13 @@ const WHATSAPP_TEST_CFG: OpenClawConfig = {
   channels: { whatsapp: {} },
 };
 
-vi.mock("./connection-controller-registry.js", async () => {
-  const actual = await vi.importActual<typeof import("./connection-controller-registry.js")>(
-    "./connection-controller-registry.js",
+vi.mock("./connection-controller-runtime-context.js", async () => {
+  const actual = await vi.importActual<typeof import("./connection-controller-runtime-context.js")>(
+    "./connection-controller-runtime-context.js",
   );
   return {
     ...actual,
-    getRegisteredWhatsAppConnectionController: vi.fn((accountId: string) => {
+    getWhatsAppConnectionController: vi.fn((accountId: string) => {
       const listener = hoisted.controllerListeners.get(accountId) ?? null;
       return listener
         ? {

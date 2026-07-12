@@ -234,7 +234,14 @@ enum CommandResolver {
         #if DEBUG
         let root = projectRoot ?? self.projectRoot()
         let candidate = root.appendingPathComponent("node_modules/.bin").appendingPathComponent(self.helperName).path
-        return FileManager().isExecutableFile(atPath: candidate) ? candidate : nil
+        if FileManager().isExecutableFile(atPath: candidate) {
+            return candidate
+        }
+        // pnpm does not create a self-referential node_modules/.bin link for
+        // this package. Source builds still need the checkout CLI, not a stale
+        // globally installed binary with a different private command surface.
+        let sourceEntrypoint = root.appendingPathComponent("openclaw.mjs").path
+        return FileManager().isExecutableFile(atPath: sourceEntrypoint) ? sourceEntrypoint : nil
         #else
         return nil
         #endif

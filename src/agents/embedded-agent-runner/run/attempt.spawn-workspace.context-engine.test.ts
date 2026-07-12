@@ -1334,6 +1334,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       message: { role: "user", content: "orphaned ask", timestamp: 1 },
     });
     const seen: { modelMessages?: unknown[]; prompt?: string; messages?: unknown[] } = {};
+    const onUserMessagePersistenceInvalidated = vi.fn();
 
     const result = await createContextEngineAttemptRunner({
       contextEngine: createContextEngineBootstrapAndAssemble(),
@@ -1341,6 +1342,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       tempPaths,
       attemptOverrides: {
         prompt: "visible ask",
+        suppressNextUserMessagePersistence: true,
+        onUserMessagePersistenceInvalidated,
       },
       sessionPrompt: async (session, prompt) => {
         seen.prompt = prompt;
@@ -1371,6 +1374,10 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(JSON.stringify(seen.messages)).not.toContain("dynamic hook context");
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain("dynamic hook tail");
     expect(hoisted.sessionManager.branch).toHaveBeenCalledWith("parent-leaf");
+    expect(
+      hoisted.sessionManager.clearNextUserMessagePersistenceSuppression,
+    ).toHaveBeenCalledOnce();
+    expect(onUserMessagePersistenceInvalidated).toHaveBeenCalledOnce();
   });
 
   it("targets the latest active prompt after orphan repair reaches the embedded provider", async () => {

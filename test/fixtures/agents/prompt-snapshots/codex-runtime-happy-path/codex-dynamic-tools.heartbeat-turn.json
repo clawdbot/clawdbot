@@ -1330,7 +1330,7 @@
       },
       {
         "deferLoading": true,
-        "description": "Message visible session by sessionKey/label, or configured agent by agentId; sessionKey wins redundant label. Thread chats rejected: target parent channel. Missing configured-agent main created. Waits for reply when available.",
+        "description": "Message visible session by sessionKey/label, or configured agent by agentId; sessionKey wins redundant label. Thread chats rejected: target parent channel. Missing configured-agent main created. Waits for reply when available. watch:true: notice arrives when others later change target session.",
         "inputSchema": {
           "properties": {
             "agentId": {
@@ -1352,6 +1352,9 @@
             "timeoutSeconds": {
               "minimum": 0,
               "type": "integer"
+            },
+            "watch": {
+              "type": "boolean"
             }
           },
           "required": ["message"],

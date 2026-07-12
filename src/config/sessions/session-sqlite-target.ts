@@ -2,7 +2,7 @@ import path from "node:path";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
 
 /** SQLite database target resolved from a legacy session store path. */
-export type ResolvedSqliteStoreTarget = {
+type ResolvedSqliteStoreTarget = {
   agentId?: string;
   path?: string;
 };
@@ -72,7 +72,7 @@ export function resolveSqliteTargetFromSessionStorePath(
 }
 
 /** Extracts the agent id from the canonical per-agent SQLite database path. */
-export function resolveAgentIdFromSqliteDatabasePath(databasePath: string): string | undefined {
+function resolveAgentIdFromSqliteDatabasePath(databasePath: string): string | undefined {
   if (path.basename(databasePath) !== "openclaw-agent.sqlite") {
     return undefined;
   }

@@ -20,6 +20,7 @@ import {
   type ClawHubSkillSecurityVerdict,
   type ClawHubSearchResult,
   type ClawHubSkillDetail,
+  type SkillOperation,
   type SkillMessageMap,
 } from "../../lib/skills/index.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
@@ -59,7 +60,7 @@ type SkillsProps = {
   filter: string;
   statusFilter: SkillsStatusFilter;
   edits: Record<string, string>;
-  busyKey: string | null;
+  operation: SkillOperation;
   messages: SkillMessageMap;
   detailKey: string | null;
   detailTab: SkillDetailTab;
@@ -77,7 +78,6 @@ type SkillsProps = {
   clawhubDetailSlug: string | null;
   clawhubDetailLoading: boolean;
   clawhubDetailError: string | null;
-  clawhubInstallSlug: string | null;
   clawhubInstallMessage: {
     kind: "success" | "error";
     text: string;
@@ -186,6 +186,18 @@ function agentOptionLabel(agent: SkillsAgentOption, defaultId: string | undefine
   return agent.id === defaultId ? t("skillsPage.defaultAgent", { name: baseName }) : baseName;
 }
 
+function skillControlsLocked(props: SkillsProps): boolean {
+  return props.loading || props.operation !== null;
+}
+
+function activeSkillMutation(props: SkillsProps, skillKey: string): boolean {
+  return props.operation?.kind === "skill" && props.operation.skillKey === skillKey;
+}
+
+function activeClawHubMutation(props: SkillsProps, slug: string): boolean {
+  return props.operation?.kind === "clawhub" && props.operation.slug === slug;
+}
+
 export function renderSkills(props: SkillsProps) {
   const skills = props.report?.skills ?? [];
   const agents = props.agentsList?.agents ?? [];
@@ -236,7 +248,7 @@ export function renderSkills(props: SkillsProps) {
         </div>
         <button
           class="btn"
-          ?disabled=${props.loading || !props.connected}
+          ?disabled=${skillControlsLocked(props) || !props.connected}
           @click=${props.onRefresh}
         >
           ${props.loading ? t("common.loading") : t("common.refresh")}
@@ -267,7 +279,7 @@ export function renderSkills(props: SkillsProps) {
                 <select
                   name="skills-agent"
                   .value=${selectedAgentId}
-                  ?disabled=${props.loading || !props.connected || agents.length < 2}
+                  ?disabled=${skillControlsLocked(props) || !props.connected || agents.length < 2}
                   @change=${(e: Event) =>
                     props.onAgentChange((e.target as HTMLSelectElement).value)}
                 >
@@ -335,8 +347,7 @@ export function renderSkills(props: SkillsProps) {
                     type="button"
                     class="btn btn--sm"
                     style="margin-top: 10px; white-space: normal;"
-                    ?disabled=${props.clawhubInstallSlug ===
-                    props.clawhubInstallMessage.acknowledgeSlug}
+                    ?disabled=${skillControlsLocked(props)}
                     @click=${() =>
                       props.onClawHubInstall(
                         props.clawhubInstallMessage?.acknowledgeSlug ?? "",
@@ -420,13 +431,13 @@ function renderClawHubResults(props: SkillsProps) {
                 : nothing}
               <button
                 class="btn btn--sm"
-                ?disabled=${props.clawhubInstallSlug !== null}
+                ?disabled=${skillControlsLocked(props)}
                 @click=${(e: Event) => {
                   e.stopPropagation();
                   props.onClawHubInstall(r.slug);
                 }}
               >
-                ${props.clawhubInstallSlug === r.slug
+                ${activeClawHubMutation(props, r.slug)
                   ? t("skillsPage.installing")
                   : t("skillsPage.install")}
               </button>
@@ -504,14 +515,14 @@ function renderClawHubDetailDialog(props: SkillsProps) {
                       : nothing}
                     <button
                       class="btn primary"
-                      ?disabled=${props.clawhubInstallSlug !== null}
+                      ?disabled=${skillControlsLocked(props)}
                       @click=${() => {
                         if (props.clawhubDetailSlug) {
                           props.onClawHubInstall(props.clawhubDetailSlug);
                         }
                       }}
                     >
-                      ${props.clawhubInstallSlug === props.clawhubDetailSlug
+                      ${activeClawHubMutation(props, props.clawhubDetailSlug ?? "")
                         ? t("skillsPage.installing")
                         : t("skillsPage.installNamed", { name: detail.skill.displayName })}
                     </button>
@@ -524,7 +535,7 @@ function renderClawHubDetailDialog(props: SkillsProps) {
 }
 
 function renderSkill(skill: SkillStatusEntry, props: SkillsProps) {
-  const busy = props.busyKey === skill.skillKey;
+  const locked = skillControlsLocked(props);
   const dotClass = skillStatusClass(skill);
   const verdict = verdictForSkill(skill, props.clawhubVerdicts);
 
@@ -552,7 +563,7 @@ function renderSkill(skill: SkillStatusEntry, props: SkillsProps) {
             type="checkbox"
             class="skill-toggle"
             .checked=${!skill.disabled}
-            ?disabled=${busy}
+            ?disabled=${locked}
             @change=${(e: Event) => {
               e.stopPropagation();
               props.onToggle(skill.skillKey, skill.disabled);
@@ -565,8 +576,9 @@ function renderSkill(skill: SkillStatusEntry, props: SkillsProps) {
 }
 
 function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
-  const busy = props.busyKey === skill.skillKey;
-  const apiKey = props.edits[skill.skillKey] ?? "";
+  const locked = skillControlsLocked(props);
+  const active = activeSkillMutation(props, skill.skillKey);
+  const editValue = props.edits[skill.skillKey] ?? "";
   const message = props.messages[skill.skillKey] ?? null;
   const installOption = skill.install[0];
   const canInstall = installOption !== undefined && skill.missing.bins.length > 0;
@@ -666,7 +678,7 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
                 type="checkbox"
                 class="skill-toggle"
                 .checked=${!skill.disabled}
-                ?disabled=${busy}
+                ?disabled=${locked}
                 @change=${() => props.onToggle(skill.skillKey, skill.disabled)}
               />
             </label>
@@ -676,11 +688,11 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
             ${canInstall
               ? html`<button
                   class="btn"
-                  ?disabled=${busy}
+                  ?disabled=${locked}
                   @click=${() =>
                     installOption && props.onInstall(skill.skillKey, skill.name, installOption.id)}
                 >
-                  ${busy ? t("skillsPage.installing") : installOption?.label}
+                  ${active ? t("skillsPage.installing") : installOption?.label}
                 </button>`
               : nothing}
           </div>
@@ -702,7 +714,8 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
                     >
                     <input
                       type="password"
-                      .value=${apiKey}
+                      ?disabled=${locked}
+                      .value=${editValue}
                       @input=${(e: Event) =>
                         props.onEdit(skill.skillKey, (e.target as HTMLInputElement).value)}
                     />
@@ -720,7 +733,7 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
                   })()}
                   <button
                     class="btn primary"
-                    ?disabled=${busy}
+                    ?disabled=${locked}
                     @click=${() => props.onSaveKey(skill.skillKey)}
                   >
                     ${t("skillsPage.saveKey")}

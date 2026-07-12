@@ -33,6 +33,7 @@ type DraftBranches = {
 type DraftNode = {
   nodeId: string;
   displayName: string;
+  connected: boolean;
   canExec: boolean;
   canBrowse: boolean;
 };
@@ -303,6 +304,7 @@ class NewSessionPage extends OpenClawLightDomElement {
             {
               nodeId,
               displayName: normalizeOptionalString(node.displayName) ?? nodeId,
+              connected,
               canExec,
               canBrowse: canExec && commands.includes("fs.listDir"),
             },
@@ -505,6 +507,14 @@ class NewSessionPage extends OpenClawLightDomElement {
     return this.isAdmin();
   }
 
+  /** Grayed-out device rows must say why: offline vs. node lacks browse support. */
+  private nodeBrowseBlockedReason(node: DraftNode): string | undefined {
+    if (node.canBrowse) {
+      return undefined;
+    }
+    return node.connected ? t("newSession.nodeCannotBrowse") : t("newSession.nodeOffline");
+  }
+
   private closeBrowser() {
     this.browserRequestToken += 1;
     // Reset state before collapsing the <details> so its toggle handler sees
@@ -692,6 +702,7 @@ class NewSessionPage extends OpenClawLightDomElement {
                       type="button"
                       class="new-session-page__browser-entry"
                       ?disabled=${!node.canBrowse}
+                      title=${this.nodeBrowseBlockedReason(node) ?? nothing}
                       @click=${() =>
                         this.selectBrowserTarget({
                           nodeId: node.nodeId,
@@ -720,6 +731,7 @@ class NewSessionPage extends OpenClawLightDomElement {
                     class="new-session-page__browser-entry ${entry.hidden
                       ? "new-session-page__browser-entry--hidden"
                       : ""}"
+                    title=${entry.hidden ? t("newSession.hiddenFolder") : nothing}
                     @click=${() => this.loadBrowser(entry.path)}
                   >
                     <span class="new-session-page__target-icon" aria-hidden="true"
@@ -969,7 +981,7 @@ class NewSessionPage extends OpenClawLightDomElement {
           class="new-session-page__trigger ${browseAvailable
             ? ""
             : "new-session-page__trigger--disabled"}"
-          title=${browseAvailable ? t("newSession.browse") : t("newSession.folder")}
+          title=${browseAvailable ? t("newSession.browse") : t("newSession.browseRequiresAdmin")}
           aria-disabled=${String(!browseAvailable)}
           @click=${(event: Event) => {
             if (!browseAvailable) {

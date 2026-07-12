@@ -1,0 +1,29 @@
+"CFBundleDisplayName" = "$(OPENCLAW_APP_DISPLAY_NAME)";
+/* OpenClaw source: "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access." */
+"NSCalendarsFullAccessUsageDescription" = "OpenClaw usa i tuoi calendari per mostrare eventi e contesto di pianificazione quando abiliti l'accesso al calendario.";
+/* OpenClaw source: "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access." */
+"NSCalendarsUsageDescription" = "OpenClaw usa i tuoi calendari per mostrare eventi e contesto di pianificazione quando abiliti l'accesso al calendario.";
+/* OpenClaw source: "OpenClaw uses your calendars to add events when you enable calendar access." */
+"NSCalendarsWriteOnlyAccessUsageDescription" = "OpenClaw usa i tuoi calendari per aggiungere eventi quando abiliti l'accesso al calendario.";
+/* OpenClaw source: "OpenClaw uses the camera when you scan a Gateway setup QR code or ask your paired Gateway or assistant to capture a photo or short video from this iPhone, for example to connect to your Gateway or show your assistant a document, device screen, or workspace." */
+"NSCameraUsageDescription" = "OpenClaw usa la fotocamera quando scansioni un codice QR di configurazione del Gateway o chiedi al Gateway associato o all'assistente di acquisire una foto o un breve video da questo iPhone, ad esempio per connetterti al Gateway o mostrare all'assistente un documento, lo schermo di un dispositivo o uno spazio di lavoro.";
+/* OpenClaw source: "OpenClaw uses your contacts so you can search and reference people while using the assistant." */
+"NSContactsUsageDescription" = "OpenClaw usa i tuoi contatti per permetterti di cercare e fare riferimento alle persone mentre usi l'assistente.";
+/* OpenClaw source: "OpenClaw discovers and connects to your OpenClaw gateway on the local network." */
+"NSLocalNetworkUsageDescription" = "OpenClaw rileva e si connette al tuo gateway OpenClaw sulla rete locale.";
+/* OpenClaw source: "OpenClaw can share your location in the background when you enable Always." */
+"NSLocationAlwaysAndWhenInUseUsageDescription" = "OpenClaw può condividere la tua posizione in background quando abiliti Sempre.";
+/* OpenClaw source: "OpenClaw uses your location when you allow location sharing." */
+"NSLocationWhenInUseUsageDescription" = "OpenClaw usa la tua posizione quando consenti la condivisione della posizione.";
+/* OpenClaw source: "OpenClaw uses the microphone for realtime chat, voice wake, push-to-talk, and voice notes." */
+"NSMicrophoneUsageDescription" = "OpenClaw usa il microfono per chat in tempo reale, attivazione vocale, push-to-talk e note vocali.";
+/* OpenClaw source: "OpenClaw may use motion data to support device-aware interactions and automations." */
+"NSMotionUsageDescription" = "OpenClaw può usare i dati di movimento per supportare interazioni e automazioni consapevoli del dispositivo.";
+/* OpenClaw source: "After you enable Health Summaries, OpenClaw reads steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider." */
+"NSHealthShareUsageDescription" = "Dopo aver abilitato i riepiloghi salute, OpenClaw legge passi, sonno, frequenza cardiaca a riposo e allenamenti per condividere i dati aggregati richiesti con il provider IA configurato.";
+/* OpenClaw source: "OpenClaw lets your assistant read photos you allow and lets you choose photos to share." */
+"NSPhotoLibraryUsageDescription" = "OpenClaw consente al tuo assistente di leggere le foto che autorizzi e ti permette di scegliere le foto da condividere.";
+/* OpenClaw source: "OpenClaw uses your reminders to list, add, and complete tasks when you enable reminders access." */
+"NSRemindersFullAccessUsageDescription" = "OpenClaw usa i tuoi promemoria per elencare, aggiungere e completare attività quando abiliti l’accesso ai promemoria.";
+/* OpenClaw source: "OpenClaw uses on-device speech recognition for talk mode and voice wake." */
+"NSSpeechRecognitionUsageDescription" = "OpenClaw usa il riconoscimento vocale sul dispositivo per la modalità conversazione e l’attivazione vocale.";

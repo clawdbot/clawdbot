@@ -155,18 +155,6 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
         | TestReplyPayload
         | TestReplyPayload[]
         | undefined;
-      const contextReplyToId =
-        typeof (params.ctx as { ReplyToId?: unknown }).ReplyToId === "string"
-          ? (params.ctx as { ReplyToId: string }).ReplyToId
-          : undefined;
-      const replyThreading = (params.ctx as { ReplyThreading?: unknown }).ReplyThreading;
-      const implicitCurrentMessage =
-        typeof replyThreading === "object" &&
-        replyThreading !== null &&
-        "implicitCurrentMessage" in replyThreading
-          ? (replyThreading as { implicitCurrentMessage?: unknown }).implicitCurrentMessage
-          : undefined;
-      const allowImplicitCurrentMessage = implicitCurrentMessage !== "deny";
       const resolvedPayloads = Array.isArray(resolved)
         ? resolved
         : Array.isArray((resolved as { replies?: unknown })?.replies)
@@ -176,20 +164,13 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
             : [];
       let queuedFinal = false;
       for (const resolvedPayload of resolvedPayloads) {
-        const shouldResolveCurrentMessage =
-          resolvedPayload.replyToCurrent === true ||
-          (resolvedPayload.replyToCurrent !== false && allowImplicitCurrentMessage);
-        const deliverable =
-          !resolvedPayload.replyToId && shouldResolveCurrentMessage && contextReplyToId
-            ? { ...resolvedPayload, replyToId: contextReplyToId }
-            : resolvedPayload;
         const text = typeof resolvedPayload.text === "string" ? resolvedPayload.text.trim() : "";
         const hasMedia =
           typeof resolvedPayload.mediaUrl === "string" ||
           (Array.isArray(resolvedPayload.mediaUrls) && resolvedPayload.mediaUrls.length > 0);
         if (text || hasMedia) {
           queuedFinal = true;
-          params.dispatcher.sendFinalReply(deliverable);
+          params.dispatcher.sendFinalReply(resolvedPayload);
         }
       }
       params.dispatcher.markComplete?.();

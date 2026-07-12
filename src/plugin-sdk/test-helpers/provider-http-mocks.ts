@@ -30,7 +30,7 @@ type ResolveProviderHttpRequestConfigResult = {
   baseUrl: string;
   allowPrivateNetwork: boolean;
   headers: Headers;
-  dispatcherPolicy: undefined;
+  dispatcherPolicy: ReturnType<typeof resolveProviderHttpRequestConfig>["dispatcherPolicy"];
 };
 
 type AnyMock = Mock<(...args: unknown[]) => unknown>;

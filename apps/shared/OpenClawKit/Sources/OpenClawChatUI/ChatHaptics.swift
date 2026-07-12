@@ -9,7 +9,6 @@ public struct OpenClawChatHaptics: Sendable {
         case messageSent
         case runCompleted
         case runFailed
-        case actionConfirmed
     }
 
     private let performer: @Sendable (Event) -> Void
@@ -36,8 +35,6 @@ public struct OpenClawChatHaptics: Sendable {
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
             case .runFailed:
                 UINotificationFeedbackGenerator().notificationOccurred(.error)
-            case .actionConfirmed:
-                UISelectionFeedbackGenerator().selectionChanged()
             }
         }
         #else

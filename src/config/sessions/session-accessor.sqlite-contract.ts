@@ -1,4 +1,3 @@
-import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
@@ -15,7 +14,7 @@ import type {
   SessionLifecycleArtifactCleanupResult,
   SessionLifecycleStoreTarget,
 } from "./store.js";
-import type { SessionCompactionCheckpoint, SessionEntry } from "./types.js";
+import type { SessionEntry } from "./types.js";
 
 export type SessionAccessScope = {
   agentId?: string;
@@ -34,7 +33,7 @@ export type SessionTranscriptAccessScope = Omit<SessionAccessScope, "sessionKey"
   threadId?: string | number;
 };
 
-export type SessionTranscriptRuntimeScope = SessionAccessScope & {
+type SessionTranscriptRuntimeScope = SessionAccessScope & {
   sessionFile?: string;
   sessionId: string;
   threadId?: string | number;
@@ -100,11 +99,6 @@ export type LatestTranscriptAssistantMessage = {
   message: unknown;
 };
 
-export type LatestTranscriptMessage = {
-  id?: string;
-  message: unknown;
-};
-
 export type SessionTranscriptTurnMessageAppend = TranscriptMessageAppendOptions<unknown> & {
   shouldAppend?: (context: SessionTranscriptTurnWriteContext) => Promise<boolean> | boolean;
 };
@@ -115,12 +109,6 @@ export type SessionTranscriptTurnWriteContext = {
   sessionId?: string;
   sessionKey?: string;
   storePath?: string;
-};
-
-export type SessionEntryUpdateOptions = {
-  skipMaintenance?: boolean;
-  takeCacheOwnership?: boolean;
-  requireWriteSuccess?: boolean;
 };
 
 export type SessionEntryPatchOptions = {
@@ -148,7 +136,7 @@ export type SessionEntryReplacementSnapshot = {
   sessionKey: string;
 };
 
-export type SessionEntryReplacement = {
+type SessionEntryReplacement = {
   entry: SessionEntry;
   sessionKey: string;
 };
@@ -172,7 +160,7 @@ export type SessionParentForkDecision =
       message: string;
     };
 
-export type ParentForkedSessionTranscript = {
+type ParentForkedSessionTranscript = {
   sessionFile: string;
   sessionId: string;
 };
@@ -239,18 +227,6 @@ export type ForkSessionEntryFromParentTargetParams = {
   storePath: string;
 };
 
-export type SqliteCompactionCheckpointSessionMutationResult =
-  | {
-      status: "created";
-      key: string;
-      checkpoint: SessionCompactionCheckpoint;
-      entry: SessionEntry;
-    }
-  | { status: "missing-session" }
-  | { status: "missing-checkpoint" }
-  | { status: "missing-boundary" }
-  | { status: "failed" };
-
 export type ResetSessionEntryLifecycleParams = {
   afterEntryMutation?: (mutation: ResetSessionEntryLifecycleMutation) => Promise<void> | void;
   agentId?: string;
@@ -284,63 +260,3 @@ export type {
   SessionLifecycleArtifactCleanupParams,
   SessionLifecycleArtifactCleanupResult,
 };
-
-export type SessionTranscriptRuntimeTarget = {
-  agentId: string;
-  sessionFile: string;
-  sessionId: string;
-  sessionKey: string;
-};
-
-export type SessionTranscriptTurnPersistOptions = {
-  config?: OpenClawConfig;
-  cwd?: string;
-  expectedLifecycleRevision?: string;
-  expectedSessionId?: string;
-  messages: readonly SessionTranscriptTurnMessageAppend[];
-  updateMode?: "inline" | "file-only" | "none";
-  publishWhen?: "always" | "when-appended";
-  touchSessionEntry?: boolean;
-};
-
-export type SessionTranscriptTurnPersistResult = {
-  appendedCount: number;
-  messages: TranscriptMessageAppendResult<unknown>[];
-  rejectedReason?: "session-rebound";
-  sessionEntry: SessionEntry | undefined;
-  sessionFile: string;
-};
-
-export type SessionTranscriptWriteLockAccessorContext = {
-  appendMessage: <TMessage>(
-    options: TranscriptMessageAppendOptions<TMessage>,
-  ) => Promise<TranscriptMessageAppendResult<TMessage> | undefined>;
-  readEvents: () => Promise<TranscriptEvent[]>;
-  replaceEvents: (events: readonly TranscriptEvent[]) => Promise<void>;
-};
-
-export type SessionTranscriptTurnUpdateMode = "inline" | "file-only" | "none";
-
-export type SessionEntryCreateWithTranscriptContext = {
-  existingEntry?: SessionEntry;
-  sessionEntries: Record<string, SessionEntry>;
-};
-
-export type SessionEntryCreateWithTranscriptResult<TError = string> =
-  | { ok: true; entry: SessionEntry; sessionFile: string }
-  | { ok: false; error: TError; phase: "entry" }
-  | { ok: false; error: string; phase: "transcript" };
-
-export type SessionEntryCreateWithTranscriptPrepareResult<TError = string> =
-  | { ok: true; entry: SessionEntry }
-  | { ok: false; error: TError };
-
-export type AppendSqliteExpectedSessionTranscriptTurnParams = SessionTranscriptWriteScope & {
-  expectedSessionId?: string;
-  messages: readonly SessionTranscriptTurnMessageAppend[];
-  updateMode?: SessionTranscriptTurnUpdateMode;
-  publishWhen?: "always" | "when-appended";
-  touchSessionEntry?: boolean;
-};
-
-export type AgentTranscriptMessage = AgentMessage;

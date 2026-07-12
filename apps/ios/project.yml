@@ -84,6 +84,7 @@ targets:
         product: SwabbleKit
       - package: WebRTC
       - sdk: AppIntents.framework
+      - sdk: HealthKit.framework
     preBuildScripts:
       - name: SwiftFormat (lint)
         basedOnDependencyAnalysis: false
@@ -180,6 +181,7 @@ targets:
         NSLocationAlwaysAndWhenInUseUsageDescription: OpenClaw can share your location in the background when you enable Always.
         NSMicrophoneUsageDescription: OpenClaw uses the microphone for realtime chat, voice wake, push-to-talk, and voice notes.
         NSMotionUsageDescription: OpenClaw may use motion data to support device-aware interactions and automations.
+        NSHealthShareUsageDescription: After you enable Health Summaries, OpenClaw reads steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.
         NSPhotoLibraryUsageDescription: OpenClaw lets your assistant read photos you allow and lets you choose photos to share.
         PHPhotoLibraryPreventAutomaticLimitedAccessAlert: true
         NSRemindersFullAccessUsageDescription: OpenClaw uses your reminders to list, add, and complete tasks when you enable reminders access.
@@ -421,6 +423,10 @@ targets:
         group: ShareExtension
       - path: WatchApp/Sources/WatchVoiceTurnTracker.swift
         group: WatchApp/Sources
+      - path: WatchApp/Sources/WatchInboxMessages.swift
+        group: WatchApp/Sources
+      - path: Sources/Services/ExactOpaqueIdentifier.swift
+        group: Sources/Services
     dependencies:
       - package: OpenClawKit
     settings:

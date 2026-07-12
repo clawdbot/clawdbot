@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
@@ -14,6 +15,7 @@ import {
   moveToTrash,
   normalizeGatewayTokenInput,
   openUrl,
+  printWizardHeader,
   probeGatewayConfiguredModel,
   probeGatewayReachable,
   resolveBrowserOpenCommand,
@@ -29,6 +31,41 @@ import {
 describe("onboard error summaries", () => {
   it("keeps the bounded first line UTF-16 well-formed", () => {
     expect(testing.summarizeError(`${"x".repeat(118)}🚀tail\nignored`)).toBe(`${"x".repeat(118)}…`);
+  });
+});
+
+describe("printWizardHeader", () => {
+  const withColumns = async (columns: number | undefined, run: () => Promise<void>) => {
+    const previous = Object.getOwnPropertyDescriptor(process.stdout, "columns");
+    Object.defineProperty(process.stdout, "columns", { value: columns, configurable: true });
+    try {
+      await run();
+    } finally {
+      if (previous) {
+        Object.defineProperty(process.stdout, "columns", previous);
+      } else {
+        delete (process.stdout as { columns?: number }).columns;
+      }
+    }
+  };
+
+  it("prints the mascot beside the wordmark with claws above the text line", async () => {
+    const log = vi.fn();
+    await withColumns(120, () => printWizardHeader({ log } as unknown as RuntimeEnv));
+    const output = stripAnsi(String(log.mock.calls[0]?.[0]));
+    const rows = output.split("\n");
+    // Claw row stands alone above the wordmark; the eye row shares a line with it.
+    expect(rows[0]).toBe("▄███▄     ▄███▄");
+    expect(rows[2]).toContain("█▀▀▀█ █▀▀▀█ █▀▀▀▀ █▄  █ █▀▀▀▀ █     █▀▀▀█ █   █");
+    expect(rows[3]).toContain("██ █ ██");
+  });
+
+  it("falls back to the plain title on narrow terminals", async () => {
+    const log = vi.fn();
+    await withColumns(50, () => printWizardHeader({ log } as unknown as RuntimeEnv));
+    const output = String(log.mock.calls[0]?.[0]);
+    expect(output).toContain("OPENCLAW");
+    expect(output).not.toContain("█");
   });
 });
 

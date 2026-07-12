@@ -1110,13 +1110,17 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
-  qa_lab_runtime_parity_release_checks:
-    name: Run QA Lab runtime parity lane
+  qa_lab_runtime_parity_tier_release_checks:
+    name: Run QA Lab runtime parity tier (${{ matrix.tier }})
     needs: [resolve_target]
     if: contains(fromJSON('["all","qa","qa-parity"]'), needs.resolve_target.outputs.rerun_group)
     continue-on-error: true
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        tier: ${{ fromJSON(needs.resolve_target.outputs.run_release_soak == 'true' && '["agentic","standard","soak"]' || '["agentic","standard"]') }}
     permissions:
       contents: read
     env:
@@ -1149,76 +1153,52 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=8192
         run: node scripts/build-all.mjs qaRuntime
 
-      - name: Run runtime parity lane
+      - name: Run runtime parity tier
         id: runtime_parity_lane
+        env:
+          RUNTIME_PARITY_TIER: ${{ matrix.tier }}
         run: |
           set -euo pipefail
+
+          case "$RUNTIME_PARITY_TIER" in
+            agentic)
+              tier_args=(--parity-pack agentic)
+              output_dir="runtime-parity"
+              ;;
+            standard|soak)
+              tier_args=(--runtime-parity-tier "$RUNTIME_PARITY_TIER")
+              output_dir="runtime-parity-${RUNTIME_PARITY_TIER}"
+              ;;
+            *)
+              echo "Unknown runtime parity tier: $RUNTIME_PARITY_TIER" >&2
+              exit 1
+              ;;
+          esac
+
           pnpm openclaw qa suite \
             --provider-mode mock-openai \
-            --parity-pack agentic \
+            "${tier_args[@]}" \
             --concurrency "${QA_PARITY_CONCURRENCY}" \
             --model "${OPENCLAW_CI_OPENAI_MODEL}" \
             --alt-model "openai/gpt-5.6-luna-alt" \
             --runtime-pair openclaw,codex \
-            --output-dir ".artifacts/qa-e2e/runtime-parity"
+            --output-dir ".artifacts/qa-e2e/${output_dir}"
 
-      - name: Run standard runtime parity tier
-        id: runtime_parity_standard_lane
-        if: ${{ always() && steps.runtime_parity_lane.outcome != 'skipped' && steps.runtime_parity_lane.outcome != 'cancelled' }}
-        run: |
-          set -euo pipefail
-          pnpm openclaw qa suite \
-            --provider-mode mock-openai \
-            --runtime-parity-tier standard \
-            --concurrency "${QA_PARITY_CONCURRENCY}" \
-            --model "${OPENCLAW_CI_OPENAI_MODEL}" \
-            --alt-model "openai/gpt-5.6-luna-alt" \
-            --runtime-pair openclaw,codex \
-            --output-dir ".artifacts/qa-e2e/runtime-parity-standard"
-
-      - name: Run soak runtime parity tier
-        id: runtime_parity_soak_lane
-        if: ${{ always() && needs.resolve_target.outputs.run_release_soak == 'true' && steps.runtime_parity_lane.outcome != 'skipped' && steps.runtime_parity_lane.outcome != 'cancelled' }}
-        run: |
-          set -euo pipefail
-          pnpm openclaw qa suite \
-            --provider-mode mock-openai \
-            --runtime-parity-tier soak \
-            --concurrency "${QA_PARITY_CONCURRENCY}" \
-            --model "${OPENCLAW_CI_OPENAI_MODEL}" \
-            --alt-model "openai/gpt-5.6-luna-alt" \
-            --runtime-pair openclaw,codex \
-            --output-dir ".artifacts/qa-e2e/runtime-parity-soak"
-
-      - name: Generate runtime parity report
+      - name: Generate runtime parity tier report
         id: generate_runtime_parity_report
         if: always()
+        env:
+          RUNTIME_PARITY_TIER: ${{ matrix.tier }}
         run: |
           set -euo pipefail
-          pnpm openclaw qa parity-report \
-            --repo-root . \
-            --runtime-axis \
-            --summary .artifacts/qa-e2e/runtime-parity/qa-suite-summary.json \
-            --output-dir .artifacts/qa-e2e/runtime-parity-report
 
-      - name: Generate standard runtime parity report
-        id: generate_runtime_parity_standard_report
-        if: always()
-        run: |
-          set -euo pipefail
-          pnpm openclaw qa parity-report \
-            --repo-root . \
-            --runtime-axis \
-            --summary .artifacts/qa-e2e/runtime-parity-standard/qa-suite-summary.json \
-            --output-dir .artifacts/qa-e2e/runtime-parity-standard-report
-
-      - name: Generate soak runtime parity report
-        id: generate_runtime_parity_soak_report
-        if: ${{ always() && needs.resolve_target.outputs.run_release_soak == 'true' && steps.runtime_parity_soak_lane.outcome != 'skipped' && steps.runtime_parity_soak_lane.outcome != 'cancelled' }}
-        run: |
-          set -euo pipefail
-          summary=".artifacts/qa-e2e/runtime-parity-soak/qa-suite-summary.json"
-          if [[ ! -f "$summary" ]]; then
+          if [[ "$RUNTIME_PARITY_TIER" == "agentic" ]]; then
+            output_dir="runtime-parity"
+          else
+            output_dir="runtime-parity-${RUNTIME_PARITY_TIER}"
+          fi
+          summary=".artifacts/qa-e2e/${output_dir}/qa-suite-summary.json"
+          if [[ "$RUNTIME_PARITY_TIER" == "soak" && ! -f "$summary" ]]; then
             echo "No soak runtime parity summary was produced."
             exit 0
           fi
@@ -1226,7 +1206,113 @@ jobs:
             --repo-root . \
             --runtime-axis \
             --summary "$summary" \
-            --output-dir .artifacts/qa-e2e/runtime-parity-soak-report
+            --output-dir ".artifacts/qa-e2e/${output_dir}-report"
+
+      - name: Upload runtime parity tier artifacts
+        id: upload_runtime_parity_artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-qa-runtime-parity-tier-${{ matrix.tier }}-${{ needs.resolve_target.outputs.revision }}
+          path: .artifacts/qa-e2e/
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Record runtime parity tier status
+        if: always()
+        shell: bash
+        env:
+          RELEASE_CHECK_JOB: qa_lab_runtime_parity_tier_release_checks
+          RELEASE_CHECK_VARIANT: ${{ matrix.tier }}
+          RELEASE_CHECK_TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
+          JOB_STATUS: ${{ job.status }}
+          RELEASE_CHECK_STEP_OUTCOMES: ${{ steps.runtime_parity_lane.outcome }} ${{ steps.generate_runtime_parity_report.outcome }} ${{ steps.upload_runtime_parity_artifacts.outcome }}
+        run: *record_release_check_advisory_status
+
+      - name: Upload runtime parity tier status
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-internal-status-qa-runtime-parity-tier-${{ matrix.tier }}-${{ needs.resolve_target.outputs.revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/release-check-status/qa_lab_runtime_parity_tier_release_checks-${{ matrix.tier }}-${{ github.run_id }}-${{ github.run_attempt }}.env
+          retention-days: 14
+          if-no-files-found: error
+
+  qa_lab_runtime_parity_release_checks:
+    name: Run QA Lab runtime parity lane
+    needs: [resolve_target, qa_lab_runtime_parity_tier_release_checks]
+    if: always() && contains(fromJSON('["all","qa","qa-parity"]'), needs.resolve_target.outputs.rerun_group)
+    continue-on-error: true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+    steps:
+      - name: Download runtime parity tier artifacts
+        id: download_runtime_parity_artifacts
+        if: always()
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: release-qa-runtime-parity-tier-*-${{ needs.resolve_target.outputs.revision }}
+          path: .artifacts/qa-e2e/
+          merge-multiple: true
+
+      - name: Download runtime parity tier statuses
+        id: download_runtime_parity_statuses
+        if: always()
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: release-internal-status-qa-runtime-parity-tier-*-${{ needs.resolve_target.outputs.revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/release-check-status/
+          merge-multiple: true
+
+      - name: Verify runtime parity tier statuses
+        id: verify_runtime_parity_statuses
+        if: always()
+        shell: bash
+        env:
+          RELEASE_CHECK_TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
+          RUN_RELEASE_SOAK: ${{ needs.resolve_target.outputs.run_release_soak }}
+        run: |
+          set -euo pipefail
+          tiers=(agentic standard)
+          if [[ "$RUN_RELEASE_SOAK" == "true" ]]; then
+            tiers+=(soak)
+          fi
+          status_field() {
+            local file="$1"
+            local key="$2"
+            awk -v key="$key" '
+              index($0, key "=") == 1 {
+                count += 1
+                value = substr($0, length(key) + 2)
+              }
+              END {
+                if (count != 1) {
+                  exit 1
+                }
+                print value
+              }
+            ' "$file"
+          }
+          for tier in "${tiers[@]}"; do
+            status_path=".artifacts/release-check-status/qa_lab_runtime_parity_tier_release_checks-${tier}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.env"
+            run_id="$(status_field "$status_path" run_id)"
+            run_attempt="$(status_field "$status_path" run_attempt)"
+            target_sha="$(status_field "$status_path" target_sha)"
+            job_name="$(status_field "$status_path" job)"
+            variant="$(status_field "$status_path" variant)"
+            status="$(status_field "$status_path" status)"
+            if [[ "$run_id" != "$GITHUB_RUN_ID" ||
+                  "$run_attempt" != "$GITHUB_RUN_ATTEMPT" ||
+                  "$target_sha" != "$RELEASE_CHECK_TARGET_SHA" ||
+                  "$job_name" != "qa_lab_runtime_parity_tier_release_checks" ||
+                  "$variant" != "$tier" ||
+                  "$status" != "success" ]]; then
+              echo "Runtime parity tier ${tier} did not produce matching successful evidence." >&2
+              exit 1
+            fi
+          done
 
       - name: Upload runtime parity artifacts
         id: upload_runtime_parity_artifacts
@@ -1245,7 +1331,7 @@ jobs:
           RELEASE_CHECK_JOB: qa_lab_runtime_parity_release_checks
           RELEASE_CHECK_TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
           JOB_STATUS: ${{ job.status }}
-          RELEASE_CHECK_STEP_OUTCOMES: ${{ steps.runtime_parity_lane.outcome }} ${{ steps.runtime_parity_standard_lane.outcome }} ${{ steps.runtime_parity_soak_lane.outcome }} ${{ steps.generate_runtime_parity_report.outcome }} ${{ steps.generate_runtime_parity_standard_report.outcome }} ${{ steps.generate_runtime_parity_soak_report.outcome }} ${{ steps.upload_runtime_parity_artifacts.outcome }}
+          RELEASE_CHECK_STEP_OUTCOMES: ${{ steps.download_runtime_parity_artifacts.outcome }} ${{ steps.download_runtime_parity_statuses.outcome }} ${{ steps.verify_runtime_parity_statuses.outcome }} ${{ steps.upload_runtime_parity_artifacts.outcome }}
         run: *record_release_check_advisory_status
 
       - name: Upload advisory status

@@ -268,7 +268,7 @@ function resolveNativeOpenAIImageSizesForModel(model: string): readonly string[]
 function resolveConfiguredOpenAIImageBaseUrl(cfg: OpenClawConfig | undefined, model: string) {
   const modelId = model.trim().replace(/^openai\//u, "");
   const modelBaseUrl = cfg?.models?.providers?.openai?.models
-    .find((candidate) => candidate.id.trim().replace(/^openai\//u, "") === modelId)
+    ?.find((candidate) => candidate.id.trim().replace(/^openai\//u, "") === modelId)
     ?.baseUrl?.trim();
   return modelBaseUrl || resolveConfiguredOpenAIBaseUrl(cfg);
 }

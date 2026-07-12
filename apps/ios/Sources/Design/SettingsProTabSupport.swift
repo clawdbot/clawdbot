@@ -27,17 +27,17 @@ enum SettingsLayout {
 /// detail row on this view so row typography cannot drift between sections;
 /// plain `LabeledContent(String, value:)` renders unbranded system fonts.
 struct SettingsDetailRow: View {
-    let label: String
-    let value: String
+    let label: LocalizedStringKey
+    let value: OpenClawTextValue
 
-    init(_ label: String, value: String) {
+    init(_ label: LocalizedStringKey, value: OpenClawTextValue) {
         self.label = label
         self.value = value
     }
 
     var body: some View {
         LabeledContent {
-            Text(self.value)
+            self.value.text
                 .font(OpenClawType.subhead)
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -176,15 +176,33 @@ struct SettingsBuildMetadataStrip: View {
         let timestamp = self.metadata.buildTimestamp
         let built = self.metadata.localizedBuildDate() ?? timestamp
         if let commit, let timestamp, let built {
-            return Text("Version \(version), commit \(commit), built \(built), timestamp \(timestamp)")
+            return Text(verbatim: String(
+                format: String(
+                    localized: "Version %1$@, commit %2$@, built %3$@, timestamp %4$@"),
+                version,
+                commit,
+                built,
+                timestamp))
         }
         if let commit {
-            return Text("Version \(version), commit \(commit), build date unavailable")
+            return Text(verbatim: String(
+                format: String(
+                    localized: "Version %1$@, commit %2$@, build date unavailable"),
+                version,
+                commit))
         }
         if let timestamp, let built {
-            return Text("Version \(version), commit unavailable, built \(built), timestamp \(timestamp)")
+            return Text(verbatim: String(
+                format: String(
+                    localized: "Version %1$@, commit unavailable, built %2$@, timestamp %3$@"),
+                version,
+                built,
+                timestamp))
         }
-        return Text("Version \(version), commit unavailable, build date unavailable")
+        return Text(verbatim: String(
+            format: String(
+                localized: "Version %@, commit unavailable, build date unavailable"),
+            version))
     }
 
     private func copyCommit() {
@@ -200,9 +218,9 @@ struct SettingsBuildMetadataStrip: View {
 struct SettingsApprovalItem: Identifiable {
     let id: String
     let icon: String
-    let title: String
-    let detail: String
-    let priority: String
+    let title: OpenClawTextValue
+    let detail: OpenClawTextValue
+    let priority: OpenClawTextValue
     let color: Color
 }
 
@@ -220,16 +238,16 @@ struct SettingsApprovalRow: View {
                         .fill(self.item.color)
                 }
             VStack(alignment: .leading, spacing: 2) {
-                Text(self.item.title)
+                self.item.title.text
                     .font(OpenClawType.subheadSemiBold)
                     .lineLimit(1)
-                Text(self.item.detail)
+                self.item.detail.text
                     .font(OpenClawType.caption2Medium)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
-            Text(self.item.priority)
+            self.item.priority.text
                 .font(OpenClawType.captionBold)
                 .foregroundStyle(self.item.color)
                 .padding(.horizontal, 9)
@@ -279,32 +297,35 @@ enum SettingsNotificationPresentation: Equatable {
 
     var text: String {
         switch self {
-        case .checking: "Checking"
-        case .enabled: "Enabled"
-        case .off: "Off"
-        case .setup: "Setup"
-        case .denied: "Denied"
-        case .notSet: "Not Enabled"
-        case .unknown: "Unknown"
+        case .checking: String(localized: "Checking")
+        case .enabled: String(localized: "Enabled")
+        case .off: String(localized: "Off")
+        case .setup: String(localized: "Setup")
+        case .denied: String(localized: "Denied")
+        case .notSet: String(localized: "Not Enabled")
+        case .unknown: String(localized: "Unknown")
         }
     }
 
     var detail: String {
         switch self {
         case .checking:
-            "Checking iOS notification permission."
+            String(localized: "Checking iOS notification permission.")
         case .enabled:
-            "OpenClaw can show approval prompts and event alerts when the app is not active."
+            String(
+                localized: "OpenClaw can show approval prompts and event alerts when the app is not active.")
         case .off:
-            "OpenClaw notifications are off."
+            String(localized: "OpenClaw notifications are off.")
         case .setup:
-            "Finish notification setup to receive alerts when the app is not active."
+            String(
+                localized: "Finish notification setup to receive alerts when the app is not active.")
         case .denied:
-            "Notifications have been denied. Enable them in iOS Settings."
+            String(localized: "Notifications have been denied. Enable them in iOS Settings.")
         case .notSet:
-            "Enable notifications to receive approval prompts and event alerts outside the app."
+            String(
+                localized: "Enable notifications to receive approval prompts and event alerts outside the app.")
         case .unknown:
-            "OpenClaw cannot determine the current notification permission state."
+            String(localized: "OpenClaw cannot determine the current notification permission state.")
         }
     }
 
@@ -493,8 +514,8 @@ private struct SettingsGatewayStatesPreview: View {
         ProCard(padding: 0, radius: SettingsLayout.cardRadius) {
             ProStatusRow(
                 icon: value == "online" ? "antenna.radiowaves.left.and.right" : "wifi.slash",
-                title: title,
-                detail: detail,
+                title: .localized(title),
+                detail: .localized(detail),
                 value: value,
                 color: color,
                 actionTitle: value == "setup" ? "Scan QR" : nil,

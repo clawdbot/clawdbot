@@ -31,6 +31,8 @@ type GuardedSessionManager = SessionManager & {
   flushPendingToolResults?: () => void;
   /** Clear pending tool calls without persisting synthetic tool results. Idempotent. */
   clearPendingToolResults?: () => void;
+  /** Persist the next user message when an earlier canonical entry was removed. */
+  clearNextUserMessagePersistenceSuppression?: () => void;
 };
 
 /**
@@ -183,5 +185,7 @@ export function guardSessionManager(
   });
   (sessionManager as GuardedSessionManager).flushPendingToolResults = guard.flushPendingToolResults;
   (sessionManager as GuardedSessionManager).clearPendingToolResults = guard.clearPendingToolResults;
+  (sessionManager as GuardedSessionManager).clearNextUserMessagePersistenceSuppression =
+    guard.clearNextUserMessagePersistenceSuppression;
   return sessionManager as GuardedSessionManager;
 }

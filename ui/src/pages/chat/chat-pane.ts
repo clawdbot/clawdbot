@@ -14,6 +14,7 @@ import type {
   TaskSuggestionsListResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type {
+  ControlUiSessionBranch,
   ControlUiSessionPullRequest,
   ControlUiSessionPullRequests,
 } from "../../../../src/gateway/control-ui-contract.js";
@@ -103,6 +104,7 @@ import { chatAttachmentFromDataUrl } from "./components/chat-composer.ts";
 import { renderChatControls } from "./components/chat-controls.ts";
 import {
   chatPullRequestId,
+  createPullRequestBranch,
   dismissChatPullRequest,
   listDismissedChatPullRequests,
 } from "./components/chat-pull-requests.ts";
@@ -269,6 +271,7 @@ class ChatPane extends OpenClawLightDomElement {
   private readonly taskSuggestionOperations = new Map<string, symbol>();
   private taskSuggestionsRequestVersion = 0;
   private sessionPullRequests: ControlUiSessionPullRequest[] = [];
+  private sessionPullRequestsBranch: ControlUiSessionBranch | undefined;
   private sessionPullRequestsRateLimited = false;
   private sessionPullRequestsRequestVersion = 0;
   private sessionPullRequestsExpanded = false;
@@ -393,6 +396,7 @@ class ChatPane extends OpenClawLightDomElement {
       !isGatewayMethodAdvertised(scope.context.gateway.snapshot, "controlUi.sessionPullRequests")
     ) {
       this.sessionPullRequests = [];
+      this.sessionPullRequestsBranch = undefined;
       this.sessionPullRequestsRateLimited = false;
       this.requestUpdate();
       return;
@@ -400,6 +404,7 @@ class ChatPane extends OpenClawLightDomElement {
     const sessionKey = scope.state.sessionKey;
     if (!sessionKey.trim() || parseCatalogSessionKey(sessionKey)) {
       this.sessionPullRequests = [];
+      this.sessionPullRequestsBranch = undefined;
       this.sessionPullRequestsRateLimited = false;
       this.requestUpdate();
       return;
@@ -417,6 +422,7 @@ class ChatPane extends OpenClawLightDomElement {
         return;
       }
       this.sessionPullRequests = result.pullRequests;
+      this.sessionPullRequestsBranch = result.branch;
       this.sessionPullRequestsRateLimited = result.rateLimited;
       this.dismissedSessionPullRequestIds = listDismissedChatPullRequests(sessionKey);
       this.requestUpdate();
@@ -429,6 +435,7 @@ class ChatPane extends OpenClawLightDomElement {
   private resetSessionPullRequests(): void {
     this.sessionPullRequestsRequestVersion += 1;
     this.sessionPullRequests = [];
+    this.sessionPullRequestsBranch = undefined;
     this.sessionPullRequestsRateLimited = false;
     this.sessionPullRequestsExpanded = false;
     this.dismissedSessionPullRequestIds = new Set();
@@ -1883,6 +1890,12 @@ class ChatPane extends OpenClawLightDomElement {
       taskSuggestions: this.taskSuggestions,
       pullRequests: this.sessionPullRequests.filter(
         (pullRequest) => !this.dismissedSessionPullRequestIds.has(chatPullRequestId(pullRequest)),
+      ),
+      // Decided on the undismissed list: a dismissed open PR still exists, so
+      // the row must not offer creating a duplicate.
+      pullRequestsBranch: createPullRequestBranch(
+        this.sessionPullRequests,
+        this.sessionPullRequestsBranch,
       ),
       pullRequestsRateLimited: this.sessionPullRequestsRateLimited,
       pullRequestsExpanded: this.sessionPullRequestsExpanded,

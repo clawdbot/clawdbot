@@ -28,7 +28,7 @@ export function serializeJsonlLine(entry: unknown): string {
   return serialized;
 }
 
-export function serializeJsonlEntries(jsonlEntries: readonly unknown[]): string {
+function serializeJsonlEntries(jsonlEntries: readonly unknown[]): string {
   return serializeJsonlLines(jsonlEntries.map(serializeJsonlLine));
 }
 

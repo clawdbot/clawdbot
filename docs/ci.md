@@ -111,7 +111,7 @@ job budget.
 
 Android CI runs both `testPlayDebugUnitTest` and `testThirdPartyDebugUnitTest` and then builds the Play debug APK. The third-party flavor has no separate source set or manifest; its unit-test lane still compiles the flavor with the SMS/call-log BuildConfig flags, while avoiding a duplicate debug APK packaging job on every Android-relevant push.
 
-The `check-dependencies` shard runs `pnpm deadcode:dependencies` (a production Knip dependency-only pass pinned to an exact Knip version, with pnpm's minimum release age disabled for the `dlx` install) and `pnpm deadcode:unused-files`, which compares Knip's production unused-file findings against `scripts/deadcode-unused-files.allowlist.mjs`, plus an advisory `pnpm deadcode:report:ci:ts-unused` report uploaded as the `deadcode-reports` artifact. The unused-file guard fails when a PR adds a new unreviewed unused file or leaves a stale allowlist entry, while preserving intentional dynamic plugin, generated, build, live-test, and package bridge surfaces that Knip cannot resolve statically.
+The `check-dependencies` shard runs a production Knip dependency-only pass, the unused-file allowlist check, and the enforced unused-exports baseline ratchet. The unused-file guard fails when a PR adds a new unreviewed unused file or leaves a stale allowlist entry, while preserving intentional dynamic plugin, generated, build, live-test, and package bridge surfaces that Knip cannot resolve statically. The unused-exports ratchet likewise rejects new findings and stale required baseline entries, so the checked-in debt can only shrink. The former ts-prune and ts-unused-exports advisory reports no longer run.
 
 ## ClawSweeper activity forwarding
 

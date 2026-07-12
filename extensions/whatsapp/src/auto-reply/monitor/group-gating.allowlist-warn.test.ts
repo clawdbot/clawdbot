@@ -203,18 +203,23 @@ describe("applyGroupGating allowlist drop warning", () => {
     expect(warn.mock.calls[1]?.[1]).toContain("b@g.us");
   });
 
-  it("evicts old warning keys instead of growing without bound", async () => {
+  it("bounds warning keys by least-recently-used conversations", async () => {
     const warn = vi.fn<WarnLogger>();
+    const apply = (conversationId: string) =>
+      applyGroupGating(makeParams(makeUnregisteredGroupMsg(conversationId), warn));
 
-    await applyGroupGating(makeParams(makeUnregisteredGroupMsg("evicted@g.us"), warn));
     for (let index = 0; index < 100; index += 1) {
-      await applyGroupGating(makeParams(makeUnregisteredGroupMsg(`overflow-${index}@g.us`), warn));
+      await apply(`${index}@g.us`);
     }
-    await applyGroupGating(makeParams(makeUnregisteredGroupMsg("evicted@g.us"), warn));
+    await apply("0@g.us");
+    await apply("100@g.us");
+    await apply("0@g.us");
+    await apply("1@g.us");
+    await apply("100@g.us");
 
     expect(warn).toHaveBeenCalledTimes(102);
-    expect(warn.mock.calls[0]?.[1]).toContain("evicted@g.us");
-    expect(warn.mock.calls[101]?.[1]).toContain("evicted@g.us");
+    expect(warn.mock.calls[100]?.[1]).toContain("100@g.us");
+    expect(warn.mock.calls[101]?.[1]).toContain("1@g.us");
   });
 
   it("does not warn when the group is registered", async () => {

@@ -9,6 +9,7 @@ import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
 } from "../plugin-sdk/windows-spawn.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
 import { killProcessTree } from "../process/kill-tree.js";
 import { loadEmbeddedAgentLspConfig } from "./embedded-agent-lsp.js";
@@ -499,10 +500,12 @@ export async function createBundleLspToolRuntime(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
   reservedToolNames?: Iterable<string>;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
 }): Promise<BundleLspToolRuntime> {
   const loaded = loadEmbeddedAgentLspConfig({
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
+    manifestRegistry: params.manifestRegistry,
   });
   for (const diagnostic of loaded.diagnostics) {
     logWarn(`bundle-lsp: ${diagnostic.pluginId}: ${diagnostic.message}`);

@@ -11,17 +11,6 @@ type StreamModelDescriptor = {
   id: string;
 };
 
-export function buildZeroUsage(): Usage {
-  return {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: 0,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-  };
-}
-
 export function buildUsageWithNoCost(params: {
   input?: number;
   output?: number;
@@ -72,7 +61,7 @@ export function buildAssistantMessageWithZeroUsage(params: {
     model: params.model,
     content: params.content,
     stopReason: params.stopReason,
-    usage: buildZeroUsage(),
+    usage: buildUsageWithNoCost({}),
     timestamp: params.timestamp,
   });
 }

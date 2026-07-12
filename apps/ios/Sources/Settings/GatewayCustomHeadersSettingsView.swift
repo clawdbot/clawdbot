@@ -34,9 +34,14 @@ struct GatewayCustomHeadersSettingsView: View {
                     Text("Headers")
                         .font(OpenClawType.captionSemiBold)
                 } footer: {
-                    Text("Sent with foreground app connections to this gateway. "
-                        + "Changes apply on the next reconnect; Share extension delivery is not yet supported.")
+                    // Keep the extraction key contiguous for the native localization inventory.
+                    // swiftlint:disable line_length
+                    Text(
+                        String(
+                            localized:
+                            "Sent with foreground app connections to this gateway. Changes apply on the next reconnect; Share extension delivery is not yet supported."))
                         .font(OpenClawType.caption)
+                    // swiftlint:enable line_length
                 }
             }
 

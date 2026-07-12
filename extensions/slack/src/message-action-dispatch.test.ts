@@ -148,6 +148,34 @@ describe("handleSlackMessageAction", () => {
     expect(elementAt(actionsBlock, 0).value).toBe("approve");
   });
 
+  it("sends an exact mirrored portable control row once", async () => {
+    const invoke = createInvokeSpy();
+    const buttons = [{ label: "Approve", action: { type: "callback" as const, value: "approve" } }];
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "send",
+        cfg: {},
+        params: {
+          to: "channel:C1",
+          message: "Deploy?",
+          presentation: { blocks: [{ type: "buttons", buttons }] },
+          interactive: { blocks: [{ type: "buttons", buttons }] },
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    const action = firstAction(invoke);
+    expect(action).not.toHaveProperty("blocks");
+    const message = preparedMessages(invoke)[0]!;
+    const blocks = message.blocks as Array<Record<string, unknown>> | undefined;
+    const actions = blocks?.filter((block) => block.type === "actions") ?? [];
+    expect(actions).toHaveLength(1);
+    expect(elementAt(actions[0]!, 0).value).toBe("approve");
+  });
+
   it("sends native charts with a complete accessible text representation", async () => {
     const invoke = createInvokeSpy();
 

@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -129,7 +130,143 @@ describe("createVerifiedSqliteSnapshot", () => {
     await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("racer");
   });
 
-  it("preserves a target replaced after hard-link publication", async () => {
+  it("rejects staged bytes changed after validation", async () => {
+    const tempDir = await createTempDir();
+    const sourcePath = path.join(tempDir, "source.sqlite");
+    const targetPath = path.join(tempDir, "snapshot.sqlite");
+    const sqlite = requireNodeSqlite();
+    new sqlite.DatabaseSync(sourcePath).close();
+    const originalOpen = fs.open.bind(fs);
+    let stagedReadCount = 0;
+    const openSpy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+      const resolvedPath = path.resolve(String(filePath));
+      if (
+        flags === "r" &&
+        path.basename(resolvedPath) === "database.sqlite" &&
+        path.basename(path.dirname(resolvedPath)).startsWith(".sqlite-snapshot-")
+      ) {
+        stagedReadCount += 1;
+        if (stagedReadCount === 2) {
+          await fs.appendFile(resolvedPath, "changed-after-validation");
+        }
+      }
+      return await originalOpen(filePath, flags, mode);
+    });
+
+    try {
+      await expect(createVerifiedSqliteSnapshot({ sourcePath, targetPath })).rejects.toThrow(
+        /size mismatch|hash mismatch/u,
+      );
+      await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
+  it("runs the final caller guard before publishing the target", async () => {
+    const tempDir = await createTempDir();
+    const sourcePath = path.join(tempDir, "source.sqlite");
+    const targetPath = path.join(tempDir, "snapshot.sqlite");
+    const sqlite = requireNodeSqlite();
+    new sqlite.DatabaseSync(sourcePath).close();
+    let guarded = false;
+
+    await expect(
+      createVerifiedSqliteSnapshot({
+        sourcePath,
+        targetPath,
+        beforePublish: () => {
+          guarded = true;
+          throw new Error("publication refused");
+        },
+      }),
+    ).rejects.toThrow(/publication refused/u);
+    expect(guarded).toBe(true);
+    await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("removes its published target when the caller rejects it", async () => {
+    const tempDir = await createTempDir();
+    const sourcePath = path.join(tempDir, "source.sqlite");
+    const targetPath = path.join(tempDir, "snapshot.sqlite");
+    const sqlite = requireNodeSqlite();
+    new sqlite.DatabaseSync(sourcePath).close();
+    let guarded = false;
+
+    await expect(
+      createVerifiedSqliteSnapshot({
+        sourcePath,
+        targetPath,
+        afterPublish: () => {
+          guarded = true;
+          throw new Error("published target refused");
+        },
+      }),
+    ).rejects.toThrow(/published target refused/u);
+    expect(guarded).toBe(true);
+    await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("rejects an asynchronous after-publication guard", async () => {
+    const tempDir = await createTempDir();
+    const sourcePath = path.join(tempDir, "source.sqlite");
+    const targetPath = path.join(tempDir, "snapshot.sqlite");
+    const sqlite = requireNodeSqlite();
+    new sqlite.DatabaseSync(sourcePath).close();
+    const asynchronousGuard = (async () => {}) as unknown as () => void;
+
+    await expect(
+      createVerifiedSqliteSnapshot({
+        sourcePath,
+        targetPath,
+        afterPublish: asynchronousGuard,
+      }),
+    ).rejects.toThrow(/after-publication guard must be synchronous/u);
+    await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("rejects an asynchronous final publication check", async () => {
+    const tempDir = await createTempDir();
+    const sourcePath = path.join(tempDir, "source.sqlite");
+    const targetPath = path.join(tempDir, "snapshot.sqlite");
+    const sqlite = requireNodeSqlite();
+    new sqlite.DatabaseSync(sourcePath).close();
+    const asynchronousFinalCheck = (async () => {}) as unknown as () => void;
+
+    await expect(
+      createVerifiedSqliteSnapshot({
+        sourcePath,
+        targetPath,
+        afterPublish: (guard) => {
+          guard.assertTargetUnchanged(asynchronousFinalCheck);
+        },
+      }),
+    ).rejects.toThrow(/publication final check must be synchronous/u);
+    await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("preserves a target replaced by the caller after publication", async () => {
+    const tempDir = await createTempDir();
+    const sourcePath = path.join(tempDir, "source.sqlite");
+    const targetPath = path.join(tempDir, "snapshot.sqlite");
+    const sqlite = requireNodeSqlite();
+    new sqlite.DatabaseSync(sourcePath).close();
+
+    await expect(
+      createVerifiedSqliteSnapshot({
+        sourcePath,
+        targetPath,
+        afterPublish: (guard) => {
+          fsSync.unlinkSync(targetPath);
+          fsSync.writeFileSync(targetPath, "racer");
+          guard.assertTargetUnchanged();
+        },
+      }),
+    ).rejects.toThrow(/snapshot file changed|hash mismatch|size mismatch/u);
+    await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("racer");
+  });
+
+  it("rejects a target replaced after atomic publication", async () => {
     const tempDir = await createTempDir();
     const sourcePath = path.join(tempDir, "source.sqlite");
     const targetPath = path.join(tempDir, "snapshot.sqlite");
@@ -138,13 +275,15 @@ describe("createVerifiedSqliteSnapshot", () => {
     const originalLink = fs.link.bind(fs);
     const linkSpy = vi.spyOn(fs, "link").mockImplementation(async (source, target) => {
       await originalLink(source, target);
-      await fs.unlink(target);
-      await fs.writeFile(target, "racer");
+      if (path.resolve(String(target)) === targetPath) {
+        await fs.unlink(targetPath);
+        await fs.writeFile(targetPath, "racer");
+      }
     });
 
     try {
       await expect(createVerifiedSqliteSnapshot({ sourcePath, targetPath })).rejects.toThrow(
-        /target changed during publication/u,
+        /target changed during publication|staging path changed|snapshot file changed/u,
       );
       await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("racer");
     } finally {
@@ -152,43 +291,72 @@ describe("createVerifiedSqliteSnapshot", () => {
     }
   });
 
-  it("rejects a target replaced after exclusive-copy publication", async () => {
+  it.runIf(process.platform !== "win32")(
+    "removes target bytes linked from a replaced staging pathname",
+    async () => {
+      const tempDir = await createTempDir();
+      const sourcePath = path.join(tempDir, "source.sqlite");
+      const targetPath = path.join(tempDir, "snapshot.sqlite");
+      const sqlite = requireNodeSqlite();
+      new sqlite.DatabaseSync(sourcePath).close();
+      const originalLink = fs.link.bind(fs);
+      const linkSpy = vi.spyOn(fs, "link").mockImplementation(async (source, target) => {
+        if (path.resolve(String(target)) === targetPath) {
+          await fs.unlink(source);
+          const replacement = new sqlite.DatabaseSync(String(source));
+          replacement.exec("CREATE TABLE replacement (value TEXT NOT NULL);");
+          replacement.close();
+        }
+        await originalLink(source, target);
+      });
+
+      try {
+        await expect(createVerifiedSqliteSnapshot({ sourcePath, targetPath })).rejects.toThrow(
+          /staging file changed during publication|size mismatch|hash mismatch/u,
+        );
+        await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        linkSpy.mockRestore();
+      }
+    },
+  );
+
+  it("removes its target when inspection fails after atomic publication", async () => {
     const tempDir = await createTempDir();
     const sourcePath = path.join(tempDir, "source.sqlite");
     const targetPath = path.join(tempDir, "snapshot.sqlite");
     const sqlite = requireNodeSqlite();
     new sqlite.DatabaseSync(sourcePath).close();
-    const originalOpen = fs.open.bind(fs);
-    const linkSpy = vi.spyOn(fs, "link").mockRejectedValue(
-      Object.assign(new Error("hard links unsupported"), {
-        code: "EPERM",
-      }),
-    );
-    const openSpy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
-      const handle = await originalOpen(filePath, flags, mode);
-      if (path.resolve(String(filePath)) === targetPath && flags === "wx+") {
-        const originalSync = handle.sync.bind(handle);
-        vi.spyOn(handle, "sync").mockImplementationOnce(async () => {
-          await originalSync();
-          await fs.unlink(targetPath);
-          await fs.writeFile(targetPath, "racer");
-        });
+    const originalLink = fs.link.bind(fs);
+    const originalLstat = fs.lstat.bind(fs);
+    let linked = false;
+    let failedInspection = false;
+    const linkSpy = vi.spyOn(fs, "link").mockImplementation(async (source, target) => {
+      await originalLink(source, target);
+      if (path.resolve(String(target)) === targetPath) {
+        linked = true;
       }
-      return handle;
+    });
+    const lstatSpy = vi.spyOn(fs, "lstat").mockImplementation(async (filePath) => {
+      if (linked && !failedInspection && path.resolve(String(filePath)) === targetPath) {
+        failedInspection = true;
+        throw Object.assign(new Error("target inspection failed"), { code: "EIO" });
+      }
+      return await originalLstat(filePath);
     });
 
     try {
       await expect(createVerifiedSqliteSnapshot({ sourcePath, targetPath })).rejects.toThrow(
-        /target changed during publication/u,
+        /target inspection failed/u,
       );
-      await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("racer");
+      await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
-      openSpy.mockRestore();
+      lstatSpy.mockRestore();
       linkSpy.mockRestore();
     }
   });
 
-  it("syncs fallback copies before reporting success", async () => {
+  it("uses a private sibling staging file for atomic publication", async () => {
     const tempDir = await createTempDir();
     const sourcePath = path.join(tempDir, "source.sqlite");
     const targetPath = path.join(tempDir, "snapshot.sqlite");
@@ -196,20 +364,122 @@ describe("createVerifiedSqliteSnapshot", () => {
     new sqlite.DatabaseSync(sourcePath).close();
     const originalOpen = fs.open.bind(fs);
     const openSpy = vi.spyOn(fs, "open").mockImplementation(originalOpen);
-    const linkSpy = vi.spyOn(fs, "link").mockRejectedValue(
-      Object.assign(new Error("hard links unsupported"), {
-        code: "EPERM",
-      }),
-    );
 
     try {
       await createVerifiedSqliteSnapshot({ sourcePath, targetPath });
       expect(
-        openSpy.mock.calls.some(([filePath]) => path.resolve(String(filePath)) === targetPath),
+        openSpy.mock.calls.some(
+          ([filePath, flags]) =>
+            flags === "wx+" &&
+            path.basename(path.dirname(String(filePath))).startsWith(".sqlite-publish-"),
+        ),
       ).toBe(true);
     } finally {
-      linkSpy.mockRestore();
       openSpy.mockRestore();
+    }
+  });
+
+  it("falls back to an exclusive copy when hard links are unavailable", async () => {
+    const tempDir = await createTempDir();
+    const sourcePath = path.join(tempDir, "source.sqlite");
+    const targetPath = path.join(tempDir, "snapshot.sqlite");
+    const sqlite = requireNodeSqlite();
+    new sqlite.DatabaseSync(sourcePath).close();
+    const linkSpy = vi
+      .spyOn(fs, "link")
+      .mockRejectedValue(Object.assign(new Error("hard links unsupported"), { code: "ENOTSUP" }));
+
+    try {
+      await expect(createVerifiedSqliteSnapshot({ sourcePath, targetPath })).resolves.toEqual({
+        path: targetPath,
+        userVersion: 0,
+      });
+      const restored = new sqlite.DatabaseSync(targetPath, { readOnly: true });
+      restored.close();
+    } finally {
+      linkSpy.mockRestore();
+    }
+  });
+
+  it("removes a fallback target whose copied bytes fail verification", async () => {
+    const tempDir = await createTempDir();
+    const sourcePath = path.join(tempDir, "source.sqlite");
+    const targetPath = path.join(tempDir, "snapshot.sqlite");
+    const sqlite = requireNodeSqlite();
+    new sqlite.DatabaseSync(sourcePath).close();
+    const linkSpy = vi.spyOn(fs, "link").mockImplementation(async (source, target) => {
+      if (path.resolve(String(target)) === targetPath) {
+        await fs.appendFile(source, "changed-before-fallback");
+      }
+      throw Object.assign(new Error("hard links unsupported"), { code: "ENOTSUP" });
+    });
+
+    try {
+      await expect(createVerifiedSqliteSnapshot({ sourcePath, targetPath })).rejects.toThrow(
+        /size mismatch|hash mismatch/u,
+      );
+      await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      linkSpy.mockRestore();
+    }
+  });
+
+  it("removes its hard link when opening the published target fails", async () => {
+    const tempDir = await createTempDir();
+    const sourcePath = path.join(tempDir, "source.sqlite");
+    const targetPath = path.join(tempDir, "snapshot.sqlite");
+    const sqlite = requireNodeSqlite();
+    new sqlite.DatabaseSync(sourcePath).close();
+    const originalLink = fs.link.bind(fs);
+    const originalOpen = fs.open.bind(fs);
+    let linked = false;
+    const linkSpy = vi.spyOn(fs, "link").mockImplementation(async (source, target) => {
+      await originalLink(source, target);
+      if (path.resolve(String(target)) === targetPath) {
+        linked = true;
+      }
+    });
+    const openSpy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+      if (linked && path.resolve(String(filePath)) === targetPath && flags === "r") {
+        throw Object.assign(new Error("target open failed"), { code: "EIO" });
+      }
+      return await originalOpen(filePath, flags, mode);
+    });
+
+    try {
+      await expect(createVerifiedSqliteSnapshot({ sourcePath, targetPath })).rejects.toThrow(
+        /target open failed/u,
+      );
+      await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      openSpy.mockRestore();
+      linkSpy.mockRestore();
+    }
+  });
+
+  it("cleans publication staging when initialization fails", async () => {
+    const tempDir = await createTempDir();
+    const sourcePath = path.join(tempDir, "source.sqlite");
+    const targetPath = path.join(tempDir, "snapshot.sqlite");
+    const sqlite = requireNodeSqlite();
+    new sqlite.DatabaseSync(sourcePath).close();
+    const originalChmod = fs.chmod.bind(fs);
+    const chmodSpy = vi.spyOn(fs, "chmod").mockImplementation(async (filePath, mode) => {
+      if (path.basename(String(filePath)).startsWith(".sqlite-publish-")) {
+        throw Object.assign(new Error("chmod refused"), { code: "EACCES" });
+      }
+      await originalChmod(filePath, mode);
+    });
+
+    try {
+      await expect(createVerifiedSqliteSnapshot({ sourcePath, targetPath })).rejects.toThrow(
+        /chmod refused/u,
+      );
+      expect(
+        (await fs.readdir(tempDir)).every((name) => !name.startsWith(".sqlite-publish-")),
+      ).toBe(true);
+    } finally {
+      chmodSpy.mockRestore();
     }
   });
 
@@ -259,7 +529,7 @@ describe("createVerifiedSqliteSnapshot", () => {
       validate: (_database, label) => labels.push(label),
     });
 
-    expect(labels).toEqual([sourcePath, targetPath]);
+    expect(labels).toEqual([sourcePath, targetPath, targetPath]);
     expect((await fs.readFile(targetPath)).includes(removedValue)).toBe(false);
     const snapshot = new sqlite.DatabaseSync(targetPath, { readOnly: true });
     try {

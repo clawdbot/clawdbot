@@ -456,18 +456,3 @@ export function validateWorkspaceDoc(value: unknown): WorkspaceDoc {
     prefs: validatePrefs(record.prefs, tabSlugs),
   };
 }
-
-export function migrateWorkspaceDoc(value: unknown): { doc: WorkspaceDoc; changed: boolean } {
-  const record = assertRecord(value, "workspaces");
-  const schemaVersion = record.schemaVersion;
-  if (typeof schemaVersion !== "number" || !Number.isInteger(schemaVersion)) {
-    throw new Error("schemaVersion must be an integer");
-  }
-  if (schemaVersion > CURRENT_WORKSPACE_SCHEMA_VERSION) {
-    throw new Error(`unsupported future workspace schemaVersion: ${schemaVersion}`);
-  }
-  if (schemaVersion < CURRENT_WORKSPACE_SCHEMA_VERSION) {
-    throw new Error(`unsupported old workspace schemaVersion: ${schemaVersion}`);
-  }
-  return { doc: validateWorkspaceDoc(record), changed: false };
-}

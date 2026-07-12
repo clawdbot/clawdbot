@@ -43,6 +43,7 @@ export function describeSessionsSendTool(): string {
   return [
     "Message visible session by sessionKey/label, or configured agent by agentId; sessionKey wins redundant label.",
     "Thread chats rejected: target parent channel. Missing configured-agent main created. Waits for reply when available.",
+    "watch:true: notice arrives when others later change target session.",
   ].join(" ");
 }
 

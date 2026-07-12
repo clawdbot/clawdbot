@@ -1,5 +1,12 @@
 // Qa Lab tests cover runtime parity classification behavior.
-import { describe, expect, it } from "vitest";
+import path from "node:path";
+import {
+  formatSqliteSessionFileMarker,
+  resolveStorePath,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
+import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   __testing,
   captureRuntimeParityCell,
@@ -10,6 +17,50 @@ import {
   type RuntimeParityCell,
   type RuntimeParityToolCall,
 } from "./runtime-parity.js";
+import { createTempDirHarness } from "./temp-dir.test-helper.js";
+
+const tempDirs = createTempDirHarness();
+
+afterEach(async () => {
+  await tempDirs.cleanup();
+});
+
+async function seedRuntimeParityTranscript(params: {
+  messages: Array<Record<string, unknown>>;
+  sessionId: string;
+  sessionKey: string;
+}) {
+  const tempRoot = await tempDirs.makeTempDir("openclaw-qa-runtime-parity-");
+  const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(tempRoot, "state") };
+  const storePath = resolveStorePath(undefined, { agentId: "qa", env });
+  await upsertSessionEntry({
+    agentId: "qa",
+    env,
+    sessionKey: params.sessionKey,
+    storePath,
+    entry: {
+      sessionId: params.sessionId,
+      sessionFile: formatSqliteSessionFileMarker({
+        agentId: "qa",
+        sessionId: params.sessionId,
+        storePath,
+      }),
+      updatedAt: 100,
+    },
+  });
+  for (const [index, message] of params.messages.entries()) {
+    await appendSessionTranscriptMessageByIdentity({
+      agentId: "qa",
+      env,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      storePath,
+      now: index + 1,
+      message: message as never,
+    });
+  }
+  return tempRoot;
+}
 
 function makeRuntimeParityCell(
   runtime: RuntimeId,
@@ -31,6 +82,48 @@ function makeRuntimeParityCell(
 }
 
 describe("runtime parity", () => {
+  it("captures tool results from the canonical SQLite session transcript", async () => {
+    const tempRoot = await seedRuntimeParityTranscript({
+      sessionId: "capability-flip",
+      sessionKey: "agent:qa:capability-flip",
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "Capability flip image check" }],
+        },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call-image-1",
+              name: "image_generate",
+              arguments: { prompt: "QA lighthouse" },
+            },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-image-1",
+          toolName: "image_generate",
+          content: [{ type: "text", text: "Image generation started" }],
+        },
+      ],
+    });
+
+    const cell = await captureRuntimeParityCell({
+      runtime: "openclaw",
+      gateway: { tempRoot },
+      scenarioResult: { status: "pass" },
+      wallClockMs: 10,
+    });
+
+    expect(cell.transcriptBytes).toContain('"role":"toolResult"');
+    expect(cell.toolCalls).toHaveLength(1);
+    expect(cell.toolCalls[0]).toMatchObject({ tool: "image_generate" });
+    expect(cell.toolCalls[0]?.errorClass).toBeUndefined();
+  });
+
   it("keeps a retry pass diagnostic from failing the captured cell", async () => {
     const cell = await captureRuntimeParityCell({
       runtime: "openclaw",
@@ -221,11 +314,127 @@ describe("runtime parity", () => {
     });
 
     expect(resolved).toEqual([
-      {
+      expect.objectContaining({
         tool: "image_generate",
         argsHash: "same-args",
-        resultHash: "async-started",
-      },
+      }),
+    ]);
+    expect(resolved[0]?.errorClass).toBeUndefined();
+  });
+
+  it("accepts a fresh scenario MEDIA result for terminal image tools", () => {
+    const resolved = __testing.resolveRuntimeParityToolCalls({
+      mockToolCalls: [
+        {
+          tool: "image_generate",
+          argsHash: "same-args",
+          resultHash: "missing",
+          errorClass: "tool-result-missing",
+        },
+      ],
+      transcriptToolCalls: [],
+      terminalImageResultProven: true,
+    });
+    const codexResult = __testing.resolveRuntimeParityToolCalls({
+      mockToolCalls: [
+        {
+          tool: "image_generate",
+          argsHash: "same-args",
+          resultHash: "runtime-specific-path",
+        },
+      ],
+      transcriptToolCalls: [],
+      terminalImageResultProven: true,
+    });
+
+    expect(resolved).toEqual(codexResult);
+    expect(resolved[0]?.errorClass).toBeUndefined();
+  });
+
+  it("requires call-linked passed step evidence for terminal image results", () => {
+    expect(
+      __testing.hasProvenTerminalImageResult({
+        status: "pass",
+        steps: [
+          {
+            status: "pass",
+            details: "QA-CAPABILITY-1234\nimage_generate=true\nMEDIA:/tmp/qa-image.png",
+          },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      __testing.hasProvenTerminalImageResult({
+        status: "pass",
+        steps: [{ status: "pass", details: "MEDIA:/tmp/unrelated-screenshot.png" }],
+      }),
+    ).toBe(false);
+    expect(
+      __testing.hasProvenTerminalImageResult({
+        status: "pass",
+        steps: [
+          {
+            status: "fail",
+            details: "image_generate=true\nMEDIA:/tmp/failed-image.png",
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  it("preserves a missing image result when MEDIA may belong to another call", () => {
+    const resolved = __testing.resolveRuntimeParityToolCalls({
+      mockToolCalls: [
+        {
+          tool: "image_generate",
+          argsHash: "first-args",
+          resultHash: "first-success",
+        },
+        {
+          tool: "image_generate",
+          argsHash: "second-args",
+          resultHash: "second-missing",
+          errorClass: "tool-result-missing",
+        },
+      ],
+      transcriptToolCalls: [],
+      terminalImageResultProven: true,
+    });
+
+    expect(resolved.map((toolCall) => toolCall.errorClass)).toEqual([
+      undefined,
+      "tool-result-missing",
+    ]);
+  });
+
+  it("preserves missing image results when capture sources disagree on call count", () => {
+    const resolved = __testing.resolveRuntimeParityToolCalls({
+      mockToolCalls: [
+        {
+          tool: "image_generate",
+          argsHash: "first-args",
+          resultHash: "mock-missing",
+          errorClass: "tool-result-missing",
+        },
+      ],
+      transcriptToolCalls: [
+        {
+          tool: "image_generate",
+          argsHash: "first-args",
+          resultHash: "first-success",
+        },
+        {
+          tool: "image_generate",
+          argsHash: "second-args",
+          resultHash: "second-missing",
+          errorClass: "tool-result-missing",
+        },
+      ],
+      terminalImageResultProven: true,
+    });
+
+    expect(resolved).toEqual([
+      expect.objectContaining({ errorClass: "tool-result-missing", resultHash: "mock-missing" }),
     ]);
   });
 

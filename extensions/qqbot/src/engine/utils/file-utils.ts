@@ -70,6 +70,8 @@ export const QQBOT_MEDIA_SSRF_POLICY: SsrfPolicyConfig = {
   allowRfc2544BenchmarkRange: true,
 };
 
+export const QQBOT_REMOTE_MEDIA_RESPONSE_HEADER_TIMEOUT_MS = 120_000;
+
 /** Result of local file-size validation. */
 interface FileSizeCheckResult {
   ok: boolean;
@@ -183,6 +185,7 @@ export async function downloadFile(
       url: parsedUrl.toString(),
       filePathHint: originalFilename,
       ssrfPolicy: QQBOT_MEDIA_SSRF_POLICY,
+      responseHeaderTimeoutMs: QQBOT_REMOTE_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
     });
 
     let filename = normalizeOptionalString(originalFilename) ?? "";

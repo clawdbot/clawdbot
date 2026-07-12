@@ -83,6 +83,7 @@ export type SignalNativeReplyContext = {
   replyToId?: string;
   author?: string;
   body?: string;
+  allowImplicitCurrentMessage?: boolean;
   state?: {
     hasReplied: boolean;
   };

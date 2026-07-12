@@ -281,7 +281,7 @@ struct RootTabsPhoneControlHub: View {
         if let agent = self.appModel.gatewayAgents.first(where: { $0.id == selectedID }) {
             return self.agentTitle(for: agent)
         }
-        return self.normalized(self.appModel.activeAgentName) ?? "Default Agent"
+        return self.normalized(self.appModel.activeAgentName) ?? String(localized: "Default Agent")
     }
 
     private var gatewayDisplayLabel: String? {
@@ -303,20 +303,27 @@ struct RootTabsPhoneControlHub: View {
 
     private var gatewayAccessibilityLabel: Text {
         if let gatewayDisplayLabel {
-            Text("Gateway \(self.gatewayStateText), \(gatewayDisplayLabel), \(self.sidebarActiveAgentTitle)")
+            Text(verbatim: String(
+                format: String(localized: "Gateway %1$@, %2$@, %3$@"),
+                self.gatewayStateText,
+                gatewayDisplayLabel,
+                self.sidebarActiveAgentTitle))
                 .font(OpenClawType.captionMedium)
         } else {
-            Text("Gateway \(self.gatewayStateText), \(self.sidebarActiveAgentTitle)")
+            Text(verbatim: String(
+                format: String(localized: "Gateway %1$@, %2$@"),
+                self.gatewayStateText,
+                self.sidebarActiveAgentTitle))
                 .font(OpenClawType.captionMedium)
         }
     }
 
     private var gatewayStateText: String {
         switch GatewayStatusBuilder.build(appModel: self.appModel) {
-        case .connected: "Online"
-        case .connecting: "Connecting"
-        case .error: "Attention"
-        case .disconnected: "Offline"
+        case .connected: String(localized: "Online")
+        case .connecting: String(localized: "Connecting")
+        case .error: String(localized: "Attention")
+        case .disconnected: String(localized: "Offline")
         }
     }
 

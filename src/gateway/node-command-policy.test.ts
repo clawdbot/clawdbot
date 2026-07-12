@@ -315,6 +315,7 @@ describe("gateway/node-command-policy", () => {
     expect(iosAllowlist.has("photos.latest")).toBe(true);
     expect(iosAllowlist.has("watch.status")).toBe(true);
     expect(iosAllowlist.has("watch.notify")).toBe(true);
+    expect(iosAllowlist.has("health.summary")).toBe(false);
     expect(iosAllowlist.has("system.run")).toBe(false);
 
     const ipadAllowlist = resolveNodeCommandAllowlist(cfg, {
@@ -533,6 +534,33 @@ describe("gateway/node-command-policy", () => {
       gateway: { nodes: { allowCommands: ["computer.act"] } },
     } as OpenClawConfig;
     expect(resolveNodeCommandAllowlist(armedCfg, macNode).has("computer.act")).toBe(true);
+  });
+
+  it("requires explicit gateway opt-in for iOS health summaries", () => {
+    const node = {
+      platform: "iOS 18.4.0",
+      deviceFamily: "iPhone",
+      commands: ["health.summary"],
+    };
+    expect(resolveNodeCommandAllowlist({} as OpenClawConfig, node).has("health.summary")).toBe(
+      false,
+    );
+
+    const armed = {
+      gateway: { nodes: { allowCommands: ["health.summary"] } },
+    } as OpenClawConfig;
+    expect(resolveNodePairingCommandAllowlist(armed, node).has("health.summary")).toBe(true);
+    expect(resolveNodeCommandAllowlist(armed, node).has("health.summary")).toBe(true);
+
+    const denied = {
+      gateway: {
+        nodes: {
+          allowCommands: ["health.summary"],
+          denyCommands: ["health.summary"],
+        },
+      },
+    } as OpenClawConfig;
+    expect(resolveNodeCommandAllowlist(denied, node).has("health.summary")).toBe(false);
   });
 
   it("reads foreground restriction metadata from plugin node policies", () => {

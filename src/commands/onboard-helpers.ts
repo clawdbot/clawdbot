@@ -11,11 +11,6 @@ import {
   ConnectErrorDetailCodes,
   readConnectErrorDetailCode,
 } from "../../packages/gateway-protocol/src/connect-error-details.js";
-import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
-import {
-  decorativeEmoji,
-  supportsDecorativeEmoji,
-} from "../../packages/terminal-core/src/decorative-emoji.js";
 import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.js";
 import { resolveAgentEffectiveModelPrimary, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
@@ -24,6 +19,7 @@ import {
   resolveWorkspaceAttestationPaths,
   shouldRemoveWorkspaceAttestation,
 } from "../agents/workspace.js";
+import { printClawBanner } from "../cli/claw-banner.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveConfigPath } from "../config/paths.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
@@ -169,23 +165,9 @@ export function validateGatewayPasswordInput(value: unknown): string | undefined
   return undefined;
 }
 
-/** Prints the onboarding banner. */
-export function printWizardHeader(runtime: RuntimeEnv) {
-  const bannerWidth = 54;
-  const icon = decorativeEmoji("🦞");
-  const title = supportsDecorativeEmoji() && icon ? `${icon} OPENCLAW ${icon}` : "OPENCLAW";
-  const pad = Math.max(0, bannerWidth - visibleWidth(title));
-  const titleLine = `${" ".repeat(Math.floor(pad / 2))}${title}${" ".repeat(Math.ceil(pad / 2))}`;
-  const header = [
-    "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
-    "██░▄▄▄░██░▄▄░██░▄▄▄██░▀██░██░▄▄▀██░████░▄▄▀██░███░██",
-    "██░███░██░▀▀░██░▄▄▄██░█░█░██░█████░████░▀▀░██░█░█░██",
-    "██░▀▀▀░██░█████░▀▀▀██░██▄░██░▀▀▄██░▀▀░█░██░██▄▀▄▀▄██",
-    "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
-    titleLine,
-    " ",
-  ].join("\n");
-  runtime.log(header);
+/** Prints the onboarding banner: pixel mascot beside the OPENCLAW wordmark. */
+export async function printWizardHeader(runtime: RuntimeEnv): Promise<void> {
+  await printClawBanner(runtime);
 }
 
 /** Records wizard provenance metadata on config writes. */

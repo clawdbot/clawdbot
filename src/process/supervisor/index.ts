@@ -21,6 +21,5 @@ export type {
   RunRecord,
   RunState,
   SpawnInput,
-  SpawnMode,
   TerminationReason,
 } from "./types.js";

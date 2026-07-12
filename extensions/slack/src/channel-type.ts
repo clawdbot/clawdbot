@@ -99,7 +99,9 @@ export async function resolveSlackConversationInfo(params: {
   if (token) {
     try {
       const client = createSlackWebClient(token);
-      if (isNativeImChannel) {
+      // Read-only classification stays on conversations.info. conversations.open is
+      // write-scoped and must only run when the caller explicitly requests a write.
+      if (isNativeImChannel && operation === "write") {
         const opened = await client.conversations.open({
           channel: channelId,
           prevent_creation: true,

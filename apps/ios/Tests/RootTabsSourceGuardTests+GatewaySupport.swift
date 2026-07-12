@@ -221,7 +221,8 @@ extension RootTabsSourceGuardTests {
         #expect(!connectionFailure.contains("self.connectMessage = message"))
         #expect(connectionFailure.contains("self.statusLine = message"))
         #expect(onboardingSource.contains(".failedStatus(message: message, allowsRetry: false)"))
-        #expect(onboardingSource.contains("primaryActionTitle: allowsRetry ? \"Retry\" : nil"))
+        #expect(onboardingSource.contains(
+            "primaryActionTitle: allowsRetry ? String(localized: \"Retry\") : nil"))
         #expect(onboardingSource.contains("onPrimaryAction: allowsRetry ? self.onRetry : nil"))
         #expect(stagedSetupClear.contains("self.localConnectionFailure = nil"))
         #expect(onboardingRetry.contains("self.localConnectionFailure = nil"))

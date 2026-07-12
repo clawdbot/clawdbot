@@ -44,16 +44,21 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -76,6 +81,12 @@ internal fun CommandPalette(
   val providers by viewModel.modelAuthProviders.collectAsState()
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
   var query by rememberSaveable { mutableStateOf("") }
+  val searchFocusRequester = remember { FocusRequester() }
+  val keyboardController = LocalSoftwareKeyboardController.current
+  LaunchedEffect(searchFocusRequester) {
+    searchFocusRequester.requestFocus()
+    keyboardController?.show()
+  }
   val normalizedQuery = query.trim()
   val quickActions =
     listOf(
@@ -113,7 +124,12 @@ internal fun CommandPalette(
         }
 
         item {
-          ClawTextField(value = query, onValueChange = { query = it }, placeholder = nativeString("Search OpenClaw"))
+          ClawTextField(
+            value = query,
+            onValueChange = { query = it },
+            placeholder = nativeString("Search OpenClaw"),
+            modifier = Modifier.focusRequester(searchFocusRequester),
+          )
         }
 
         item {

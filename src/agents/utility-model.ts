@@ -8,7 +8,7 @@ import { resolveAgentConfig, resolveAgentEffectiveModelPrimary } from "./agent-s
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import { resolveDefaultModelForAgent } from "./model-selection.js";
 
-export type UtilityModelSetting =
+type UtilityModelSetting =
   | { kind: "explicit"; modelRef: string }
   | { kind: "disabled" }
   | { kind: "auto" };

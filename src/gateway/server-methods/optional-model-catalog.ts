@@ -50,7 +50,7 @@ function startOptionalServerMethodModelCatalogValueLoad<T>(params: {
   };
 }
 
-export function startOptionalServerMethodModelCatalogLoad(
+function startOptionalServerMethodModelCatalogLoad(
   context: GatewayRequestContext,
 ): OptionalServerMethodModelCatalogLoad<ModelCatalogEntry[]> {
   return startOptionalServerMethodModelCatalogValueLoad({

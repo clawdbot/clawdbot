@@ -6104,9 +6104,29 @@
       "translated": "أدِر المهارات المثبّتة وأضف الإصدارات الموثوقة من ClawHub."
     },
     {
-      "id": "native.android.8d8bafb716f856dd",
-      "source": "Needs Setup",
-      "translated": "يحتاج إلى إعداد"
+      "id": "native.android.9c353cf3a7ec08e9",
+      "source": "Browse",
+      "translated": "تصفح"
+    },
+    {
+      "id": "native.android.c6d0b8c171da5e69",
+      "source": "Skill changes require operator.admin. Reconnect with an admin-capable gateway token.",
+      "translated": "تتطلب تغييرات المهارات operator.admin. أعِد الاتصال باستخدام رمز Gateway مميز يملك صلاحيات المسؤول."
+    },
+    {
+      "id": "native.android.cf0bc487b537dd04",
+      "source": "Inspect and manage installed skill state.",
+      "translated": "افحص حالة المهارات المثبّتة وأدِرها."
+    },
+    {
+      "id": "native.android.92e94c3027f3e5ce",
+      "source": "Status",
+      "translated": "الحالة"
+    },
+    {
+      "id": "native.android.3866fe91a977b21a",
+      "source": "Missing",
+      "translated": "مفقود"
     },
     {
       "id": "native.android.9507bc022dc2e3ed",
@@ -6119,9 +6139,9 @@
       "translated": "جارٍ التحديث"
     },
     {
-      "id": "native.android.c6d0b8c171da5e69",
-      "source": "Skill changes require operator.admin. Reconnect with an admin-capable gateway token.",
-      "translated": "تتطلب تغييرات المهارات operator.admin. أعِد الاتصال باستخدام رمز Gateway مميز يملك صلاحيات المسؤول."
+      "id": "native.android.8748f97cadea1632",
+      "source": "Search installed skills",
+      "translated": "البحث في المهارات المثبّتة"
     },
     {
       "id": "native.android.73f15da5b2ffdf3c",
@@ -6142,36 +6162,6 @@
       "id": "native.android.193fa2086c682510",
       "source": "No installed skills match this search.",
       "translated": "لا توجد مهارات مثبّتة تطابق هذا البحث."
-    },
-    {
-      "id": "native.android.cf0bc487b537dd04",
-      "source": "Inspect and manage installed skill state.",
-      "translated": "افحص حالة المهارات المثبّتة وأدِرها."
-    },
-    {
-      "id": "native.android.92e94c3027f3e5ce",
-      "source": "Status",
-      "translated": "الحالة"
-    },
-    {
-      "id": "native.android.3866fe91a977b21a",
-      "source": "Missing",
-      "translated": "مفقود"
-    },
-    {
-      "id": "native.android.944e0db270dbef5c",
-      "source": "Installed skills",
-      "translated": "المهارات المثبّتة"
-    },
-    {
-      "id": "native.android.47ee8c52e754f17d",
-      "source": "${visibleCount}/${totalCount}",
-      "translated": "${visibleCount}/${totalCount}"
-    },
-    {
-      "id": "native.android.8748f97cadea1632",
-      "source": "Search installed skills",
-      "translated": "البحث في المهارات المثبّتة"
     },
     {
       "id": "native.android.e7aa097ca1a41857",
@@ -6254,16 +6244,6 @@
       "translated": "جارٍ البحث"
     },
     {
-      "id": "native.android.559e047666ce63f8",
-      "source": "Dismiss",
-      "translated": "تجاهل"
-    },
-    {
-      "id": "native.android.0c00aa53506c3cd3",
-      "source": "Acknowledge Gateway warning and install",
-      "translated": "الإقرار بتحذير Gateway والتثبيت"
-    },
-    {
       "id": "native.android.cc0b71a70901e723",
       "source": "Version $it",
       "translated": "Version $it"
@@ -6279,9 +6259,24 @@
       "translated": "Loading"
     },
     {
+      "id": "native.android.c27608d140fad1ba",
+      "source": "Needs attention",
+      "translated": "يحتاج إلى اهتمام"
+    },
+    {
       "id": "native.android.e63592576acd892e",
       "source": "Review",
       "translated": "Review"
+    },
+    {
+      "id": "native.android.559e047666ce63f8",
+      "source": "Dismiss",
+      "translated": "تجاهل"
+    },
+    {
+      "id": "native.android.0c00aa53506c3cd3",
+      "source": "Acknowledge Gateway warning and install",
+      "translated": "الإقرار بتحذير Gateway والتثبيت"
     },
     {
       "id": "native.android.9be29ded6a7097bf",
@@ -6312,6 +6307,16 @@
       "id": "native.android.268a3461947b22d3",
       "source": "Cancel",
       "translated": "إلغاء"
+    },
+    {
+      "id": "native.android.5f24ed8fa0ca7622",
+      "source": "All",
+      "translated": "الكل"
+    },
+    {
+      "id": "native.android.8d8bafb716f856dd",
+      "source": "Needs Setup",
+      "translated": "يحتاج إلى إعداد"
     },
     {
       "id": "native.android.815c8dab8db8a6c1",
@@ -7919,6 +7924,36 @@
       "translated": "OpenClaw"
     },
     {
+      "id": "native.apple.417ac9273b5f63ca",
+      "source": "Connecting...",
+      "translated": "جارٍ الاتصال..."
+    },
+    {
+      "id": "native.apple.39eb7766f921f67b",
+      "source": "Reconnecting...",
+      "translated": "جارٍ إعادة الاتصال..."
+    },
+    {
+      "id": "native.apple.96a81746f4b59406",
+      "source": "Approval needed",
+      "translated": "الموافقة مطلوبة"
+    },
+    {
+      "id": "native.apple.c619843217c15317",
+      "source": "Action required",
+      "translated": "إجراء مطلوب"
+    },
+    {
+      "id": "native.apple.f2f3e6437fafcd1c",
+      "source": "Connected",
+      "translated": "متصل"
+    },
+    {
+      "id": "native.apple.18d4f8a4eea7f930",
+      "source": "Disconnected",
+      "translated": "غير متصل"
+    },
+    {
       "id": "native.apple.9168fcd110c3019a",
       "source": "OpenClaw Share",
       "translated": "OpenClaw Share"
@@ -7999,21 +8034,6 @@
       "translated": "Dreaming"
     },
     {
-      "id": "native.apple.db33016dc3f5171e",
-      "source": "Backfill",
-      "translated": "الملء بأثر رجعي"
-    },
-    {
-      "id": "native.apple.ae45153f28d9cf2a",
-      "source": "Repair",
-      "translated": "إصلاح"
-    },
-    {
-      "id": "native.apple.dace92af637733b7",
-      "source": "Dedupe",
-      "translated": "إزالة التكرارات"
-    },
-    {
       "id": "native.apple.7d9b95f78347a27a",
       "source": "Memory State",
       "translated": "حالة الذاكرة"
@@ -8074,14 +8094,9 @@
       "translated": "لا توجد يوميات أحلام بعد"
     },
     {
-      "id": "native.apple.bb7c4a8dbc801a19",
-      "source": "\\(diary.path) exists but has no readable content.",
-      "translated": "\\(diary.path) موجود لكنه لا يحتوي على محتوى قابل للقراءة."
-    },
-    {
-      "id": "native.apple.a6a454a28f1db7df",
-      "source": "The gateway did not find DREAMS.md or dreams.md in the active agent workspace.",
-      "translated": "لم تعثر البوابة على DREAMS.md أو dreams.md في مساحة عمل الوكيل النشطة."
+      "id": "native.apple.38481edee49dee86",
+      "source": "%@ exists but has no readable content.",
+      "translated": "%@ موجود، لكنه لا يحتوي على محتوى قابل للقراءة."
     },
     {
       "id": "native.apple.11ae1c140df749a6",
@@ -8104,14 +8119,14 @@
       "translated": "يوم في يوميات الأحلام"
     },
     {
+      "id": "native.apple.cb5d476e6fd39132",
+      "source": "^[\\(count) entry](inflect: true)",
+      "translated": "^[\\(count) إدخال](inflect: true)"
+    },
+    {
       "id": "native.apple.f0df95f0790fe675",
       "source": "Connect a gateway to load dreaming entries.",
       "translated": "اتصل ببوابة لتحميل إدخالات الأحلام."
-    },
-    {
-      "id": "native.apple.32c1207f3fb0ea37",
-      "source": "\\(entry.totalSignalCount)",
-      "translated": "\\(entry.totalSignalCount)"
     },
     {
       "id": "native.apple.bc3cd66fe555c668",
@@ -8139,6 +8154,81 @@
       "translated": "وصّل Gateway لتحميل مراحل الحلم."
     },
     {
+      "id": "native.apple.b8484753b2261ca4",
+      "source": "promoted %@",
+      "translated": "تمت ترقية %@"
+    },
+    {
+      "id": "native.apple.3121be88a53b35fe",
+      "source": "recalled %@",
+      "translated": "تم استدعاء %@"
+    },
+    {
+      "id": "native.apple.e146b79166fb56c8",
+      "source": "^[\\(recallCount) recall](inflect: true)",
+      "translated": "^[\\(recallCount) استدعاء](inflect: true)"
+    },
+    {
+      "id": "native.apple.ae348d77e6a3b5a7",
+      "source": "%@ grounded",
+      "translated": "تم إيقاف %@"
+    },
+    {
+      "id": "native.apple.09ccd0d65706bbe8",
+      "source": "Next cycle %@",
+      "translated": "الدورة التالية %@"
+    },
+    {
+      "id": "native.apple.ae72432c9c8df81c",
+      "source": "Managed cron is installed.",
+      "translated": "تم تثبيت cron المُدار."
+    },
+    {
+      "id": "native.apple.182b224822f923c6",
+      "source": "Managed cron is not installed.",
+      "translated": "لم يتم تثبيت cron المُدار."
+    },
+    {
+      "id": "native.apple.e7ed0e6bd6475e87",
+      "source": "off",
+      "translated": "متوقف"
+    },
+    {
+      "id": "native.apple.89c2dbadb61beaa6",
+      "source": "scheduled",
+      "translated": "مجدول"
+    },
+    {
+      "id": "native.apple.bb81d1f272523053",
+      "source": "setup",
+      "translated": "إعداد"
+    },
+    {
+      "id": "native.apple.7cd754a270dd420c",
+      "source": "No update timestamp",
+      "translated": "لا يوجد طابع زمني للتحديث"
+    },
+    {
+      "id": "native.apple.fe8384438a3e1416",
+      "source": "Updated %@",
+      "translated": "تم التحديث %@"
+    },
+    {
+      "id": "native.apple.f915f940cd41f8b7",
+      "source": "%@ written",
+      "translated": "تمت كتابة %@"
+    },
+    {
+      "id": "native.apple.04f334bae872bd6e",
+      "source": "%@ replaced",
+      "translated": "تم استبدال %@"
+    },
+    {
+      "id": "native.apple.d65f4b2b6f3521f9",
+      "source": "%@ removed",
+      "translated": "تمت إزالة %@"
+    },
+    {
       "id": "native.apple.95e346b05c4acf8a",
       "source": "artifacts repaired",
       "translated": "تم إصلاح العناصر"
@@ -8147,6 +8237,26 @@
       "id": "native.apple.da9b0546b320aa00",
       "source": "no repair needed",
       "translated": "لا حاجة إلى إصلاح"
+    },
+    {
+      "id": "native.apple.d9dfa96b05191434",
+      "source": "%@ complete.",
+      "translated": "اكتمل %@."
+    },
+    {
+      "id": "native.apple.43f505f68eadffcd",
+      "source": "Light",
+      "translated": "فاتح"
+    },
+    {
+      "id": "native.apple.b6f05f951d73bd1e",
+      "source": "Deep",
+      "translated": "عميق"
+    },
+    {
+      "id": "native.apple.0d5038dc94122bcf",
+      "source": "REM",
+      "translated": "REM"
     },
     {
       "id": "native.apple.43258a1742cabdb6",
@@ -8184,6 +8294,16 @@
       "translated": "Gateway"
     },
     {
+      "id": "native.apple.c3ae9efdc2be272f",
+      "source": "online",
+      "translated": "متصل"
+    },
+    {
+      "id": "native.apple.0518f671585ef32f",
+      "source": "offline",
+      "translated": "غير متصل"
+    },
+    {
       "id": "native.apple.9a1211ec7db72f53",
       "source": "Connected Instances",
       "translated": "المثيلات المتصلة"
@@ -8214,9 +8334,19 @@
       "translated": "المثيل"
     },
     {
+      "id": "native.apple.c25db81e3ff64553",
+      "source": "Copy instance",
+      "translated": "نسخ المثيل"
+    },
+    {
       "id": "native.apple.7450caafbc4c4905",
       "source": "Device",
       "translated": "الجهاز"
+    },
+    {
+      "id": "native.apple.31f2a68054e28eba",
+      "source": "Copy device",
+      "translated": "نسخ الجهاز"
     },
     {
       "id": "native.apple.918d896da8c9690b",
@@ -8224,9 +8354,19 @@
       "translated": "المضيف"
     },
     {
+      "id": "native.apple.c8a36d8d7ae83044",
+      "source": "Copy host",
+      "translated": "نسخ المضيف"
+    },
+    {
       "id": "native.apple.2f6eab7cb6d67e11",
       "source": "IP",
       "translated": "عنوان IP"
+    },
+    {
+      "id": "native.apple.834d2d0fdd210ac2",
+      "source": "Copy IP",
+      "translated": "نسخ عنوان IP"
     },
     {
       "id": "native.apple.8b827c9e2747230b",
@@ -8234,14 +8374,29 @@
       "translated": "النظام الأساسي"
     },
     {
+      "id": "native.apple.feb084c3238e4d28",
+      "source": "Copy platform",
+      "translated": "نسخ المنصة"
+    },
+    {
       "id": "native.apple.78ed7a935ffced12",
       "source": "Version",
       "translated": "الإصدار"
     },
     {
+      "id": "native.apple.ec157a467416278f",
+      "source": "Copy version",
+      "translated": "نسخ الإصدار"
+    },
+    {
       "id": "native.apple.752a753f245e5ca4",
       "source": "Mode",
       "translated": "الوضع"
+    },
+    {
+      "id": "native.apple.25649f1b07285efb",
+      "source": "Copy mode",
+      "translated": "نسخ الوضع"
     },
     {
       "id": "native.apple.cef6a48e33c99f34",
@@ -8259,24 +8414,29 @@
       "translated": "الوسوم"
     },
     {
-      "id": "native.apple.4b2a40c2512edb6b",
-      "source": "Copy \\(title)",
-      "translated": "نسخ \\(title)"
-    },
-    {
       "id": "native.apple.e9c4662a91a0188e",
       "source": "None reported.",
       "translated": "لم يتم الإبلاغ عن أي شيء."
     },
     {
-      "id": "native.apple.41526676f6d4d2cf",
-      "source": "\\(scopesCount) scopes",
-      "translated": "\\(scopesCount) scopes"
+      "id": "native.apple.f70500f86f74cf61",
+      "source": "Presence beacon received.",
+      "translated": "تم استلام إشارة الحضور."
     },
     {
-      "id": "native.apple.58bcd0a6ffe9de8a",
-      "source": "\\(rolesCount) roles",
-      "translated": "\\(rolesCount) roles"
+      "id": "native.apple.595bbfa0a67340a4",
+      "source": "^[\\(scopesCount) scope](inflect: true)",
+      "translated": "^[\\(scopesCount) نطاق](inflect: true)"
+    },
+    {
+      "id": "native.apple.788d9eb419f4161c",
+      "source": "^[\\(rolesCount) role](inflect: true)",
+      "translated": "^[\\(rolesCount) دور](inflect: true)"
+    },
+    {
+      "id": "native.apple.1ea9bc4832a565a6",
+      "source": "instance %@",
+      "translated": "المثيل %@"
     },
     {
       "id": "native.apple.828de90d8dfed4ad",
@@ -8309,14 +8469,19 @@
       "translated": "إيقاف مؤقت"
     },
     {
-      "id": "native.apple.5c9bbc2dc26712ef",
-      "source": "Enabled \\(job.name).",
-      "translated": "تم تمكين \\(job.name)."
+      "id": "native.apple.7323dffbc056bdcd",
+      "source": "Queued %@.",
+      "translated": "تمت إضافة %@ إلى قائمة الانتظار."
     },
     {
-      "id": "native.apple.8658a6a0ee787fc3",
-      "source": "Paused \\(job.name).",
-      "translated": "تم إيقاف \\(job.name) مؤقتًا."
+      "id": "native.apple.424e352a747453ed",
+      "source": "Enabled %@.",
+      "translated": "تم تمكين %@."
+    },
+    {
+      "id": "native.apple.3fa576c85eabf0c1",
+      "source": "Paused %@.",
+      "translated": "تم إيقاف %@ مؤقتًا."
     },
     {
       "id": "native.apple.a373bf2332f0ab6a",
@@ -8364,11 +8529,6 @@
       "translated": "محدد"
     },
     {
-      "id": "native.apple.6992ddf119f4d920",
-      "source": "\\(self.sortedAgents.count) total",
-      "translated": "الإجمالي \\(self.sortedAgents.count)"
-    },
-    {
       "id": "native.apple.5ee1fa5a66b2d846",
       "source": "Search agents",
       "translated": "البحث في الوكلاء"
@@ -8394,14 +8554,14 @@
       "translated": "تصفية الوكلاء"
     },
     {
-      "id": "native.apple.0938c66b5382e9b5",
-      "source": "Gateway offline",
-      "translated": "Gateway غير متصل"
-    },
-    {
       "id": "native.apple.6f0aae58035253c8",
       "source": "Gateway online",
       "translated": "Gateway متصل"
+    },
+    {
+      "id": "native.apple.0938c66b5382e9b5",
+      "source": "Gateway offline",
+      "translated": "Gateway غير متصل"
     },
     {
       "id": "native.apple.9c45abb65d0ba8f3",
@@ -8464,14 +8624,14 @@
       "translated": "يحدد هذا الوكيل"
     },
     {
-      "id": "native.apple.e347d159f30bca34",
-      "source": "Cron unavailable",
-      "translated": "Cron غير متاح"
-    },
-    {
       "id": "native.apple.4f053bb46f35a802",
       "source": "No scheduled jobs",
       "translated": "لا توجد مهام مجدولة"
+    },
+    {
+      "id": "native.apple.e347d159f30bca34",
+      "source": "Cron unavailable",
+      "translated": "Cron غير متاح"
     },
     {
       "id": "native.apple.0cd04bacdbcd8fa5",
@@ -8484,6 +8644,56 @@
       "translated": "وصّل Gateway لتحميل العمل المجدول."
     },
     {
+      "id": "native.apple.a2124ae7a022491b",
+      "source": "Agents unavailable",
+      "translated": "الوكلاء غير متاحين"
+    },
+    {
+      "id": "native.apple.475dc97bd0e6286b",
+      "source": "No matches",
+      "translated": "لا توجد نتائج مطابقة"
+    },
+    {
+      "id": "native.apple.9d2786ddafa15430",
+      "source": "No online agents",
+      "translated": "لا يوجد وكلاء متصلون"
+    },
+    {
+      "id": "native.apple.87bae31404c2d258",
+      "source": "No ready agents",
+      "translated": "لا يوجد وكلاء جاهزون"
+    },
+    {
+      "id": "native.apple.b9fde6b86e25094d",
+      "source": "No agents reported",
+      "translated": "لم يتم الإبلاغ عن أي وكلاء"
+    },
+    {
+      "id": "native.apple.8dd027d0cda8df94",
+      "source": "Connect a gateway to load the live agent roster.",
+      "translated": "صِل بوابة لتحميل قائمة الوكلاء المباشرة."
+    },
+    {
+      "id": "native.apple.54310f408a47ff34",
+      "source": "Try another search or clear the agent filters.",
+      "translated": "جرّب بحثًا آخر أو امسح عوامل تصفية الوكلاء."
+    },
+    {
+      "id": "native.apple.79b8e83c45264357",
+      "source": "Clear the filter to view the full roster.",
+      "translated": "امسح عامل التصفية لعرض القائمة الكاملة."
+    },
+    {
+      "id": "native.apple.45617d19347a2523",
+      "source": "The connected gateway did not return an agent list.",
+      "translated": "لم تُرجع البوابة المتصلة قائمة بالوكلاء."
+    },
+    {
+      "id": "native.apple.9df7fcf062da8bd9",
+      "source": "Connect a gateway to load skills.",
+      "translated": "صِل بوابة لتحميل المهارات."
+    },
+    {
       "id": "native.apple.13e776bd20f1df1c",
       "source": "Loading skill status.",
       "translated": "جارٍ تحميل حالة Skills."
@@ -8494,9 +8704,24 @@
       "translated": "حالة Skills متاحة من Gateway."
     },
     {
-      "id": "native.apple.6276902cd4fe942d",
-      "source": "Instance presence is available.",
-      "translated": "توفر المثيل متاح."
+      "id": "native.apple.f06876c38a2fc175",
+      "source": "%@ enabled, %@ blocked",
+      "translated": "%@ مفعّلة, %@ محظورة"
+    },
+    {
+      "id": "native.apple.d93bd8454b0e1e98",
+      "source": "%@ enabled, %@ need setup",
+      "translated": "%@ مفعّلة, %@ تحتاج إلى إعداد"
+    },
+    {
+      "id": "native.apple.bd50e55712b9c077",
+      "source": "%@ enabled, %@ installed",
+      "translated": "%@ مفعّلة, %@ مثبّتة"
+    },
+    {
+      "id": "native.apple.814a805c3735687d",
+      "source": "Connect a gateway to load instances.",
+      "translated": "صِل بوابة لتحميل المثيلات."
     },
     {
       "id": "native.apple.30b12adf015466a3",
@@ -8504,14 +8729,24 @@
       "translated": "جارٍ تحميل توفر المثيل."
     },
     {
-      "id": "native.apple.2beba7d892331495",
-      "source": "\\(cronStatus.jobs)",
-      "translated": "\\(cronStatus.jobs)"
+      "id": "native.apple.6276902cd4fe942d",
+      "source": "Instance presence is available.",
+      "translated": "توفر المثيل متاح."
     },
     {
-      "id": "native.apple.f0d3f77e976e0392",
-      "source": "Cron status is available.",
-      "translated": "حالة Cron متاحة."
+      "id": "native.apple.09a4622db6dfdcc5",
+      "source": "No live instances reported.",
+      "translated": "لم يتم الإبلاغ عن أي مثيلات مباشرة."
+    },
+    {
+      "id": "native.apple.d38daa486f0413a0",
+      "source": "^[\\(count) agent](inflect: true) total",
+      "translated": "^[\\(count) وكيل](inflect: true) إجمالًا"
+    },
+    {
+      "id": "native.apple.c326e858393ccc4b",
+      "source": "Connect a gateway to load cron.",
+      "translated": "صِل بوابة لتحميل cron."
     },
     {
       "id": "native.apple.a08cca83d5753d7b",
@@ -8519,14 +8754,29 @@
       "translated": "جارٍ تحميل حالة cron."
     },
     {
-      "id": "native.apple.2f89185965cb4c09",
-      "source": "Scheduler disabled",
-      "translated": "تم تعطيل المجدول"
+      "id": "native.apple.f0d3f77e976e0392",
+      "source": "Cron status is available.",
+      "translated": "حالة Cron متاحة."
+    },
+    {
+      "id": "native.apple.257ef001e3f0acd8",
+      "source": "Next wake %@",
+      "translated": "التنبيه التالي %@"
     },
     {
       "id": "native.apple.59cb26a37071e5b8",
       "source": "Scheduler enabled",
       "translated": "تم تمكين المجدول"
+    },
+    {
+      "id": "native.apple.2f89185965cb4c09",
+      "source": "Scheduler disabled",
+      "translated": "تم تعطيل المجدول"
+    },
+    {
+      "id": "native.apple.a25259231dc8beb8",
+      "source": "Connect a gateway to load usage.",
+      "translated": "صِل بوابة لتحميل الاستخدام."
     },
     {
       "id": "native.apple.c3ebef43c447e296",
@@ -8539,14 +8789,59 @@
       "translated": "الاستخدام الأخير متاح."
     },
     {
-      "id": "native.apple.524a87549db68abc",
-      "source": "Background memory status is available.",
-      "translated": "حالة ذاكرة الخلفية متاحة."
+      "id": "native.apple.5f8339966a21d586",
+      "source": "%@ tokens in %@d",
+      "translated": "%@ من الرموز المميزة خلال %@d"
+    },
+    {
+      "id": "native.apple.9c4c9e889d06e927",
+      "source": "No token usage reported for %@d.",
+      "translated": "لم يتم الإبلاغ عن استخدام الرموز المميزة خلال %@d."
+    },
+    {
+      "id": "native.apple.7ffc45b47d1de053",
+      "source": "offline",
+      "translated": "غير متصل"
+    },
+    {
+      "id": "native.apple.7a572cb05a006b2d",
+      "source": "live",
+      "translated": "مباشر"
+    },
+    {
+      "id": "native.apple.286a89c0fef4fea9",
+      "source": "off",
+      "translated": "متوقف"
+    },
+    {
+      "id": "native.apple.9d1714c85e8f6e6f",
+      "source": "on",
+      "translated": "قيد التشغيل"
+    },
+    {
+      "id": "native.apple.4a5feb7e6c26dc76",
+      "source": "Connect a gateway to load dreaming.",
+      "translated": "وصّل Gateway لتحميل الأحلام."
     },
     {
       "id": "native.apple.9b141e37ef320c38",
       "source": "Loading dreaming status.",
       "translated": "جارٍ تحميل حالة الحلم."
+    },
+    {
+      "id": "native.apple.524a87549db68abc",
+      "source": "Background memory status is available.",
+      "translated": "حالة ذاكرة الخلفية متاحة."
+    },
+    {
+      "id": "native.apple.1f526e6e6d345436",
+      "source": "Next cycle %@",
+      "translated": "الدورة التالية %@"
+    },
+    {
+      "id": "native.apple.396d49d581bf2ffd",
+      "source": "%@ signals, %@ promoted today",
+      "translated": "%@ إشارة، تمت ترقية %@ اليوم"
     },
     {
       "id": "native.apple.79e92dff90eb58d0",
@@ -8594,9 +8889,9 @@
       "translated": "البحث في ClawHub"
     },
     {
-      "id": "native.apple.a46408193c7d93e8",
-      "source": "Install \\(result.displayName)",
-      "translated": "تثبيت \\(result.displayName)"
+      "id": "native.apple.5112dacfc5f5ed3f",
+      "source": "Install %@",
+      "translated": "تثبيت %@"
     },
     {
       "id": "native.apple.b11c71227fc1e5fd",
@@ -8624,19 +8919,24 @@
       "translated": "وصّل Gateway لتحميل Skills الخاصة بمساحة العمل."
     },
     {
-      "id": "native.apple.61ebcf220ca6f7f4",
-      "source": "Setup: \\(install)",
-      "translated": "الإعداد: \\(install)"
+      "id": "native.apple.c080a32bd21468b5",
+      "source": "Setup: %@",
+      "translated": "الإعداد: %@"
     },
     {
-      "id": "native.apple.e94ab5a64ed0052b",
-      "source": "Set up \\(skill.displayName)",
-      "translated": "إعداد \\(skill.displayName)"
+      "id": "native.apple.219649974c6b668c",
+      "source": "Set up %@",
+      "translated": "إعداد %@"
     },
     {
-      "id": "native.apple.801febb8177c45d6",
-      "source": "Edit \\(skill.displayName)",
-      "translated": "تعديل \\(skill.displayName)"
+      "id": "native.apple.559d9af0ff087bba",
+      "source": "Edit %@",
+      "translated": "تعديل %@"
+    },
+    {
+      "id": "native.apple.23771aa70438b62f",
+      "source": "saving",
+      "translated": "جارٍ الحفظ"
     },
     {
       "id": "native.apple.de59fbc2807318fc",
@@ -8657,6 +8957,11 @@
       "id": "native.apple.8869a6b2fde070b8",
       "source": "Close",
       "translated": "إغلاق"
+    },
+    {
+      "id": "native.apple.093b53b0ef042e46",
+      "source": "Workspace skill",
+      "translated": "مهارة مساحة العمل"
     },
     {
       "id": "native.apple.05e570a704fc1119",
@@ -8694,9 +8999,9 @@
       "translated": "الإعداد"
     },
     {
-      "id": "native.apple.7c9ea375c01972ee",
-      "source": "Missing: \\(missing)",
-      "translated": "مفقود: \\(missing)"
+      "id": "native.apple.4657169285b4c056",
+      "source": "Missing: %@",
+      "translated": "مفقود: %@"
     },
     {
       "id": "native.apple.51d5e0c708a3fa66",
@@ -8744,6 +9049,31 @@
       "translated": "تم حفظ مفتاح API."
     },
     {
+      "id": "native.apple.e47ee6ec695e8f51",
+      "source": "off",
+      "translated": "متوقف"
+    },
+    {
+      "id": "native.apple.fd393483f9be16a0",
+      "source": "blocked",
+      "translated": "محظور"
+    },
+    {
+      "id": "native.apple.04ba483eeaa9c10a",
+      "source": "disabled",
+      "translated": "معطّل"
+    },
+    {
+      "id": "native.apple.92790379912bf7cf",
+      "source": "setup",
+      "translated": "إعداد"
+    },
+    {
+      "id": "native.apple.f649bab19968c41a",
+      "source": "enabled",
+      "translated": "مفعّل"
+    },
+    {
       "id": "native.apple.a65066d19ed879fd",
       "source": "Totals",
       "translated": "الإجماليات"
@@ -8779,9 +9109,9 @@
       "translated": "أرجع Gateway الإجماليات من دون صفوف تكلفة الجلسات اليومية."
     },
     {
-      "id": "native.apple.a17ce77200834d9c",
-      "source": "\\(Self.compactNumber(day.totalTokens ?? 0)) tokens",
-      "translated": "\\(Self.compactNumber(day.totalTokens ?? 0)) رمزًا"
+      "id": "native.apple.40801447cf1a7747",
+      "source": "%@ tokens",
+      "translated": "%@ من الرموز"
     },
     {
       "id": "native.apple.fb60c35df83a0768",
@@ -8834,9 +9164,9 @@
       "translated": "تحميل المزيد"
     },
     {
-      "id": "native.apple.e617cdacc3bce5ea",
-      "source": "\\(self.entries.count) of \\(self.totalEntries)",
-      "translated": "\\(self.entries.count) من \\(self.totalEntries)"
+      "id": "native.apple.62fffc0c4177b942",
+      "source": "%1$@ of %2$@",
+      "translated": "%1$@ من %2$@"
     },
     {
       "id": "native.apple.336a7eeb12d6e5f4",
@@ -8914,14 +9244,14 @@
       "translated": "غير متاح"
     },
     {
-      "id": "native.apple.4dcedefea4b49a1c",
-      "source": "Message \\(self.agentDisplayName)...",
-      "translated": "مراسلة \\(self.agentDisplayName)..."
+      "id": "native.apple.ab1ba2e13f0d7a5c",
+      "source": "Message %@...",
+      "translated": "مراسلة %@..."
     },
     {
-      "id": "native.apple.84767ec18054524b",
-      "source": "Message \\(self.agentDisplayName); sends when connected",
-      "translated": "مراسلة \\(self.agentDisplayName)؛ تُرسل عند الاتصال"
+      "id": "native.apple.330854f5d85e93ba",
+      "source": "Message %@; sends when connected",
+      "translated": "مراسلة %@; تُرسل عند الاتصال"
     },
     {
       "id": "native.apple.11b20bef7e51ab69",
@@ -8959,19 +9289,49 @@
       "translated": "ساعدني في بدء جلسة صوتية فورية من هذا الهاتف."
     },
     {
+      "id": "native.apple.a8516ff4857a2a32",
+      "source": "offline",
+      "translated": "غير متصل"
+    },
+    {
+      "id": "native.apple.8a1dbc1bb480924e",
+      "source": "off",
+      "translated": "متوقف"
+    },
+    {
+      "id": "native.apple.99efca46cb7001be",
+      "source": "idle",
+      "translated": "خامل"
+    },
+    {
+      "id": "native.apple.4902ae257d46c391",
+      "source": "open",
+      "translated": "مفتوح"
+    },
+    {
+      "id": "native.apple.e73df4140ad54ddf",
+      "source": "default",
+      "translated": "افتراضي"
+    },
+    {
+      "id": "native.apple.4e6a9b646f60ba00",
+      "source": "recent",
+      "translated": "حديث"
+    },
+    {
       "id": "native.apple.41afc4a5d600ded5",
       "source": "Unarchive",
       "translated": "إلغاء الأرشفة"
     },
     {
-      "id": "native.apple.69b8d4842a6b18ca",
-      "source": "Pin",
-      "translated": "تثبيت"
-    },
-    {
       "id": "native.apple.43b1796d55760cbf",
       "source": "Unpin",
       "translated": "إلغاء التثبيت"
+    },
+    {
+      "id": "native.apple.69b8d4842a6b18ca",
+      "source": "Pin",
+      "translated": "تثبيت"
     },
     {
       "id": "native.apple.48fe0c28f708d02d",
@@ -8999,14 +9359,14 @@
       "translated": "أرشفة"
     },
     {
-      "id": "native.apple.ef105487ab62349a",
-      "source": "Create",
-      "translated": "إنشاء"
-    },
-    {
       "id": "native.apple.1d017f810676d86b",
       "source": "Save",
       "translated": "حفظ"
+    },
+    {
+      "id": "native.apple.ef105487ab62349a",
+      "source": "Create",
+      "translated": "إنشاء"
     },
     {
       "id": "native.apple.f488b9caf6e51ac3",
@@ -9119,6 +9479,21 @@
       "translated": "Gateway غير متصل"
     },
     {
+      "id": "native.apple.28c97cf23665ee01",
+      "source": "No recent sessions",
+      "translated": "لا توجد جلسات حديثة"
+    },
+    {
+      "id": "native.apple.79937d7781fb65ae",
+      "source": "Connect to the gateway.",
+      "translated": "الاتصال بـ Gateway."
+    },
+    {
+      "id": "native.apple.bb1a311441d3cf24",
+      "source": "Start a chat and it will appear here.",
+      "translated": "ابدأ محادثة وستظهر هنا."
+    },
+    {
       "id": "native.apple.e01aac63fda4c147",
       "source": "Online",
       "translated": "متصل"
@@ -9137,6 +9512,41 @@
       "id": "native.apple.89989b6d557090e8",
       "source": "Offline",
       "translated": "غير متصل"
+    },
+    {
+      "id": "native.apple.a90a3aac6e2a6da8",
+      "source": "Unknown",
+      "translated": "غير معروف"
+    },
+    {
+      "id": "native.apple.04d46f4c341bc216",
+      "source": "No recent activity",
+      "translated": "لا يوجد نشاط حديث"
+    },
+    {
+      "id": "native.apple.6103c89c066a8fa1",
+      "source": "iOS chat",
+      "translated": "دردشة iOS"
+    },
+    {
+      "id": "native.apple.c6acae7a45463816",
+      "source": "Telegram chat",
+      "translated": "دردشة Telegram"
+    },
+    {
+      "id": "native.apple.4b9a0a6dad9d258c",
+      "source": "Direct chat",
+      "translated": "دردشة مباشرة"
+    },
+    {
+      "id": "native.apple.dbd48d25920f342b",
+      "source": "%@ on %@",
+      "translated": "%@ على %@"
+    },
+    {
+      "id": "native.apple.c2837d500094e6ae",
+      "source": "%@ via %@",
+      "translated": "%@ عبر %@"
     },
     {
       "id": "native.apple.9aba1ae114cf9848",
@@ -9169,11 +9579,6 @@
       "translated": "إلغاء"
     },
     {
-      "id": "native.apple.82f2bbb1828494f2",
-      "source": "Sessions in \\u{201C}\\(group)\\u{201D} move back to Ungrouped.",
-      "translated": "تعود الجلسات الموجودة في \\u{201C}\\(group)\\u{201D} إلى غير المجمّعة."
-    },
-    {
       "id": "native.apple.9f2fd65953013b7c",
       "source": "Sessions",
       "translated": "الجلسات"
@@ -9194,11 +9599,6 @@
       "translated": "الجلسات غير متاحة"
     },
     {
-      "id": "native.apple.79937d7781fb65ae",
-      "source": "Connect to the gateway.",
-      "translated": "الاتصال بـ Gateway."
-    },
-    {
       "id": "native.apple.54f8260c9b863087",
       "source": "Loading archived sessions",
       "translated": "جارٍ تحميل الجلسات المؤرشفة"
@@ -9209,24 +9609,19 @@
       "translated": "جارٍ تحميل الجلسات الأخيرة"
     },
     {
+      "id": "native.apple.207dad20d09f3160",
+      "source": "^[\\(count) session](inflect: true)",
+      "translated": "^[\\(count) جلسة](inflect: true)"
+    },
+    {
       "id": "native.apple.1f4501a6bf2bae4c",
       "source": "No archived sessions",
       "translated": "لا توجد جلسات مؤرشفة"
     },
     {
-      "id": "native.apple.28c97cf23665ee01",
-      "source": "No recent sessions",
-      "translated": "لا توجد جلسات حديثة"
-    },
-    {
       "id": "native.apple.2a1ba7a5e1979c9e",
       "source": "Archived sessions will appear here.",
       "translated": "ستظهر الجلسات المؤرشفة هنا."
-    },
-    {
-      "id": "native.apple.bb1a311441d3cf24",
-      "source": "Start a chat and it will appear here.",
-      "translated": "ابدأ محادثة وستظهر هنا."
     },
     {
       "id": "native.apple.e8e8cea7ec44fe08",
@@ -9404,9 +9799,9 @@
       "translated": "تم"
     },
     {
-      "id": "native.apple.57ea1dae1aa22723",
-      "source": "\\(self.filteredProposals.count) proposals",
-      "translated": "\\(self.filteredProposals.count) مقترحات"
+      "id": "native.apple.e25d5a230c257297",
+      "source": "^[\\(count) proposal](inflect: true)",
+      "translated": "^[\\(count) اقتراح](inflect: true)"
     },
     {
       "id": "native.apple.daffe56ff9b28fa8",
@@ -9489,6 +9884,41 @@
       "translated": "نطاق المسؤول مطلوب."
     },
     {
+      "id": "native.apple.530e9aa1b568a5cb",
+      "source": "Pending",
+      "translated": "قيد الانتظار"
+    },
+    {
+      "id": "native.apple.cf9d683ac30d212d",
+      "source": "Held",
+      "translated": "محتجز"
+    },
+    {
+      "id": "native.apple.a4242fe1c49b2f1b",
+      "source": "Applied",
+      "translated": "مطبق"
+    },
+    {
+      "id": "native.apple.4e05c7dc80bea12c",
+      "source": "Rejected",
+      "translated": "مرفوض"
+    },
+    {
+      "id": "native.apple.2873e14114795934",
+      "source": "All",
+      "translated": "الكل"
+    },
+    {
+      "id": "native.apple.1ca96e4c1dc83eae",
+      "source": "Quarantined",
+      "translated": "معزول"
+    },
+    {
+      "id": "native.apple.11de8fc2d1cd1e13",
+      "source": "Stale",
+      "translated": "قديم"
+    },
+    {
       "id": "native.apple.79e7355c669bf71e",
       "source": "Proposal applied.",
       "translated": "تم تطبيق المقترح."
@@ -9499,9 +9929,9 @@
       "translated": "تم رفض المقترح."
     },
     {
-      "id": "native.apple.16e5b5a92891e431",
-      "source": "No \\(IPadSkillWorkshopScreen.proposalLaneLabel(self.status).lowercased()) proposals",
-      "translated": "لا توجد مقترحات \\(IPadSkillWorkshopScreen.proposalLaneLabel(self.status).lowercased())"
+      "id": "native.apple.f65f8915f907c779",
+      "source": "No proposals in %@",
+      "translated": "لا توجد اقتراحات في %@"
     },
     {
       "id": "native.apple.d551631fd59d66ba",
@@ -9539,6 +9969,26 @@
       "translated": "رفض"
     },
     {
+      "id": "native.apple.b4af97417b497912",
+      "source": "now",
+      "translated": "الآن"
+    },
+    {
+      "id": "native.apple.8c28e758250ae478",
+      "source": "%@m",
+      "translated": "%@د"
+    },
+    {
+      "id": "native.apple.e893b637bb1308af",
+      "source": "%@h",
+      "translated": "%@س"
+    },
+    {
+      "id": "native.apple.bfd7390a8b9613e6",
+      "source": "%@d",
+      "translated": "%@ي"
+    },
+    {
       "id": "native.apple.f12f3fcc4fa6b04b",
       "source": "Workboard",
       "translated": "لوحة العمل"
@@ -9559,9 +10009,9 @@
       "translated": "تحديث"
     },
     {
-      "id": "native.apple.fb9e29033d18989e",
-      "source": "\\(self.filteredCards.count) cards",
-      "translated": "\\(self.filteredCards.count) بطاقات"
+      "id": "native.apple.7f29ff61a73ddf37",
+      "source": "^[\\(count) card](inflect: true)",
+      "translated": "^[\\(count) بطاقة](inflect: true)"
     },
     {
       "id": "native.apple.218fbb58080fb72d",
@@ -9589,9 +10039,9 @@
       "translated": "نشط"
     },
     {
-      "id": "native.apple.1025db84f77e09e2",
-      "source": "Show \\(IPadWorkboardDefaults.label(for: status)) cards",
-      "translated": "عرض بطاقات \\(IPadWorkboardDefaults.label(for: status))"
+      "id": "native.apple.ac8197202dbb14d1",
+      "source": "Show %@ cards",
+      "translated": "إظهار %@ بطاقة"
     },
     {
       "id": "native.apple.d451be3a2cbc14a2",
@@ -9649,19 +10099,29 @@
       "translated": "إلغاء"
     },
     {
-      "id": "native.apple.5c1a338af512a718",
-      "source": "Create",
-      "translated": "إنشاء"
-    },
-    {
       "id": "native.apple.6d92a8218bb832f5",
       "source": "Creating...",
       "translated": "جارٍ الإنشاء..."
     },
     {
-      "id": "native.apple.13138f666cdcf858",
-      "source": "Connect from Settings to create, move, and dispatch cards.",
-      "translated": "اتصل من الإعدادات لإنشاء البطاقات ونقلها وإرسالها."
+      "id": "native.apple.5c1a338af512a718",
+      "source": "Create",
+      "translated": "إنشاء"
+    },
+    {
+      "id": "native.apple.41e179b61c87f68a",
+      "source": "Creates a workboard card",
+      "translated": "ينشئ بطاقة في لوحة العمل"
+    },
+    {
+      "id": "native.apple.d73462fb8914ddfa",
+      "source": "Card creation is already in progress.",
+      "translated": "إنشاء البطاقة قيد التقدم بالفعل."
+    },
+    {
+      "id": "native.apple.d9d4d643a859734e",
+      "source": "Enter a title to create a card.",
+      "translated": "أدخل عنوانًا لإنشاء بطاقة."
     },
     {
       "id": "native.apple.3a979dd267aec356",
@@ -9669,9 +10129,14 @@
       "translated": "Gateway للقراءة فقط."
     },
     {
-      "id": "native.apple.32c4f348c9f4e313",
-      "source": "No \\(IPadWorkboardDefaults.label(for: self.status).lowercased()) cards",
-      "translated": "لا توجد بطاقات \\(IPadWorkboardDefaults.label(for: self.status).lowercased())"
+      "id": "native.apple.13138f666cdcf858",
+      "source": "Connect from Settings to create, move, and dispatch cards.",
+      "translated": "اتصل من الإعدادات لإنشاء البطاقات ونقلها وإرسالها."
+    },
+    {
+      "id": "native.apple.55813ade2bfb13b0",
+      "source": "No cards in %@",
+      "translated": "لا توجد بطاقات في %@"
     },
     {
       "id": "native.apple.30c47306610cb517",
@@ -9694,9 +10159,9 @@
       "translated": "فحص"
     },
     {
-      "id": "native.apple.774f595a01eca278",
-      "source": "Move to \\(IPadWorkboardDefaults.label(for: status))",
-      "translated": "نقل إلى \\(IPadWorkboardDefaults.label(for: status))"
+      "id": "native.apple.155107659d31d314",
+      "source": "Move to %@",
+      "translated": "نقل إلى %@"
     },
     {
       "id": "native.apple.1345612333480144",
@@ -9747,6 +10212,81 @@
       "id": "native.apple.07a313e2adf7227b",
       "source": "Done",
       "translated": "تم"
+    },
+    {
+      "id": "native.apple.a3c9f8abaed4b9c5",
+      "source": "Todo",
+      "translated": "المهام"
+    },
+    {
+      "id": "native.apple.33ab99f7be5a2588",
+      "source": "Scheduled",
+      "translated": "مجدول"
+    },
+    {
+      "id": "native.apple.9ea3a990d4c500b0",
+      "source": "Ready",
+      "translated": "جاهز"
+    },
+    {
+      "id": "native.apple.c04dad88a3a94530",
+      "source": "Running",
+      "translated": "قيد التشغيل"
+    },
+    {
+      "id": "native.apple.70a8a0d2bd61c82e",
+      "source": "Review",
+      "translated": "مراجعة"
+    },
+    {
+      "id": "native.apple.604c326e2d07e75b",
+      "source": "Blocked",
+      "translated": "محظور"
+    },
+    {
+      "id": "native.apple.34d5790c7bdf7f00",
+      "source": "No cards dispatched.",
+      "translated": "لم يتم إرسال أي بطاقات."
+    },
+    {
+      "id": "native.apple.fa75fb838aa0a94a",
+      "source": "%@ dispatched.",
+      "translated": "تم إرسال %@."
+    },
+    {
+      "id": "native.apple.df4dfa88b477c8e7",
+      "source": "%@ dispatched: %@.",
+      "translated": "تم إرسال %@: %@."
+    },
+    {
+      "id": "native.apple.60e9b4bdd5dc28eb",
+      "source": "%@ started",
+      "translated": "تم بدء %@"
+    },
+    {
+      "id": "native.apple.6a5b16d2fca0ef44",
+      "source": "%@ promoted",
+      "translated": "تمت ترقية %@"
+    },
+    {
+      "id": "native.apple.8cbc76241ff24464",
+      "source": "%@ reclaimed",
+      "translated": "تمت استعادة %@"
+    },
+    {
+      "id": "native.apple.76b254218a18e34a",
+      "source": "%@ orchestrated",
+      "translated": "تم تنسيق %@"
+    },
+    {
+      "id": "native.apple.8cea3f74e7801be8",
+      "source": "%@ blocked",
+      "translated": "تم حظر %@"
+    },
+    {
+      "id": "native.apple.ac2f7d6624d2cb56",
+      "source": "%@ failed",
+      "translated": "فشل %@"
     },
     {
       "id": "native.apple.132b2b13adbcee9d",
@@ -9814,9 +10354,9 @@
       "translated": "رموز إعداد الهاتف المحمول وQR والموافقة على العقدة."
     },
     {
-      "id": "native.apple.f36a9ff70377109b",
-      "source": "Request ID: \\(value)",
-      "translated": "معرّف الطلب: \\(value)"
+      "id": "native.apple.e5db84b0b3ad9a5b",
+      "source": "Request ID: %@",
+      "translated": "معرّف الطلب: %@"
     },
     {
       "id": "native.apple.cf9bb65f8e405cc8",
@@ -9824,9 +10364,9 @@
       "translated": "OpenClaw"
     },
     {
-      "id": "native.apple.51c566ed34b67acf",
-      "source": "Gateway \\(self.title)",
-      "translated": "Gateway \\(self.title)"
+      "id": "native.apple.20d011936ab5cd30",
+      "source": "Gateway %@",
+      "translated": "Gateway %@"
     },
     {
       "id": "native.apple.72baecec6cf1b462",
@@ -9899,19 +10439,24 @@
       "translated": "مهام Cron"
     },
     {
+      "id": "native.apple.57587fec1ca582ec",
+      "source": "Default Agent",
+      "translated": "الوكيل الافتراضي"
+    },
+    {
       "id": "native.apple.e0e99a802f07cc68",
       "source": "Gateway",
       "translated": "Gateway"
     },
     {
-      "id": "native.apple.e30d7d35682e8ffa",
-      "source": "Gateway \\(self.gatewayStateText), \\(gatewayDisplayLabel), \\(self.sidebarActiveAgentTitle)",
-      "translated": "Gateway \\(self.gatewayStateText)، \\(gatewayDisplayLabel)، \\(self.sidebarActiveAgentTitle)"
+      "id": "native.apple.731e5fccde7cbc86",
+      "source": "Gateway %1$@, %2$@, %3$@",
+      "translated": "Gateway %1$@، %2$@، %3$@"
     },
     {
-      "id": "native.apple.75b65c24f3607c35",
-      "source": "Gateway \\(self.gatewayStateText), \\(self.sidebarActiveAgentTitle)",
-      "translated": "Gateway \\(self.gatewayStateText)، \\(self.sidebarActiveAgentTitle)"
+      "id": "native.apple.ab0a315f69e3d5df",
+      "source": "Gateway %1$@, %2$@",
+      "translated": "Gateway %1$@، %2$@"
     },
     {
       "id": "native.apple.01ad746119fbc27d",
@@ -9949,6 +10494,61 @@
       "translated": "جارٍ جلب القنوات والحسابات وحالة التوجيه المثبّتة من Gateway."
     },
     {
+      "id": "native.apple.3e8737ac9ff3aefb",
+      "source": "Connect to load channel integrations.",
+      "translated": "اتصل لتحميل عمليات تكامل القنوات."
+    },
+    {
+      "id": "native.apple.d85c62fbda2d828d",
+      "source": "Installed channel clients, account state, and message-routing readiness.",
+      "translated": "عملاء القنوات المثبّتون، وحالة الحساب، وجاهزية توجيه الرسائل."
+    },
+    {
+      "id": "native.apple.0dd123b0c6cbc53b",
+      "source": "offline",
+      "translated": "غير متصل"
+    },
+    {
+      "id": "native.apple.1e46f9b8b25855cf",
+      "source": "loading",
+      "translated": "جارٍ التحميل"
+    },
+    {
+      "id": "native.apple.6ec7c992ab445d66",
+      "source": "error",
+      "translated": "خطأ"
+    },
+    {
+      "id": "native.apple.c95aaf3a4c8f8bf3",
+      "source": "Self-hosted chat bot routing.",
+      "translated": "توجيه روبوت محادثة مستضاف ذاتيًا."
+    },
+    {
+      "id": "native.apple.b76a3e746440ea50",
+      "source": "Channel integration",
+      "translated": "تكامل القناة"
+    },
+    {
+      "id": "native.apple.ca2ccc041a816709",
+      "source": "now",
+      "translated": "الآن"
+    },
+    {
+      "id": "native.apple.3b05516950f11612",
+      "source": "%@m ago",
+      "translated": "منذ %@ د"
+    },
+    {
+      "id": "native.apple.18371ec38b4bbb2d",
+      "source": "%@h ago",
+      "translated": "منذ %@ س"
+    },
+    {
+      "id": "native.apple.d24f6d836a91d4f3",
+      "source": "%@d ago",
+      "translated": "منذ %@ ي"
+    },
+    {
       "id": "native.apple.d0eb2c9b73d0e34c",
       "source": "Stop",
       "translated": "إيقاف"
@@ -9962,6 +10562,56 @@
       "id": "native.apple.19108f0f755e083d",
       "source": "Logout",
       "translated": "تسجيل الخروج"
+    },
+    {
+      "id": "native.apple.1e290e521d7dacc1",
+      "source": "not set",
+      "translated": "غير محدد"
+    },
+    {
+      "id": "native.apple.78813a82efe538d2",
+      "source": "%@ • active %@",
+      "translated": "%@ • نشط %@"
+    },
+    {
+      "id": "native.apple.65973e58d36b7d4b",
+      "source": "connected",
+      "translated": "متصل"
+    },
+    {
+      "id": "native.apple.98481a3a3ba0271d",
+      "source": "running",
+      "translated": "قيد التشغيل"
+    },
+    {
+      "id": "native.apple.8ad19480f2be09c5",
+      "source": "linked",
+      "translated": "مرتبط"
+    },
+    {
+      "id": "native.apple.706eb48fa54eb003",
+      "source": "configured",
+      "translated": "تم إعداده"
+    },
+    {
+      "id": "native.apple.3d9f505b80afc625",
+      "source": "not configured",
+      "translated": "غير مُعدّ"
+    },
+    {
+      "id": "native.apple.6b907152fb598bdf",
+      "source": "enabled",
+      "translated": "مُمكّن"
+    },
+    {
+      "id": "native.apple.660070a6473ba221",
+      "source": "disabled",
+      "translated": "معطّل"
+    },
+    {
+      "id": "native.apple.d78e6d97f3accb7e",
+      "source": "%@, %@, error",
+      "translated": "%@، %@، خطأ"
     },
     {
       "id": "native.apple.9ac0bbf442dd842f",
@@ -10099,9 +10749,14 @@
       "translated": "اختر متى يمكن لـ OpenClaw مشاركة موقع هذا الـ iPhone مع أدوات Gateway."
     },
     {
-      "id": "native.apple.d5eb77296d18a08b",
-      "source": "Forget \\(self.pendingForgetGateway?.name ?? \"gateway\")?",
-      "translated": "Forget \\(self.pendingForgetGateway?.name ?? \"gateway\")?"
+      "id": "native.apple.9515109ce97ec94e",
+      "source": "Forget %@?",
+      "translated": "هل تريد نسيان %@؟"
+    },
+    {
+      "id": "native.apple.95c6e675e9ca4ad3",
+      "source": "gateway",
+      "translated": "Gateway"
     },
     {
       "id": "native.apple.ab8d7959b6ab66f9",
@@ -10179,9 +10834,49 @@
       "translated": "حالة الالتقاط الأمامي المباشر"
     },
     {
+      "id": "native.apple.dead8a77b18317b0",
+      "source": "live",
+      "translated": "متصل"
+    },
+    {
+      "id": "native.apple.cd36ec3e11954837",
+      "source": "idle",
+      "translated": "خامل"
+    },
+    {
       "id": "native.apple.e641f2eb5c7bce81",
       "source": "Voice Wake",
       "translated": "التنبيه الصوتي"
+    },
+    {
+      "id": "native.apple.6319ee4aca1b1727",
+      "source": "on",
+      "translated": "مفعّل"
+    },
+    {
+      "id": "native.apple.f3d4113a320322ab",
+      "source": "off",
+      "translated": "متوقف"
+    },
+    {
+      "id": "native.apple.994e37e1b07670bf",
+      "source": "Switching to %@…",
+      "translated": "جارٍ التبديل إلى %@…"
+    },
+    {
+      "id": "native.apple.9ad201bddd9d910c",
+      "source": "Could not forget %@.",
+      "translated": "تعذّر نسيان %@."
+    },
+    {
+      "id": "native.apple.022a95d96bf58598",
+      "source": "Forgot %@.",
+      "translated": "تم نسيان %@."
+    },
+    {
+      "id": "native.apple.31b43217c8c02879",
+      "source": "Saved endpoint unavailable",
+      "translated": "نقطة النهاية المحفوظة غير متاحة"
     },
     {
       "id": "native.apple.27942ed8539c84c6",
@@ -10189,14 +10884,124 @@
       "translated": "\\(endpoint) • TLS"
     },
     {
+      "id": "native.apple.1fe7af76a372f7dd",
+      "source": "Discovered • TLS",
+      "translated": "تم الاكتشاف • TLS"
+    },
+    {
       "id": "native.apple.0a3f566ac6a35d90",
       "source": "Discovered",
       "translated": "تم الاكتشاف"
     },
     {
-      "id": "native.apple.1fe7af76a372f7dd",
-      "source": "Discovered • TLS",
-      "translated": "تم الاكتشاف • TLS"
+      "id": "native.apple.2d8a0d06669abd5b",
+      "source": "TLS",
+      "translated": "TLS"
+    },
+    {
+      "id": "native.apple.c0b3ac0002eacf8c",
+      "source": "plain",
+      "translated": "عادي"
+    },
+    {
+      "id": "native.apple.e811b06800ecc7b1",
+      "source": "Setup link loaded for %@:%@ (%@). Tap Connect to apply.",
+      "translated": "تم تحميل رابط الإعداد لـ %@:%@ (%@). اضغط على اتصال للتطبيق."
+    },
+    {
+      "id": "native.apple.14746eb5dd4ee297",
+      "source": "Paste a setup code to continue.",
+      "translated": "الصق رمز إعداد للمتابعة."
+    },
+    {
+      "id": "native.apple.f8b15149454d468c",
+      "source": "Setup code not recognized or uses an insecure ws:// gateway URL.",
+      "translated": "لم يتم التعرّف على رمز الإعداد أو أنه يستخدم عنوان URL غير آمن لـ Gateway يبدأ بـ ws://."
+    },
+    {
+      "id": "native.apple.68e88fdd6cac93dd",
+      "source": "Opening QR scanner...",
+      "translated": "جارٍ فتح ماسح QR..."
+    },
+    {
+      "id": "native.apple.6f794a6d47d94afb",
+      "source": "QR loaded. Closing scanner...",
+      "translated": "تم تحميل QR. جارٍ إغلاق الماسح..."
+    },
+    {
+      "id": "native.apple.936cfc236a691cca",
+      "source": "Apple Review demo mode enabled.",
+      "translated": "تم تفعيل الوضع التجريبي لمراجعة Apple."
+    },
+    {
+      "id": "native.apple.b316dd4aabc35bde",
+      "source": "Failed: host required",
+      "translated": "فشل: المضيف مطلوب"
+    },
+    {
+      "id": "native.apple.a12741e5a0646a38",
+      "source": "Failed: invalid port",
+      "translated": "فشل: المنفذ غير صالح"
+    },
+    {
+      "id": "native.apple.192a9f5ea51ab7b9",
+      "source": "Tailscale is off on this device. Turn it on, then try again.",
+      "translated": "Tailscale متوقف على هذا الجهاز. شغّله، ثم حاول مرة أخرى."
+    },
+    {
+      "id": "native.apple.f330bd62f5b05c15",
+      "source": "Gateway",
+      "translated": "Gateway"
+    },
+    {
+      "id": "native.apple.b99af99847ac7823",
+      "source": "Apple Watch",
+      "translated": "Apple Watch"
+    },
+    {
+      "id": "native.apple.f681deb07d62d330",
+      "source": "Approvals",
+      "translated": "الموافقات"
+    },
+    {
+      "id": "native.apple.cd277313429b8bd8",
+      "source": "Permissions",
+      "translated": "الأذونات"
+    },
+    {
+      "id": "native.apple.50c76ef6e632d860",
+      "source": "Channels",
+      "translated": "القنوات"
+    },
+    {
+      "id": "native.apple.fd44d6742909f55c",
+      "source": "Voice & Talk",
+      "translated": "الصوت والتحدث"
+    },
+    {
+      "id": "native.apple.2ca547a8af65da9d",
+      "source": "Diagnostics",
+      "translated": "التشخيصات"
+    },
+    {
+      "id": "native.apple.c61d03a77bd4de27",
+      "source": "Privacy",
+      "translated": "الخصوصية"
+    },
+    {
+      "id": "native.apple.34f46bfa4b0d25bb",
+      "source": "Licenses",
+      "translated": "التراخيص"
+    },
+    {
+      "id": "native.apple.037e2acdb8f2cc04",
+      "source": "About",
+      "translated": "حول"
+    },
+    {
+      "id": "native.apple.f83f6cf05ad7bd71",
+      "source": "Preparing one-time setup…",
+      "translated": "جارٍ التحضير للإعداد لمرة واحدة…"
     },
     {
       "id": "native.apple.3503aca018f04865",
@@ -10209,6 +11014,51 @@
       "translated": "تم وضع الإعداد في قائمة الانتظار للساعة. افتح OpenClaw قبل انتهاء صلاحية الرمز."
     },
     {
+      "id": "native.apple.ba8d38a642bee7f3",
+      "source": "This gateway is on your tailnet. Turn on Tailscale on this device, then tap Connect.",
+      "translated": "هذا الـ Gateway موجود على شبكة tailnet الخاصة بك. فعّل Tailscale على هذا الجهاز، ثم اضغط على اتصال."
+    },
+    {
+      "id": "native.apple.07668650c75a20f1",
+      "source": "Pairing required. Run /pair approve in your OpenClaw chat, then connect again.",
+      "translated": "الإقران مطلوب. شغّل /pair approve في دردشة OpenClaw، ثم اتصل مجددًا."
+    },
+    {
+      "id": "native.apple.101b491eed1648ce",
+      "source": "Secure handshake failed. Check Tailscale, then connect again.",
+      "translated": "فشلت المصافحة الآمنة. تحقّق من Tailscale، ثم اتصل مجددًا."
+    },
+    {
+      "id": "native.apple.23d6048415329d85",
+      "source": "Connection timed out. Make sure Tailscale is connected, then try again.",
+      "translated": "انتهت مهلة الاتصال. تأكّد من اتصال Tailscale، ثم حاول مجددًا."
+    },
+    {
+      "id": "native.apple.d753f386bd160f0b",
+      "source": "Connected, but some controls are restricted for nodes. This is expected.",
+      "translated": "تم الاتصال، لكن بعض عناصر التحكم مقيّدة للعُقد. هذا متوقع."
+    },
+    {
+      "id": "native.apple.78da99bde486859a",
+      "source": "Setup code applied. Connecting...",
+      "translated": "تم تطبيق رمز الإعداد. جارٍ الاتصال..."
+    },
+    {
+      "id": "native.apple.3cad691d1eb18cd4",
+      "source": "Checking gateway reachability...",
+      "translated": "جارٍ التحقق من إمكانية الوصول إلى Gateway..."
+    },
+    {
+      "id": "native.apple.19946c83aa300ef1",
+      "source": "QR loaded. Connecting to %@:%@...",
+      "translated": "تم تحميل رمز QR. جارٍ الاتصال بـ %@:%@..."
+    },
+    {
+      "id": "native.apple.0529cef580537755",
+      "source": "Not loaded",
+      "translated": "Not loaded"
+    },
+    {
       "id": "native.apple.fbf8fb158f556a76",
       "source": "Configured",
       "translated": "مُهيأ"
@@ -10219,14 +11069,39 @@
       "translated": "غير مُهيأ"
     },
     {
+      "id": "native.apple.8550bd4d628b39dd",
+      "source": "Not active",
+      "translated": "غير نشط"
+    },
+    {
+      "id": "native.apple.55973197d5e7ff87",
+      "source": "Apple Review demo mode",
+      "translated": "وضع العرض التوضيحي لمراجعة Apple"
+    },
+    {
       "id": "native.apple.3ba1d988ea9c9a21",
       "source": "Connected",
       "translated": "Connected"
     },
     {
-      "id": "native.apple.0e6f25ab4a59543a",
-      "source": "Connect to the gateway.",
-      "translated": "اتصل بـ Gateway."
+      "id": "native.apple.053cca424822977a",
+      "source": "offline",
+      "translated": "غير متصل"
+    },
+    {
+      "id": "native.apple.917e129304ec763f",
+      "source": "online",
+      "translated": "متصل"
+    },
+    {
+      "id": "native.apple.5d087d20889e44bc",
+      "source": "Live gateway requests are disabled in demo mode.",
+      "translated": "طلبات Gateway المباشرة معطّلة في وضع العرض التوضيحي."
+    },
+    {
+      "id": "native.apple.3d805ac21285b092",
+      "source": "Foreground approvals still appear while OpenClaw is connected.",
+      "translated": "تظل طلبات الموافقة في الواجهة ظاهرة أثناء اتصال OpenClaw."
     },
     {
       "id": "native.apple.0b7a54926d06b7d8",
@@ -10234,49 +11109,149 @@
       "translated": "ستظهر طلبات Gateway هنا."
     },
     {
+      "id": "native.apple.0e6f25ab4a59543a",
+      "source": "Connect to the gateway.",
+      "translated": "اتصل بـ Gateway."
+    },
+    {
+      "id": "native.apple.ad2c49da3cdd5399",
+      "source": "Demo mode only",
+      "translated": "وضع العرض التوضيحي فقط"
+    },
+    {
+      "id": "native.apple.c7fdf08753305acf",
+      "source": "loaded",
+      "translated": "تم التحميل"
+    },
+    {
+      "id": "native.apple.f256b0936f2303be",
+      "source": "missing",
+      "translated": "مفقود"
+    },
+    {
+      "id": "native.apple.106a2d92f6bc1bc8",
+      "source": "Waiting for gateway",
+      "translated": "في انتظار Gateway"
+    },
+    {
       "id": "native.apple.ebd38d32acb5373c",
       "source": "1 waiting",
       "translated": "1 في الانتظار"
     },
     {
-      "id": "native.apple.651249e2a5fc8852",
-      "source": "\\(self.pendingApprovalCount) waiting",
-      "translated": "\\(self.pendingApprovalCount) في الانتظار"
+      "id": "native.apple.15b03c7da242cb92",
+      "source": "%@ waiting",
+      "translated": "%@ قيد الانتظار"
     },
     {
-      "id": "native.apple.0194fd3744125fd1",
-      "source": "High",
-      "translated": "مرتفع"
+      "id": "native.apple.50ab064e91d5db50",
+      "source": "Review gateway action",
+      "translated": "مراجعة إجراء Gateway"
     },
     {
-      "id": "native.apple.cf64badb547e25c3",
+      "id": "native.apple.4d83fc69abc45dbd",
+      "source": "Agent: %@",
+      "translated": "الوكيل: %@"
+    },
+    {
+      "id": "native.apple.65db2459c9fe2ffd",
       "source": "Resolving",
       "translated": "جارٍ الحل"
     },
     {
-      "id": "native.apple.c84829a753b01fe6",
-      "source": "One-time approval",
-      "translated": "موافقة لمرة واحدة"
+      "id": "native.apple.0e6374735564f939",
+      "source": "High",
+      "translated": "مرتفع"
     },
     {
-      "id": "native.apple.b02830c5966591df",
+      "id": "native.apple.062831956ee66b51",
       "source": "Permission can be saved",
       "translated": "يمكن حفظ الإذن"
     },
     {
-      "id": "native.apple.3ce9dc6fee455ee5",
+      "id": "native.apple.f8a79e13751914d9",
+      "source": "One-time approval",
+      "translated": "موافقة لمرة واحدة"
+    },
+    {
+      "id": "native.apple.1d997081ebcef122",
       "source": "Medium",
       "translated": "متوسط"
     },
     {
-      "id": "native.apple.7d5aa3128fb859da",
+      "id": "native.apple.778b4f9ae0fe994d",
       "source": "Review",
       "translated": "مراجعة"
     },
     {
-      "id": "native.apple.8ae57748b0b13d62",
-      "source": "\\(diagnosticsIssueCount)",
-      "translated": "\\(diagnosticsIssueCount)"
+      "id": "native.apple.c9703d48718b91a7",
+      "source": "Talk + Wake",
+      "translated": "التحدث + التنبيه"
+    },
+    {
+      "id": "native.apple.79945cd8e028f50f",
+      "source": "Talk on",
+      "translated": "التحدث مفعّل"
+    },
+    {
+      "id": "native.apple.7445aa38c3e21ec0",
+      "source": "Wake on",
+      "translated": "التنبيه مفعّل"
+    },
+    {
+      "id": "native.apple.5653c8078a3c6564",
+      "source": "Off",
+      "translated": "إيقاف"
+    },
+    {
+      "id": "native.apple.2ff33d6fc06f34fa",
+      "source": "demo",
+      "translated": "تجريبي"
+    },
+    {
+      "id": "native.apple.9d66e6d70603da62",
+      "source": "ready",
+      "translated": "جاهز"
+    },
+    {
+      "id": "native.apple.32d3e55e5af9dce5",
+      "source": "check",
+      "translated": "فحص"
+    },
+    {
+      "id": "native.apple.f06862e3097913d1",
+      "source": "partial",
+      "translated": "جزئي"
+    },
+    {
+      "id": "native.apple.a3d1558a92ecf570",
+      "source": "pending",
+      "translated": "قيد الانتظار"
+    },
+    {
+      "id": "native.apple.3093941c6c5c30b1",
+      "source": "pass",
+      "translated": "ناجح"
+    },
+    {
+      "id": "native.apple.d971b8cce93a5689",
+      "source": "Requesting iOS location permission…",
+      "translated": "جارٍ طلب إذن الوصول إلى الموقع في iOS…"
+    },
+    {
+      "id": "native.apple.817057c658a751c7",
+      "source": "This build uses OpenClaw's hosted push relay at %@ for notification delivery data.",
+      "translated": "يستخدم هذا الإصدار وسيط الإشعارات الفورية المستضاف من OpenClaw على %@ لبيانات تسليم الإشعارات."
+    },
+    {
+      "id": "native.apple.d70d23305da2016a",
+      "source": "This build is not configured to use OpenClaw's hosted push relay.",
+      "translated": "هذا الإصدار غير مهيأ لاستخدام وسيط الإشعارات الفورية المستضاف من OpenClaw."
+    },
+    {
+      "id": "native.apple.6c81c3d48548ca05",
+      "source": "Enabling this sends delivery data through OpenClaw's hosted push relay.",
+      "translated": "يؤدي تمكين هذا الخيار إلى إرسال بيانات التسليم عبر وسيط الإشعارات الفورية المستضاف من OpenClaw."
     },
     {
       "id": "native.apple.80fade864c8ad242",
@@ -10389,6 +11364,11 @@
       "translated": "Alerts Off"
     },
     {
+      "id": "native.apple.906553130aa591f1",
+      "source": "clear",
+      "translated": "مسح"
+    },
+    {
       "id": "native.apple.561d865ad24910d2",
       "source": "Apple Watch",
       "translated": "Apple Watch"
@@ -10404,14 +11384,14 @@
       "translated": "ثبّت تطبيق OpenClaw للساعة قبل تمكين الوضع المباشر."
     },
     {
-      "id": "native.apple.cfa1c0be2d607257",
-      "source": "Installed",
-      "translated": "مثبّت"
-    },
-    {
       "id": "native.apple.3710cda9cb13870f",
       "source": "Reachable",
       "translated": "Reachable"
+    },
+    {
+      "id": "native.apple.cfa1c0be2d607257",
+      "source": "Installed",
+      "translated": "مثبّت"
     },
     {
       "id": "native.apple.59405b82eb08ae1e",
@@ -10894,14 +11874,14 @@
       "translated": "معرّف المثيل"
     },
     {
-      "id": "native.apple.40692c0b7ad6a05d",
-      "source": "Off",
-      "translated": "إيقاف"
-    },
-    {
       "id": "native.apple.0fca0d66e1fc4fa0",
       "source": "On",
       "translated": "تشغيل"
+    },
+    {
+      "id": "native.apple.40692c0b7ad6a05d",
+      "source": "Off",
+      "translated": "إيقاف"
     },
     {
       "id": "native.apple.2834f131e112b1b4",
@@ -10929,24 +11909,24 @@
       "translated": "غير متاح"
     },
     {
-      "id": "native.apple.b10bfeade7e6dcc4",
-      "source": "Version \\(version), commit \\(commit), built \\(built), timestamp \\(timestamp)",
-      "translated": "الإصدار \\(version)، الالتزام \\(commit)، تم البناء \\(built)، الطابع الزمني \\(timestamp)"
+      "id": "native.apple.7daded5ae2e6401c",
+      "source": "Version %1$@, commit %2$@, built %3$@, timestamp %4$@",
+      "translated": "الإصدار %1$@، الالتزام %2$@، تاريخ الإنشاء %3$@، الطابع الزمني %4$@"
     },
     {
-      "id": "native.apple.32c68e6864c7faa5",
-      "source": "Version \\(version), commit \\(commit), build date unavailable",
-      "translated": "الإصدار \\(version)، الالتزام \\(commit)، تاريخ البناء غير متاح"
+      "id": "native.apple.7765273cea1bf600",
+      "source": "Version %1$@, commit %2$@, build date unavailable",
+      "translated": "الإصدار %1$@، الالتزام %2$@، تاريخ الإنشاء غير متاح"
     },
     {
-      "id": "native.apple.664c866505040add",
-      "source": "Version \\(version), commit unavailable, built \\(built), timestamp \\(timestamp)",
-      "translated": "الإصدار \\(version)، الالتزام غير متاح، تم البناء \\(built)، الطابع الزمني \\(timestamp)"
+      "id": "native.apple.cd8a84e760bc137e",
+      "source": "Version %1$@, commit unavailable, built %2$@, timestamp %3$@",
+      "translated": "الإصدار %1$@، الالتزام غير متاح، تاريخ الإنشاء %2$@، الطابع الزمني %3$@"
     },
     {
-      "id": "native.apple.29192c8dd3ef0f5e",
-      "source": "Version \\(version), commit unavailable, build date unavailable",
-      "translated": "الإصدار \\(version)، الالتزام غير متاح، تاريخ البناء غير متاح"
+      "id": "native.apple.b21c4d0848f9512b",
+      "source": "Version %@, commit unavailable, build date unavailable",
+      "translated": "الإصدار %@، الالتزام غير متاح، تاريخ الإنشاء غير متاح"
     },
     {
       "id": "native.apple.f5d9409953949617",
@@ -11124,6 +12104,11 @@
       "translated": "تظهر هنا أجهزة Gateway المكتشفة والإعداد اليدوي عندما لا يكون Gateway متصلًا بعد."
     },
     {
+      "id": "native.apple.798c3584ad95f8da",
+      "source": "Enable Talk",
+      "translated": "تمكين التحدث"
+    },
+    {
       "id": "native.apple.c6e171128190d131",
       "source": "Not Now",
       "translated": "ليس الآن"
@@ -11209,49 +12194,39 @@
       "translated": "إعدادات الصوت والتحدث"
     },
     {
+      "id": "native.apple.c7a591fd5bb6687e",
+      "source": "Gateway approval is required before this phone can capture voice.",
+      "translated": "يلزم الحصول على موافقة Gateway قبل أن يتمكن هذا الهاتف من التقاط الصوت."
+    },
+    {
+      "id": "native.apple.9d40e75e55ed39eb",
+      "source": "Voice is disabled in Apple Review demo mode.",
+      "translated": "الصوت معطّل في وضع العرض التوضيحي لمراجعة Apple."
+    },
+    {
+      "id": "native.apple.3ef69bf916177799",
+      "source": "Connect to your gateway to start a voice conversation.",
+      "translated": "اتصل بـ Gateway لبدء محادثة صوتية."
+    },
+    {
+      "id": "native.apple.ed03af7c68841a5d",
+      "source": "Open Voice settings after the gateway loads Talk configuration.",
+      "translated": "افتح إعدادات الصوت بعد أن يحمّل Gateway إعدادات Talk."
+    },
+    {
+      "id": "native.apple.883a251978601b96",
+      "source": "Routes voice to %@.",
+      "translated": "يوجّه الصوت إلى %@."
+    },
+    {
       "id": "native.apple.877fb5c1abfaafa1",
       "source": "Not loaded",
       "translated": "Not loaded"
     },
     {
-      "id": "native.apple.05c434bb5fe3c275",
-      "source": "Gateway permission required",
-      "translated": "إذن Gateway مطلوب"
-    },
-    {
-      "id": "native.apple.105896ad894955b4",
-      "source": "Requesting approval",
-      "translated": "جارٍ طلب الموافقة"
-    },
-    {
-      "id": "native.apple.d0cf291f96827526",
-      "source": "Approval requested",
-      "translated": "تم طلب الموافقة"
-    },
-    {
-      "id": "native.apple.e8c2902caf83b20e",
-      "source": "Voice API key missing",
-      "translated": "مفتاح Voice API مفقود"
-    },
-    {
-      "id": "native.apple.364bb50be18c79c7",
-      "source": "Voice config failed",
-      "translated": "فشل تكوين الصوت"
-    },
-    {
-      "id": "native.apple.87fca324b443b623",
-      "source": "Start Talk",
-      "translated": "بدء التحدث"
-    },
-    {
-      "id": "native.apple.8cba3288f401cbfb",
-      "source": "Stop Talk",
-      "translated": "إيقاف التحدث"
-    },
-    {
-      "id": "native.apple.798c3584ad95f8da",
-      "source": "Enable Talk",
-      "translated": "تمكين التحدث"
+      "id": "native.apple.d3ccb092936551fc",
+      "source": "Not active",
+      "translated": "غير نشط"
     },
     {
       "id": "native.apple.1620f7cb3deea133",
@@ -11309,9 +12284,9 @@
       "translated": "تشغيل وكيل OpenClaw؟"
     },
     {
-      "id": "native.apple.32dc136ac23fef8c",
-      "source": "Message:\n\\(prompt.messagePreview)\n\nURL:\n\\(prompt.urlPreview)",
-      "translated": "الرسالة:\n\\(prompt.messagePreview)\n\nURL:\n\\(prompt.urlPreview)"
+      "id": "native.apple.5d2fb30a9c85ad10",
+      "source": "Message:\n%1$@\n\nURL:\n%2$@",
+      "translated": "الرسالة:\n%1$@\n\nURL:\n%2$@"
     },
     {
       "id": "native.apple.fd7a510d373bb915",
@@ -11384,24 +12359,34 @@
       "translated": "إلغاء"
     },
     {
-      "id": "native.apple.03e81e2c3208e897",
-      "source": "about 1 minute",
-      "translated": "حوالي دقيقة واحدة"
+      "id": "native.apple.440509619f46b730",
+      "source": "expired",
+      "translated": "منتهي الصلاحية"
     },
     {
-      "id": "native.apple.caf9889b0b0e18b6",
-      "source": "about \\(minutes) minutes",
-      "translated": "حوالي \\(minutes) دقائق"
+      "id": "native.apple.90036144f0f90b9c",
+      "source": "under a minute",
+      "translated": "أقل من دقيقة"
     },
     {
-      "id": "native.apple.00ef62d3eae63065",
-      "source": "about 1 hour",
-      "translated": "حوالي ساعة واحدة"
+      "id": "native.apple.82624b1edf51773c",
+      "source": "about ^[\\(minutes) minute](inflect: true)",
+      "translated": "حوالي ^[\\(minutes) دقيقة](inflect: true)"
     },
     {
-      "id": "native.apple.09312ef7ca727f4b",
-      "source": "about \\(hours) hours",
-      "translated": "حوالي \\(hours) ساعات"
+      "id": "native.apple.268c6bb2084beea8",
+      "source": "about ^[\\(hours) hour](inflect: true)",
+      "translated": "حوالي ^[\\(hours) ساعة](inflect: true)"
+    },
+    {
+      "id": "native.apple.3f226dbc1c453c30",
+      "source": "Secure connection is required for this host.",
+      "translated": "يلزم اتصال آمن لهذا المضيف."
+    },
+    {
+      "id": "native.apple.7ebbd544507ec5fc",
+      "source": "Use only on a trusted private network.",
+      "translated": "استخدمه فقط على شبكة خاصة موثوقة."
     },
     {
       "id": "native.apple.3cb1f1788ffb16e2",
@@ -11419,14 +12404,29 @@
       "translated": "فعّل TLS الخاص بـ Gateway، أو أدخل مضيف HTTPS الخاص بـ Tailscale Serve في الإعداد اليدوي. استخدم غير المشفّر فقط مع عنوان شبكة محلية خاصة موثوق."
     },
     {
-      "id": "native.apple.ccfde3d74305d096",
-      "source": "Can't reach gateway at \\(host):\\(port). Verify Tailscale Serve is enabled and publishes this Gateway.",
-      "translated": "تعذّر الوصول إلى gateway على \\(host):\\(port). تحقّق من تفعيل Tailscale Serve ونشره لهذا الـ Gateway."
+      "id": "native.apple.1d1aa0192206041c",
+      "source": "Can't reach gateway at %1$@:%2$@. Verify Tailscale Serve is enabled and publishes this Gateway.",
+      "translated": "لا يمكن الوصول إلى Gateway على %1$@:%2$@. تحقّق من تمكين Tailscale Serve ومن أنه ينشر Gateway هذا."
     },
     {
-      "id": "native.apple.fe8f13e52e05ff77",
-      "source": "Can't reach gateway at \\(host):\\(port). Check Tailscale or LAN.",
-      "translated": "تعذّر الوصول إلى gateway على \\(host):\\(port). تحقّق من Tailscale أو الشبكة المحلية."
+      "id": "native.apple.f8e351c2a7c24652",
+      "source": "Can't reach gateway at %1$@:%2$@. Check Tailscale or LAN.",
+      "translated": "لا يمكن الوصول إلى Gateway على %1$@:%2$@. تحقّق من Tailscale أو LAN."
+    },
+    {
+      "id": "native.apple.5939318ffa667d0a",
+      "source": "TLS fingerprint verification timed out for %1$@:%2$@. Secure endpoint was reached, but TLS did not finish in time.",
+      "translated": "انتهت مهلة التحقق من بصمة TLS لـ %1$@:%2$@. تم الوصول إلى نقطة النهاية الآمنة، لكن TLS لم يكتمل في الوقت المحدد."
+    },
+    {
+      "id": "native.apple.9dd9783959c1a4ab",
+      "source": "No secure gateway endpoint was detected at %1$@:%2$@. Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address with Unencrypted selected.",
+      "translated": "لم يتم اكتشاف نقطة نهاية آمنة لـ Gateway على %1$@:%2$@. فعّل TLS لـ Gateway أو Tailscale Serve، أو استخدم عنوان LAN خاصًا وموثوقًا مع تحديد «غير مشفّر»."
+    },
+    {
+      "id": "native.apple.cbbf2e86b0dbc6fd",
+      "source": "Could not read the TLS certificate from %1$@:%2$@.",
+      "translated": "تعذّرت قراءة شهادة TLS من %1$@:%2$@."
     },
     {
       "id": "native.apple.c741e0a44409ac2a",
@@ -11447,6 +12447,16 @@
       "id": "native.apple.f21a8e304b607dc8",
       "source": "Copy",
       "translated": "نسخ"
+    },
+    {
+      "id": "native.apple.760dbcb0180666e1",
+      "source": "Trust certificate",
+      "translated": "الوثوق بالشهادة"
+    },
+    {
+      "id": "native.apple.b53cd5730b58d742",
+      "source": "%@ (request ID: %@)",
+      "translated": "%@ (معرّف الطلب: %@)"
     },
     {
       "id": "native.apple.a7866a6499f4462a",
@@ -11714,6 +12724,11 @@
       "translated": "قد يستخدم OpenClaw بيانات الحركة لدعم التفاعلات والأتمتة الواعية بالجهاز."
     },
     {
+      "id": "native.apple.c86f7ba5b3762eb7",
+      "source": "After you enable Health Summaries, OpenClaw reads steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider.",
+      "translated": "بعد تمكين ملخصات الصحة، يقرأ OpenClaw الخطوات والنوم ومعدل ضربات القلب أثناء الراحة والتمارين لمشاركة البيانات المجمعة المطلوبة مع موفر الذكاء الاصطناعي الذي أعددته."
+    },
+    {
       "id": "native.apple.40ed4259ec869f1b",
       "source": "OpenClaw lets your assistant read photos you allow and lets you choose photos to share.",
       "translated": "يتيح OpenClaw لمساعدك قراءة الصور التي تسمح بها، ويتيح لك اختيار الصور لمشاركتها."
@@ -11727,6 +12742,26 @@
       "id": "native.apple.2275552c26460945",
       "source": "OpenClaw uses on-device speech recognition for talk mode and voice wake.",
       "translated": "يستخدم OpenClaw التعرف على الكلام على الجهاز لوضع التحدث والتنبيه الصوتي."
+    },
+    {
+      "id": "native.apple.46111fe0569488ab",
+      "source": "Connecting...",
+      "translated": "جارٍ الاتصال..."
+    },
+    {
+      "id": "native.apple.86a8207c5aacd51b",
+      "source": "Reconnecting...",
+      "translated": "جارٍ إعادة الاتصال..."
+    },
+    {
+      "id": "native.apple.1b7a9e4228d3d087",
+      "source": "Approval needed",
+      "translated": "الموافقة مطلوبة"
+    },
+    {
+      "id": "native.apple.8faaac6dab276c0a",
+      "source": "Action required",
+      "translated": "إجراء مطلوب"
     },
     {
       "id": "native.apple.cf0450b542893fb5",
@@ -11874,24 +12909,14 @@
       "translated": "دائمًا"
     },
     {
-      "id": "native.apple.0d030e96f7738497",
-      "source": "Action required",
-      "translated": "إجراء مطلوب"
-    },
-    {
       "id": "native.apple.ce6a022159f2fb41",
       "source": "Approval needed",
       "translated": "الموافقة مطلوبة"
     },
     {
-      "id": "native.apple.b0d9c1ba8ef7ec19",
-      "source": "Connecting…",
-      "translated": "جارٍ الاتصال…"
-    },
-    {
-      "id": "native.apple.bd98e19b49309284",
-      "source": "Reconnecting…",
-      "translated": "جارٍ إعادة الاتصال…"
+      "id": "native.apple.0d030e96f7738497",
+      "source": "Action required",
+      "translated": "إجراء مطلوب"
     },
     {
       "id": "native.apple.6504753f3621269e",
@@ -11916,7 +12941,17 @@
     {
       "id": "native.apple.4a98b3a346be2662",
       "source": "No chat messages yet",
-      "translated": "No chat messages yet"
+      "translated": "لا توجد رسائل دردشة بعد"
+    },
+    {
+      "id": "native.apple.b0d9c1ba8ef7ec19",
+      "source": "Connecting…",
+      "translated": "جارٍ الاتصال…"
+    },
+    {
+      "id": "native.apple.bd98e19b49309284",
+      "source": "Reconnecting…",
+      "translated": "جارٍ إعادة الاتصال…"
     },
     {
       "id": "native.apple.0b1eff808df04e2b",
@@ -12309,9 +13344,19 @@
       "translated": "الموافقة على الاقتران"
     },
     {
-      "id": "native.apple.9725443db32f5158",
-      "source": "Approve this device on the gateway.\n1) `\\(commandLine)`\n2) `/pair approve` in your OpenClaw chat\n\\(requestLine)\nOpenClaw will also retry automatically when you return to this app.",
-      "translated": "وافق على هذا الجهاز على gateway.\n1) `\\(commandLine)`\n2) `/pair approve` في دردشة OpenClaw\n\\(requestLine)\nسيعيد OpenClaw المحاولة تلقائيًا أيضًا عند عودتك إلى هذا التطبيق."
+      "id": "native.apple.3fb8b48f5bc0f893",
+      "source": "Request ID: %@",
+      "translated": "معرّف الطلب: %@"
+    },
+    {
+      "id": "native.apple.da636328de464a40",
+      "source": "Request ID: check `openclaw devices list`.",
+      "translated": "معرّف الطلب: تحقّق من `openclaw devices list`."
+    },
+    {
+      "id": "native.apple.d5a5f13a1dd28c9d",
+      "source": "Approve this device on the gateway.\n1) `%1$@`\n2) `/pair approve` in your OpenClaw chat\n%2$@\nOpenClaw will also retry automatically when you return to this app.",
+      "translated": "وافق على هذا الجهاز في Gateway.\n1) `%1$@`\n2) `/pair approve` في دردشة OpenClaw\n%2$@\nسيعيد OpenClaw المحاولة تلقائيًا أيضًا عند عودتك إلى هذا التطبيق."
     },
     {
       "id": "native.apple.af3890b1e07c3084",
@@ -12429,9 +13474,9 @@
       "translated": "OpenClaw"
     },
     {
-      "id": "native.apple.39042da9fc187030",
-      "source": "OpenClaw \\(self.sidebarGatewayStatusTitle)",
-      "translated": "OpenClaw \\(self.sidebarGatewayStatusTitle)"
+      "id": "native.apple.9e781c0183b79a76",
+      "source": "OpenClaw %@",
+      "translated": "OpenClaw %@"
     },
     {
       "id": "native.apple.f4eea6473f43388d",
@@ -12492,6 +13537,16 @@
       "id": "native.apple.db0d9af6d0855d18",
       "source": "Cron Jobs",
       "translated": "مهام Cron"
+    },
+    {
+      "id": "native.apple.20f4753fc51c5341",
+      "source": "Show Sidebar",
+      "translated": "إظهار الشريط الجانبي"
+    },
+    {
+      "id": "native.apple.bb0ea6d61a32c7c2",
+      "source": "Back to %@",
+      "translated": "العودة إلى %@"
     },
     {
       "id": "native.apple.72fab75688479b3e",
@@ -12654,6 +13709,41 @@
       "translated": "رؤوس مخصصة"
     },
     {
+      "id": "native.apple.e5a601c8fe47e9ed",
+      "source": "Add-Only",
+      "translated": "إضافة فقط"
+    },
+    {
+      "id": "native.apple.32aabe66f916a809",
+      "source": "Allowed",
+      "translated": "مسموح"
+    },
+    {
+      "id": "native.apple.7b551f40d1a6148c",
+      "source": "Enabled",
+      "translated": "مُمكّن"
+    },
+    {
+      "id": "native.apple.94208c3068dae5b9",
+      "source": "Limited",
+      "translated": "محدود"
+    },
+    {
+      "id": "native.apple.92223852c90e286d",
+      "source": "Not Allowed",
+      "translated": "غير مسموح"
+    },
+    {
+      "id": "native.apple.aa6ff8becab99fdc",
+      "source": "Not Set",
+      "translated": "غير معيّن"
+    },
+    {
+      "id": "native.apple.03e2f7265119d263",
+      "source": "Unknown",
+      "translated": "غير معروف"
+    },
+    {
       "id": "native.apple.4dac301c7e0c921c",
       "source": "Contacts",
       "translated": "جهات الاتصال"
@@ -12699,14 +13789,14 @@
       "translated": "اسرد التذكيرات وأضِفها وأكملها."
     },
     {
+      "id": "native.apple.33df187e4402065a",
+      "source": "Health Summaries",
+      "translated": "ملخصات الصحة"
+    },
+    {
       "id": "native.apple.bb572eab08269809",
       "source": "Privacy & Access",
       "translated": "الخصوصية والوصول"
-    },
-    {
-      "id": "native.apple.651cc89381dd69c0",
-      "source": "Limited",
-      "translated": "محدود"
     },
     {
       "id": "native.apple.ab998419291361da",
@@ -12719,29 +13809,54 @@
       "translated": "قراءة الصور الحديثة للمساعد."
     },
     {
-      "id": "native.apple.22b335bddf72e453",
-      "source": "Allowed",
-      "translated": "مسموح"
+      "id": "native.apple.ac3ff8e4c6df7a2a",
+      "source": "Manage Access",
+      "translated": "إدارة الوصول"
     },
     {
-      "id": "native.apple.d2f5de202e0426f8",
-      "source": "Add-Only",
-      "translated": "إضافة فقط"
+      "id": "native.apple.c557c95fa2789089",
+      "source": "Request Full Access",
+      "translated": "طلب الوصول الكامل"
     },
     {
-      "id": "native.apple.62f71c671e344fef",
-      "source": "Not Set",
-      "translated": "غير معيّن"
+      "id": "native.apple.4e50e2ab4c869464",
+      "source": "Request Access",
+      "translated": "طلب الوصول"
     },
     {
-      "id": "native.apple.1f17d59d38e1fe83",
-      "source": "Not Allowed",
-      "translated": "غير مسموح"
+      "id": "native.apple.a9f30d4e86060dca",
+      "source": "Upgrade to Full Access",
+      "translated": "الترقية إلى الوصول الكامل"
     },
     {
-      "id": "native.apple.6b95517f513d9b7c",
-      "source": "Unknown",
-      "translated": "غير معروف"
+      "id": "native.apple.3cb9ed2ae352f95c",
+      "source": "Open Settings",
+      "translated": "فتح الإعدادات"
+    },
+    {
+      "id": "native.apple.3f902cdb4d4e9176",
+      "source": "Health data is unavailable on this device.",
+      "translated": "بيانات الصحة غير متاحة على هذا الجهاز."
+    },
+    {
+      "id": "native.apple.33316ec020810816",
+      "source": "Shares only requested step, sleep, resting heart rate, and workout aggregates through your Gateway with your configured AI provider. Results may remain in chat history.",
+      "translated": "تتم مشاركة البيانات المجمعة المطلوبة فقط للخطوات والنوم ومعدل ضربات القلب أثناء الراحة والتمارين عبر Gateway مع موفر الذكاء الاصطناعي الذي أعددته. قد تبقى النتائج في سجل الدردشة."
+    },
+    {
+      "id": "native.apple.53fb25cb6e6aae6e",
+      "source": "Off by default. Enabling lets requested aggregates leave this iPhone through your Gateway and configured AI provider.",
+      "translated": "متوقف افتراضيًا. يتيح التمكين للبيانات المجمعة المطلوبة مغادرة هذا الـ iPhone عبر Gateway وموفر الذكاء الاصطناعي الذي أعددته."
+    },
+    {
+      "id": "native.apple.6c2be9b001fb95b0",
+      "source": "Disable",
+      "translated": "تعطيل"
+    },
+    {
+      "id": "native.apple.9eab20fbad55a0a9",
+      "source": "Enable & Share Summaries",
+      "translated": "تمكين الملخصات ومشاركتها"
     },
     {
       "id": "native.apple.d9f9a74e25431256",
@@ -12814,9 +13929,9 @@
       "translated": "جاهز"
     },
     {
-      "id": "native.apple.1b7c66d315581f73",
-      "source": "Missing \\(scope)",
-      "translated": "النطاق \\(scope) مفقود"
+      "id": "native.apple.2a7bd600324d6966",
+      "source": "Missing %@",
+      "translated": "%@ مفقود"
     },
     {
       "id": "native.apple.08acd077aaacb96f",
@@ -12844,6 +13959,31 @@
       "translated": "فشل التحميل"
     },
     {
+      "id": "native.apple.5259dce62f31f9b1",
+      "source": "Realtime voice did not start.",
+      "translated": "لم يبدأ الصوت في الوقت الفعلي."
+    },
+    {
+      "id": "native.apple.bc3f22ea805e8fdc",
+      "source": "Listening (iOS Speech fallback)",
+      "translated": "جارٍ الاستماع (باستخدام iOS Speech كخيار احتياطي)"
+    },
+    {
+      "id": "native.apple.4195992b7cec4de9",
+      "source": "Using iOS Speech fallback",
+      "translated": "استخدام iOS Speech كخيار احتياطي"
+    },
+    {
+      "id": "native.apple.87b746fdbdcd733d",
+      "source": "Fallback active",
+      "translated": "الخيار الاحتياطي نشط"
+    },
+    {
+      "id": "native.apple.59a332dd5e027d9d",
+      "source": "Realtime voice did not start. Talk is running with iOS speech recognition and TTS.",
+      "translated": "لم يبدأ الصوت في الوقت الفعلي. تعمل المحادثة باستخدام التعرّف على الكلام وتحويل النص إلى كلام في iOS."
+    },
+    {
       "id": "native.apple.f2be0b00a9d003fe",
       "source": "Realtime Voice",
       "translated": "Realtime Voice"
@@ -12869,24 +14009,79 @@
       "translated": "Realtime-2 (OpenAI)"
     },
     {
+      "id": "native.apple.40c911d83bbd9ac0",
+      "source": "%@ permission restricted",
+      "translated": "إذن %@ مقيّد"
+    },
+    {
+      "id": "native.apple.8da60d8b2a82b94a",
+      "source": "%@ permission not granted",
+      "translated": "لم يُمنح إذن %@"
+    },
+    {
+      "id": "native.apple.41b6d967ba3c83e6",
+      "source": "%@ permission denied",
+      "translated": "رُفض إذن %@"
+    },
+    {
+      "id": "native.apple.c797a09cef8f5be5",
+      "source": "Gateway relay ready",
+      "translated": "مرحل Gateway جاهز"
+    },
+    {
+      "id": "native.apple.5ebb3294c5302726",
+      "source": "Realtime Voice, Gateway relay ready",
+      "translated": "الصوت في الوقت الفعلي، مرحل Gateway جاهز"
+    },
+    {
+      "id": "native.apple.bd4bcd02df094c5c",
+      "source": "Listening starts from this phone",
+      "translated": "يبدأ الاستماع من هذا الهاتف"
+    },
+    {
+      "id": "native.apple.2befa146ddd61c44",
+      "source": "Off",
+      "translated": "إيقاف"
+    },
+    {
+      "id": "native.apple.4a39ea14013488e9",
+      "source": "Not active",
+      "translated": "غير نشط"
+    },
+    {
+      "id": "native.apple.50a5c93daef52545",
+      "source": "Requesting permissions…",
+      "translated": "جارٍ طلب الأذونات…"
+    },
+    {
+      "id": "native.apple.a1910b5c2e008b6c",
+      "source": "Microphone permission denied",
+      "translated": "رُفض إذن الميكروفون"
+    },
+    {
+      "id": "native.apple.6a48b93f46ea3b08",
+      "source": "Speech recognition",
+      "translated": "التعرّف على الكلام"
+    },
+    {
+      "id": "native.apple.198f59c97d7afe11",
+      "source": "Start failed: %@",
+      "translated": "فشل البدء: %@"
+    },
+    {
       "id": "native.apple.c09f4e3bbef8177a",
       "source": "Offline",
       "translated": "غير متصل"
     },
     {
-      "id": "native.apple.5839cdb826c12c71",
-      "source": "Ready",
-      "translated": "جاهز"
+      "id": "native.apple.d91efa5ed033446a",
+      "source": "Speech error: %@",
+      "translated": "خطأ في التعرّف على الكلام: %@"
     },
     {
-      "id": "native.apple.794c5c98f3a4238d",
-      "source": "Listening",
-      "translated": "جارٍ الاستماع"
-    },
-    {
-      "id": "native.apple.0b35fc3b0b221098",
-      "source": "Speech error: \\(msg)",
-      "translated": "خطأ في الكلام: \\(msg)"
+      "id": "native.apple.83bf170cb7e21d39",
+      "source": "Gateway not connected",
+      "translated": "Gateway غير متصل"
     },
     {
       "id": "native.apple.96c7457cafa7dd47",
@@ -12899,9 +14094,159 @@
       "translated": "خطأ في الدردشة"
     },
     {
+      "id": "native.apple.0d8f68af6ec45f08",
+      "source": "Talk failed: %@",
+      "translated": "فشلت المحادثة: %@"
+    },
+    {
+      "id": "native.apple.542431f49a492a0b",
+      "source": "No reply",
+      "translated": "لا يوجد رد"
+    },
+    {
+      "id": "native.apple.a49e24e713412e4b",
+      "source": "Paused",
+      "translated": "متوقف مؤقتًا"
+    },
+    {
+      "id": "native.apple.4108045142cf3fdc",
+      "source": "Generating voice…",
+      "translated": "جارٍ إنشاء الصوت…"
+    },
+    {
+      "id": "native.apple.db0e918af3e1b36c",
+      "source": "Speak failed: %@",
+      "translated": "فشل النطق: %@"
+    },
+    {
+      "id": "native.apple.45d981a033f2096f",
+      "source": "Speaking (System)…",
+      "translated": "جارٍ النطق (النظام)…"
+    },
+    {
+      "id": "native.apple.c2d0ff42680f7827",
+      "source": "iOS System Voice",
+      "translated": "صوت نظام iOS"
+    },
+    {
+      "id": "native.apple.10f51671ccf7c8c5",
+      "source": "Realtime Voice",
+      "translated": "الصوت الفوري"
+    },
+    {
+      "id": "native.apple.1e5894f81fd2d432",
+      "source": "Gateway Default",
+      "translated": "Gateway الافتراضي"
+    },
+    {
+      "id": "native.apple.21357c0b806135e9",
+      "source": "Listening (Realtime)",
+      "translated": "جارٍ الاستماع (في الوقت الفعلي)"
+    },
+    {
+      "id": "native.apple.8dad85bc9a7e4920",
+      "source": "Thinking",
+      "translated": "التفكير"
+    },
+    {
+      "id": "native.apple.c98d612a84a8068c",
+      "source": "Thinking…",
+      "translated": "جارٍ التفكير…"
+    },
+    {
+      "id": "native.apple.5b40cb9cf4ee4d4f",
+      "source": "Asking OpenClaw",
+      "translated": "جارٍ سؤال OpenClaw"
+    },
+    {
+      "id": "native.apple.34531893ae6091b1",
+      "source": "Still asking OpenClaw",
+      "translated": "لا يزال السؤال موجّهًا إلى OpenClaw"
+    },
+    {
+      "id": "native.apple.027ab0bbb4553124",
+      "source": "Updating OpenClaw",
+      "translated": "جارٍ تحديث OpenClaw"
+    },
+    {
+      "id": "native.apple.471dc394d6b9e443",
+      "source": "Speaking",
+      "translated": "جارٍ النطق"
+    },
+    {
+      "id": "native.apple.d875398b44f6de27",
+      "source": "Speaking…",
+      "translated": "يتحدث…"
+    },
+    {
+      "id": "native.apple.5745471bd8e60077",
+      "source": "Connecting",
+      "translated": "جارٍ الاتصال"
+    },
+    {
+      "id": "native.apple.278dad1d617e7a63",
+      "source": "Connecting realtime…",
+      "translated": "جارٍ الاتصال في الوقت الفعلي…"
+    },
+    {
+      "id": "native.apple.2c399dd7dd8c6e06",
+      "source": "Waiting for realtime…",
+      "translated": "في انتظار الاتصال في الوقت الفعلي…"
+    },
+    {
+      "id": "native.apple.5839cdb826c12c71",
+      "source": "Ready",
+      "translated": "جاهز"
+    },
+    {
+      "id": "native.apple.bc63dbcb225d81cb",
+      "source": "Reconnecting",
+      "translated": "جارٍ إعادة الاتصال"
+    },
+    {
+      "id": "native.apple.1fbe3b3a2c51fb29",
+      "source": "Reconnecting…",
+      "translated": "جارٍ إعادة الاتصال…"
+    },
+    {
+      "id": "native.apple.bd65682a00615345",
+      "source": "Realtime failed before connecting",
+      "translated": "فشل الاتصال في الوقت الفعلي قبل إنشائه"
+    },
+    {
+      "id": "native.apple.f3cfe789550ebfa8",
+      "source": "Realtime disconnected",
+      "translated": "انقطع الاتصال في الوقت الفعلي"
+    },
+    {
+      "id": "native.apple.deb282fd61fd2de3",
+      "source": "OpenClaw unavailable",
+      "translated": "OpenClaw غير متاح"
+    },
+    {
+      "id": "native.apple.f703391677039fa3",
+      "source": "iOS Speech + TTS",
+      "translated": "ميزة النطق في iOS + تحويل النص إلى كلام"
+    },
+    {
+      "id": "native.apple.794c5c98f3a4238d",
+      "source": "Listening",
+      "translated": "جارٍ الاستماع"
+    },
+    {
+      "id": "native.apple.7b59ddc5cb1e921a",
+      "source": "iOS Speech fallback",
+      "translated": "الخيار الاحتياطي لميزة النطق في iOS"
+    },
+    {
       "id": "native.apple.465b84d5ff3f3717",
       "source": "Gateway Relay",
       "translated": "Gateway Relay"
+    },
+    {
+      "id": "native.apple.b0eb8a8cad908166",
+      "source": "Native WebRTC",
+      "translated": "WebRTC الأصلي"
     },
     {
       "id": "native.apple.c48dc51b49089432",
@@ -12909,9 +14254,29 @@
       "translated": "أصلي"
     },
     {
-      "id": "native.apple.b0eb8a8cad908166",
-      "source": "Native WebRTC",
-      "translated": "WebRTC الأصلي"
+      "id": "native.apple.fff0b45f7154022d",
+      "source": "Gateway permission required",
+      "translated": "إذن Gateway مطلوب"
+    },
+    {
+      "id": "native.apple.dbb7649650c5d9f1",
+      "source": "Not loaded",
+      "translated": "Not loaded"
+    },
+    {
+      "id": "native.apple.c014fe216584eb70",
+      "source": "Approval requested",
+      "translated": "تم طلب الموافقة"
+    },
+    {
+      "id": "native.apple.7876a473b7c3c245",
+      "source": "Realtime unavailable",
+      "translated": "الوضع الآني غير متاح"
+    },
+    {
+      "id": "native.apple.2970f0510ac6b396",
+      "source": "Listening (PTT)",
+      "translated": "جارٍ الاستماع (PTT)"
     },
     {
       "id": "native.apple.0189269b6a863dc2",
@@ -12984,9 +14349,34 @@
       "translated": "جارٍ تحديث OpenClaw"
     },
     {
-      "id": "native.apple.b6bc54876f20104f",
-      "source": "Off",
-      "translated": "إيقاف"
+      "id": "native.apple.8a944b06087fe8ef",
+      "source": "Microphone input format unavailable",
+      "translated": "تنسيق إدخال الميكروفون غير متاح"
+    },
+    {
+      "id": "native.apple.817cd123d5572334",
+      "source": "Voice Wake isn’t supported on Simulator",
+      "translated": "ميزة التنبيه الصوتي غير مدعومة على المحاكي"
+    },
+    {
+      "id": "native.apple.3134d6758c5938c8",
+      "source": "Requesting permissions…",
+      "translated": "جارٍ طلب الأذونات…"
+    },
+    {
+      "id": "native.apple.1586514b83de93d3",
+      "source": "Microphone",
+      "translated": "الميكروفون"
+    },
+    {
+      "id": "native.apple.c20d0510d9f4085e",
+      "source": "Speech recognition",
+      "translated": "التعرّف على الكلام"
+    },
+    {
+      "id": "native.apple.b10c893016bae8f3",
+      "source": "Speech recognizer unavailable",
+      "translated": "أداة التعرّف على الكلام غير متاحة"
     },
     {
       "id": "native.apple.5590d661cdc81fbf",
@@ -12994,34 +14384,84 @@
       "translated": "متوقف مؤقتًا"
     },
     {
+      "id": "native.apple.215b739170be3ccb",
+      "source": "Listening",
+      "translated": "جارٍ الاستماع"
+    },
+    {
+      "id": "native.apple.b9b2bc7374bda537",
+      "source": "Start failed: %@",
+      "translated": "فشل البدء: %@"
+    },
+    {
+      "id": "native.apple.b6bc54876f20104f",
+      "source": "Off",
+      "translated": "إيقاف"
+    },
+    {
+      "id": "native.apple.ff237edc49a2dbfb",
+      "source": "Recognizer error: %@",
+      "translated": "خطأ في أداة التعرّف: %@"
+    },
+    {
+      "id": "native.apple.318763774e517122",
+      "source": "Triggered",
+      "translated": "تم التشغيل"
+    },
+    {
+      "id": "native.apple.8d18f2dade115efd",
+      "source": "%@ permission restricted",
+      "translated": "إذن %@ مقيّد"
+    },
+    {
+      "id": "native.apple.52d4bcf3c97fe1f8",
+      "source": "%@ permission not granted",
+      "translated": "لم يتم منح إذن %@"
+    },
+    {
+      "id": "native.apple.00887489a998411e",
+      "source": "%@ permission denied",
+      "translated": "تم رفض إذن %@"
+    },
+    {
       "id": "native.apple.12a4a51d251f65c0",
       "source": "OpenClaw connects this Apple Watch directly to your Gateway on trusted local networks.",
       "translated": "يربط OpenClaw ساعة Apple Watch هذه مباشرةً بـ Gateway الخاص بك على الشبكات المحلية الموثوقة."
     },
     {
-      "id": "native.apple.f01783596898f5d6",
-      "source": "Unknown",
-      "translated": "Unknown"
+      "id": "native.apple.130180e0065c80fc",
+      "source": "Refreshing iPhone state",
+      "translated": "جارٍ تحديث حالة iPhone"
     },
     {
-      "id": "native.apple.7d8e032476dee789",
-      "source": "Main",
-      "translated": "Main"
-    },
-    {
-      "id": "native.apple.c7d56c96499accff",
-      "source": "Off",
-      "translated": "Off"
-    },
-    {
-      "id": "native.apple.9df4056896cf6c02",
-      "source": "Gateway HTTP error (\\(self.status))",
-      "translated": "Gateway HTTP error (\\(self.status))"
+      "id": "native.apple.2f705211a3ec0c43",
+      "source": "Gateway HTTP error (%@)",
+      "translated": "خطأ HTTP في Gateway ‏(%@)"
     },
     {
       "id": "native.apple.d4c7af4a7bfeb382",
       "source": "Ready to connect",
       "translated": "جاهز للاتصال"
+    },
+    {
+      "id": "native.apple.b2daa79ca7f09eb3",
+      "source": "Ignored an expired direct connection setup. Send setup again from iPhone.",
+      "translated": "تم تجاهل إعداد اتصال مباشر منتهي الصلاحية. أرسل الإعداد مجددًا من iPhone."
+    },
+    {
+      "id": "native.apple.a5d7818f133e5edf",
+      "source": "Direct mode requires a trusted HTTPS Gateway endpoint.",
+      "translated": "يتطلب الوضع المباشر نقطة نهاية HTTPS موثوقة لـ Gateway."
+    },
+    {
+      "id": "native.apple.57e372c820a6be30",
+      "source": "Could not save direct connection securely.",
+      "translated": "تعذّر حفظ الاتصال المباشر بأمان."
+    },
+    {
+      "id": "native.apple.a0ebe82a796d2053",
+      "source": "Setup received. Connecting…",
+      "translated": "تم استلام الإعداد. جارٍ الاتصال…"
     },
     {
       "id": "native.apple.01062f110734602f",
@@ -13034,19 +14474,304 @@
       "translated": "استخدم إعدادات iPhone لتفعيل الاتصال المباشر."
     },
     {
-      "id": "native.apple.f3cc640d74e3b4b5",
-      "source": "Connected",
-      "translated": "Connected"
+      "id": "native.apple.32473b10033ac0f4",
+      "source": "Reconnects when OpenClaw is active",
+      "translated": "يعيد الاتصال عندما يكون OpenClaw نشطًا"
     },
     {
-      "id": "native.apple.9486a204b499e24a",
+      "id": "native.apple.760267006777c454",
+      "source": "Direct connection failed: %@",
+      "translated": "فشل الاتصال المباشر: %@"
+    },
+    {
+      "id": "native.apple.72906137acc1fa3e",
+      "source": "No usable Gateway endpoint",
+      "translated": "لا توجد نقطة نهاية صالحة للاستخدام لـ Gateway"
+    },
+    {
+      "id": "native.apple.d1ad78ee6e503156",
+      "source": "Connecting directly…",
+      "translated": "جارٍ الاتصال مباشرةً…"
+    },
+    {
+      "id": "native.apple.bdbf195388dd47d0",
+      "source": "Could not save the watch device identity",
+      "translated": "تعذّر حفظ هوية جهاز الساعة"
+    },
+    {
+      "id": "native.apple.13df5b54180bba52",
+      "source": "No watch device credential",
+      "translated": "لا توجد بيانات اعتماد لجهاز الساعة"
+    },
+    {
+      "id": "native.apple.f09da802e348ac84",
+      "source": "Could not save the watch device credential",
+      "translated": "تعذّر حفظ بيانات اعتماد جهاز الساعة"
+    },
+    {
+      "id": "native.apple.984480af89723c7f",
+      "source": "Connected directly",
+      "translated": "تم الاتصال مباشرةً"
+    },
+    {
+      "id": "native.apple.2d08e7d07397d7b8",
+      "source": "Could not sign watch identity",
+      "translated": "تعذّر توقيع هوية الساعة"
+    },
+    {
+      "id": "native.apple.fc5a98287165a0e5",
+      "source": "Invalid Gateway response",
+      "translated": "استجابة Gateway غير صالحة"
+    },
+    {
+      "id": "native.apple.fe846a916e4d5ae2",
+      "source": "Paired, but could not finish secure setup",
+      "translated": "تم الاقتران، ولكن تعذّر إكمال الإعداد الآمن"
+    },
+    {
+      "id": "native.apple.d834b6a7fe1e76d9",
+      "source": "Connected",
+      "translated": "متصل"
+    },
+    {
+      "id": "native.apple.c74420509a41df63",
+      "source": "Reconnecting…",
+      "translated": "جارٍ إعادة الاتصال…"
+    },
+    {
+      "id": "native.apple.1bbd3d2941ae7481",
+      "source": "Offline",
+      "translated": "غير متصل"
+    },
+    {
+      "id": "native.apple.06fdaba1468c68e7",
+      "source": "%@ (request ID: %@)",
+      "translated": "%@ (معرّف الطلب: %@)"
+    },
+    {
+      "id": "native.apple.3ee4f36ada379200",
       "source": "Ready",
-      "translated": "Ready"
+      "translated": "جاهز"
+    },
+    {
+      "id": "native.apple.9553b313de28af01",
+      "source": "Connecting",
+      "translated": "جارٍ الاتصال"
+    },
+    {
+      "id": "native.apple.d130499609c6d0e2",
+      "source": "Listening",
+      "translated": "جارٍ الاستماع"
+    },
+    {
+      "id": "native.apple.4f36637b4a6d0e47",
+      "source": "Thinking",
+      "translated": "التفكير"
+    },
+    {
+      "id": "native.apple.1627c0c4761eb0f4",
+      "source": "Speaking",
+      "translated": "جارٍ التحدث"
+    },
+    {
+      "id": "native.apple.32adc0c69c30f8a0",
+      "source": "Off",
+      "translated": "إيقاف"
+    },
+    {
+      "id": "native.apple.49e8885d52376b23",
+      "source": "Missing %@",
+      "translated": "%@ مفقود"
+    },
+    {
+      "id": "native.apple.76dbff60e10da917",
+      "source": "Requesting approval",
+      "translated": "جارٍ طلب الموافقة"
+    },
+    {
+      "id": "native.apple.b5dd3389abb9bc4d",
+      "source": "Approval requested",
+      "translated": "تم طلب الموافقة"
+    },
+    {
+      "id": "native.apple.d054c2f765b69fc5",
+      "source": "API key missing",
+      "translated": "مفتاح API مفقود"
+    },
+    {
+      "id": "native.apple.d2d7cef0c7758cdb",
+      "source": "Unavailable",
+      "translated": "غير متاح"
+    },
+    {
+      "id": "native.apple.9e2509f0acfd2429",
+      "source": "Connect iPhone chat to read messages",
+      "translated": "اربط دردشة iPhone لقراءة الرسائل"
+    },
+    {
+      "id": "native.apple.07188ebdca3fbba5",
+      "source": "No chat messages yet",
+      "translated": "No chat messages yet"
+    },
+    {
+      "id": "native.apple.d0697a13b9cff264",
+      "source": "Chat unavailable",
+      "translated": "الدردشة غير متاحة"
+    },
+    {
+      "id": "native.apple.c52c1d112c1a9255",
+      "source": "No messages synced",
+      "translated": "لم تتم مزامنة أي رسائل"
+    },
+    {
+      "id": "native.apple.f83078efbebeee58",
+      "source": "Waiting for iPhone",
+      "translated": "بانتظار iPhone"
+    },
+    {
+      "id": "native.apple.3c9d5628928ba096",
+      "source": "Refresh",
+      "translated": "تحديث"
+    },
+    {
+      "id": "native.apple.61b52937ffa71fc1",
+      "source": "Open Chat",
+      "translated": "فتح الدردشة"
+    },
+    {
+      "id": "native.apple.fdfb867c267aa4d7",
+      "source": "Chat",
+      "translated": "الدردشة"
+    },
+    {
+      "id": "native.apple.b88eeb167bd0224a",
+      "source": "Start Talk",
+      "translated": "بدء التحدث"
+    },
+    {
+      "id": "native.apple.b53377a10fa36a0b",
+      "source": "Stop Talk",
+      "translated": "إيقاف التحدث"
+    },
+    {
+      "id": "native.apple.82b2062d2133a096",
+      "source": "Sending %@…",
+      "translated": "جارٍ إرسال %@…"
+    },
+    {
+      "id": "native.apple.49a344835bfef46b",
+      "source": "%@ failed: %@",
+      "translated": "فشل %@: %@"
+    },
+    {
+      "id": "native.apple.e69e21d71e730d60",
+      "source": "%@: sent",
+      "translated": "%@: تم الإرسال"
+    },
+    {
+      "id": "native.apple.e7a7216e312a0d9e",
+      "source": "%@: queued",
+      "translated": "%@: في قائمة الانتظار"
+    },
+    {
+      "id": "native.apple.dff85946a1bc4b88",
+      "source": "Refreshing from iPhone…",
+      "translated": "جارٍ التحديث من iPhone…"
+    },
+    {
+      "id": "native.apple.14d80dcfd0571e5e",
+      "source": "Allow Once",
+      "translated": "السماح مرة واحدة"
+    },
+    {
+      "id": "native.apple.3d0f2919840907f5",
+      "source": "Deny",
+      "translated": "رفض"
+    },
+    {
+      "id": "native.apple.29770881786535f0",
+      "source": "Couldn't reach iPhone. Tap to retry.",
+      "translated": "تعذّر الوصول إلى iPhone. اضغط لإعادة المحاولة."
+    },
+    {
+      "id": "native.apple.2eec75b56c60d5b0",
+      "source": "Allowed once",
+      "translated": "تم السماح مرة واحدة"
+    },
+    {
+      "id": "native.apple.9400bb38632069de",
+      "source": "Approval set to Always Allow.",
+      "translated": "تم ضبط الموافقة على السماح دائمًا."
+    },
+    {
+      "id": "native.apple.f8dcff9a92819f00",
+      "source": "Denied",
+      "translated": "مرفوض"
+    },
+    {
+      "id": "native.apple.ec83442c2d7e3f6e",
+      "source": "Approval resolved",
+      "translated": "تمت معالجة الموافقة"
+    },
+    {
+      "id": "native.apple.177af48b87b701c8",
+      "source": "Approval expired",
+      "translated": "انتهت صلاحية الموافقة"
+    },
+    {
+      "id": "native.apple.e16ae6cb7a930543",
+      "source": "Approval no longer available",
+      "translated": "لم تعد الموافقة متاحة"
+    },
+    {
+      "id": "native.apple.e6c4ccb5e120af6f",
+      "source": "Approval resolved elsewhere",
+      "translated": "تمت معالجة الموافقة في مكان آخر"
+    },
+    {
+      "id": "native.apple.b955676dd84ee3c7",
+      "source": "Approval replaced",
+      "translated": "تم استبدال الموافقة"
+    },
+    {
+      "id": "native.apple.0cdaf3d078114cae",
+      "source": "Approval unavailable",
+      "translated": "الموافقة غير متاحة"
+    },
+    {
+      "id": "native.apple.e880bdd3d513b01a",
+      "source": "Main",
+      "translated": "الرئيسي"
+    },
+    {
+      "id": "native.apple.99e8a0a2f7fc5290",
+      "source": "^[\\(chatCount) recent message](inflect: true)",
+      "translated": "^[\\(chatCount) رسالة حديثة](inflect: true)"
+    },
+    {
+      "id": "native.apple.ebe1094c7e81ea1b",
+      "source": "Waiting for iPhone",
+      "translated": "بانتظار iPhone"
+    },
+    {
+      "id": "native.apple.00567830c2a6f90b",
+      "source": "Not synced",
+      "translated": "غير متزامن"
+    },
+    {
+      "id": "native.apple.29a7a76862d72ff3",
+      "source": "Loading approval from iPhone…",
+      "translated": "جارٍ تحميل الموافقة من iPhone…"
     },
     {
       "id": "native.apple.ca02fd2965efe74e",
       "source": "OpenClaw",
       "translated": "OpenClaw"
+    },
+    {
+      "id": "native.apple.1ba2f03dc98103c0",
+      "source": "Exec approval required",
+      "translated": "مطلوب الموافقة على التنفيذ"
     },
     {
       "id": "native.apple.732051c3e897a9f1",
@@ -13069,14 +14794,29 @@
       "translated": "لا توجد دردشات أو موافقات تحتاج إليك"
     },
     {
+      "id": "native.apple.e927c0240dd8ab4b",
+      "source": "Waiting for iPhone sync",
+      "translated": "في انتظار مزامنة iPhone"
+    },
+    {
       "id": "native.apple.6a2c7f809c734c45",
       "source": "Continue on iPhone",
       "translated": "المتابعة على iPhone"
     },
     {
-      "id": "native.apple.a974845eb4fcc692",
-      "source": "Chat",
-      "translated": "دردشة"
+      "id": "native.apple.1f56c2d5162b3561",
+      "source": "Latest",
+      "translated": "الأحدث"
+    },
+    {
+      "id": "native.apple.6306e68c719b88c3",
+      "source": "Approval waiting",
+      "translated": "الموافقة قيد الانتظار"
+    },
+    {
+      "id": "native.apple.9a3d09becc9983dd",
+      "source": "Latest update",
+      "translated": "آخر تحديث"
     },
     {
       "id": "native.apple.dc532fb77a310766",
@@ -13104,6 +14844,16 @@
       "translated": "جارٍ تحميل الموافقة"
     },
     {
+      "id": "native.apple.ccb410a28ce9fbe2",
+      "source": "Waiting for your iPhone",
+      "translated": "في انتظار iPhone"
+    },
+    {
+      "id": "native.apple.b5de6b91209ad07c",
+      "source": "Syncing",
+      "translated": "جارٍ المزامنة"
+    },
+    {
       "id": "native.apple.7eadc6444e799223",
       "source": "Unavailable",
       "translated": "غير متاح"
@@ -13112,6 +14862,16 @@
       "id": "native.apple.6699bd5238af0897",
       "source": "Approval not loaded",
       "translated": "لم يتم تحميل الموافقة"
+    },
+    {
+      "id": "native.apple.4e820bf84e971fa2",
+      "source": "Approval details have not loaded",
+      "translated": "لم يتم تحميل تفاصيل الموافقة"
+    },
+    {
+      "id": "native.apple.a30328bfb2a82106",
+      "source": "Retry",
+      "translated": "إعادة المحاولة"
     },
     {
       "id": "native.apple.373973b577f97d63",
@@ -13124,14 +14884,19 @@
       "translated": "فتح كل الموافقات"
     },
     {
-      "id": "native.apple.577dd5b3738b6aec",
-      "source": "Direct Gateway",
-      "translated": "Gateway مباشر"
+      "id": "native.apple.7cf623c78bbd5ed3",
+      "source": "Connection",
+      "translated": "الاتصال"
     },
     {
       "id": "native.apple.b5ac093277f18109",
       "source": "Watch node online",
       "translated": "عقدة الساعة متصلة"
+    },
+    {
+      "id": "native.apple.577dd5b3738b6aec",
+      "source": "Direct Gateway",
+      "translated": "Gateway مباشر"
     },
     {
       "id": "native.apple.82fa10a36cbd5773",
@@ -13144,6 +14909,11 @@
       "translated": "الإعداد"
     },
     {
+      "id": "native.apple.69da4de4304a6a7c",
+      "source": "Enable from iPhone",
+      "translated": "تمكين من iPhone"
+    },
+    {
       "id": "native.apple.c7d87356e6cdb374",
       "source": "Uses Wi-Fi or cellular while OpenClaw is active",
       "translated": "يستخدم Wi-Fi أو الشبكة الخلوية أثناء نشاط OpenClaw"
@@ -13154,14 +14924,14 @@
       "translated": "افتح إعدادات iPhone ← Apple Watch"
     },
     {
-      "id": "native.apple.f748dad8f2ce22ae",
-      "source": "Offline",
-      "translated": "غير متصل"
-    },
-    {
       "id": "native.apple.60cdcd03d8b51965",
       "source": "Online",
       "translated": "متصل"
+    },
+    {
+      "id": "native.apple.f748dad8f2ce22ae",
+      "source": "Offline",
+      "translated": "غير متصل"
     },
     {
       "id": "native.apple.088f07637cc141c9",
@@ -13184,16 +14954,6 @@
       "translated": "يرسل الـ iPhone بأمان رمز إعداد لمرة واحدة. تبقى ميزات الترحيل الحالية متاحة."
     },
     {
-      "id": "native.apple.00d2c14f9f635100",
-      "source": "\\(self.chatCount)",
-      "translated": "\\(self.chatCount)"
-    },
-    {
-      "id": "native.apple.c3f1a9e79f6e0e97",
-      "source": "\\(self.approvalCount)",
-      "translated": "\\(self.approvalCount)"
-    },
-    {
       "id": "native.apple.eb8d87882ee9d932",
       "source": "AI agent online",
       "translated": "وكيل الذكاء الاصطناعي متصل"
@@ -13204,9 +14964,14 @@
       "translated": "إعادة الاتصال على iPhone"
     },
     {
-      "id": "native.apple.a240e731ca37dbdd",
-      "source": "Pairing",
-      "translated": "جارٍ الاقتران"
+      "id": "native.apple.978324b4957ca2a5",
+      "source": "Pair iPhone",
+      "translated": "إقران iPhone"
+    },
+    {
+      "id": "native.apple.d0bec88aee57badb",
+      "source": "Next up",
+      "translated": "التالي"
     },
     {
       "id": "native.apple.381d10256d49d0e0",
@@ -13214,24 +14979,24 @@
       "translated": "قيد التشغيل"
     },
     {
+      "id": "native.apple.a240e731ca37dbdd",
+      "source": "Pairing",
+      "translated": "جارٍ الاقتران"
+    },
+    {
+      "id": "native.apple.60410d86c9d2317d",
+      "source": "Approval waiting on your wrist",
+      "translated": "موافقة بانتظارك على معصمك"
+    },
+    {
       "id": "native.apple.643a9402efef3924",
       "source": "Ready for quick actions",
       "translated": "جاهز للإجراءات السريعة"
     },
     {
-      "id": "native.apple.e927c0240dd8ab4b",
-      "source": "Waiting for iPhone sync",
-      "translated": "في انتظار مزامنة iPhone"
-    },
-    {
-      "id": "native.apple.6a607ff2270f7234",
-      "source": "1 approval waiting",
-      "translated": "موافقة واحدة بانتظارك"
-    },
-    {
-      "id": "native.apple.046272dd8fbd45cd",
-      "source": "\\(self.approvalCount) approvals",
-      "translated": "\\(self.approvalCount) موافقات"
+      "id": "native.apple.0b6f1eb837ac1918",
+      "source": "^[\\(count) approval](inflect: true) waiting",
+      "translated": "^[\\(count) موافقة](inflect: true) قيد الانتظار"
     },
     {
       "id": "native.apple.c938aa514b77854a",
@@ -13244,19 +15009,34 @@
       "translated": "لا توجد موافقات"
     },
     {
-      "id": "native.apple.84674ce9751faffd",
-      "source": "1 recent message",
-      "translated": "رسالة حديثة واحدة"
+      "id": "native.apple.b5ab9afbe0f178c1",
+      "source": "Expires in %@",
+      "translated": "تنتهي الصلاحية خلال %@"
     },
     {
-      "id": "native.apple.1495106ee09cc268",
-      "source": "\\(self.chatCount) recent messages",
-      "translated": "\\(self.chatCount) من الرسائل الأخيرة"
+      "id": "native.apple.49675f366ea200fe",
+      "source": "Review before it runs",
+      "translated": "راجع قبل التشغيل"
     },
     {
-      "id": "native.apple.2b7032e200b1d495",
-      "source": "No messages synced",
-      "translated": "لم تتم مزامنة أي رسائل"
+      "id": "native.apple.fa2e6caeee3ae121",
+      "source": "Sending",
+      "translated": "جارٍ الإرسال"
+    },
+    {
+      "id": "native.apple.68ed8400b5a7fbd9",
+      "source": "Good morning",
+      "translated": "صباح الخير"
+    },
+    {
+      "id": "native.apple.b63fae6055b02343",
+      "source": "Good afternoon",
+      "translated": "طاب مساؤك"
+    },
+    {
+      "id": "native.apple.8fc63b508e376b2b",
+      "source": "Good evening",
+      "translated": "مساء الخير"
     },
     {
       "id": "native.apple.5e32bb776eec9d39",
@@ -13269,14 +15049,39 @@
       "translated": "بانتظار iPhone"
     },
     {
+      "id": "native.apple.898d2a554cca48e5",
+      "source": "Just now",
+      "translated": "الآن"
+    },
+    {
+      "id": "native.apple.763c0fa10e337dbf",
+      "source": "Requires confirmation",
+      "translated": "يتطلب تأكيدًا"
+    },
+    {
+      "id": "native.apple.6618fbfc58234886",
+      "source": "Dismiss this update",
+      "translated": "تجاهل هذا التحديث"
+    },
+    {
+      "id": "native.apple.64c79ac2ec6a9246",
+      "source": "Send from watch",
+      "translated": "إرسال من الساعة"
+    },
+    {
+      "id": "native.apple.cc598b347d8816d8",
+      "source": "less than 1 min",
+      "translated": "أقل من دقيقة"
+    },
+    {
+      "id": "native.apple.b95263bf403c110b",
+      "source": "%@ min",
+      "translated": "%@ د"
+    },
+    {
       "id": "native.apple.fadaa0ca97ba0c43",
       "source": "Inbox",
       "translated": "صندوق الوارد"
-    },
-    {
-      "id": "native.apple.3fdc651e507de84b",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
     },
     {
       "id": "native.apple.a4e70d96cf65b2b2",
@@ -13294,19 +15099,34 @@
       "translated": "Sending decision..."
     },
     {
-      "id": "native.apple.337c2164038d1a5a",
-      "source": "You",
-      "translated": "أنت"
-    },
-    {
       "id": "native.apple.a8cfe6cb5bc33c21",
       "source": "System",
       "translated": "النظام"
     },
     {
+      "id": "native.apple.3fdc651e507de84b",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
       "id": "native.apple.c1de056da9ee1b27",
       "source": "Refresh",
       "translated": "تحديث"
+    },
+    {
+      "id": "native.apple.a974845eb4fcc692",
+      "source": "Chat",
+      "translated": "دردشة"
+    },
+    {
+      "id": "native.apple.381840bafc83d21d",
+      "source": "Speaking reply…",
+      "translated": "جارٍ نطق الرد…"
+    },
+    {
+      "id": "native.apple.d0b65146b7bdd9cc",
+      "source": "Waiting for spoken reply…",
+      "translated": "بانتظار الرد المنطوق…"
     },
     {
       "id": "native.apple.5f277949dc42b1c3",
@@ -13319,9 +15139,29 @@
       "translated": "اضغط على كبسولة الرسالة أدناه للبدء من ساعتك."
     },
     {
+      "id": "native.apple.337c2164038d1a5a",
+      "source": "You",
+      "translated": "أنت"
+    },
+    {
       "id": "native.apple.b816e4b9e492ae6c",
       "source": "Message OpenClaw",
       "translated": "مراسلة OpenClaw"
+    },
+    {
+      "id": "native.apple.502a884cec1f0d5d",
+      "source": "Stop speaking",
+      "translated": "إيقاف النطق"
+    },
+    {
+      "id": "native.apple.017e284509fafd26",
+      "source": "Cancel voice turn",
+      "translated": "إلغاء الدور الصوتي"
+    },
+    {
+      "id": "native.apple.3c24aabc01cf9d84",
+      "source": "Start voice turn",
+      "translated": "بدء الدور الصوتي"
     },
     {
       "id": "native.apple.f3ccbf04d80cf021",
@@ -13339,6 +15179,16 @@
       "translated": "لا توجد موافقات قيد الانتظار"
     },
     {
+      "id": "native.apple.88dcffad1e47412e",
+      "source": "You are caught up",
+      "translated": "أنت مطّلع على كل جديد"
+    },
+    {
+      "id": "native.apple.6da5ce592afa6a14",
+      "source": "Ready",
+      "translated": "جاهز"
+    },
+    {
       "id": "native.apple.ef3ff87537a32741",
       "source": "Approval",
       "translated": "الموافقة"
@@ -13346,7 +15196,17 @@
     {
       "id": "native.apple.2cf742a80121a8ea",
       "source": "Pending review",
-      "translated": "Pending review"
+      "translated": "في انتظار المراجعة"
+    },
+    {
+      "id": "native.apple.676408ac65f97207",
+      "source": "Expires in less than 1 min",
+      "translated": "تنتهي الصلاحية خلال أقل من دقيقة واحدة"
+    },
+    {
+      "id": "native.apple.ad02224230471914",
+      "source": "Expires in %@ min",
+      "translated": "تنتهي الصلاحية خلال %@ دقيقة"
     },
     {
       "id": "native.apple.507b63347d559665",
@@ -13354,9 +15214,19 @@
       "translated": "مراجعة الأمر"
     },
     {
+      "id": "native.apple.b8d5c2abcfba5377",
+      "source": "Review",
+      "translated": "مراجعة"
+    },
+    {
       "id": "native.apple.cd22b958c904f66f",
       "source": "Command execution",
       "translated": "تنفيذ الأمر"
+    },
+    {
+      "id": "native.apple.cfaf9f116e79b2ef",
+      "source": "Now",
+      "translated": "الآن"
     },
     {
       "id": "native.apple.82ee6f7c58b18b55",
@@ -13372,6 +15242,31 @@
       "id": "native.apple.f84adc6a026a3aaf",
       "source": "Review command below",
       "translated": "Review command below"
+    },
+    {
+      "id": "native.apple.412eb18a464e8d0f",
+      "source": "High risk",
+      "translated": "مخاطر عالية"
+    },
+    {
+      "id": "native.apple.3772bcb9e1a9fa47",
+      "source": "Medium risk",
+      "translated": "مخاطر متوسطة"
+    },
+    {
+      "id": "native.apple.6290c464a8c52e22",
+      "source": "Low risk",
+      "translated": "مخاطر منخفضة"
+    },
+    {
+      "id": "native.apple.3b1c428e8e545a5d",
+      "source": "less than 1 minute",
+      "translated": "أقل من دقيقة واحدة"
+    },
+    {
+      "id": "native.apple.264c0d4ccc08fa21",
+      "source": "^[\\(minutes) minute](inflect: true)",
+      "translated": "^[\\(minutes) دقيقة](inflect: true)"
     },
     {
       "id": "native.apple.5ac0c79487a492b4",
@@ -16009,16 +17904,6 @@
       "translated": "الاستخدام"
     },
     {
-      "id": "native.apple.386595fa18585dbb",
-      "source": "approvalSource requires matching systemRunPlan",
-      "translated": "يتطلّب approvalSource وجود systemRunPlan مطابق"
-    },
-    {
-      "id": "native.apple.014ff905cecd753b",
-      "source": "explicit approval requires matching systemRunPlan",
-      "translated": "تتطلّب الموافقة الصريحة وجود systemRunPlan مطابق"
-    },
-    {
       "id": "native.apple.7eb0a88b8274ced8",
       "source": "Node pairing approved",
       "translated": "تمت الموافقة على إقران العقدة"
@@ -16624,19 +18509,24 @@
       "translated": "جارٍ تجهيز الأمور"
     },
     {
-      "id": "native.apple.183aee003b44ede6",
-      "source": "OpenClaw is setting up its background service on this Mac. This usually takes under a minute — no Terminal, no administrator password.",
-      "translated": "يقوم OpenClaw بإعداد خدمته في الخلفية على هذا الـ Mac. يستغرق ذلك عادةً أقل من دقيقة — من دون Terminal، ولا كلمة مرور مسؤول."
-    },
-    {
       "id": "native.apple.d0b8cf59f852b3d0",
       "source": "Install OpenClaw",
       "translated": "ثبّت OpenClaw"
     },
     {
+      "id": "native.apple.0b0fc42b8827e01f",
+      "source": "Prepare the Mac node",
+      "translated": "إعداد عقدة Mac"
+    },
+    {
       "id": "native.apple.0112e18fa97e7c0c",
       "source": "Start the background service",
       "translated": "ابدأ خدمة الخلفية"
+    },
+    {
+      "id": "native.apple.9230c2a15ba6da94",
+      "source": "Runs inside the app and uses its macOS permissions.",
+      "translated": "تعمل داخل التطبيق وتستخدم أذونات macOS الخاصة به."
     },
     {
       "id": "native.apple.d1f9f278b55fe9b0",
@@ -16647,6 +18537,11 @@
       "id": "native.apple.0357f1eea66db068",
       "source": "Ready for the next step",
       "translated": "جاهز للخطوة التالية"
+    },
+    {
+      "id": "native.apple.b4ba6f183309593d",
+      "source": "Once ready, this Mac connects to your selected Gateway.",
+      "translated": "بمجرد أن يصبح جاهزًا، يتصل جهاز Mac هذا بـ Gateway المحدد."
     },
     {
       "id": "native.apple.9f58badc863cbf2b",
@@ -18354,9 +20249,9 @@
       "translated": "<\\(tag)"
     },
     {
-      "id": "native.apple.38a8e96962b1a93d",
-      "source": "Context \\(percentage)% used",
-      "translated": "تم استخدام \\(percentage)% من السياق"
+      "id": "native.apple.03aca5cfee32f12d",
+      "source": "Context %@%% used",
+      "translated": "تم استخدام %@%% من السياق"
     },
     {
       "id": "native.apple.510c6dfa05924ae2",
@@ -18489,29 +20384,29 @@
       "translated": "Message…"
     },
     {
-      "id": "native.apple.c622ecbe64757e20",
-      "source": "Input tokens: \\(input)",
-      "translated": "رموز الإدخال: \\(input)"
+      "id": "native.apple.190f1eda9727180a",
+      "source": "Input tokens: %@",
+      "translated": "رموز الإدخال: %@"
     },
     {
-      "id": "native.apple.9a2df48646af1dde",
-      "source": "Output tokens: \\(output)",
-      "translated": "رموز الإخراج: \\(output)"
+      "id": "native.apple.58dcab73dfa3ef76",
+      "source": "Output tokens: %@",
+      "translated": "رموز الإخراج: %@"
     },
     {
-      "id": "native.apple.0c6c7b65489adafa",
-      "source": "Cache read tokens: \\(cacheRead)",
-      "translated": "رموز قراءة الذاكرة المؤقتة: \\(cacheRead)"
+      "id": "native.apple.2b649c2738a96b06",
+      "source": "Cache read tokens: %@",
+      "translated": "رموز قراءة ذاكرة التخزين المؤقت: %@"
     },
     {
-      "id": "native.apple.c71fa1cad2deba7e",
-      "source": "Cache write tokens: \\(cacheWrite)",
-      "translated": "رموز كتابة الذاكرة المؤقتة: \\(cacheWrite)"
+      "id": "native.apple.e760f2286ce6cb93",
+      "source": "Cache write tokens: %@",
+      "translated": "رموز كتابة ذاكرة التخزين المؤقت: %@"
     },
     {
-      "id": "native.apple.62bcf67218a0ecd0",
-      "source": "Cost: \\(formattedCost)",
-      "translated": "التكلفة: \\(formattedCost)"
+      "id": "native.apple.ca393fd6a32df121",
+      "source": "Cost: %@",
+      "translated": "التكلفة: %@"
     },
     {
       "id": "native.apple.118ab29788bb00fd",
@@ -18519,24 +20414,19 @@
       "translated": "ctx"
     },
     {
-      "id": "native.apple.1b6b0d02dc774cc3",
-      "source": "\\(contextPercent) percent of context used",
-      "translated": "تم استخدام \\(contextPercent) بالمئة من السياق"
+      "id": "native.apple.ac0fdf24e3430c88",
+      "source": "%@ percent of context used",
+      "translated": "تم استخدام %@ بالمئة من السياق"
     },
     {
-      "id": "native.apple.4e7cd5b3f4e0ddc0",
-      "source": "Warning: \\(contextPercent) percent of context used",
-      "translated": "تحذير: تم استخدام \\(contextPercent) بالمئة من السياق"
+      "id": "native.apple.528a0ca804fa3d61",
+      "source": "Warning: %@ percent of context used",
+      "translated": "تحذير: تم استخدام %@ بالمئة من السياق"
     },
     {
-      "id": "native.apple.107321cf0b74cb7f",
-      "source": "Critical: \\(contextPercent) percent of context used",
-      "translated": "حرج: تم استخدام \\(contextPercent) بالمئة من السياق"
-    },
-    {
-      "id": "native.apple.e8fba80e238f4283",
-      "source": "\\(percent)%",
-      "translated": "\\(percent)%"
+      "id": "native.apple.41e40039fb38ed8f",
+      "source": "Critical: %@ percent of context used",
+      "translated": "حرج: تم استخدام %@ بالمئة من السياق"
     },
     {
       "id": "native.apple.a902d7f653b46010",
@@ -18544,9 +20434,29 @@
       "translated": "استخدام السياق"
     },
     {
+      "id": "native.apple.3cba3f4fe2ca796b",
+      "source": "%@ percent of the context window used",
+      "translated": "تم استخدام %@ بالمئة من نافذة السياق"
+    },
+    {
+      "id": "native.apple.9243b96b3d4d590f",
+      "source": "%@ tokens used",
+      "translated": "تم استخدام %@ من الرموز"
+    },
+    {
       "id": "native.apple.769b7dcea4708c40",
       "source": "Image",
       "translated": "Image"
+    },
+    {
+      "id": "native.apple.14da4c958ae30949",
+      "source": "%@ avatar",
+      "translated": "الصورة الرمزية لـ %@"
+    },
+    {
+      "id": "native.apple.fccc8a9ba3da1426",
+      "source": "Agent avatar",
+      "translated": "الصورة الرمزية للوكيل"
     },
     {
       "id": "native.apple.8509385953c19619",
@@ -18599,64 +20509,9 @@
       "translated": "جارٍ التحدث، اضغط للإيقاف"
     },
     {
-      "id": "native.apple.86695104895ebed8",
-      "source": "Queued",
-      "translated": "في قائمة الانتظار"
-    },
-    {
-      "id": "native.apple.a85f179b35d39d8f",
-      "source": "Sending…",
-      "translated": "جارٍ الإرسال…"
-    },
-    {
-      "id": "native.apple.38722ea25417ad4f",
-      "source": "Confirming…",
-      "translated": "جارٍ التأكيد…"
-    },
-    {
-      "id": "native.apple.78682085b14232f8",
-      "source": "Delivery unknown",
-      "translated": "التسليم غير معروف"
-    },
-    {
-      "id": "native.apple.2888a268bfa49e9e",
-      "source": "Not sent",
-      "translated": "لم يتم الإرسال"
-    },
-    {
-      "id": "native.apple.593219d4c4479c59",
-      "source": "Queued, sends when reconnected",
-      "translated": "في قائمة الانتظار، يُرسل عند إعادة الاتصال"
-    },
-    {
-      "id": "native.apple.00e673b9c5263c5c",
-      "source": "Sending",
-      "translated": "جارٍ الإرسال"
-    },
-    {
-      "id": "native.apple.bfe7aab77abe9a2c",
-      "source": "Sent, waiting for chat history confirmation",
-      "translated": "تم الإرسال، في انتظار تأكيد سجل الدردشة"
-    },
-    {
-      "id": "native.apple.7eb6eca416d33bb4",
-      "source": "Delivery unconfirmed, touch and hold to retry or delete",
-      "translated": "لم يتم تأكيد التسليم، المس مع الاستمرار لإعادة المحاولة أو الحذف"
-    },
-    {
-      "id": "native.apple.df1a81bd7a0bca36",
-      "source": "Not sent, touch and hold to retry or delete",
-      "translated": "لم يتم الإرسال، المس مطولًا لإعادة المحاولة أو الحذف"
-    },
-    {
       "id": "native.apple.6b18ea1d85b5d3a2",
       "source": "Running tools…",
       "translated": "جارٍ تشغيل الأدوات…"
-    },
-    {
-      "id": "native.apple.7c99becc26501014",
-      "source": "\\(display.emoji) \\(display.label)",
-      "translated": "\\(display.emoji) \\(display.label)"
     },
     {
       "id": "native.apple.63320b6d5138c0db",
@@ -18819,14 +20674,29 @@
       "translated": "إغلاق"
     },
     {
-      "id": "native.apple.82befa424fe7bace",
-      "source": "Could not attach voice note: \\(error.localizedDescription)",
-      "translated": "تعذّر إرفاق الملاحظة الصوتية: \\(error.localizedDescription)"
+      "id": "native.apple.92fe9093903eda3b",
+      "source": "Could not attach voice note: %@",
+      "translated": "تعذر إرفاق الملاحظة الصوتية: %@"
     },
     {
       "id": "native.apple.ec5daba7e38184dc",
       "source": "Voice note exceeds the 5 MB attachment limit",
       "translated": "تتجاوز الملاحظة الصوتية حد المرفقات البالغ 5 ميغابايت"
+    },
+    {
+      "id": "native.apple.3fc625c22ab9178f",
+      "source": "Only image attachments are supported right now",
+      "translated": "لا تُدعم حاليًا سوى مرفقات الصور"
+    },
+    {
+      "id": "native.apple.4bbad34e5b7d878a",
+      "source": "Could not process %1$@: %2$@",
+      "translated": "تعذّرت معالجة %1$@: %2$@"
+    },
+    {
+      "id": "native.apple.b4db7a269f931ad8",
+      "source": "Attachment %@ exceeds 5 MB limit after resizing",
+      "translated": "يتجاوز المرفق %@ حد 5 MB بعد تغيير حجمه"
     },
     {
       "id": "native.apple.82c2287cd78da56f",
@@ -18874,9 +20744,9 @@
       "translated": "مسح السجل"
     },
     {
-      "id": "native.apple.ca701776b3d9ce70",
-      "source": "This resets the conversation for \\(self.activeSessionTitle). The session key stays the same.",
-      "translated": "يؤدي هذا إلى إعادة تعيين المحادثة لـ \\(self.activeSessionTitle). يبقى مفتاح الجلسة كما هو."
+      "id": "native.apple.6222c1b2e42e123e",
+      "source": "This resets the conversation for %@. The session key stays the same.",
+      "translated": "سيؤدي هذا إلى إعادة تعيين المحادثة لـ %@. سيبقى مفتاح الجلسة كما هو."
     },
     {
       "id": "native.apple.2ee7858b00a47c42",
@@ -18939,9 +20809,9 @@
       "translated": "إجراءات الجلسة"
     },
     {
-      "id": "native.apple.547fe762a61d08a6",
-      "source": "Session cost \\(ChatContextUsageFormatter.cost(cost))",
-      "translated": "تكلفة الجلسة \\(ChatContextUsageFormatter.cost(cost))"
+      "id": "native.apple.9f9dedf599b2619b",
+      "source": "Session cost %@",
+      "translated": "تكلفة الجلسة %@"
     },
     {
       "id": "native.apple.f0a4720df5f5f403",
@@ -19059,9 +20929,9 @@
       "translated": "الوصول إلى الميكروفون مطلوب. فعّله في الإعدادات."
     },
     {
-      "id": "native.apple.c963f6dfaa0610b5",
-      "source": "Could not start recording: \\(error.localizedDescription)",
-      "translated": "تعذّر بدء التسجيل: \\(error.localizedDescription)"
+      "id": "native.apple.5f56be8ab5ef3c3b",
+      "source": "Could not start recording: %@",
+      "translated": "تعذّر بدء التسجيل: %@"
     },
     {
       "id": "native.apple.bb00abc2aa9ae5e1",
@@ -19087,6 +20957,26 @@
       "id": "native.apple.31178752f837d528",
       "source": " This device could not verify the new certificate.",
       "translated": " تعذّر على هذا الجهاز التحقق من الشهادة الجديدة."
+    },
+    {
+      "id": "native.apple.b5a7aafce7ace797",
+      "source": "The saved TLS certificate pin for %@ no longer matches the gateway certificate. The new certificate is trusted by this device; this is commonly caused by certificate rotation.",
+      "translated": "لم تعد بصمة شهادة TLS المحفوظة لـ %@ تطابق شهادة Gateway. يثق هذا الجهاز بالشهادة الجديدة؛ ويحدث ذلك عادةً بسبب تدوير الشهادة."
+    },
+    {
+      "id": "native.apple.1d1924a7686194f8",
+      "source": "The saved TLS certificate pin for %@ no longer matches the gateway certificate. This device could not verify the new certificate.",
+      "translated": "لم تعد بصمة شهادة TLS المحفوظة لـ %@ تطابق شهادة Gateway. تعذّر على هذا الجهاز التحقق من الشهادة الجديدة."
+    },
+    {
+      "id": "native.apple.1823d7bddaa73a1a",
+      "source": "OpenClaw could not read the gateway certificate for %@.",
+      "translated": "تعذّر على OpenClaw قراءة شهادة Gateway لـ %@."
+    },
+    {
+      "id": "native.apple.b737f84578f558eb",
+      "source": "This device does not trust the TLS certificate presented by %@.",
+      "translated": "لا يثق هذا الجهاز بشهادة TLS المقدَّمة من %@."
     },
     {
       "id": "native.apple.a825441f646eb195",

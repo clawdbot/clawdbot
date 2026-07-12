@@ -76,6 +76,7 @@ import {
 } from "../identity.js";
 import { normalizeSignalMessagingTarget } from "../normalize.js";
 import { resolveSignalReactionLevel } from "../reaction-level.js";
+import { registerSignalReplyContext } from "../reply-authors.js";
 import {
   removeReactionSignal,
   sendReactionSignal,
@@ -305,12 +306,13 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             limit: deps.historyLimit,
           })
         : undefined;
+    const replyToMode = resolveSignalReplyToMode({
+      cfg: deps.cfg,
+      accountId: deps.accountId,
+      chatType: entry.isGroup ? "group" : "direct",
+    });
     const replyThreading = resolveBatchedReplyThreadingPolicy(
-      resolveSignalReplyToMode({
-        cfg: deps.cfg,
-        accountId: deps.accountId,
-        chatType: entry.isGroup ? "group" : "direct",
-      }),
+      replyToMode,
       entry.isBatched === true,
     );
     const media =
@@ -512,6 +514,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       replyToId: ctxPayload.ReplyToId,
       author: entry.senderRecipient,
       body: entry.nativeReplyBody ?? entry.bodyText,
+      allowImplicitCurrentMessage:
+        replyToMode !== "off" && replyThreading?.implicitCurrentMessage !== "deny",
       state: { hasReplied: false },
     };
     const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
@@ -1052,6 +1056,23 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       groupId,
       senderPeerId,
     });
+    const inboundTimestamp =
+      typeof envelope.timestamp === "number"
+        ? envelope.timestamp
+        : typeof dataMessage.timestamp === "number"
+          ? dataMessage.timestamp
+          : undefined;
+    const nativeReplyTargetTimestamp =
+      typeof envelope.editMessage?.targetSentTimestamp === "number"
+        ? envelope.editMessage.targetSentTimestamp
+        : inboundTimestamp;
+    const messageId = typeof inboundTimestamp === "number" ? String(inboundTimestamp) : undefined;
+    const replyToId =
+      typeof nativeReplyTargetTimestamp === "number"
+        ? String(nativeReplyTargetTimestamp)
+        : undefined;
+    const signalToRaw = isGroup ? `group:${groupId}` : `signal:${senderRecipient}`;
+    const signalTo = normalizeSignalMessagingTarget(signalToRaw) ?? signalToRaw;
     const mentionRegexes = buildMentionRegexes(deps.cfg, route.agentId);
     const wasMentioned = isGroup && matchesMentionPatterns(messageText, mentionRegexes);
     const requireMention =
@@ -1118,6 +1139,14 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           messageId:
             typeof envelope.timestamp === "number" ? String(envelope.timestamp) : undefined,
         },
+      });
+      await registerSignalReplyContext({
+        accountId: deps.accountId,
+        to: signalTo,
+        replyToId,
+        author: senderRecipient,
+        body: pendingBodyText,
+        sourceTimestamp: inboundTimestamp,
       });
       const signalGroupPolicy = resolveChannelGroupPolicy({
         cfg: deps.cfg,
@@ -1227,16 +1256,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       return;
     }
 
-    const inboundTimestamp =
-      typeof envelope.timestamp === "number"
-        ? envelope.timestamp
-        : typeof dataMessage.timestamp === "number"
-          ? dataMessage.timestamp
-          : undefined;
-    const nativeReplyTargetTimestamp =
-      typeof envelope.editMessage?.targetSentTimestamp === "number"
-        ? envelope.editMessage.targetSentTimestamp
-        : inboundTimestamp;
     if (deps.sendReadReceipts && !deps.readReceiptsViaDaemon && !isGroup && inboundTimestamp) {
       try {
         await sendReadReceiptSignal(`signal:${senderRecipient}`, inboundTimestamp, {
@@ -1258,11 +1277,14 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     }
 
     const senderName = envelope.sourceName ?? senderDisplay;
-    const messageId = typeof inboundTimestamp === "number" ? String(inboundTimestamp) : undefined;
-    const replyToId =
-      typeof nativeReplyTargetTimestamp === "number"
-        ? String(nativeReplyTargetTimestamp)
-        : undefined;
+    await registerSignalReplyContext({
+      accountId: deps.accountId,
+      to: signalTo,
+      replyToId,
+      author: senderRecipient,
+      body: bodyText,
+      sourceTimestamp: inboundTimestamp,
+    });
     const entry: SignalInboundEntry = {
       senderName,
       senderDisplay,

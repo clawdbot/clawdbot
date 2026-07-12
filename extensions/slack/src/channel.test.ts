@@ -574,7 +574,7 @@ describe("slackPlugin status", () => {
     if (!resolveRoute) {
       throw new Error("slack messaging.resolveOutboundSessionRoute unavailable");
     }
-    conversationsOpenMock.mockResolvedValueOnce({
+    conversationsInfoMock.mockResolvedValueOnce({
       channel: {
         id: "D0AEWSDHAQH",
         is_im: true,
@@ -597,11 +597,10 @@ describe("slackPlugin status", () => {
       threadId: "1778110574.653649",
     });
 
-    expect(conversationsOpenMock).toHaveBeenCalledWith({
+    expect(conversationsInfoMock).toHaveBeenCalledWith({
       channel: "D0AEWSDHAQH",
-      prevent_creation: true,
-      return_im: true,
     });
+    expect(conversationsOpenMock).not.toHaveBeenCalled();
     expectRecordFields(route, "Slack direct route", {
       sessionKey: "agent:main:slack:direct:u09g2dj0275:thread:1778110574.653649",
       baseSessionKey: "agent:main:slack:direct:u09g2dj0275",
@@ -622,7 +621,7 @@ describe("slackPlugin status", () => {
     if (!resolveRoute) {
       throw new Error("slack messaging.resolveOutboundSessionRoute unavailable");
     }
-    conversationsOpenMock.mockResolvedValueOnce({
+    conversationsInfoMock.mockResolvedValueOnce({
       channel: {
         id: "D123",
         is_im: true,
@@ -644,6 +643,8 @@ describe("slackPlugin status", () => {
       target: "channel:D123",
     });
 
+    expect(conversationsInfoMock).toHaveBeenCalledWith({ channel: "D123" });
+    expect(conversationsOpenMock).not.toHaveBeenCalled();
     expectRecordFields(route, "Slack explicit IM route", {
       sessionKey: "agent:main:slack:direct:u123",
     });
@@ -662,16 +663,24 @@ describe("slackPlugin status", () => {
     if (!resolveRoute) {
       throw new Error("slack messaging.resolveOutboundSessionRoute unavailable");
     }
-    conversationsOpenMock.mockResolvedValueOnce({ channel: { id: "D0NOUSER001", is_im: true } });
+    conversationsInfoMock.mockResolvedValueOnce({ channel: { id: "D0NOUSER001", is_im: true } });
 
     await expect(
       resolveRoute({
-        cfg: {} as OpenClawConfig,
+        cfg: {
+          channels: {
+            slack: {
+              botToken: "test",
+            },
+          },
+        } as OpenClawConfig,
         agentId: "main",
         target: "D0NOUSER001",
         threadId: "1778110574.653649",
       }),
     ).resolves.toBeNull();
+    expect(conversationsInfoMock).toHaveBeenCalledWith({ channel: "D0NOUSER001" });
+    expect(conversationsOpenMock).not.toHaveBeenCalled();
   });
 
   it("keeps Slack MPIM outbound routing as group", async () => {

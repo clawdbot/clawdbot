@@ -144,6 +144,31 @@ describe("streaming config resolution", () => {
 });
 
 describe("progress narration", () => {
+  it("omits the implicit progress label when narration is available", () => {
+    const text = formatChannelProgressDraftText({
+      entry: { streaming: { mode: "progress" } },
+      lines: ["🛠️ Exec"],
+      narration: "Counting lines in the workspace files.",
+    });
+
+    expect(text).toBe("Counting lines in the workspace files.");
+  });
+
+  it("keeps an explicitly configured automatic label above narration", () => {
+    const text = formatChannelProgressDraftText({
+      entry: {
+        streaming: {
+          mode: "progress",
+          progress: { label: "auto", labels: ["Clawing"] },
+        },
+      },
+      lines: ["🛠️ Exec"],
+      narration: "Counting lines in the workspace files.",
+    });
+
+    expect(text).toBe("Clawing\n\nCounting lines in the workspace files.");
+  });
+
   it("renders narration instead of tool lines", () => {
     const text = formatChannelProgressDraftText({
       entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },

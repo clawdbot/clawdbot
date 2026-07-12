@@ -4,17 +4,20 @@ import type {
   ChannelDoctorLegacyConfigRule,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  asObjectRecord,
-  hasLegacyAccountStreamingAliases,
-  hasLegacyStreamingAliases,
-  normalizeLegacyChannelAliases,
-} from "openclaw/plugin-sdk/runtime-doctor";
+import { asObjectRecord, defineChannelAliasMigration } from "openclaw/plugin-sdk/runtime-doctor";
 import { resolveSlackNativeStreaming, resolveSlackStreamingMode } from "./streaming-compat.js";
 
-function hasLegacySlackStreamingAliases(value: unknown): boolean {
-  return hasLegacyStreamingAliases(value, { includeNativeTransport: true });
-}
+const streamingAliasMigration = defineChannelAliasMigration({
+  channelId: "slack",
+  streaming: {
+    // Slack maps its legacy draft stream modes (replace/status_final/append)
+    // through its own resolver instead of the generic mode parser.
+    defaultMode: "partial",
+    resolveMode: resolveSlackStreamingMode,
+    resolveNativeTransport: resolveSlackNativeStreaming,
+  },
+  dm: { root: true, accounts: true },
+});
 
 function hasLegacySlackChannelAllowAlias(value: unknown): boolean {
   const channels = asObjectRecord(asObjectRecord(value)?.channels);
@@ -57,18 +60,7 @@ function normalizeSlackChannelAllowAliases(params: {
 }
 
 export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
-  {
-    path: ["channels", "slack"],
-    message:
-      "channels.slack.streamMode, channels.slack.streaming (scalar), chunkMode, blockStreaming, blockStreamingCoalesce, and nativeStreaming are legacy; use channels.slack.streaming.{mode,chunkMode,block.enabled,block.coalesce,nativeTransport}.",
-    match: hasLegacySlackStreamingAliases,
-  },
-  {
-    path: ["channels", "slack", "accounts"],
-    message:
-      "channels.slack.accounts.<id>.streamMode, streaming (scalar), chunkMode, blockStreaming, blockStreamingCoalesce, and nativeStreaming are legacy; use channels.slack.accounts.<id>.streaming.{mode,chunkMode,block.enabled,block.coalesce,nativeTransport}.",
-    match: (value) => hasLegacyAccountStreamingAliases(value, hasLegacySlackStreamingAliases),
-  },
+  ...streamingAliasMigration.legacyConfigRules,
   {
     path: ["channels", "slack"],
     message:
@@ -94,28 +86,16 @@ export function normalizeCompatibilityConfig({
 }: {
   cfg: OpenClawConfig;
 }): ChannelDoctorConfigMutation {
-  const rawEntry = asObjectRecord((cfg.channels as Record<string, unknown> | undefined)?.slack);
+  const changes: string[] = [];
+  const aliases = streamingAliasMigration.normalizeChannelConfig({ cfg, changes });
+  const rawEntry = asObjectRecord(
+    (aliases.config.channels as Record<string, unknown> | undefined)?.slack,
+  );
   if (!rawEntry) {
     return { config: cfg, changes: [] };
   }
-
-  const changes: string[] = [];
-  let updated;
-  let changed;
-
-  const aliases = normalizeLegacyChannelAliases({
-    entry: rawEntry,
-    pathPrefix: "channels.slack",
-    changes,
-    normalizeDm: true,
-    normalizeAccountDm: true,
-    resolveStreamingOptions: (entry) => ({
-      resolvedMode: resolveSlackStreamingMode(entry),
-      resolvedNativeTransport: resolveSlackNativeStreaming(entry),
-    }),
-  });
-  updated = aliases.entry;
-  changed = aliases.changed;
+  let updated = rawEntry;
+  let changed = aliases.config !== cfg;
 
   const channels = asObjectRecord(updated.channels);
   if (channels) {
@@ -162,9 +142,9 @@ export function normalizeCompatibilityConfig({
   }
   return {
     config: {
-      ...cfg,
+      ...aliases.config,
       channels: {
-        ...cfg.channels,
+        ...aliases.config.channels,
         slack: updated as unknown as NonNullable<OpenClawConfig["channels"]>["slack"],
       } as OpenClawConfig["channels"],
     },

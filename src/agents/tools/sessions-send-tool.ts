@@ -23,6 +23,7 @@ import {
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { isCronRunSessionKey, parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
+import { registerSessionStateWatch } from "../../sessions/session-state-events.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
 import {
   type GatewayMessageChannel,
@@ -66,6 +67,7 @@ const SessionsSendToolSchema = Type.Object({
   agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
   message: Type.String(),
   timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
+  watch: Type.Optional(Type.Boolean()),
 });
 
 type GatewayCaller = typeof callGateway;
@@ -559,6 +561,20 @@ export function createSessionsSendTool(opts?: {
       const requesterChannel = opts?.agentChannel;
       const sameSessionA2A = requesterSessionKey === resolvedKey;
       const isIsolatedCronRequester = isCronRunSessionKey(requesterSessionKey);
+      // Watch registration follows successful dispatch: a failed send must not leave
+      // a hidden watch, and cron run-scoped sends can fall back to the durable parent
+      // session, which is the key that receives future state changes.
+      const watchRequested = params.watch === true;
+      const registerWatchIfRequested = (targetSessionKey: string) => {
+        const watched =
+          watchRequested && requesterSessionKey && requesterSessionKey !== targetSessionKey
+            ? registerSessionStateWatch({
+                watcherSessionKey: requesterSessionKey,
+                targetSessionKey,
+              })
+            : false;
+        return watchRequested ? { watched } : {};
+      };
       const fallbackA2ASessionKey =
         timeoutSeconds === 0 && isIsolatedCronRequester
           ? resolveCronRunScopedFallbackSessionKey(displayKey)
@@ -705,6 +721,7 @@ export function createSessionsSendTool(opts?: {
           return start.result;
         }
         runId = start.runId;
+        const watchField = registerWatchIfRequested(start.a2aSessionKey ?? resolvedKey);
         if (!start.activeRunQueue) {
           startA2AFlow(undefined, runId, start.a2aSessionKey, start.a2aDisplayKey, true);
         }
@@ -713,6 +730,7 @@ export function createSessionsSendTool(opts?: {
           status: "accepted",
           sessionKey: displayKey,
           delivery,
+          ...watchField,
         });
       }
 
@@ -727,6 +745,7 @@ export function createSessionsSendTool(opts?: {
         return start.result;
       }
       runId = start.runId;
+      const watchField = registerWatchIfRequested(resolvedKey);
       const result = await waitForAgentRunAndReadUpdatedAssistantReply({
         runId,
         sessionKey: resolvedKey,
@@ -746,6 +765,7 @@ export function createSessionsSendTool(opts?: {
             sentBeforeError: true,
             sessionKey: displayKey,
             delivery,
+            ...watchField,
           });
         }
         if (!isTerminalAgentWaitTimeout(result)) {
@@ -755,6 +775,7 @@ export function createSessionsSendTool(opts?: {
             status: "accepted",
             sessionKey: displayKey,
             delivery,
+            ...watchField,
           });
         }
         return jsonResult({
@@ -763,6 +784,7 @@ export function createSessionsSendTool(opts?: {
           error: result.error,
           sentBeforeError: true,
           sessionKey: displayKey,
+          ...watchField,
         });
       }
       if (result.status === "error") {
@@ -772,6 +794,7 @@ export function createSessionsSendTool(opts?: {
           error: result.error ?? "agent error",
           sentBeforeError: true,
           sessionKey: displayKey,
+          ...watchField,
         });
       }
       const reply = result.replyText;
@@ -783,6 +806,7 @@ export function createSessionsSendTool(opts?: {
         reply,
         sessionKey: displayKey,
         delivery,
+        ...watchField,
       });
     },
   };

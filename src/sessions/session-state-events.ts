@@ -162,8 +162,11 @@ export function decodeSessionStateNoticeContextKey(contextKey: string): string |
   return Buffer.from(encoded, "hex").toString("utf8");
 }
 
+// Terse on purpose: this line lands in model prompts, possibly repeatedly across
+// turns. Text must stay byte-stable per frozen watermark so queue dedupe holds,
+// and the reconciliation call must be self-contained (explicit target sessionKey).
 function sessionStateNoticeText(targetSessionKey: string, lastSeenSequence: number): string {
-  return `Another actor has interacted with child session "${targetSessionKey}" since you last synced. Your assumptions about that session may be stale. Call session_status with sessionKey "${targetSessionKey}" and changesSince ${lastSeenSequence} before acting on it.`;
+  return `Session "${targetSessionKey}" changed (other actor). Reconcile before acting: session_status sessionKey "${targetSessionKey}" changesSince ${lastSeenSequence}.`;
 }
 
 function shouldWakeWatcher(watcherSessionKey: string): boolean {
@@ -192,9 +195,12 @@ function enqueueSessionStateNotice(params: {
   if (!shouldWakeWatcher(params.watcherSessionKey)) {
     return;
   }
+  // intent "immediate": event-intent wakes defer on heartbeat dueness, which would
+  // delay stale-state notices by up to the whole heartbeat interval. Task/cron
+  // wake-now paths use the same class; the flood guard remains the backstop.
   requestHeartbeat({
     source: "session-state",
-    intent: "event",
+    intent: "immediate",
     reason: `session-state:${params.targetSessionKey}`,
     sessionKey: params.watcherSessionKey,
   });
@@ -360,9 +366,21 @@ export function recordSessionStateEvent(
           ),
       );
 
-      const watcherSessionKeys = [...new Set(input.watcherSessionKeys ?? [])].filter(
-        (key) => Boolean(key) && isNotifiableWatcherKey(key),
-      );
+      // Explicit watch registrations (registerSessionStateWatch) live as cursor rows;
+      // union them with producer-passed watchers so sessions_send coordinators get
+      // notices without every producer knowing about registration.
+      const registeredWatcherKeys = NOTIFY_BY_KIND[input.kind]
+        ? executeSqliteQuerySync(
+            db,
+            getSessionStateKysely(db)
+              .selectFrom("session_watch_cursors")
+              .select("watcher_session_key")
+              .where("target_session_key", "=", input.sessionKey),
+          ).rows.map((row) => row.watcher_session_key)
+        : [];
+      const watcherSessionKeys = [
+        ...new Set([...(input.watcherSessionKeys ?? []), ...registeredWatcherKeys]),
+      ].filter((key) => Boolean(key) && isNotifiableWatcherKey(key));
       for (const watcherSessionKey of watcherSessionKeys) {
         if (input.kind === "child_spawned") {
           upsertSeedCursor({
@@ -813,7 +831,76 @@ export function recordSessionGoalChanged(params: {
   });
 }
 
-/** Record a direct human turn only when the target has an implicit parent watcher. */
+/** True when any seeded or explicitly registered watcher cursor targets this session. */
+function hasSessionStateWatchers(
+  targetSessionKey: string,
+  options: OpenClawStateDatabaseOptions = {},
+): boolean {
+  try {
+    const { db } = openOpenClawStateDatabase(options);
+    const row = executeSqliteQueryTakeFirstSync(
+      db,
+      getSessionStateKysely(db)
+        .selectFrom("session_watch_cursors")
+        .select("watcher_session_key")
+        .where("target_session_key", "=", targetSessionKey)
+        .limit(1),
+    );
+    return row !== undefined;
+  } catch (error) {
+    // Best-effort log: enrichment reads must never fail core session tools.
+    log.warn(`failed to probe session state watchers: ${String(error)}`);
+    return false;
+  }
+}
+
+/** Register an explicit watcher (e.g. a sessions_send coordinator) for a target session. */
+export function registerSessionStateWatch(
+  params: { watcherSessionKey: string; targetSessionKey: string; targetAgentId?: string },
+  options: OpenClawStateDatabaseOptions & { now?: number } = {},
+): boolean {
+  if (
+    params.watcherSessionKey === params.targetSessionKey ||
+    !isNotifiableWatcherKey(params.watcherSessionKey)
+  ) {
+    return false;
+  }
+  const now = options.now ?? Date.now();
+  try {
+    let registered = false;
+    runOpenClawStateWriteTransaction(({ db }) => {
+      // Re-watching must not clobber pending-notice cursor state.
+      if (readCursor(db, params.watcherSessionKey, params.targetSessionKey)) {
+        registered = true;
+        return;
+      }
+      const agentId = params.targetAgentId ?? resolveAgentIdFromSessionKey(params.targetSessionKey);
+      const head = executeSqliteQueryTakeFirstSync(
+        db,
+        getSessionStateKysely(db)
+          .selectFrom("session_state_heads")
+          .select("last_sequence")
+          .where("session_key", "=", params.targetSessionKey)
+          .where("agent_id", "=", agentId),
+      );
+      // Seed at the current head: the watcher is synced now; only future changes notify.
+      upsertSeedCursor({
+        db,
+        watcherSessionKey: params.watcherSessionKey,
+        targetSessionKey: params.targetSessionKey,
+        sequence: normalizeOptionalSqliteNumber(head?.last_sequence) ?? 0,
+        now,
+      });
+      registered = true;
+    }, options);
+    return registered;
+  } catch (error) {
+    log.warn(`failed to register session state watch: ${String(error)}`);
+    return false;
+  }
+}
+
+/** Record a direct human turn when the target has a parent or registered watcher. */
 export function recordSessionHumanDirectMessage(params: {
   sessionKey: string;
   entry?: SessionEntry;
@@ -823,7 +910,12 @@ export function recordSessionHumanDirectMessage(params: {
   runId?: string;
 }): void {
   const watcherSessionKey = params.entry?.spawnedBy ?? params.entry?.parentSessionKey;
-  if (params.actor.actorType !== "human" || !watcherSessionKey) {
+  if (params.actor.actorType !== "human") {
+    return;
+  }
+  // Unparented sessions record only when someone explicitly watches them: one
+  // indexed existence probe keeps ordinary un-watched human turns write-free.
+  if (!watcherSessionKey && !hasSessionStateWatchers(params.sessionKey)) {
     return;
   }
   recordSessionStateEvent({
@@ -835,7 +927,7 @@ export function recordSessionHumanDirectMessage(params: {
     ...(params.actor.actorId ? { actorId: params.actor.actorId } : {}),
     runId: params.runId,
     summary: `human message via ${params.channel?.trim() || "unknown"}`,
-    watcherSessionKeys: [watcherSessionKey],
+    ...(watcherSessionKey ? { watcherSessionKeys: [watcherSessionKey] } : {}),
   });
 }
 

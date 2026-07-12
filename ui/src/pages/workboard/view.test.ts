@@ -502,9 +502,9 @@ describe("renderWorkboard", () => {
       "Unsaved edit",
     );
 
-    container
-      .querySelector<HTMLButtonElement>('button[aria-label="Cancel"]')
-      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const cancelButton = container.querySelector<HTMLButtonElement>('button[aria-label="Cancel"]');
+    expect(cancelButton?.disabled).toBe(false);
+    cancelButton?.click();
 
     expect(state.draftOpen).toBe(false);
   });

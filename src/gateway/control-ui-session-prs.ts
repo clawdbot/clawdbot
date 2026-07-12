@@ -5,6 +5,7 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import { runGit } from "../agents/worktrees/git.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import type {
+  ControlUiSessionBranch,
   ControlUiSessionPullRequest,
   ControlUiSessionPullRequests,
 } from "./control-ui-contract.js";
@@ -37,6 +38,10 @@ export type SessionPullRequestGitContext = {
   owner: string;
   repo: string;
   branch: string;
+  /** Checkout root for local diff stats; absent for stubbed test contexts. */
+  root?: string;
+  /** Remote default branch when origin/HEAD is resolvable. */
+  defaultBranch?: string;
 };
 
 type PullListItem = {
@@ -160,10 +165,150 @@ export async function resolveSessionPullRequestGitContext(
     return null;
   }
   const defaultRef = await gitOutput(root, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]);
-  if (defaultRef?.replace(/^origin\//, "") === branch) {
+  const defaultBranch = defaultRef?.replace(/^origin\//, "");
+  if (defaultBranch === branch) {
     return null;
   }
-  return { ...remote, branch };
+  return { ...remote, branch, root, ...(defaultBranch ? { defaultBranch } : {}) };
+}
+
+// git push's own "create a pull request" hint URL; GitHub resolves the base
+// branch (including fork -> parent) so no API call is needed to build it.
+function branchCreateUrl(context: SessionPullRequestGitContext): string {
+  const owner = encodeURIComponent(context.owner);
+  const repo = encodeURIComponent(context.repo);
+  const branch = context.branch.split("/").map(encodeURIComponent).join("/");
+  return `https://github.com/${owner}/${repo}/pull/new/${branch}`;
+}
+
+const SHORTSTAT_INSERTIONS = /(\d+) insertion/;
+const SHORTSTAT_DELETIONS = /(\d+) deletion/;
+// Matches sessions-diff's untracked scan bound; stats degrade to an
+// undercount past it instead of stalling the request.
+const MAX_UNTRACKED_STAT_FILES = 100;
+
+async function untrackedAdditions(root: string): Promise<number> {
+  const listing = await gitOutput(root, ["ls-files", "--others", "--exclude-standard", "-z"]);
+  if (!listing) {
+    return 0;
+  }
+  const paths = listing.split("\0").filter(Boolean);
+  let additions = 0;
+  // Counts only, never patch content, so the hardlink/symlink content guards
+  // in sessions-diff are unnecessary here; binary files count as 0 lines.
+  for (const filePath of paths.slice(0, MAX_UNTRACKED_STAT_FILES)) {
+    try {
+      const result = await runGit(root, [
+        "diff",
+        "--shortstat",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-index",
+        "--",
+        "/dev/null",
+        filePath,
+      ]);
+      // Exit code 1 is git's "files differ" for --no-index, not a failure.
+      if (result.code === 0 || result.code === 1) {
+        additions += Number(SHORTSTAT_INSERTIONS.exec(result.stdout.trim())?.[1] ?? 0);
+      }
+    } catch {
+      // Unreadable paths just do not count toward the size.
+    }
+  }
+  return additions;
+}
+
+/**
+ * Working-tree diff counts vs the merge base with the remote default branch,
+ * untracked files included: the size the PR would have if the current work
+ * were committed and pushed.
+ */
+async function loadBranchDiffStats(
+  root: string,
+  defaultBranch: string,
+): Promise<{ additions: number; deletions: number } | null> {
+  const mergeBase = await gitOutput(root, [
+    "merge-base",
+    `refs/remotes/origin/${defaultBranch}`,
+    "HEAD",
+  ]);
+  if (!mergeBase) {
+    return null;
+  }
+  try {
+    // --no-ext-diff/--no-textconv: checkout-configurable diff drivers must
+    // never execute in the Gateway process (same guard as sessions-diff).
+    const result = await runGit(root, [
+      "diff",
+      "--shortstat",
+      "--no-ext-diff",
+      "--no-textconv",
+      mergeBase,
+    ]);
+    if (result.code !== 0) {
+      return null;
+    }
+    // Empty output means an empty diff, not a failure.
+    const summary = result.stdout.trim();
+    return {
+      additions:
+        Number(SHORTSTAT_INSERTIONS.exec(summary)?.[1] ?? 0) + (await untrackedAdditions(root)),
+      deletions: Number(SHORTSTAT_DELETIONS.exec(summary)?.[1] ?? 0),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * GitHub's pull/new page only has something to offer once the pushed branch
+ * carries commits the default branch lacks; unpushed or fully-merged remote
+ * branches get "nothing to compare" (or a 404), so the row stays hidden.
+ * Rename-only or zero-line-delta commits still count — visibility keys on
+ * commits, not on line counts.
+ */
+async function branchHasCreatablePullRequest(
+  root: string,
+  context: SessionPullRequestGitContext,
+): Promise<boolean> {
+  // Fail closed without a resolvable default branch: a session sitting on the
+  // actual default in a clone lacking origin/HEAD must not get a Create PR row.
+  if (!context.defaultBranch) {
+    return false;
+  }
+  const remoteRef = `refs/remotes/origin/${context.branch}`;
+  const pushed = await gitOutput(root, ["rev-parse", "--verify", "--quiet", remoteRef]);
+  if (!pushed) {
+    return false;
+  }
+  const ahead = await gitOutput(root, [
+    "rev-list",
+    "--count",
+    `refs/remotes/origin/${context.defaultBranch}..${remoteRef}`,
+  ]);
+  // A failed count keeps the row: rev-list errors must not hide a valid branch.
+  return ahead === null || Number(ahead) > 0;
+}
+
+async function resolveSessionBranch(
+  context: SessionPullRequestGitContext,
+): Promise<ControlUiSessionBranch | undefined> {
+  // Stubbed test contexts without a root skip the local-git gate.
+  if (context.root && !(await branchHasCreatablePullRequest(context.root, context))) {
+    return undefined;
+  }
+  const stats =
+    context.root && context.defaultBranch
+      ? await loadBranchDiffStats(context.root, context.defaultBranch)
+      : null;
+  return {
+    owner: context.owner,
+    repo: context.repo,
+    branch: context.branch,
+    createUrl: branchCreateUrl(context),
+    ...stats,
+  };
 }
 
 function derivePullState(value: Record<string, unknown>): ControlUiSessionPullRequest["state"] {
@@ -414,6 +559,20 @@ export async function loadControlUiSessionPullRequests(
   if (!context) {
     return { pullRequests: [], rateLimited: false };
   }
+  // Branch metadata is local git only, so it stays fresh per request (the
+  // working-tree diff moves while the agent works) and keeps the pre-PR row
+  // alive when GitHub is rate limited; only the GitHub fetch is cached.
+  const [branch, snapshot] = await Promise.all([
+    resolveSessionBranch(context),
+    cachedBranchPullRequests(context, deps),
+  ]);
+  return branch ? { ...snapshot, branch } : snapshot;
+}
+
+function cachedBranchPullRequests(
+  context: SessionPullRequestGitContext,
+  deps: LoadSessionPullRequestDeps,
+): Promise<ControlUiSessionPullRequests> {
   const key = `${context.owner.toLowerCase()}/${context.repo.toLowerCase()}#${context.branch}`;
   const cached = branchCache.get(key);
   if (cached && cached.expiresAt > Date.now()) {

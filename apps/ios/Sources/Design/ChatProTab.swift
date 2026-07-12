@@ -433,10 +433,14 @@ struct ChatProTab: View {
 
     private var messagePlaceholder: String {
         if self.gatewayConnected {
-            return String(localized: "Message \(self.agentDisplayName)...")
+            return String(
+                format: String(localized: "Message %@..."),
+                self.agentDisplayName)
         }
         if self.canQueueOffline {
-            return String(localized: "Message \(self.agentDisplayName); sends when connected")
+            return String(
+                format: String(localized: "Message %@; sends when connected"),
+                self.agentDisplayName)
         }
         return String(localized: "Connect to a gateway")
     }

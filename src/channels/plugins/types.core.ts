@@ -753,6 +753,8 @@ export type ChannelMessagePreparedSendPayloadContext = {
   to: string;
   payload: ReplyPayload;
   replyToId?: string | null;
+  /** Preserve caller intent when plugins translate reply ids into durable payloads. */
+  replyToIdSource?: "explicit" | "implicit";
   threadId?: string | number | null;
 };
 

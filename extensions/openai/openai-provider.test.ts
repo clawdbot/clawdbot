@@ -986,6 +986,112 @@ describe("buildOpenAIProvider", () => {
     });
   });
 
+  it("preserves authored Completions independently of route eligibility", () => {
+    const provider = buildOpenAIProvider();
+    const config = {
+      models: {
+        providers: {
+          openai: {
+            api: "openai-completions",
+            baseUrl: OPENAI_API_BASE_URL,
+            models: [{ id: "gpt-5.3-codex-spark" }],
+          },
+        },
+      },
+    };
+    const observedTransport = {
+      provider: "openai",
+      modelId: "gpt-5.3-codex-spark",
+      api: "openai-chatgpt-responses",
+      baseUrl: OPENAI_CODEX_RESPONSES_BASE_URL,
+      config,
+    } as const;
+
+    expect(provider.normalizeTransport?.(observedTransport as never)).toEqual({
+      api: "openai-completions",
+      baseUrl: OPENAI_API_BASE_URL,
+    });
+    expect(
+      provider.normalizeResolvedModel?.({
+        ...observedTransport,
+        model: {
+          provider: "openai",
+          id: "gpt-5.3-codex-spark",
+          name: "GPT-5.3 Codex Spark",
+          api: "openai-chatgpt-responses",
+          baseUrl: OPENAI_CODEX_RESPONSES_BASE_URL,
+        },
+      } as never),
+    ).toMatchObject({
+      api: "openai-completions",
+      baseUrl: OPENAI_API_BASE_URL,
+    });
+  });
+
+  it("preserves the environment base URL for authored Completions", () => {
+    vi.stubEnv("OPENAI_BASE_URL", "https://proxy.example.test/v1");
+    const provider = buildOpenAIProvider();
+
+    expect(
+      provider.normalizeTransport?.({
+        provider: "openai",
+        modelId: "gpt-5.5",
+        api: "openai-responses",
+        baseUrl: OPENAI_CODEX_RESPONSES_BASE_URL,
+        config: {
+          models: {
+            providers: {
+              openai: { api: "openai-completions", models: [{ id: "gpt-5.5" }] },
+            },
+          },
+        },
+      } as never),
+    ).toEqual({
+      api: "openai-completions",
+      baseUrl: "https://proxy.example.test/v1",
+    });
+  });
+
+  it("preserves authored Responses", () => {
+    const provider = buildOpenAIProvider();
+    const model = {
+      provider: "openai",
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      api: "openai-responses",
+      baseUrl: OPENAI_API_BASE_URL,
+    } as const;
+    const authoredResponsesConfig = {
+      models: {
+        providers: {
+          openai: {
+            api: "openai-responses",
+            baseUrl: OPENAI_API_BASE_URL,
+            models: [{ id: "gpt-5.5" }],
+          },
+        },
+      },
+    };
+
+    expect(
+      provider.normalizeResolvedModel?.({
+        provider: "openai",
+        modelId: "gpt-5.5",
+        model,
+        config: authoredResponsesConfig,
+      } as never),
+    ).toEqual(model);
+    expect(
+      provider.normalizeTransport?.({
+        provider: "openai",
+        modelId: "gpt-5.5",
+        api: "openai-responses",
+        baseUrl: OPENAI_API_BASE_URL,
+        config: authoredResponsesConfig,
+      } as never),
+    ).toBeUndefined();
+  });
+
   it("lets an authored Completions route replace observed ChatGPT transport metadata", () => {
     vi.stubEnv("OPENAI_BASE_URL", "");
     const provider = buildOpenAIProvider();

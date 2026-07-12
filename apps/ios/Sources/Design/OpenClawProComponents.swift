@@ -23,6 +23,28 @@ enum OpenClawRadius {
     static let md: CGFloat = 12
 }
 
+enum OpenClawTextValue: ExpressibleByStringLiteral {
+    case localized(LocalizedStringKey)
+    case verbatim(String)
+
+    init(stringLiteral value: String) {
+        self = .localized(LocalizedStringKey(value))
+    }
+
+    static func localized(_ value: String) -> Self {
+        .localized(LocalizedStringKey(value))
+    }
+
+    var text: Text {
+        switch self {
+        case let .localized(key):
+            Text(key)
+        case let .verbatim(value):
+            Text(verbatim: value)
+        }
+    }
+}
+
 struct OpenClawProBackground: View {
     var body: some View {
         Color(uiColor: .systemGroupedBackground)
@@ -31,14 +53,14 @@ struct OpenClawProBackground: View {
 }
 
 struct ProSectionHeader: View {
-    let title: String
-    var actionTitle: String?
+    let title: OpenClawTextValue
+    var actionTitle: OpenClawTextValue?
     var action: (() -> Void)?
     var uppercase = true
 
     var body: some View {
         HStack {
-            Text(self.title)
+            self.title.text
                 .font(OpenClawType.footnoteMedium)
                 .foregroundStyle(.secondary)
                 .textCase(self.uppercase ? .uppercase : nil)
@@ -46,12 +68,12 @@ struct ProSectionHeader: View {
             if let actionTitle {
                 if let action {
                     Button(action: action) {
-                        Text(actionTitle)
+                        actionTitle.text
                             .font(OpenClawType.footnoteMedium)
                     }
                     .foregroundStyle(OpenClawBrand.accent)
                 } else {
-                    Text(actionTitle)
+                    actionTitle.text
                         .font(OpenClawType.footnoteMedium)
                         .foregroundStyle(.secondary)
                 }
@@ -251,13 +273,13 @@ struct ProIconBadge: View {
 
 struct OpenClawSidebarHeaderAction {
     let systemName: String
-    let accessibilityLabel: String
+    let accessibilityLabel: OpenClawTextValue
     let accessibilityIdentifier: String?
     let action: () -> Void
 
     init(
         systemName: String,
-        accessibilityLabel: String,
+        accessibilityLabel: OpenClawTextValue,
         accessibilityIdentifier: String? = nil,
         action: @escaping () -> Void)
     {
@@ -286,7 +308,7 @@ struct OpenClawSidebarRevealButton: View {
         }
         .buttonBorderShape(.circle)
         .openClawGlassButton(tint: OpenClawBrand.accent)
-        .accessibilityLabel(self.headerAction.accessibilityLabel)
+        .accessibilityLabel(self.headerAction.accessibilityLabel.text)
 
         if let accessibilityIdentifier = headerAction.accessibilityIdentifier {
             button.accessibilityIdentifier(accessibilityIdentifier)
@@ -326,14 +348,14 @@ enum OpenClawNoticeDetail {
 
 struct OpenClawNoticeBanner: View {
     let icon: String
-    let title: String
-    let message: String
-    let ownerLabel: String
+    let title: OpenClawTextValue
+    let message: OpenClawTextValue
+    let ownerLabel: OpenClawTextValue
     let tint: Color
     var detail: OpenClawNoticeDetail?
-    var primaryActionTitle: String?
+    var primaryActionTitle: OpenClawTextValue?
     var onPrimaryAction: (() -> Void)?
-    var secondaryActionTitle: String?
+    var secondaryActionTitle: OpenClawTextValue?
     var onSecondaryAction: (() -> Void)?
 
     var body: some View {
@@ -344,16 +366,16 @@ struct OpenClawNoticeBanner: View {
 
                     VStack(alignment: .leading, spacing: 6) {
                         HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            Text(self.title)
+                            self.title.text
                                 .font(OpenClawType.subheadSemiBold)
                                 .multilineTextAlignment(.leading)
                             Spacer(minLength: 0)
-                            Text(self.ownerLabel)
+                            self.ownerLabel.text
                                 .font(OpenClawType.captionSemiBold)
                                 .foregroundStyle(.secondary)
                         }
 
-                        Text(self.message)
+                        self.message.text
                             .font(OpenClawType.footnote)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -367,7 +389,7 @@ struct OpenClawNoticeBanner: View {
                         HStack(spacing: 10) {
                             if let primaryActionTitle, let onPrimaryAction {
                                 Button(action: onPrimaryAction) {
-                                    Text(primaryActionTitle)
+                                    primaryActionTitle.text
                                         .font(OpenClawType.captionSemiBold)
                                 }
                                 .font(OpenClawType.captionSemiBold)
@@ -376,7 +398,7 @@ struct OpenClawNoticeBanner: View {
                             }
                             if let secondaryActionTitle, let onSecondaryAction {
                                 Button(action: onSecondaryAction) {
-                                    Text(secondaryActionTitle)
+                                    secondaryActionTitle.text
                                         .font(OpenClawType.captionSemiBold)
                                 }
                                 .font(OpenClawType.captionSemiBold)
@@ -400,7 +422,9 @@ struct OpenClawNoticeBanner: View {
                     .foregroundStyle(self.tint)
                     .fixedSize(horizontal: false, vertical: true)
             case let .requestID(value):
-                Text("Request ID: \(value)")
+                Text(verbatim: String(
+                    format: String(localized: "Request ID: %@"),
+                    value))
                     .font(OpenClawType.monoSmallMedium)
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
@@ -410,8 +434,8 @@ struct OpenClawNoticeBanner: View {
 }
 
 struct OpenClawAdaptiveHeaderRow<Leading: View, Accessory: View>: View {
-    let title: String
-    let subtitle: String?
+    let title: OpenClawTextValue
+    let subtitle: OpenClawTextValue?
     var titleFont: Font = OpenClawType.title3SemiBold
     var subtitleFont: Font = OpenClawType.subhead
     var subtitleLineLimit: Int? = 2
@@ -419,8 +443,8 @@ struct OpenClawAdaptiveHeaderRow<Leading: View, Accessory: View>: View {
     @ViewBuilder let accessory: Accessory
 
     init(
-        title: String,
-        subtitle: String? = nil,
+        title: OpenClawTextValue,
+        subtitle: OpenClawTextValue? = nil,
         titleFont: Font = OpenClawType.title3SemiBold,
         subtitleFont: Font = OpenClawType.subhead,
         subtitleLineLimit: Int? = 2,
@@ -478,13 +502,13 @@ struct OpenClawAdaptiveHeaderRow<Leading: View, Accessory: View>: View {
 
     private var titleBlock: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(self.title)
+            self.title.text
                 .font(self.titleFont)
                 .lineLimit(2)
                 .minimumScaleFactor(0.86)
                 .fixedSize(horizontal: false, vertical: true)
-            if let subtitle, !subtitle.isEmpty {
-                Text(subtitle)
+            if let subtitle {
+                subtitle.text
                     .font(self.subtitleFont)
                     .foregroundStyle(.secondary)
                     .lineLimit(self.subtitleLineLimit)
@@ -538,7 +562,7 @@ enum OpenClawStatusTone {
 
 struct OpenClawStatusBadge: View {
     @Environment(\.colorScheme) private var colorScheme
-    let label: String
+    let label: OpenClawTextValue
     let tone: OpenClawStatusTone
 
     var body: some View {
@@ -547,7 +571,7 @@ struct OpenClawStatusBadge: View {
                 .fill(self.tone.color)
                 .frame(width: 7, height: 7)
                 .shadow(color: self.tone.color.opacity(0.55), radius: 3)
-            Text(self.label)
+            self.label.text
                 .font(OpenClawType.caption2SemiBold)
                 .foregroundStyle(self.tone.color)
         }
@@ -626,20 +650,23 @@ struct OpenClawGatewayCompactPill: View {
     @Environment(NodeAppModel.self) private var appModel
 
     var body: some View {
-        OpenClawStatusBadge(label: self.title, tone: self.tone)
-            .accessibilityLabel("Gateway \(self.title)")
+        OpenClawStatusBadge(label: .verbatim(self.title), tone: self.tone)
+            .accessibilityLabel(
+                String(
+                    format: String(localized: "Gateway %@"),
+                    self.title))
     }
 
     private var title: String {
         switch GatewayStatusBuilder.build(appModel: self.appModel) {
         case .connected:
-            "Online"
+            String(localized: "Online")
         case .connecting:
-            "Connecting"
+            String(localized: "Connecting")
         case .error:
-            "Attention"
+            String(localized: "Attention")
         case .disconnected:
-            "Offline"
+            String(localized: "Offline")
         }
     }
 
@@ -659,7 +686,7 @@ struct OpenClawGatewayCompactPill: View {
 
 struct ProMetricTile: View {
     @Environment(\.colorScheme) private var colorScheme
-    let title: String
+    let title: OpenClawTextValue
     let value: String
     let icon: String
     let color: Color
@@ -680,7 +707,7 @@ struct ProMetricTile: View {
                     .font(OpenClawType.headlineBold)
                     .lineLimit(1)
                     .minimumScaleFactor(0.72)
-                Text(self.title)
+                self.title.text
                     .font(OpenClawType.caption2Medium)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -695,7 +722,7 @@ struct ProMetricTile: View {
 struct ProMetric: Identifiable {
     let id = UUID()
     let icon: String
-    let title: String
+    let title: OpenClawTextValue
     let value: String
     let color: Color
 }
@@ -727,9 +754,9 @@ struct ProMetricGrid: View {
 }
 
 struct ProPanelHeader: View {
-    let title: String
+    let title: OpenClawTextValue
     var value: String?
-    var actionTitle: String?
+    var actionTitle: OpenClawTextValue?
     var actionIcon: String?
     var actionAccessibilityLabel: String?
     var isActionDisabled = false
@@ -737,7 +764,7 @@ struct ProPanelHeader: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Text(self.title)
+            self.title.text
                 .font(OpenClawType.subheadSemiBold)
             if let value {
                 Text(value)
@@ -759,11 +786,14 @@ struct ProPanelHeader: View {
                 Button(action: action) {
                     Image(systemName: actionIcon)
                 }
-                .accessibilityLabel(self.actionAccessibilityLabel ?? actionTitle ?? self.title)
+                .accessibilityLabel(
+                    self.actionAccessibilityLabel.map { Text(LocalizedStringKey($0)) }
+                        ?? actionTitle?.text
+                        ?? self.title.text)
                 .disabled(self.isActionDisabled)
             } else if let actionTitle {
                 Button(action: action) {
-                    Text(actionTitle)
+                    actionTitle.text
                         .font(OpenClawType.captionSemiBold)
                 }
                 .disabled(self.isActionDisabled)
@@ -774,21 +804,21 @@ struct ProPanelHeader: View {
 
 struct ProStatusRow: View {
     let icon: String
-    let title: String
-    let detail: String
+    let title: OpenClawTextValue
+    let detail: OpenClawTextValue
     let value: String?
     let color: Color
-    var actionTitle: String?
+    var actionTitle: OpenClawTextValue?
     var action: (() -> Void)?
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             ProIconBadge(systemName: self.icon, color: self.color)
             VStack(alignment: .leading, spacing: 4) {
-                Text(self.title)
+                self.title.text
                     .font(OpenClawType.subheadSemiBold)
                     .lineLimit(1)
-                Text(self.detail)
+                self.detail.text
                     .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
@@ -800,7 +830,7 @@ struct ProStatusRow: View {
                 }
                 if let actionTitle, let action {
                     Button(action: action) {
-                        Text(actionTitle)
+                        actionTitle.text
                             .font(OpenClawType.captionSemiBold)
                     }
                     .buttonStyle(.bordered)

@@ -367,9 +367,61 @@ describe("message lifecycle primitives", () => {
 
     const nackError = new Error("offset failed");
     await ctx.nack(nackError);
+    await ctx.nack(new Error("duplicate failure"));
+    expect(onNack).toHaveBeenCalledTimes(1);
     expect(onNack).toHaveBeenCalledWith(nackError);
     expect(ctx.ackState).toBe("nacked");
     expect(ctx.nackErrorMessage).toBe("offset failed");
+  });
+
+  it("retries nack callbacks after a failed attempt", async () => {
+    const onNack = vi
+      .fn<(error: unknown) => Promise<void>>()
+      .mockRejectedValueOnce(new Error("temporary failure"))
+      .mockResolvedValueOnce();
+    const ctx = createMessageReceiveContext({
+      id: "rx-nack-retry",
+      channel: "telegram",
+      message: { text: "hello" },
+      onNack,
+    });
+
+    await expect(ctx.nack(new Error("first failure"))).rejects.toThrow("temporary failure");
+    expect(ctx.ackState).toBe("pending");
+
+    const retryError = new Error("retry failure");
+    await ctx.nack(retryError);
+
+    expect(onNack).toHaveBeenCalledTimes(2);
+    expect(ctx.ackState).toBe("nacked");
+    expect(ctx.nackErrorMessage).toBe("retry failure");
+  });
+
+  it("coalesces overlapping nack callbacks and retains the first error", async () => {
+    let resolveNack: (() => void) | undefined;
+    const onNack = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveNack = resolve;
+        }),
+    );
+    const ctx = createMessageReceiveContext({
+      id: "rx-nack-overlap",
+      channel: "telegram",
+      message: { text: "hello" },
+      onNack,
+    });
+    const firstError = new Error("first failure");
+
+    const first = ctx.nack(firstError);
+    const duplicate = ctx.nack(new Error("duplicate failure"));
+    await vi.waitFor(() => expect(onNack).toHaveBeenCalledOnce());
+    resolveNack?.();
+    await Promise.all([first, duplicate]);
+
+    expect(onNack).toHaveBeenCalledWith(firstError);
+    expect(ctx.ackState).toBe("nacked");
+    expect(ctx.nackErrorMessage).toBe("first failure");
   });
 
   it("maps ack policies to lifecycle stages", () => {

@@ -47,6 +47,37 @@ struct GatewayErrorsTests {
         #expect(error.minimumProbeProtocol == 4)
     }
 
+    @Test func `app owned gateway copy remains localizable`() throws {
+        let error = GatewayConnectAuthError(
+            message: "pairing required",
+            detailCode: GatewayConnectAuthDetailCode.pairingRequired.rawValue,
+            canRetryWithDeviceToken: false,
+            requestId: "req-123")
+
+        let problem = try #require(GatewayConnectionProblemMapper.map(error: error))
+
+        #expect(problem.titlePresentation == .localized("Pairing approval required"))
+        #expect(problem.messagePresentation == .localized(
+            "Approve this device on the gateway, then reconnect."))
+        #expect(problem.actionLabelPresentation == .localized("Approve on gateway"))
+    }
+
+    @Test func `gateway supplied copy remains verbatim`() throws {
+        let error = GatewayConnectAuthError(
+            message: "pairing required",
+            detailCode: GatewayConnectAuthDetailCode.pairingRequired.rawValue,
+            canRetryWithDeviceToken: false,
+            titleOverride: "Custom gateway title",
+            userMessageOverride: "Custom gateway instructions",
+            actionLabel: "Custom gateway action")
+
+        let problem = try #require(GatewayConnectionProblemMapper.map(error: error))
+
+        #expect(problem.titlePresentation == .verbatim("Custom gateway title"))
+        #expect(problem.messagePresentation == .verbatim("Custom gateway instructions"))
+        #expect(problem.actionLabelPresentation == .verbatim("Custom gateway action"))
+    }
+
     @Test func `protocol mismatch maps older app to update problem`() {
         let error = GatewayConnectAuthError(
             message: "protocol mismatch",
@@ -210,6 +241,10 @@ struct GatewayErrorsTests {
         #expect(problem?.tlsStoreKey == "gateway.example.ts.net:443")
         #expect(problem?.tlsExpectedFingerprint == "old")
         #expect(problem?.tlsObservedFingerprint == "new")
+        #expect(problem?.messagePresentation == .localizedFormat(
+            "The saved TLS certificate pin for %@ no longer matches the gateway certificate. "
+                + "The new certificate is trusted by this device; this is commonly caused by certificate rotation.",
+            ["gateway.example.ts.net"]))
     }
 
     @Test func `untrusted TLS certificate pauses reconnect`() {

@@ -24,7 +24,7 @@ export type SessionSkillPromptBlobProjection = {
   prompt: string;
 };
 
-export type SessionStorePersistenceProjection = PersistedSessionStore & {
+type SessionStorePersistenceProjection = PersistedSessionStore & {
   promptBlobs: Map<string, SessionSkillPromptBlobProjection>;
 };
 
@@ -64,7 +64,7 @@ function isSha256Hex(value: string): boolean {
   return /^[a-f0-9]{64}$/u.test(value);
 }
 
-export function resolveSessionSkillPromptBlobPath(storePath: string, hash: string): string | null {
+function resolveSessionSkillPromptBlobPath(storePath: string, hash: string): string | null {
   if (!isSha256Hex(hash)) {
     return null;
   }

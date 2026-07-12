@@ -839,7 +839,11 @@ export function createRuntimeConfigCapability(
   };
   const run = async <T>(task: () => Promise<T>): Promise<T> => {
     try {
-      return await task();
+      const result = task();
+      // Async config owners mutate their busy flag before the first await.
+      // Publish that transition so editors can lock before accepting more input.
+      publish();
+      return await result;
     } finally {
       publish();
     }

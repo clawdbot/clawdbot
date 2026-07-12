@@ -8,7 +8,7 @@ Det här kan du göra:
 - Använd Talk-läge i realtid och tryck-och-prata
 - Granska åtgärder som väntar på godkännande från gatewayen
 - Dela text, länkar och media direkt från iOS till OpenClaw
-- Aktivera enhetsfunktioner som kamera, skärm, plats, bilder, kontakter, kalender och påminnelser när du vill
+- Aktivera enhetsfunktioner som kamera, skärm, plats, bilder, kontakter, kalender, påminnelser och skrivskyddade hälsosammanfattningar när du vill
 - Ta emot pushväckningar och nodstatus för anslutna arbetsflöden
 
 OpenClaw är byggt för lokal kontroll: du styr din gateway, dina nycklar, din konfiguration och dina behörigheter. Åtkomst till enheten hanteras av iOS-behörigheter och aktiveras bara för de funktioner du vill använda.

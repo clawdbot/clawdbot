@@ -1,0 +1,29 @@
+"CFBundleDisplayName" = "$(OPENCLAW_APP_DISPLAY_NAME)";
+/* OpenClaw source: "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access." */
+"NSCalendarsFullAccessUsageDescription" = "O OpenClaw usa seus calendários para mostrar eventos e contexto de agendamento quando você ativa o acesso ao calendário.";
+/* OpenClaw source: "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access." */
+"NSCalendarsUsageDescription" = "O OpenClaw usa seus calendários para mostrar eventos e contexto de agendamento quando você ativa o acesso ao calendário.";
+/* OpenClaw source: "OpenClaw uses your calendars to add events when you enable calendar access." */
+"NSCalendarsWriteOnlyAccessUsageDescription" = "O OpenClaw usa seus calendários para adicionar eventos quando você ativa o acesso ao calendário.";
+/* OpenClaw source: "OpenClaw uses the camera when you scan a Gateway setup QR code or ask your paired Gateway or assistant to capture a photo or short video from this iPhone, for example to connect to your Gateway or show your assistant a document, device screen, or workspace." */
+"NSCameraUsageDescription" = "O OpenClaw usa a câmera quando você escaneia um código QR de configuração do Gateway ou pede ao Gateway pareado ou ao assistente para capturar uma foto ou um vídeo curto deste iPhone, por exemplo, para se conectar ao Gateway ou mostrar ao assistente um documento, a tela de um dispositivo ou seu espaço de trabalho.";
+/* OpenClaw source: "OpenClaw uses your contacts so you can search and reference people while using the assistant." */
+"NSContactsUsageDescription" = "O OpenClaw usa seus contatos para que você possa pesquisar e mencionar pessoas ao usar o assistente.";
+/* OpenClaw source: "OpenClaw discovers and connects to your OpenClaw gateway on the local network." */
+"NSLocalNetworkUsageDescription" = "O OpenClaw descobre e se conecta ao Gateway do OpenClaw na rede local.";
+/* OpenClaw source: "OpenClaw can share your location in the background when you enable Always." */
+"NSLocationAlwaysAndWhenInUseUsageDescription" = "O OpenClaw pode compartilhar sua localização em segundo plano quando você ativa Sempre.";
+/* OpenClaw source: "OpenClaw uses your location when you allow location sharing." */
+"NSLocationWhenInUseUsageDescription" = "O OpenClaw usa sua localização quando você permite o compartilhamento de localização.";
+/* OpenClaw source: "OpenClaw uses the microphone for realtime chat, voice wake, push-to-talk, and voice notes." */
+"NSMicrophoneUsageDescription" = "O OpenClaw usa o microfone para chat em tempo real, ativação por voz, pressionar para falar e notas de voz.";
+/* OpenClaw source: "OpenClaw may use motion data to support device-aware interactions and automations." */
+"NSMotionUsageDescription" = "O OpenClaw pode usar dados de movimento para oferecer suporte a interações e automações sensíveis ao dispositivo.";
+/* OpenClaw source: "After you enable Health Summaries, OpenClaw reads steps, sleep, resting heart rate, and workouts to share requested aggregates with your configured AI provider." */
+"NSHealthShareUsageDescription" = "Depois que você ativa os Resumos de Saúde, o OpenClaw lê passos, sono, frequência cardíaca em repouso e exercícios para compartilhar os dados agregados solicitados com o provedor de IA configurado.";
+/* OpenClaw source: "OpenClaw lets your assistant read photos you allow and lets you choose photos to share." */
+"NSPhotoLibraryUsageDescription" = "O OpenClaw permite que seu assistente leia as fotos que você autorizar e permite que você escolha fotos para compartilhar.";
+/* OpenClaw source: "OpenClaw uses your reminders to list, add, and complete tasks when you enable reminders access." */
+"NSRemindersFullAccessUsageDescription" = "O OpenClaw usa seus lembretes para listar, adicionar e concluir tarefas quando você ativa o acesso aos lembretes.";
+/* OpenClaw source: "OpenClaw uses on-device speech recognition for talk mode and voice wake." */
+"NSSpeechRecognitionUsageDescription" = "O OpenClaw usa reconhecimento de fala no dispositivo para o modo de conversa e ativação por voz.";

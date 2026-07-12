@@ -1,5 +1,6 @@
 // Signal tests cover event handler.inbound context plugin behavior.
 import { expectChannelInboundContextContract as expectInboundContextContract } from "openclaw/plugin-sdk/channel-contract-testing";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SignalReactionMessage } from "./event-handler.types.js";
@@ -7,7 +8,12 @@ vi.useRealTimers();
 const [
   { createBaseSignalEventHandlerDeps, createSignalReceiveEvent },
   { createSignalEventHandler },
-] = await Promise.all([import("./event-handler.test-harness.js"), import("./event-handler.js")]);
+  { clearSignalReplyAuthorsForTest, resolveSignalReplyContextWithPersistence },
+] = await Promise.all([
+  import("./event-handler.test-harness.js"),
+  import("./event-handler.js"),
+  import("../reply-authors.js"),
+]);
 
 type DispatchInboundMessageMockParams = {
   ctx: MsgContext;
@@ -123,8 +129,9 @@ function nextTimerTick(): Promise<void> {
 }
 
 describe("signal createSignalEventHandler inbound context", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.useRealTimers();
+    await clearSignalReplyAuthorsForTest();
     delete capture.ctx;
     sendTypingMock.mockReset().mockResolvedValue(true);
     sendReadReceiptMock.mockReset().mockResolvedValue(true);
@@ -139,7 +146,7 @@ describe("signal createSignalEventHandler inbound context", () => {
   it("passes a finalized MsgContext to dispatchInboundMessage", async () => {
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
-        cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
+        cfg: { messages: { inbound: { debounceMs: 0 } } } as OpenClawConfig,
         historyLimit: 0,
       }),
     );
@@ -165,7 +172,7 @@ describe("signal createSignalEventHandler inbound context", () => {
   it("normalizes direct chat To/OriginatingTo targets to canonical Signal ids", async () => {
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
-        cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
+        cfg: { messages: { inbound: { debounceMs: 0 } } } as OpenClawConfig,
         historyLimit: 0,
       }),
     );
@@ -287,6 +294,13 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(context.MessageSid).toBe("1700000000999");
     expect(context.ReplyToId).toBe("1700000000002");
     expect(context.Timestamp).toBe(1700000000999);
+    await expect(
+      resolveSignalReplyContextWithPersistence({
+        accountId: "default",
+        to: "+15550002222",
+        replyToId: "1700000000002",
+      }),
+    ).resolves.toEqual({ author: "+15550002222", body: "edited hello" });
   });
 
   it("preserves the last debounced message body for native reply quote metadata", async () => {

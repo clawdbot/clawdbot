@@ -182,6 +182,22 @@ The push wake and node status demo completed.
    - `Calendar (View Events)` / `Request Full Access`
    - `Reminders` / `Request Access`
 
+### Optional HealthKit summary
+
+Health Summaries is off by default. Under `Privacy & Access`, tap
+`Enable & Share Summaries` to see the disclosure and Apple's Health permission
+sheet. OpenClaw requests read-only access to steps, sleep, resting heart rate,
+and workouts. It performs aggregation on device and shares only a user-requested
+`today` summary through the user's Gateway and configured AI provider;
+individual samples, sources, metadata, clinical records, background
+ingestion, and writes are not supported. The Gateway separately requires
+`health.summary` in `gateway.nodes.allowCommands`.
+
+The app does not infer read authorization from an empty result because HealthKit
+intentionally makes denied data indistinguishable from unavailable data. This
+feature is for personal health and fitness summaries only, not diagnosis or
+medical advice.
+
 ## Share Sheet
 
 1. Open Safari.

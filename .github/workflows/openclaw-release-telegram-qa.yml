@@ -1255,6 +1255,7 @@ jobs:
             OPENCLAW_EMBEDDED_ABORT_SETTLE_TIMEOUT_MS
             OPENCLAW_GATEWAY_TOKEN
             OPENCLAW_HOME
+            OPENCLAW_LOG_LEVEL
             OPENCLAW_NO_RESPAWN
             OPENCLAW_OAUTH_DIR
             OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER
@@ -1493,6 +1494,71 @@ jobs:
               pgrep -u "$SUT_UID" >/dev/null 2>&1
           }
 
+          capture_live_model_config() {
+            local config_path="${1:?}"
+            local config_id diagnostics_dir diagnostics_real proof_bytes proof_path proof_tmp
+            umask 077
+            diagnostics_dir="${EVIDENCE_ROOT}/trusted-runtime-diagnostics"
+            install -d -o "$RUNNER_UID" -g "$RUNNER_GID" -m 0700 "$diagnostics_dir"
+            [[ ! -L "$diagnostics_dir" ]]
+            diagnostics_real="$(realpath -e "$diagnostics_dir")"
+            [[ "$diagnostics_real" == "$diagnostics_dir" ]]
+            proof_tmp="${RUNTIME_ROOT}/gateway-model-config-${BASHPID}.json"
+
+            # Capture only bounded routing identifiers before the QA suite removes its temp config.
+            jq -c '
+              def bounded_text:
+                if type == "string" then .[0:256] else null end;
+              def bounded_texts:
+                if type == "array" then
+                  [.[:64][] | bounded_text | select(. != null)]
+                else
+                  []
+                end;
+              {
+                agentDefaultModel: (
+                  if (.agents.defaults.model | type) == "string" then
+                    {
+                      primary: (.agents.defaults.model | bounded_text),
+                      fallbacks: []
+                    }
+                  elif (.agents.defaults.model | type) == "object" then
+                    {
+                      primary: (.agents.defaults.model.primary | bounded_text),
+                      fallbacks: (.agents.defaults.model.fallbacks | bounded_texts)
+                    }
+                  else
+                    {primary: null, fallbacks: []}
+                  end
+                ),
+                agentModelRefs: (
+                  ((.agents.defaults.models // {}) | keys | sort)[:128] |
+                  map(bounded_text | select(. != null))
+                ),
+                providers: (
+                  (.models.providers // {}) |
+                  to_entries |
+                  sort_by(.key) |
+                  .[:32] |
+                  map({
+                    id: (.key | bounded_text),
+                    api: (.value.api | bounded_text),
+                    modelIds: ([.value.models[]?.id][:128] | map(bounded_text | select(. != null)))
+                  })
+                )
+              }
+            ' "$config_path" >"$proof_tmp"
+            proof_bytes="$(stat -c '%s' "$proof_tmp")"
+            ((proof_bytes > 0 && proof_bytes <= 65536))
+            # Content addressing deduplicates credential-specific temp configs
+            # that project to the same bounded routing proof.
+            config_id="$(sha256sum "$proof_tmp" | awk '{print $1}')"
+            proof_path="${diagnostics_dir}/gateway-model-config-${config_id}.json"
+            chown "$RUNNER_UID:$RUNNER_GID" "$proof_tmp"
+            chmod 0600 "$proof_tmp"
+            mv -f "$proof_tmp" "$proof_path"
+          }
+
           terminate_sut_uid() {
             pkill -TERM -U "$SUT_UID" >/dev/null 2>&1 || true
             pkill -TERM -u "$SUT_UID" >/dev/null 2>&1 || true
@@ -1642,6 +1708,7 @@ jobs:
           config_path="${temp_root}/openclaw.json"
           [[ -f "$config_path" && ! -L "$config_path" ]]
           [[ "$(realpath -e "$config_path")" == "$config_path" ]]
+          capture_live_model_config "$config_path"
 
           export OPENCLAW_QA_TEMP_ROOT="$temp_root"
           export HOME="${temp_root}/home"
@@ -1999,7 +2066,8 @@ jobs:
       - name: Validate required QA credential env
         id: validate_credentials
         env:
-          CREDENTIAL_ACQUIRE_TIMEOUT_MS: "60000"
+          # Release trains share a bounded Telegram pool; wait through overlapping lanes.
+          CREDENTIAL_ACQUIRE_TIMEOUT_MS: "600000"
           JOB_TIMEOUT_MINUTES: "60"
           LEASE_TTL_MS: "7200000"
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
@@ -2021,7 +2089,8 @@ jobs:
           EVIDENCE_ROOT: ${{ steps.create_sut.outputs.evidence_root }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
-          OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "60000"
+          # Keep the CLI lease wait aligned with the validated workflow contract above.
+          OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "600000"
           OPENCLAW_QA_CREDENTIAL_LEASE_TTL_MS: "7200000"
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
           OPENCLAW_QA_SUT_FORBIDDEN_SENTINEL: trusted-parent-${{ github.run_id }}-${{ github.run_attempt }}
@@ -2033,6 +2102,7 @@ jobs:
           OPENCLAW_QA_TELEGRAM_SUT_PROCESS_BOUNDARY_DIR: ${{ steps.create_sut.outputs.boundary_evidence_dir }}
           OPENCLAW_QA_TELEGRAM_SUT_RUNTIME_EXECUTABLE: ${{ steps.create_sut.outputs.runtime_executable }}
           OPENCLAW_QA_TELEGRAM_SUT_UID: ${{ steps.create_sut.outputs.uid }}
+          OPENCLAW_LOG_LEVEL: trace
           SUT_RUNTIME_ROOT: ${{ steps.create_sut.outputs.runtime_root }}
           SUT_UID: ${{ steps.create_sut.outputs.uid }}
           TARGET_REF: ${{ inputs.target_ref }}
@@ -2163,6 +2233,210 @@ jobs:
           done
           echo "Isolated Telegram SUT UID still owns processes after terminal cleanup." >&2
           exit 1
+
+      - name: Capture isolated Telegram runtime diagnostics
+        id: capture_diagnostics
+        if: always() && steps.terminate_sut.outputs.quiescent == 'true' && steps.run_lane.outputs.output_dir != ''
+        env:
+          OUTPUT_DIR: ${{ steps.run_lane.outputs.output_dir }}
+          RUNTIME_ROOT: ${{ steps.create_sut.outputs.runtime_root }}
+          RUN_LANE_OUTCOME: ${{ steps.run_lane.outcome }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          [[ "$RUNTIME_ROOT" == "/var/lib/openclaw-telegram-sut-runtime-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" ]]
+          diagnostics_dir="${OUTPUT_DIR}/trusted-runtime-diagnostics"
+          install -d -m 0700 "$diagnostics_dir"
+          trusted_temp_root="$(mktemp -d "${RUNNER_TEMP}/openclaw-telegram-diagnostics.XXXXXX")"
+          trap 'rm -rf -- "$trusted_temp_root"' EXIT
+          redactor_script="${trusted_temp_root}/redact-gateway-tail.mts"
+          cat >"$redactor_script" <<'NODE'
+          import fs from "node:fs";
+          import path from "node:path";
+          import { pathToFileURL } from "node:url";
+
+          const [outputPath] = process.argv.slice(2);
+          const redactorPath = path.resolve(
+            "extensions/qa-lab/src/gateway-log-redaction.ts",
+          );
+          const { redactQaGatewayDebugText } = await import(pathToFileURL(redactorPath).href);
+          const limitBytes = 131_072;
+          const maxInputRecordBytes = 1_048_576;
+          const oversizedMarker = "[truncated oversized gateway log record] ";
+          const omittedMarker = "[omitted oversized gateway log record]\n";
+          const safeVerboseMessagePrefixes = [
+            "embedded run start:",
+            "[trace:embedded-run] prep stages:",
+            "[trace:embedded-run] core-plugin-tool stages:",
+            "embedded run prompt start:",
+            "[context-diag] pre-prompt:",
+            "model.call.started",
+            "model_call_started",
+            "embedded run prompt end:",
+            "run cleanup:",
+          ];
+          const retained = [];
+          let retainedBytes = 0;
+
+          function extractLogTapeMessage(record) {
+            if (!record || typeof record !== "object" || Array.isArray(record)) {
+              return undefined;
+            }
+            const numericKeys = Object.keys(record)
+              .filter((key) => /^\d+$/u.test(key))
+              .sort((left, right) => Number(left) - Number(right));
+            for (let index = numericKeys.length - 1; index >= 0; index -= 1) {
+              const value = record[numericKeys[index]];
+              if (typeof value === "string") {
+                return value;
+              }
+            }
+            return undefined;
+          }
+
+          function shouldRetainRecord(line) {
+            let record;
+            try {
+              record = JSON.parse(line);
+            } catch {
+              return false;
+            }
+            const level = record?._meta?.logLevelName;
+            if (level !== "DEBUG" && level !== "TRACE") {
+              return true;
+            }
+            const message = extractLogTapeMessage(record);
+            return (
+              typeof message === "string" &&
+              safeVerboseMessagePrefixes.some((prefix) => message.startsWith(prefix))
+            );
+          }
+
+          function boundRedactedLine(line) {
+            const redactedLine = `${redactQaGatewayDebugText(line)}\n`;
+            const lineBuffer = Buffer.from(redactedLine);
+            if (lineBuffer.length <= limitBytes) {
+              return redactedLine;
+            }
+            const markerBytes = Buffer.byteLength(oversizedMarker);
+            const suffixBuffer = lineBuffer.subarray(
+              lineBuffer.length - (limitBytes - markerBytes),
+            );
+            let suffix = suffixBuffer.toString("utf8");
+            while (Buffer.byteLength(`${oversizedMarker}${suffix}`) > limitBytes) {
+              suffix = suffix.slice(1);
+            }
+            return `${oversizedMarker}${suffix}`;
+          }
+
+          function retainLine(boundedLine) {
+            const lineBytes = Buffer.byteLength(boundedLine);
+            while (retained.length > 0 && retainedBytes + lineBytes > limitBytes) {
+              const removed = retained.shift();
+              retainedBytes -= Buffer.byteLength(removed);
+            }
+            retained.push(boundedLine);
+            retainedBytes += lineBytes;
+          }
+
+          let recordParts = [];
+          let recordBytes = 0;
+          let recordOmitted = false;
+          function appendRecordPart(part) {
+            if (recordOmitted) {
+              return;
+            }
+            if (recordBytes + part.length > maxInputRecordBytes) {
+              recordParts = [];
+              recordBytes = 0;
+              recordOmitted = true;
+              return;
+            }
+            recordParts.push(Buffer.from(part));
+            recordBytes += part.length;
+          }
+          function finishRecord() {
+            if (recordOmitted) {
+              retainLine(omittedMarker);
+            } else {
+              const line = Buffer.concat(recordParts, recordBytes).toString("utf8").replace(/\r$/u, "");
+              if (shouldRetainRecord(line)) {
+                retainLine(boundRedactedLine(line));
+              }
+            }
+            recordParts = [];
+            recordBytes = 0;
+            recordOmitted = false;
+          }
+
+          for await (const value of process.stdin) {
+            const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
+            let offset = 0;
+            while (offset < chunk.length) {
+              const newline = chunk.indexOf(0x0a, offset);
+              const end = newline === -1 ? chunk.length : newline;
+              appendRecordPart(chunk.subarray(offset, end));
+              if (newline === -1) {
+                break;
+              }
+              finishRecord();
+              offset = newline + 1;
+            }
+          }
+          if (recordOmitted || recordBytes > 0) {
+            finishRecord();
+          }
+          fs.writeFileSync(outputPath, retained.join(""), { encoding: "utf8", mode: 0o600 });
+          NODE
+          chmod 0600 "$redactor_script"
+
+          # The live suite can launch more than eight gateways. Keep the newest
+          # bounded tails instead of failing diagnostics after a successful lane.
+          mapfile -d '' -t gateway_logs < <(
+            sudo find "$RUNTIME_ROOT/tmp" -xdev -type f -name 'openclaw-*.log' -printf '%T@\t%p\0' |
+              sort -z -nr |
+              sed -z -n '1,8p' |
+              cut -z -f2-
+          )
+          ((${#gateway_logs[@]} <= 8))
+          if [[ "$RUN_LANE_OUTCOME" != "success" ]]; then
+            ((${#gateway_logs[@]} > 0))
+          fi
+          for index in "${!gateway_logs[@]}"; do
+            log_path="$(sudo realpath -e "${gateway_logs[$index]}")"
+            case "$log_path" in
+              "$RUNTIME_ROOT"/tmp/*) ;;
+              *) echo "Telegram gateway log escaped the isolated runtime root." >&2; exit 1 ;;
+            esac
+            [[ "$(sudo stat -c '%F' "$log_path")" == "regular file" ]]
+            output_path="${diagnostics_dir}/gateway-internal-tail-$((index + 1)).log"
+            sudo cat "$log_path" | node --import tsx "$redactor_script" "$output_path"
+          done
+
+          mapfile -t model_config_proofs < <(
+            find "$diagnostics_dir" -maxdepth 1 -type f -name 'gateway-model-config-*.json' -print |
+              sort
+          )
+          ((${#model_config_proofs[@]} <= 8))
+          if [[ "$RUN_LANE_OUTCOME" != "success" ]]; then
+            ((${#model_config_proofs[@]} > 0))
+          fi
+          for proof_path in "${model_config_proofs[@]}"; do
+            [[ "$(stat -c '%F:%a' "$proof_path")" == "regular file:600" ]]
+            proof_bytes="$(stat -c '%s' "$proof_path")"
+            ((proof_bytes > 0 && proof_bytes <= 65536))
+            jq -e '
+              (keys | sort) == ["agentDefaultModel", "agentModelRefs", "providers"] and
+              (.agentDefaultModel | keys | sort) == ["fallbacks", "primary"] and
+              ([.agentDefaultModel.primary, .agentDefaultModel.fallbacks[], .agentModelRefs[]] |
+                all(. == null or type == "string")) and
+              (.providers | all(
+                (keys | sort) == ["api", "id", "modelIds"] and
+                ([.id, .api, .modelIds[]] | all(. == null or type == "string"))
+              ))
+            ' "$proof_path" >/dev/null
+          done
 
       - name: Finalize trusted Telegram process-boundary evidence
         id: finalize_boundary
@@ -2360,6 +2634,7 @@ jobs:
             ${{ steps.validate_credentials.outcome }}
             ${{ steps.run_lane.outcome }}
             ${{ steps.terminate_sut.outcome }}
+            ${{ steps.capture_diagnostics.outcome }}
             ${{ steps.finalize_boundary.outcome }}
             ${{ steps.validate_evidence.outcome }}
             ${{ steps.remove_sut.outcome }}

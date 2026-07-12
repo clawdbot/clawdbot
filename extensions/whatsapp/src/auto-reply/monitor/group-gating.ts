@@ -1,6 +1,7 @@
 // Whatsapp plugin module implements group gating behavior.
 import type { BuildMentionRegexesOptions } from "openclaw/plugin-sdk/channel-mention-gating";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import { resolveWhatsAppGroupsConfigPath } from "../../group-config-path.js";
 import {
   getPrimaryIdentityId,
@@ -57,25 +58,17 @@ type ApplyGroupGatingParams = {
 };
 
 const MAX_GROUP_DROP_WARNINGS = 100;
-const groupDropWarned = new Set<string>();
+const groupDropWarned = createDedupeCache({
+  ttlMs: 0,
+  maxSize: MAX_GROUP_DROP_WARNINGS,
+});
 
 export function resetGroupDropWarningsForTests() {
   groupDropWarned.clear();
 }
 
 function shouldWarnForGroupDrop(warnKey: string): boolean {
-  if (groupDropWarned.has(warnKey)) {
-    return false;
-  }
-  groupDropWarned.add(warnKey);
-  while (groupDropWarned.size > MAX_GROUP_DROP_WARNINGS) {
-    const oldest = groupDropWarned.values().next().value;
-    if (!oldest) {
-      break;
-    }
-    groupDropWarned.delete(oldest);
-  }
-  return true;
+  return !groupDropWarned.check(warnKey);
 }
 
 function isOwnerSender(
