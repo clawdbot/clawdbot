@@ -77,8 +77,7 @@ export function trimSummaryElisionsToCap(queue: SummaryElisionCapState): void {
   );
   while (sourceCount > queue.cap) {
     let evicted = false;
-    for (let entryIndex = 0; entryIndex < queue.summaryElisions.length; entryIndex += 1) {
-      const entry = queue.summaryElisions[entryIndex];
+    for (const [entryIndex, entry] of queue.summaryElisions.entries()) {
       const sourceIndex = entry.sources.findIndex(
         (source) => !queue.activeSummarySources.has(source),
       );

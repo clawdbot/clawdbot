@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import { request } from "node:http";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -183,7 +184,7 @@ function formatModeErrorList(modes: readonly string[]): string {
     return "";
   }
   if (quoted.length === 1) {
-    return quoted[0];
+    return expectDefined(quoted[0], "quoted entry at 0");
   }
   if (quoted.length === 2) {
     return `${quoted[0]} or ${quoted[1]}`;

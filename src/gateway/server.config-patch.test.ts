@@ -404,6 +404,61 @@ describe("gateway config methods", () => {
     }
   });
 
+  it("round-trips prototype-like browser profile names through config.patch", async () => {
+    const original = await getCurrentConfigObject();
+    const profileNames = ["constructor", "prototype"] as const;
+
+    try {
+      const create = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
+        raw: JSON.stringify({
+          browser: {
+            profiles: Object.fromEntries(
+              profileNames.map((name, index) => [
+                name,
+                {
+                  cdpPort: 18991 + index,
+                  color: "#0066CC",
+                  constructor: { polluted: true },
+                  prototype: { polluted: true },
+                },
+              ]),
+            ),
+          },
+        }),
+        baseHash: original.hash,
+      });
+      expect(create.ok).toBe(true);
+
+      const afterCreate = await getCurrentConfigObject();
+      const browser = requireConfigObject(afterCreate.config.browser, "browser");
+      const profiles = requireConfigObject(browser.profiles, "browser.profiles");
+      for (const [index, name] of profileNames.entries()) {
+        const profile = requireConfigObject(profiles[name], `browser.profiles.${name}`);
+        expect(profile.cdpPort).toBe(18991 + index);
+        expect(Object.hasOwn(profile, "constructor")).toBe(false);
+        expect(Object.hasOwn(profile, "prototype")).toBe(false);
+      }
+      expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+
+      const remove = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
+        raw: JSON.stringify({
+          browser: { profiles: { constructor: null, prototype: null } },
+        }),
+        baseHash: afterCreate.hash,
+      });
+      expect(remove.ok).toBe(true);
+
+      const afterRemove = await getCurrentConfigObject();
+      const afterBrowser = requireConfigObject(afterRemove.config.browser, "browser");
+      const afterProfiles = requireConfigObject(afterBrowser.profiles, "browser.profiles");
+      for (const name of profileNames) {
+        expect(Object.hasOwn(afterProfiles, name)).toBe(false);
+      }
+    } finally {
+      await restoreConfigFileForTest(original);
+    }
+  });
+
   it("does not reject config.set for unresolved auth-profile refs outside submitted config", async () => {
     const missingEnvVar = `OPENCLAW_MISSING_AUTH_PROFILE_REF_${Date.now()}`;
     await writeUnresolvedAuthProfileTokenRef(missingEnvVar);

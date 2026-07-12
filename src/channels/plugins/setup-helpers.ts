@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 /**
  * Channel setup config mutation helpers.
  *
@@ -486,7 +487,9 @@ function resolveSingleAccountPromotionTarget(params: { channel: ChannelSectionBa
     );
   }
   const namedAccounts = Object.keys(accounts).filter(Boolean);
-  return namedAccounts.length === 1 ? namedAccounts[0] : DEFAULT_ACCOUNT_ID;
+  return namedAccounts.length === 1
+    ? expectDefined(namedAccounts[0], "named accounts entry at 0")
+    : DEFAULT_ACCOUNT_ID;
 }
 
 /**

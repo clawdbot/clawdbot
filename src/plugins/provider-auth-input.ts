@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 /** Normalizes provider auth input metadata collected from plugin setup flows. */
 import {
   normalizeOptionalLowercaseString,
@@ -41,7 +42,9 @@ export function normalizeApiKeyInput(raw: string): string {
   const assignmentMatch = normalizedPaste.match(
     /^(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=\s*(.+)$/,
   );
-  const valuePart = assignmentMatch ? assignmentMatch[1].trim() : normalizedPaste;
+  const valuePart = assignmentMatch
+    ? expectDefined(assignmentMatch[1], "assignment match capture group 1").trim()
+    : normalizedPaste;
   const withoutSemicolon = valuePart.endsWith(";") ? valuePart.slice(0, -1).trim() : valuePart;
 
   const unquoted =

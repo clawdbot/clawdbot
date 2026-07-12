@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 /** Collects and renders gateway health for channels, agents, plugins, and sessions. */
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
@@ -700,7 +701,11 @@ export async function getHealthSnapshot(params?: {
       accountSummaries[preferredAccountId] ??
       accountSummaries[defaultAccountId] ??
       accountSummaries[accountIdsToProbe[0] ?? preferredAccountId];
-    const fallbackSummary = defaultSummary ?? accountSummaries[Object.keys(accountSummaries)[0]];
+    const fallbackSummary =
+      defaultSummary ??
+      accountSummaries[
+        expectDefined(Object.keys(accountSummaries)[0], "object.keys(account summaries) entry at 0")
+      ];
     if (fallbackSummary) {
       channels[plugin.id] = {
         ...fallbackSummary,

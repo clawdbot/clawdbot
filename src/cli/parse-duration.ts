@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Duration parser shared by CLI flags, command directives, and config-backed timing values.
 import {
   normalizeLowercaseStringOrEmpty,
@@ -46,7 +47,10 @@ export function parseDurationMs(raw: string, opts?: DurationMsParseOptions): num
       throw invalidDuration(raw);
     }
     const unit = (single[2] ?? opts?.defaultUnit ?? "ms") as "ms" | "s" | "m" | "h" | "d";
-    return roundSafeDurationMs(raw, value * DURATION_MULTIPLIERS[unit]);
+    return roundSafeDurationMs(
+      raw,
+      value * expectDefined(DURATION_MULTIPLIERS[unit], "duration multipliers entry at unit"),
+    );
   }
 
   // Composite form (e.g. "1h30m", "2m500ms"); each token must include a unit.

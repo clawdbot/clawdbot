@@ -15,6 +15,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.Request
@@ -154,6 +155,33 @@ private data class ReconnectServer(
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class GatewaySessionReconnectTest {
+  @Test
+  fun connectedHelloPublishesCanonicalAndLegacyApprovalMethods() =
+    runBlocking {
+      val catalogs =
+        listOf(
+          setOf("approval.get", "approval.resolve"),
+          setOf("exec.approval.get", "exec.approval.resolve"),
+        )
+
+      for (methods in catalogs) {
+        val json = Json { ignoreUnknownKeys = true }
+        val hello = CompletableDeferred<GatewayHelloSummary>()
+        val server =
+          startGatewayServer(json = json) { webSocket, id, method ->
+            if (method == "connect") webSocket.send(connectResponseFrame(id, methods))
+          }
+        val harness = createReconnectHarness(onHello = hello::complete)
+
+        try {
+          connectNodeSession(harness.session, server.port)
+          assertEquals(methods, withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { hello.await() }.methods)
+        } finally {
+          shutdownReconnectHarness(harness, server)
+        }
+      }
+    }
+
   @Test
   fun disconnectAndJoinWaitsForNaturalFailureCallback() =
     runBlocking {
@@ -903,6 +931,7 @@ class GatewaySessionReconnectTest {
 
   private fun createReconnectHarness(
     onConnected: () -> Unit = {},
+    onHello: (GatewayHelloSummary) -> Unit = {},
     onDisconnected: (String) -> Unit = {},
     deviceAuthStore: DeviceAuthTokenStore = ReconnectDeviceAuthStore(),
     onEvent: (String, String?) -> Unit = { _, _ -> },
@@ -918,7 +947,10 @@ class GatewaySessionReconnectTest {
         scope = CoroutineScope(sessionJob + Dispatchers.Default),
         identityStore = DeviceIdentityStore(app),
         deviceAuthStore = deviceAuthStore,
-        onConnected = { onConnected() },
+        onConnected = { summary ->
+          onConnected()
+          onHello(summary)
+        },
         onDisconnected = onDisconnected,
         onConnectFailure = onConnectFailure,
         onEvent = onEvent,
@@ -975,7 +1007,13 @@ class GatewaySessionReconnectTest {
     servers.forEach { it.shutdown() }
   }
 
-  private fun connectResponseFrame(id: String): String = """{"type":"res","id":"$id","ok":true,"payload":{"snapshot":{"sessionDefaults":{"mainSessionKey":"main"}}}}"""
+  private fun connectResponseFrame(
+    id: String,
+    methods: Set<String> = emptySet(),
+  ): String {
+    val encodedMethods = methods.joinToString(",") { JsonPrimitive(it).toString() }
+    return """{"type":"res","id":"$id","ok":true,"payload":{"features":{"methods":[$encodedMethods]},"snapshot":{"sessionDefaults":{"mainSessionKey":"main"}}}}"""
+  }
 
   private fun startGatewayServer(
     json: Json,

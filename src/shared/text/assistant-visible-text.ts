@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Assistant visible text helpers strip hidden reasoning and control marker text.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
@@ -96,7 +97,7 @@ function parseXmlTagAt(text: string, start: number): ParsedToolCallTag | null {
   }
 
   let cursor = start + 1;
-  while (cursor < text.length && /\s/.test(text[cursor])) {
+  while (cursor < text.length && /\s/.test(text.charAt(cursor))) {
     cursor += 1;
   }
 
@@ -104,7 +105,7 @@ function parseXmlTagAt(text: string, start: number): ParsedToolCallTag | null {
   if (text[cursor] === "/") {
     isClose = true;
     cursor += 1;
-    while (cursor < text.length && /\s/.test(text[cursor])) {
+    while (cursor < text.length && /\s/.test(text.charAt(cursor))) {
       cursor += 1;
     }
   }
@@ -114,7 +115,7 @@ function parseXmlTagAt(text: string, start: number): ParsedToolCallTag | null {
     return null;
   }
   cursor += 1;
-  while (cursor < text.length && /[A-Za-z0-9_.:-]/.test(text[cursor])) {
+  while (cursor < text.length && /[A-Za-z0-9_.:-]/.test(text.charAt(cursor))) {
     cursor += 1;
   }
 
@@ -201,7 +202,7 @@ function startsWithNestedJsonToolCallPayload(text: string, start: number): boole
     return false;
   }
   let cursor = start;
-  while (cursor < text.length && /\s/.test(text[cursor])) {
+  while (cursor < text.length && /\s/.test(text.charAt(cursor))) {
     cursor += 1;
   }
   const nestedTag = parseToolCallTagAt(text, cursor);
@@ -235,7 +236,7 @@ function isLikelyStandaloneFunctionToolCall(
     idx -= 1;
   }
 
-  return idx < 0 || text[idx] === "\n" || text[idx] === "\r" || /[.!?:]/.test(text[idx]);
+  return idx < 0 || text[idx] === "\n" || text[idx] === "\r" || /[.!?:]/.test(text.charAt(idx));
 }
 
 function isStandaloneOpeningTagLine(
@@ -320,7 +321,7 @@ function findAdjacentOpeningToolCallTag(
   tagName: string,
 ): ParsedToolCallTag | null {
   let idx = start;
-  while (idx < text.length && /\s/.test(text[idx])) {
+  while (idx < text.length && /\s/.test(text.charAt(idx))) {
     idx += 1;
   }
   if (text[idx] !== "<") {
@@ -366,7 +367,7 @@ function isDanglingFunctionParameterParent(text: string, tag: ParsedToolCallTag)
     return false;
   }
   let cursor = tag.end;
-  while (cursor < text.length && /\s/.test(text[cursor])) {
+  while (cursor < text.length && /\s/.test(text.charAt(cursor))) {
     cursor += 1;
   }
   const nextTag = parseXmlTagAt(text, cursor);
@@ -425,7 +426,7 @@ function unwrapStandaloneParameterTags(text: string): string {
     if (tag.isClose) {
       const openIndex = openTags.findLastIndex((entry) => entry.name === tag.tagName);
       if (openIndex !== -1) {
-        const opening = openTags[openIndex];
+        const opening = expectDefined(openTags[openIndex], "open tags entry at open index");
         if (opening.unwrap) {
           const contentEnd =
             opening.trimBoundaryLineBreaks &&

@@ -395,6 +395,7 @@ class MainViewModel(
   val execApprovals: StateFlow<List<GatewayExecApprovalSummary>> = runtimeState(initial = emptyList()) { it.execApprovals }
   val execApprovalsRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.execApprovalsRefreshing }
   val execApprovalsErrorText: StateFlow<String?> = runtimeState(initial = null) { it.execApprovalsErrorText }
+  val execApprovalsNotice: StateFlow<GatewayExecApprovalNotice?> = runtimeState(initial = null) { it.execApprovalsNotice }
 
   val canvas: CanvasController
     get() = ensureRuntime().canvas
@@ -964,6 +965,10 @@ class MainViewModel(
     decision: String,
   ) {
     ensureRuntime().resolveExecApproval(id = id, decision = decision)
+  }
+
+  fun dismissExecApprovalsNotice(expected: GatewayExecApprovalNotice) {
+    ensureRuntime().dismissExecApprovalsNotice(expected)
   }
 
   fun refreshChannels() {

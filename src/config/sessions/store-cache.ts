@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Session store caches share parsed stores, immutable snapshots, and serialized JSON.
 import { parseStrictNonNegativeInteger } from "../../infra/parse-finite-number.js";
 import { createExpiringMapCache, isCacheEnabled, resolveCacheTtlMs } from "../cache-utils.js";
@@ -249,7 +250,9 @@ export function cloneSessionStoreSnapshot(
 }
 
 export function cloneSessionStoreSnapshotEntry(entry: SessionEntry): SessionStoreSnapshotEntry {
-  return deepFreeze(cloneSessionStoreRecord({ entry }).entry);
+  return deepFreeze(
+    expectDefined(cloneSessionStoreRecord({ entry }).entry, "cloned session cache entry"),
+  );
 }
 
 function getSessionStoreTtl(): number {

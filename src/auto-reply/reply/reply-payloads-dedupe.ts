@@ -56,8 +56,7 @@ export function filterMessagingToolMediaDuplicates(params: {
   }
 
   let nextPayloads: ReplyPayload[] | undefined;
-  for (let index = 0; index < payloads.length; index++) {
-    const payload = payloads[index];
+  for (const [index, payload] of payloads.entries()) {
     const mediaUrl = payload.mediaUrl;
     const mediaUrls = payload.mediaUrls;
     const stripSingle = mediaUrl && sentSet.has(normalizeMediaForDedupe(mediaUrl));
@@ -65,8 +64,7 @@ export function filterMessagingToolMediaDuplicates(params: {
     let filteredUrls: string[] | undefined;
     let strippedMediaUrls = false;
     if (mediaUrls?.length) {
-      for (let mediaIndex = 0; mediaIndex < mediaUrls.length; mediaIndex++) {
-        const url = mediaUrls[mediaIndex];
+      for (const [mediaIndex, url] of mediaUrls.entries()) {
         if (sentSet.has(normalizeMediaForDedupe(url))) {
           strippedMediaUrls = true;
           if (!filteredUrls) {

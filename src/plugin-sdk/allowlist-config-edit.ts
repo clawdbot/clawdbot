@@ -5,6 +5,7 @@ import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
+import { isRecord } from "../utils.js";
 
 type AllowlistConfigPaths = {
   readPaths: string[][];
@@ -234,30 +235,32 @@ function ensureNestedObject(
 }
 
 function setNestedValue(root: Record<string, unknown>, path: string[], value: unknown) {
-  if (path.length === 0) {
+  const leaf = path.at(-1);
+  if (leaf === undefined) {
     return;
   }
   if (path.length === 1) {
-    root[path[0]] = value;
+    root[leaf] = value;
     return;
   }
   const parent = ensureNestedObject(root, path.slice(0, -1));
-  parent[path[path.length - 1]] = value;
+  parent[leaf] = value;
 }
 
 function deleteNestedValue(root: Record<string, unknown>, path: string[]) {
-  if (path.length === 0) {
+  const leaf = path.at(-1);
+  if (leaf === undefined) {
     return;
   }
   if (path.length === 1) {
-    delete root[path[0]];
+    delete root[leaf];
     return;
   }
   const parent = getNestedValue(root, path.slice(0, -1));
-  if (!parent || typeof parent !== "object") {
+  if (!isRecord(parent)) {
     return;
   }
-  delete (parent as Record<string, unknown>)[path[path.length - 1]];
+  delete parent[leaf];
 }
 
 function applyAccountScopedAllowlistConfigEdit(params: {

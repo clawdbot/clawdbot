@@ -13,6 +13,7 @@ import {
   closeOpenClawStateDatabase,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   testApi as backupCreateInternals,
@@ -70,6 +71,36 @@ async function listArchiveEntryDetails(
     },
   });
   return entries;
+}
+
+function createUnsafeIndexDrift(sqlitePath: string): void {
+  const sqlite = requireNodeSqlite();
+  const database = new sqlite.DatabaseSync(sqlitePath);
+  try {
+    database.exec(`
+      CREATE TABLE unsafe_index_records (
+        id INTEGER PRIMARY KEY,
+        indexed_value TEXT NOT NULL,
+        alternate_value TEXT NOT NULL
+      );
+      CREATE INDEX unsafe_index_records_value ON unsafe_index_records(indexed_value);
+      INSERT INTO unsafe_index_records (indexed_value, alternate_value)
+      VALUES ('alpha', 'zeta'), ('beta', 'eta'), ('gamma', 'theta');
+    `);
+    database.enableDefensive?.(false);
+    database.exec("PRAGMA writable_schema = ON;");
+    database
+      .prepare(
+        "UPDATE sqlite_schema SET sql = 'CREATE INDEX unsafe_index_records_value ON unsafe_index_records(alternate_value)' WHERE name = 'unsafe_index_records_value'",
+      )
+      .run();
+    const schemaVersion = Number(
+      Object.values(database.prepare("PRAGMA schema_version;").get() as Record<string, unknown>)[0],
+    );
+    database.exec(`PRAGMA writable_schema = OFF; PRAGMA schema_version = ${schemaVersion + 1};`);
+  } finally {
+    database.close();
+  }
 }
 
 describe("formatBackupCreateSummary", () => {
@@ -611,6 +642,34 @@ describe("createBackupArchive", () => {
     );
   });
 
+  it("rejects stale secondary indexes before creating a backup archive", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-unsafe-index-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputDir = state.path("backups");
+        await fs.mkdir(outputDir, { recursive: true });
+        openOpenClawStateDatabase({ env: state.env });
+        closeOpenClawStateDatabase();
+        createUnsafeIndexDrift(resolveOpenClawStateSqlitePath(state.env));
+
+        await expect(
+          createBackupArchive({
+            output: outputDir,
+            includeWorkspace: false,
+            nowMs: Date.UTC(2026, 4, 9, 8, 30, 30),
+          }),
+        ).rejects.toThrow(
+          /integrity_check failed.*missing from index unsafe_index_records_value/iu,
+        );
+        expect(await fs.readdir(outputDir)).toEqual([]);
+      },
+    );
+  });
+
   it("snapshots per-agent SQLite auth stores without deleted secret pages", async () => {
     await withOpenClawTestState(
       {
@@ -694,6 +753,76 @@ describe("createBackupArchive", () => {
           });
         } finally {
           archivedDb.close();
+        }
+      },
+    );
+  });
+
+  it("snapshots and verifies a canonical agent database when the agent id is node_modules", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-agent-node-modules-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputDir = state.path("backups");
+        const extractDir = state.path("extract");
+        const dbPath = state.statePath("agents", "node_modules", "agent", "openclaw-agent.sqlite");
+        await fs.mkdir(path.dirname(dbPath), { recursive: true });
+        await fs.mkdir(outputDir, { recursive: true });
+        await fs.mkdir(extractDir, { recursive: true });
+        const sqlite = requireNodeSqlite();
+        const db = new sqlite.DatabaseSync(dbPath);
+        try {
+          db.exec(`
+            PRAGMA journal_mode = WAL;
+            PRAGMA wal_autocheckpoint = 0;
+            CREATE TABLE schema_meta (
+              meta_key TEXT NOT NULL PRIMARY KEY,
+              role TEXT NOT NULL
+            );
+            INSERT INTO schema_meta (meta_key, role) VALUES ('primary', 'agent');
+            CREATE TABLE markers (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
+            PRAGMA wal_checkpoint(TRUNCATE);
+            INSERT INTO markers (value) VALUES ('committed-in-wal');
+          `);
+          await expect(fs.access(`${dbPath}-wal`)).resolves.toBeUndefined();
+
+          const result = await createBackupArchive({
+            output: outputDir,
+            includeWorkspace: false,
+            nowMs: Date.UTC(2026, 4, 9, 8, 31, 30),
+          });
+          const entries = await listArchiveEntries(result.archivePath);
+          const archivedDbEntry = entries.find((entry) =>
+            entry.endsWith("/state/agents/node_modules/agent/openclaw-agent.sqlite"),
+          );
+          expect(archivedDbEntry).toBeDefined();
+          expect(
+            entries.some((entry) =>
+              entry.endsWith("/state/agents/node_modules/agent/openclaw-agent.sqlite-wal"),
+            ),
+          ).toBe(false);
+
+          const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+          await expect(
+            backupVerifyCommand(runtime, { archive: result.archivePath }),
+          ).resolves.toMatchObject({ ok: true });
+
+          await tar.x({ file: result.archivePath, gzip: true, cwd: extractDir });
+          const archivedDb = new sqlite.DatabaseSync(path.join(extractDir, archivedDbEntry!), {
+            readOnly: true,
+          });
+          try {
+            expect(archivedDb.prepare("SELECT value FROM markers").get()).toEqual({
+              value: "committed-in-wal",
+            });
+          } finally {
+            archivedDb.close();
+          }
+        } finally {
+          db.close();
         }
       },
     );
@@ -787,6 +916,90 @@ describe("createBackupArchive", () => {
           }
         } finally {
           db.close();
+        }
+      },
+    );
+  });
+
+  it("fails closed when a plugin SQLite schema cannot be compacted safely", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-plugin-capability-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputDir = state.path("backups");
+        const dbPath = state.statePath("plugins", "dedicated", "custom.sqlite");
+        await fs.mkdir(path.dirname(dbPath), { recursive: true });
+        await fs.mkdir(outputDir, { recursive: true });
+        const sqlite = requireNodeSqlite();
+        const db = new sqlite.DatabaseSync(dbPath);
+        db.function("plugin_double", { deterministic: true }, (value) => Number(value) * 2);
+        db.exec(`
+          CREATE TABLE records (value INTEGER NOT NULL);
+          INSERT INTO records (value) VALUES (1), (2);
+          CREATE INDEX records_double ON records(plugin_double(value));
+        `);
+        db.close();
+
+        await expect(
+          createBackupArchive({
+            output: outputDir,
+            includeWorkspace: false,
+            nowMs: Date.UTC(2026, 4, 9, 8, 33, 0),
+          }),
+        ).rejects.toThrow(/cannot be compacted safely.*custom\.sqlite/iu);
+      },
+    );
+  });
+
+  it("scrubs deleted plugin SQLite bytes from archive snapshots", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-plugin-deleted-bytes-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputDir = state.path("backups");
+        const extractDir = state.path("extract");
+        const dbPath = state.statePath("plugins", "dedicated", "deleted.sqlite");
+        const deletedValue = `deleted-plugin-secret-${"x".repeat(256)}`;
+        await fs.mkdir(path.dirname(dbPath), { recursive: true });
+        await fs.mkdir(outputDir, { recursive: true });
+        await fs.mkdir(extractDir, { recursive: true });
+        const sqlite = requireNodeSqlite();
+        const db = new sqlite.DatabaseSync(dbPath);
+        db.exec("PRAGMA secure_delete = OFF; CREATE TABLE records (value TEXT NOT NULL);");
+        const insert = db.prepare("INSERT INTO records (value) VALUES (?)");
+        insert.run("survivor");
+        insert.run(deletedValue);
+        db.prepare("DELETE FROM records WHERE value = ?").run(deletedValue);
+        db.close();
+
+        expect((await fs.readFile(dbPath)).includes(deletedValue)).toBe(true);
+        const result = await createBackupArchive({
+          output: outputDir,
+          includeWorkspace: false,
+          nowMs: Date.UTC(2026, 4, 9, 8, 34, 0),
+        });
+        const entries = await listArchiveEntries(result.archivePath);
+        const archivedDbEntry = entries.find((entry) =>
+          entry.endsWith("/state/plugins/dedicated/deleted.sqlite"),
+        );
+        expect(archivedDbEntry).toBeDefined();
+
+        await tar.x({ file: result.archivePath, gzip: true, cwd: extractDir });
+        const archivedPath = path.join(extractDir, archivedDbEntry!);
+        expect((await fs.readFile(archivedPath)).includes(deletedValue)).toBe(false);
+        const archivedDb = new sqlite.DatabaseSync(archivedPath, { readOnly: true });
+        try {
+          expect(archivedDb.prepare("SELECT value FROM records").all()).toEqual([
+            { value: "survivor" },
+          ]);
+        } finally {
+          archivedDb.close();
         }
       },
     );
@@ -979,6 +1192,10 @@ describe("createBackupArchive", () => {
         expect(
           entries.find((entry) => entry.path.endsWith("/state/plugins/dedicated/linked.sqlite")),
         ).toMatchObject({ type: "SymbolicLink" });
+        const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        await expect(
+          backupVerifyCommand(runtime, { archive: result.archivePath }),
+        ).resolves.toMatchObject({ ok: true });
       },
     );
   });
@@ -1019,6 +1236,11 @@ describe("createBackupArchive", () => {
           CREATE TABLE delivery_queue_entries (
             id TEXT PRIMARY KEY
           );
+          CREATE TABLE schema_meta (
+            meta_key TEXT NOT NULL PRIMARY KEY,
+            role TEXT NOT NULL
+          );
+          INSERT INTO schema_meta (meta_key, role) VALUES ('primary', 'global');
           PRAGMA wal_checkpoint(TRUNCATE);
           INSERT INTO durable_state (id, value) VALUES (1, 'must-stay');
           INSERT INTO delivery_queue_entries (id) VALUES ('must-drop');

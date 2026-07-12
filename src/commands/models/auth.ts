@@ -7,6 +7,7 @@ import {
   select as clackSelect,
   text as clackText,
 } from "@clack/prompts";
+import { expectDefined } from "@openclaw/normalization-core";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeOptionalString,
@@ -999,7 +1000,7 @@ export function resolveLoginProfiles(params: {
   }
 
   const [profile] = params.result.profiles;
-  return [{ ...profile, profileId: requestedProfileId }];
+  return [{ ...expectDefined(profile, "auth profile"), profileId: requestedProfileId }];
 }
 
 function maybeLogOpenAICodexNativeSearchTip(runtime: RuntimeEnv, providerId: string) {

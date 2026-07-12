@@ -2,6 +2,7 @@
 // rotation, output extraction, and decision summaries.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeNullableString,
@@ -1072,11 +1073,15 @@ export async function runCliEntry(params: {
     if (shouldLogVerbose()) {
       logVerbose(`Media understanding via CLI: ${argv.join(" ")}`);
     }
-    const { stdout, stderr } = await runExec(argv[0], argv.slice(1), {
-      timeoutMs,
-      maxBuffer: CLI_OUTPUT_MAX_BUFFER,
-      cwd: isAntigravityCliCommand(command) ? path.dirname(mediaPath) : undefined,
-    });
+    const { stdout, stderr } = await runExec(
+      expectDefined(argv[0], "argv entry at 0"),
+      argv.slice(1),
+      {
+        timeoutMs,
+        maxBuffer: CLI_OUTPUT_MAX_BUFFER,
+        cwd: isAntigravityCliCommand(command) ? path.dirname(mediaPath) : undefined,
+      },
+    );
     const requestedBackend =
       capability === "audio"
         ? resolveRequestedLocalAudioBackend({

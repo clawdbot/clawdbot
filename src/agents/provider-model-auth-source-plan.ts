@@ -125,7 +125,10 @@ export function buildProviderModelAuthSourcePlan(params: {
   } else {
     const available = ordered.filter((profile) => profile.readiness !== "unavailable");
     if (available.length === 0) {
-      profiles = { kind: "all-unavailable", explicitOrder, first: ordered[0] };
+      const [firstOrdered] = ordered;
+      profiles = firstOrdered
+        ? { kind: "all-unavailable", explicitOrder, first: firstOrdered }
+        : { kind: "empty", explicitOrder };
     } else {
       const outsideCooldown = available.filter((profile) => profile.cooldown === "clear");
       if (outsideCooldown.length > 0) {
@@ -133,7 +136,10 @@ export function buildProviderModelAuthSourcePlan(params: {
       } else if (params.allowCooldown) {
         profiles = { kind: "usable", explicitOrder, profiles: available.slice(0, 1) };
       } else {
-        profiles = { kind: "all-cooldown", explicitOrder, first: available[0] };
+        const [firstAvailable] = available;
+        profiles = firstAvailable
+          ? { kind: "all-cooldown", explicitOrder, first: firstAvailable }
+          : { kind: "empty", explicitOrder };
       }
     }
   }

@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Subsystem logger helpers create scoped loggers with subsystem-specific filters.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { Chalk } from "chalk";
@@ -161,24 +162,29 @@ function pickSubsystemColor(color: ChalkInstance, subsystem: string): ChalkInsta
     hash = (hash * 31 + subsystem.charCodeAt(i)) | 0;
   }
   const idx = Math.abs(hash) % SUBSYSTEM_COLORS.length;
-  const name = SUBSYSTEM_COLORS[idx];
+  const name = expectDefined(SUBSYSTEM_COLORS[idx], "subsystem colors entry at idx");
   return color[name];
 }
 
 function formatSubsystemForConsole(subsystem: string): string {
   const parts = subsystem.split("/").filter(Boolean);
   const original = parts.join("/") || subsystem;
-  while (
-    parts.length > 0 &&
-    SUBSYSTEM_PREFIXES_TO_DROP.includes(parts[0] as (typeof SUBSYSTEM_PREFIXES_TO_DROP)[number])
-  ) {
+  while (parts.length > 0) {
+    const first = parts.at(0);
+    if (
+      first === undefined ||
+      !SUBSYSTEM_PREFIXES_TO_DROP.includes(first as (typeof SUBSYSTEM_PREFIXES_TO_DROP)[number])
+    ) {
+      break;
+    }
     parts.shift();
   }
-  if (parts.length === 0) {
+  const first = parts.at(0);
+  if (first === undefined) {
     return original;
   }
-  if (isChannelSubsystemPrefix(parts[0])) {
-    return parts[0];
+  if (isChannelSubsystemPrefix(first)) {
+    return first;
   }
   if (parts.length > SUBSYSTEM_MAX_SEGMENTS) {
     return parts.slice(-SUBSYSTEM_MAX_SEGMENTS).join("/");

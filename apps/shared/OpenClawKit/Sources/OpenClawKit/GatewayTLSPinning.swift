@@ -88,39 +88,52 @@ enum GatewayTLSFirstUsePolicy {
 
 public enum GatewayTLSStore {
     private static let keychainService = "ai.openclaw.tls-pinning"
+    private static let keychainAccountPrefix = "fingerprint.v2."
 
     // Legacy UserDefaults location used before Keychain migration.
     private static let legacySuiteName = "ai.openclaw.shared"
     private static let legacyKeyPrefix = "gateway.tls."
 
     public static func loadFingerprint(stableID: String) -> String? {
-        self.migrateFromUserDefaultsIfNeeded(stableID: stableID)
-        let raw = GenericPasswordKeychainStore.loadString(service: self.keychainService, account: stableID)?
+        guard let account = self.keychainAccount(stableID: stableID) else { return nil }
+        self.migrateLegacyFingerprintIfNeeded(stableID: stableID, account: account)
+        let raw = GenericPasswordKeychainStore.loadString(service: self.keychainService, account: account)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if raw?.isEmpty == false { return raw }
         return nil
     }
 
     public static func saveFingerprint(_ value: String, stableID: String) {
-        _ = GenericPasswordKeychainStore.saveString(value, service: self.keychainService, account: stableID)
+        guard let account = self.keychainAccount(stableID: stableID),
+              GenericPasswordKeychainStore.saveString(
+                  value,
+                  service: self.keychainService,
+                  account: account)
+        else { return }
+        _ = self.clearSafeLegacyFingerprint(stableID: stableID)
     }
 
     @discardableResult
     public static func replaceFingerprint(_ value: String, stableID: String) -> Bool {
-        guard GenericPasswordKeychainStore.saveString(value, service: self.keychainService, account: stableID) else {
+        guard let account = self.keychainAccount(stableID: stableID),
+              GenericPasswordKeychainStore.saveString(
+                  value,
+                  service: self.keychainService,
+                  account: account)
+        else {
             return false
         }
-        self.clearLegacyFingerprint(stableID: stableID)
-        return true
+        return self.clearSafeLegacyFingerprint(stableID: stableID)
     }
 
     @discardableResult
     public static func clearFingerprint(stableID: String) -> Bool {
-        let removedKeychain = GenericPasswordKeychainStore.delete(
+        guard let account = self.keychainAccount(stableID: stableID) else { return false }
+        let removedCanonical = GenericPasswordKeychainStore.delete(
             service: self.keychainService,
-            account: stableID)
-        self.clearLegacyFingerprint(stableID: stableID)
-        return removedKeychain
+            account: account)
+        let removedLegacy = self.clearSafeLegacyFingerprint(stableID: stableID)
+        return removedCanonical && removedLegacy
     }
 
     @discardableResult
@@ -135,27 +148,62 @@ public enum GatewayTLSStore {
 
     // MARK: - Migration
 
-    /// On first Keychain read for a given stableID, move any legacy UserDefaults
-    /// fingerprint into Keychain and remove the old entry.
-    private static func migrateFromUserDefaultsIfNeeded(stableID: String) {
-        guard let defaults = UserDefaults(suiteName: self.legacySuiteName) else { return }
-        let legacyKey = self.legacyKeyPrefix + stableID
-        guard let existing = defaults.string(forKey: legacyKey)?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-            !existing.isEmpty
-        else { return }
-        if GenericPasswordKeychainStore.loadString(service: self.keychainService, account: stableID) == nil {
-            guard GenericPasswordKeychainStore.saveString(existing, service: self.keychainService, account: stableID)
-            else {
-                return
-            }
+    /// Legacy raw Keychain/UserDefaults keys can apply Unicode equivalence without
+    /// embedding their owner. Only ASCII owners are safe to attribute and migrate.
+    private static func migrateLegacyFingerprintIfNeeded(stableID: String, account: String) {
+        guard self.canSafelyReadLegacyRawStorageKey(stableID) else { return }
+        let canonical = self.normalizedFingerprint(GenericPasswordKeychainStore.loadString(
+            service: self.keychainService,
+            account: account))
+        if canonical != nil {
+            _ = self.clearSafeLegacyFingerprint(stableID: stableID)
+            return
         }
-        defaults.removeObject(forKey: legacyKey)
+
+        let legacyKeychain = self.normalizedFingerprint(GenericPasswordKeychainStore.loadString(
+            service: self.keychainService,
+            account: stableID))
+        let defaults = UserDefaults(suiteName: self.legacySuiteName)
+        let legacyDefaults = self.normalizedFingerprint(defaults?.string(
+            forKey: self.legacyKeyPrefix + stableID))
+        guard let existing = legacyKeychain ?? legacyDefaults,
+              GenericPasswordKeychainStore.saveString(
+                  existing,
+                  service: self.keychainService,
+                  account: account)
+        else { return }
+        _ = self.clearSafeLegacyFingerprint(stableID: stableID)
     }
 
-    private static func clearLegacyFingerprint(stableID: String) {
-        guard let defaults = UserDefaults(suiteName: self.legacySuiteName) else { return }
-        defaults.removeObject(forKey: self.legacyKeyPrefix + stableID)
+    private static func keychainAccount(stableID: String) -> String? {
+        guard !stableID.isEmpty else { return nil }
+        let component = Data(stableID.utf8).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        return self.keychainAccountPrefix + component
+    }
+
+    private static func canSafelyReadLegacyRawStorageKey(_ stableID: String) -> Bool {
+        !stableID.isEmpty &&
+            !stableID.hasPrefix(self.keychainAccountPrefix) &&
+            stableID.unicodeScalars.allSatisfy(\.isASCII)
+    }
+
+    private static func normalizedFingerprint(_ value: String?) -> String? {
+        let value = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return value.isEmpty ? nil : value
+    }
+
+    @discardableResult
+    private static func clearSafeLegacyFingerprint(stableID: String) -> Bool {
+        guard self.canSafelyReadLegacyRawStorageKey(stableID) else { return true }
+        let removedKeychain = GenericPasswordKeychainStore.delete(
+            service: self.keychainService,
+            account: stableID)
+        UserDefaults(suiteName: self.legacySuiteName)?
+            .removeObject(forKey: self.legacyKeyPrefix + stableID)
+        return removedKeychain
     }
 
     private static func clearAllLegacyFingerprints() {

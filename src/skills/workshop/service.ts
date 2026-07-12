@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readLocalFileSafely, root, walkDirectory } from "../../infra/fs-safe.js";
@@ -231,7 +232,10 @@ export async function resolvePendingSkillProposal(input: {
       .join(", ");
     throw new Error(`Multiple pending skill proposals matched ${name}: ${candidates}`);
   }
-  const matched = await readRequiredProposal(matches[0].id, input.workspaceDir);
+  const matched = await readRequiredProposal(
+    expectDefined(matches[0], "matches capture group 0").id,
+    input.workspaceDir,
+  );
   if (matched.record.status !== "pending") {
     throw new Error(
       `Only pending proposals can be revised. Current status: ${matched.record.status}.`,

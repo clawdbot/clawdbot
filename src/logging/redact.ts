@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Redaction helpers scrub secrets and sensitive identifiers from log output.
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -317,8 +318,11 @@ function parsePattern(raw: RedactPattern): RegExp | null {
   } else if (raw.trim()) {
     const match = raw.match(/^\/(.+)\/([gimsuy]*)$/);
     if (match) {
-      const flags = match[2].includes("g") ? match[2] : `${match[2]}g`;
-      pattern = compileConfigRegex(match[1], flags)?.regex ?? null;
+      const flags = expectDefined(match[2], "redact regex capture 2").includes("g")
+        ? match[2]
+        : `${match[2]}g`;
+      pattern =
+        compileConfigRegex(expectDefined(match[1], "redact regex capture 1"), flags)?.regex ?? null;
     } else {
       pattern = compileConfigRegex(raw, "gi")?.regex ?? null;
     }

@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { tryReadJsonSync } from "../infra/json-files.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
@@ -203,7 +204,11 @@ function directoryChildFingerprint(directoryPath: string): unknown {
     return fs
       .readdirSync(directoryPath, { withFileTypes: true })
       .map((entry) => [entry.name, entry.isDirectory() ? "dir" : entry.isFile() ? "file" : "other"])
-      .toSorted(([left], [right]) => left.localeCompare(right));
+      .toSorted(([left], [right]) =>
+        expectDefined(left, "plugin registry snapshot left").localeCompare(
+          expectDefined(right, "plugin registry snapshot right"),
+        ),
+      );
   } catch {
     return "unreadable";
   }

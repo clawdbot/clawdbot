@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Extension shared helpers expose cross-plugin runtime utilities that remain SDK-safe.
 import { createAmbientNodeProxyAgent, hasAmbientNodeProxyConfigured } from "@openclaw/proxyline";
 import type { z } from "zod";
@@ -183,7 +184,10 @@ export function formatPluginConfigIssue(
     return options?.invalidConfigMessage ?? "invalid config";
   }
   if (issue.code === "unrecognized_keys" && issue.keys.length > 0) {
-    return options?.unknownKeyMessage?.(issue.keys[0]) ?? `unknown config key: ${issue.keys[0]}`;
+    return (
+      options?.unknownKeyMessage?.(expectDefined(issue.keys[0], "keys entry at 0")) ??
+      `unknown config key: ${issue.keys[0]}`
+    );
   }
   if (issue.code === "invalid_type" && issue.path.length === 0) {
     return options?.rootInvalidTypeMessage ?? "expected config object";

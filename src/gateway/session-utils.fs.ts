@@ -2,6 +2,7 @@
 // Parses transcript JSONL files for messages, previews, counts, and usage metadata.
 import fs from "node:fs";
 import { StringDecoder } from "node:string_decoder";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   resolveIntegerOption,
   resolveNonNegativeIntegerOption,
@@ -329,7 +330,7 @@ function isOversizedTranscriptLine(line: string): boolean {
 
 function isJsonObjectFieldToken(source: string, tokenIndex: number): boolean {
   for (let index = tokenIndex - 1; index >= 0; index--) {
-    const char = source[index];
+    const char = source.charAt(index);
     if (/\s/.test(char)) {
       continue;
     }
@@ -972,7 +973,7 @@ export function capArrayByJsonBytes<T>(
   let bytes = 2 + parts.reduce((a, b) => a + b, 0) + (items.length - 1);
   let start = 0;
   while (bytes > maxBytes && start < items.length - 1) {
-    bytes -= parts[start] + 1;
+    bytes -= expectDefined(parts[start], "parts entry at start") + 1;
     start += 1;
   }
   const next = start > 0 ? items.slice(start) : items;
@@ -2076,7 +2077,7 @@ function readRecentMessagesFromTranscript(
 
     const collected: TranscriptPreviewMessage[] = [];
     for (let i = tailLines.length - 1; i >= 0; i--) {
-      const line = tailLines[i];
+      const line = expectDefined(tailLines[i], "tail lines entry at i");
       try {
         const parsed = JSON.parse(line);
         const msg = parsed?.message as TranscriptPreviewMessage | undefined;

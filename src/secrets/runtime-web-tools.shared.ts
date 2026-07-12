@@ -12,6 +12,7 @@ import type {
 import { pushInactiveSurfaceWarning, pushWarning } from "./runtime-shared.js";
 import type { RuntimeWebDiagnostic, RuntimeWebDiagnosticCode } from "./runtime-web-tools.types.js";
 export { isRecord } from "./shared.js";
+import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "./shared.js";
 
 const loadResolveManifestContractOwnerPluginId = createLazyRuntimeNamedExport(
@@ -598,7 +599,9 @@ export async function resolveRuntimeWebProviderSelection<
       }
     } else {
       if (!selectedProvider && unresolvedWithoutFallback.length > 0) {
-        failUnresolvedNoFallback(unresolvedWithoutFallback[0]);
+        failUnresolvedNoFallback(
+          expectDefined(unresolvedWithoutFallback[0], "unresolved without fallback entry at 0"),
+        );
       }
 
       if (selectedProvider) {

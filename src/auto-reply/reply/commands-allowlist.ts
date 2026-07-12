@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 /** Handles /allowlist commands across config and pairing-store targets. */
 import {
   normalizeOptionalLowercaseString,
@@ -109,7 +110,7 @@ function parseAllowlistCommand(raw: string): AllowlistCommand | null {
   }
 
   for (; i < tokens.length; i += 1) {
-    const token = tokens[i];
+    const token = expectDefined(tokens[i], "tokens entry at i");
     const lowered = normalizeOptionalLowercaseString(token) ?? "";
     if (lowered === "--resolve" || lowered === "resolve") {
       resolve = true;

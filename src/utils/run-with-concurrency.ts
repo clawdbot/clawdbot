@@ -1,4 +1,4 @@
-/** Controls whether the worker pool keeps scheduling after a task failure. */
+import { expectDefined } from "@openclaw/normalization-core"; /** Controls whether the worker pool keeps scheduling after a task failure. */
 export type ConcurrencyErrorMode = "continue" | "stop";
 
 /** Options for running a fixed list of promise factories through a bounded worker pool. */
@@ -52,7 +52,7 @@ export async function runTasksWithConcurrency<T>(
         return;
       }
       try {
-        results[index] = await tasks[index]();
+        results[index] = await expectDefined(tasks[index], "tasks entry at index")();
       } catch (error) {
         if (!hasError) {
           firstError = error;

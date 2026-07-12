@@ -2,6 +2,7 @@
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -550,7 +551,7 @@ async function probeMcpServersOrFail(params: {
   try {
     const result = formatMcpProbeResult(await runtime.getCatalog());
     if (result.diagnostics.length > 0) {
-      const first = result.diagnostics[0];
+      const first = expectDefined(result.diagnostics[0], "diagnostics entry at 0");
       fail(`MCP probe failed for "${first.serverName}" in ${params.path}: ${first.message}`);
     }
     for (const name of Object.keys(params.servers)) {

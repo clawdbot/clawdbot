@@ -3,6 +3,7 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { isGatewayArgv } from "../infra/gateway-process-argv.js";
@@ -526,7 +527,7 @@ async function launchFallbackTaskScript(
     installedCommand === undefined ? await readScheduledTaskCommand(env) : installedCommand;
   if (command?.programArguments.length) {
     const [executable, ...args] = command.programArguments;
-    const child = spawn(executable, args, {
+    const child = spawn(expectDefined(executable, "schtasks executable"), args, {
       cwd: command.workingDirectory || undefined,
       detached: true,
       env: {

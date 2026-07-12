@@ -299,8 +299,7 @@ function readGatewayServiceCommandPortState(
   if (!programArguments || programArguments.length === 0) {
     return { kind: "missing" };
   }
-  for (let index = 0; index < programArguments.length; index += 1) {
-    const arg = programArguments[index];
+  for (const [index, arg] of programArguments.entries()) {
     if (arg === "--port") {
       return parseGatewayPortArg(programArguments[index + 1]);
     }

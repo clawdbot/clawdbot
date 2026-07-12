@@ -11,6 +11,7 @@ import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
+  appendTranscriptEvent,
   listSessionEntries,
   loadSessionEntry,
   replaceSessionEntry,
@@ -385,17 +386,23 @@ async function writeTerminalTranscriptSessionStore(params: {
   omitStatus?: boolean;
   updatedAt: number;
   endedAt: number;
-  transcriptMtimeMs: number;
+  transcriptMutationOrder: "after-registry" | "before-registry";
 }): Promise<void> {
   const sessionFile = `${params.sessionId}.jsonl`;
-  const transcriptPath = path.join(path.dirname(params.storePath), sessionFile);
-  await fs.writeFile(
-    transcriptPath,
-    `${JSON.stringify({ type: "session", id: params.sessionId })}\n`,
-    "utf-8",
-  );
-  await fs.utimes(transcriptPath, params.transcriptMtimeMs / 1000, params.transcriptMtimeMs / 1000);
   const status = params.status ?? (params.omitStatus ? undefined : "done");
+  const appendTranscript = () =>
+    appendTranscriptEvent(
+      {
+        agentId: "main",
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+      },
+      { type: "custom", timestamp: "1970-01-01T00:00:00.001Z" },
+    );
+  if (params.transcriptMutationOrder === "before-registry") {
+    await appendTranscript();
+  }
   await writeSessionStoreFast(params.storePath, {
     [params.sessionKey]: {
       sessionId: params.sessionId,
@@ -407,6 +414,9 @@ async function writeTerminalTranscriptSessionStore(params: {
       ...(status ? { status } : {}),
     },
   });
+  if (params.transcriptMutationOrder === "after-registry") {
+    await appendTranscript();
+  }
 }
 
 function setMinimalCurrentConversationBindingRegistryForTests(): void {
@@ -2344,36 +2354,36 @@ describe("initSessionState reset policy", () => {
 
   it.each([
     {
-      name: "non-main terminal rows ignore transcript mtime",
+      name: "non-main terminal rows ignore later transcript mutations",
       sessionKey: "agent:main:whatsapp:dm:terminal-entry",
       updatedAtOffsetMs: -5_000,
       endedAtOffsetMs: -6_000,
-      transcriptMtimeOffsetMs: -3_000,
+      transcriptMutationOrder: "after-registry" as const,
       expectNewSession: false,
     },
     {
-      name: "main status-done terminal rows reuse when transcript is newer than updatedAt",
+      name: "main status-done terminal rows reuse after a later transcript mutation",
       sessionKey: "agent:main:main",
       updatedAtOffsetMs: -10_000,
       endedAtOffsetMs: -11_000,
-      transcriptMtimeOffsetMs: 0,
+      transcriptMutationOrder: "after-registry" as const,
       expectNewSession: false,
     },
     {
-      name: "main killed terminal rows rotate when transcript is newer than updatedAt",
+      name: "main killed terminal rows rotate after a later transcript mutation",
       sessionKey: "agent:main:main",
       status: "killed" as const,
       updatedAtOffsetMs: -10_000,
       endedAtOffsetMs: -11_000,
-      transcriptMtimeOffsetMs: 0,
+      transcriptMutationOrder: "after-registry" as const,
       expectNewSession: true,
     },
     {
-      name: "main endedAt-only rows rotate when transcript is newer than updatedAt",
+      name: "main endedAt-only rows rotate after a later transcript mutation",
       sessionKey: "agent:main:main",
       updatedAtOffsetMs: -10_000,
       endedAtOffsetMs: -11_000,
-      transcriptMtimeOffsetMs: 0,
+      transcriptMutationOrder: "after-registry" as const,
       omitStatus: true,
       expectNewSession: true,
     },
@@ -2383,32 +2393,16 @@ describe("initSessionState reset policy", () => {
       status: "failed" as const,
       updatedAtOffsetMs: -10_000,
       endedAtOffsetMs: -11_000,
-      transcriptMtimeOffsetMs: 0,
+      transcriptMutationOrder: "after-registry" as const,
       expectNewSession: false,
       expectRecovered: true,
     },
     {
-      name: "main terminal rows reuse when updatedAt already reflects the transcript",
+      name: "main terminal rows reuse when the registry observes the transcript mutation",
       sessionKey: "agent:main:main",
       updatedAtOffsetMs: -1_000,
       endedAtOffsetMs: -6_000,
-      transcriptMtimeOffsetMs: -4_000,
-      expectNewSession: false,
-    },
-    {
-      name: "main terminal rows reuse when transcript mtime differs only by sub-millisecond precision",
-      sessionKey: "agent:main:main",
-      updatedAtOffsetMs: -4_000,
-      endedAtOffsetMs: -6_000,
-      transcriptMtimeOffsetMs: -3_999.5,
-      expectNewSession: false,
-    },
-    {
-      name: "main terminal rows reuse when transcript is not newer than updatedAt",
-      sessionKey: "agent:main:main",
-      updatedAtOffsetMs: -10_000,
-      endedAtOffsetMs: -11_000,
-      transcriptMtimeOffsetMs: -15_000,
+      transcriptMutationOrder: "before-registry" as const,
       expectNewSession: false,
     },
   ])("$name", async (scenario) => {
@@ -2427,7 +2421,7 @@ describe("initSessionState reset policy", () => {
       omitStatus: scenario.omitStatus,
       updatedAt: terminalUpdatedAt,
       endedAt: terminalEndedAt,
-      transcriptMtimeMs: now + scenario.transcriptMtimeOffsetMs,
+      transcriptMutationOrder: scenario.transcriptMutationOrder,
     });
 
     const cfg = { session: { store: storePath } } as OpenClawConfig;

@@ -1,6 +1,7 @@
 /** Provider plugin catalog loading for model-list output. */
 import { createHash } from "node:crypto";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { expectDefined } from "@openclaw/normalization-core";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../../agents/auth-profiles/store.js";
 import {
@@ -47,7 +48,11 @@ function buildProviderCatalogEnvCacheFingerprint(env: NodeJS.ProcessEnv): string
   const entries = Object.entries(env)
     .filter((entry): entry is [string, string] => entry[1] !== undefined)
     .map(([key, value]) => [key, createHash("sha256").update(value).digest("hex")])
-    .toSorted(([left], [right]) => left.localeCompare(right));
+    .toSorted(([left], [right]) =>
+      expectDefined(left, "list.provider catalog left").localeCompare(
+        expectDefined(right, "list.provider catalog right"),
+      ),
+    );
   return createHash("sha256").update(JSON.stringify(entries)).digest("hex");
 }
 

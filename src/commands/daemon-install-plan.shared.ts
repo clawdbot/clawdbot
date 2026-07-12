@@ -12,7 +12,11 @@ import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 export function resolveGatewayDevMode(argv: string[] = process.argv): boolean {
   const entry = argv[1];
   const normalizedEntry = entry?.replaceAll("\\", "/");
-  return normalizedEntry?.includes("/src/") && normalizedEntry.endsWith(".ts");
+  return (
+    normalizedEntry !== undefined &&
+    normalizedEntry.includes("/src/") &&
+    normalizedEntry.endsWith(".ts")
+  );
 }
 
 /** Resolve dev-mode and Node path inputs for daemon service install planning. */

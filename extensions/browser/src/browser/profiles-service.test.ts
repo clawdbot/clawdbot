@@ -179,6 +179,45 @@ describe("BrowserProfilesService", () => {
     expect(writeConfigFile).toHaveBeenCalled();
   });
 
+  it("round-trips prototype-like profile names as own entries", async () => {
+    for (const profileName of ["constructor", "prototype"] as const) {
+      writeConfigFile.mockClear();
+      const resolved = resolveBrowserConfig({});
+      const { ctx, state } = createCtx(resolved);
+      vi.mocked(getRuntimeConfig).mockReturnValue({ browser: { profiles: {} } });
+
+      const service = createBrowserProfilesService(ctx);
+      const result = await service.createProfile({ name: profileName });
+
+      expect(result.profile).toBe(profileName);
+      expect(Object.hasOwn(state.resolved.profiles, profileName)).toBe(true);
+      const createdProfiles = writtenBrowserConfig().profiles as Record<
+        string,
+        { cdpPort?: number; color: string }
+      >;
+      expect(Object.hasOwn(createdProfiles, profileName)).toBe(true);
+
+      writeConfigFile.mockClear();
+      vi.mocked(getRuntimeConfig).mockReturnValue({
+        browser: {
+          defaultProfile: "openclaw",
+          profiles: { [profileName]: createdProfiles[profileName] },
+        },
+      });
+      await service.deleteProfile(profileName);
+
+      const deletedProfiles = writtenBrowserConfig().profiles as Record<
+        string,
+        { cdpPort?: number; color: string }
+      >;
+      expect(Object.hasOwn(deletedProfiles, profileName)).toBe(false);
+      expect(Object.hasOwn(state.resolved.profiles, profileName)).toBe(false);
+      expect(resolveProfile(resolveBrowserConfig({ profiles: deletedProfiles }), profileName)).toBe(
+        null,
+      );
+    }
+  });
+
   it("persists an existing managed profile as the browser default", async () => {
     vi.mocked(getRuntimeConfig).mockReturnValue({
       browser: {

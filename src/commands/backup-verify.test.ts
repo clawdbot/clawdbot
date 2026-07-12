@@ -2,13 +2,17 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { gzipSync } from "node:zlib";
 import * as tar from "tar";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { buildBackupArchiveRoot } from "./backup-shared.js";
-import { backupVerifyCommand } from "./backup-verify.js";
+import { backupVerifyCommand, testApi } from "./backup-verify.js";
 
 const TEST_ARCHIVE_ROOT = "2026-03-09T00-00-00.000Z-openclaw-backup";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const createBackupVerifyRuntime = () => ({
   log: vi.fn(),
@@ -16,7 +20,11 @@ const createBackupVerifyRuntime = () => ({
   exit: vi.fn(),
 });
 
-function createBackupManifest(assetArchivePath: string, archiveRoot = TEST_ARCHIVE_ROOT) {
+function createBackupManifest(
+  assetArchivePath: string,
+  archiveRoot = TEST_ARCHIVE_ROOT,
+  stateDir = "/tmp/.openclaw",
+) {
   return {
     schemaVersion: 1,
     createdAt: "2026-03-09T00:00:00.000Z",
@@ -24,10 +32,13 @@ function createBackupManifest(assetArchivePath: string, archiveRoot = TEST_ARCHI
     runtimeVersion: "test",
     platform: process.platform,
     nodeVersion: process.version,
+    paths: {
+      stateDir,
+    },
     assets: [
       {
         kind: "state",
-        sourcePath: "/tmp/.openclaw",
+        sourcePath: stateDir,
         archivePath: assetArchivePath,
       },
     ],
@@ -105,7 +116,8 @@ async function withBrokenArchiveFixture(
   options: {
     tempPrefix: string;
     manifestAssetArchivePath: string;
-    payloads: Array<{ fileName: string; contents: string; archivePath?: string }>;
+    manifest?: ReturnType<typeof createBackupManifest>;
+    payloads: Array<{ fileName: string; contents: string | Uint8Array; archivePath?: string }>;
     buildTarEntries?: (paths: { manifestPath: string; payloadPaths: string[] }) => string[];
   },
   run: (archivePath: string) => Promise<void>,
@@ -130,7 +142,7 @@ async function withBrokenArchiveFixture(
   try {
     await fs.writeFile(
       manifestPath,
-      `${JSON.stringify(createBackupManifest(options.manifestAssetArchivePath), null, 2)}\n`,
+      `${JSON.stringify(options.manifest ?? createBackupManifest(options.manifestAssetArchivePath), null, 2)}\n`,
       "utf8",
     );
     await tar.c(
@@ -156,6 +168,23 @@ async function withBrokenArchiveFixture(
       }) ?? [manifestPath, ...payloadSpecs.map((payload) => payload.path)],
     );
     await run(archivePath);
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+async function createSqlitePayload(setup: (database: DatabaseSync) => void): Promise<Buffer> {
+  const tempDir = tempDirs.make("openclaw-backup-verify-sqlite-db-");
+  const databasePath = path.join(tempDir, "snapshot.sqlite");
+  try {
+    const sqlite = requireNodeSqlite();
+    const database = new sqlite.DatabaseSync(databasePath);
+    try {
+      setup(database);
+    } finally {
+      database.close();
+    }
+    return await fs.readFile(databasePath);
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true });
   }
@@ -208,6 +237,526 @@ describe("backupVerifyCommand", () => {
     } finally {
       await fs.rm(archiveDir, { recursive: true, force: true });
     }
+  });
+
+  it("verifies SQLite integrity and the canonical shared-state role", async () => {
+    const stateAssetArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw`;
+    const sqliteArchivePath = `${stateAssetArchivePath}/state/openclaw.sqlite`;
+    const sqlitePayload = await createSqlitePayload((database) => {
+      database.exec(`
+        CREATE TABLE schema_meta (
+          meta_key TEXT NOT NULL PRIMARY KEY,
+          role TEXT NOT NULL
+        );
+        INSERT INTO schema_meta (meta_key, role) VALUES ('primary', 'global');
+      `);
+    });
+
+    await withBrokenArchiveFixture(
+      {
+        tempPrefix: "openclaw-backup-valid-sqlite-",
+        manifestAssetArchivePath: stateAssetArchivePath,
+        payloads: [
+          {
+            fileName: "openclaw.sqlite",
+            contents: sqlitePayload,
+            archivePath: sqliteArchivePath,
+          },
+        ],
+      },
+      async (archivePath) => {
+        const runtime = createBackupVerifyRuntime();
+        await expect(backupVerifyCommand(runtime, { archive: archivePath })).resolves.toMatchObject(
+          {
+            ok: true,
+          },
+        );
+      },
+    );
+  });
+
+  it("does not interpret plugin-owned SQLite schemas without their owner runtime", async () => {
+    const stateAssetArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw`;
+    const sqliteArchivePath = `${stateAssetArchivePath}/plugins/dedicated/custom.sqlite`;
+    const sqlitePayload = await createSqlitePayload((database) => {
+      database.function("plugin_double", { deterministic: true }, (value) => Number(value) * 2);
+      database.exec(`
+        CREATE TABLE records (value INTEGER NOT NULL);
+        INSERT INTO records (value) VALUES (1), (2);
+        CREATE INDEX records_double ON records(plugin_double(value));
+      `);
+    });
+
+    await withBrokenArchiveFixture(
+      {
+        tempPrefix: "openclaw-backup-plugin-owned-sqlite-",
+        manifestAssetArchivePath: stateAssetArchivePath,
+        payloads: [
+          {
+            fileName: "custom.sqlite",
+            contents: sqlitePayload,
+            archivePath: sqliteArchivePath,
+          },
+        ],
+      },
+      async (archivePath) => {
+        const runtime = createBackupVerifyRuntime();
+        await expect(backupVerifyCommand(runtime, { archive: archivePath })).resolves.toMatchObject(
+          {
+            ok: true,
+          },
+        );
+      },
+    );
+  });
+
+  it("rejects a structurally valid archive containing a malformed SQLite snapshot", async () => {
+    const stateAssetArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw`;
+    const sqliteArchivePath = `${stateAssetArchivePath}/state/openclaw.sqlite`;
+    const invalidSqlite = Buffer.from("not a sqlite database", "utf8");
+    expect(invalidSqlite.byteLength).toBe(21);
+
+    await withBrokenArchiveFixture(
+      {
+        tempPrefix: "openclaw-backup-invalid-sqlite-",
+        manifestAssetArchivePath: stateAssetArchivePath,
+        payloads: [
+          {
+            fileName: "openclaw.sqlite",
+            contents: invalidSqlite,
+            archivePath: sqliteArchivePath,
+          },
+        ],
+      },
+      async (archivePath) => {
+        const verificationTempRoot = tempDirs.make("openclaw-backup-verify-cleanup-");
+        const tmpdirSpy = vi.spyOn(os, "tmpdir").mockReturnValue(verificationTempRoot);
+        try {
+          const runtime = createBackupVerifyRuntime();
+          await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
+            /Backup SQLite snapshot failed verification.*openclaw\.sqlite/iu,
+          );
+          await expect(fs.readdir(verificationTempRoot)).resolves.toEqual([]);
+        } finally {
+          tmpdirSpy.mockRestore();
+          await fs.rm(verificationTempRoot, { recursive: true, force: true });
+        }
+      },
+    );
+  });
+
+  it("rejects an empty SQLite snapshot instead of accepting a new empty database", async () => {
+    const stateAssetArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw`;
+    const sqliteArchivePath = `${stateAssetArchivePath}/plugins/dedicated/empty.sqlite`;
+
+    await withBrokenArchiveFixture(
+      {
+        tempPrefix: "openclaw-backup-empty-sqlite-",
+        manifestAssetArchivePath: stateAssetArchivePath,
+        payloads: [
+          {
+            fileName: "empty.sqlite",
+            contents: new Uint8Array(),
+            archivePath: sqliteArchivePath,
+          },
+        ],
+      },
+      async (archivePath) => {
+        const runtime = createBackupVerifyRuntime();
+        await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
+          /SQLite snapshot is empty.*empty\.sqlite/iu,
+        );
+      },
+    );
+  });
+
+  it.each(["-wal", "-WAL"])(
+    "rejects SQLite sidecars that could change restored snapshot contents (%s)",
+    async (sidecarSuffix) => {
+      const stateAssetArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw`;
+      const sqliteArchivePath = `${stateAssetArchivePath}/state/openclaw.sqlite`;
+      const sqlitePayload = await createSqlitePayload((database) => {
+        database.exec(`
+        CREATE TABLE schema_meta (
+          meta_key TEXT NOT NULL PRIMARY KEY,
+          role TEXT NOT NULL
+        );
+        INSERT INTO schema_meta (meta_key, role) VALUES ('primary', 'global');
+      `);
+      });
+
+      await withBrokenArchiveFixture(
+        {
+          tempPrefix: "openclaw-backup-sqlite-sidecar-",
+          manifestAssetArchivePath: stateAssetArchivePath,
+          payloads: [
+            {
+              fileName: "openclaw.sqlite",
+              contents: sqlitePayload,
+              archivePath: sqliteArchivePath,
+            },
+            {
+              fileName: "openclaw.sqlite-wal",
+              contents: "unverified transaction data",
+              archivePath: `${sqliteArchivePath}${sidecarSuffix}`,
+            },
+          ],
+        },
+        async (archivePath) => {
+          const runtime = createBackupVerifyRuntime();
+          await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
+            /contains a SQLite snapshot sidecar.*openclaw\.sqlite-wal/iu,
+          );
+        },
+      );
+    },
+  );
+
+  it("rejects case-mangled canonical SQLite paths", async () => {
+    const stateAssetArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw`;
+    const sqliteArchivePath = `${stateAssetArchivePath}/State/OpenClaw.SQLITE`;
+    const sqlitePayload = await createSqlitePayload((database) => {
+      database.exec(`
+        CREATE TABLE schema_meta (
+          meta_key TEXT NOT NULL PRIMARY KEY,
+          role TEXT NOT NULL
+        );
+        INSERT INTO schema_meta (meta_key, role) VALUES ('primary', 'global');
+      `);
+    });
+
+    await withBrokenArchiveFixture(
+      {
+        tempPrefix: "openclaw-backup-sqlite-case-alias-",
+        manifestAssetArchivePath: stateAssetArchivePath,
+        payloads: [
+          {
+            fileName: "openclaw.sqlite",
+            contents: sqlitePayload,
+            archivePath: sqliteArchivePath,
+          },
+        ],
+      },
+      async (archivePath) => {
+        const runtime = createBackupVerifyRuntime();
+        await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
+          /case-mangled canonical SQLite path.*State\/OpenClaw\.SQLITE/u,
+        );
+      },
+    );
+  });
+
+  it("rejects case-mangled aliases of the state asset root", async () => {
+    const stateAssetArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw`;
+    const statePayloadArchivePath = `${stateAssetArchivePath}/payload.txt`;
+    const aliasSidecarArchivePath = `${TEST_ARCHIVE_ROOT}/PAYLOAD/posix/tmp/.openclaw/plugins/dedicated/custom.sqlite-wal`;
+
+    await withBrokenArchiveFixture(
+      {
+        tempPrefix: "openclaw-backup-state-root-case-alias-",
+        manifestAssetArchivePath: stateAssetArchivePath,
+        payloads: [
+          {
+            fileName: "payload.txt",
+            contents: "payload\n",
+            archivePath: statePayloadArchivePath,
+          },
+          {
+            fileName: "custom.sqlite-wal",
+            contents: "unverified transaction data",
+            archivePath: aliasSidecarArchivePath,
+          },
+        ],
+      },
+      async (archivePath) => {
+        const runtime = createBackupVerifyRuntime();
+        await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
+          /case-mangled state asset path.*PAYLOAD.*custom\.sqlite-wal/iu,
+        );
+      },
+    );
+  });
+
+  it("rejects a truncated SQLite snapshot with a valid database header", async () => {
+    const stateAssetArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw`;
+    const sqliteArchivePath = `${stateAssetArchivePath}/plugins/dedicated/corrupt.sqlite`;
+    const sqlitePayload = await createSqlitePayload((database) => {
+      database.exec("CREATE TABLE records (id INTEGER PRIMARY KEY, value TEXT NOT NULL);");
+      const insert = database.prepare("INSERT INTO records (value) VALUES (?)");
+      for (let index = 0; index < 100; index += 1) {
+        insert.run(`record-${index}-${"x".repeat(100)}`);
+      }
+    });
+    const encodedPageSize = sqlitePayload.readUInt16BE(16);
+    const pageSize = encodedPageSize === 1 ? 65_536 : encodedPageSize;
+    const truncatedPayload = sqlitePayload.subarray(
+      0,
+      sqlitePayload.byteLength - Math.floor(pageSize / 2),
+    );
+    expect(truncatedPayload.subarray(0, 16).toString("utf8")).toBe("SQLite format 3\u0000");
+    expect(truncatedPayload.byteLength % pageSize).not.toBe(0);
+
+    await withBrokenArchiveFixture(
+      {
+        tempPrefix: "openclaw-backup-corrupt-sqlite-",
+        manifestAssetArchivePath: stateAssetArchivePath,
+        payloads: [
+          {
+            fileName: "corrupt.sqlite",
+            contents: truncatedPayload,
+            archivePath: sqliteArchivePath,
+          },
+        ],
+      },
+      async (archivePath) => {
+        const runtime = createBackupVerifyRuntime();
+        await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
+          /Backup SQLite snapshot failed verification.*corrupt\.sqlite/iu,
+        );
+      },
+    );
+  });
+
+  it("rejects a page-aligned truncated plugin SQLite snapshot", async () => {
+    const stateAssetArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw`;
+    const sqliteArchivePath = `${stateAssetArchivePath}/plugins/dedicated/corrupt.sqlite`;
+    const sqlitePayload = await createSqlitePayload((database) => {
+      database.exec("CREATE TABLE records (id INTEGER PRIMARY KEY, value TEXT NOT NULL);");
+      const insert = database.prepare("INSERT INTO records (value) VALUES (?)");
+      for (let index = 0; index < 100; index += 1) {
+        insert.run(`record-${index}-${"x".repeat(100)}`);
+      }
+    });
+    const encodedPageSize = sqlitePayload.readUInt16BE(16);
+    const pageSize = encodedPageSize === 1 ? 65_536 : encodedPageSize;
+    const declaredPageCount = sqlitePayload.readUInt32BE(28);
+    expect(sqlitePayload.readUInt32BE(24)).toBe(sqlitePayload.readUInt32BE(92));
+    expect(declaredPageCount).toBeGreaterThan(1);
+    expect(declaredPageCount).toBe(sqlitePayload.byteLength / pageSize);
+    const truncatedPayload = sqlitePayload.subarray(0, sqlitePayload.byteLength - pageSize);
+    expect(truncatedPayload.byteLength % pageSize).toBe(0);
+
+    await withBrokenArchiveFixture(
+      {
+        tempPrefix: "openclaw-backup-page-truncated-sqlite-",
+        manifestAssetArchivePath: stateAssetArchivePath,
+        payloads: [
+          {
+            fileName: "corrupt.sqlite",
+            contents: truncatedPayload,
+            archivePath: sqliteArchivePath,
+          },
+        ],
+      },
+      async (archivePath) => {
+        const runtime = createBackupVerifyRuntime();
+        await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
+          /Backup SQLite snapshot failed verification.*corrupt\.sqlite/iu,
+        );
+      },
+    );
+  });
+
+  it("rejects a canonical SQLite snapshot with the wrong database role", async () => {
+    const stateAssetArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw`;
+    const sqliteArchivePath = `${stateAssetArchivePath}/state/openclaw.sqlite`;
+    const sqlitePayload = await createSqlitePayload((database) => {
+      database.exec(`
+        CREATE TABLE schema_meta (
+          meta_key TEXT NOT NULL PRIMARY KEY,
+          role TEXT NOT NULL
+        );
+        INSERT INTO schema_meta (meta_key, role) VALUES ('primary', 'agent');
+      `);
+    });
+
+    await withBrokenArchiveFixture(
+      {
+        tempPrefix: "openclaw-backup-wrong-sqlite-role-",
+        manifestAssetArchivePath: stateAssetArchivePath,
+        payloads: [
+          {
+            fileName: "openclaw.sqlite",
+            contents: sqlitePayload,
+            archivePath: sqliteArchivePath,
+          },
+        ],
+      },
+      async (archivePath) => {
+        const runtime = createBackupVerifyRuntime();
+        await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
+          /has role agent; expected global/iu,
+        );
+      },
+    );
+  });
+
+  it("validates a canonical agent database whose agent id is node_modules", async () => {
+    const stateAssetArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw`;
+    const sqliteArchivePath = `${stateAssetArchivePath}/agents/node_modules/agent/openclaw-agent.sqlite`;
+    const sqlitePayload = await createSqlitePayload((database) => {
+      database.exec(`
+        CREATE TABLE schema_meta (
+          meta_key TEXT NOT NULL PRIMARY KEY,
+          role TEXT NOT NULL
+        );
+        INSERT INTO schema_meta (meta_key, role) VALUES ('primary', 'global');
+      `);
+    });
+
+    await withBrokenArchiveFixture(
+      {
+        tempPrefix: "openclaw-backup-agent-node-modules-",
+        manifestAssetArchivePath: stateAssetArchivePath,
+        payloads: [
+          {
+            fileName: "openclaw-agent.sqlite",
+            contents: sqlitePayload,
+            archivePath: sqliteArchivePath,
+          },
+        ],
+      },
+      async (archivePath) => {
+        const runtime = createBackupVerifyRuntime();
+        await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
+          /has role global; expected agent/iu,
+        );
+      },
+    );
+  });
+
+  it("rejects a state asset root that does not encode its declared source path", async () => {
+    const declaredStateAssetRoot = `${TEST_ARCHIVE_ROOT}/payload`;
+    const sqliteArchivePath = `${declaredStateAssetRoot}/posix/tmp/.openclaw/state/openclaw.sqlite`;
+    const sqlitePayload = await createSqlitePayload((database) => {
+      database.exec(`
+        CREATE TABLE schema_meta (
+          meta_key TEXT NOT NULL PRIMARY KEY,
+          role TEXT NOT NULL
+        );
+        INSERT INTO schema_meta (meta_key, role) VALUES ('primary', 'agent');
+      `);
+    });
+
+    await withBrokenArchiveFixture(
+      {
+        tempPrefix: "openclaw-backup-state-root-bypass-",
+        manifestAssetArchivePath: declaredStateAssetRoot,
+        manifest: createBackupManifest(declaredStateAssetRoot),
+        payloads: [
+          {
+            fileName: "openclaw.sqlite",
+            contents: sqlitePayload,
+            archivePath: sqliteArchivePath,
+          },
+        ],
+      },
+      async (archivePath) => {
+        const runtime = createBackupVerifyRuntime();
+        await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
+          /state asset archivePath does not match its sourcePath/iu,
+        );
+      },
+    );
+  });
+
+  it("rejects SQLite extraction before writing when temporary space is insufficient", () => {
+    expect(() =>
+      testApi.assertSqliteExtractionBudget({
+        entries: [
+          {
+            raw: "backup/payload/state/openclaw.sqlite",
+            normalized: "backup/payload/state/openclaw.sqlite",
+            stateAssetRoot: "backup/payload",
+            type: "File",
+            size: 2 * 1024 * 1024,
+          },
+        ],
+        tempRoot: "/tmp",
+        readDiskSpace: () => ({
+          targetPath: "/tmp",
+          checkedPath: "/tmp",
+          availableBytes: 128 * 1024 * 1024,
+          totalBytes: 1024 * 1024 * 1024,
+        }),
+      }),
+    ).toThrow(/only 128 MiB is available/iu);
+  });
+
+  it("rejects SQLite extraction beyond the verification hard limit", () => {
+    expect(() =>
+      testApi.assertSqliteExtractionBudget({
+        entries: [
+          {
+            raw: "backup/payload/state/openclaw.sqlite",
+            normalized: "backup/payload/state/openclaw.sqlite",
+            stateAssetRoot: "backup/payload",
+            type: "File",
+            size: 64 * 1024 * 1024 * 1024 + 1,
+          },
+        ],
+        tempRoot: "/tmp",
+        readDiskSpace: () => null,
+      }),
+    ).toThrow(/verification limit is 64 GiB/iu);
+  });
+
+  it("ignores package-owned and transient SQLite-shaped state files", async () => {
+    const stateAssetArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw`;
+    const transientId = "11111111-2222-3333-4444-555555555555";
+    const invalidSqlite = "not a sqlite database";
+
+    await withBrokenArchiveFixture(
+      {
+        tempPrefix: "openclaw-backup-excluded-sqlite-",
+        manifestAssetArchivePath: stateAssetArchivePath,
+        payloads: [
+          {
+            fileName: "root-fixture.sqlite",
+            contents: invalidSqlite,
+            archivePath: `${stateAssetArchivePath}/node_modules/root-dep/fixture.sqlite`,
+          },
+          {
+            fileName: "root-fixture.sqlite-wal",
+            contents: invalidSqlite,
+            archivePath: `${stateAssetArchivePath}/node_modules/root-dep/fixture.sqlite-wal`,
+          },
+          {
+            fileName: "managed-fixture.sqlite",
+            contents: invalidSqlite,
+            archivePath: `${stateAssetArchivePath}/npm/projects/demo/node_modules/dep/fixture.sqlite`,
+          },
+          {
+            fileName: "reindex-lock.sqlite",
+            contents: invalidSqlite,
+            archivePath: `${stateAssetArchivePath}/memory/main.sqlite.reindex-lock.sqlite`,
+          },
+          {
+            fileName: "reindex-tmp",
+            contents: invalidSqlite,
+            archivePath: `${stateAssetArchivePath}/memory/main.sqlite.tmp-${transientId}`,
+          },
+          {
+            fileName: "reindex-backup",
+            contents: invalidSqlite,
+            archivePath: `${stateAssetArchivePath}/memory/main.sqlite.backup-${transientId}`,
+          },
+          {
+            fileName: "memory-reindex",
+            contents: invalidSqlite,
+            archivePath: `${stateAssetArchivePath}/agents/main/agent.sqlite.memory-reindex-${transientId}`,
+          },
+        ],
+      },
+      async (archivePath) => {
+        const runtime = createBackupVerifyRuntime();
+        await expect(backupVerifyCommand(runtime, { archive: archivePath })).resolves.toMatchObject(
+          {
+            ok: true,
+          },
+        );
+      },
+    );
   });
 
   it("fails when the archive does not contain a manifest", async () => {
@@ -519,6 +1068,18 @@ describe("backupVerifyCommand", () => {
           { fileName: "payload-b.txt", contents: "payload-b\n", archivePath: payloadArchivePath },
         ],
         error: /duplicate entry path/i,
+      },
+      {
+        tempPrefix: "openclaw-backup-portable-path-collision-",
+        payloads: [
+          { fileName: "payload-a.txt", contents: "payload-a\n", archivePath: payloadArchivePath },
+          {
+            fileName: "payload-b.txt",
+            contents: "payload-b\n",
+            archivePath: payloadArchivePath.toUpperCase(),
+          },
+        ],
+        error: /portable path collision/i,
       },
     ]) {
       await withBrokenArchiveFixture(

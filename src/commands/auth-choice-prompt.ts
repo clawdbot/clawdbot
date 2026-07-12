@@ -1,5 +1,6 @@
 // Interactive grouped auth-choice prompt used by onboarding and agent setup.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -90,7 +91,7 @@ export async function promptAuthChoiceGrouped(
         } satisfies WizardSelectOption<KeepCurrentAuthChoice>)
       : undefined;
     if (group.options.length === 1 && !keepCurrentOption) {
-      return group.options[0].value;
+      return expectDefined(group.options[0], "options entry at 0").value;
     }
     return (await params.prompter.select({
       message: `${group.label} auth method`,

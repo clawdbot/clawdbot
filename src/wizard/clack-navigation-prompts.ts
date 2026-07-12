@@ -31,6 +31,7 @@ import {
   type SelectOptions,
   type TextOptions,
 } from "@clack/prompts";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { WizardPromptNavigation } from "./prompts.js";
 
 type PromptOption<Value> = {
@@ -164,7 +165,10 @@ export function selectWithNavigationFooter<Value>(
           const submitPrefix = showGuide ? `${styleText("gray", S_BAR)}  ` : "";
           const wrappedLines = wrapTextWithPrefix(
             opts.output,
-            selectOptionRenderer(this.options[this.cursor], "selected"),
+            selectOptionRenderer(
+              expectDefined(this.options[this.cursor], "options entry at this.cursor"),
+              "selected",
+            ),
             submitPrefix,
           );
           return `${title}${wrappedLines}`;
@@ -173,7 +177,10 @@ export function selectWithNavigationFooter<Value>(
           const cancelPrefix = showGuide ? `${styleText("gray", S_BAR)}  ` : "";
           const wrappedLines = wrapTextWithPrefix(
             opts.output,
-            selectOptionRenderer(this.options[this.cursor], "cancelled"),
+            selectOptionRenderer(
+              expectDefined(this.options[this.cursor], "options entry at this.cursor"),
+              "cancelled",
+            ),
             cancelPrefix,
           );
           return `${title}${wrappedLines}${showGuide ? `\n${styleText("gray", S_BAR)}` : ""}`;

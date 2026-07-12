@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   type WorkerAdmissionHandshake,
@@ -706,7 +707,10 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       if (!profiles || !Object.hasOwn(profiles, normalizedProfileId)) {
         throw serviceError("profile_not_found", `Unknown worker profile: ${normalizedProfileId}`);
       }
-      const profile = profiles[normalizedProfileId];
+      const profile = expectDefined(
+        profiles[normalizedProfileId],
+        "profiles entry at normalized profile id",
+      );
       const provider = providerFor(profile.provider);
       const settings = requireWorkerProfile(profile.settings ?? {});
       const intent = store.createIntent({

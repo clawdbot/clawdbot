@@ -2,6 +2,7 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
@@ -624,7 +625,7 @@ function parseExecValues(params: {
     try {
       parsed = JSON.parse(trimmed) as unknown;
     } catch {
-      return { [params.ids[0]]: trimmed };
+      return { [expectDefined(params.ids[0], "ids entry at 0")]: trimmed };
     }
   } else {
     try {
@@ -640,7 +641,7 @@ function parseExecValues(params: {
 
   if (!isRecord(parsed)) {
     if (!params.jsonOnly && params.ids.length === 1 && typeof parsed === "string") {
-      return { [params.ids[0]]: parsed };
+      return { [expectDefined(params.ids[0], "ids entry at 0")]: parsed };
     }
     throw providerResolutionError({
       source: "exec",
@@ -952,7 +953,7 @@ export async function resolveSecretRefValues(
         });
       }
       const providerConfig = resolveConfiguredProvider({
-        ref: group.refs[0],
+        ref: expectDefined(group.refs[0], "refs entry at 0"),
         config: options.config,
         env: options.env ?? process.env,
         manifestRegistry: options.manifestRegistry,

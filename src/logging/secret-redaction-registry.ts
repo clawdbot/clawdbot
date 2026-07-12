@@ -10,7 +10,7 @@ function escapeRegExp(value: string): string {
 }
 
 function rebuildProbe(): void {
-  firstChars = new Set([...registeredValues.keys()].map((value) => value[0]));
+  firstChars = new Set([...registeredValues.keys()].map((value) => value.charAt(0)));
   compiledMatcher = undefined;
 }
 

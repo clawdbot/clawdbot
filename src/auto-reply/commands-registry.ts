@@ -1,4 +1,5 @@
 /** Command-registry facade for native specs, text aliases, argument parsing, and menus. */
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
@@ -205,7 +206,7 @@ function parsePositionalArgs(definitions: CommandArgDefinition[], raw: string): 
       values[definition.name] = tokens.slice(index).join(" ");
       break;
     }
-    values[definition.name] = tokens[index];
+    values[definition.name] = expectDefined(tokens[index], "command argument token");
     index += 1;
   }
   return values;

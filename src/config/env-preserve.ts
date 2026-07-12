@@ -1,5 +1,6 @@
 // Normalizes preserved environment-variable config for subprocess launches.
 import { isDeepStrictEqual } from "node:util";
+import { expectDefined } from "@openclaw/normalization-core";
 import { isPlainObject } from "../infra/plain-object.js";
 
 /**
@@ -615,7 +616,7 @@ function matchAuthoredEscapedTemplateArrayItems(params: {
       const sameIndexMatch = incomingMatches.includes(parsedIndex)
         ? parsedIndex
         : incomingMatches[0];
-      addMatch(parsedIndex, sameIndexMatch);
+      addMatch(parsedIndex, expectDefined(sameIndexMatch, "env preserve same index match"));
       continue;
     }
     if (incomingMatches.length > 0) {
@@ -696,7 +697,7 @@ function tryResolveString(template: string, env: NodeJS.ProcessEnv): string {
         }
       }
     }
-    chunks.push(template[i]);
+    chunks.push(template.charAt(i));
   }
 
   return chunks.join("");

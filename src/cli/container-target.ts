@@ -1,6 +1,7 @@
 // CLI container targeting: parse --container and re-exec the command inside Docker/Podman.
 import { spawnSync } from "node:child_process";
 import { isIP } from "node:net";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
@@ -124,7 +125,7 @@ function resolveRunningContainer(params: {
       `Container "${params.containerName}" is running under multiple runtimes (${runtimes}); use a unique container name.`,
     );
   }
-  return matches[0];
+  return expectDefined(matches[0], "matches capture group 0");
 }
 
 function buildContainerExecArgs(params: {
@@ -196,7 +197,7 @@ function isLoopbackProxyHostname(hostname: string): boolean {
   if (!mapped) {
     return false;
   }
-  const high = Number.parseInt(mapped[1], 16);
+  const high = Number.parseInt(expectDefined(mapped[1], "mapped capture group 1"), 16);
   return Number.isInteger(high) && high >= 0x7f00 && high <= 0x7fff;
 }
 

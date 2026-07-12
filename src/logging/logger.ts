@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Logger as TsLogger } from "tslog";
 import type { OpenClawConfig } from "../config/types.js";
@@ -607,7 +608,10 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
       const structuredFields = buildStructuredFileLogFields(logObj as TsLogRecord);
       const record = {
         ...logObj,
-        _meta: withResolvedLogMetaHostname(logObj["_meta"], structuredFields.hostname),
+        _meta: withResolvedLogMetaHostname(
+          logObj["_meta"],
+          expectDefined(structuredFields.hostname, "structured log hostname"),
+        ),
         time,
         ...structuredFields,
         ...traceFields,

@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -354,7 +355,7 @@ export function parseExecApprovalCommandText(
   }
   const rawDecision = normalizeOptionalLowercaseString(match[2]) ?? "";
   return {
-    approvalId: match[1],
+    approvalId: expectDefined(match[1], "exec approval reply regex capture 1"),
     decision:
       rawDecision === "always" ? "allow-always" : (rawDecision as ExecApprovalReplyDecision),
   };

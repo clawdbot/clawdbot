@@ -145,6 +145,16 @@ function parsePresence(text: string): SystemPresence {
     return { text: trimmed, ts: Date.now() };
   }
   const [, host, ip, version, lastInputStr, mode, reasonRaw] = match;
+  if (
+    host === undefined ||
+    ip === undefined ||
+    version === undefined ||
+    lastInputStr === undefined ||
+    mode === undefined ||
+    reasonRaw === undefined
+  ) {
+    return { text: trimmed, ts: Date.now() };
+  }
   const lastInputSeconds = Number.parseInt(lastInputStr, 10);
   const reason = reasonRaw.trim();
   return {
@@ -283,8 +293,8 @@ export function listSystemPresence(): SystemPresence[] {
   if (entries.size > MAX_ENTRIES) {
     const sorted = [...entries.entries()].toSorted((a, b) => a[1].ts - b[1].ts);
     const toDrop = entries.size - MAX_ENTRIES;
-    for (let i = 0; i < toDrop; i++) {
-      entries.delete(sorted[i][0]);
+    for (const [key] of sorted.slice(0, toDrop)) {
+      entries.delete(key);
     }
   }
   touchSelfPresence();

@@ -229,8 +229,12 @@ export function normalizeGeneratedHelpCommandArgv(argv: string[]): string[] {
   ) {
     return argv;
   }
+  const [runtimePath, entryPath] = argv;
+  if (runtimePath === undefined || entryPath === undefined) {
+    return argv;
+  }
 
-  return [argv[0], argv[1], ...rootOptions, primary.value, target.value, "--help"];
+  return [runtimePath, entryPath, ...rootOptions, primary.value, target.value, "--help"];
 }
 
 export function normalizeRootHelpTargetArgv(argv: string[]): string[] {
@@ -241,16 +245,24 @@ export function normalizeRootHelpTargetArgv(argv: string[]): string[] {
   const { positionals, rootOptions, helpFlagIndex } = scan;
 
   const [help, target] = positionals;
+  // The --help flag must trail the LAST positional so nested targets like
+  // `help plugins list --help` still normalize (target is only the first one).
+  const lastPositional = positionals.at(-1);
   if (
     help?.value !== "help" ||
     !target ||
-    (helpFlagIndex !== null && helpFlagIndex !== positionals.at(-1)!.index + 1)
+    !lastPositional ||
+    (helpFlagIndex !== null && helpFlagIndex !== lastPositional.index + 1)
   ) {
+    return argv;
+  }
+  const [runtimePath, entryPath] = argv;
+  if (runtimePath === undefined || entryPath === undefined) {
     return argv;
   }
 
   const targetPath = positionals.slice(1).map((positional) => positional.value);
-  return [argv[0], argv[1], ...rootOptions, ...targetPath, "--help"];
+  return [runtimePath, entryPath, ...rootOptions, ...targetPath, "--help"];
 }
 
 export type NormalizeRootNoColorArgvOptions = {
@@ -328,7 +340,10 @@ export function normalizeRootNoColorArgv(
   const movedNoColorArgs: string[] = [];
   const nextArgs: string[] = [];
   for (let index = 0; index < remainingArgs.length; index += 1) {
-    const arg = remainingArgs[index];
+    const arg = remainingArgs.at(index);
+    if (arg === undefined) {
+      break;
+    }
     if (arg === FLAG_TERMINATOR) {
       nextArgs.push(...remainingArgs.slice(index));
       break;
@@ -363,7 +378,10 @@ export function normalizeRootLogLevelArgv(
   const movedLogLevelArgs: string[] = [];
   const nextArgs: string[] = [];
   for (let index = 0; index < remainingArgs.length; index += 1) {
-    const arg = remainingArgs[index];
+    const arg = remainingArgs.at(index);
+    if (arg === undefined) {
+      break;
+    }
     if (arg === FLAG_TERMINATOR) {
       nextArgs.push(...remainingArgs.slice(index));
       break;
@@ -398,7 +416,10 @@ export function getFlagValue(argv: string[], name: string): string | null | unde
   const args = argv.slice(2);
   let value: string | undefined;
   for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i];
+    const arg = args.at(i);
+    if (arg === undefined) {
+      break;
+    }
     if (arg === FLAG_TERMINATOR) {
       break;
     }

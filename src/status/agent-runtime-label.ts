@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Agent runtime label helpers format provider, model, and runtime labels.
 import {
   normalizeOptionalLowercaseString,
@@ -55,5 +56,5 @@ export function resolveAgentRuntimeLabel(args: {
     );
   }
 
-  return AGENT_RUNTIME_LABELS.openclaw;
+  return expectDefined(AGENT_RUNTIME_LABELS.openclaw, "OpenClaw runtime label");
 }

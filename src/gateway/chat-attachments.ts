@@ -3,6 +3,7 @@
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { extensionForMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -295,7 +296,7 @@ function normalizeAttachment(
   if (opts.stripDataUrlPrefix) {
     const dataUrlMatch = /^data:[^;]+;base64,(.*)$/.exec(base64);
     if (dataUrlMatch) {
-      base64 = dataUrlMatch[1];
+      base64 = expectDefined(dataUrlMatch[1], "data url match capture group 1");
     }
   }
   return { label, mime, base64 };

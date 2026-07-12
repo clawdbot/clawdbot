@@ -1,6 +1,7 @@
 // Diagnostic session context helpers capture session metadata for support bundles.
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../config/paths.js";
 import { loadCronJobsStoreSync, resolveCronJobsStorePath } from "../cron/store.js";
@@ -118,7 +119,7 @@ export function readLastAssistantFromSessionFile(filePath: string | undefined): 
   }
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     try {
-      const parsed = JSON.parse(lines[index]) as {
+      const parsed = JSON.parse(expectDefined(lines[index], "lines entry at index")) as {
         message?: { role?: unknown; content?: unknown };
       };
       if (parsed.message?.role !== "assistant") {

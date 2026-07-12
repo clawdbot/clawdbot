@@ -11,7 +11,7 @@ import {
   findRegisteredChannelPluginEntryById,
   listRegisteredChannelPluginEntries,
 } from "./registry-lookup.js";
-export { getChatChannelMeta } from "./chat-meta.js";
+export { findChatChannelMeta, getChatChannelMeta } from "./chat-meta.js";
 export { CHAT_CHANNEL_ORDER } from "./ids.js";
 export type { ChatChannelId } from "./ids.js";
 export { normalizeChatChannelId };

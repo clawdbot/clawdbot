@@ -328,12 +328,16 @@ extension SettingsProTab {
                         Text(entry.name)
                             .font(OpenClawType.body)
                     } icon: {
-                        Image(systemName: entry.stableID == self.gatewayRegistry.activeStableID
+                        Image(systemName: GatewayStableIdentifier.matches(
+                            entry.stableID,
+                            self.gatewayRegistry.activeStableID)
                             ? "checkmark.circle.fill"
                             : "circle")
                     }
                 }
-                .disabled(entry.stableID == self.gatewayRegistry.activeStableID || self.connectingGatewayID != nil)
+                .disabled(
+                    GatewayStableIdentifier.matches(entry.stableID, self.gatewayRegistry.activeStableID) ||
+                        self.connectingGateway != nil)
             }
         } label: {
             Image(systemName: "arrow.triangle.2.circlepath")
@@ -350,13 +354,13 @@ extension SettingsProTab {
                 title: "Approvals",
                 detail: self.notificationsNeedAttention
                     ? "Out-of-app approval alerts need notification permission."
-                    : (self.pendingApproval == nil ? "No gateway actions are waiting for review." :
-                        "Review the pending gateway action."),
+                    : (self.pendingApprovalCount == 0 ? "No gateway actions are waiting for review." :
+                        "Review pending gateway actions."),
                 value: self.notificationsNeedAttention
                     ? "Alerts Off"
-                    : (self.pendingApproval == nil ? "clear" : "1 waiting"),
+                    : (self.pendingApprovalCount == 0 ? "clear" : self.approvalWaitingText),
                 color: self.notificationsNeedAttention ? OpenClawBrand.warn :
-                    (self.pendingApproval == nil ? OpenClawBrand.ok : OpenClawBrand.warn))
+                    (self.pendingApprovalCount == 0 ? OpenClawBrand.ok : OpenClawBrand.warn))
 
             if self.notificationsNeedAttention {
                 self.approvalNotificationsWarningCard
@@ -436,41 +440,101 @@ extension SettingsProTab {
 
     @ViewBuilder
     var approvalsReviewCard: some View {
+        if !self.appModel.pendingExecApprovalInboxItems.isEmpty {
+            Section("Pending approvals") {
+                ForEach(self.appModel.pendingExecApprovalInboxItems) { item in
+                    Button {
+                        self.appModel.presentPendingExecApprovalFromInbox(item.id)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(item.prompt.commandPreview ?? item.prompt.commandText)
+                                .font(OpenClawType.body)
+                                .foregroundStyle(.primary)
+                                .lineLimit(2)
+                            Text(item.prompt.gatewayStableID)
+                                .font(OpenClawType.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .accessibilityLabel("Review exec approval")
+                    .accessibilityValue(item.prompt.commandPreview ?? item.prompt.commandText)
+                }
+            }
+        }
+
         if let pendingApproval {
-            Section {
+            Section("Reviewing") {
                 ForEach(self.approvalItems, id: \.id) { item in
                     SettingsApprovalRow(item: item)
+                }
+                if let warningText = pendingApproval.warningText {
+                    Label {
+                        Text(warningText)
+                            .font(OpenClawType.caption)
+                    } icon: {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                    }
+                    .foregroundStyle(OpenClawBrand.warn)
+                    .fixedSize(horizontal: false, vertical: true)
                 }
                 if let errorText = self.appModel.pendingExecApprovalPromptErrorText {
                     Text(errorText)
                         .font(OpenClawType.caption)
                         .foregroundStyle(OpenClawBrand.danger)
                 }
-                Button {
-                    Task { await self.appModel.resolvePendingExecApprovalPrompt(decision: "allow-once") }
-                } label: {
-                    Label("Allow", systemImage: "checkmark")
-                        .font(OpenClawType.body)
-                }
-                .disabled(self.appModel.pendingExecApprovalPromptResolving)
-                if pendingApproval.allowsAllowAlways {
+                if let resolvedText = self.appModel.pendingExecApprovalPromptResolvedText {
+                    Text(resolvedText)
+                        .font(OpenClawType.caption)
+                        .foregroundStyle(self.approvalOutcomeColor)
                     Button {
-                        Task { await self.appModel.resolvePendingExecApprovalPrompt(decision: "allow-always") }
+                        self.appModel.dismissPendingExecApprovalPrompt()
                     } label: {
-                        Label("Always Allow", systemImage: "checkmark.shield")
+                        Label("Dismiss", systemImage: "xmark")
                             .font(OpenClawType.body)
                     }
-                    .disabled(self.appModel.pendingExecApprovalPromptResolving)
+                } else {
+                    if pendingApproval.allowsAllowOnce {
+                        Button {
+                            Task { await self.appModel.resolvePendingExecApprovalPrompt(decision: "allow-once") }
+                        } label: {
+                            Label("Allow Once", systemImage: "checkmark")
+                                .font(OpenClawType.body)
+                        }
+                        .disabled(self.appModel.pendingExecApprovalPromptResolving)
+                    }
+                    if pendingApproval.allowsAllowAlways {
+                        Button {
+                            Task { await self.appModel.resolvePendingExecApprovalPrompt(decision: "allow-always") }
+                        } label: {
+                            Label("Allow Always", systemImage: "checkmark.shield")
+                                .font(OpenClawType.body)
+                        }
+                        .disabled(self.appModel.pendingExecApprovalPromptResolving)
+                    }
+                    if pendingApproval.allowsDeny {
+                        Button(role: .destructive) {
+                            Task { await self.appModel.resolvePendingExecApprovalPrompt(decision: "deny") }
+                        } label: {
+                            Label("Deny", systemImage: "xmark")
+                                .font(OpenClawType.body)
+                        }
+                        .disabled(self.appModel.pendingExecApprovalPromptResolving)
+                    }
+                    if self.appModel.pendingExecApprovalPromptResolving,
+                       self.appModel.pendingExecApprovalPromptCanDismiss
+                    {
+                        Button(role: .cancel) {
+                            self.appModel.dismissPendingExecApprovalPrompt()
+                        } label: {
+                            Label("Dismiss", systemImage: "xmark")
+                                .font(OpenClawType.body)
+                        }
+                    }
                 }
-                Button(role: .destructive) {
-                    Task { await self.appModel.resolvePendingExecApprovalPrompt(decision: "deny") }
-                } label: {
-                    Label("Deny", systemImage: "xmark")
-                        .font(OpenClawType.body)
-                }
-                .disabled(self.appModel.pendingExecApprovalPromptResolving)
             }
-        } else {
+        } else if self.pendingApprovalCount == 0 {
             Section {
                 Label {
                     VStack(alignment: .leading, spacing: 2) {
@@ -485,6 +549,19 @@ extension SettingsProTab {
                         .foregroundStyle(OpenClawBrand.ok)
                 }
             }
+        }
+    }
+
+    private var approvalOutcomeColor: Color {
+        switch self.appModel.pendingExecApprovalPromptOutcome?.tone {
+        case .success:
+            OpenClawBrand.ok
+        case .danger:
+            OpenClawBrand.danger
+        case .warning:
+            OpenClawBrand.warn
+        case .neutral, nil:
+            .secondary
         }
     }
 
@@ -875,13 +952,13 @@ extension SettingsProTab {
                 .font(OpenClawType.body)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
-                .disabled(self.connectingGatewayID != nil)
+                .disabled(self.connectingGateway != nil)
             self.gatewayActionButton(
                 title: "Scan QR",
                 icon: "qrcode.viewfinder",
                 color: OpenClawBrand.accent,
                 isBusy: false,
-                isDisabled: self.connectingGatewayID != nil)
+                isDisabled: self.connectingGateway != nil)
             {
                 self.openGatewayQRScanner()
             }
@@ -890,8 +967,8 @@ extension SettingsProTab {
                 title: "Connect",
                 icon: "bolt.horizontal.circle",
                 color: OpenClawBrand.accent,
-                isBusy: self.connectingGatewayID == "manual",
-                isDisabled: !self.canApplyGatewaySetup || self.connectingGatewayID != nil)
+                isBusy: self.connectingGateway == .manual,
+                isDisabled: !self.canApplyGatewaySetup || self.connectingGateway != nil)
             {
                 Task { await self.applySetupCodeAndConnect() }
             }
@@ -943,7 +1020,9 @@ extension SettingsProTab {
     }
 
     func pairedGatewayRow(_ entry: GatewaySettingsStore.GatewayRegistryEntry) -> some View {
-        let isActive = entry.stableID == self.gatewayRegistry.activeStableID
+        let isActive = GatewayStableIdentifier.matches(
+            entry.stableID,
+            self.gatewayRegistry.activeStableID)
         return Button {
             guard !isActive else { return }
             Task { await self.switchGateway(to: entry) }
@@ -958,7 +1037,7 @@ extension SettingsProTab {
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 8)
-                if self.connectingGatewayID == entry.stableID {
+                if self.connectingGateway == .gateway(entry.id) {
                     ProgressView()
                         .controlSize(.small)
                 } else if isActive {
@@ -971,7 +1050,7 @@ extension SettingsProTab {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(self.connectingGatewayID != nil)
+        .disabled(self.connectingGateway != nil)
         .swipeActions {
             Button(role: .destructive) {
                 self.pendingForgetGateway = entry
@@ -1015,7 +1094,7 @@ extension SettingsProTab {
                     Button {
                         Task { await self.connect(gateway) }
                     } label: {
-                        if self.connectingGatewayID == gateway.id {
+                        if self.connectingGateway == .gateway(gateway.id) {
                             ProgressView().controlSize(.small)
                         } else {
                             Text(availability.actionTitle)
@@ -1024,7 +1103,7 @@ extension SettingsProTab {
                     }
                     .font(OpenClawType.captionSemiBold)
                     .buttonStyle(.bordered)
-                    .disabled(self.connectingGatewayID != nil)
+                    .disabled(self.connectingGateway != nil)
                 } else {
                     Text(availability.actionTitle)
                         .font(OpenClawType.captionSemiBold)
@@ -1073,7 +1152,7 @@ extension SettingsProTab {
                 title: "Connect Manual",
                 icon: "network",
                 color: OpenClawBrand.accent,
-                isBusy: self.connectingGatewayID == "manual",
+                isBusy: self.connectingGateway == .manual,
                 isDisabled: self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     || !self.manualPortIsValid)
             {

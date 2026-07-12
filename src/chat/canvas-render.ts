@@ -1,5 +1,5 @@
 // Renders chat canvas payloads into text and metadata for transcript output.
-import { safeParseJson } from "@openclaw/normalization-core";
+import { expectDefined, safeParseJson } from "@openclaw/normalization-core";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { parseFenceSpans } from "../../packages/markdown-core/src/fences.js";
@@ -166,7 +166,7 @@ function previewFromShortcode(attrs: Record<string, string>): CanvasPreview | un
       kind: "canvas",
       surface,
       render: "url",
-      url: url ?? defaultCanvasEntryUrl(ref),
+      url: url ?? defaultCanvasEntryUrl(expectDefined(ref, "canvas reference")),
       ...(ref ? { viewId: ref } : {}),
       ...(title ? { title } : {}),
       ...(preferredHeight ? { preferredHeight } : {}),

@@ -52,22 +52,20 @@ export function recordPluginInstall(
 ): OpenClawConfig {
   const { pluginId, ...record } = update;
   const previous = clearStaleInstallRecordFields(cfg.plugins?.installs?.[pluginId]);
-  const installs = {
-    ...cfg.plugins?.installs,
-    [pluginId]: {
-      ...previous,
-      ...record,
-      installedAt: record.installedAt ?? new Date().toISOString(),
-    },
+  const nextRecord = {
+    ...previous,
+    ...record,
+    installedAt: record.installedAt ?? new Date().toISOString(),
   };
 
   return {
     ...cfg,
     plugins: {
+      // cfg.plugins may be absent on first install; spreading undefined is {}.
       ...cfg.plugins,
       installs: {
-        ...installs,
-        [pluginId]: installs[pluginId],
+        ...cfg.plugins?.installs,
+        [pluginId]: nextRecord,
       },
     },
   };

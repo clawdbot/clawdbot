@@ -13,6 +13,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { canUseRootFileOpen, openRootFileSync } from "../infra/boundary-file-read.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
@@ -122,7 +123,10 @@ export class ConfigIncludeError extends Error {
 
 export class CircularIncludeError extends ConfigIncludeError {
   constructor(public readonly chain: string[]) {
-    super(`Circular include detected: ${chain.join(" -> ")}`, chain[chain.length - 1]);
+    super(
+      `Circular include detected: ${chain.join(" -> ")}`,
+      expectDefined(chain[chain.length - 1], "chain entry at chain.length 1"),
+    );
     this.name = "CircularIncludeError";
   }
 }

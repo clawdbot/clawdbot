@@ -30,7 +30,7 @@ import {
 } from "../../config/io.js";
 import { createMergePatch, projectSourceOntoRuntimeShape } from "../../config/io.write-prepare.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
-import { applyMergePatch } from "../../config/merge-patch.js";
+import { applyMergePatch, isMergePatchObjectKeyAllowed } from "../../config/merge-patch.js";
 import { normalizeConfigPatchReplacePaths } from "../../config/patch-replace-paths.js";
 import {
   redactConfigObject,
@@ -47,7 +47,6 @@ import {
 import { isBuiltInModelProviderOverlayId } from "../../config/zod-schema.core.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import { isPlainObject } from "../../infra/plain-object.js";
-import { isBlockedObjectKey } from "../../infra/prototype-keys.js";
 import {
   prepareSecretsRuntimeSnapshot,
   type PreparedSecretsRuntimeSnapshot,
@@ -155,10 +154,10 @@ function collectDestructiveArrayPatchPaths(params: {
   const merged = isPlainObject(params.merged) ? params.merged : {};
   const paths: string[] = [];
   for (const [key, patchValue] of Object.entries(params.patch)) {
-    if (isBlockedObjectKey(key)) {
+    const path = formatConfigPatchPath(params.path ?? "", key);
+    if (!isMergePatchObjectKeyAllowed(key, params.path)) {
       continue;
     }
-    const path = formatConfigPatchPath(params.path ?? "", key);
     const baseValue = params.base[key];
     const mergedValue = merged[key];
 
@@ -214,10 +213,11 @@ function collectBaseArrayPaths(base: unknown, path: string): string[] {
   }
   const paths: string[] = [];
   for (const [key, value] of Object.entries(base)) {
-    if (isBlockedObjectKey(key)) {
+    const childPath = formatConfigPatchPath(path, key);
+    if (!isMergePatchObjectKeyAllowed(key, path)) {
       continue;
     }
-    paths.push(...collectBaseArrayPaths(value, formatConfigPatchPath(path, key)));
+    paths.push(...collectBaseArrayPaths(value, childPath));
   }
   return paths;
 }

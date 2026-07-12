@@ -78,7 +78,7 @@ const CATALOGS: readonly AppleCatalogSpec[] = [
       "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift": ["Go to Chat"],
       "apps/ios/Sources/RootTabs.swift": ["Agent", "Chat", "Control", "Settings", "Talk"],
       "apps/ios/WatchApp/Sources/WatchInboxView.swift": [
-        "Approve",
+        "Allow Once",
         "Chat",
         "Continue on iPhone",
         "Deny",

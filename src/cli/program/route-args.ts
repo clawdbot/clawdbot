@@ -32,7 +32,7 @@ function parseRepeatedFlagValues(argv: string[], name: string): string[] | null 
     }
     if (arg === name) {
       const next = args[i + 1];
-      if (!isValueToken(next)) {
+      if (next === undefined || !isValueToken(next)) {
         // Invalid fast-path shapes fall back to Commander so its normal errors and help text win.
         return null;
       }

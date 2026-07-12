@@ -6,6 +6,11 @@ public enum GatewayServerCapability: String, CaseIterable, Sendable {
 }
 
 extension HelloOk {
+    func advertisedServerMethods() -> Set<String> {
+        let values = features["methods"]?.value as? [AnyCodable] ?? []
+        return Set(values.compactMap { $0.value as? String })
+    }
+
     public func supportsServerCapability(_ capability: GatewayServerCapability) -> Bool {
         let values = features["capabilities"]?.value as? [AnyCodable] ?? []
         return values.contains { ($0.value as? String) == capability.rawValue }

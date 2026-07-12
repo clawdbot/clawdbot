@@ -101,6 +101,16 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
 }
 
 @Suite(.serialized) struct GatewaySettingsStoreTests {
+    @Test func `opaque identifier validation preserves protocol-valid edge bytes`() {
+        #expect(ExecApprovalIdentifier.exact("") == nil)
+        #expect(ExecApprovalIdentifier.key(".") == nil)
+        #expect(ExecApprovalIdentifier.key("..") == nil)
+        #expect(ExecApprovalIdentifier.exact(" approval ") == " approval ")
+        #expect(ExecApprovalIdentifier.exact("\u{0085}approval") == "\u{0085}approval")
+        #expect(GatewayStableIdentifier.exact(" gateway ") == " gateway ")
+        #expect(GatewayStableIdentifier.exact("\u{0085}gateway") == "\u{0085}gateway")
+    }
+
     @Test func `custom headers round trip per gateway`() {
         let service = "\(gatewayService).custom-headers-test.\(UUID().uuidString)"
         let gatewayID = "manual|headers.example.com|443|\(UUID().uuidString)"
@@ -134,6 +144,88 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
         #expect(GatewaySettingsStore.loadGatewayCustomHeaders(
             gatewayStableID: otherGatewayID,
             service: service) == ["X-Other": "other-value"])
+    }
+
+    @Test func `custom headers keep canonically equivalent owners isolated`() {
+        let service = "\(gatewayService).custom-headers-exact-test.\(UUID().uuidString)"
+        let composedOwner = "gateway-\u{00E9}"
+        let decomposedOwner = "gateway-e\u{0301}"
+        let nextLineOwner = "\u{0085}gateway"
+        defer { GatewaySettingsStore.clearGatewayCustomHeaders(service: service) }
+
+        #expect(GatewaySettingsStore.saveGatewayCustomHeaders(
+            ["X-Owner": "composed"],
+            gatewayStableID: composedOwner,
+            service: service))
+        #expect(GatewaySettingsStore.saveGatewayCustomHeaders(
+            ["X-Owner": "decomposed"],
+            gatewayStableID: decomposedOwner,
+            service: service))
+        #expect(GatewaySettingsStore.saveGatewayCustomHeaders(
+            ["X-Owner": "next-line"],
+            gatewayStableID: nextLineOwner,
+            service: service))
+
+        #expect(GatewaySettingsStore.loadGatewayCustomHeaders(
+            gatewayStableID: composedOwner,
+            service: service)["X-Owner"] == "composed")
+        #expect(GatewaySettingsStore.loadGatewayCustomHeaders(
+            gatewayStableID: decomposedOwner,
+            service: service)["X-Owner"] == "decomposed")
+        #expect(GatewaySettingsStore.loadGatewayCustomHeaders(
+            gatewayStableID: nextLineOwner,
+            service: service)["X-Owner"] == "next-line")
+    }
+
+    @Test func `legacy custom header account cannot alias encoded owner account`() {
+        let service = "\(gatewayService).custom-headers-prefix-test.\(UUID().uuidString)"
+        let exactOwner = "gateway-\(UUID().uuidString)"
+        let component = Data(exactOwner.utf8).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        let collidingLegacyOwner = "v2.\(component)"
+        defer { GatewaySettingsStore.clearGatewayCustomHeaders(service: service) }
+
+        #expect(GatewaySettingsStore.saveGatewayCustomHeaders(
+            ["X-Owner": "exact"],
+            gatewayStableID: exactOwner,
+            service: service))
+
+        #expect(GatewaySettingsStore.loadGatewayCustomHeaders(
+            gatewayStableID: collidingLegacyOwner,
+            service: service).isEmpty)
+        #expect(GatewaySettingsStore.clearGatewayCustomHeaders(
+            gatewayStableID: collidingLegacyOwner,
+            service: service))
+        #expect(GatewaySettingsStore.loadGatewayCustomHeaders(
+            gatewayStableID: exactOwner,
+            service: service)["X-Owner"] == "exact")
+    }
+
+    @Test func `legacy gateway defaults cannot alias encoded owner keys`() {
+        let exactOwner = "gateway-\(UUID().uuidString)"
+        let component = Data(exactOwner.utf8).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        let collidingLegacyOwner = "v2.\(component)"
+        defer {
+            GatewaySettingsStore.saveGatewayClientIdOverride(stableID: exactOwner, clientId: nil)
+            GatewaySettingsStore.saveGatewayClientIdOverride(stableID: collidingLegacyOwner, clientId: nil)
+            GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: exactOwner, agentId: nil)
+            GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: collidingLegacyOwner, agentId: nil)
+        }
+
+        GatewaySettingsStore.saveGatewayClientIdOverride(stableID: exactOwner, clientId: "exact-client")
+        GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: exactOwner, agentId: "exact-agent")
+
+        #expect(GatewaySettingsStore.loadGatewayClientIdOverride(stableID: collidingLegacyOwner) == nil)
+        #expect(GatewaySettingsStore.loadGatewaySelectedAgentId(stableID: collidingLegacyOwner) == nil)
+        GatewaySettingsStore.saveGatewayClientIdOverride(stableID: collidingLegacyOwner, clientId: nil)
+        GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: collidingLegacyOwner, agentId: nil)
+        #expect(GatewaySettingsStore.loadGatewayClientIdOverride(stableID: exactOwner) == "exact-client")
+        #expect(GatewaySettingsStore.loadGatewaySelectedAgentId(stableID: exactOwner) == "exact-agent")
     }
 
     @Test func `custom header storage drops reserved names`() {
@@ -229,6 +321,46 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
         #expect(GatewaySettingsStore.loadGatewayCredentials(
             instanceId: instanceID,
             gatewayStableID: secondGatewayID) == .empty)
+    }
+
+    @Test func `credentials preserve exact unicode gateway owners`() {
+        let instanceID = "credential-exact-owner-\(UUID().uuidString)"
+        let composedOwner = "gateway-\u{00E9}"
+        let decomposedOwner = "gateway-e\u{0301}"
+        let nextLineOwner = "\u{0085}gateway"
+        defer { GatewaySettingsStore.deleteAllGatewayCredentials(instanceId: instanceID) }
+
+        for (owner, token) in [
+            (composedOwner, "composed-token"),
+            (decomposedOwner, "decomposed-token"),
+            (nextLineOwner, "next-line-token"),
+        ] {
+            #expect(GatewaySettingsStore.saveGatewayCredentials(
+                token: token,
+                bootstrapToken: nil,
+                password: nil,
+                gatewayStableID: owner,
+                suppressStoredDeviceAuth: false,
+                instanceId: instanceID))
+        }
+
+        #expect(GatewaySettingsStore.loadGatewayCredentials(
+            instanceId: instanceID,
+            gatewayStableID: composedOwner).token == "composed-token")
+        #expect(GatewaySettingsStore.loadGatewayCredentials(
+            instanceId: instanceID,
+            gatewayStableID: decomposedOwner).token == "decomposed-token")
+        #expect(GatewaySettingsStore.loadGatewayCredentials(
+            instanceId: instanceID,
+            gatewayStableID: nextLineOwner).token == "next-line-token")
+
+        GatewaySettingsStore.deleteGatewayCredentials(instanceId: instanceID, stableID: decomposedOwner)
+        #expect(GatewaySettingsStore.loadGatewayCredentials(
+            instanceId: instanceID,
+            gatewayStableID: composedOwner).token == "composed-token")
+        #expect(GatewaySettingsStore.loadGatewayCredentials(
+            instanceId: instanceID,
+            gatewayStableID: decomposedOwner) == .empty)
     }
 
     @Test func `shared tls certificate does not alias distinct routes`() {
@@ -555,6 +687,36 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
         }
     }
 
+    @Test func `registry preserves byte-distinct unicode gateway owners`() {
+        withLastGatewaySnapshot {
+            applyKeychain([gatewayRegistryKeychainEntry: nil, lastGatewayKeychainEntry: nil])
+            let composedOwner = "gateway-\u{00E9}"
+            let decomposedOwner = "gateway-e\u{0301}"
+            let nextLineOwner = "\u{0085}gateway"
+            for owner in [composedOwner, decomposedOwner, nextLineOwner] {
+                #expect(GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
+                    stableID: owner,
+                    kind: .discovered,
+                    name: "Gateway",
+                    host: nil,
+                    port: nil,
+                    useTLS: true,
+                    lastConnectedAtMs: nil)))
+            }
+
+            let registry = GatewaySettingsStore.loadGatewayRegistry()
+            #expect(Set(registry.entries.compactMap { GatewayStableIdentifier.key($0.stableID) }).count == 3)
+            #expect(GatewaySettingsStore.setActiveGateway(stableID: decomposedOwner))
+            #expect(GatewaySettingsStore.activeGatewayEntry().map { Array($0.stableID.utf8) } ==
+                Array(decomposedOwner.utf8))
+            #expect(GatewaySettingsStore.removeGatewayRegistryEntry(stableID: composedOwner))
+            let remaining = GatewaySettingsStore.loadGatewayRegistry().entries
+            #expect(remaining.contains(where: {
+                GatewayStableIdentifier.matches($0.stableID, decomposedOwner)
+            }))
+        }
+    }
+
     @Test func `legacy manual last connection migrates once into active registry`() {
         withLastGatewaySnapshot {
             applyKeychain([
@@ -634,6 +796,7 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
     @Test func `legacy unscoped credential bundle migrates to its gateway account`() {
         withBootstrapSnapshots {
             let instanceID = "legacy-bundle-\(UUID().uuidString)"
+            defer { GatewaySettingsStore.deleteAllGatewayCredentials(instanceId: instanceID) }
             let gatewayID = "manual|credentials.example.com|443"
             let legacyAccount = "gateway-credentials.\(instanceID)"
             let scopedAccount = "\(legacyAccount).\(gatewayID)"
@@ -663,7 +826,7 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
             #expect(credentials.password == "legacy-password")
             #expect(credentials.suppressStoredDeviceAuth)
             #expect(KeychainStore.loadString(service: gatewayService, account: legacyAccount) == nil)
-            #expect(KeychainStore.loadString(service: gatewayService, account: scopedAccount) != nil)
+            #expect(KeychainStore.loadString(service: gatewayService, account: scopedAccount) == nil)
         }
     }
 

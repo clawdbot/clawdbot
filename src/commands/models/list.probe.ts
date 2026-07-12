@@ -1,6 +1,7 @@
 /** Auth probe planning and execution helpers for model diagnostics. */
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   resolveAgentDir,
@@ -194,7 +195,7 @@ function selectProbeModel(params: {
   const { provider, candidates, catalog } = params;
   const direct = candidates.get(provider);
   if (direct && direct.length > 0) {
-    return { provider, model: direct[0] };
+    return { provider, model: expectDefined(direct[0], "direct entry at 0") };
   }
   const fromCatalog = catalog
     .map((entry, index) => ({ entry, index }))
@@ -601,7 +602,7 @@ async function runTargetsWithConcurrency(params: {
       if (index >= targets.length) {
         return;
       }
-      const target = targets[index];
+      const target = expectDefined(targets[index], "targets entry at index");
       onProgress?.({
         completed,
         total: targets.length,

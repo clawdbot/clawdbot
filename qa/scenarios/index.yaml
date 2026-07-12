@@ -41,7 +41,8 @@ title: OpenClaw QA Scenario Pack
 #
 # - `standard`: required Codex-vs-OpenClaw mock gate coverage for first-hour depth and
 #   default runtime-tool fixtures. OpenClaw dynamic integration tools in this
-#   tier are hard-gated by `openclaw qa coverage --tools --summary`; Codex-native
+#   tier are hard-gated by `openclaw qa coverage --tools --summary <path>`, where
+#   `<path>` is the paired `qa-suite-summary.json`; Codex-native
 #   workspace rows remain separately tracked until native/live behavior is the
 #   asserted surface. Rows that explicitly target searchable/deferred OpenClaw
 #   dynamic loading stay report-only unless a fixture promotes them to required. Selected with

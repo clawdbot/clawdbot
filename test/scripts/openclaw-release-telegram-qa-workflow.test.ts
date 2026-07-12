@@ -207,10 +207,18 @@ function runAdvisoryStatus(overrides: Record<string, string> = {}) {
 }
 
 describe("release Telegram QA workflow", () => {
-  it("attributes GitHub web-flow release merges to their exact maintainer merger", () => {
+  it("attributes GitHub web-flow and unsigned release merges to their exact maintainer merger", () => {
     const source = readFileSync(WORKFLOW_PATH, "utf8");
 
     expect(source.match(/associatedPullRequests\(first:10\)/gu)).toHaveLength(2);
+    expect(source.match(/for-each-ref --format='%\(refname\)' 'refs\/tags\/v\*'/gu)).toHaveLength(
+      2,
+    );
+    expect(source.match(/if \.signature == null then "missing"/gu)).toHaveLength(2);
+    expect(source.match(/\$signature_status" == "invalid"/gu)).toHaveLength(2);
+    expect(
+      source.match(/\$signature_status" == "missing" \|\| "\$signer" == "web-flow"/gu),
+    ).toHaveLength(2);
     expect(source.match(/\.mergeCommit\.oid == \$sha/gu)).toHaveLength(2);
     expect(source.match(/\.baseRefName == \$base/gu)).toHaveLength(2);
     expect(source.match(/\.baseRepository\.nameWithOwner == \$repo/gu)).toHaveLength(2);

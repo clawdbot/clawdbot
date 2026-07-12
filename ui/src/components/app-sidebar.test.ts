@@ -345,6 +345,38 @@ describe("AppSidebar session catalog pagination", () => {
     ],
   });
 
+  it("renders catalog groups inside the shared sessions scroller", async () => {
+    vi.useFakeTimers();
+    try {
+      const request = vi
+        .fn()
+        .mockResolvedValue(catalogPage([{ threadId: "thread-1", name: "Newest" }]));
+      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+      gateway.publish({
+        hello: {
+          features: { methods: ["sessions.catalog.list"] },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+      const { sidebar } = await mountSidebar(
+        gateway.gateway,
+        createSessions("main", ["agent:main:main"]),
+      );
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+      await sidebar.updateComplete;
+
+      // One scroll region: catalog groups live inside the sessions scroller.
+      // Sibling scroll-less sections flex-squeeze and paint over each other.
+      expect(
+        sidebar.querySelector('.sidebar-recent-sessions [data-session-section="catalog:codex"]'),
+      ).not.toBeNull();
+      expect(sidebar.querySelectorAll(".sidebar-sessions")).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("appends host pages and keeps them through the next poll refresh", async () => {
     vi.useFakeTimers();
     try {

@@ -1,5 +1,7 @@
 import Foundation
+import Network
 import OpenClawChatUI
+import os
 import Testing
 import UIKit
 @testable import OpenClaw
@@ -121,6 +123,20 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
             gatewayStableID: "gateway-b",
             lastToken: "device-token",
             lastGatewayStableID: "gateway-a"))
+        #expect(NodeAppModel.shouldPublishDirectAPNsRegistration(
+            token: "device-token",
+            gatewayStableID: "gateway-\u{00E9}",
+            lastToken: "device-token",
+            lastGatewayStableID: "gateway-e\u{0301}"))
+    }
+
+    @Test func `push relay identity preserves exact opaque gateway bytes`() throws {
+        for deviceID in ["\u{0085}gateway-\u{00E9}", " gateway", "gateway\u{FEFF}"] {
+            let identity = try NodeAppModel._test_decodePushRelayGatewayIdentity(
+                #"{"deviceId":"\#(deviceID)","publicKey":"public-key"}"#)
+
+            #expect(Array(identity.deviceId.utf8) == Array(deviceID.utf8))
+        }
     }
 
     @Test @MainActor func `resolved display name sets default when missing`() {
@@ -390,6 +406,59 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
                 clientDisplayName: "Phone"))
 
         #expect(lhs.hasSameConnectionInputs(as: rhs))
+    }
+
+    @Test func `gateway connect config keeps stable owner bytes exact`() {
+        let composedID = "gateway-\u{00E9}"
+        let decomposedID = "gateway-e\u{0301}"
+        let boundaryID = "\u{0085}gateway"
+        let composed = Self.makeGatewayConnectConfig(stableID: composedID)
+        let decomposed = Self.makeGatewayConnectConfig(stableID: decomposedID)
+        let boundary = Self.makeGatewayConnectConfig(stableID: boundaryID)
+
+        #expect(composedID == decomposedID)
+        #expect(Array(composed.effectiveStableID.utf8) == Array(composedID.utf8))
+        #expect(Array(boundary.effectiveStableID.utf8) == Array(boundaryID.utf8))
+        #expect(!composed.hasSameConnectionInputs(as: decomposed))
+
+        var composedOptions = composed.nodeOptions
+        composedOptions.deviceAuthGatewayID = composedID
+        var decomposedOptions = composed.nodeOptions
+        decomposedOptions.deviceAuthGatewayID = decomposedID
+        let composedAuthOwner = GatewayConnectConfig(
+            url: composed.url,
+            stableID: "shared-route",
+            tls: composed.tls,
+            token: composed.token,
+            bootstrapToken: composed.bootstrapToken,
+            password: composed.password,
+            nodeOptions: composedOptions)
+        let decomposedAuthOwner = GatewayConnectConfig(
+            url: composed.url,
+            stableID: "shared-route",
+            tls: composed.tls,
+            token: composed.token,
+            bootstrapToken: composed.bootstrapToken,
+            password: composed.password,
+            nodeOptions: decomposedOptions)
+        #expect(!composedAuthOwner.hasSameConnectionInputs(as: decomposedAuthOwner))
+    }
+
+    @Test @MainActor func `gateway reconnect options stay scoped to exact owner bytes`() {
+        let composedID = "gateway-\u{00E9}"
+        let decomposedID = "gateway-e\u{0301}"
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let config = Self.makeGatewayConnectConfig(stableID: composedID)
+        appModel.applyGatewayConnectConfig(config)
+        var fallback = config.nodeOptions
+        fallback.clientId = "fallback-client"
+
+        let selected = appModel._test_currentGatewayReconnectOptions(
+            stableID: decomposedID,
+            fallback: fallback)
+
+        #expect(selected.clientId == "fallback-client")
     }
 
     @Test func `setup auth override is scoped to scanned endpoint`() {
@@ -1284,6 +1353,54 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
 
         #expect(appModel.activeGatewayConnectConfig?.stableID == stableID)
         #expect(appModel.activeGatewayConnectConfig?.nodeOptions.deviceAuthGatewayID == stableID)
+    }
+
+    @Test @MainActor func `discovered connect preserves exact device auth owner bytes`() async throws {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let stableID = "\u{0085}gateway-e\u{0301}"
+        let endpoint: NWEndpoint = .service(
+            name: "Exact Owner",
+            type: "_openclaw-gw._tcp",
+            domain: "local.",
+            interface: nil)
+        let gateway = GatewayDiscoveryModel.DiscoveredGateway(
+            name: "Exact Owner",
+            endpoint: endpoint,
+            stableID: stableID,
+            debugID: "exact-owner",
+            lanHost: nil,
+            tailnetDns: nil,
+            gatewayPort: nil,
+            canvasPort: nil,
+            tlsEnabled: true,
+            tlsFingerprintSha256: nil,
+            cliPath: nil)
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let persistedOwnerBytes = OSAllocatedUnfairLock<[UInt8]?>(initialState: nil)
+        let controller = GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: false,
+            tcpReachabilityProbe: { _, _, _, _ in true },
+            tlsFingerprintProbe: { _ in .fingerprint("exact-owner-fingerprint") },
+            serviceEndpointResolver: { _ in (host: "127.0.0.1", port: 1) },
+            persistTLSFingerprint: { _, owner in
+                persistedOwnerBytes.withLock { $0 = Array(owner.utf8) }
+                return true
+            })
+
+        #expect(await controller.connectWithDiagnostics(gateway) == nil)
+        await controller.acceptPendingTrustPrompt()
+        for _ in 0..<100 where appModel.activeGatewayConnectConfig == nil {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(persistedOwnerBytes.withLock { $0 } == Array(stableID.utf8))
+        #expect(appModel.activeGatewayConnectConfig.map { Array($0.stableID.utf8) } == Array(stableID.utf8))
+        #expect(appModel.activeGatewayConnectConfig
+            .flatMap(\.nodeOptions.deviceAuthGatewayID)
+            .map { Array($0.utf8) } == Array(stableID.utf8))
     }
 
     @Test @MainActor func `first trust aborts when certificate pin is not durable`() async {

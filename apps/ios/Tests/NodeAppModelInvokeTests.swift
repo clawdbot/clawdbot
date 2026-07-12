@@ -309,14 +309,27 @@ private func makeProjectedWatchChatRawMessage(
     return try JSONDecoder().decode(AnyCodable.self, from: data)
 }
 
+private func makePendingExecApprovalJSON(_ approvalID: String) -> String {
+    #"{"approval":{"id":"\#(approvalID)","status":"pending","urlPath":"/approve/\#(approvalID)","createdAtMs":100,"expiresAtMs":4000000000000,"presentation":{"kind":"exec","commandText":"echo held","commandPreview":"echo held","warningText":null,"host":"gateway","nodeId":null,"agentId":"main","allowedDecisions":["allow-once","deny"]}}}"#
+}
+
+private func makeExpiredExecApprovalJSON(_ approvalID: String) -> String {
+    #"{"approval":{"id":"\#(approvalID)","status":"expired","urlPath":"/approve/\#(approvalID)","createdAtMs":0,"expiresAtMs":1,"resolvedAtMs":2,"reason":"timeout","presentation":{"kind":"exec","commandText":"echo expired","commandPreview":"echo expired","warningText":null,"host":"gateway","nodeId":null,"agentId":"main","allowedDecisions":["allow-once","deny"]}}}"#
+}
+
 @MainActor
-private func waitForMainActorWork(_ condition: () -> Bool) async {
-    for _ in 0..<100 {
-        if condition() {
-            return
-        }
+@discardableResult
+private func waitForMainActorWork(
+    timeout: Duration = .seconds(2),
+    _ condition: () -> Bool) async -> Bool
+{
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: timeout)
+    while clock.now < deadline {
+        if condition() { return true }
         await Task.yield()
     }
+    return condition()
 }
 
 @MainActor
@@ -343,6 +356,7 @@ private final class MockWatchMessagingService: @preconcurrency WatchMessagingSer
     var lastSent: (id: String, params: OpenClawWatchNotifyParams, gatewayStableID: String?)?
     var lastDirectNodeSetupCode: String?
     var lastSentExecApprovalPrompt: OpenClawWatchExecApprovalPromptMessage?
+    var sentExecApprovalPrompts: [OpenClawWatchExecApprovalPromptMessage] = []
     var lastSentExecApprovalResolved: OpenClawWatchExecApprovalResolvedMessage?
     var lastSentExecApprovalExpired: OpenClawWatchExecApprovalExpiredMessage?
     var lastSentExecApprovalSnapshot: OpenClawWatchExecApprovalSnapshotMessage?
@@ -417,6 +431,7 @@ private final class MockWatchMessagingService: @preconcurrency WatchMessagingSer
         _ message: OpenClawWatchExecApprovalPromptMessage) async throws -> WatchNotificationSendResult
     {
         self.lastSentExecApprovalPrompt = message
+        self.sentExecApprovalPrompts.append(message)
         if let sendError {
             throw sendError
         }
@@ -553,10 +568,15 @@ private actor NotificationAuthorizationGate {
 
 private actor WatchSnapshotSendGate {
     private var didStart = false
+    private var resumePending = false
     private var continuation: CheckedContinuation<Void, Never>?
 
     func wait() async {
         self.didStart = true
+        if self.resumePending {
+            self.resumePending = false
+            return
+        }
         await withCheckedContinuation { continuation in
             self.continuation = continuation
         }
@@ -567,8 +587,68 @@ private actor WatchSnapshotSendGate {
     }
 
     func resume() {
+        guard let continuation else {
+            self.resumePending = true
+            return
+        }
+        continuation.resume()
+        self.continuation = nil
+    }
+}
+
+private actor ExecApprovalResolutionGate {
+    private var calls = 0
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func waitForFirstCall() async -> String {
+        self.calls += 1
+        guard self.calls == 1 else { return "unexpected duplicate approval write" }
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+        return "simulated approval write failure"
+    }
+
+    func callCount() -> Int {
+        self.calls
+    }
+
+    func hasStarted() -> Bool {
+        self.calls > 0
+    }
+
+    func resume() {
         self.continuation?.resume()
         self.continuation = nil
+    }
+}
+
+private actor ExecApprovalConcurrentWriteProbe {
+    private var calls: [String] = []
+    private var activeWrites = 0
+    private var maximumActiveWrites = 0
+    private var firstContinuation: CheckedContinuation<Void, Never>?
+
+    func resolve(decision: String) async -> String {
+        self.calls.append(decision)
+        self.activeWrites += 1
+        self.maximumActiveWrites = max(self.maximumActiveWrites, self.activeWrites)
+        if self.calls.count == 1 {
+            await withCheckedContinuation { continuation in
+                self.firstContinuation = continuation
+            }
+        }
+        self.activeWrites -= 1
+        return "simulated approval write failure"
+    }
+
+    func snapshot() -> (calls: [String], maximumActiveWrites: Int) {
+        (calls: self.calls, maximumActiveWrites: self.maximumActiveWrites)
+    }
+
+    func releaseFirst() {
+        self.firstContinuation?.resume()
+        self.firstContinuation = nil
     }
 }
 
@@ -790,6 +870,393 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(appModel._test_pendingExecApprovalPrompt() == nil)
     }
 
+    @Test @MainActor func `explicit notification tap replaces visible approval after canonical fetch`() async throws {
+        let fetchGate = WatchSnapshotSendGate()
+        let appModel = NodeAppModel(
+            notificationCenter: MockBootstrapNotificationCenter(),
+            watchMessagingService: MockWatchMessagingService())
+        appModel._test_setConnectedGatewayID("test-gateway")
+        try appModel._test_presentExecApprovalPrompt(#require(
+            NodeAppModel._test_makeExecApprovalPrompt(
+                id: "approval-visible-a",
+                commandText: "echo visible-a",
+                allowedDecisions: ["allow-once", "deny"],
+                host: "gateway",
+                nodeId: nil,
+                agentId: "main",
+                expiresAtMs: 4_000_000_000_000)))
+        appModel._test_setUnifiedExecApprovalGetResponse(#"""
+        {
+          "approval": {
+            "id": "approval-tapped-b",
+            "status": "pending",
+            "urlPath": "/approve/approval-tapped-b",
+            "createdAtMs": 100,
+            "expiresAtMs": 4000000000000,
+            "presentation": {
+              "kind": "exec",
+              "commandText": "echo tapped-b",
+              "commandPreview": "echo tapped-b",
+              "warningText": null,
+              "host": "gateway",
+              "nodeId": null,
+              "agentId": "main",
+              "allowedDecisions": ["allow-once", "deny"]
+            }
+          }
+        }
+        """#, beforeResponse: { await fetchGate.wait() })
+
+        let fetching = Task { @MainActor in
+            await appModel._test_presentExecApprovalNotificationPrompt(ExecApprovalNotificationPrompt(
+                approvalId: "approval-tapped-b",
+                gatewayDeviceId: nil))
+        }
+        let deadline = ContinuousClock().now.advanced(by: .seconds(2))
+        while await !(fetchGate.hasStarted()), ContinuousClock().now < deadline {
+            await Task.yield()
+        }
+
+        #expect(appModel._test_pendingExecApprovalPrompt()?.id == "approval-visible-a")
+        await fetchGate.resume()
+        await fetching.value
+        #expect(appModel._test_pendingExecApprovalPrompt()?.id == "approval-tapped-b")
+        #expect(appModel._test_pendingExecApprovalPrompt()?.commandText == "echo tapped-b")
+    }
+
+    @Test @MainActor func `unified approval get accepts only matching exec presentation`() throws {
+        let execJSON = #"""
+        {
+          "approval": {
+            "id": "approval-unified",
+            "status": "pending",
+            "urlPath": "/approve/approval-unified",
+            "createdAtMs": 100,
+            "expiresAtMs": 200,
+            "presentation": {
+              "kind": "exec",
+              "commandText": "echo unified",
+              "commandPreview": "echo unified",
+              "warningText": "  Review shell expansion  ",
+              "host": "gateway",
+              "nodeId": null,
+              "agentId": "main",
+              "allowedDecisions": ["allow-once", "deny"]
+            }
+          }
+        }
+        """#
+
+        let decodedPrompt = try NodeAppModel._test_decodeUnifiedExecApprovalPrompt(
+            execJSON,
+            approvalID: "approval-unified")
+        let prompt = try #require(decodedPrompt)
+        #expect(prompt.kind == "exec")
+        #expect(prompt.commandText == "echo unified")
+        #expect(prompt.warningText == "Review shell expansion")
+        #expect(prompt.allowedDecisions == ["allow-once", "deny"])
+        #expect(prompt.gatewayStableID == "test-gateway")
+
+        #expect(try NodeAppModel._test_decodeUnifiedExecApprovalPrompt(
+            execJSON,
+            approvalID: "different-approval") == nil)
+
+        let composedID = "approval-\u{00E9}"
+        let decomposedID = "approval-e\u{0301}"
+        let composedJSON = execJSON.replacingOccurrences(
+            of: "approval-unified",
+            with: composedID)
+        #expect(try NodeAppModel._test_decodeUnifiedExecApprovalPrompt(
+            composedJSON,
+            approvalID: composedID)?.id == composedID)
+        #expect(try NodeAppModel._test_decodeUnifiedExecApprovalPrompt(
+            composedJSON,
+            approvalID: decomposedID) == nil)
+
+        let pluginJSON = #"""
+        {
+          "approval": {
+            "id": "approval-unified",
+            "status": "pending",
+            "urlPath": "/approve/approval-unified",
+            "createdAtMs": 100,
+            "expiresAtMs": 200,
+            "presentation": {
+              "kind": "plugin",
+              "title": "Plugin approval",
+              "description": "Review",
+              "severity": "warning",
+              "pluginId": "example",
+              "toolName": "guarded",
+              "agentId": "main",
+              "allowedDecisions": ["allow-once", "deny"]
+            }
+          }
+        }
+        """#
+        #expect(try NodeAppModel._test_decodeUnifiedExecApprovalPrompt(
+            pluginJSON,
+            approvalID: "approval-unified") == nil)
+    }
+
+    @Test @MainActor func `exec approval prompt rejects malformed decision sets`() {
+        for decisions in [
+            ["allow-once"],
+            ["allow-once", "allow-once", "deny"],
+            ["accept", "deny"],
+            [" allow-once ", "deny"],
+            ["allow-once", "deny "],
+        ] {
+            #expect(NodeAppModel._test_makeExecApprovalPrompt(
+                id: "approval-malformed",
+                commandText: "echo guarded",
+                allowedDecisions: decisions,
+                host: "gateway",
+                nodeId: nil,
+                agentId: "main",
+                expiresAtMs: 200) == nil)
+        }
+    }
+
+    @Test @MainActor func `unified approval resolve reports and applies canonical late winner`() async throws {
+        let paramsData = try JSONEncoder().encode(ApprovalResolveParams(
+            id: "approval-race",
+            kind: .exec,
+            decision: .deny))
+        let params = try #require(JSONSerialization.jsonObject(with: paramsData) as? [String: String])
+        #expect(params == [
+            "id": "approval-race",
+            "kind": "exec",
+            "decision": "deny",
+        ])
+
+        let responseJSON = #"""
+        {
+          "applied": false,
+          "approval": {
+            "id": "approval-race",
+            "status": "allowed",
+            "urlPath": "/approve/approval-race",
+            "createdAtMs": 100,
+            "expiresAtMs": 200,
+            "resolvedAtMs": 150,
+            "reason": "user",
+            "decision": "allow-always",
+            "presentation": {
+              "kind": "exec",
+              "commandText": "npm publish",
+              "commandPreview": "npm publish",
+              "warningText": "Publishes a package",
+              "host": "gateway",
+              "nodeId": null,
+              "agentId": "main",
+              "allowedDecisions": ["allow-once", "allow-always", "deny"]
+            }
+          }
+        }
+        """#
+
+        let decodedResult = try NodeAppModel._test_decodeUnifiedExecApprovalResolution(
+            responseJSON,
+            approvalID: "approval-race")
+        let result = try #require(decodedResult)
+        #expect(!result.applied)
+        #expect(result.status == "allowed")
+        #expect(result.decision == "allow-always")
+        #expect(result.text == "This approval was already set to Always Allow.")
+        #expect(try NodeAppModel._test_isValidUnifiedExecApprovalResolveAck(
+            responseJSON,
+            approvalID: "approval-race",
+            attemptedDecision: .deny))
+        let mismatchedAppliedAck = try NodeAppModel._test_isValidUnifiedExecApprovalResolveAck(
+            responseJSON.replacingOccurrences(of: #""applied": false"#, with: #""applied": true"#),
+            approvalID: "approval-race",
+            attemptedDecision: .deny)
+        #expect(!mismatchedAppliedAck)
+        #expect(try NodeAppModel._test_decodeUnifiedExecApprovalResolution(
+            responseJSON,
+            approvalID: "different-approval") == nil)
+        for malformedResponse in [
+            responseJSON.replacingOccurrences(
+                of: #""urlPath": "/approve/approval-race""#,
+                with: #""urlPath": """#),
+            responseJSON.replacingOccurrences(
+                of: #""createdAtMs": 100"#,
+                with: #""createdAtMs": -1"#),
+            responseJSON.replacingOccurrences(
+                of: #""resolvedAtMs": 150"#,
+                with: #""resolvedAtMs": -1"#),
+            responseJSON.replacingOccurrences(
+                of: #"["allow-once", "allow-always", "deny"]"#,
+                with: #"["allow-once", "deny"]"#),
+            responseJSON.replacingOccurrences(
+                of: #"["allow-once", "allow-always", "deny"]"#,
+                with: #"["allow-always", "allow-always", "deny"]"#),
+        ] {
+            #expect(try NodeAppModel._test_decodeUnifiedExecApprovalResolution(
+                malformedResponse,
+                approvalID: "approval-race") == nil)
+        }
+
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(
+            notificationCenter: MockBootstrapNotificationCenter(),
+            watchMessagingService: watchService)
+        try appModel._test_presentExecApprovalPrompt(#require(
+            NodeAppModel._test_makeExecApprovalPrompt(
+                id: "approval-race",
+                commandText: "npm publish",
+                warningText: "Publishes a package",
+                allowedDecisions: ["allow-once", "allow-always", "deny"],
+                host: "gateway",
+                nodeId: nil,
+                agentId: "main",
+                expiresAtMs: 200)))
+        #expect(try await appModel._test_applyUnifiedExecApprovalResolveResult(
+            responseJSON,
+            approvalID: "approval-race",
+            attemptedDecision: .deny))
+        #expect(appModel._test_pendingExecApprovalPrompt()?.id == "approval-race")
+        #expect(appModel._test_pendingExecApprovalState().resolved ==
+            "This approval was already set to Always Allow.")
+        #expect(appModel._test_pendingExecApprovalState().tone == .success)
+        #expect(appModel._test_pendingExecApprovalState().resolving == false)
+        await appModel.resolvePendingExecApprovalPrompt(decision: "deny")
+        #expect(appModel._test_pendingExecApprovalState().resolved ==
+            "This approval was already set to Always Allow.")
+        #expect(appModel._test_pendingExecApprovalState().resolving == false)
+        #expect(watchService.lastSentExecApprovalResolved?.source == "another-reviewer")
+        #expect(watchService.lastSentExecApprovalResolved?.outcomeText ==
+            "This approval was already set to Always Allow.")
+
+        let ownWinnerService = MockWatchMessagingService()
+        let ownWinnerModel = NodeAppModel(watchMessagingService: ownWinnerService)
+        try ownWinnerModel._test_presentExecApprovalPrompt(#require(
+            NodeAppModel._test_makeExecApprovalPrompt(
+                id: "approval-race",
+                commandText: "npm publish",
+                allowedDecisions: ["allow-once", "allow-always", "deny"],
+                host: "gateway",
+                nodeId: nil,
+                agentId: "main",
+                expiresAtMs: 200)))
+        let ownWinnerResponse = responseJSON.replacingOccurrences(
+            of: #""applied": false"#,
+            with: #""applied": true"#)
+        #expect(try await ownWinnerModel._test_applyUnifiedExecApprovalResolveResult(
+            ownWinnerResponse,
+            approvalID: "approval-race",
+            attemptedDecision: .allowAlways))
+        #expect(ownWinnerModel._test_pendingExecApprovalPrompt()?.id == "approval-race")
+        #expect(ownWinnerModel._test_pendingExecApprovalState().resolved ==
+            "Approval set to Always Allow.")
+        #expect(ownWinnerModel._test_pendingExecApprovalInboxItems().isEmpty)
+        #expect(ownWinnerService.lastSentExecApprovalResolved?.source == "iphone")
+
+        let pluginResponseJSON = #"""
+        {
+          "applied": false,
+          "approval": {
+            "id": "approval-race",
+            "status": "denied",
+            "urlPath": "/approve/approval-race",
+            "createdAtMs": 100,
+            "expiresAtMs": 200,
+            "resolvedAtMs": 150,
+            "reason": "user",
+            "decision": "deny",
+            "presentation": {
+              "kind": "plugin",
+              "title": "Plugin approval",
+              "description": "Review",
+              "severity": "warning",
+              "pluginId": "example",
+              "toolName": "guarded",
+              "agentId": "main",
+              "allowedDecisions": ["allow-once", "deny"]
+            }
+          }
+        }
+        """#
+        #expect(try NodeAppModel._test_decodeUnifiedExecApprovalResolution(
+            pluginResponseJSON,
+            approvalID: "approval-race") == nil)
+    }
+
+    @Test @MainActor func `legacy approval resolve acknowledgment uses neutral gateway attribution`() async throws {
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(
+            notificationCenter: MockBootstrapNotificationCenter(),
+            watchMessagingService: watchService)
+        try appModel._test_presentExecApprovalPrompt(#require(
+            NodeAppModel._test_makeExecApprovalPrompt(
+                id: "approval-legacy-ack",
+                commandText: "echo legacy",
+                allowedDecisions: ["deny"],
+                host: "gateway",
+                nodeId: nil,
+                agentId: "main",
+                expiresAtMs: nil)))
+
+        await appModel._test_applyLegacyExecApprovalTerminal(
+            approvalID: "approval-legacy-ack",
+            decision: .deny)
+
+        #expect(appModel._test_pendingExecApprovalPrompt()?.id == "approval-legacy-ack")
+        #expect(appModel._test_pendingExecApprovalState().resolved == "Approval denied.")
+        #expect(watchService.lastSentExecApprovalResolved?.source == "gateway")
+        #expect(watchService.lastSentExecApprovalResolved?.outcomeText == "Approval denied.")
+    }
+
+    @Test @MainActor func `canonical denial keeps destructive terminal tone`() async throws {
+        let responseJSON = #"""
+        {
+          "applied": false,
+          "approval": {
+            "id": "approval-denied-elsewhere",
+            "status": "denied",
+            "urlPath": "/approve/approval-denied-elsewhere",
+            "createdAtMs": 100,
+            "expiresAtMs": 200,
+            "resolvedAtMs": 150,
+            "reason": "user",
+            "decision": "deny",
+            "presentation": {
+              "kind": "exec",
+              "commandText": "rm -rf build",
+              "commandPreview": "rm build",
+              "warningText": "Deletes build output",
+              "host": "gateway",
+              "nodeId": null,
+              "agentId": "main",
+              "allowedDecisions": ["allow-once", "deny"]
+            }
+          }
+        }
+        """#
+        let appModel = NodeAppModel(
+            notificationCenter: MockBootstrapNotificationCenter(),
+            watchMessagingService: MockWatchMessagingService())
+        try appModel._test_presentExecApprovalPrompt(#require(
+            NodeAppModel._test_makeExecApprovalPrompt(
+                id: "approval-denied-elsewhere",
+                commandText: "rm -rf build",
+                warningText: "Deletes build output",
+                allowedDecisions: ["allow-once", "deny"],
+                host: "gateway",
+                nodeId: nil,
+                agentId: "main",
+                expiresAtMs: 200)))
+
+        #expect(try await appModel._test_applyUnifiedExecApprovalResolveResult(
+            responseJSON,
+            approvalID: "approval-denied-elsewhere",
+            attemptedDecision: .allowOnce))
+        #expect(appModel._test_pendingExecApprovalState().resolved ==
+            "This approval was already denied.")
+        #expect(appModel._test_pendingExecApprovalState().tone == .danger)
+    }
+
     @Test @MainActor func `gateway switch invalidates privileged approval surfaces`() async throws {
         NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
@@ -872,6 +1339,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(appModel._test_pendingWatchExecApprovalRecoveryIDs().isEmpty)
         #expect(watchService.lastSentExecApprovalSnapshot?.approvals.isEmpty == true)
         #expect(notificationCenter.pendingRemovedIdentifiers.contains([
+            "exec.approval-v2.8:device-a.recovery-a",
             "exec.approval.device-a.recovery-a",
         ]))
         #expect(notificationCenter.deliveredRemovedIdentifiers.contains([
@@ -908,6 +1376,702 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             .effectiveStableID)
     }
 
+    @Test @MainActor func `uncertain approval survives dismiss and restart until canonical readback`() async throws {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
+        let appModel = NodeAppModel(
+            notificationCenter: MockBootstrapNotificationCenter(),
+            watchMessagingService: MockWatchMessagingService())
+        let approvalID = "approval-uncertain-dismissible"
+        let prompt = try #require(NodeAppModel._test_makeExecApprovalPrompt(
+            id: approvalID,
+            commandText: "echo uncertain",
+            allowedDecisions: ["allow-once", "deny"],
+            host: "gateway",
+            nodeId: nil,
+            agentId: "main",
+            expiresAtMs: 4_000_000_000_000))
+        appModel._test_presentExecApprovalPrompt(prompt)
+
+        let uncertainMessage = "Decision status is unknown. Actions remain locked until OpenClaw reconnects."
+        appModel._test_setPendingExecApprovalPromptUncertain(uncertainMessage)
+
+        #expect(appModel._test_pendingExecApprovalState().resolving)
+        #expect(appModel._test_pendingExecApprovalState().canDismiss)
+        appModel._test_dismissPendingExecApprovalPrompt()
+        #expect(appModel._test_pendingExecApprovalPrompt() == nil)
+
+        appModel._test_presentPendingExecApprovalFromInbox(
+            approvalID: approvalID,
+            gatewayStableID: prompt.gatewayStableID)
+        #expect(appModel._test_pendingExecApprovalState().resolving)
+        #expect(appModel._test_pendingExecApprovalState().error == uncertainMessage)
+
+        let restoredModel = NodeAppModel(
+            notificationCenter: MockBootstrapNotificationCenter(),
+            watchMessagingService: MockWatchMessagingService())
+        restoredModel._test_presentExecApprovalPrompt(prompt)
+        #expect(restoredModel._test_pendingExecApprovalState().resolving)
+        #expect(restoredModel._test_pendingExecApprovalState().error == uncertainMessage)
+
+        restoredModel._test_setUnifiedExecApprovalGetResponse(makePendingExecApprovalJSON(approvalID))
+        await restoredModel._test_reconcileWatchExecApprovalCache(reason: "operator_reconnected")
+        #expect(!restoredModel._test_pendingExecApprovalState().resolving)
+        #expect(restoredModel._test_pendingExecApprovalState().error ==
+            "The previous decision was not recorded. Review and try again.")
+    }
+
+    @Test @MainActor func `readback started before uncertainty cannot unlock approval`() async throws {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
+        let approvalID = "approval-uncertain-readback-fence"
+        let appModel = NodeAppModel(watchMessagingService: MockWatchMessagingService())
+        try appModel._test_presentExecApprovalPrompt(#require(
+            NodeAppModel._test_makeExecApprovalPrompt(
+                id: approvalID,
+                commandText: "echo fenced",
+                allowedDecisions: ["allow-once", "deny"],
+                host: "gateway",
+                nodeId: nil,
+                agentId: "main",
+                expiresAtMs: 4_000_000_000_000)))
+        let fetchGate = WatchSnapshotSendGate()
+        appModel._test_setUnifiedExecApprovalGetResponse(
+            makePendingExecApprovalJSON(approvalID),
+            beforeResponse: { await fetchGate.wait() })
+
+        let reconciliation = Task { @MainActor in
+            await appModel._test_reconcileWatchExecApprovalCache(reason: "operator_reconnected")
+        }
+        let deadline = ContinuousClock().now.advanced(by: .seconds(2))
+        while await !fetchGate.hasStarted(), ContinuousClock().now < deadline {
+            await Task.yield()
+        }
+        #expect(await fetchGate.hasStarted())
+        let uncertainMessage = "Decision status is unknown while an older readback is in flight."
+        appModel._test_setPendingExecApprovalPromptUncertain(uncertainMessage)
+        await fetchGate.resume()
+        _ = await reconciliation.value
+
+        #expect(appModel._test_pendingExecApprovalState().resolving)
+        #expect(appModel._test_pendingExecApprovalState().error == uncertainMessage)
+    }
+
+    @Test @MainActor func `expired persisted uncertainty remains a canonical readback candidate`() async throws {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
+        let approvalID = "approval-expired-uncertainty-readback"
+        let prompt = try #require(NodeAppModel._test_makeExecApprovalPrompt(
+            id: approvalID,
+            commandText: "echo expired",
+            allowedDecisions: ["allow-once", "deny"],
+            host: "gateway",
+            nodeId: nil,
+            agentId: "main",
+            expiresAtMs: 1))
+        let firstModel = NodeAppModel(watchMessagingService: MockWatchMessagingService())
+        firstModel._test_presentExecApprovalPrompt(prompt)
+        firstModel._test_setPendingExecApprovalPromptUncertain("Awaiting expired terminal truth.")
+        #expect(firstModel._test_watchExecApprovalCacheIDs().isEmpty)
+        #expect(firstModel._test_pendingPersistedExecApprovalReadbacks().map(\.approvalId) == [approvalID])
+
+        let restoredModel = NodeAppModel(watchMessagingService: MockWatchMessagingService())
+        restoredModel._test_setConnectedGatewayID(prompt.gatewayStableID)
+        #expect(restoredModel._test_watchExecApprovalCacheIDs().isEmpty)
+        #expect(restoredModel._test_pendingPersistedExecApprovalReadbacks().map(\.approvalId) == [approvalID])
+        restoredModel._test_setUnifiedExecApprovalGetResponse(makeExpiredExecApprovalJSON(approvalID))
+        await restoredModel._test_reconcileWatchExecApprovalCache(reason: "operator_reconnected")
+
+        #expect(restoredModel._test_pendingPersistedExecApprovalReadbacks().isEmpty)
+        restoredModel._test_presentExecApprovalPrompt(prompt)
+        #expect(restoredModel._test_pendingExecApprovalPrompt() == nil)
+    }
+
+    @Test @MainActor func `canonical pending readback resumes queued watch decision`() async throws {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
+        let approvalID = "approval-watch-uncertain-resume"
+        let appModel = NodeAppModel(watchMessagingService: MockWatchMessagingService())
+        let prompt = try #require(NodeAppModel._test_makeExecApprovalPrompt(
+            id: approvalID,
+            commandText: "echo watch",
+            allowedDecisions: ["allow-once", "deny"],
+            host: "gateway",
+            nodeId: nil,
+            agentId: "main",
+            expiresAtMs: 4_000_000_000_000))
+        appModel._test_presentExecApprovalPrompt(prompt)
+        appModel._test_setPendingExecApprovalPromptUncertain("Awaiting canonical state.")
+        let watchEvent = WatchExecApprovalResolveEvent(
+            replyId: "watch-uncertain-resume",
+            approvalId: approvalID,
+            gatewayStableID: prompt.gatewayStableID,
+            decision: .deny,
+            sentAtMs: 123,
+            transport: "test")
+        let resolvedImmediately = await appModel._test_handleWatchExecApprovalResolve(watchEvent)
+        #expect(!resolvedImmediately)
+
+        let writeGate = ExecApprovalResolutionGate()
+        appModel._test_setExecApprovalResolutionFailureHandler { _, _, _ in
+            await writeGate.waitForFirstCall()
+        }
+        appModel._test_setUnifiedExecApprovalGetResponse(makePendingExecApprovalJSON(approvalID))
+        await appModel._test_reconcileWatchExecApprovalCache(reason: "operator_reconnected")
+        let deadline = ContinuousClock().now.advanced(by: .seconds(2))
+        while await !writeGate.hasStarted(), ContinuousClock().now < deadline {
+            await Task.yield()
+        }
+        let writeCount = await writeGate.callCount()
+        #expect(writeCount == 1)
+        await writeGate.resume()
+    }
+
+    @Test @MainActor func `uncertain result stays owner scoped after another prompt replaces it`() async throws {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
+        let appModel = NodeAppModel(watchMessagingService: MockWatchMessagingService())
+        let firstPrompt = try #require(NodeAppModel._test_makeExecApprovalPrompt(
+            id: "approval-uncertain-replaced",
+            commandText: "echo first",
+            allowedDecisions: ["allow-once", "deny"],
+            host: "gateway",
+            nodeId: nil,
+            agentId: "main",
+            expiresAtMs: 4_000_000_000_000))
+        let secondPrompt = try #require(NodeAppModel._test_makeExecApprovalPrompt(
+            id: "approval-visible-replacement",
+            commandText: "echo second",
+            allowedDecisions: ["deny"],
+            host: "gateway",
+            nodeId: nil,
+            agentId: "main",
+            expiresAtMs: 4_000_000_000_000))
+        appModel._test_presentExecApprovalPrompt(firstPrompt)
+        let writeGate = ExecApprovalResolutionGate()
+        appModel._test_setExecApprovalResolutionUncertainHandler { _, _, _ in
+            await writeGate.waitForFirstCall()
+        }
+
+        let firstWrite = Task { @MainActor in
+            await appModel.resolvePendingExecApprovalPrompt(decision: "allow-once")
+        }
+        let deadline = ContinuousClock().now.advanced(by: .seconds(2))
+        while await !writeGate.hasStarted(), ContinuousClock().now < deadline {
+            await Task.yield()
+        }
+        #expect(await writeGate.hasStarted())
+        appModel._test_presentExecApprovalPrompt(secondPrompt)
+        await writeGate.resume()
+        await firstWrite.value
+
+        #expect(appModel._test_pendingExecApprovalPrompt()?.id == secondPrompt.id)
+        appModel._test_dismissPendingExecApprovalPrompt()
+        appModel._test_presentPendingExecApprovalFromInbox(
+            approvalID: firstPrompt.id,
+            gatewayStableID: firstPrompt.gatewayStableID)
+        #expect(appModel._test_pendingExecApprovalState().resolving)
+        #expect(appModel._test_pendingExecApprovalState().error == "simulated approval write failure")
+    }
+
+    @Test @MainActor func `canonical terminal invalidates an in flight uncertain result`() async throws {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
+        let appModel = NodeAppModel(watchMessagingService: MockWatchMessagingService())
+        let approvalID = "approval-terminal-beats-uncertain"
+        try appModel._test_presentExecApprovalPrompt(#require(
+            NodeAppModel._test_makeExecApprovalPrompt(
+                id: approvalID,
+                commandText: "echo terminal",
+                allowedDecisions: ["allow-once", "deny"],
+                host: "gateway",
+                nodeId: nil,
+                agentId: "main",
+                expiresAtMs: 4_000_000_000_000)))
+        let writeGate = ExecApprovalResolutionGate()
+        appModel._test_setExecApprovalResolutionUncertainHandler { _, _, _ in
+            await writeGate.waitForFirstCall()
+        }
+
+        let pendingWrite = Task { @MainActor in
+            await appModel.resolvePendingExecApprovalPrompt(decision: "allow-once")
+        }
+        let deadline = ContinuousClock().now.advanced(by: .seconds(2))
+        while await !writeGate.hasStarted(), ContinuousClock().now < deadline {
+            await Task.yield()
+        }
+        #expect(await writeGate.hasStarted())
+        let terminalApplied = await appModel._test_applyLegacyExecApprovalTerminal(
+            approvalID: approvalID,
+            decision: .deny)
+        #expect(terminalApplied)
+        await writeGate.resume()
+        await pendingWrite.value
+
+        #expect(appModel._test_pendingExecApprovalState().resolved == "Approval denied.")
+        #expect(!appModel._test_pendingExecApprovalState().resolving)
+        #expect(appModel._test_pendingExecApprovalInboxItems().isEmpty)
+    }
+
+    @Test @MainActor func `gateway switch during uncertain resolve keeps owner frozen after switching back`() async throws {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
+        let appModel = NodeAppModel(
+            notificationCenter: MockBootstrapNotificationCenter(),
+            watchMessagingService: MockWatchMessagingService())
+        defer { appModel.disconnectGateway() }
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: [],
+            commands: [],
+            permissions: [:],
+            clientId: "ios",
+            clientMode: "node",
+            clientDisplayName: "Phone")
+        let gatewayA = try GatewayConnectConfig(
+            url: #require(URL(string: "wss://127.0.0.1:1")),
+            stableID: "gateway-a",
+            tls: nil,
+            token: "token-a",
+            bootstrapToken: nil,
+            password: nil,
+            nodeOptions: options)
+        let gatewayB = try GatewayConnectConfig(
+            url: #require(URL(string: "wss://127.0.0.1:2")),
+            stableID: "gateway-b",
+            tls: nil,
+            token: "token-b",
+            bootstrapToken: nil,
+            password: nil,
+            nodeOptions: options)
+        let approvalID = "approval-switch-mid-uncertain"
+        let prompt = try #require(NodeAppModel._test_makeExecApprovalPrompt(
+            id: approvalID,
+            gatewayStableID: gatewayA.effectiveStableID,
+            commandText: "echo switch",
+            allowedDecisions: ["allow-once", "deny"],
+            host: "gateway-a",
+            nodeId: nil,
+            agentId: "main",
+            expiresAtMs: 4_000_000_000_000))
+
+        appModel.applyGatewayConnectConfig(gatewayA)
+        appModel._test_presentExecApprovalPrompt(prompt)
+        let writeGate = ExecApprovalResolutionGate()
+        appModel._test_setExecApprovalResolutionUncertainHandler { _, _, _ in
+            await writeGate.waitForFirstCall()
+        }
+
+        let pendingWrite = Task { @MainActor in
+            await appModel.resolvePendingExecApprovalPrompt(decision: "allow-once")
+        }
+        let deadline = ContinuousClock().now.advanced(by: .seconds(2))
+        while await !writeGate.hasStarted(), ContinuousClock().now < deadline {
+            await Task.yield()
+        }
+        #expect(await writeGate.hasStarted())
+        appModel.applyGatewayConnectConfig(gatewayB)
+        await writeGate.resume()
+        await pendingWrite.value
+
+        // The invalidated attempt must not surface UI on the newly selected gateway,
+        // but the lost outcome must survive as an owner-scoped readback candidate.
+        #expect(appModel._test_pendingExecApprovalPrompt() == nil)
+        #expect(appModel._test_pendingPersistedExecApprovalReadbacks().contains { readback in
+            readback.approvalId == approvalID && readback.gatewayStableID == gatewayA.effectiveStableID
+        })
+
+        appModel.applyGatewayConnectConfig(gatewayA)
+        appModel._test_presentExecApprovalPrompt(prompt)
+        #expect(appModel._test_pendingExecApprovalState().resolving)
+        #expect(appModel._test_pendingExecApprovalState().error == "simulated approval write failure")
+
+        let restoredModel = NodeAppModel(
+            notificationCenter: MockBootstrapNotificationCenter(),
+            watchMessagingService: MockWatchMessagingService())
+        restoredModel._test_presentExecApprovalPrompt(prompt)
+        #expect(restoredModel._test_pendingExecApprovalState().resolving)
+        #expect(restoredModel._test_pendingExecApprovalState().error == "simulated approval write failure")
+    }
+
+    @Test @MainActor func `gateway switch during in flight resolve keeps the owner write fence`() async throws {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
+        let appModel = NodeAppModel(
+            notificationCenter: MockBootstrapNotificationCenter(),
+            watchMessagingService: MockWatchMessagingService())
+        defer { appModel.disconnectGateway() }
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: [],
+            commands: [],
+            permissions: [:],
+            clientId: "ios",
+            clientMode: "node",
+            clientDisplayName: "Phone")
+        let gatewayA = try GatewayConnectConfig(
+            url: #require(URL(string: "wss://127.0.0.1:1")),
+            stableID: "gateway-a",
+            tls: nil,
+            token: "token-a",
+            bootstrapToken: nil,
+            password: nil,
+            nodeOptions: options)
+        let gatewayB = try GatewayConnectConfig(
+            url: #require(URL(string: "wss://127.0.0.1:2")),
+            stableID: "gateway-b",
+            tls: nil,
+            token: "token-b",
+            bootstrapToken: nil,
+            password: nil,
+            nodeOptions: options)
+        let approvalID = "approval-switch-mid-write"
+        let prompt = try #require(NodeAppModel._test_makeExecApprovalPrompt(
+            id: approvalID,
+            gatewayStableID: gatewayA.effectiveStableID,
+            commandText: "echo fence",
+            allowedDecisions: ["allow-once", "deny"],
+            host: "gateway-a",
+            nodeId: nil,
+            agentId: "main",
+            expiresAtMs: 4_000_000_000_000))
+
+        appModel.applyGatewayConnectConfig(gatewayA)
+        appModel._test_presentExecApprovalPrompt(prompt)
+        let writeGate = ExecApprovalResolutionGate()
+        appModel._test_setExecApprovalResolutionFailureHandler { _, _, _ in
+            await writeGate.waitForFirstCall()
+        }
+
+        let pendingWrite = Task { @MainActor in
+            await appModel.resolvePendingExecApprovalPrompt(decision: "allow-once")
+        }
+        let deadline = ContinuousClock().now.advanced(by: .seconds(2))
+        while await !writeGate.hasStarted(), ContinuousClock().now < deadline {
+            await Task.yield()
+        }
+        #expect(await writeGate.hasStarted())
+
+        appModel.applyGatewayConnectConfig(gatewayB)
+        appModel.applyGatewayConnectConfig(gatewayA)
+        appModel._test_presentExecApprovalPrompt(prompt)
+        // The preserved write fence keeps the owner card non-actionable: the prompt
+        // renders as resolving and a second resolution attempt never reaches transport.
+        #expect(appModel._test_pendingExecApprovalState().resolving)
+        await appModel.resolvePendingExecApprovalPrompt(decision: "deny")
+        #expect(await writeGate.callCount() == 1)
+
+        await writeGate.resume()
+        await pendingWrite.value
+
+        // Settling the original write releases the fence and reports its outcome.
+        #expect(!appModel._test_pendingExecApprovalState().resolving)
+        #expect(appModel._test_pendingExecApprovalState().error == "simulated approval write failure")
+        await appModel.resolvePendingExecApprovalPrompt(decision: "deny")
+        #expect(await writeGate.callCount() == 2)
+    }
+
+    @Test @MainActor func `gateway switch during unknown ack readback keeps re-presented card resolving`() async throws {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
+        let appModel = NodeAppModel(
+            notificationCenter: MockBootstrapNotificationCenter(),
+            watchMessagingService: MockWatchMessagingService())
+        defer { appModel.disconnectGateway() }
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: [],
+            commands: [],
+            permissions: [:],
+            clientId: "ios",
+            clientMode: "node",
+            clientDisplayName: "Phone")
+        let gatewayA = try GatewayConnectConfig(
+            url: #require(URL(string: "wss://127.0.0.1:1")),
+            stableID: "gateway-a",
+            tls: nil,
+            token: "token-a",
+            bootstrapToken: nil,
+            password: nil,
+            nodeOptions: options)
+        let gatewayB = try GatewayConnectConfig(
+            url: #require(URL(string: "wss://127.0.0.1:2")),
+            stableID: "gateway-b",
+            tls: nil,
+            token: "token-b",
+            bootstrapToken: nil,
+            password: nil,
+            nodeOptions: options)
+        let approvalID = "approval-switch-mid-readback"
+        let prompt = try #require(NodeAppModel._test_makeExecApprovalPrompt(
+            id: approvalID,
+            gatewayStableID: gatewayA.effectiveStableID,
+            commandText: "echo readback",
+            allowedDecisions: ["allow-once", "deny"],
+            host: "gateway-a",
+            nodeId: nil,
+            agentId: "main",
+            expiresAtMs: 4_000_000_000_000))
+
+        appModel.applyGatewayConnectConfig(gatewayA)
+        appModel._test_presentExecApprovalPrompt(prompt)
+        appModel._test_setExecApprovalResolutionUnknownAck()
+        let fetchGate = ExecApprovalResolutionGate()
+        appModel._test_setUnifiedExecApprovalGetResponse(
+            makePendingExecApprovalJSON(approvalID),
+            beforeResponse: { _ = await fetchGate.waitForFirstCall() })
+
+        let pendingWrite = Task { @MainActor in
+            await appModel.resolvePendingExecApprovalPrompt(decision: "allow-once")
+        }
+        let deadline = ContinuousClock().now.advanced(by: .seconds(2))
+        while await !fetchGate.hasStarted(), ContinuousClock().now < deadline {
+            await Task.yield()
+        }
+        #expect(await fetchGate.hasStarted())
+
+        appModel.applyGatewayConnectConfig(gatewayB)
+        appModel.applyGatewayConnectConfig(gatewayA)
+        appModel._test_presentExecApprovalPrompt(prompt)
+        // The write settled but readback has not classified it: the attempt lease is
+        // still held, so the re-presented card must render resolving (non-actionable)
+        // and a second resolution attempt must never reach the transport.
+        #expect(appModel._test_pendingExecApprovalState().resolving)
+        await appModel.resolvePendingExecApprovalPrompt(decision: "deny")
+        #expect(await fetchGate.callCount() == 1)
+
+        await fetchGate.resume()
+        await pendingWrite.value
+
+        // The gated readback lost its route to the A->B->A switch, so the settle is the
+        // owner-frozen uncertain contract with a durable readback record.
+        #expect(appModel._test_pendingExecApprovalState().resolving)
+        #expect(appModel._test_pendingExecApprovalState().error ==
+            "Decision status is unknown. Actions remain locked until OpenClaw reconnects.")
+        #expect(appModel._test_pendingPersistedExecApprovalReadbacks().contains { readback in
+            readback.approvalId == approvalID && readback.gatewayStableID == gatewayA.effectiveStableID
+        })
+    }
+
+    @Test @MainActor func `watch pending retry after unknown ack unlocks the phone card`() async throws {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
+        let appModel = NodeAppModel(
+            notificationCenter: MockBootstrapNotificationCenter(),
+            watchMessagingService: MockWatchMessagingService())
+        let approvalID = "approval-watch-unknown-ack-retry"
+        let prompt = try #require(NodeAppModel._test_makeExecApprovalPrompt(
+            id: approvalID,
+            commandText: "echo watch retry",
+            allowedDecisions: ["allow-once", "deny"],
+            host: "gateway",
+            nodeId: nil,
+            agentId: "main",
+            expiresAtMs: 4_000_000_000_000))
+        appModel._test_presentExecApprovalPrompt(prompt)
+        appModel._test_setExecApprovalResolutionUnknownAck()
+        let fetchGate = ExecApprovalResolutionGate()
+        appModel._test_setUnifiedExecApprovalGetResponse(
+            makePendingExecApprovalJSON(approvalID),
+            beforeResponse: { _ = await fetchGate.waitForFirstCall() })
+
+        let watchResolve = Task { @MainActor in
+            await appModel._test_handleWatchExecApprovalResolve(WatchExecApprovalResolveEvent(
+                replyId: "watch-unknown-ack-retry",
+                approvalId: approvalID,
+                gatewayStableID: prompt.gatewayStableID,
+                decision: .allowOnce,
+                sentAtMs: nil,
+                transport: "test"))
+        }
+        let deadline = ContinuousClock().now.advanced(by: .seconds(2))
+        while await !fetchGate.hasStarted(), ContinuousClock().now < deadline {
+            await Task.yield()
+        }
+        #expect(await fetchGate.hasStarted())
+
+        // Re-presenting during the gated readback keeps the card fenced as resolving.
+        appModel._test_presentExecApprovalPrompt(prompt)
+        #expect(appModel._test_pendingExecApprovalState().resolving)
+
+        await fetchGate.resume()
+        let completed = await watchResolve.value
+        #expect(completed)
+
+        // Pending readback settled the watch attempt: the phone card must unlock with
+        // the same retry message the phone path stamps.
+        #expect(!appModel._test_pendingExecApprovalState().resolving)
+        #expect(appModel._test_pendingExecApprovalState().error ==
+            "The previous decision was not recorded. Review and try again.")
+
+        // The released lease admits a fresh resolve that reaches the transport again.
+        await appModel.resolvePendingExecApprovalPrompt(decision: "deny")
+        #expect(await fetchGate.callCount() == 2)
+    }
+
+    @Test @MainActor func `gateway switch during uncertain watch resolve records owner uncertainty`() async throws {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
+        let appModel = NodeAppModel(
+            notificationCenter: MockBootstrapNotificationCenter(),
+            watchMessagingService: MockWatchMessagingService())
+        defer { appModel.disconnectGateway() }
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: [],
+            commands: [],
+            permissions: [:],
+            clientId: "ios",
+            clientMode: "node",
+            clientDisplayName: "Phone")
+        let gatewayA = try GatewayConnectConfig(
+            url: #require(URL(string: "wss://127.0.0.1:1")),
+            stableID: "gateway-a",
+            tls: nil,
+            token: "token-a",
+            bootstrapToken: nil,
+            password: nil,
+            nodeOptions: options)
+        let gatewayB = try GatewayConnectConfig(
+            url: #require(URL(string: "wss://127.0.0.1:2")),
+            stableID: "gateway-b",
+            tls: nil,
+            token: "token-b",
+            bootstrapToken: nil,
+            password: nil,
+            nodeOptions: options)
+        let approvalID = "approval-watch-switch-mid-uncertain"
+        let prompt = try #require(NodeAppModel._test_makeExecApprovalPrompt(
+            id: approvalID,
+            gatewayStableID: gatewayA.effectiveStableID,
+            commandText: "echo watch switch",
+            allowedDecisions: ["allow-once", "deny"],
+            host: "gateway-a",
+            nodeId: nil,
+            agentId: "main",
+            expiresAtMs: 4_000_000_000_000))
+
+        appModel.applyGatewayConnectConfig(gatewayA)
+        appModel._test_presentExecApprovalPrompt(prompt)
+        let writeGate = ExecApprovalResolutionGate()
+        appModel._test_setExecApprovalResolutionUncertainHandler { _, _, _ in
+            await writeGate.waitForFirstCall()
+        }
+
+        let watchResolve = Task { @MainActor in
+            await appModel._test_handleWatchExecApprovalResolve(WatchExecApprovalResolveEvent(
+                replyId: "watch-switch-mid-uncertain",
+                approvalId: approvalID,
+                gatewayStableID: gatewayA.effectiveStableID,
+                decision: .allowOnce,
+                sentAtMs: nil,
+                transport: "test"))
+        }
+        let deadline = ContinuousClock().now.advanced(by: .seconds(2))
+        while await !writeGate.hasStarted(), ContinuousClock().now < deadline {
+            await Task.yield()
+        }
+        #expect(await writeGate.hasStarted())
+        appModel.applyGatewayConnectConfig(gatewayB)
+        await writeGate.resume()
+        let completed = await watchResolve.value
+
+        // The Watch decision was written with an unknown outcome: consume it, keep the
+        // owner-scoped uncertainty + readback record instead of dropping every trace.
+        #expect(completed)
+        #expect(appModel._test_pendingPersistedExecApprovalReadbacks().contains { readback in
+            readback.approvalId == approvalID && readback.gatewayStableID == gatewayA.effectiveStableID
+        })
+
+        appModel.applyGatewayConnectConfig(gatewayA)
+        appModel._test_presentExecApprovalPrompt(prompt)
+        #expect(appModel._test_pendingExecApprovalState().resolving)
+        #expect(appModel._test_pendingExecApprovalState().error == "simulated approval write failure")
+    }
+
+    @Test @MainActor func `canonically equivalent gateway owners stay distinct across switch and resolve`() async throws {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
+        let composedGatewayID = "gateway-\u{00E9}"
+        let decomposedGatewayID = "gateway-e\u{0301}"
+        #expect(composedGatewayID == decomposedGatewayID)
+        #expect(GatewayStableIdentifier.key(composedGatewayID) !=
+            GatewayStableIdentifier.key(decomposedGatewayID))
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: [],
+            commands: [],
+            permissions: [:],
+            clientId: "ios",
+            clientMode: "node",
+            clientDisplayName: "Phone")
+        let switchModel = NodeAppModel(
+            notificationCenter: MockBootstrapNotificationCenter(),
+            watchMessagingService: MockWatchMessagingService())
+        defer { switchModel.disconnectGateway() }
+        let composedGateway = try GatewayConnectConfig(
+            url: #require(URL(string: "wss://127.0.0.1:1")),
+            stableID: composedGatewayID,
+            tls: nil,
+            token: "token-a",
+            bootstrapToken: nil,
+            password: nil,
+            nodeOptions: options)
+        let decomposedGateway = try GatewayConnectConfig(
+            url: #require(URL(string: "wss://127.0.0.1:2")),
+            stableID: decomposedGatewayID,
+            tls: nil,
+            token: "token-b",
+            bootstrapToken: nil,
+            password: nil,
+            nodeOptions: options)
+
+        switchModel.applyGatewayConnectConfig(composedGateway)
+        try switchModel._test_presentExecApprovalPrompt(#require(
+            NodeAppModel._test_makeExecApprovalPrompt(
+                id: "approval-exact-gateway-switch",
+                gatewayStableID: composedGatewayID,
+                commandText: "echo composed",
+                allowedDecisions: ["allow-once", "deny"],
+                host: "gateway",
+                nodeId: nil,
+                agentId: "main",
+                expiresAtMs: 4_000_000_000_000)))
+        switchModel.applyGatewayConnectConfig(decomposedGateway)
+        #expect(switchModel._test_pendingExecApprovalPrompt() == nil)
+        #expect(switchModel._test_watchExecApprovalCacheIDs().isEmpty)
+
+        let watchService = MockWatchMessagingService()
+        let resolveModel = NodeAppModel(
+            notificationCenter: MockBootstrapNotificationCenter(),
+            watchMessagingService: watchService)
+        resolveModel._test_setConnectedGatewayID(composedGatewayID)
+        try resolveModel._test_presentExecApprovalPrompt(#require(
+            NodeAppModel._test_makeExecApprovalPrompt(
+                id: "approval-exact-gateway-resolve",
+                gatewayStableID: composedGatewayID,
+                commandText: "echo resolve",
+                allowedDecisions: ["deny"],
+                host: "gateway",
+                nodeId: nil,
+                agentId: "main",
+                expiresAtMs: 4_000_000_000_000)))
+        resolveModel._test_setConnectedGatewayID(decomposedGatewayID)
+
+        let applied = await resolveModel._test_applyLegacyExecApprovalTerminal(
+            approvalID: "approval-exact-gateway-resolve",
+            decision: .deny,
+            expectedGatewayStableID: composedGatewayID)
+        #expect(!applied)
+        #expect(resolveModel._test_pendingExecApprovalPrompt()?.id == "approval-exact-gateway-resolve")
+        #expect(watchService.lastSentExecApprovalResolved == nil)
+    }
+
     @Test @MainActor func `offline resolution push remains durable until its gateway reconnects`() async {
         NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
@@ -929,6 +2093,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(await firstModel.handleExecApprovalResolvedRemotePush(push))
         #expect(firstModel._test_pendingExecApprovalResolvedPushes() == [push])
         #expect(notificationCenter.pendingRemovedIdentifiers == [[
+            "exec.approval-v2.16:gateway-device-a.approval-resolved-offline",
             "exec.approval.gateway-device-a.approval-resolved-offline",
         ]])
         #expect(notificationCenter.deliveredRemovedIdentifiers == [["offline-request-alert"]])
@@ -2550,6 +3715,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             NodeAppModel._test_makeExecApprovalPrompt(
                 id: "approval-watch-sync",
                 commandText: "npm publish",
+                warningText: "Publishes a package",
                 allowedDecisions: ["allow-once", "deny"],
                 host: "gateway",
                 nodeId: "node-1",
@@ -2557,17 +3723,23 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 expiresAtMs: 1234))
 
         appModel._test_presentExecApprovalPrompt(prompt)
-        await Task.yield()
+        let promptPublished = await waitForMainActorWork {
+            watchService.lastSentExecApprovalPrompt?.approval.id == "approval-watch-sync"
+        }
+        try #require(promptPublished)
 
         let sent = try #require(watchService.lastSentExecApprovalPrompt)
         #expect(sent.approval.id == "approval-watch-sync")
         #expect(sent.approval.allowedDecisions == [.allowOnce, .deny])
+        #expect(sent.approval.warningText == "Publishes a package")
         #expect(sent.approval.host == "gateway")
         #expect(sent.approval.risk == nil)
-        #expect(sent.resetResolvingState != true)
+        #expect(sent.resetResolutionAttemptId == nil)
     }
 
     @Test @MainActor func `watch exec approval snapshot request publishes cached approvals in background`() async throws {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let watchService = MockWatchMessagingService()
         let appModel = NodeAppModel(watchMessagingService: watchService)
         let futureExpiryMs = Int64(Date().timeIntervalSince1970 * 1000) + 60000
@@ -2581,45 +3753,981 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                     nodeId: nil,
                     agentId: nil,
                     expiresAtMs: futureExpiryMs)))
-        await Task.yield()
+        appModel._test_setUnifiedExecApprovalGetResponse(#"""
+        {
+          "approval": {
+            "id": "approval-watch-snapshot",
+            "status": "pending",
+            "urlPath": "/approve/approval-watch-snapshot",
+            "createdAtMs": 100,
+            "expiresAtMs": 4000000000000,
+            "presentation": {
+              "kind": "exec",
+              "commandText": "echo from watch",
+              "commandPreview": "echo from watch",
+              "warningText": null,
+              "host": "gateway",
+              "nodeId": null,
+              "agentId": null,
+              "allowedDecisions": ["allow-once", "deny"]
+            }
+          }
+        }
+        """#)
+        let initialSnapshotPublished = await waitForMainActorWork {
+            watchService.sentExecApprovalSnapshots.contains { snapshot in
+                snapshot.requestId == nil &&
+                    snapshot.approvals.map(\.id) == ["approval-watch-snapshot"]
+            }
+        }
+        try #require(initialSnapshotPublished)
 
         appModel.setScenePhase(.background)
+        let snapshotCount = watchService.sentExecApprovalSnapshots.count
         watchService.emitExecApprovalSnapshotRequest(
             WatchExecApprovalSnapshotRequestEvent(
                 requestId: "snapshot-1",
+                gatewayStableID: "test-gateway",
                 sentAtMs: 111,
                 transport: "sendMessage"))
-        await Task.yield()
+        let correlatedSnapshotPublished = await waitForMainActorWork {
+            watchService.sentExecApprovalSnapshots.dropFirst(snapshotCount).contains { snapshot in
+                snapshot.requestId == "snapshot-1" &&
+                    snapshot.requestGatewayStableID == "test-gateway"
+            }
+        }
+        try #require(correlatedSnapshotPublished)
 
-        let snapshot = try #require(watchService.lastSentExecApprovalSnapshot)
+        let snapshot = try #require(watchService.sentExecApprovalSnapshots
+            .dropFirst(snapshotCount)
+            .first { $0.requestId == "snapshot-1" })
         #expect(snapshot.approvals.map(\.id) == ["approval-watch-snapshot"])
+        #expect(snapshot.requestId == "snapshot-1")
+        #expect(snapshot.requestGatewayStableID == "test-gateway")
     }
 
-    @Test @MainActor func `watch exec approval snapshot request skips foreground recovery`() async throws {
+    @Test @MainActor func `foreground watch snapshot acknowledgment requires canonical readback`() async throws {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let watchService = MockWatchMessagingService()
         let appModel = NodeAppModel(watchMessagingService: watchService)
         let futureExpiryMs = Int64(Date().timeIntervalSince1970 * 1000) + 60000
         try appModel._test_presentExecApprovalPrompt(
             #require(
                 NodeAppModel._test_makeExecApprovalPrompt(
-                    id: "approval-watch-foreground-skip",
+                    id: "approval-watch-foreground",
                     commandText: "echo foreground",
                     allowedDecisions: ["allow-once", "deny"],
                     host: "gateway",
                     nodeId: nil,
                     agentId: nil,
                     expiresAtMs: futureExpiryMs)))
-        await Task.yield()
+        let canonicalResponse = #"""
+        {
+          "approval": {
+            "id": "approval-watch-foreground",
+            "status": "pending",
+            "urlPath": "/approve/approval-watch-foreground",
+            "createdAtMs": 100,
+            "expiresAtMs": 4000000000000,
+            "presentation": {
+              "kind": "exec",
+              "commandText": "echo foreground",
+              "commandPreview": "echo foreground",
+              "warningText": null,
+              "host": "gateway",
+              "nodeId": null,
+              "agentId": null,
+              "allowedDecisions": ["allow-once", "deny"]
+            }
+          }
+        }
+        """#
+        let initialSnapshotPublished = await waitForMainActorWork {
+            watchService.sentExecApprovalSnapshots.contains { snapshot in
+                snapshot.requestId == nil &&
+                    snapshot.approvals.map(\.id) == ["approval-watch-foreground"]
+            }
+        }
+        try #require(initialSnapshotPublished)
+        watchService.lastSentExecApprovalSnapshot = nil
+        let snapshotCountBeforeMatchingRequest = watchService.sentExecApprovalSnapshots.count
+
+        appModel._test_setExecApprovalPromptFetchFailure("gateway unavailable")
+        await appModel._test_refreshWatchExecApprovalSnapshotOnDemand(
+            WatchExecApprovalSnapshotRequestEvent(
+                requestId: "snapshot-foreground-failed",
+                gatewayStableID: "test-gateway",
+                sentAtMs: 221,
+                transport: "sendMessage"))
+        #expect(watchService.sentExecApprovalSnapshots.count == snapshotCountBeforeMatchingRequest)
+
+        appModel._test_setUnifiedExecApprovalGetResponse(canonicalResponse)
+        await appModel._test_refreshWatchExecApprovalSnapshotOnDemand(
+            WatchExecApprovalSnapshotRequestEvent(
+                requestId: "snapshot-foreground",
+                gatewayStableID: "test-gateway",
+                sentAtMs: 222,
+                transport: "sendMessage"))
+        let matchingSnapshotPublished = await waitForMainActorWork {
+            watchService.sentExecApprovalSnapshots.dropFirst(snapshotCountBeforeMatchingRequest).contains { snapshot in
+                snapshot.requestId == "snapshot-foreground" &&
+                    snapshot.requestGatewayStableID == "test-gateway"
+            }
+        }
+        try #require(matchingSnapshotPublished)
+        let matchingSnapshot = try #require(watchService.sentExecApprovalSnapshots
+            .dropFirst(snapshotCountBeforeMatchingRequest)
+            .first { $0.requestId == "snapshot-foreground" })
+
+        #expect(matchingSnapshot.approvals.map(\.id) == [
+            "approval-watch-foreground",
+        ])
+        #expect(matchingSnapshot.requestId == "snapshot-foreground")
+        #expect(matchingSnapshot.requestGatewayStableID == "test-gateway")
+
+        watchService.lastSentExecApprovalSnapshot = nil
+        let snapshotCountBeforeWrongOwnerRequest = watchService.sentExecApprovalSnapshots.count
+        watchService.emitExecApprovalSnapshotRequest(
+            WatchExecApprovalSnapshotRequestEvent(
+                requestId: "snapshot-wrong-owner",
+                gatewayStableID: "other-gateway",
+                sentAtMs: 223,
+                transport: "sendMessage"))
+        let uncorrelatedSnapshotPublished = await waitForMainActorWork {
+            watchService.sentExecApprovalSnapshots.dropFirst(snapshotCountBeforeWrongOwnerRequest)
+                .contains { snapshot in
+                    snapshot.requestId == nil && snapshot.requestGatewayStableID == nil
+                }
+        }
+        try #require(uncorrelatedSnapshotPublished)
+        let uncorrelatedSnapshot = try #require(watchService.sentExecApprovalSnapshots
+            .dropFirst(snapshotCountBeforeWrongOwnerRequest)
+            .first { $0.requestId == nil && $0.requestGatewayStableID == nil })
+        #expect(uncorrelatedSnapshot.requestId == nil)
+        #expect(uncorrelatedSnapshot.requestGatewayStableID == nil)
+    }
+
+    @Test @MainActor func `unknown held attempt stays frozen after pending readback`() async throws {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(
+            notificationCenter: MockBootstrapNotificationCenter(),
+            watchMessagingService: watchService)
+        appModel._test_setConnectedGatewayID("test-gateway")
+        let approvalID = "approval-held-pending"
+        let resolutionAttemptID = "attempt-e\u{0301}-\u{0085}"
+        appModel._test_setUnifiedExecApprovalGetResponse(makePendingExecApprovalJSON(approvalID))
+
+        await appModel._test_refreshWatchExecApprovalSnapshotOnDemand(
+            WatchExecApprovalSnapshotRequestEvent(
+                requestId: "snapshot-held-pending",
+                gatewayStableID: "test-gateway",
+                heldApprovals: [WatchExecApprovalSnapshotRequestItem(
+                    approvalId: approvalID,
+                    activeResolutionAttemptId: resolutionAttemptID)],
+                sentAtMs: 225,
+                transport: "sendMessage"))
+
+        let snapshot = try #require(watchService.lastSentExecApprovalSnapshot)
+        #expect(snapshot.requestId == "snapshot-held-pending")
+        #expect(snapshot.approvals.map(\.id) == [approvalID])
+        #expect(!watchService.sentExecApprovalPrompts.contains {
+            $0.approval.id == approvalID && $0.resetResolutionAttemptId != nil
+        })
+    }
+
+    @Test @MainActor func `failed held approval readback sends no request snapshot`() async {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(
+            notificationCenter: MockBootstrapNotificationCenter(),
+            watchMessagingService: watchService)
+        appModel._test_setConnectedGatewayID("test-gateway")
+        appModel._test_setUnifiedExecApprovalGetResponse(#"{"invalid":true}"#)
+        let snapshotCount = watchService.sentExecApprovalSnapshots.count
+
+        await appModel._test_refreshWatchExecApprovalSnapshotOnDemand(
+            WatchExecApprovalSnapshotRequestEvent(
+                requestId: "snapshot-readback-failed",
+                gatewayStableID: "test-gateway",
+                heldApprovals: [WatchExecApprovalSnapshotRequestItem(
+                    approvalId: "approval-watch-readback-failure",
+                    activeResolutionAttemptId: nil)],
+                sentAtMs: 225,
+                transport: "sendMessage"))
+
+        #expect(watchService.sentExecApprovalSnapshots.count == snapshotCount)
+    }
+
+    @Test @MainActor func `watch refresh classifies every held approval before acknowledging`() async throws {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(
+            notificationCenter: MockBootstrapNotificationCenter(),
+            watchMessagingService: watchService)
+        appModel._test_setConnectedGatewayID("test-gateway")
+        let approvalIDs = ["approval-held-b", "approval-held-a"]
+        appModel._test_setUnifiedExecApprovalGetResponses(approvalIDs.map {
+            (approvalID: $0, json: makePendingExecApprovalJSON($0))
+        })
+
+        await appModel._test_refreshWatchExecApprovalSnapshotOnDemand(
+            WatchExecApprovalSnapshotRequestEvent(
+                requestId: "snapshot-held-all",
+                gatewayStableID: "test-gateway",
+                heldApprovals: approvalIDs.map {
+                    WatchExecApprovalSnapshotRequestItem(
+                        approvalId: $0,
+                        activeResolutionAttemptId: nil)
+                },
+                sentAtMs: 226,
+                transport: "sendMessage"))
+
+        let snapshot = try #require(watchService.lastSentExecApprovalSnapshot)
+        #expect(snapshot.requestId == "snapshot-held-all")
+        #expect(snapshot.approvals.map(\.id) == approvalIDs.sorted())
+    }
+
+    @Test @MainActor func `canonical watch refresh does not acknowledge byte distinct owner`() async throws {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
+        let composedGatewayID = "gateway-\u{00E9}"
+        let decomposedGatewayID = "gateway-e\u{0301}"
+        #expect(composedGatewayID == decomposedGatewayID)
+        #expect(GatewayStableIdentifier.key(composedGatewayID) !=
+            GatewayStableIdentifier.key(decomposedGatewayID))
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(watchMessagingService: watchService)
+        appModel._test_setConnectedGatewayID(composedGatewayID)
+        try appModel._test_presentExecApprovalPrompt(#require(
+            NodeAppModel._test_makeExecApprovalPrompt(
+                id: "approval-watch-exact-owner",
+                gatewayStableID: composedGatewayID,
+                commandText: "echo exact owner",
+                allowedDecisions: ["allow-once", "deny"],
+                host: "gateway",
+                nodeId: nil,
+                agentId: "main",
+                expiresAtMs: 4_000_000_000_000)))
+        appModel._test_setUnifiedExecApprovalGetResponse(#"""
+        {
+          "approval": {
+            "id": "approval-watch-exact-owner",
+            "status": "pending",
+            "urlPath": "/approve/approval-watch-exact-owner",
+            "createdAtMs": 100,
+            "expiresAtMs": 4000000000000,
+            "presentation": {
+              "kind": "exec",
+              "commandText": "echo exact owner",
+              "commandPreview": "echo exact owner",
+              "warningText": null,
+              "host": "gateway",
+              "nodeId": null,
+              "agentId": "main",
+              "allowedDecisions": ["allow-once", "deny"]
+            }
+          }
+        }
+        """#)
+        await waitForMainActorWork { watchService.lastSentExecApprovalSnapshot != nil }
+        let snapshotCount = watchService.sentExecApprovalSnapshots.count
+
+        watchService.emitExecApprovalSnapshotRequest(
+            WatchExecApprovalSnapshotRequestEvent(
+                requestId: "snapshot-byte-distinct-owner",
+                gatewayStableID: decomposedGatewayID,
+                sentAtMs: 227,
+                transport: "sendMessage"))
+        await waitForMainActorWork {
+            watchService.sentExecApprovalSnapshots.count > snapshotCount
+        }
+
+        let snapshot = try #require(watchService.sentExecApprovalSnapshots.last)
+        #expect(snapshot.approvals.map(\.id) == ["approval-watch-exact-owner"])
+        #expect(snapshot.requestId == nil)
+        #expect(snapshot.requestGatewayStableID == nil)
+        #expect(try Array(#require(snapshot.gatewayStableID).utf8) == Array(composedGatewayID.utf8))
+    }
+
+    @Test @MainActor func `not found canonical watch refresh acknowledges request`() async throws {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(
+            notificationCenter: MockBootstrapNotificationCenter(),
+            watchMessagingService: watchService)
+        appModel._test_setConnectedGatewayID("test-gateway")
+        try appModel._test_presentExecApprovalPrompt(#require(
+            NodeAppModel._test_makeExecApprovalPrompt(
+                id: "approval-watch-not-found",
+                commandText: "echo cached",
+                allowedDecisions: ["allow-once", "deny"],
+                host: "gateway",
+                nodeId: nil,
+                agentId: "main",
+                expiresAtMs: 4_000_000_000_000)))
+        appModel._test_setExecApprovalPromptFetchStale()
+        await waitForMainActorWork { watchService.lastSentExecApprovalSnapshot != nil }
+
+        watchService.emitExecApprovalSnapshotRequest(
+            WatchExecApprovalSnapshotRequestEvent(
+                requestId: "snapshot-not-found",
+                gatewayStableID: "test-gateway",
+                sentAtMs: 226,
+                transport: "sendMessage"))
+        await waitForMainActorWork {
+            watchService.lastSentExecApprovalSnapshot?.requestId == "snapshot-not-found"
+        }
+
+        #expect(watchService.lastSentExecApprovalSnapshot?.approvals.isEmpty == true)
+        #expect(watchService.lastSentExecApprovalExpired?.approvalId == "approval-watch-not-found")
+        #expect(watchService.lastSentExecApprovalExpired?.reason == .notFound)
+    }
+
+    @Test @MainActor func `foreground watch snapshot acknowledgment follows canonical readback`() async throws {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(
+            notificationCenter: MockBootstrapNotificationCenter(),
+            watchMessagingService: watchService)
+        appModel._test_setConnectedGatewayID("test-gateway")
+        try appModel._test_presentExecApprovalPrompt(#require(
+            NodeAppModel._test_makeExecApprovalPrompt(
+                id: "approval-watch-stale-cache",
+                commandText: "echo stale",
+                allowedDecisions: ["allow-once", "deny"],
+                host: "gateway",
+                nodeId: nil,
+                agentId: "main",
+                expiresAtMs: 4_000_000_000_000)))
+        appModel._test_setUnifiedExecApprovalGetResponse(#"""
+        {
+          "approval": {
+            "id": "approval-watch-stale-cache",
+            "status": "denied",
+            "urlPath": "/approve/approval-watch-stale-cache",
+            "createdAtMs": 100,
+            "expiresAtMs": 4000000000000,
+            "resolvedAtMs": 150,
+            "reason": "user",
+            "decision": "deny",
+            "presentation": {
+              "kind": "exec",
+              "commandText": "echo stale",
+              "commandPreview": "echo stale",
+              "warningText": null,
+              "host": "gateway",
+              "nodeId": null,
+              "agentId": "main",
+              "allowedDecisions": ["allow-once", "deny"]
+            }
+          }
+        }
+        """#)
         watchService.lastSentExecApprovalSnapshot = nil
 
         watchService.emitExecApprovalSnapshotRequest(
             WatchExecApprovalSnapshotRequestEvent(
-                requestId: "snapshot-foreground",
-                sentAtMs: 222,
+                requestId: "snapshot-canonical",
+                gatewayStableID: "test-gateway",
+                sentAtMs: 224,
                 transport: "sendMessage"))
-        await Task.yield()
+        await waitForMainActorWork {
+            watchService.lastSentExecApprovalSnapshot?.requestId == "snapshot-canonical"
+        }
 
-        #expect(watchService.lastSentExecApprovalSnapshot == nil)
+        #expect(watchService.lastSentExecApprovalSnapshot?.approvals.isEmpty == true)
+        #expect(watchService.lastSentExecApprovalResolved?.approvalId == "approval-watch-stale-cache")
+        #expect(watchService.lastSentExecApprovalResolved?.decision == .deny)
+    }
+
+    @Test @MainActor func `watch approval cache miss reports canonical terminal readback`() async {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(
+            notificationCenter: MockBootstrapNotificationCenter(),
+            watchMessagingService: watchService)
+        appModel._test_setConnectedGatewayID("test-gateway")
+        appModel._test_setUnifiedExecApprovalGetResponse(#"""
+        {
+          "approval": {
+            "id": "approval-watch-terminal-readback",
+            "status": "denied",
+            "urlPath": "/approve/approval-watch-terminal-readback",
+            "createdAtMs": 100,
+            "expiresAtMs": 200,
+            "resolvedAtMs": 150,
+            "reason": "user",
+            "decision": "deny",
+            "presentation": {
+              "kind": "exec",
+              "commandText": "echo guarded",
+              "commandPreview": "echo guarded",
+              "warningText": null,
+              "host": "gateway",
+              "nodeId": null,
+              "agentId": "main",
+              "allowedDecisions": ["allow-once", "deny"]
+            }
+          }
+        }
+        """#)
+
+        let handled = await appModel._test_handleWatchExecApprovalResolve(
+            WatchExecApprovalResolveEvent(
+                replyId: "watch-terminal-readback",
+                approvalId: "approval-watch-terminal-readback",
+                gatewayStableID: "test-gateway",
+                decision: .allowOnce,
+                sentAtMs: 123,
+                transport: "test"))
+
+        #expect(handled)
+        #expect(watchService.lastSentExecApprovalResolved?.approvalId ==
+            "approval-watch-terminal-readback")
+        #expect(watchService.lastSentExecApprovalResolved?.decision == .deny)
+        #expect(watchService.lastSentExecApprovalResolved?.source == "another-reviewer")
+        #expect(watchService.lastSentExecApprovalExpired == nil)
+    }
+
+    @Test @MainActor func `watch approval cache miss reports canonical pending readback`() async throws {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(
+            notificationCenter: MockBootstrapNotificationCenter(),
+            watchMessagingService: watchService)
+        appModel._test_setConnectedGatewayID("test-gateway")
+        appModel._test_setUnifiedExecApprovalGetResponse(#"""
+        {
+          "approval": {
+            "id": "approval-watch-pending-readback",
+            "status": "pending",
+            "urlPath": "/approve/approval-watch-pending-readback",
+            "createdAtMs": 100,
+            "expiresAtMs": 4000000000000,
+            "presentation": {
+              "kind": "exec",
+              "commandText": "echo guarded",
+              "commandPreview": "echo guarded",
+              "warningText": "Review this command",
+              "host": "gateway",
+              "nodeId": null,
+              "agentId": "main",
+              "allowedDecisions": ["deny"]
+            }
+          }
+        }
+        """#)
+
+        let handled = await appModel._test_handleWatchExecApprovalResolve(
+            WatchExecApprovalResolveEvent(
+                replyId: "watch-pending-readback",
+                approvalId: "approval-watch-pending-readback",
+                gatewayStableID: "test-gateway",
+                decision: .allowOnce,
+                sentAtMs: 123,
+                transport: "test"))
+
+        #expect(handled)
+        let prompt = try #require(watchService.lastSentExecApprovalPrompt)
+        #expect(prompt.approval.id == "approval-watch-pending-readback")
+        #expect(prompt.approval.allowedDecisions == [.deny])
+        #expect(prompt.resetResolutionAttemptId == "watch-pending-readback")
+        #expect(watchService.lastSentExecApprovalExpired == nil)
+    }
+
+    @Test @MainActor func `delayed terminal fetch does not mutate another visible approval`() async throws {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
+        let fetchGate = WatchSnapshotSendGate()
+        let appModel = NodeAppModel(
+            notificationCenter: MockBootstrapNotificationCenter(),
+            watchMessagingService: MockWatchMessagingService())
+        appModel._test_setConnectedGatewayID("test-gateway")
+        try appModel._test_presentExecApprovalPrompt(#require(
+            NodeAppModel._test_makeExecApprovalPrompt(
+                id: "approval-visible-b",
+                commandText: "echo visible-b",
+                allowedDecisions: ["allow-once", "deny"],
+                host: "gateway",
+                nodeId: nil,
+                agentId: "main",
+                expiresAtMs: 4_000_000_000_000)))
+        appModel._test_setUnifiedExecApprovalGetResponse(#"""
+        {
+          "approval": {
+            "id": "approval-terminal-a",
+            "status": "denied",
+            "urlPath": "/approve/approval-terminal-a",
+            "createdAtMs": 100,
+            "expiresAtMs": 200,
+            "resolvedAtMs": 150,
+            "reason": "user",
+            "decision": "deny",
+            "presentation": {
+              "kind": "exec",
+              "commandText": "echo terminal-a",
+              "commandPreview": "echo terminal-a",
+              "warningText": null,
+              "host": "gateway",
+              "nodeId": null,
+              "agentId": "main",
+              "allowedDecisions": ["allow-once", "deny"]
+            }
+          }
+        }
+        """#, beforeResponse: { await fetchGate.wait() })
+
+        let fetching = Task { @MainActor in
+            await appModel._test_presentExecApprovalGatewayEventPrompt("approval-terminal-a")
+        }
+        let deadline = ContinuousClock().now.advanced(by: .seconds(2))
+        while await !(fetchGate.hasStarted()), ContinuousClock().now < deadline {
+            await Task.yield()
+        }
+
+        #expect(appModel._test_pendingExecApprovalPrompt()?.id == "approval-visible-b")
+        #expect(appModel._test_pendingExecApprovalState().resolving == false)
+        await fetchGate.resume()
+        await fetching.value
+        #expect(appModel._test_pendingExecApprovalPrompt()?.id == "approval-visible-b")
+        #expect(appModel._test_pendingExecApprovalState().resolving == false)
+        #expect(appModel._test_pendingExecApprovalState().resolved == nil)
+    }
+
+    @Test @MainActor func `delayed pending fetch cannot replace a newer visible approval`() async throws {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
+        let fetchGate = WatchSnapshotSendGate()
+        let appModel = NodeAppModel(watchMessagingService: MockWatchMessagingService())
+        appModel._test_setConnectedGatewayID("test-gateway")
+        appModel._test_setUnifiedExecApprovalGetResponse(#"""
+        {
+          "approval": {
+            "id": "approval-delayed-a",
+            "status": "pending",
+            "urlPath": "/approve/approval-delayed-a",
+            "createdAtMs": 100,
+            "expiresAtMs": 4000000000000,
+            "presentation": {
+              "kind": "exec",
+              "commandText": "echo delayed-a",
+              "commandPreview": "echo delayed-a",
+              "warningText": null,
+              "host": "gateway",
+              "nodeId": null,
+              "agentId": "main",
+              "allowedDecisions": ["allow-once", "deny"]
+            }
+          }
+        }
+        """#, beforeResponse: { await fetchGate.wait() })
+        let fetching = Task { @MainActor in
+            await appModel._test_presentExecApprovalGatewayEventPrompt("approval-delayed-a")
+        }
+        let deadline = ContinuousClock().now.advanced(by: .seconds(2))
+        while await !(fetchGate.hasStarted()), ContinuousClock().now < deadline {
+            await Task.yield()
+        }
+        try appModel._test_presentExecApprovalPrompt(#require(
+            NodeAppModel._test_makeExecApprovalPrompt(
+                id: "approval-newer-b",
+                commandText: "echo newer-b",
+                allowedDecisions: ["allow-once", "deny"],
+                host: "gateway",
+                nodeId: nil,
+                agentId: "main",
+                expiresAtMs: 4_000_000_000_000)))
+
+        await fetchGate.resume()
+        await fetching.value
+        #expect(appModel._test_pendingExecApprovalPrompt()?.id == "approval-newer-b")
+        #expect(appModel._test_pendingExecApprovalState().resolving == false)
+    }
+
+    @Test @MainActor func `terminal event tombstone blocks delayed pending reconciliation resurrection`() async throws {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
+        let fetchGate = WatchSnapshotSendGate()
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(watchMessagingService: watchService)
+        appModel._test_setConnectedGatewayID("test-gateway")
+        let approvalID = "approval-terminal-interleave"
+        try appModel._test_presentExecApprovalPrompt(#require(
+            NodeAppModel._test_makeExecApprovalPrompt(
+                id: approvalID,
+                commandText: "echo guarded",
+                allowedDecisions: ["allow-once", "deny"],
+                host: "gateway",
+                nodeId: nil,
+                agentId: "main",
+                expiresAtMs: 4_000_000_000_000)))
+        await waitForMainActorWork { watchService.lastSentExecApprovalPrompt != nil }
+        watchService.lastSentExecApprovalPrompt = nil
+        watchService.sentExecApprovalPrompts.removeAll()
+        appModel._test_setUnifiedExecApprovalGetResponse(makePendingExecApprovalJSON(approvalID), beforeResponse: {
+            await fetchGate.wait()
+        })
+
+        let reconciling = Task { @MainActor in
+            await appModel._test_reconcileWatchExecApprovalCache(reason: "watch_request")
+        }
+        let deadline = ContinuousClock().now.advanced(by: .seconds(2))
+        while await !fetchGate.hasStarted(), ContinuousClock().now < deadline {
+            await Task.yield()
+        }
+
+        let terminalJSON = #"""
+        {
+          "applied": true,
+          "approval": {
+            "id": "approval-terminal-interleave",
+            "status": "allowed",
+            "urlPath": "/approve/approval-terminal-interleave",
+            "createdAtMs": 100,
+            "expiresAtMs": 4000000000000,
+            "resolvedAtMs": 150,
+            "reason": "user",
+            "decision": "allow-once",
+            "presentation": {
+              "kind": "exec",
+              "commandText": "echo guarded",
+              "commandPreview": "echo guarded",
+              "warningText": null,
+              "host": "gateway",
+              "nodeId": null,
+              "agentId": "main",
+              "allowedDecisions": ["allow-once", "deny"]
+            }
+          }
+        }
+        """#
+        #expect(try await appModel._test_applyUnifiedExecApprovalResolveResult(
+            terminalJSON,
+            approvalID: approvalID,
+            attemptedDecision: .allowOnce))
+        await fetchGate.resume()
+        _ = await reconciling.value
+
+        #expect(appModel._test_pendingExecApprovalInboxItems().isEmpty)
+        #expect(appModel._test_pendingExecApprovalPrompt()?.id == approvalID)
+        #expect(appModel._test_pendingExecApprovalState().resolved == "Approval allowed once.")
+        #expect(watchService.sentExecApprovalPrompts.isEmpty)
+        #expect(watchService.lastSentExecApprovalResolved?.approvalId == approvalID)
+    }
+
+    @Test @MainActor func `operator reconnect preserves dismissed approval in reopenable inbox`() async throws {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(watchMessagingService: watchService)
+        appModel._test_setConnectedGatewayID("test-gateway")
+        let prompt = try #require(NodeAppModel._test_makeExecApprovalPrompt(
+            id: "approval-reconnect-restore",
+            commandText: "echo restore",
+            warningText: "Review after reconnect",
+            allowedDecisions: ["allow-once", "deny"],
+            host: "gateway",
+            nodeId: nil,
+            agentId: "main",
+            expiresAtMs: 4_000_000_000_000))
+        appModel._test_presentExecApprovalPrompt(prompt)
+        appModel.dismissPendingExecApprovalPrompt()
+        #expect(appModel._test_pendingExecApprovalPrompt() == nil)
+        appModel._test_setUnifiedExecApprovalGetResponse(#"""
+        {
+          "approval": {
+            "id": "approval-reconnect-restore",
+            "status": "pending",
+            "urlPath": "/approve/approval-reconnect-restore",
+            "createdAtMs": 100,
+            "expiresAtMs": 4000000000000,
+            "presentation": {
+              "kind": "exec",
+              "commandText": "echo restore",
+              "commandPreview": "echo restore",
+              "warningText": "Review after reconnect",
+              "host": "gateway",
+              "nodeId": null,
+              "agentId": "main",
+              "allowedDecisions": ["allow-once", "deny"]
+            }
+          }
+        }
+        """#)
+
+        await appModel._test_reconcileWatchExecApprovalCache(reason: "operator_reconnected")
+
+        #expect(appModel._test_pendingExecApprovalPrompt() == nil)
+        #expect(appModel._test_pendingExecApprovalInboxItems().map(\.id) == ["approval-reconnect-restore"])
+        await waitForMainActorWork { watchService.lastSentExecApprovalPrompt != nil }
+        #expect(watchService.lastSentExecApprovalPrompt?.approval.id == "approval-reconnect-restore")
+        #expect(watchService.lastSentExecApprovalPrompt?.resetResolutionAttemptId == nil)
+        appModel._test_presentPendingExecApprovalFromInbox(
+            approvalID: "approval-reconnect-restore",
+            gatewayStableID: "test-gateway")
+        #expect(appModel._test_pendingExecApprovalPrompt()?.id == "approval-reconnect-restore")
+    }
+
+    @Test @MainActor func `watch reconciliation does not reopen dismissed phone presentation`() async throws {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(
+            notificationCenter: MockBootstrapNotificationCenter(),
+            watchMessagingService: watchService)
+        try appModel._test_presentExecApprovalPrompt(#require(
+            NodeAppModel._test_makeExecApprovalPrompt(
+                id: "approval-watch-reconcile",
+                commandText: "echo reconcile",
+                allowedDecisions: ["allow-once", "deny"],
+                host: "gateway",
+                nodeId: nil,
+                agentId: "main",
+                expiresAtMs: 4_000_000_000_000)))
+        await waitForMainActorWork { watchService.lastSentExecApprovalPrompt != nil }
+        appModel._test_dismissPendingExecApprovalPrompt()
+        watchService.lastSentExecApprovalPrompt = nil
+        appModel._test_setUnifiedExecApprovalGetResponse(#"""
+        {
+          "approval": {
+            "id": "approval-watch-reconcile",
+            "status": "pending",
+            "urlPath": "/approve/approval-watch-reconcile",
+            "createdAtMs": 100,
+            "expiresAtMs": 4000000000000,
+            "presentation": {
+              "kind": "exec",
+              "commandText": "echo reconcile",
+              "commandPreview": "echo reconcile",
+              "warningText": null,
+              "host": "gateway",
+              "nodeId": null,
+              "agentId": "main",
+              "allowedDecisions": ["allow-once", "deny"]
+            }
+          }
+        }
+        """#)
+
+        await appModel._test_reconcileWatchExecApprovalCache(reason: "operator_reconnected")
+
+        await waitForMainActorWork { watchService.lastSentExecApprovalPrompt != nil }
+        #expect(watchService.lastSentExecApprovalPrompt?.approval.id == "approval-watch-reconcile")
+        #expect(watchService.lastSentExecApprovalPrompt?.resetResolutionAttemptId == nil)
+        #expect(appModel._test_pendingExecApprovalPrompt() == nil)
+        #expect(appModel._test_pendingExecApprovalInboxItems().map(\.id) == ["approval-watch-reconcile"])
+    }
+
+    @Test @MainActor func `pending reconciliation cannot unlock or duplicate an active phone approval write`() async throws {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
+        let appModel = NodeAppModel(watchMessagingService: MockWatchMessagingService())
+        let approvalID = "approval-phone-write-race"
+        try appModel._test_presentExecApprovalPrompt(#require(
+            NodeAppModel._test_makeExecApprovalPrompt(
+                id: approvalID,
+                commandText: "echo race",
+                allowedDecisions: ["allow-once", "deny"],
+                host: "gateway",
+                nodeId: nil,
+                agentId: "main",
+                expiresAtMs: 4_000_000_000_000)))
+        appModel._test_setUnifiedExecApprovalGetResponse(#"""
+        {
+          "approval": {
+            "id": "approval-phone-write-race",
+            "status": "pending",
+            "urlPath": "/approve/approval-phone-write-race",
+            "createdAtMs": 100,
+            "expiresAtMs": 4000000000000,
+            "presentation": {
+              "kind": "exec",
+              "commandText": "echo race",
+              "commandPreview": "echo race",
+              "warningText": null,
+              "host": "gateway",
+              "nodeId": null,
+              "agentId": "main",
+              "allowedDecisions": ["allow-once", "deny"]
+            }
+          }
+        }
+        """#)
+        let writeGate = ExecApprovalResolutionGate()
+        appModel._test_setExecApprovalResolutionFailureHandler { _, _, _ in
+            await writeGate.waitForFirstCall()
+        }
+
+        let firstWrite = Task { @MainActor in
+            await appModel.resolvePendingExecApprovalPrompt(decision: "allow-once")
+        }
+        let deadline = ContinuousClock().now.advanced(by: .seconds(2))
+        while await !writeGate.hasStarted(), ContinuousClock().now < deadline {
+            await Task.yield()
+        }
+        let initialWriteCount = await writeGate.callCount()
+        #expect(initialWriteCount == 1)
+        #expect(appModel._test_pendingExecApprovalState().resolving)
+
+        await appModel._test_reconcileWatchExecApprovalCache(reason: "watch_request")
+        #expect(appModel._test_pendingExecApprovalState().resolving)
+        #expect(appModel._test_pendingExecApprovalState().error == nil)
+
+        await appModel.resolvePendingExecApprovalPrompt(decision: "deny")
+        let conflictingWriteCount = await writeGate.callCount()
+        #expect(conflictingWriteCount == 1)
+        #expect(appModel._test_pendingExecApprovalState().resolving)
+
+        await writeGate.resume()
+        await firstWrite.value
+        #expect(!appModel._test_pendingExecApprovalState().resolving)
+        #expect(appModel._test_pendingExecApprovalState().error == "simulated approval write failure")
+    }
+
+    @Test @MainActor func `phone and watch decisions share one exact owner write lease`() async throws {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(watchMessagingService: watchService)
+        let approvalID = "approval-phone-watch-lease"
+        try appModel._test_presentExecApprovalPrompt(#require(
+            NodeAppModel._test_makeExecApprovalPrompt(
+                id: approvalID,
+                commandText: "echo serialized",
+                allowedDecisions: ["allow-once", "deny"],
+                host: "gateway",
+                nodeId: nil,
+                agentId: "main",
+                expiresAtMs: 4_000_000_000_000)))
+        await waitForMainActorWork { watchService.lastSentExecApprovalPrompt != nil }
+        watchService.lastSentExecApprovalPrompt = nil
+        let probe = ExecApprovalConcurrentWriteProbe()
+        appModel._test_setExecApprovalResolutionFailureHandler { _, decision, _ in
+            await probe.resolve(decision: decision)
+        }
+
+        let phoneWrite = Task { @MainActor in
+            await appModel.resolvePendingExecApprovalPrompt(decision: "allow-once")
+        }
+        let deadline = ContinuousClock().now.advanced(by: .seconds(2))
+        while await probe.snapshot().calls.count < 1, ContinuousClock().now < deadline {
+            await Task.yield()
+        }
+        let queuedWatchDecision = await appModel._test_handleWatchExecApprovalResolve(
+            WatchExecApprovalResolveEvent(
+                replyId: "watch-lease-attempt",
+                approvalId: approvalID,
+                gatewayStableID: "test-gateway",
+                decision: .deny,
+                sentAtMs: 123,
+                transport: "test"))
+        #expect(!queuedWatchDecision)
+        let queuedSnapshot = await probe.snapshot()
+        #expect(queuedSnapshot.calls == ["allow-once"])
+
+        await probe.releaseFirst()
+        await phoneWrite.value
+        let secondDeadline = ContinuousClock().now.advanced(by: .seconds(2))
+        while await probe.snapshot().calls.count < 2, ContinuousClock().now < secondDeadline {
+            await Task.yield()
+        }
+        let snapshot = await probe.snapshot()
+        #expect(snapshot.calls == ["allow-once", "deny"])
+        #expect(snapshot.maximumActiveWrites == 1)
+        await waitForMainActorWork {
+            watchService.lastSentExecApprovalPrompt?.resetResolutionAttemptId == "watch-lease-attempt"
+        }
+        #expect(watchService.lastSentExecApprovalPrompt?.resetResolutionAttemptId == "watch-lease-attempt")
+    }
+
+    @Test @MainActor func `watch reconciliation retains visible approval and otherwise chooses first exact I d`() async throws {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
+        let appModel = NodeAppModel(watchMessagingService: MockWatchMessagingService())
+        appModel._test_setConnectedGatewayID("test-gateway")
+        for approvalID in ["approval-b", "approval-a"] {
+            try appModel._test_presentExecApprovalPrompt(#require(
+                NodeAppModel._test_makeExecApprovalPrompt(
+                    id: approvalID,
+                    commandText: "echo cached \(approvalID)",
+                    allowedDecisions: ["allow-once", "deny"],
+                    host: "gateway",
+                    nodeId: nil,
+                    agentId: "main",
+                    expiresAtMs: 4_000_000_000_000)))
+        }
+        let responseTemplate = #"""
+        {
+          "approval": {
+            "id": "__ID__",
+            "status": "pending",
+            "urlPath": "/approve/__ID__",
+            "createdAtMs": 100,
+            "expiresAtMs": 4000000000000,
+            "presentation": {
+              "kind": "exec",
+              "commandText": "canonical __ID__",
+              "commandPreview": "canonical __ID__",
+              "warningText": null,
+              "host": "gateway",
+              "nodeId": null,
+              "agentId": "main",
+              "allowedDecisions": ["allow-once", "deny"]
+            }
+          }
+        }
+        """#
+        let responses: [(approvalID: String, json: String)] = [
+            ("approval-a", responseTemplate.replacingOccurrences(of: "__ID__", with: "approval-a")),
+            ("approval-b", responseTemplate.replacingOccurrences(of: "__ID__", with: "approval-b")),
+        ]
+        appModel._test_setUnifiedExecApprovalGetResponses(responses)
+
+        #expect(appModel._test_pendingExecApprovalPrompt()?.id == "approval-a")
+        await appModel._test_reconcileWatchExecApprovalCache(reason: "watch_request")
+        #expect(appModel._test_pendingExecApprovalPrompt()?.id == "approval-a")
+        #expect(appModel._test_pendingExecApprovalPrompt()?.commandText == "canonical approval-a")
+
+        let fetchGate = WatchSnapshotSendGate()
+        appModel._test_setUnifiedExecApprovalGetResponses(responses, beforeResponse: { approvalID in
+            if approvalID == "approval-a" {
+                await fetchGate.wait()
+            }
+        })
+        let reconciling = Task { @MainActor in
+            await appModel._test_reconcileWatchExecApprovalCache(reason: "watch_request")
+        }
+        let deadline = ContinuousClock().now.advanced(by: .seconds(2))
+        while await !(fetchGate.hasStarted()), ContinuousClock().now < deadline {
+            await Task.yield()
+        }
+        try appModel._test_presentExecApprovalPrompt(#require(
+            NodeAppModel._test_makeExecApprovalPrompt(
+                id: "approval-b",
+                commandText: "newer visible b",
+                allowedDecisions: ["allow-once", "deny"],
+                host: "gateway",
+                nodeId: nil,
+                agentId: "main",
+                expiresAtMs: 4_000_000_000_000)))
+        await fetchGate.resume()
+        _ = await reconciling.value
+        #expect(appModel._test_pendingExecApprovalPrompt()?.id == "approval-b")
+        #expect(appModel._test_pendingExecApprovalPrompt()?.commandText == "newer visible b")
+
+        appModel._test_dismissPendingExecApprovalPrompt()
+        appModel._test_setUnifiedExecApprovalGetResponses(responses)
+        await appModel._test_reconcileWatchExecApprovalCache(reason: "operator_reconnected")
+        #expect(appModel._test_pendingExecApprovalPrompt()?.id == "approval-a")
     }
 
     @Test @MainActor func `watch app snapshot request publishes current dashboard state`() async throws {
@@ -2627,9 +4735,10 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let watchService = MockWatchMessagingService()
         let appModel = NodeAppModel(watchMessagingService: watchService)
+        let gatewayStableID = " gateway-watch-snapshot "
         appModel._test_setGatewayConnected(true)
         appModel._test_setOperatorConnected(true)
-        appModel._test_setConnectedGatewayID("gateway-watch-snapshot")
+        appModel._test_setConnectedGatewayID(gatewayStableID)
         appModel.gatewayStatusText = "Connected"
         appModel.talkMode.setEnabled(true)
         appModel.talkMode.statusText = "Listening"
@@ -2651,7 +4760,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(snapshot.gatewayStatusText == "Connected")
         #expect(snapshot.agentName == "Main")
         #expect(snapshot.sessionKey == "main")
-        #expect(snapshot.gatewayStableID == "gateway-watch-snapshot")
+        #expect(try Array(#require(snapshot.gatewayStableID).utf8) == Array(gatewayStableID.utf8))
         #expect(!snapshot.talkStatusText.isEmpty)
         #expect(snapshot.talkEnabled == true)
         #expect(snapshot.pendingApprovalCount == 0)
@@ -3531,6 +5640,120 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         ])
     }
 
+    @Test @MainActor func `approval push owners dedupe and remove by exact bytes`() async {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
+        let composedOwner = "gateway-device-\u{00E9}"
+        let decomposedOwner = "gateway-device-e\u{0301}"
+        #expect(composedOwner == decomposedOwner)
+        let appModel = NodeAppModel(notificationCenter: MockBootstrapNotificationCenter())
+        let composedRecovery = ExecApprovalNotificationPrompt(
+            approvalId: "approval-exact-push-recovery",
+            gatewayDeviceId: composedOwner)
+        let decomposedRecovery = ExecApprovalNotificationPrompt(
+            approvalId: "approval-exact-push-recovery",
+            gatewayDeviceId: decomposedOwner)
+
+        appModel._test_recordPendingWatchExecApprovalRecoveryID(
+            composedRecovery.approvalId,
+            gatewayDeviceId: composedOwner)
+        appModel._test_recordPendingWatchExecApprovalRecoveryID(
+            decomposedRecovery.approvalId,
+            gatewayDeviceId: decomposedOwner)
+        var recoveryPushes = appModel._test_pendingWatchExecApprovalRecoveryPushes()
+        #expect(recoveryPushes.count == 2)
+        #expect(Set(recoveryPushes.compactMap { GatewayStableIdentifier.key($0.gatewayDeviceId) }).count == 2)
+
+        appModel._test_removePendingWatchExecApprovalRecoveryPush(composedRecovery)
+        recoveryPushes = appModel._test_pendingWatchExecApprovalRecoveryPushes()
+        #expect(recoveryPushes.count == 1)
+        #expect(GatewayStableIdentifier.key(recoveryPushes.first?.gatewayDeviceId) ==
+            GatewayStableIdentifier.key(decomposedOwner))
+
+        let composedResolved = ExecApprovalNotificationPrompt(
+            approvalId: "approval-exact-push-resolved",
+            gatewayDeviceId: composedOwner)
+        let decomposedResolved = ExecApprovalNotificationPrompt(
+            approvalId: "approval-exact-push-resolved",
+            gatewayDeviceId: decomposedOwner)
+        #expect(await appModel.handleExecApprovalResolvedRemotePush(composedResolved))
+        #expect(await appModel.handleExecApprovalResolvedRemotePush(decomposedResolved))
+        var resolvedPushes = appModel._test_pendingExecApprovalResolvedPushes()
+        #expect(resolvedPushes.count == 2)
+        #expect(Set(resolvedPushes.compactMap { GatewayStableIdentifier.key($0.gatewayDeviceId) }).count == 2)
+
+        appModel._test_removePendingExecApprovalResolvedPush(composedResolved)
+        resolvedPushes = appModel._test_pendingExecApprovalResolvedPushes()
+        #expect(resolvedPushes.count == 1)
+        #expect(GatewayStableIdentifier.key(resolvedPushes.first?.gatewayDeviceId) ==
+            GatewayStableIdentifier.key(decomposedOwner))
+    }
+
+    @Test @MainActor func `shipped kindless approval cache migrates through owner scoped canonical readback`() async {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
+        NodeAppModel._test_setPersistedWatchExecApprovalBridgeStateJSON(#"""
+        {
+          "approvals": [{
+            "id": "approval-shipped-cache",
+            "gatewayStableID": "gateway-a",
+            "commandText": "stale cached command",
+            "commandPreview": null,
+            "warningText": null,
+            "allowedDecisions": ["allow-once", "deny"],
+            "host": "gateway",
+            "nodeId": null,
+            "agentId": "main",
+            "expiresAtMs": 4000000000000
+          }]
+        }
+        """#)
+        let appModel = NodeAppModel(
+            notificationCenter: MockBootstrapNotificationCenter(),
+            watchMessagingService: MockWatchMessagingService())
+
+        #expect(appModel._test_watchExecApprovalCacheIDs().isEmpty)
+        var readbacks = appModel._test_pendingPersistedExecApprovalReadbacks()
+        #expect(readbacks.count == 1)
+        #expect(readbacks.first?.approvalId == "approval-shipped-cache")
+        #expect(readbacks.first?.gatewayStableID == "gateway-a")
+
+        appModel._test_setUnifiedExecApprovalGetResponse(#"""
+        {
+          "approval": {
+            "id": "approval-shipped-cache",
+            "status": "pending",
+            "urlPath": "/approve/approval-shipped-cache",
+            "createdAtMs": 100,
+            "expiresAtMs": 4000000000000,
+            "presentation": {
+              "kind": "exec",
+              "commandText": "canonical command",
+              "commandPreview": "canonical command",
+              "warningText": null,
+              "host": "gateway",
+              "nodeId": null,
+              "agentId": "main",
+              "allowedDecisions": ["allow-once", "deny"]
+            }
+          }
+        }
+        """#)
+        appModel._test_setConnectedGatewayID("gateway-b")
+        await appModel._test_reconcileWatchExecApprovalCache(reason: "operator_reconnected")
+        #expect(appModel._test_watchExecApprovalCacheIDs().isEmpty)
+        #expect(appModel._test_pendingExecApprovalPrompt() == nil)
+        #expect(appModel._test_pendingPersistedExecApprovalReadbacks().count == 1)
+
+        appModel._test_setConnectedGatewayID("gateway-a")
+        await appModel._test_reconcileWatchExecApprovalCache(reason: "operator_reconnected")
+        #expect(appModel._test_watchExecApprovalCacheIDs() == ["approval-shipped-cache"])
+        #expect(appModel._test_pendingExecApprovalPrompt()?.id == "approval-shipped-cache")
+        #expect(appModel._test_pendingExecApprovalPrompt()?.commandText == "canonical command")
+        readbacks = appModel._test_pendingPersistedExecApprovalReadbacks()
+        #expect(readbacks.isEmpty)
+    }
+
     @Test @MainActor func `route prompt cannot clear ownerful push recovery`() throws {
         NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
@@ -3553,20 +5776,50 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(appModel._test_pendingWatchExecApprovalRecoveryIDs() == ["approval-watch-clear"])
     }
 
-    @Test func `approval notification error classification prefers structured details`() {
+    @Test func `approval notification stale error classification prefers structured details`() {
         let staleError = GatewayResponseError(
-            method: "exec.approval.get",
+            method: "approval.get",
             code: "INVALID_REQUEST",
             message: "gateway error",
             details: ["reason": AnyCodable("APPROVAL_NOT_FOUND")])
-        let unavailableError = GatewayResponseError(
-            method: "exec.approval.resolve",
-            code: "INVALID_REQUEST",
-            message: "gateway error",
-            details: ["reason": AnyCodable("APPROVAL_ALLOW_ALWAYS_UNAVAILABLE")])
 
         #expect(NodeAppModel._test_isApprovalNotificationStaleError(staleError))
-        #expect(NodeAppModel._test_isApprovalNotificationUnavailableError(unavailableError))
+    }
+
+    @Test func `approval RPC family requires a complete route catalog family`() {
+        #expect(NodeAppModel._test_execApprovalRPCFamily(
+            unifiedGet: true,
+            unifiedResolve: true,
+            legacyGet: true,
+            legacyResolve: true) == "unified")
+        #expect(NodeAppModel._test_execApprovalRPCFamily(
+            unifiedGet: false,
+            unifiedResolve: false,
+            legacyGet: true,
+            legacyResolve: true) == "legacy")
+
+        for methods in [
+            (true, false, true, true),
+            (false, true, true, true),
+            (false, false, true, false),
+            (false, false, false, true),
+        ] {
+            #expect(NodeAppModel._test_execApprovalRPCFamily(
+                unifiedGet: methods.0,
+                unifiedResolve: methods.1,
+                legacyGet: methods.2,
+                legacyResolve: methods.3) == "unavailable")
+        }
+        #expect(NodeAppModel._test_execApprovalRPCFamily(
+            unifiedGet: nil,
+            unifiedResolve: nil,
+            legacyGet: nil,
+            legacyResolve: nil) == "unavailable")
+        #expect(NodeAppModel._test_execApprovalRPCFamily(
+            unifiedGet: nil,
+            unifiedResolve: nil,
+            legacyGet: true,
+            legacyResolve: true) == "unavailable")
     }
 
     @Test func `background aware exec approval reconnect covers watch and push paths`() {
@@ -3593,12 +5846,22 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
     }
 
     @Test func `exec approval event ID decodes gateway payload`() {
-        #expect(NodeAppModel._test_execApprovalEventID(from: AnyCodable(["id": " approval-1 "])) == "approval-1")
-        #expect(NodeAppModel._test_execApprovalEventID(from: AnyCodable(["id": "   "])) == nil)
+        let controlPrefixedID = "\u{001C}approval-1"
+        #expect(NodeAppModel
+            ._test_execApprovalEventID(from: AnyCodable(["id": controlPrefixedID])) == controlPrefixedID)
+        #expect(NodeAppModel
+            ._test_execApprovalEventID(from: AnyCodable(["id": " approval-1 "])) == " approval-1 ")
+        #expect(NodeAppModel
+            ._test_execApprovalEventID(from: AnyCodable(["id": "\tapproval-1"])) == "\tapproval-1")
+        #expect(NodeAppModel
+            ._test_execApprovalEventID(from: AnyCodable(["id": "\u{FEFF}approval-1"])) == "\u{FEFF}approval-1")
+        #expect(NodeAppModel._test_execApprovalEventID(from: AnyCodable(["id": "."])) == nil)
+        #expect(NodeAppModel._test_execApprovalEventID(from: AnyCodable(["id": ".."])) == nil)
+        #expect(NodeAppModel._test_execApprovalEventID(from: AnyCodable(["id": "   "])) == "   ")
         #expect(NodeAppModel._test_execApprovalEventID(from: AnyCodable(["other": "approval-1"])) == nil)
     }
 
-    @Test @MainActor func `operator gateway resolved event leaves unvalidated push recovery`() async throws {
+    @Test @MainActor func `operator gateway resolved event waits for canonical readback`() async throws {
         NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let notificationCenter = MockBootstrapNotificationCenter()
@@ -3633,14 +5896,18 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             seq: nil,
             stateversion: nil))
 
-        #expect(appModel._test_pendingExecApprovalPrompt() == nil)
+        #expect(appModel._test_pendingExecApprovalPrompt()?.id == "approval-event-resolved")
         #expect(appModel._test_pendingWatchExecApprovalRecoveryIDs() == ["approval-event-resolved"])
+        let pendingResolvedPush = ExecApprovalNotificationPrompt(
+            approvalId: "approval-event-resolved",
+            gatewayDeviceId: nil)
+        #expect(appModel._test_pendingExecApprovalResolvedPushes() == [pendingResolvedPush])
         #expect(!notificationCenter.deliveredRemovedIdentifiers.contains([
             "approval-event-notification",
         ]))
     }
 
-    @Test @MainActor func `validated resolved push clears only its gateway recovery`() async {
+    @Test @MainActor func `resolved push without canonical readback preserves gateway recoveries`() async {
         NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let appModel = NodeAppModel(notificationCenter: MockBootstrapNotificationCenter())
@@ -3662,21 +5929,71 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             approvalId: gatewayA.approvalId,
             recoveryPushGatewayDeviceID: gatewayA.gatewayDeviceId)
 
-        #expect(appModel._test_pendingWatchExecApprovalRecoveryPushes() == [gatewayB])
+        #expect(appModel._test_pendingWatchExecApprovalRecoveryPushes() == [gatewayA, gatewayB])
     }
 
-    @Test func `watch exec approval hydrate fetches only missing I ds`() {
+    @Test func `watch exec approval hydrate preserves exact missing I ds`() {
+        let controlPrefixedID = "\u{001C}pending"
+        let composedID = "pending-\u{00E9}"
+        let decomposedID = "pending-e\u{0301}"
         let idsToFetch = NodeAppModel._test_watchExecApprovalIDsNeedingFetch(
-            candidateIDs: ["cached", "pending", "cached", "other", "", "  pending  "],
+            candidateIDs: [
+                "cached",
+                controlPrefixedID,
+                "pending",
+                composedID,
+                decomposedID,
+                "cached",
+                "other",
+                "",
+                "  pending  ",
+            ],
             cachedApprovalIDs: ["cached", "also-cached"])
 
-        #expect(idsToFetch == ["pending", "other"])
+        #expect(idsToFetch.count == 6)
+        #expect(idsToFetch[0] == controlPrefixedID)
+        #expect(idsToFetch[1] == "pending")
+        #expect(Array(idsToFetch[2].utf8) == Array(composedID.utf8))
+        #expect(Array(idsToFetch[3].utf8) == Array(decomposedID.utf8))
+        #expect(idsToFetch[4] == "other")
+        #expect(idsToFetch[5] == "  pending  ")
     }
 
-    @Test func `watch exec approval retry prompt resets resolving state only for retry reason`() {
-        #expect(NodeAppModel._test_shouldResetWatchExecApprovalResolvingStateOnPrompt(reason: "resolve_retry"))
-        #expect(!NodeAppModel._test_shouldResetWatchExecApprovalResolvingStateOnPrompt(reason: "push_request"))
-        #expect(!NodeAppModel._test_shouldResetWatchExecApprovalResolvingStateOnPrompt(reason: "present_prompt"))
+    @Test @MainActor func `watch approval cache orders canonically equivalent I ds exactly`() async throws {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
+        let composedID = "approval-\u{00E9}"
+        let decomposedID = "approval-e\u{0301}"
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(watchMessagingService: watchService)
+        appModel._test_setConnectedGatewayID("test-gateway")
+
+        for approvalID in [composedID, decomposedID] {
+            try appModel._test_presentExecApprovalPrompt(#require(
+                NodeAppModel._test_makeExecApprovalPrompt(
+                    id: approvalID,
+                    commandText: "echo exact",
+                    allowedDecisions: ["allow-once", "deny"],
+                    host: "gateway",
+                    nodeId: nil,
+                    agentId: "main",
+                    expiresAtMs: 4_000_000_000_000)))
+        }
+
+        let cachedIDs = appModel._test_watchExecApprovalCacheIDs()
+        #expect(cachedIDs.count == 2)
+        #expect(Array(cachedIDs[0].utf8) == Array(decomposedID.utf8))
+        #expect(Array(cachedIDs[1].utf8) == Array(composedID.utf8))
+
+        await waitForMainActorWork {
+            watchService.lastSentExecApprovalSnapshot?.approvals.count == 2
+        }
+        let snapshotIDs = try #require(watchService.lastSentExecApprovalSnapshot).approvals.map(\.id)
+        #expect(Array(snapshotIDs[0].utf8) == Array(decomposedID.utf8))
+        #expect(Array(snapshotIDs[1].utf8) == Array(composedID.utf8))
+
+        let restoredModel = NodeAppModel(watchMessagingService: MockWatchMessagingService())
+        #expect(restoredModel._test_watchExecApprovalCacheIDs().count == 2)
     }
 
     @Test func `operator loop waits for bootstrap handoff before using stored token`() {
@@ -3743,6 +6060,37 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(prompt.approvalId == "approval-notifications-off")
     }
 
+    @Test @MainActor func `requested event persists exact readback until canonical classification`() async {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
+        let center = MockBootstrapNotificationCenter()
+        center.status = .authorized
+        let appModel = NodeAppModel(
+            notificationCenter: center,
+            watchMessagingService: MockWatchMessagingService())
+        appModel._test_setConnectedGatewayID("test-gateway")
+        appModel._test_setExecApprovalPromptFetchFailure("route_changed")
+
+        await appModel._test_handleOperatorGatewayServerEvent(EventFrame(
+            type: "event",
+            event: ExecApprovalNotificationBridge.requestedKind,
+            payload: AnyCodable(["id": "approval-requested-retry"]),
+            seq: nil,
+            stateversion: nil))
+
+        #expect(appModel._test_pendingPersistedExecApprovalReadbacks().map(\.approvalId) == [
+            "approval-requested-retry",
+        ])
+        appModel._test_setUnifiedExecApprovalGetResponse(
+            makePendingExecApprovalJSON("approval-requested-retry"))
+        await appModel._test_reconcileWatchExecApprovalCache(reason: "operator_reconnected")
+
+        #expect(appModel._test_pendingPersistedExecApprovalReadbacks().isEmpty)
+        #expect(appModel._test_pendingExecApprovalInboxItems().map(\.id) == [
+            "approval-requested-retry",
+        ])
+    }
+
     @Test @MainActor func `stale operator event cannot mutate approval UI after suspension`() async {
         let center = MockBootstrapNotificationCenter()
         let authorizationGate = NotificationAuthorizationGate()
@@ -3793,7 +6141,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(appModel._test_pendingNotificationPermissionGuidancePrompt() == nil)
     }
 
-    @Test @MainActor func `operator gateway resolved event clears notification guidance prompt`() async throws {
+    @Test @MainActor func `canonical resolved readback clears notification guidance prompt`() async throws {
         let center = MockBootstrapNotificationCenter()
         center.status = .denied
         let appModel = NodeAppModel(notificationCenter: center)
@@ -3807,13 +6155,35 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             seq: nil,
             stateversion: nil))
         _ = try #require(appModel._test_pendingNotificationPermissionGuidancePrompt())
+        appModel._test_setConnectedGatewayID("test-gateway")
+        appModel._test_setUnifiedExecApprovalGetResponse(#"""
+        {
+          "approval": {
+            "id": "approval-guidance-resolved",
+            "status": "denied",
+            "urlPath": "/approve/approval-guidance-resolved",
+            "createdAtMs": 100,
+            "expiresAtMs": 200,
+            "resolvedAtMs": 150,
+            "reason": "user",
+            "decision": "deny",
+            "presentation": {
+              "kind": "exec",
+              "commandText": "echo guarded",
+              "commandPreview": "echo guarded",
+              "warningText": null,
+              "host": "gateway",
+              "nodeId": null,
+              "agentId": "main",
+              "allowedDecisions": ["allow-once", "deny"]
+            }
+          }
+        }
+        """#)
 
-        await appModel._test_handleOperatorGatewayServerEvent(EventFrame(
-            type: "event",
-            event: ExecApprovalNotificationBridge.resolvedKind,
-            payload: AnyCodable(["id": "approval-guidance-resolved"]),
-            seq: nil,
-            stateversion: nil))
+        await appModel._test_handleExecApprovalResolvedForCurrentGateway(
+            approvalId: "approval-guidance-resolved",
+            recoveryPushGatewayDeviceID: nil)
 
         #expect(appModel._test_pendingNotificationPermissionGuidancePrompt() == nil)
     }
@@ -4277,11 +6647,13 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             id: "approval-a",
             gatewayStableID: "gateway-a",
             commandText: "echo safe",
+            warningText: "Review shell expansion",
             allowedDecisions: [.allowOnce, .deny])
         let prompt = WatchMessagingPayloadCodec.encodeExecApprovalPromptPayload(
             OpenClawWatchExecApprovalPromptMessage(approval: approval))
         let encodedApproval = try #require(prompt["approval"] as? [String: Any])
         #expect(encodedApproval["gatewayStableID"] as? String == "gateway-a")
+        #expect(encodedApproval["warningText"] as? String == "Review shell expansion")
 
         let reply = try #require(WatchMessagingPayloadCodec.parseExecApprovalResolvePayload([
             "type": OpenClawWatchPayloadType.execApprovalResolve.rawValue,
@@ -4295,14 +6667,136 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let resolved = WatchMessagingPayloadCodec.encodeExecApprovalResolvedPayload(
             OpenClawWatchExecApprovalResolvedMessage(
                 approvalId: "approval-a",
-                gatewayStableID: "gateway-a"))
+                gatewayStableID: "gateway-a",
+                outcomeText: "This approval was already set to Always Allow."))
         let expired = WatchMessagingPayloadCodec.encodeExecApprovalExpiredPayload(
             OpenClawWatchExecApprovalExpiredMessage(
                 approvalId: "approval-a",
                 gatewayStableID: "gateway-a",
                 reason: .notFound))
         #expect(resolved["gatewayStableID"] as? String == "gateway-a")
+        #expect(resolved["outcomeText"] as? String == "This approval was already set to Always Allow.")
         #expect(expired["gatewayStableID"] as? String == "gateway-a")
+
+        let requestID = "\u{0085}snapshot-request-a"
+        let heldApprovalID = "\u{0085}held-approval-a\u{0085}"
+        let activeResolutionAttemptID = "\u{0085}resolution-attempt-a\u{0085}"
+        let snapshotRequest = try #require(
+            WatchMessagingPayloadCodec.parseExecApprovalSnapshotRequestPayload([
+                "type": OpenClawWatchPayloadType.execApprovalSnapshotRequest.rawValue,
+                "requestId": requestID,
+                "gatewayStableID": "gateway-a",
+                "heldApprovals": [
+                    [
+                        "approvalId": heldApprovalID,
+                        "activeResolutionAttemptId": activeResolutionAttemptID,
+                    ],
+                    ["approvalId": "held-approval-b"],
+                ],
+            ], transport: "sendMessage"))
+        #expect(Array(snapshotRequest.requestId.utf8) == Array(requestID.utf8))
+        #expect(snapshotRequest.gatewayStableID == "gateway-a")
+        #expect(snapshotRequest.heldApprovals.count == 2)
+        #expect(Array(snapshotRequest.heldApprovals[0].approvalId.utf8) == Array(heldApprovalID.utf8))
+        #expect(try Array(#require(snapshotRequest.heldApprovals[0].activeResolutionAttemptId).utf8) ==
+            Array(activeResolutionAttemptID.utf8))
+        #expect(snapshotRequest.heldApprovals[1].activeResolutionAttemptId == nil)
+
+        let snapshot = WatchMessagingPayloadCodec.encodeExecApprovalSnapshotPayload(
+            OpenClawWatchExecApprovalSnapshotMessage(
+                approvals: [approval],
+                gatewayStableID: "gateway-a",
+                requestId: requestID,
+                requestGatewayStableID: "gateway-a"))
+        #expect(try Array(#require(snapshot["requestId"] as? String).utf8) == Array(requestID.utf8))
+        #expect(snapshot["requestGatewayStableID"] as? String == "gateway-a")
+
+        let legacySnapshot = try JSONDecoder().decode(
+            OpenClawWatchExecApprovalSnapshotMessage.self,
+            from: Data(#"{"type":"watch.execApproval.snapshot","approvals":[]}"#.utf8))
+        #expect(legacySnapshot.requestId == nil)
+        #expect(legacySnapshot.requestGatewayStableID == nil)
+        #expect(throws: DecodingError.self) {
+            _ = try JSONDecoder().decode(
+                OpenClawWatchExecApprovalSnapshotRequestMessage.self,
+                from: Data(#"{"type":"watch.execApproval.snapshotRequest","requestId":"legacy"}"#.utf8))
+        }
+        // Shipped Watch binaries request snapshots with neither requestId nor heldApprovals.
+        let shippedShapeRequest = try #require(
+            WatchMessagingPayloadCodec.parseExecApprovalSnapshotRequestPayload([
+                "type": OpenClawWatchPayloadType.execApprovalSnapshotRequest.rawValue,
+            ], transport: "sendMessage"))
+        #expect(!shippedShapeRequest.requestId.isEmpty)
+        #expect(shippedShapeRequest.heldApprovals.isEmpty)
+        #expect(shippedShapeRequest.gatewayStableID == nil)
+        let missingHeldApprovalsRequest = try #require(
+            WatchMessagingPayloadCodec.parseExecApprovalSnapshotRequestPayload([
+                "type": OpenClawWatchPayloadType.execApprovalSnapshotRequest.rawValue,
+                "requestId": "missing-held-approvals",
+            ], transport: "applicationContext"))
+        #expect(missingHeldApprovalsRequest.requestId == "missing-held-approvals")
+        #expect(missingHeldApprovalsRequest.heldApprovals.isEmpty)
+        let missingRequestIdRequest = try #require(
+            WatchMessagingPayloadCodec.parseExecApprovalSnapshotRequestPayload([
+                "type": OpenClawWatchPayloadType.execApprovalSnapshotRequest.rawValue,
+                "heldApprovals": [],
+            ], transport: "applicationContext"))
+        #expect(!missingRequestIdRequest.requestId.isEmpty)
+        let emptyRequestIdRequest = try #require(
+            WatchMessagingPayloadCodec.parseExecApprovalSnapshotRequestPayload([
+                "type": OpenClawWatchPayloadType.execApprovalSnapshotRequest.rawValue,
+                "requestId": "",
+                "heldApprovals": [],
+            ], transport: "applicationContext"))
+        #expect(!emptyRequestIdRequest.requestId.isEmpty)
+        // A present heldApprovals key keeps strict rejection when malformed.
+        #expect(WatchMessagingPayloadCodec.parseExecApprovalSnapshotRequestPayload([
+            "type": OpenClawWatchPayloadType.execApprovalSnapshotRequest.rawValue,
+            "requestId": "malformed-held-approvals-shape",
+            "heldApprovals": "not-an-array",
+        ], transport: "applicationContext") == nil)
+        #expect(WatchMessagingPayloadCodec.parseExecApprovalSnapshotRequestPayload([
+            "type": OpenClawWatchPayloadType.execApprovalSnapshotRequest.rawValue,
+            "requestId": "malformed-held-approval",
+            "heldApprovals": [
+                ["approvalId": "valid"],
+                ["approvalId": ""],
+            ],
+        ], transport: "applicationContext") == nil)
+        #expect(WatchMessagingPayloadCodec.parseExecApprovalSnapshotRequestPayload([
+            "type": OpenClawWatchPayloadType.execApprovalSnapshotRequest.rawValue,
+            "requestId": "malformed-attempt",
+            "heldApprovals": [[
+                "approvalId": "valid",
+                "activeResolutionAttemptId": "",
+            ]],
+        ], transport: "applicationContext") == nil)
+    }
+
+    @Test @MainActor func `watch exec approval codec round trips exact opaque identifiers`() throws {
+        let approvalID = "\u{0085}approval-a\u{0085}"
+        let gatewayID = "\u{0085}gateway-a\u{0085}"
+        let replyID = "\u{0085}reply-e\u{0301}\u{0085}"
+        let prompt = WatchMessagingPayloadCodec.encodeExecApprovalPromptPayload(
+            OpenClawWatchExecApprovalPromptMessage(approval: OpenClawWatchExecApprovalItem(
+                id: approvalID,
+                gatewayStableID: gatewayID,
+                commandText: "echo exact",
+                allowedDecisions: [.allowOnce, .deny])))
+        let encodedApproval = try #require(prompt["approval"] as? [String: Any])
+        let encodedApprovalID = try #require(encodedApproval["id"] as? String)
+        let encodedGatewayID = try #require(encodedApproval["gatewayStableID"] as? String)
+        let reply = try #require(WatchMessagingPayloadCodec.parseExecApprovalResolvePayload([
+            "type": OpenClawWatchPayloadType.execApprovalResolve.rawValue,
+            "replyId": replyID,
+            "approvalId": encodedApprovalID,
+            "gatewayStableID": encodedGatewayID,
+            "decision": OpenClawWatchExecApprovalDecision.allowOnce.rawValue,
+        ], transport: "sendMessage"))
+
+        #expect(Array(reply.replyId.utf8) == Array(replyID.utf8))
+        #expect(Array(reply.approvalId.utf8) == Array(approvalID.utf8))
+        #expect(try Array(#require(reply.gatewayStableID).utf8) == Array(gatewayID.utf8))
     }
 
     @Test @MainActor func `watch direct node setup codec carries opaque setup code`() {
@@ -4334,7 +6828,9 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let approvalSnapshotRequest = try #require(
             WatchMessagingPayloadCodec.parseExecApprovalSnapshotRequestPayload([
                 "type": OpenClawWatchPayloadType.execApprovalSnapshotRequest.rawValue,
+                "requestId": "timestamp-request",
                 "sentAtMs": encodedTimestamp,
+                "heldApprovals": [],
             ], transport: "sendMessage"))
         let appSnapshotRequest = try #require(WatchMessagingPayloadCodec.parseAppSnapshotRequestPayload([
             "type": OpenClawWatchPayloadType.appSnapshotRequest.rawValue,
@@ -4374,6 +6870,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                         id: "approval-a",
                         gatewayStableID: "gateway-a",
                         commandText: "echo safe",
+                        warningText: "Review shell expansion",
                         allowedDecisions: [.allowOnce, .deny]),
                 ],
                 gatewayStableID: "gateway-a",
@@ -4396,6 +6893,8 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(nestedApprovals["snapshotId"] as? String == "approval-a")
         #expect(nestedApprovals["gatewayStableID"] as? String == "gateway-a")
         #expect((nestedApprovals["approvals"] as? [Any])?.count == 1)
+        let nestedApproval = try #require((nestedApprovals["approvals"] as? [[String: Any]])?.first)
+        #expect(nestedApproval["warningText"] as? String == "Review shell expansion")
     }
 
     @Test @MainActor func `handle invoke watch notify rejects empty message`() async throws {
@@ -4558,6 +7057,49 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 transport: "transferUserInfo"))
         await Task.yield()
         #expect(appModel._test_queuedWatchReplyCount() == 1)
+    }
+
+    @Test @MainActor func `watch chat and reply preserve boundary whitespace gateway owner`() async {
+        NodeAppModel._test_resetPersistedWatchChatQueueState()
+        defer { NodeAppModel._test_resetPersistedWatchChatQueueState() }
+        let gatewayID = " gateway-boundary "
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(watchMessagingService: watchService)
+        appModel._test_setConnectedGatewayID(gatewayID)
+
+        watchService.emitAppCommand(WatchAppCommandEvent(
+            commandId: "watch-boundary-chat",
+            command: .sendChat,
+            sessionKey: "main",
+            gatewayStableID: gatewayID,
+            text: "Keep exact owner",
+            sentAtMs: 1,
+            transport: "sendMessage"))
+        watchService.emitReply(WatchQuickReplyEvent(
+            replyId: "watch-boundary-reply",
+            promptId: "watch-boundary-prompt",
+            actionId: "approve",
+            actionLabel: "Approve",
+            sessionKey: "main",
+            gatewayStableID: gatewayID,
+            note: nil,
+            sentAtMs: 2,
+            transport: "sendMessage"))
+        await waitForMainActorWork { appModel._test_queuedWatchReplyCount() == 1 }
+
+        #expect(appModel._test_queuedWatchChatCommandIds() == ["watch-boundary-chat"])
+        #expect(appModel._test_queuedWatchReplyCount() == 1)
+
+        watchService.emitAppCommand(WatchAppCommandEvent(
+            commandId: "watch-trimmed-owner-chat",
+            command: .sendChat,
+            sessionKey: "main",
+            gatewayStableID: "gateway-boundary",
+            text: "Wrong owner",
+            sentAtMs: 3,
+            transport: "sendMessage"))
+        await Task.yield()
+        #expect(appModel._test_queuedWatchChatCommandIds() == ["watch-boundary-chat"])
     }
 
     @Test @MainActor func `watch message outbox restores queued reply after restart`() throws {

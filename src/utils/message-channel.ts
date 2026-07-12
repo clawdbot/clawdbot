@@ -8,7 +8,7 @@ import {
   normalizeGatewayClientName,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { listBundledChannelCatalogEntries } from "../channels/bundled-channel-catalog-read.js";
-import { getChatChannelMeta } from "../channels/chat-meta.js";
+import { findChatChannelMeta } from "../channels/chat-meta.js";
 import { getRegisteredChannelPluginMeta, normalizeChatChannelId } from "../channels/registry.js";
 export {
   isDeliverableMessageChannel,
@@ -103,7 +103,7 @@ export function isMarkdownCapableMessageChannel(raw?: string | null): boolean {
   }
   const builtInChannel = normalizeChatChannelId(channel);
   if (builtInChannel) {
-    const builtInMeta = getChatChannelMeta(builtInChannel);
+    const builtInMeta = findChatChannelMeta(builtInChannel);
     if (builtInMeta) {
       return builtInMeta.markdownCapable === true;
     }

@@ -100,6 +100,7 @@ private final class FirstCancelGate: @unchecked Sendable {
 private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Sendable {
     private let lock = NSLock()
     private let helloAuth: [String: Any]?
+    private let helloMethods: [String]
     private let connectError: [String: Any]?
     private let cancelGate: FirstCancelGate?
     private var _state: URLSessionTask.State = .suspended
@@ -114,10 +115,12 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
 
     init(
         helloAuth: [String: Any]? = nil,
+        helloMethods: [String] = [],
         connectError: [String: Any]? = nil,
         cancelGate: FirstCancelGate? = nil)
     {
         self.helloAuth = helloAuth
+        self.helloMethods = helloMethods
         self.connectError = connectError
         self.cancelGate = cancelGate
     }
@@ -213,14 +216,20 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
                 if let connectError {
                     return .data(Self.connectErrorData(id: id, error: connectError))
                 }
-                return .data(Self.connectOkData(id: id, auth: self.helloAuth))
+                return .data(Self.connectOkData(
+                    id: id,
+                    auth: self.helloAuth,
+                    methods: self.helloMethods))
             }
             try await Task.sleep(nanoseconds: 1_000_000)
         }
         if let connectError {
             return .data(Self.connectErrorData(id: "connect", error: connectError))
         }
-        return .data(Self.connectOkData(id: "connect", auth: self.helloAuth))
+        return .data(Self.connectOkData(
+            id: "connect",
+            auth: self.helloAuth,
+            methods: self.helloMethods))
     }
 
     func receive(
@@ -278,7 +287,11 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
         return (try? JSONSerialization.data(withJSONObject: frame)) ?? Data()
     }
 
-    private static func connectOkData(id: String, auth: [String: Any]? = nil) -> Data {
+    private static func connectOkData(
+        id: String,
+        auth: [String: Any]? = nil,
+        methods: [String] = []) -> Data
+    {
         var payload: [String: Any] = [
             "type": "hello-ok",
             "protocol": 2,
@@ -287,7 +300,7 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
                 "connId": "test",
             ],
             "features": [
-                "methods": [],
+                "methods": methods,
                 "events": [],
             ],
             "snapshot": [
@@ -355,6 +368,7 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
 private final class FakeGatewayWebSocketSession: WebSocketSessioning, @unchecked Sendable {
     private let lock = NSLock()
     private let helloAuth: [String: Any]?
+    private let helloMethods: [String]
     private let connectError: [String: Any]?
     private let cancelGate: FirstCancelGate?
     private var tasks: [FakeGatewayWebSocketTask] = []
@@ -363,10 +377,12 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, @unchecked
 
     init(
         helloAuth: [String: Any]? = nil,
+        helloMethods: [String] = [],
         connectError: [String: Any]? = nil,
         cancelGate: FirstCancelGate? = nil)
     {
         self.helloAuth = helloAuth
+        self.helloMethods = helloMethods
         self.connectError = connectError
         self.cancelGate = cancelGate
     }
@@ -393,6 +409,7 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, @unchecked
             self.requests.append(request)
             let task = FakeGatewayWebSocketTask(
                 helloAuth: self.helloAuth,
+                helloMethods: self.helloMethods,
                 connectError: self.connectError,
                 cancelGate: self.cancelGate)
             self.tasks.append(task)
@@ -527,6 +544,53 @@ private func nodeInvokePush(id: String, command: String) -> GatewayPush {
 @Suite(.serialized)
 struct GatewayNodeSessionTests {
     @Test
+    func `watch approval warning text is optional and round trips`() throws {
+        let legacy = try JSONDecoder().decode(
+            OpenClawWatchExecApprovalItem.self,
+            from: Data(#"{"id":"approval","commandText":"echo ok","allowedDecisions":["deny"]}"#.utf8))
+        #expect(legacy.warningText == nil)
+
+        var current = legacy
+        current.warningText = "Review shell expansion"
+        let decoded = try JSONDecoder().decode(
+            OpenClawWatchExecApprovalItem.self,
+            from: JSONEncoder().encode(current))
+        #expect(decoded.warningText == "Review shell expansion")
+    }
+
+    @Test
+    func `watch approval recovery schema carries exact resolution attempt identifiers`() throws {
+        let resetAttemptID = "\u{0085}reset-attempt\u{0085}"
+        let prompt = OpenClawWatchExecApprovalPromptMessage(
+            approval: OpenClawWatchExecApprovalItem(
+                id: "approval",
+                commandText: "echo ok"),
+            resetResolutionAttemptId: resetAttemptID)
+        let promptData = try JSONEncoder().encode(prompt)
+        let promptObject = try #require(
+            JSONSerialization.jsonObject(with: promptData) as? [String: Any])
+        #expect(try Array(#require(promptObject["resetResolutionAttemptId"] as? String).utf8) ==
+            Array(resetAttemptID.utf8))
+        #expect(promptObject["deliveryId"] == nil)
+        #expect(promptObject["resetResolvingState"] == nil)
+
+        let approvalID = "\u{0085}held-approval\u{0085}"
+        let activeAttemptID = "\u{0085}active-attempt\u{0085}"
+        let request = OpenClawWatchExecApprovalSnapshotRequestMessage(
+            requestId: "request",
+            heldApprovals: [OpenClawWatchExecApprovalSnapshotRequestItem(
+                approvalId: approvalID,
+                activeResolutionAttemptId: activeAttemptID)])
+        let decoded = try JSONDecoder().decode(
+            OpenClawWatchExecApprovalSnapshotRequestMessage.self,
+            from: JSONEncoder().encode(request))
+        #expect(decoded.heldApprovals.count == 1)
+        #expect(Array(decoded.heldApprovals[0].approvalId.utf8) == Array(approvalID.utf8))
+        #expect(try Array(#require(decoded.heldApprovals[0].activeResolutionAttemptId).utf8) ==
+            Array(activeAttemptID.utf8))
+    }
+
+    @Test
     func `websocket ping ignores duplicate success callbacks`() async throws {
         let task = DoubleCallbackPingWebSocketTask(callbacks: [nil, nil])
         try await WebSocketTaskBox(task: task).sendPing()
@@ -610,6 +674,62 @@ struct GatewayNodeSessionTests {
     }
 
     @Test
+    func `connect joins the snapshot dispatched connected callback`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let connectedGate = AsyncGate()
+        let lifecycle = DisconnectProbe()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: [],
+            commands: [],
+            permissions: [:],
+            clientId: "openclaw-ios-test",
+            clientMode: "node",
+            clientDisplayName: "iOS Test",
+            includeDeviceIdentity: false)
+
+        let connect = Task {
+            try await gateway.connect(
+                url: #require(URL(string: "ws://first.example.invalid")),
+                token: nil,
+                bootstrapToken: nil,
+                password: nil,
+                connectOptions: options,
+                sessionBox: WebSocketSessionBox(session: session),
+                onConnected: {
+                    await lifecycle.record("connected-start")
+                    await connectedGate.wait()
+                    await lifecycle.record("connected-end")
+                },
+                onDisconnected: { _ in },
+                onInvoke: { req in
+                    BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil)
+                })
+            await lifecycle.record("connect-returned")
+        }
+        defer { connect.cancel() }
+
+        try await waitUntil("connected callback suspended") {
+            await connectedGate.hasStarted()
+        }
+        for _ in 0..<20 {
+            await Task.yield()
+        }
+        #expect(await lifecycle.values() == ["connected-start"])
+
+        await connectedGate.release()
+        try await connect.value
+        #expect(await lifecycle.values() == [
+            "connected-start",
+            "connected-end",
+            "connect-returned",
+        ])
+        await gateway.disconnect()
+    }
+
+    @Test
     func `concurrent replacements wait for route invalidation before installing a channel`() async throws {
         let session = FakeGatewayWebSocketSession()
         let gateway = GatewayNodeSession()
@@ -654,6 +774,7 @@ struct GatewayNodeSessionTests {
         try await waitUntil("route invalidation started") {
             await invalidationGate.hasStarted()
         }
+        let supersededAdmissionGeneration = await gateway._test_admissionGeneration()
         let finalReplacement = Task {
             try await gateway.connect(
                 url: #require(URL(string: "ws://third.example.invalid")),
@@ -668,8 +789,8 @@ struct GatewayNodeSessionTests {
                     BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil)
                 })
         }
-        for _ in 0..<20 {
-            await Task.yield()
+        try await waitUntil("final replacement revoked superseded admission") {
+            await gateway._test_admissionGeneration() != supersededAdmissionGeneration
         }
 
         #expect(await gateway.currentRoute() == nil)
@@ -1367,9 +1488,49 @@ struct GatewayNodeSessionTests {
     }
 
     @Test
+    func `server methods stay bound to the connected route`() async throws {
+        let session = FakeGatewayWebSocketSession(helloMethods: [
+            "approval.get",
+            "approval.resolve",
+            "exec.approval.get",
+            "exec.approval.resolve",
+        ])
+        let gateway = GatewayNodeSession()
+        let options = GatewayConnectOptions(
+            role: "operator",
+            scopes: [],
+            caps: [],
+            commands: [],
+            permissions: [:],
+            clientId: "openclaw-ios-test",
+            clientMode: "operator",
+            clientDisplayName: "iOS Test",
+            includeDeviceIdentity: false)
+
+        try await gateway.connect(
+            url: #require(URL(string: "ws://gateway.example.invalid")),
+            token: nil,
+            bootstrapToken: nil,
+            password: nil,
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { req in BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil) })
+        let route = try #require(await gateway.currentRoute())
+        #expect(await gateway.supportsServerMethod("approval.get", ifCurrentRoute: route) == true)
+        #expect(await gateway.supportsServerMethod("missing", ifCurrentRoute: route) == false)
+
+        await gateway.disconnect()
+        #expect(await gateway.supportsServerMethod("approval.get", ifCurrentRoute: route) == nil)
+    }
+
+    @Test
     func `captured route bound operations never use a replacement channel`() async throws {
         let session = FakeGatewayWebSocketSession()
         let gateway = GatewayNodeSession()
+        let composedGatewayID = "gw-\u{00E9}"
+        let decomposedGatewayID = "gw-e\u{0301}"
         let options = GatewayConnectOptions(
             role: "node",
             scopes: [],
@@ -1380,7 +1541,7 @@ struct GatewayNodeSessionTests {
             clientMode: "node",
             clientDisplayName: "iOS Test",
             includeDeviceIdentity: false,
-            deviceAuthGatewayID: "gw-a")
+            deviceAuthGatewayID: composedGatewayID)
 
         try await gateway.connect(
             url: #require(URL(string: "ws://first.example.invalid")),
@@ -1390,8 +1551,9 @@ struct GatewayNodeSessionTests {
             onConnected: {},
             onDisconnected: { _ in },
             onInvoke: { req in BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil) })
-        let firstRoute = try #require(await gateway.currentRoute(ifGatewayID: "gw-a"))
-        #expect(await gateway.currentRoute(ifGatewayID: "GW-A") == nil)
+        let firstRoute = try #require(await gateway.currentRoute(ifGatewayID: composedGatewayID))
+        #expect(composedGatewayID == decomposedGatewayID)
+        #expect(await gateway.currentRoute(ifGatewayID: decomposedGatewayID) == nil)
         let capturedFirstRouteSender: @Sendable (String, String?) async -> Bool = { event, payloadJSON in
             await gateway.sendEvent(
                 event: event,
@@ -1399,20 +1561,25 @@ struct GatewayNodeSessionTests {
                 ifCurrentRoute: firstRoute)
         }
 
+        var replacementOptions = options
+        replacementOptions.deviceAuthGatewayID = decomposedGatewayID
         try await gateway.connect(
-            url: #require(URL(string: "ws://second.example.invalid")),
+            url: #require(URL(string: "ws://first.example.invalid")),
             credentials: .init(),
-            connectOptions: options,
+            connectOptions: replacementOptions,
             sessionBox: WebSocketSessionBox(session: session),
             onConnected: {},
             onDisconnected: { _ in },
             onInvoke: { req in BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil) })
 
+        #expect(await gateway.currentRoute(ifGatewayID: composedGatewayID) == nil)
+        #expect(await gateway.currentRoute(ifGatewayID: decomposedGatewayID) != nil)
+
         let sent = await capturedFirstRouteSender("push.apns.register", "{}")
         #expect(!sent)
         do {
             _ = try await gateway.request(
-                method: "exec.approval.get",
+                method: "approval.get",
                 paramsJSON: "{}",
                 ifCurrentRoute: firstRoute)
             Issue.record("stale route request unexpectedly reached the replacement channel")
@@ -1421,7 +1588,7 @@ struct GatewayNodeSessionTests {
         }
         do {
             _ = try await gateway.request(
-                method: "exec.approval.get",
+                method: "approval.get",
                 paramsJSON: "{}",
                 ifCurrentRoute: firstRoute,
                 distinguishPreDispatchRouteChange: true)
@@ -1431,7 +1598,7 @@ struct GatewayNodeSessionTests {
         }
         let replacementTask = try #require(session.latestTask())
         #expect(replacementTask.sentRequestCount(method: "node.event") == 0)
-        #expect(replacementTask.sentRequestCount(method: "exec.approval.get") == 0)
+        #expect(replacementTask.sentRequestCount(method: "approval.get") == 0)
     }
 
     @Test
@@ -1728,6 +1895,33 @@ struct GatewayNodeSessionTests {
         #expect(await probe.count() == 1)
 
         await gateway.disconnect()
+    }
+
+    @Test
+    func `computer invoke receipts isolate canonically equivalent gateway owners`() async {
+        let gateway = GatewayNodeSession()
+        let probe = ComputerInvokeProbe()
+        await probe.release()
+        let paramsJSON = #"{"action":"type","text":"hello"}"#
+        let idempotencyKey = "computer.act:v1:exact-owner"
+        let composedScope = "gateway:gw-\u{00E9}"
+        let decomposedScope = "gateway:gw-e\u{0301}"
+
+        #expect(composedScope == decomposedScope)
+        _ = await gateway.invokeComputerWithReceiptForTesting(
+            requestId: "composed-owner",
+            paramsJSON: paramsJSON,
+            idempotencyKey: idempotencyKey,
+            receiptScope: composedScope,
+            onInvoke: { request in await probe.execute(request) })
+        _ = await gateway.invokeComputerWithReceiptForTesting(
+            requestId: "decomposed-owner",
+            paramsJSON: paramsJSON,
+            idempotencyKey: idempotencyKey,
+            receiptScope: decomposedScope,
+            onInvoke: { request in await probe.execute(request) })
+
+        #expect(await probe.count() == 2)
     }
 
     @Test

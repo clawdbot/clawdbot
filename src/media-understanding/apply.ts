@@ -1,6 +1,7 @@
 // Applies media-understanding outputs to inbound message context, including
 // attachment normalization, provider execution, file text extraction, and echoing.
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -267,7 +268,9 @@ function hasSuspiciousBinarySignal(buffer?: Buffer): boolean {
   if (sample.length < 4 || sample[0] !== 0x50 || sample[1] !== 0x4b) {
     return false;
   }
-  const signature = (sample[2] << 8) | sample[3];
+  const signature =
+    (expectDefined(sample[2], "sample entry at 2") << 8) |
+    expectDefined(sample[3], "sample entry at 3");
   // Cover the ZIP local-header, central-directory, and empty-archive markers
   // so archive payloads cannot slip past text coercion when MIME detection is weak.
   return signature === 0x0304 || signature === 0x0102 || signature === 0x0506;
@@ -282,8 +285,8 @@ function decodeTextSample(buffer?: Buffer): string {
   if (utf16Charset === "utf-16be") {
     const swapped = Buffer.alloc(sample.length);
     for (let i = 0; i + 1 < sample.length; i += 2) {
-      swapped[i] = sample[i + 1];
-      swapped[i + 1] = sample[i];
+      swapped[i] = expectDefined(sample[i + 1], "UTF-16BE low byte");
+      swapped[i + 1] = expectDefined(sample[i], "UTF-16BE high byte");
     }
     return new TextDecoder("utf-16le").decode(swapped);
   }

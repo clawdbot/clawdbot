@@ -126,7 +126,7 @@ export function applyAgentConfig(
   const name = params.name?.trim();
   const list = listAgentEntries(cfg);
   const index = findAgentEntryIndex(list, agentId);
-  const base = index >= 0 ? list[index] : { id: agentId };
+  const base = (index >= 0 ? list[index] : undefined) ?? { id: agentId };
   const mergedIdentity = params.identity ? { ...base.identity, ...params.identity } : undefined;
   const nextEntry: AgentEntry = {
     ...base,

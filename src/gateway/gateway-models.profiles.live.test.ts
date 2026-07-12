@@ -2444,6 +2444,18 @@ function shouldSkipToolNonceProbeMissForLiveModel(modelKey?: string): boolean {
   return GATEWAY_LIVE_TOOL_NONCE_MISS_SKIP_MODEL_KEYS.has(normalizedKey);
 }
 
+function shouldRetryToolNonceProbeMissForLiveModel(modelKey?: string): boolean {
+  if (shouldSkipToolNonceProbeMissForLiveModel(modelKey)) {
+    return true;
+  }
+  if (!modelKey) {
+    return false;
+  }
+  const [provider, ...rest] = modelKey.split("/");
+  const modelId = rest.join("/");
+  return provider === "openai" && (modelId === "gpt-5.6" || modelId.startsWith("gpt-5.6-"));
+}
+
 describe("shouldSkipToolNonceProbeMissForLiveModel", () => {
   it.each([
     { modelKey: "anthropic/claude-opus-4-6", expected: true },
@@ -2458,8 +2470,21 @@ describe("shouldSkipToolNonceProbeMissForLiveModel", () => {
     { modelKey: "google/gemini-3-flash-preview", expected: true },
     { modelKey: "google/gemini-3.1-pro-preview", expected: true },
     { modelKey: "openai/gpt-5.4", expected: false },
+    { modelKey: "openai/gpt-5.6-sol", expected: false },
   ])("returns $expected for $modelKey", ({ modelKey, expected }) => {
     expect(shouldSkipToolNonceProbeMissForLiveModel(modelKey)).toBe(expected);
+  });
+});
+
+describe("shouldRetryToolNonceProbeMissForLiveModel", () => {
+  it.each([
+    { modelKey: "openai/gpt-5.6", expected: true },
+    { modelKey: "openai/gpt-5.6-luna", expected: true },
+    { modelKey: "openai/gpt-5.6-sol", expected: true },
+    { modelKey: "openai/gpt-5.5", expected: false },
+    { modelKey: "openai/gpt-5.60", expected: false },
+  ])("returns $expected for $modelKey", ({ modelKey, expected }) => {
+    expect(shouldRetryToolNonceProbeMissForLiveModel(modelKey)).toBe(expected);
   });
 });
 
@@ -4782,9 +4807,9 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
               logProgress(`${progressLabel}: tool-read`);
               const runIdTool = randomUUID();
               const maxToolReadAttempts = 3;
-              // Known-variable models already skip after exhausted nonce misses.
-              // Use the stricter follow-up prompts before conceding that coverage.
-              const retryKnownToolNonceMiss = shouldSkipToolNonceProbeMissForLiveModel(modelKey);
+              // Some known-variable models may skip after exhausted nonce misses;
+              // GPT-5.6 variants retry but still fail closed after the final attempt.
+              const retryKnownToolNonceMiss = shouldRetryToolNonceProbeMissForLiveModel(modelKey);
               let toolText = "";
               for (
                 let toolReadAttempt = 0;

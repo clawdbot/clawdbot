@@ -191,7 +191,10 @@ function isUserToolResultMessage(message: unknown): boolean {
 function coalesceClaudeCliToolMessages(messages: TranscriptLikeMessage[]): TranscriptLikeMessage[] {
   const coalesced: TranscriptLikeMessage[] = [];
   for (let index = 0; index < messages.length; index += 1) {
-    const current = messages[index];
+    const current = messages.at(index);
+    if (current === undefined) {
+      break;
+    }
     const next = messages[index + 1];
     if (!isAssistantToolCallMessage(current) || !isUserToolResultMessage(next)) {
       coalesced.push(current);

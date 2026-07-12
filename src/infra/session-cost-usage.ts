@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
+import { expectDefined } from "@openclaw/normalization-core";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -1237,9 +1238,9 @@ const computeLatencyStats = (values: number[]): SessionLatencyStats | undefined 
   return {
     count,
     avgMs: total / count,
-    p95Ms: sorted[p95Index] ?? sorted[count - 1],
-    minMs: sorted[0],
-    maxMs: sorted[count - 1],
+    p95Ms: sorted[p95Index] ?? expectDefined(sorted[count - 1], "last latency sample"),
+    minMs: expectDefined(sorted[0], "sorted entry at 0"),
+    maxMs: expectDefined(sorted[count - 1], "sorted entry at count 1"),
   };
 };
 

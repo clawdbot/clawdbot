@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Resolves CLI command path policy from the declarative command catalog.
 import { isGatewayConfigBypassCommandPath } from "../gateway/explicit-connection-policy.js";
 import { getCommandPathWithRootOptions } from "./argv.js";
@@ -58,7 +59,7 @@ export function resolveCliCatalogCommandPath(argv: string[]): string[] {
       bestMatch = entry.commandPath;
     }
   }
-  return bestMatch ? [...bestMatch] : [tokens[0]];
+  return bestMatch ? [...bestMatch] : [expectDefined(tokens[0], "tokens entry at 0")];
 }
 
 export function resolveCliNetworkProxyPolicy(argv: string[]): CliNetworkProxyPolicy {

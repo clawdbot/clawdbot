@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { getChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
+import { findChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { isRecord, resolveConfigDir, resolveUserPath } from "../utils.js";
 import type { PluginAutoEnableCandidate } from "./plugin-auto-enable.types.js";
@@ -97,7 +97,7 @@ function resolveBuiltInChannelPreferOver(channelId: string): readonly string[] {
   if (!builtInChannelId) {
     return [];
   }
-  return getChatChannelMeta(builtInChannelId)?.preferOver ?? [];
+  return findChatChannelMeta(builtInChannelId)?.preferOver ?? [];
 }
 
 function resolvePreferredOverIds(

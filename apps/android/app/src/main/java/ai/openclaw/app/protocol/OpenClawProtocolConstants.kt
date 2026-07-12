@@ -7,7 +7,6 @@ enum class OpenClawCapability(
   Canvas("canvas"),
   Camera("camera"),
   Sms("sms"),
-  VoiceWake("voiceWake"),
   Talk("talk"),
   Location("location"),
   Device("device"),

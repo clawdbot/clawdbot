@@ -24,7 +24,6 @@ class OpenClawProtocolConstantsTest {
   fun capabilitiesUseStableStrings() {
     assertEquals("canvas", OpenClawCapability.Canvas.rawValue)
     assertEquals("camera", OpenClawCapability.Camera.rawValue)
-    assertEquals("voiceWake", OpenClawCapability.VoiceWake.rawValue)
     assertEquals("talk", OpenClawCapability.Talk.rawValue)
     assertEquals("location", OpenClawCapability.Location.rawValue)
     assertEquals("sms", OpenClawCapability.Sms.rawValue)

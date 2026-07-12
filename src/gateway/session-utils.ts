@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Gateway session listing and projection helpers.
 // Normalizes persisted session stores into UI/RPC rows without mutating state.
 import {
@@ -2881,7 +2882,7 @@ export async function listSessionsFromStoreAsync(params: {
 
     const sessions: GatewaySessionRow[] = [];
     for (let i = 0; i < entries.length; i++) {
-      const [key, entry] = entries[i];
+      const [key, entry] = expectDefined(entries[i], "entries entry at i");
       const includeTranscriptFields = i < sessionListTranscriptFieldRows;
       const rowAgentId =
         key === "global" && typeof opts.agentId === "string"

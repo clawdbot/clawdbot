@@ -5,6 +5,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { AssistantMessage, UserMessage } from "openclaw/plugin-sdk/llm";
 import { afterAll, beforeAll, beforeEach, expect, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -693,7 +694,10 @@ export async function directSessionReq<TPayload = unknown>(
   let result:
     | { ok: boolean; payload?: TPayload; error?: { code?: string; message?: string } }
     | undefined;
-  await sessionsHandlers[method]({
+  await expectDefined(
+    sessionsHandlers[method],
+    "sessions handlers entry at method",
+  )({
     req: {} as never,
     params,
     respond: (ok, payload, error) => {

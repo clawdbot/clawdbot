@@ -230,6 +230,18 @@ func (t *singletonFenceRetryTranslator) TranslateRaw(_ context.Context, text, _,
 
 func (t *singletonFenceRetryTranslator) Close() {}
 
+type splitProtocolMarkerTranslator struct{}
+
+func (splitProtocolMarkerTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
+	return text, nil
+}
+
+func (splitProtocolMarkerTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
+	return strings.ReplaceAll(text, "[Notice kind=system]", "[Aviso kind=system]"), nil
+}
+
+func (splitProtocolMarkerTranslator) Close() {}
+
 func TestParseTaggedDocumentRejectsMissingBodyCloseAtEOF(t *testing.T) {
 	t.Parallel()
 
@@ -754,11 +766,639 @@ func TestValidateDocChunkTranslationRejectsAttributeCodeWithoutTrailingNewline(t
 func TestValidateDocChunkTranslationAllowsTranslationInsideFencedExamples(t *testing.T) {
 	t.Parallel()
 
-	source := "```md\nUse `<your uid>` here.\n```\n"
-	translated := "```md\nUsa `<tu uid>` aquí.\n```\n"
+	source := "```md\nUse the value shown here.\n```\n"
+	translated := "```md\nUsa el valor que se muestra aquí.\n```\n"
 
 	if err := validateDocChunkTranslation(source, translated); err != nil {
 		t.Fatalf("expected fenced example prose to remain governed by fence validation, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationAllowsVisibleFencedMarkupToTranslate(t *testing.T) {
+	t.Parallel()
+
+	source := "```mdx\n<Note title=\"English\">Text.</Note>\n```\n"
+	translated := "```mdx\n<Note title=\"Español\">Texto.</Note>\n```\n"
+
+	if err := validateDocChunkTranslation(source, translated); err != nil {
+		t.Fatalf("expected visible fenced markup attributes and prose to translate, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationRejectsTranslatedFencedPlaceholders(t *testing.T) {
+	t.Parallel()
+
+	source := "```text\nCommands: /goal edit <objective>, /goal pause\n```\n"
+	translated := "```text\n명령어: /goal edit <목적>, /goal pause\n```\n"
+
+	err := validateDocChunkTranslation(source, translated)
+	if err == nil {
+		t.Fatal("expected translated fenced placeholder to be rejected")
+	}
+	if !strings.Contains(err.Error(), "fenced placeholder mismatch") {
+		t.Fatalf("expected fenced placeholder mismatch, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationRejectsTranslatedFencedProtocolMarkers(t *testing.T) {
+	t.Parallel()
+
+	source := strings.Join([]string{
+		"<Accordion>",
+		"",
+		"    ```text",
+		"    [Replying to <sender> id:<stanzaId>]",
+		"    <quoted body or media placeholder>",
+		"    [/Replying]",
+		"    ```",
+		"",
+		"</Accordion>",
+	}, "\n")
+	translated := strings.Join([]string{
+		"<Accordion>",
+		"",
+		"    ```text",
+		"    [<sender>에게 답장 중 id:<stanzaId>]",
+		"    <인용된 본문 또는 미디어 자리표시자>",
+		"    [/답장 중]",
+		"    ```",
+		"",
+		"</Accordion>",
+	}, "\n")
+
+	err := validateDocChunkTranslation(source, translated)
+	if err == nil {
+		t.Fatal("expected translated fenced protocol markers to be rejected")
+	}
+	if !strings.Contains(err.Error(), "fenced placeholder mismatch") && !strings.Contains(err.Error(), "fenced protocol marker mismatch") {
+		t.Fatalf("expected fenced literal mismatch, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationRejectsChangedFencedMarkersInContainers(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		source     string
+		translated string
+	}{
+		{
+			name:       "blockquote",
+			source:     "> ```text\n> [Replying to <sender>]\n> [/Replying]\n> ```\n",
+			translated: "> ```text\n> [Respuesta a <sender>]\n> [/Replying]\n> ```\n",
+		},
+		{
+			name:       "list item",
+			source:     "- ```text\n  <objective>\n  ```\n",
+			translated: "- ```text\n  <objetivo>\n  ```\n",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if err := validateDocChunkTranslation(test.source, test.translated); err == nil {
+				t.Fatal("expected changed fenced marker to be rejected")
+			}
+		})
+	}
+}
+
+func TestValidateDocChunkTranslationRejectsFencedProtocolMarkersWithoutPlaceholders(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		source     string
+		translated string
+	}{
+		{
+			name:       "self closing marker",
+			source:     "```text\n[embed ref=\"cv_123\" title=\"Status\" /]\n```\n",
+			translated: "```text\n[embed ref=\"cv_123\" title=\"Estado\" /]\n```\n",
+		},
+		{
+			name:       "paired runtime marker",
+			source:     "```text\n[Replying to Alice id:123]\n[/Replying]\n```\n",
+			translated: "```text\n[Respuesta a Alice id:123]\n[/Respuesta]\n```\n",
+		},
+		{
+			name:       "attribute free paired marker",
+			source:     "```text\n[Replying]\n[/Replying]\n```\n",
+			translated: "```text\n[Respuesta]\n[/Replying]\n```\n",
+		},
+		{
+			name:       "standalone reply marker",
+			source:     "```text\n[Replying to: \"hello\"]\n```\n",
+			translated: "```text\n[Respondiendo a: \"hello\"]\n```\n",
+		},
+		{
+			name:       "config section",
+			source:     "```ini\n[Install]\nWantedBy=default.target\n```\n",
+			translated: "```ini\n[Instalar]\nWantedBy=default.target\n```\n",
+		},
+		{
+			name:       "optional cli syntax",
+			source:     "```text\n[--apply] [--json]\n```\n",
+			translated: "```text\n[--aplicar] [--json]\n```\n",
+		},
+		{
+			name:       "standalone attributes",
+			source:     "```text\n[Inter-session message source=agent isUser=false]\n```\n",
+			translated: "```text\n[Mensaje entre sesiones source=agente isUser=falso]\n```\n",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			err := validateDocChunkTranslation(test.source, test.translated)
+			if err == nil {
+				t.Fatal("expected changed fenced protocol marker to be rejected")
+			}
+			if !strings.Contains(err.Error(), "fenced protocol marker mismatch") {
+				t.Fatalf("expected fenced protocol marker mismatch, got %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateDocChunkTranslationPreservesFencedDirectiveTokens(t *testing.T) {
+	t.Parallel()
+
+	source := "```text\n[[tts:text]]Here is the spoken version.[[/tts:text]]\n[[audio_as_voice]]\n```\n"
+	translatedProse := "```text\n[[tts:text]]Aquí está la versión hablada.[[/tts:text]]\n[[audio_as_voice]]\n```\n"
+	if err := validateDocChunkTranslation(source, translatedProse); err != nil {
+		t.Fatalf("expected prose around preserved directive tokens to translate, got %v", err)
+	}
+
+	translatedDirective := "```text\n[[tts:texto]]Aquí está la versión hablada.[[/tts:texto]]\n[[audio_como_voz]]\n```\n"
+	err := validateDocChunkTranslation(source, translatedDirective)
+	if err == nil {
+		t.Fatal("expected changed fenced directive tokens to be rejected")
+	}
+	if !strings.Contains(err.Error(), "fenced directive mismatch") {
+		t.Fatalf("expected fenced directive mismatch, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationRejectsPlaceholderAfterContainerLikeFenceContent(t *testing.T) {
+	t.Parallel()
+
+	source := "```text\n- ```\n<objective>\n```\n"
+	translated := "```text\n- ```\n<objetivo>\n```\n"
+
+	err := validateDocChunkTranslation(source, translated)
+	if err == nil {
+		t.Fatal("expected placeholder after container-like fence content to be rejected")
+	}
+	if !strings.Contains(err.Error(), "fenced placeholder mismatch") {
+		t.Fatalf("expected fenced placeholder mismatch, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationAllowsBracketedFencedHumanProse(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		source     string
+		translated string
+	}{
+		{
+			name:       "placeholder prose",
+			source:     "```text\n[Send <file> now]\n```\n",
+			translated: "```text\n[Envía <file> ahora]\n```\n",
+		},
+		{
+			name:       "colon prose",
+			source:     "```text\n[Warning: send <file> now]\n```\n",
+			translated: "```text\n[Advertencia: envía <file> ahora]\n```\n",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if err := validateDocChunkTranslation(test.source, test.translated); err != nil {
+				t.Fatalf("expected ordinary bracketed prose with a preserved placeholder to translate, got %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateDocChunkTranslationAllowsFencedComparisonsToTranslate(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		source     string
+		translated string
+	}{
+		{
+			name:       "spaced operators",
+			source:     "```text\nLatency < 5 ms and errors > 0 require attention.\n```\n",
+			translated: "```text\nLa latencia < 5 ms y los errores > 0 requieren atención.\n```\n",
+		},
+		{
+			name:       "compact operators",
+			source:     "```text\nLatency <5 ms and retries>0 require attention.\n```\n",
+			translated: "```text\nLa latencia <5 ms y los reintentos>0 requieren atención.\n```\n",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if err := validateDocChunkTranslation(test.source, test.translated); err != nil {
+				t.Fatalf("expected comparison prose to translate without placeholder classification, got %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateDocChunkTranslationFindsPlaceholderAfterFencedComparison(t *testing.T) {
+	t.Parallel()
+
+	source := "```text\nLatency <5 ms; use <duration>.\n```\n"
+	translated := "```text\nLatencia <5 ms; usa <duración>.\n```\n"
+
+	err := validateDocChunkTranslation(source, translated)
+	if err == nil {
+		t.Fatal("expected placeholder after comparison to be rejected")
+	}
+	if !strings.Contains(err.Error(), "fenced placeholder mismatch") {
+		t.Fatalf("expected fenced placeholder mismatch, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationPreservesEmbeddedSquareMarkers(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		source     string
+		translated string
+	}{
+		{
+			name:       "usage tokens",
+			source:     "```text\nUsage: cmd [provider] [page]\n```\n",
+			translated: "```text\nUso: cmd [proveedor] [página]\n```\n",
+		},
+		{
+			name:       "json string",
+			source:     "```json\n{\"usage_hint\": \"[provider] [page] ...\"}\n```\n",
+			translated: "```json\n{\"usage_hint\": \"[proveedor] [página] ...\"}\n```\n",
+		},
+		{
+			name:       "config section in shell heredoc",
+			source:     "```bash\ncat <<'EOF'\n[boot]\ncommand = \"run\"\nEOF\n```\n",
+			translated: "```bash\ncat <<'EOF'\n[arranque]\ncommand = \"run\"\nEOF\n```\n",
+		},
+		{
+			name:       "punctuated option list",
+			source:     "```text\ncmd [status|on|off] [name|#|status] [limit=<n>|size=<n>|all]\n```\n",
+			translated: "```text\ncmd [estado|encendido|apagado] [nombre|#|estado] [límite=<n>|tamaño=<n>|todo]\n```\n",
+		},
+		{
+			name:       "dotted config section",
+			source:     "```toml\n[plugins.entries.foo]\nenabled = true\n```\n",
+			translated: "```toml\n[plugins.entradas.foo]\nenabled = true\n```\n",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			err := validateDocChunkTranslation(test.source, test.translated)
+			if err == nil {
+				t.Fatal("expected changed embedded square marker to be rejected")
+			}
+			if !strings.Contains(err.Error(), "fenced protocol marker mismatch") {
+				t.Fatalf("expected fenced protocol marker mismatch, got %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateDocChunkTranslationKeepsIndentedFenceLikeContentOpen(t *testing.T) {
+	t.Parallel()
+
+	source := "```text\n    ```\n<objective>\n```\n"
+	translated := "```text\n    ```\n<objetivo>\n```\n"
+
+	err := validateDocChunkTranslation(source, translated)
+	if err == nil {
+		t.Fatal("expected placeholder after indented fence-like content to be rejected")
+	}
+	if !strings.Contains(err.Error(), "fenced placeholder mismatch") {
+		t.Fatalf("expected fenced placeholder mismatch, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationPreservesEmbeddedAnglePlaceholders(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		source     string
+		translated string
+	}{
+		{
+			name:       "url token",
+			source:     "```text\nhttps://api.telegram.org/bot<bot_token>/getUpdates\n```\n",
+			translated: "```text\nhttps://api.telegram.org/bot<token_del_bot>/getUpdates\n```\n",
+		},
+		{
+			name:       "version token",
+			source:     "```text\nOpenClaw v<version>\n```\n",
+			translated: "```text\nOpenClaw v<versión>\n```\n",
+		},
+		{
+			name:       "assignment token",
+			source:     "```text\nprovider <provider=id>\n```\n",
+			translated: "```text\nprovider <proveedor=identificador>\n```\n",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			err := validateDocChunkTranslation(test.source, test.translated)
+			if err == nil {
+				t.Fatal("expected changed embedded angle placeholder to be rejected")
+			}
+			if !strings.Contains(err.Error(), "fenced placeholder mismatch") {
+				t.Fatalf("expected fenced placeholder mismatch, got %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateDocBodyFencedLiteralsRejectsFenceBalanceChange(t *testing.T) {
+	t.Parallel()
+
+	source := "```text\nLiteral output.\n```\n"
+	translated := "~~~text\nSalida literal.\n```\n"
+
+	err := validateDocBodyFencedLiterals(source, translated)
+	if err == nil {
+		t.Fatal("expected recombined fence balance change to be rejected")
+	}
+	if !strings.Contains(err.Error(), "code fence balance mismatch") {
+		t.Fatalf("expected code fence balance mismatch, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationAllowsFencedBracketLabelsToTranslate(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		source     string
+		translated string
+	}{
+		{
+			name:       "markdown link",
+			source:     "```md\nSee [docs](https://example.com).\n```\n",
+			translated: "```md\nConsulta la [documentación](https://example.com).\n```\n",
+		},
+		{
+			name:       "markdown reference style link",
+			source:     "```md\nSee [docs][manual].\n```\n",
+			translated: "```md\nConsulta la [documentación][manual].\n```\n",
+		},
+		{
+			name:       "mermaid node labels",
+			source:     "```mermaid\nHEARTBEAT[Heartbeat] --> DONE[Done]\n```\n",
+			translated: "```mermaid\nHEARTBEAT[Latido] --> DONE[Hecho]\n```\n",
+		},
+		{
+			name:       "mermaid subroutine label",
+			source:     "```mermaid\nSTEP[[Process request]] --> DONE[Done]\n```\n",
+			translated: "```mermaid\nSTEP[[Procesar solicitud]] --> DONE[Hecho]\n```\n",
+		},
+		{
+			name:       "mermaid parallelogram label",
+			source:     "```mermaid\nC1[/No replies section/] --> C2[/Done/]\n```\n",
+			translated: "```mermaid\nC1[/Sección sin respuestas/] --> C2[/Hecho/]\n```\n",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if err := validateDocChunkTranslation(test.source, test.translated); err != nil {
+				t.Fatalf("expected user-visible bracket label to translate, got %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateDocChunkTranslationPreservesFencedMarkdownReferenceID(t *testing.T) {
+	t.Parallel()
+
+	source := "```md\nSee [docs][manual].\n```\n"
+	translated := "```md\nConsulta la [documentación][manual-es].\n```\n"
+
+	err := validateDocChunkTranslation(source, translated)
+	if err == nil {
+		t.Fatal("expected changed fenced Markdown reference ID to be rejected")
+	}
+	if !strings.Contains(err.Error(), "fenced protocol marker mismatch") {
+		t.Fatalf("expected fenced protocol marker mismatch, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationPreservesFencedMarkdownReferenceDefinitionID(t *testing.T) {
+	t.Parallel()
+
+	source := "```md\nSee [docs][manual].\n\n[manual]: https://example.com\n```\n"
+	translated := "```md\nConsulta la [documentación][manual].\n\n[manual-es]: https://example.com\n```\n"
+
+	err := validateDocChunkTranslation(source, translated)
+	if err == nil {
+		t.Fatal("expected changed fenced Markdown reference definition ID to be rejected")
+	}
+	if !strings.Contains(err.Error(), "fenced protocol marker mismatch") {
+		t.Fatalf("expected fenced protocol marker mismatch, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationPreservesFencedEnvelopeTokens(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		source     string
+		translated string
+	}{
+		{
+			name:       "channel envelope",
+			source:     "```text\n[WhatsApp +1555 Mon 2026-01-05 16:26:34 PST] message text\n```\n",
+			translated: "```text\n[WhatsApp +1555 Lun 2026-01-05 16:26:34 CET] texto del mensaje\n```\n",
+		},
+		{
+			name:       "system timestamp",
+			source:     "```text\nSystem: [2026-01-12 12:19:17 PST] Model switched.\n```\n",
+			translated: "```text\nSistema: [2026-01-12 12:19:17 CET] Modelo cambiado.\n```\n",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			err := validateDocChunkTranslation(test.source, test.translated)
+			if err == nil {
+				t.Fatal("expected changed fenced envelope token to be rejected")
+			}
+			if !strings.Contains(err.Error(), "fenced protocol marker mismatch") {
+				t.Fatalf("expected fenced protocol marker mismatch, got %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateDocChunkTranslationRejectsMarkerInListBlockquoteFence(t *testing.T) {
+	t.Parallel()
+
+	source := "- > ```text\n  > <objective>\n  > ```\n"
+	translated := "- > ```text\n  > <objetivo>\n  > ```\n"
+
+	err := validateDocChunkTranslation(source, translated)
+	if err == nil {
+		t.Fatal("expected changed placeholder in list-blockquote fence to be rejected")
+	}
+	if !strings.Contains(err.Error(), "fenced placeholder mismatch") {
+		t.Fatalf("expected fenced placeholder mismatch, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationRejectsUppercasePlaceholderAcrossFenceBlankLine(t *testing.T) {
+	t.Parallel()
+
+	source := "```text\n<CODE-HERE>\n\nLiteral output.\n````\n"
+	translated := "```text\n<CODE-AQUI>\n\nSalida literal.\n````\n"
+
+	err := validateDocChunkTranslation(source, translated)
+	if err == nil {
+		t.Fatal("expected changed uppercase fenced placeholder to be rejected")
+	}
+	if !strings.Contains(err.Error(), "fenced placeholder mismatch") {
+		t.Fatalf("expected fenced placeholder mismatch, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationRejectsAlternativeFencedPlaceholderSyntax(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		source     string
+		translated string
+	}{
+		{
+			name:       "alternatives",
+			source:     "```text\n--timeout <duration|off>\n```\n",
+			translated: "```text\n--timeout <duración|apagado>\n```\n",
+		},
+		{
+			name:       "digit prefix",
+			source:     "```text\ncommit <40-char-sha>\n```\n",
+			translated: "```text\ncommit <40-caracteres-sha>\n```\n",
+		},
+		{
+			name:       "symbol alternative",
+			source:     "```text\nnode <id|#>\n```\n",
+			translated: "```text\nnode <identificador|#>\n```\n",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			err := validateDocChunkTranslation(test.source, test.translated)
+			if err == nil {
+				t.Fatal("expected changed fenced placeholder syntax to be rejected")
+			}
+			if !strings.Contains(err.Error(), "fenced placeholder mismatch") {
+				t.Fatalf("expected fenced placeholder mismatch, got %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateDocChunkTranslationRejectsReorderedFencedPlaceholders(t *testing.T) {
+	t.Parallel()
+
+	source := "```text\ncmd <source> <destination>\n```\n"
+	translated := "```text\ncmd <destination> <source>\n```\n"
+
+	err := validateDocChunkTranslation(source, translated)
+	if err == nil {
+		t.Fatal("expected reordered fenced placeholders to be rejected")
+	}
+	if !strings.Contains(err.Error(), "fenced placeholder mismatch") {
+		t.Fatalf("expected fenced placeholder mismatch, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationStopsFencedLiteralsAtContainerBoundary(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		source     string
+		translated string
+	}{
+		{
+			name:       "blockquote",
+			source:     "> ```text\n> <objective>\nOutside [Warning].\n",
+			translated: "> ```text\n> <objective>\nFuera [Advertencia].\n",
+		},
+		{
+			name:       "list",
+			source:     "- ```text\n  <objective>\nOutside [Warning].\n",
+			translated: "- ```text\n  <objective>\nFuera [Advertencia].\n",
+		},
+		{
+			name:       "indented list fence",
+			source:     "- Example:\n    ```text\n    <objective>\nOutside [Warning].\n",
+			translated: "- Ejemplo:\n    ```text\n    <objective>\nFuera [Advertencia].\n",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if err := validateDocChunkTranslation(test.source, test.translated); err != nil {
+				t.Fatalf("expected content after container boundary to remain translatable, got %v", err)
+			}
+		})
+	}
+}
+
+func TestTranslateDocBodyChunkedRevalidatesMarkersAfterSplit(t *testing.T) {
+	body := strings.Join([]string{
+		"```text",
+		"[Notice kind=system]",
+		"Line 01",
+		"Line 02",
+		"Line 03",
+		"[/Notice]",
+		"```",
+		"",
+	}, "\n")
+	t.Setenv("OPENCLAW_DOCS_I18N_DOC_CHUNK_MAX_BYTES", "32")
+
+	_, err := translateDocBodyChunked(context.Background(), splitProtocolMarkerTranslator{}, "channels/example.md", body, "en", "es")
+	if err == nil {
+		t.Fatal("expected recombined split marker mutation to be rejected")
+	}
+	if !strings.Contains(err.Error(), "final document validation") || !strings.Contains(err.Error(), "fenced protocol marker mismatch") {
+		t.Fatalf("expected final fenced protocol validation error, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationAcceptsLongerClosingFence(t *testing.T) {
+	t.Parallel()
+
+	source := "```text\n<objective>\n````\n<Note title=\"English\">Text.</Note>\n"
+	translated := "```text\n<objective>\n````\n<Note title=\"Español\">Texto.</Note>\n"
+
+	if err := validateDocChunkTranslation(source, translated); err != nil {
+		t.Fatalf("expected longer valid closing fence to end literal scanning, got %v", err)
 	}
 }
 
@@ -1291,6 +1931,9 @@ func TestProcessFileDocUsesFieldLevelFrontmatterTranslation(t *testing.T) {
 	}
 	if !strings.Contains(text, "在 Fly.io 上部署 OpenClaw") {
 		t.Fatalf("expected translated read_when entry in output:\n%s", text)
+	}
+	if !strings.Contains(text, "prompt_version: 10") {
+		t.Fatalf("expected prompt version 10 in output metadata:\n%s", text)
 	}
 }
 

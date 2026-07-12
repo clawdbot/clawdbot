@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeNullableString,
@@ -562,7 +563,7 @@ function resolveGenericInterpreterScriptOperandIndex(params: {
   if (collection.sawOptionValueFile) {
     return null;
   }
-  return collection.hits.length === 1 ? collection.hits[0] : null;
+  return collection.hits.length === 1 ? expectDefined(collection.hits[0], "hits entry at 0") : null;
 }
 
 function resolveBunScriptOperandIndex(params: {

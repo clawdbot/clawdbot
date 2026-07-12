@@ -1,5 +1,6 @@
 // CLI for reading and mutating exec approval allowlists locally, via gateway, or via node.
 import fs from "node:fs/promises";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Command } from "commander";
@@ -342,7 +343,7 @@ async function saveSnapshotTargeted(params: SaveSnapshotTargetedParams): Promise
 function formatCliError(err: unknown): string {
   const msg = formatErrorMessage(err);
   const firstLine = msg.includes("\n") ? msg.split("\n")[0] : msg;
-  const safe = sanitizeForLog(firstLine);
+  const safe = sanitizeForLog(expectDefined(firstLine, "exec approvals cli first line"));
   return safe.length > 300 ? `${truncateUtf16Safe(safe, 300)}...` : safe;
 }
 

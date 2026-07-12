@@ -5,6 +5,7 @@ import { enableCompileCache, getCompileCacheDir } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { expectDefined } from "@openclaw/normalization-core";
 import { isTerminalInteractiveRespawnArgv } from "./cli/respawn-policy.js";
 import { attachChildProcessBridge } from "./process/child-process-bridge.js";
 import {
@@ -48,8 +49,8 @@ export function isNodeVersionAffectedByCompileCacheDeadlock(
   if (!match) {
     return false;
   }
-  const major = Number.parseInt(match[1], 10);
-  const minor = Number.parseInt(match[2], 10);
+  const major = Number.parseInt(expectDefined(match[1], "compile-cache major version capture"), 10);
+  const minor = Number.parseInt(expectDefined(match[2], "compile-cache minor version capture"), 10);
   if (major !== 24) {
     return false;
   }

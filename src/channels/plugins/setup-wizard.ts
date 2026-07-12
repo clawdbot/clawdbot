@@ -562,8 +562,9 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
         const allowFrom = wizard.allowFrom;
         // Allowlist resolution often needs the freshly entered credential, not
         // only the persisted config, because setup may not have been written yet.
+        const credentialInputKey = allowFrom.credentialInputKey ?? wizard.credentials[0]?.inputKey;
         const allowFromCredentialValue = normalizeOptionalString(
-          credentialValues[allowFrom.credentialInputKey ?? wizard.credentials[0]?.inputKey],
+          credentialInputKey === undefined ? undefined : credentialValues[credentialInputKey],
         );
         if (allowFrom.helpLines && allowFrom.helpLines.length > 0) {
           await prompter.note(

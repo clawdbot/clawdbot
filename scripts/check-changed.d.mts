@@ -40,6 +40,8 @@ export function shouldRunPromptSnapshotCheck(paths: string[]): boolean;
 export function shouldRunPromptSnapshotOwnerTest(paths: string[]): boolean;
 export function shouldRunRuntimeSidecarBaselineCheck(paths: string[]): boolean;
 export function shouldRunSqliteSessionSchemaBaselineCheck(paths: string[]): boolean;
+export function shouldRunPluginSdkApiBaselineCheck(paths: string[]): boolean;
+export function shouldRunPluginSdkSurfaceChecks(paths: string[]): boolean;
 export function shouldRunCanvasA2uiNativeResourceCheck(paths: string[]): boolean;
 export function shouldRunAppcastOwnerTest(paths: string[]): boolean;
 export function shouldRunTestTempCreationReport(paths: string[]): boolean;

@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Normalizes MCP server config for runtime launch and validation.
 import { isRecord } from "../utils.js";
 import { readSourceConfigSnapshot } from "./io.js";
@@ -157,7 +158,7 @@ async function updateConfiguredMcpServerConfig(params: {
 
   const validated = validateConfigObjectWithPlugins(next);
   if (!validated.ok) {
-    const issue = validated.issues[0];
+    const issue = expectDefined(validated.issues[0], "issues entry at 0");
     return {
       ok: false,
       path: loaded.path,
@@ -276,7 +277,7 @@ export async function setConfiguredMcpServer(params: {
 
   const validated = validateConfigObjectWithPlugins(next);
   if (!validated.ok) {
-    const issue = validated.issues[0];
+    const issue = expectDefined(validated.issues[0], "issues entry at 0");
     return {
       ok: false,
       path: loaded.path,
@@ -334,7 +335,7 @@ export async function unsetConfiguredMcpServer(params: {
 
   const validated = validateConfigObjectWithPlugins(next);
   if (!validated.ok) {
-    const issue = validated.issues[0];
+    const issue = expectDefined(validated.issues[0], "issues entry at 0");
     return {
       ok: false,
       path: loaded.path,

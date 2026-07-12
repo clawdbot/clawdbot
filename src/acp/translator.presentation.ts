@@ -110,7 +110,7 @@ function formatThinkingLevelName(level: string): string {
     case "adaptive":
       return "Adaptive";
     default:
-      return level.length > 0 ? `${level[0].toUpperCase()}${level.slice(1)}` : "Unknown";
+      return level.length > 0 ? `${level.charAt(0).toUpperCase()}${level.slice(1)}` : "Unknown";
   }
 }
 
@@ -126,7 +126,7 @@ function formatConfigValueName(value: string): string {
     case "xhigh":
       return "Extra High";
     default:
-      return value.length > 0 ? `${value[0].toUpperCase()}${value.slice(1)}` : "Unknown";
+      return value.length > 0 ? `${value.charAt(0).toUpperCase()}${value.slice(1)}` : "Unknown";
   }
 }
 

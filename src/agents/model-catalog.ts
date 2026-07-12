@@ -324,10 +324,11 @@ function mergeCatalogRouteVariants(
       collector.indexByKey.set(key, collector.entries.length - 1);
       continue;
     }
-    collector.entries[existingIndex] = overlayCatalogMetadata(
-      collector.entries[existingIndex],
-      entry,
-    );
+    const existingEntry = collector.entries[existingIndex];
+    if (existingEntry === undefined) {
+      continue;
+    }
+    collector.entries[existingIndex] = overlayCatalogMetadata(existingEntry, entry);
   }
 }
 

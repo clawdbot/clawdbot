@@ -3,7 +3,6 @@ package ai.openclaw.app.node
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.LocationMode
 import ai.openclaw.app.SecurePrefs
-import ai.openclaw.app.VoiceWakeMode
 import ai.openclaw.app.gateway.GatewayClientInfo
 import ai.openclaw.app.gateway.GatewayConnectOptions
 import ai.openclaw.app.gateway.GatewayEndpoint
@@ -19,7 +18,6 @@ class ConnectionManager(
   private val prefs: SecurePrefs,
   private val cameraEnabled: () -> Boolean,
   private val locationMode: () -> LocationMode,
-  private val voiceWakeMode: () -> VoiceWakeMode,
   private val motionActivityAvailable: () -> Boolean,
   private val motionPedometerAvailable: () -> Boolean,
   private val sendSmsAvailable: () -> Boolean,
@@ -27,7 +25,6 @@ class ConnectionManager(
   private val smsSearchPossible: () -> Boolean,
   private val callLogAvailable: () -> Boolean,
   private val photosAvailable: () -> Boolean,
-  private val hasRecordAudioPermission: () -> Boolean,
   private val installedAppsSharingEnabled: () -> Boolean,
   private val manualTls: (GatewayEndpoint) -> Boolean,
 ) {
@@ -140,7 +137,6 @@ class ConnectionManager(
       smsSearchPossible = smsSearchPossible(),
       callLogAvailable = callLogAvailable(),
       photosAvailable = photosAvailable(),
-      voiceWakeEnabled = voiceWakeMode() != VoiceWakeMode.Off && hasRecordAudioPermission(),
       motionActivityAvailable = motionActivityAvailable(),
       motionPedometerAvailable = motionPedometerAvailable(),
       installedAppsSharingEnabled = installedAppsSharingEnabled(),

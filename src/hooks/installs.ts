@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Hook install record helpers read and write installed hook metadata.
 import type { HookInstallRecord } from "../config/types.hooks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -25,7 +26,7 @@ export function recordHookInstall(cfg: OpenClawConfig, update: HookInstallUpdate
         ...cfg.hooks?.internal,
         installs: {
           ...installs,
-          [hookId]: installs[hookId],
+          [hookId]: expectDefined(installs[hookId], "installs entry at hook id"),
         },
       },
     },

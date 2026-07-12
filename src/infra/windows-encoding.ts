@@ -212,13 +212,11 @@ export function createWindowsOutputDecoder(params?: {
 function getTrailingIncompleteUtf8Bytes(buffer: Buffer): Buffer {
   let index = buffer.length - 1;
   let continuationBytes = 0;
-  while (
-    index >= 0 &&
-    buffer[index] !== undefined &&
-    buffer[index] >= 0x80 &&
-    buffer[index] <= 0xbf &&
-    continuationBytes < 3
-  ) {
+  while (index >= 0 && continuationBytes < 3) {
+    const byte = buffer.at(index);
+    if (byte === undefined || byte < 0x80 || byte > 0xbf) {
+      break;
+    }
     continuationBytes += 1;
     index -= 1;
   }
@@ -226,7 +224,10 @@ function getTrailingIncompleteUtf8Bytes(buffer: Buffer): Buffer {
     return buffer;
   }
 
-  const leadByte = buffer[index];
+  const leadByte = buffer.at(index);
+  if (leadByte === undefined) {
+    return Buffer.alloc(0);
+  }
   const sequenceLength = getUtf8SequenceLength(leadByte);
   if (sequenceLength <= 1) {
     return Buffer.alloc(0);

@@ -2,7 +2,6 @@ package ai.openclaw.app.node
 
 import ai.openclaw.app.LocationMode
 import ai.openclaw.app.SecurePrefs
-import ai.openclaw.app.VoiceWakeMode
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.isLocalCleartextGatewayHost
 import ai.openclaw.app.gateway.isLoopbackGatewayHost
@@ -521,11 +520,9 @@ class ConnectionManagerTest {
       newManager(
         cameraEnabled = true,
         locationMode = LocationMode.WhileUsing,
-        voiceWakeMode = VoiceWakeMode.Always,
         motionActivityAvailable = true,
         callLogAvailable = true,
         photosAvailable = true,
-        hasRecordAudioPermission = true,
       ).buildNodeConnectOptions()
 
     assertTrue(options.commands.contains(OpenClawCameraCommand.List.rawValue))
@@ -538,7 +535,7 @@ class ConnectionManagerTest {
     assertTrue(options.caps.contains(OpenClawCapability.Motion.rawValue))
     assertTrue(options.caps.contains(OpenClawCapability.CallLog.rawValue))
     assertTrue(options.caps.contains(OpenClawCapability.Photos.rawValue))
-    assertTrue(options.caps.contains(OpenClawCapability.VoiceWake.rawValue))
+    assertFalse(options.caps.contains("voiceWake"))
   }
 
   @Test
@@ -548,17 +545,6 @@ class ConnectionManagerTest {
 
     assertFalse(disabled.commands.contains(OpenClawDeviceCommand.Apps.rawValue))
     assertTrue(enabled.commands.contains(OpenClawDeviceCommand.Apps.rawValue))
-  }
-
-  @Test
-  fun buildNodeConnectOptions_omitsVoiceWakeWithoutMicrophonePermission() {
-    val options =
-      newManager(
-        voiceWakeMode = VoiceWakeMode.Always,
-        hasRecordAudioPermission = false,
-      ).buildNodeConnectOptions()
-
-    assertFalse(options.caps.contains(OpenClawCapability.VoiceWake.rawValue))
   }
 
   @Test
@@ -612,7 +598,6 @@ class ConnectionManagerTest {
   private fun newManager(
     cameraEnabled: Boolean = false,
     locationMode: LocationMode = LocationMode.Off,
-    voiceWakeMode: VoiceWakeMode = VoiceWakeMode.Off,
     motionActivityAvailable: Boolean = false,
     motionPedometerAvailable: Boolean = false,
     sendSmsAvailable: Boolean = false,
@@ -620,7 +605,6 @@ class ConnectionManagerTest {
     smsSearchPossible: Boolean = false,
     callLogAvailable: Boolean = false,
     photosAvailable: Boolean = false,
-    hasRecordAudioPermission: Boolean = false,
     installedAppsSharingEnabled: Boolean = false,
   ): ConnectionManager {
     val context = RuntimeEnvironment.getApplication()
@@ -634,7 +618,6 @@ class ConnectionManagerTest {
       prefs = prefs,
       cameraEnabled = { cameraEnabled },
       locationMode = { locationMode },
-      voiceWakeMode = { voiceWakeMode },
       motionActivityAvailable = { motionActivityAvailable },
       motionPedometerAvailable = { motionPedometerAvailable },
       sendSmsAvailable = { sendSmsAvailable },
@@ -642,7 +625,6 @@ class ConnectionManagerTest {
       smsSearchPossible = { smsSearchPossible },
       callLogAvailable = { callLogAvailable },
       photosAvailable = { photosAvailable },
-      hasRecordAudioPermission = { hasRecordAudioPermission },
       installedAppsSharingEnabled = { installedAppsSharingEnabled },
       manualTls = { false },
     )

@@ -6,6 +6,12 @@ struct GatewaySetupRequest {
     let link: GatewayConnectDeepLink
 }
 
+enum GatewayConnectionAttempt: Equatable {
+    case gateway(GatewayStableIdentifier.Key)
+    case manual
+    case setupCode
+}
+
 struct SettingsProTab: View {
     @Environment(NodeAppModel.self) var appModel
     @Environment(VoiceWakeManager.self) var voiceWake
@@ -42,7 +48,7 @@ struct SettingsProTab: View {
     @State var isReconnectingGateway = false
     @State var isRefreshingGateway = false
     @State var isChangingLocationMode = false
-    @State var connectingGatewayID: String?
+    @State var connectingGateway: GatewayConnectionAttempt?
     @State var gatewayRegistry = GatewaySettingsStore.GatewayRegistry.empty
     @State var pendingForgetGateway: GatewaySettingsStore.GatewayRegistryEntry?
     @State var selectedAgentPickerId = ""
@@ -88,6 +94,7 @@ struct SettingsProTab: View {
     let ownsNavigationStack: Bool
     let navigateToRoute: ((SettingsRoute) -> Void)?
     let onRouteChange: ((SettingsRoute?) -> Void)?
+    let onApprovalNotificationsRoute: ((String) -> Void)?
     let gatewaySetupRequest: GatewaySetupRequest?
     let onGatewaySetupRequestHandled: ((Int) -> Void)?
 
@@ -99,6 +106,7 @@ struct SettingsProTab: View {
         ownsNavigationStack: Bool = true,
         navigateToRoute: ((SettingsRoute) -> Void)? = nil,
         onRouteChange: ((SettingsRoute?) -> Void)? = nil,
+        onApprovalNotificationsRoute: ((String) -> Void)? = nil,
         gatewaySetupRequest: GatewaySetupRequest? = nil,
         onGatewaySetupRequestHandled: ((Int) -> Void)? = nil)
     {
@@ -109,6 +117,7 @@ struct SettingsProTab: View {
         self.ownsNavigationStack = ownsNavigationStack
         self.navigateToRoute = navigateToRoute
         self.onRouteChange = onRouteChange
+        self.onApprovalNotificationsRoute = onApprovalNotificationsRoute
         self.gatewaySetupRequest = gatewaySetupRequest
         self.onGatewaySetupRequestHandled = onGatewaySetupRequestHandled
     }
@@ -368,6 +377,9 @@ struct SettingsProTab: View {
 
     func openNotificationsRouteFromApprovals() {
         guard self.directRoute == nil else { return }
+        if let approvalID = ExecApprovalIdentifier.exact(self.appModel.pendingExecApprovalPrompt?.id) {
+            self.onApprovalNotificationsRoute?(approvalID)
+        }
         if !self.ownsNavigationStack, let navigateToRoute {
             navigateToRoute(.notifications)
             return

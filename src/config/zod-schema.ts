@@ -1612,8 +1612,7 @@ export const OpenClawSchema = z
       if (!Array.isArray(ids)) {
         continue;
       }
-      for (let idx = 0; idx < ids.length; idx += 1) {
-        const agentId = ids[idx];
+      for (const [idx, agentId] of ids.entries()) {
         if (!agentIds.has(agentId)) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,

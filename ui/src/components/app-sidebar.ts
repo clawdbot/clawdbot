@@ -2494,12 +2494,16 @@ class AppSidebar extends OpenClawLightDomContentsElement {
                 showDraft: Boolean(this.draftSessionAgentId),
                 showFallback: true,
               })}
+          ${this.renderSessionCatalogs()}
         </div>
       </section>
-      ${this.renderSessionCatalogs()}
     `;
   }
 
+  // Catalog groups render inside the shared sessions scroller. Sibling
+  // .sidebar-sessions sections would form a second scroll-less region that
+  // flex-squeezes under the shell body's overflow clip and paints rows over
+  // the following section.
   private renderSessionCatalogs() {
     return this.sessionCatalogs.map((catalog) => {
       const sectionId = `catalog:${catalog.id}`;
@@ -2509,44 +2513,42 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       const loadingMore = this.loadingMoreSessionCatalogIds.has(catalog.id);
       const hasMore = hosts.some((host) => Boolean(host.nextCursor));
       return html`
-        <section class="sidebar-sessions">
-          <div class="sidebar-recent-sessions__group" data-session-section=${sectionId}>
-            <div class="sidebar-recent-sessions__head">
-              <button
-                type="button"
-                class="sidebar-session-group-toggle"
-                aria-expanded=${String(!collapsed)}
-                aria-label=${catalog.label}
-                @click=${() => this.toggleSessionSection(sectionId)}
+        <div class="sidebar-recent-sessions__group" data-session-section=${sectionId}>
+          <div class="sidebar-recent-sessions__head">
+            <button
+              type="button"
+              class="sidebar-session-group-toggle"
+              aria-expanded=${String(!collapsed)}
+              aria-label=${catalog.label}
+              @click=${() => this.toggleSessionSection(sectionId)}
+            >
+              <span class="sidebar-session-group-toggle__icon" aria-hidden="true"
+                >${collapsed ? icons.chevronRight : icons.chevronDown}</span
               >
-                <span class="sidebar-session-group-toggle__icon" aria-hidden="true"
-                  >${collapsed ? icons.chevronRight : icons.chevronDown}</span
-                >
-                <span class="sidebar-recent-sessions__label-text">${catalog.label}</span>
-                <span class="sidebar-session-group-count">${rows.length}</span>
-              </button>
-            </div>
-            ${collapsed
-              ? nothing
-              : html`<div class="sidebar-recent-sessions__list">
-                    ${rows.map(({ host, session }) =>
-                      this.renderCatalogSession(catalog, host, session),
-                    )}
-                  </div>
-                  ${hasMore
-                    ? html`<button
-                        type="button"
-                        class="sidebar-session-catalog-load-more"
-                        data-session-catalog-load-more=${catalog.id}
-                        ?disabled=${loadingMore}
-                        aria-busy=${String(loadingMore)}
-                        @click=${() => void this.loadMoreSessionCatalog(catalog.id)}
-                      >
-                        ${t("chat.selectors.loadMoreSessions")}
-                      </button>`
-                    : nothing}`}
+              <span class="sidebar-recent-sessions__label-text">${catalog.label}</span>
+              <span class="sidebar-session-group-count">${rows.length}</span>
+            </button>
           </div>
-        </section>
+          ${collapsed
+            ? nothing
+            : html`<div class="sidebar-recent-sessions__list">
+                  ${rows.map(({ host, session }) =>
+                    this.renderCatalogSession(catalog, host, session),
+                  )}
+                </div>
+                ${hasMore
+                  ? html`<button
+                      type="button"
+                      class="sidebar-session-catalog-load-more"
+                      data-session-catalog-load-more=${catalog.id}
+                      ?disabled=${loadingMore}
+                      aria-busy=${String(loadingMore)}
+                      @click=${() => void this.loadMoreSessionCatalog(catalog.id)}
+                    >
+                      ${t("chat.selectors.loadMoreSessions")}
+                    </button>`
+                  : nothing}`}
+        </div>
       `;
     });
   }

@@ -1,5 +1,6 @@
 // Config CLI command implementation for get/set/unset/patch/validate and secret refs.
 import fs from "node:fs";
+import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -282,7 +283,9 @@ function normalizeConfigMutationModelRefs(cfg: OpenClawConfig): OpenClawConfig {
 
 function normalizeConfigMutationExplicitSetPath(path: PathSegment[]): PathSegment[] {
   if (path.length >= 4 && path[0] === "agents" && path[1] === "defaults" && path[2] === "models") {
-    const normalizedModelId = normalizeAgentModelRefForConfig(path[3]);
+    const normalizedModelId = normalizeAgentModelRefForConfig(
+      expectDefined(path[3], "path entry at 3"),
+    );
     return normalizedModelId === path[3]
       ? path
       : [...path.slice(0, 3), normalizedModelId, ...path.slice(4)];
@@ -687,9 +690,12 @@ function setAtPath(
   value: unknown,
   options?: SetAtPathOptions,
 ): void {
+  const last = path.at(-1);
+  if (last === undefined) {
+    throw new Error("Config path must contain at least one segment");
+  }
   let current: unknown = root;
-  for (let i = 0; i < path.length - 1; i += 1) {
-    const segment = path[i];
+  for (const [i, segment] of path.slice(0, -1).entries()) {
     const next = path[i + 1];
     const nextIsIndex = shouldCreateArrayForMissingPathSegment({
       path,
@@ -723,7 +729,6 @@ function setAtPath(
     current = record[segment];
   }
 
-  const last = path[path.length - 1];
   if (Array.isArray(current)) {
     if (!isIndexSegment(last)) {
       throw new Error(`Expected numeric index for array segment "${last}"`);
@@ -892,9 +897,12 @@ function assertNonDestructiveReplacement(params: {
 type UnsetAtPathResult = { removed: true; leafContainer: "array" | "object" } | { removed: false };
 
 function unsetAtPath(root: Record<string, unknown>, path: PathSegment[]): UnsetAtPathResult {
+  const last = path.at(-1);
+  if (last === undefined) {
+    return { removed: false };
+  }
   let current: unknown = root;
-  for (let i = 0; i < path.length - 1; i += 1) {
-    const segment = path[i];
+  for (const segment of path.slice(0, -1)) {
     if (!current || typeof current !== "object") {
       return { removed: false };
     }
@@ -916,7 +924,6 @@ function unsetAtPath(root: Record<string, unknown>, path: PathSegment[]): UnsetA
     current = record[segment];
   }
 
-  const last = path[path.length - 1];
   if (Array.isArray(current)) {
     if (!isIndexSegment(last)) {
       return { removed: false };

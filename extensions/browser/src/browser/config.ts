@@ -121,6 +121,14 @@ export type ResolvedBrowserProfile = {
   attachOnly: boolean;
 };
 
+/** Read a named browser profile without falling through to inherited object keys. */
+export function getOwnBrowserProfile<T>(
+  profiles: Record<string, T> | undefined,
+  name: string,
+): T | undefined {
+  return profiles && Object.hasOwn(profiles, name) ? profiles[name] : undefined;
+}
+
 const DEFAULT_BROWSER_CDP_PORT_RANGE_START = 18800;
 /**
  * Default extension relay port offset from the browser control port. Sits just
@@ -410,7 +418,7 @@ function applyLegacyCdpUrlToExistingSessionDefaultProfile(
   if (!legacyCdpUrl) {
     return profiles;
   }
-  const profile = profiles[defaultProfile];
+  const profile = getOwnBrowserProfile(profiles, defaultProfile);
   if (
     !profile ||
     profile.driver !== "existing-session" ||
@@ -573,7 +581,7 @@ export function resolveProfile(
   resolved: ResolvedBrowserConfig,
   profileName: string,
 ): ResolvedBrowserProfile | null {
-  const profile = resolved.profiles[profileName];
+  const profile = getOwnBrowserProfile(resolved.profiles, profileName);
   if (!profile) {
     return null;
   }

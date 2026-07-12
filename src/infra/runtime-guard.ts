@@ -1,5 +1,6 @@
 // Validates the current runtime against OpenClaw's Node engine floor.
 import process from "node:process";
+import { expectDefined } from "@openclaw/normalization-core";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 
 type RuntimeKind = "node" | "unknown";
@@ -37,9 +38,9 @@ export function parseSemver(version: string | null): Semver | null {
   }
   const [, major, minor, patch] = match;
   return {
-    major: Number.parseInt(major, 10),
-    minor: Number.parseInt(minor, 10),
-    patch: Number.parseInt(patch, 10),
+    major: Number.parseInt(expectDefined(major, "runtime guard major"), 10),
+    minor: Number.parseInt(expectDefined(minor, "runtime guard minor"), 10),
+    patch: Number.parseInt(expectDefined(patch, "runtime guard patch"), 10),
   };
 }
 

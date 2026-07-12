@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 /** Command authorization helpers for owner and allowlist checks. */
 import {
   normalizeOptionalLowercaseString,
@@ -97,8 +98,8 @@ function resolveProviderFromContext(
   const inferred = inferredProviders.candidates;
   if (inferred.length === 1) {
     return {
-      providerId: inferred[0].providerId,
-      hadResolutionError: inferred[0].hadResolutionError,
+      providerId: expectDefined(inferred[0], "inferred entry at 0").providerId,
+      hadResolutionError: expectDefined(inferred[0], "inferred entry at 0").hadResolutionError,
     };
   }
   return {

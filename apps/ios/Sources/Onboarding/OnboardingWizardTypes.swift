@@ -43,6 +43,17 @@ enum OnboardingConnectPhase {
     case ready
 }
 
+/// Typed connection attempt replaces string sentinels ("manual", "retry", ...) so
+/// gateway attempts compare by byte-exact stable-ID key, never trimmed strings.
+enum OnboardingGatewayConnectionAttempt: Equatable {
+    case gateway(GatewayStableIdentifier.Key)
+    case manual
+    case retry
+    case retryAutomatically
+    case setupCode
+    case trustCertificate
+}
+
 struct GatewaySetupLinkStaging {
     private(set) var link: GatewayConnectDeepLink?
 

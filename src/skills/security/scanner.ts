@@ -1,6 +1,7 @@
 // Skill security scanner inspects skill files and manifests for unsafe patterns.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { hasErrnoCode } from "../../infra/errors.js";
 import { isPathInside } from "../../security/scan-paths.js";
@@ -409,8 +410,7 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
       continue;
     }
 
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
+    for (const [i, line] of lines.entries()) {
       const match = rule.pattern.exec(line);
       if (!match) {
         continue;
@@ -422,7 +422,7 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
 
       // Special handling for suspicious-network: check port
       if (rule.ruleId === "suspicious-network") {
-        const port = Number.parseInt(match[1], 10);
+        const port = Number.parseInt(expectDefined(match[1], "scanner regex capture 1"), 10);
         if (STANDARD_PORTS.has(port)) {
           continue;
         }

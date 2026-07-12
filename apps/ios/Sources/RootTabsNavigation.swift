@@ -171,6 +171,13 @@ extension RootTabs {
         !isSidebarVisible
     }
 
+    static func visibleSettingsRoute(
+        navigationPath: [SettingsRoute],
+        baseRoute: SettingsRoute?) -> SettingsRoute?
+    {
+        navigationPath.last ?? baseRoute
+    }
+
     static func shouldShowSidebarRevealInDestinationHeader(
         isSidebarVisible: Bool,
         layoutMode: SidebarLayoutMode) -> Bool

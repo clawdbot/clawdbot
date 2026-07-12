@@ -6,6 +6,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
@@ -464,7 +465,7 @@ async function promptInstallChoice(params: {
     if (realSources.length === 1) {
       // Callers that already selected a plugin/channel can skip an extra prompt
       // when there is only one viable source.
-      return realSources[0];
+      return expectDefined(realSources[0], "real sources entry at 0");
     }
   }
 

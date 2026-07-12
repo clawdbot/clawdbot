@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Gateway service lifecycle runners, including unmanaged-process fallbacks and restart health checks.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
@@ -252,7 +253,7 @@ async function restartGatewayWithoutServiceManager(
     reason: "gateway.restart",
     ...(restartIntent ? { intent: restartIntent } : {}),
   });
-  signalVerifiedGatewayPidSync(pids[0], "SIGUSR1");
+  signalVerifiedGatewayPidSync(expectDefined(pids[0], "pids entry at 0"), "SIGUSR1");
   return {
     result: "restarted" as const,
     message: `Gateway restart signal sent to unmanaged process on port ${port}: ${pids[0]}.`,

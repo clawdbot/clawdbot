@@ -1,5 +1,9 @@
 # OpenClaw iOS Changelog
 
+## Unreleased
+
+- Routes iPhone and Apple Watch exec approvals through durable Gateway records, preserves safety warnings, shows the first recorded decision across surfaces, reconciles uncertain replies, and remains compatible with shipped Gateway v4 approval RPCs.
+
 ## 2026.7.1 - 2026-07-08
 
 - Added multi-gateway pairing and switching with gateway-scoped credentials, TLS trust, cached chats, push registration, and custom proxy headers.

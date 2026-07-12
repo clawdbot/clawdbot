@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Channel streaming config normalization and progress-draft formatting helpers.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
@@ -1139,7 +1140,10 @@ export function mergeChannelProgressDraftLine<TLine extends string | ChannelProg
       resolveProgressDraftLineMergeKeys(entry).some((entryKey) => lineKeys.includes(entryKey)),
     );
     if (existingIndex >= 0) {
-      const replacement = mergeProgressDraftLineUpdate(lines[existingIndex], line);
+      const replacement = mergeProgressDraftLineUpdate(
+        expectDefined(lines[existingIndex], "lines entry at existing index"),
+        line,
+      );
       if (replacement === lines[existingIndex]) {
         return lines;
       }

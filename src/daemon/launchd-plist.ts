@@ -236,24 +236,44 @@ export async function readLaunchAgentProgramArgumentsFromFile(
     if (!programMatch) {
       return null;
     }
-    const args = Array.from(programMatch[1].matchAll(/<string>([\s\S]*?)<\/string>/gi)).map(
-      (match) => plistUnescape(match[1] ?? "").trim(),
-    );
+    const programArgumentsXml = programMatch.at(1);
+    if (programArgumentsXml === undefined) {
+      return null;
+    }
+    const args: string[] = [];
+    for (const match of programArgumentsXml.matchAll(/<string>([\s\S]*?)<\/string>/gi)) {
+      const rawArgument = match.at(1);
+      if (rawArgument === undefined) {
+        return null;
+      }
+      args.push(plistUnescape(rawArgument).trim());
+    }
     const workingDirMatch = plist.match(
       /<key>WorkingDirectory<\/key>\s*<string>([\s\S]*?)<\/string>/i,
     );
-    const workingDirectory = workingDirMatch ? plistUnescape(workingDirMatch[1] ?? "").trim() : "";
+    const workingDirectoryXml = workingDirMatch?.at(1);
+    const workingDirectory =
+      workingDirectoryXml === undefined ? "" : plistUnescape(workingDirectoryXml).trim();
     const envMatch = plist.match(/<key>EnvironmentVariables<\/key>\s*<dict>([\s\S]*?)<\/dict>/i);
     const inlineEnvironment: Record<string, string> = {};
     if (envMatch) {
-      for (const pair of envMatch[1].matchAll(
+      const environmentXml = envMatch.at(1);
+      if (environmentXml === undefined) {
+        return null;
+      }
+      for (const pair of environmentXml.matchAll(
         /<key>([\s\S]*?)<\/key>\s*<string>([\s\S]*?)<\/string>/gi,
       )) {
-        const key = plistUnescape(pair[1] ?? "").trim();
+        const rawKey = pair.at(1);
+        const rawValue = pair.at(2);
+        if (rawKey === undefined || rawValue === undefined) {
+          return null;
+        }
+        const key = plistUnescape(rawKey).trim();
         if (!key) {
           continue;
         }
-        const value = plistUnescape(pair[2] ?? "").trim();
+        const value = plistUnescape(rawValue).trim();
         inlineEnvironment[key] = value;
       }
     }

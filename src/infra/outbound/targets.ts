@@ -61,6 +61,7 @@ export type HeartbeatSenderContext = {
 
 export type { OutboundTargetResolution } from "./targets-resolve-shared.js";
 export { resolveSessionDeliveryTarget, type SessionDeliveryTarget } from "./targets-session.js";
+import { expectDefined } from "@openclaw/normalization-core";
 import { resolveSessionDeliveryTarget, type SessionDeliveryTarget } from "./targets-session.js";
 
 /** Resolves a user-supplied outbound destination through the channel plugin. */
@@ -549,5 +550,5 @@ export function resolveHeartbeatSenderContext(params: {
     provider,
   });
 
-  return { sender, provider, allowFrom };
+  return { sender: expectDefined(sender, "resolved sender"), provider, allowFrom };
 }

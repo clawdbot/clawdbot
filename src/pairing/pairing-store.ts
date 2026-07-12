@@ -209,26 +209,26 @@ function pruneExcessRequestsByAccount(reqs: PairingRequest[], maxPending: number
   if (maxPending <= 0 || reqs.length <= maxPending) {
     return { requests: reqs, removed: false };
   }
-  const grouped = new Map<string, number[]>();
+  const grouped = new Map<string, Array<{ index: number; request: PairingRequest }>>();
   for (const [index, entry] of reqs.entries()) {
     const accountId = resolvePairingRequestAccountId(entry);
     const current = grouped.get(accountId);
     if (current) {
-      current.push(index);
+      current.push({ index, request: entry });
       continue;
     }
-    grouped.set(accountId, [index]);
+    grouped.set(accountId, [{ index, request: entry }]);
   }
 
   const droppedIndexes = new Set<number>();
-  for (const indexes of grouped.values()) {
-    if (indexes.length <= maxPending) {
+  for (const entries of grouped.values()) {
+    if (entries.length <= maxPending) {
       continue;
     }
-    const sortedIndexes = indexes
-      .slice()
-      .toSorted((left, right) => resolveLastSeenAt(reqs[left]) - resolveLastSeenAt(reqs[right]));
-    for (const index of sortedIndexes.slice(0, sortedIndexes.length - maxPending)) {
+    const sortedEntries = entries.toSorted(
+      (left, right) => resolveLastSeenAt(left.request) - resolveLastSeenAt(right.request),
+    );
+    for (const { index } of sortedEntries.slice(0, sortedEntries.length - maxPending)) {
       droppedIndexes.add(index);
     }
   }

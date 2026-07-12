@@ -25,6 +25,7 @@ import {
   resetSubagentTraceparentHandoffsForTests,
 } from "../../agents/subagent-traceparent-handoff.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { SessionTranscriptStats } from "../../config/sessions/session-accessor.js";
 import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import {
   onDiagnosticEvent,
@@ -75,7 +76,11 @@ const mocks = vi.hoisted(() => ({
   updateSessionStore: vi.fn(),
   applySessionEntryReplacements: vi.fn(),
   patchSessionEntryTarget: vi.fn(),
-  readTranscriptStatsSync: vi.fn(() => ({ eventCount: 0, maxSeq: 0, sizeBytes: 0 })),
+  readTranscriptStatsSync: vi.fn<() => SessionTranscriptStats>(() => ({
+    eventCount: 0,
+    maxSeq: 0,
+    sizeBytes: 0,
+  })),
   agentCommand: vi.fn(),
   clearAgentRunContext: vi.fn(),
   registerAgentRunContext: vi.fn(),
@@ -2246,18 +2251,17 @@ describe("gateway agent handler", () => {
       vi.useFakeTimers({ toFake: ["Date"] });
       dateOnlyFakeClockActive = true;
       vi.setSystemTime(now);
+      mocks.readTranscriptStatsSync.mockReturnValue({
+        eventCount: 1,
+        lastMutationAtMs: now - 1_000,
+        lastObservedMutationAtMs: now - 10_000,
+        maxSeq: 0,
+        sizeBytes: 64,
+      });
 
       await withTempDir({ prefix: "openclaw-gateway-terminal-main-newer-" }, async (root) => {
         const sessionsDir = `${root}/sessions`;
-        await fs.mkdir(sessionsDir, { recursive: true });
         const sessionFile = "terminal-main-session.jsonl";
-        const transcriptPath = `${sessionsDir}/${sessionFile}`;
-        await fs.writeFile(
-          transcriptPath,
-          `${JSON.stringify({ type: "session", id: "terminal-main-session" })}\n`,
-          "utf8",
-        );
-        await fs.utimes(transcriptPath, new Date(now - 1_000), new Date(now - 1_000));
         mocks.loadSessionEntry.mockReturnValue({
           cfg: {},
           storePath: `${sessionsDir}/sessions.json`,

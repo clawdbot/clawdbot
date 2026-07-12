@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   normalizeOptionalString,
   readStringValue,
@@ -521,7 +522,10 @@ async function createAgentMainSessionForSend(params: {
   let createResult:
     | { ok: boolean; payload?: { key?: string }; error?: ReturnType<typeof errorShape> }
     | undefined;
-  await sessionsHandlers["sessions.create"]({
+  await expectDefined(
+    sessionsHandlers["sessions.create"],
+    "sessions.create handler",
+  )({
     req: params.req,
     params: {
       key: params.canonicalKey,
@@ -701,7 +705,10 @@ async function interruptSessionRunIfActive(params: {
       canonicalKey: params.canonicalKey,
     });
 
-    await chatHandlers["chat.abort"]({
+    await expectDefined(
+      chatHandlers["chat.abort"],
+      "chat.abort handler",
+    )({
       req: params.req,
       params: {
         sessionKey: abortSessionKey,
@@ -804,7 +811,10 @@ async function handleSessionSend(params: {
       : undefined;
   const idempotencyKey = explicitIdempotencyKey ?? randomUUID();
   const dispatchChatSend = async (respond: RespondFn) => {
-    await chatHandlers["chat.send"]({
+    await expectDefined(
+      chatHandlers["chat.send"],
+      "chat.send handler",
+    )({
       req: params.req,
       params: {
         sessionKey: canonicalKey,
@@ -1575,7 +1585,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
                 sessionKey: key,
                 storePath,
               })) + 1;
-            await chatHandlers["chat.send"]({
+            await expectDefined(
+              chatHandlers["chat.send"],
+              "chat.send handler",
+            )({
               req,
               params: {
                 sessionKey: key,
@@ -2193,7 +2206,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       }
     }
     let abortedRunId: string | null = null;
-    await chatHandlers["chat.abort"]({
+    await expectDefined(
+      chatHandlers["chat.abort"],
+      "chat.abort handler",
+    )({
       req,
       params: {
         sessionKey: abortSessionKey,
@@ -2699,7 +2715,11 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         }
       | undefined;
     const abortSessionKey = target.canonicalKey ?? key;
-    await chatHandlers["chat.abort"]({
+    const chatAbort = chatHandlers["chat.abort"];
+    if (!chatAbort) {
+      throw new Error("chat.abort handler is not registered");
+    }
+    await chatAbort({
       req,
       params: {
         sessionKey: abortSessionKey,

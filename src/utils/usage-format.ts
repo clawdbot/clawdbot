@@ -3,6 +3,7 @@
  * Keep this module synchronous; request paths call it while rendering usage summaries.
  */
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { modelKey, normalizeModelRef, normalizeProviderId } from "../agents/model-selection.js";
@@ -661,7 +662,7 @@ function selectPricingTier(tiers: PricingTier[], input: number): PricingTier | u
   }
 
   for (let index = sortedTiers.length - 1; index >= 0; index -= 1) {
-    const tier = sortedTiers[index];
+    const tier = expectDefined(sortedTiers[index], "sorted tiers entry at index");
     if (input >= tier.range[0]) {
       return tier;
     }

@@ -479,6 +479,9 @@ export async function resolveMessagingTarget(params: {
   });
   if (match.kind === "single") {
     const entry = match.entry;
+    if (!entry) {
+      throw new Error("Single directory match is missing its entry");
+    }
     return {
       ok: true,
       target: {

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
@@ -1173,12 +1174,13 @@ async function migrateLegacyTaskRunsSidecar(params: {
           "terminal_outcome",
         ];
         for (const row of taskRows) {
+          const taskId = legacyKeyValue(expectDefined(row.task_id, "task migration row key"));
           const existing = db
             .prepare(`SELECT ${taskColumns.join(", ")} FROM task_runs WHERE task_id = ?`)
-            .get(legacyKeyValue(row.task_id));
+            .get(taskId);
           if (existing) {
             if (!legacyRowsMatch(existing as Record<string, unknown>, row, taskColumns)) {
-              conflicts.push(legacyKeyValue(row.task_id));
+              conflicts.push(taskId);
             }
             continue;
           }
@@ -1187,20 +1189,19 @@ async function migrateLegacyTaskRunsSidecar(params: {
         }
         const deliveryColumns = ["requester_origin_json", "last_notified_event_at"];
         for (const row of deliveryRows) {
+          const taskId = legacyKeyValue(expectDefined(row.task_id, "delivery migration row key"));
           const existing = db
             .prepare(
               `SELECT requester_origin_json, last_notified_event_at FROM task_delivery_state WHERE task_id = ?`,
             )
-            .get(legacyKeyValue(row.task_id));
+            .get(taskId);
           if (existing) {
             if (!legacyRowsMatch(existing as Record<string, unknown>, row, deliveryColumns)) {
-              conflicts.push(`${legacyKeyValue(row.task_id)}/delivery`);
+              conflicts.push(`${taskId}/delivery`);
             }
             continue;
           }
-          const taskExists = db
-            .prepare("SELECT 1 FROM task_runs WHERE task_id = ?")
-            .get(legacyKeyValue(row.task_id));
+          const taskExists = db.prepare("SELECT 1 FROM task_runs WHERE task_id = ?").get(taskId);
           if (!taskExists) {
             skippedOrphanDeliveryStates++;
             continue;
@@ -1298,12 +1299,13 @@ async function migrateLegacyFlowRunsSidecar(params: {
           "ended_at",
         ];
         for (const row of rows) {
+          const flowId = legacyKeyValue(expectDefined(row.flow_id, "flow migration row key"));
           const existing = db
             .prepare(`SELECT ${columns.join(", ")} FROM flow_runs WHERE flow_id = ?`)
-            .get(legacyKeyValue(row.flow_id));
+            .get(flowId);
           if (existing) {
             if (!legacyRowsMatch(existing as Record<string, unknown>, row, columns)) {
-              conflicts.push(legacyKeyValue(row.flow_id));
+              conflicts.push(flowId);
             }
             continue;
           }

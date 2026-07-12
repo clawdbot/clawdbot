@@ -190,8 +190,37 @@ describe("sqlite hot query plans", () => {
           FROM cache_entries
          WHERE scope = ? AND expires_at IS NOT NULL
          ORDER BY expires_at ASC, key
-         LIMIT 50
+        LIMIT 50
       `,
     });
+    expectPlanUsesIndex({
+      db: database.db,
+      indexName: "idx_agent_session_entries_session_updated",
+      params: ["session-1"],
+      sql: `
+        SELECT session_key
+          FROM session_entries
+         WHERE session_id = ?
+         ORDER BY updated_at DESC, session_key ASC
+         LIMIT 1
+      `,
+    });
+    const latestMessagePlan = explainQueryPlan(
+      database.db,
+      `
+        SELECT te.event_json
+          FROM transcript_events AS te
+          JOIN transcript_event_identities AS ti
+            ON ti.session_id = te.session_id AND ti.seq = te.seq
+         WHERE te.session_id = ? AND ti.event_type = 'message'
+         ORDER BY ti.seq DESC
+         LIMIT 1
+      `,
+      ["session-1"],
+    );
+    expect(latestMessagePlan).toContain(
+      "USING COVERING INDEX idx_agent_transcript_event_sequence (session_id=? AND event_type=?)",
+    );
+    expect(latestMessagePlan).not.toContain("USE TEMP B-TREE FOR ORDER BY");
   });
 });

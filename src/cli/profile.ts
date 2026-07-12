@@ -40,7 +40,7 @@ export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
       const [primary, secondary] = resolveCliArgvInvocation(out).commandPath;
       if (primary === "qa" && secondary === "matrix") {
         out.push(arg);
-        if (consumedNext) {
+        if (consumedNext && next !== undefined) {
           out.push(next);
         }
         return { kind: "handled", consumedNext };

@@ -1,6 +1,7 @@
 // Prepares config writes by diffing current state and preserving metadata.
 import { isDeepStrictEqual } from "node:util";
 import { normalizeConfiguredProviderCatalogModelId } from "@openclaw/model-catalog-core/provider-model-id-normalization";
+import { expectDefined } from "@openclaw/normalization-core";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { isRecord } from "../utils.js";
@@ -37,8 +38,8 @@ export function createMergePatch(base: unknown, target: unknown): unknown {
   const patch: Record<string, unknown> = {};
   const keys = new Set([...Object.keys(base), ...Object.keys(target)]);
   for (const key of keys) {
-    const hasBase = key in base;
-    const hasTarget = key in target;
+    const hasBase = Object.hasOwn(base, key);
+    const hasTarget = Object.hasOwn(target, key);
     if (!hasTarget) {
       patch[key] = null;
       continue;
@@ -215,7 +216,8 @@ function setPathValue(value: unknown, path: string[], nextValue: unknown): unkno
   if (path.length === 0) {
     return cloneUnknown(nextValue);
   }
-  const [head, ...tail] = path;
+  const head = expectDefined(path[0], "config path head");
+  const tail = path.slice(1);
   if (Array.isArray(value)) {
     const index = parseArrayIndexPathSegment(head);
     if (index === undefined || index >= value.length) {
@@ -273,7 +275,8 @@ function setPathValueCreatingParents(value: unknown, path: string[], nextValue: 
   if (path.length === 0) {
     return cloneUnknown(nextValue);
   }
-  const [head, ...tail] = path;
+  const head = expectDefined(path[0], "config path head");
+  const tail = path.slice(1);
   if (Array.isArray(value) || isNumericPathSegment(head)) {
     const index = parseArrayIndexPathSegment(head);
     if (index === undefined) {
@@ -294,7 +297,8 @@ function deletePathValue(value: unknown, path: string[]): unknown {
   if (path.length === 0) {
     return value;
   }
-  const [head, ...tail] = path;
+  const head = expectDefined(path[0], "config path head");
+  const tail = path.slice(1);
   if (Array.isArray(value)) {
     const index = parseArrayIndexPathSegment(head);
     if (index === undefined || index >= value.length || tail.length === 0) {
@@ -786,7 +790,8 @@ function hasPathValue(value: unknown, path: readonly string[]): boolean {
   if (path.length === 0) {
     return true;
   }
-  const [head, ...tail] = path;
+  const head = expectDefined(path[0], "config path head");
+  const tail = path.slice(1);
   if (Array.isArray(value)) {
     const index = parseArrayIndexPathSegment(head);
     if (index === undefined || index >= value.length) {
@@ -1019,7 +1024,7 @@ function unsetPathForWriteAt(
   if (depth >= pathSegments.length) {
     return { changed: false, value };
   }
-  const segment = pathSegments[depth];
+  const segment = expectDefined(pathSegments[depth], "path segments entry at depth");
   const isLeaf = depth === pathSegments.length - 1;
 
   if (Array.isArray(value)) {

@@ -10,6 +10,7 @@ import {
   parseLooseIpAddress,
 } from "@openclaw/net-policy/ip";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
+import { expectDefined } from "@openclaw/normalization-core";
 import { parseFenceSpans } from "../../packages/markdown-core/src/fences.js";
 import { parseAudioTag } from "./audio-tags.js";
 
@@ -346,7 +347,7 @@ function parseMarkdownImageDestination(
   let destinationEnd = index;
   let parenDepth = 0;
   while (index < input.length) {
-    const ch = input[index];
+    const ch = input.charAt(index);
     if (ch === "\\") {
       index += 2;
       destinationEnd = index;
@@ -583,7 +584,7 @@ export function splitMediaFromOutput(
       const start = match.index ?? 0;
       pieces.push(line.slice(cursor, start));
 
-      const payload = match[1];
+      const payload = expectDefined(match[1], "parse regex capture 1");
       const unwrapped = unwrapQuoted(payload);
       const payloadValue = unwrapped ?? payload;
       const parts = unwrapped ? [unwrapped] : payload.split(/\s+/).filter(Boolean);

@@ -6,6 +6,28 @@ import type { DoctorSessionSqliteReport } from "./doctor-session-sqlite.js";
 
 /** Runs doctor or the post-upgrade probe submode using the provided runtime. */
 export async function doctorCommand(runtime?: RuntimeEnv, options?: DoctorOptions): Promise<void> {
+  if (options?.stateSqlite) {
+    const outputRuntime = runtime ?? defaultRuntime;
+    const { runDoctorStateSqliteCompact } = await import("./doctor-state-sqlite-compact.js");
+    const report = runDoctorStateSqliteCompact();
+    if (options.json) {
+      writeRuntimeJson(outputRuntime, report);
+    } else if (report.skipped) {
+      outputRuntime.log(`state-sqlite compact: skipped; database missing at ${report.path}`);
+    } else {
+      outputRuntime.log(
+        `state-sqlite compact: reclaimed=${report.reclaimedBytes} bytes, db=${report.before.dbSizeBytes}->${report.after.dbSizeBytes} bytes, wal=${report.before.walSizeBytes}->${report.after.walSizeBytes} bytes`,
+      );
+      outputRuntime.log(
+        `- freelist=${report.before.freelistPages}->${report.after.freelistPages} pages, page-size=${report.after.pageSizeBytes} bytes, auto-vacuum=${report.before.autoVacuum}->${report.after.autoVacuum}`,
+      );
+      outputRuntime.log(
+        `- quick-check=${report.quickCheck}, integrity-check=${report.integrityCheck}, path=${report.path}`,
+      );
+    }
+    outputRuntime.exit(0);
+    return;
+  }
   if (options?.sessionSqlite) {
     const outputRuntime = runtime ?? defaultRuntime;
     const { runDoctorSessionSqlite } = await import("./doctor-session-sqlite.js");

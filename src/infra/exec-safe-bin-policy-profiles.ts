@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Defines safe-bin policy profile fixtures and metadata.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -392,7 +393,12 @@ export function renderSafeBinDeniedFlagsDocBullets(
   const deniedByBin = resolveSafeBinDeniedFlags(fixtures);
   const bins = Object.keys(deniedByBin).toSorted();
   return bins
-    .map((bin) => `- \`${bin}\`: ${deniedByBin[bin].map((flag) => `\`${flag}\``).join(", ")}`)
+    .map(
+      (bin) =>
+        `- \`${bin}\`: ${expectDefined(deniedByBin[bin], "denied by bin entry at bin")
+          .map((flag) => `\`${flag}\``)
+          .join(", ")}`,
+    )
     .join("\n");
 }
 

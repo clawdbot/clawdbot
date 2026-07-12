@@ -17,7 +17,12 @@ import {
   deleteBrowserProfileConfig,
   setDefaultBrowserProfile,
 } from "./config-mutations.js";
-import { parseHttpUrl, resolveBrowserConfig, resolveProfile } from "./config.js";
+import {
+  getOwnBrowserProfile,
+  parseHttpUrl,
+  resolveBrowserConfig,
+  resolveProfile,
+} from "./config.js";
 import {
   BrowserConflictError,
   BrowserProfileNotFoundError,
@@ -94,13 +99,13 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
 
     const state = ctx.state();
     const resolvedProfiles = state.resolved.profiles;
-    if (name in resolvedProfiles) {
+    if (getOwnBrowserProfile(resolvedProfiles, name)) {
       throw new BrowserConflictError(`profile "${name}" already exists`);
     }
 
     const cfg = getRuntimeConfig();
     const rawProfiles = cfg.browser?.profiles ?? {};
-    if (name in rawProfiles) {
+    if (getOwnBrowserProfile(rawProfiles, name)) {
       throw new BrowserConflictError(`profile "${name}" already exists`);
     }
 
@@ -236,14 +241,14 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
         `cannot delete the default profile "${name}"; change browser.defaultProfile first`,
       );
     }
-    if (!(name in profiles)) {
-      throw new BrowserProfileNotFoundError(`profile "${name}" not found`);
-    }
-    const runtimeProfile = profiles[name];
+    const runtimeProfile = getOwnBrowserProfile(profiles, name);
     if (!runtimeProfile) {
       throw new BrowserProfileNotFoundError(`profile "${name}" not found`);
     }
-    const sourceProfile = getRuntimeConfigSourceSnapshot()?.browser?.profiles?.[name];
+    const sourceProfile = getOwnBrowserProfile(
+      getRuntimeConfigSourceSnapshot()?.browser?.profiles,
+      name,
+    );
     const expected = structuredClone(sourceProfile ?? runtimeProfile);
 
     let deleted = false;

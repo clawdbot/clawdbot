@@ -163,6 +163,9 @@ struct OpenClawTypographyTests {
         let settingsSupport = try String(
             contentsOf: Self.sourceURL("Design/SettingsProTabSupport.swift"),
             encoding: .utf8)
+        let approvalDialog = try String(
+            contentsOf: Self.sourceURL("Gateway/ExecApprovalPromptDialog.swift"),
+            encoding: .utf8)
         let privacyAccess = try String(
             contentsOf: Self.sourceURL("Settings/PrivacyAccessSectionView.swift"),
             encoding: .utf8)
@@ -254,6 +257,15 @@ struct OpenClawTypographyTests {
         #expect(onboardingSecureOption.contains(".font(OpenClawType.captionSemiBold)"))
 
         #expect(settingsSections.contains(".font(OpenClawType.body)"))
+        #expect(settingsSections.contains("Text(warningText)"))
+        #expect(settingsSections.contains(".font(OpenClawType.caption)"))
+        #expect(approvalDialog.contains("Text(warningText)"))
+        #expect(approvalDialog.contains(".font(OpenClawType.footnote)"))
+        #expect(approvalDialog.contains("ScrollView {"))
+        #expect(approvalDialog.contains("self.actionFooter"))
+        #expect(approvalDialog.contains("exec-approval-review-scroll"))
+        #expect(approvalDialog.contains("exec-approval-actions"))
+        #expect(approvalDialog.contains("ViewThatFits(in: .horizontal)"))
         #expect(settingsSections.contains("self.settingsToggle(\"Show Talk Control\", isOn: self.$talkButtonEnabled)"))
         #expect(settingsSections.contains("OpenClawToggleIndicator(isOn: isOn.wrappedValue)"))
         #expect(settingsSections.contains("TextField(\"Default Share Instruction\""))

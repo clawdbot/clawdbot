@@ -59,7 +59,7 @@ function compileGlobRegex(pattern: string): RegExp {
   let regex = "^";
   let i = 0;
   while (i < pattern.length) {
-    const ch = pattern[i];
+    const ch = pattern.charAt(i);
     if (ch === "*") {
       const next = pattern[i + 1];
       if (next === "*") {

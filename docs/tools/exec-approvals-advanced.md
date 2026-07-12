@@ -361,6 +361,23 @@ See:
 - [Telegram](/channels/telegram)
 - [QQ bot](/channels/qqbot)
 
+### Official mobile operator apps
+
+The official iOS and Android apps can also review Gateway-owned pending exec
+approvals when an `operator.admin` connection is used, or when their paired
+`operator.approvals` device was explicitly targeted by the request. They read
+the same sanitized durable record used by the
+Control UI, submit a kind-aware decision, and display the Gateway's canonical
+first-answer result. The Apple Watch mirrors these approval prompts through
+the paired iPhone, with allow-once and deny actions. Direct Watch Gateway mode
+does not review approvals.
+
+A lost resolve acknowledgement does not make the submitted choice authoritative:
+the app disables the controls and reads the record again. If another surface
+won, the app shows that recorded decision. Pending prompts remain bound to the
+Gateway that issued them, so switching the active Gateway cannot redirect an
+old approval ID.
+
 ### macOS IPC flow
 
 ```

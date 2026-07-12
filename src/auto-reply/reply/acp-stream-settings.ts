@@ -25,6 +25,10 @@ const ACP_TAG_VISIBILITY_DEFAULTS: Record<AcpSessionUpdateTag, boolean> = {
   agent_thought_chunk: false,
 };
 
+function isAcpSessionUpdateTag(tag: string): tag is AcpSessionUpdateTag {
+  return Object.hasOwn(ACP_TAG_VISIBILITY_DEFAULTS, tag);
+}
+
 /** ACP delivery strategy for projected assistant output. */
 type AcpDeliveryMode = "live" | "final_only";
 export type AcpHiddenBoundarySeparator = "none" | "space" | "newline" | "paragraph";
@@ -148,12 +152,16 @@ export function isAcpTagVisible(settings: AcpProjectionSettings, tag: string | u
   if (!tag) {
     return true;
   }
-  const override = settings.tagVisibility[tag as AcpSessionUpdateTag];
+  if (!isAcpSessionUpdateTag(tag)) {
+    return true;
+  }
+  const override = settings.tagVisibility[tag];
   if (typeof override === "boolean") {
     return override;
   }
-  if (Object.hasOwn(ACP_TAG_VISIBILITY_DEFAULTS, tag)) {
-    return ACP_TAG_VISIBILITY_DEFAULTS[tag as AcpSessionUpdateTag];
+  const defaultVisibility = ACP_TAG_VISIBILITY_DEFAULTS[tag];
+  if (defaultVisibility === undefined) {
+    throw new Error(`Missing ACP visibility default for ${tag}`);
   }
-  return true;
+  return defaultVisibility;
 }

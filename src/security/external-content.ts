@@ -225,7 +225,7 @@ function foldMarkerTextWithIndexMap(input: string): FoldedMarkerMatch {
   const originalEndByFoldedIndex: number[] = [];
 
   for (let index = 0; index < input.length; index += 1) {
-    const char = input[index];
+    const char = input.charAt(index);
     if (isMarkerIgnorableChar(char)) {
       continue;
     }

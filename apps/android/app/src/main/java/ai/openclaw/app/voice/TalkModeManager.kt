@@ -688,52 +688,6 @@ class TalkModeManager internal constructor(
         }
     }
 
-  /**
-   * Speak a wake-word command through TalkMode's full pipeline:
-   * chat.send → wait for final → read assistant text → TTS.
-   * Calls [onComplete] when done so the caller can disable TalkMode and re-arm VoiceWake.
-   */
-  fun speakWakeCommand(
-    command: String,
-    onComplete: () -> Unit,
-  ) {
-    gatewayWorkScope.launch {
-      try {
-        reloadConfig()
-        val startedAt = System.currentTimeMillis().toDouble() / 1000.0
-        val prompt = buildPrompt(command)
-        val ack = sendChat(prompt, session)
-        val runId = ack.runId ?: throw IllegalStateException("chat.send returned no run id")
-        if (ack.isTerminalFailure) {
-          setStatus(if (ack.normalizedStatus == "error") "Chat error" else "Aborted")
-          return@launch
-        }
-        val ok = if (ack.isTerminalSuccess) true else waitForChatFinal(runId)
-        val assistant =
-          consumeRunText(runId)
-            ?: waitForAssistantText(
-              session,
-              chatSendAckHistorySinceSeconds(ack, startedAt),
-              if (ok) 12_000 else 25_000,
-            )
-        if (!assistant.isNullOrBlank()) {
-          val playbackToken = playbackGeneration.incrementAndGet()
-          cancelActivePlayback()
-          setStatus("Speaking…")
-          runPlaybackSession(playbackToken) {
-            playAssistant(assistant, playbackToken)
-          }
-        } else {
-          setStatus("No reply")
-        }
-      } catch (err: Throwable) {
-        Log.w(tag, "speakWakeCommand failed: ${err.message}")
-      } finally {
-        onComplete()
-      }
-    }
-  }
-
   /** When true, play TTS for all final chat responses (even ones we didn't initiate). */
   @Volatile var ttsOnAllResponses = false
 

@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { ContentBlock } from "@modelcontextprotocol/sdk/types.js";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -355,7 +356,7 @@ async function runCommand(
     // node result because runner.ts intentionally dispatches invokes with `void`.
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawn(argv[0], argv.slice(1), {
+      child = spawn(expectDefined(argv[0], "argv entry at 0"), argv.slice(1), {
         cwd,
         env,
         stdio: ["ignore", "pipe", "pipe"],

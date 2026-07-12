@@ -25,7 +25,7 @@ openclaw backup verify ./2026-03-09T08-00-00.000+08-00-openclaw-backup.tar.gz
 - The archive embeds a `manifest.json` with the resolved source paths and archive layout.
 - Default output is a timestamped `.tar.gz` archive in the current working directory. Timestamped filenames use your machine's local timezone and include the UTC offset. If the current working directory is inside a backed-up source tree, OpenClaw falls back to your home directory for the default archive location.
 - Existing archive files are never overwritten. Output paths inside the source state/workspace trees are rejected to avoid self-inclusion.
-- `openclaw backup verify <archive>` checks that the archive contains exactly one root manifest, rejects traversal-style archive paths, and confirms every manifest-declared payload exists in the tarball. `openclaw backup create --verify` runs that validation immediately after writing the archive.
+- `openclaw backup verify <archive>` checks that the archive contains exactly one root manifest, rejects traversal-style archive paths and SQLite sidecars, confirms every manifest-declared payload exists, validates every SQLite snapshot's file shape, and runs full integrity and role checks on canonical OpenClaw databases. Dedicated plugin schemas remain opaque because they may require owner-defined SQLite capabilities. `openclaw backup create --verify` runs that validation immediately after writing the archive.
 - `openclaw backup create --only-config` backs up just the active JSON config file.
 
 ## What gets backed up
@@ -43,7 +43,7 @@ Auth profiles and other per-agent runtime state live in SQLite under the state d
 
 OpenClaw canonicalizes paths before building the archive: if config, the credentials directory, or a workspace already live inside the state directory, they are not duplicated as separate top-level backup sources. Missing paths are skipped.
 
-During archive creation, OpenClaw skips known live-mutation files with no restoration value: active agent session transcripts, cron run logs, rolling logs, delivery queues, socket/pid/temp files under the state directory, and related durable-queue temp files. The JSON result's `skippedVolatileCount` reports how many files were intentionally omitted. SQLite databases under the state directory are snapshotted safely (`VACUUM INTO`) rather than copied live, so open WAL/SHM files do not corrupt the backup.
+During archive creation, OpenClaw skips known live-mutation files with no restoration value: active agent session transcripts, cron run logs, rolling logs, delivery queues, socket/pid/temp files under the state directory, and related durable-queue temp files. The JSON result's `skippedVolatileCount` reports how many files were intentionally omitted. SQLite databases under the state directory are compacted with `VACUUM INTO` so deleted-page remnants do not enter the archive, and live WAL/SHM files are not copied. A plugin-owned database that requires unavailable owner-defined SQLite capabilities fails closed rather than falling back to a raw page copy. SQLite files included through workspace backups are copied as workspace files and are not covered by the compaction guarantee.
 
 Installed plugin source and manifest files under the state directory's `extensions/` tree are included, but their nested `node_modules/` dependency trees are skipped as rebuildable install artifacts. After restoring an archive, use `openclaw plugins update <id>` or reinstall with `openclaw plugins install <spec> --force` if a restored plugin reports missing dependencies.
 

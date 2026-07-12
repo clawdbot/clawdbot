@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Implements approval commands for pending tool and execution requests.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -68,7 +69,7 @@ function parseApproveCommand(raw: string): ParsedApproveCommand | null {
     return {
       ok: true,
       decision: DECISION_ALIASES[second],
-      id: tokens[0],
+      id: expectDefined(tokens[0], "tokens entry at 0"),
     };
   }
   return { ok: false, error: APPROVE_USAGE_TEXT };

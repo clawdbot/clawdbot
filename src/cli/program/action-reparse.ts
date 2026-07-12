@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Reparse support for lazy commands after their placeholder has been replaced.
 import type { Command, Option } from "commander";
 import { buildParseArgv } from "../argv.js";
@@ -26,7 +27,10 @@ function buildFallbackArgv(program: Command, actionCommand: Command | undefined)
   return [
     ...commandPath.slice(0, -1),
     ...parentOptionArgs,
-    commandPath[commandPath.length - 1],
+    expectDefined(
+      commandPath[commandPath.length - 1],
+      "command path entry at command path.length 1",
+    ),
     ...actionArgsList,
   ];
 }

@@ -1,6 +1,7 @@
 // Shares plugin auto-enable detection across config and runtime code.
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtimes.js";
 import {
@@ -11,7 +12,7 @@ import {
   hasBundledChannelConfiguredState,
   listBundledChannelIdsWithConfiguredState,
 } from "../channels/plugins/configured-state.js";
-import { getChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
+import { findChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
@@ -692,7 +693,7 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
     });
     if (owningPluginIds?.length === 1) {
       changes.push({
-        pluginId: owningPluginIds[0],
+        pluginId: expectDefined(owningPluginIds[0], "owning plugin ids entry at 0"),
         kind: "provider-model-configured",
         modelRef,
       });
@@ -1013,7 +1014,7 @@ function resolveChannelAutoEnableDisplayLabel(
   const builtInChannelId = normalizeChatChannelId(entry.channelId);
   const plugin = manifestRegistry.plugins.find((record) => record.id === entry.pluginId);
   return (
-    (builtInChannelId ? getChatChannelMeta(builtInChannelId)?.label : undefined) ??
+    (builtInChannelId ? findChatChannelMeta(builtInChannelId)?.label : undefined) ??
     plugin?.channelConfigs?.[entry.channelId]?.label ??
     plugin?.channelCatalogMeta?.label
   );

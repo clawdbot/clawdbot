@@ -188,6 +188,30 @@ describe("timeout-triggered compaction", () => {
     expect(result.meta.agentMeta?.compactionTokensAfter).toBe(80_000);
   });
 
+  it("does not compact for a caller-owned timeout before attempt flags settle", async () => {
+    const controller = new AbortController();
+    const timeoutError = new Error("caller deadline elapsed");
+    timeoutError.name = "TimeoutError";
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async () => {
+      controller.abort(timeoutError);
+      return makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          usage: { input: 150000 },
+        } as never,
+      });
+    });
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      abortSignal: controller.signal,
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(mockedCompactDirect).not.toHaveBeenCalled();
+    expect(result.payloads?.at(-1)?.text).toContain("timed out");
+  });
+
   it("leaves timeout recovery to a forced unlocked Codex compaction owner", async () => {
     const { clearAgentHarnesses, registerAgentHarness } = await import("../harness/registry.js");
     const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>

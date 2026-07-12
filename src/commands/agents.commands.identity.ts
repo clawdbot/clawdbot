@@ -1,13 +1,14 @@
 // Implements identity metadata updates for configured agents.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { identityHasValues, parseIdentityMarkdown } from "../agents/identity-file.js";
 import { DEFAULT_IDENTITY_FILENAME } from "../agents/workspace.js";
 import { replaceConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
-import type { IdentityConfig } from "../config/types.js";
+import type { AgentConfig, IdentityConfig } from "../config/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -163,9 +164,11 @@ export async function agentsSetIdentityCommand(
     return;
   }
 
+  const resolvedAgentId = expectDefined(agentId, "agent id");
   const list = listAgentEntries(cfg);
-  const index = findAgentEntryIndex(list, agentId);
-  const base = index >= 0 ? list[index] : { id: agentId };
+  const index = findAgentEntryIndex(list, resolvedAgentId);
+  const base: AgentConfig =
+    index >= 0 ? expectDefined(list[index], "agent config") : { id: resolvedAgentId };
   const nextIdentity: IdentityConfig = {
     ...base.identity,
     ...incomingIdentity,
@@ -181,7 +184,7 @@ export async function agentsSetIdentityCommand(
     nextList[index] = nextEntry;
   } else {
     const defaultId = normalizeAgentId(resolveDefaultAgentId(cfg));
-    if (nextList.length === 0 && agentId !== defaultId) {
+    if (nextList.length === 0 && resolvedAgentId !== defaultId) {
       nextList.push({ id: defaultId });
     }
     nextList.push(nextEntry);

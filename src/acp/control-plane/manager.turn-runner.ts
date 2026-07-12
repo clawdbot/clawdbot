@@ -1,5 +1,6 @@
 /** Runs ACP turns, failover, timeout cleanup, and detached-task progress mirroring. */
 import type { AcpRuntime, AcpRuntimeHandle } from "@openclaw/acp-core/runtime/types";
+import { expectDefined } from "@openclaw/normalization-core";
 import { logVerbose } from "../../globals.js";
 import {
   recordSessionHumanDirectMessage,
@@ -165,8 +166,7 @@ export async function runManagerTurn(params: {
   }
 
   try {
-    for (let backendIdx = 0; backendIdx < candidateBackends.length; backendIdx += 1) {
-      const currentBackend = candidateBackends[backendIdx];
+    for (const [backendIdx, currentBackend] of candidateBackends.entries()) {
       if (backendIdx > 0) {
         await params.runtimeHandles.close({
           sessionKey,
@@ -174,7 +174,10 @@ export async function runManagerTurn(params: {
         });
         logVerbose(
           `acp-manager: switching backend for ${sessionKey} from ${describeBackendCandidate(
-            candidateBackends[backendIdx - 1],
+            expectDefined(
+              candidateBackends[backendIdx - 1],
+              "candidate backends entry at backend idx 1",
+            ),
           )} to ${describeBackendCandidate(currentBackend)}`,
         );
       }

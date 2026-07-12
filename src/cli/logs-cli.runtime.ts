@@ -1,5 +1,6 @@
 // Runtime helpers for bounded subprocess log tails and service runtime lookups.
 import { spawn } from "node:child_process";
+import { expectDefined } from "@openclaw/normalization-core";
 
 export { buildGatewayConnectionDetails } from "../gateway/call.js";
 export { resolveGatewaySystemdServiceName } from "../daemon/constants.js";
@@ -15,7 +16,7 @@ function appendByteTail(tail: ByteTail, chunk: Buffer, maxBytes: number): void {
   tail.chunks.push(chunk);
   tail.bytes += chunk.length;
   while (tail.bytes > maxBytes && tail.chunks.length > 0) {
-    const first = tail.chunks[0];
+    const first = expectDefined(tail.chunks[0], "chunks entry at 0");
     const overflow = tail.bytes - maxBytes;
     if (first.length <= overflow) {
       tail.chunks.shift();
@@ -36,7 +37,10 @@ function decodeUtf8Tail(tail: ByteTail): string {
   // A byte cap can cut the leading code point. Skip only its continuation
   // bytes so decoding cannot invent a replacement character at the boundary.
   let offset = 0;
-  while (offset < buffer.length && (buffer[offset] & 0xc0) === 0x80) {
+  while (
+    offset < buffer.length &&
+    (expectDefined(buffer[offset], "buffer entry at offset") & 0xc0) === 0x80
+  ) {
     offset += 1;
   }
   return buffer.subarray(offset).toString("utf8");

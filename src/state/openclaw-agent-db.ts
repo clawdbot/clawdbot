@@ -20,6 +20,7 @@ import {
 } from "../infra/sqlite-user-version.js";
 import {
   configureSqliteConnectionPragmas,
+  configureSqlitePreSchemaPragmas,
   registerSqliteCacheExitClose,
   type SqliteWalMaintenance,
 } from "../infra/sqlite-wal.js";
@@ -46,10 +47,11 @@ export { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
  * per pathname, protected with private file modes, and registered in the shared
  * OpenClaw state database for discovery and maintenance.
  */
-// v5 = transcript mutation watermark. The v4 session/transcript flip and main's v2 memory-identity
+// v6 = session/transcript hot-path indexes. v5 added transcript mutation watermarks.
+// The v4 session/transcript flip and main's v2 memory-identity
 // change is folded in structure-gated (migrateMemoryIndexSourcesIdentity), so
 // v2 main DBs and pre-merge v4 flip DBs both converge on this schema.
-export const OPENCLAW_AGENT_SCHEMA_VERSION = 5;
+export const OPENCLAW_AGENT_SCHEMA_VERSION = 6;
 const OPENCLAW_AGENT_DB_DIR_MODE = 0o700;
 const OPENCLAW_AGENT_DB_FILE_MODE = 0o600;
 const OPENCLAW_AGENT_DB_SLOW_OPEN_MS = 1_000;
@@ -81,7 +83,6 @@ type OpenClawAgentMetadataDatabase = Pick<OpenClawAgentKyselyDatabase, "schema_m
 type OpenClawAgentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "agent_databases">;
 
 const cachedDatabases = new Map<string, OpenClawAgentDatabase>();
-const registeredDatabasePaths = new Set<string>();
 
 type ExistingSchemaMeta = {
   agentId: string | null;
@@ -181,6 +182,9 @@ function migrateOpenClawAgentSchema(db: DatabaseSync): void {
   const userVersion = readSqliteUserVersion(db);
   if (userVersion >= OPENCLAW_AGENT_SCHEMA_VERSION) {
     return;
+  }
+  if (userVersion < 6) {
+    db.exec("DROP INDEX IF EXISTS idx_agent_session_entries_session_id;");
   }
   if (userVersion < 3) {
     db.exec("DROP INDEX IF EXISTS idx_agent_transcript_events_session;");
@@ -578,18 +582,6 @@ function ensureAgentSchema(db: DatabaseSync, agentId: string, pathname: string):
   }
 }
 
-// auto_vacuum only takes effect when set before the first page is written;
-// existing databases keep their mode until a doctor-owned full VACUUM.
-// INCREMENTAL lets maintenance release freed pages in bounded steps so
-// per-agent DBs shrink after retention deletes rows instead of pinning
-// their high-water mark forever.
-function enableIncrementalAutoVacuumForFreshDatabase(db: DatabaseSync): void {
-  const row = db.prepare("PRAGMA page_count").get() as { page_count?: unknown } | undefined;
-  if (row?.page_count === 0) {
-    db.exec("PRAGMA auto_vacuum = INCREMENTAL;");
-  }
-}
-
 /** Initialize agent schema/ownership metadata on an independently managed connection. */
 export function ensureOpenClawAgentDatabaseSchema(
   db: DatabaseSync,
@@ -599,7 +591,9 @@ export function ensureOpenClawAgentDatabaseSchema(
   const databaseOptions = { ...options, agentId };
   const pathname = resolveOpenClawAgentSqlitePath(databaseOptions);
   ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
-  enableIncrementalAutoVacuumForFreshDatabase(db);
+  configureSqlitePreSchemaPragmas(db, {
+    busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+  });
   ensureAgentSchema(db, agentId, pathname);
   ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
   if (options.register === true) {
@@ -822,7 +816,9 @@ export function openOpenClawAgentDatabase(
   const walMaintenance = (() => {
     let maintenance: SqliteWalMaintenance | undefined;
     try {
-      enableIncrementalAutoVacuumForFreshDatabase(db);
+      configureSqlitePreSchemaPragmas(db, {
+        busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+      });
       maintenance = configureSqliteConnectionPragmas(db, {
         busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
         databaseLabel: `openclaw-agent:${agentId}`,
@@ -840,14 +836,16 @@ export function openOpenClawAgentDatabase(
   })();
   ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
   const database = { agentId, db, path: pathname, walMaintenance };
+  try {
+    registerAgentDatabase({ agentId, path: pathname, env: options.env });
+  } catch (error) {
+    closeCachedOpenClawAgentDatabase(database);
+    throw error;
+  }
   cachedDatabases.set(pathname, database);
   // Safety net for processes that end without an orderly close: agent DBs have
   // no shutdown owner like the ACP/gateway state DB closes. Closing unregisters.
   unregisterExitClose ??= registerSqliteCacheExitClose(closeOpenClawAgentDatabases);
-  if (!registeredDatabasePaths.has(pathname)) {
-    registerAgentDatabase({ agentId, path: pathname, env: options.env });
-    registeredDatabasePaths.add(pathname);
-  }
   logSlowAgentDatabaseOpen({
     agentId,
     elapsedMs: Date.now() - openStartedAt,
@@ -943,7 +941,6 @@ export function closeOpenClawAgentDatabases(): void {
     closeCachedOpenClawAgentDatabase(database);
   }
   cachedDatabases.clear();
-  registeredDatabasePaths.clear();
 }
 
 /** Test alias for closing cached agent database handles from teardown code. */

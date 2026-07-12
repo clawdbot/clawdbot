@@ -2,6 +2,7 @@
  * GitHub Copilot OAuth flow
  */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import {
   assertOkOrThrowProviderError,
@@ -109,7 +110,7 @@ function getBaseUrlFromToken(token: string): string | null {
   if (!match) {
     return null;
   }
-  const proxyHost = match[1];
+  const proxyHost = expectDefined(match[1], "github copilot regex capture 1");
   // Convert proxy.xxx to api.xxx
   const apiHost = proxyHost.replace(/^proxy\./, "api.");
   return `https://${apiHost}`;

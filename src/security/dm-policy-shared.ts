@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Shares direct-message policy normalization for channel audits.
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveGroupAllowFromSources } from "../channels/allow-from.js";
@@ -32,7 +33,9 @@ export function resolvePinnedMainDmOwnerFromAllowlist(params: {
         .filter((entry): entry is string => Boolean(entry)),
     ),
   );
-  return normalizedOwners.length === 1 ? normalizedOwners[0] : null;
+  return normalizedOwners.length === 1
+    ? expectDefined(normalizedOwners[0], "normalized owners entry at 0")
+    : null;
 }
 
 /** @deprecated Use `resolveChannelMessageIngress` from `openclaw/plugin-sdk/channel-ingress-runtime`. */

@@ -17,20 +17,15 @@ Related:
 
 ## Postures
 
-| Posture | Command                  | Behavior                                                                    |
-| ------- | ------------------------ | --------------------------------------------------------------------------- |
-| Inspect | `openclaw doctor`        | Human-oriented checks and guided prompts.                                   |
-| Repair  | `openclaw doctor --fix`  | Applies supported repairs, prompting unless non-interactive repair is safe. |
-| Lint    | `openclaw doctor --lint` | Read-only structured findings for CI, preflight, and review gates.          |
+Doctor has five postures:
 
-Doctor has four postures:
-
-| Posture                  | Command                                   | Behavior                                                                        |
-| ------------------------ | ----------------------------------------- | ------------------------------------------------------------------------------- |
-| Inspect                  | `openclaw doctor`                         | Human-oriented checks and guided prompts.                                       |
-| Repair                   | `openclaw doctor --fix`                   | Applies supported repairs, using prompts unless non-interactive repair is safe. |
-| Lint                     | `openclaw doctor --lint`                  | Read-only structured findings for CI, preflight, and review gates.              |
-| Session SQLite migration | `openclaw doctor --session-sqlite <mode>` | Inspects, imports, validates, compacts, recovers, or restores session state.    |
+| Posture                   | Command                                   | Behavior                                                                        |
+| ------------------------- | ----------------------------------------- | ------------------------------------------------------------------------------- |
+| Inspect                   | `openclaw doctor`                         | Human-oriented checks and guided prompts.                                       |
+| Repair                    | `openclaw doctor --fix`                   | Applies supported repairs, using prompts unless non-interactive repair is safe. |
+| Lint                      | `openclaw doctor --lint`                  | Read-only structured findings for CI, preflight, and review gates.              |
+| Shared SQLite maintenance | `openclaw doctor --state-sqlite compact`  | Explicitly checkpoints, compacts, and verifies the canonical shared state DB.   |
+| Session SQLite migration  | `openclaw doctor --session-sqlite <mode>` | Inspects, imports, validates, compacts, recovers, or restores session state.    |
 
 Prefer `--lint` when automation needs a stable result. Prefer `--fix` when a human operator wants doctor to edit config or state.
 
@@ -49,6 +44,8 @@ openclaw doctor --fix --non-interactive
 openclaw doctor --generate-gateway-token
 openclaw doctor --post-upgrade
 openclaw doctor --post-upgrade --json
+openclaw doctor --state-sqlite compact
+openclaw doctor --state-sqlite compact --json
 openclaw doctor --session-sqlite inspect --session-sqlite-all-agents
 openclaw doctor --session-sqlite dry-run --session-sqlite-agent main --json
 openclaw doctor --session-sqlite import --session-sqlite-all-agents
@@ -81,18 +78,19 @@ openclaw channels status --probe
 | `--deep`                        | Scan system services for extra gateway installs; report recent Gateway supervisor restart handoffs.                                                                                     |
 | `--lint`                        | Run modernized health checks in read-only mode and emit diagnostic findings.                                                                                                            |
 | `--post-upgrade`                | Run post-upgrade plugin compatibility probes; findings go to stdout; exit code 1 if any error-level finding is present.                                                                 |
+| `--state-sqlite <mode>`         | Run explicit shared state SQLite maintenance. The only mode is `compact`.                                                                                                               |
 | `--session-sqlite <mode>`       | Run the targeted session SQLite migration mode: `inspect`, `dry-run`, `import`, `validate`, `compact`, `recover`, or `restore`.                                                         |
 | `--session-sqlite-store <path>` | With `--session-sqlite`: select one legacy `sessions.json` store path.                                                                                                                  |
 | `--session-sqlite-agent <id>`   | With `--session-sqlite`: select one configured agent.                                                                                                                                   |
 | `--session-sqlite-all-agents`   | With `--session-sqlite`: select configured and discovered agent stores.                                                                                                                 |
 | `--github-issue`                | With `--session-sqlite recover`: prepare a sanitized openclaw/openclaw issue report; doctor creates it with `gh` after `--yes` or interactive confirmation.                             |
-| `--json`                        | With `--lint`: JSON findings. With `--post-upgrade`: machine-readable envelope `{ probesRun, findings }`. With `--session-sqlite`: the migration report as JSON.                        |
+| `--json`                        | With `--lint`: JSON findings. With `--post-upgrade`: `{ probesRun, findings }`. With `--state-sqlite` or `--session-sqlite`: the maintenance report as JSON.                            |
 | `--severity-min <level>`        | With `--lint`: drop findings below `info`, `warning`, or `error`.                                                                                                                       |
 | `--all`                         | With `--lint`: run all registered checks, including opt-in checks excluded from the default set.                                                                                        |
 | `--skip <id>`                   | With `--lint`: skip a check id. Repeatable.                                                                                                                                             |
 | `--only <id>`                   | With `--lint`: run only the given check id(s). Repeatable.                                                                                                                              |
 
-`--severity-min`, `--all`, `--only`, and `--skip` are only accepted together with `--lint`; `--json` is accepted with `--lint`, `--post-upgrade`, and `--session-sqlite`.
+`--severity-min`, `--all`, `--only`, and `--skip` are only accepted together with `--lint`; `--json` is accepted with `--lint`, `--post-upgrade`, `--state-sqlite`, and `--session-sqlite`.
 
 ## Lint mode
 
@@ -198,6 +196,46 @@ runs safe state and plugin repairs before reporting ready. If repair cannot
 finish safely, startup exits and tells you to run the same image once with
 `openclaw doctor --fix` against the same mounted state/config before restarting
 the container normally.
+
+## Shared state SQLite compaction
+
+`openclaw doctor --state-sqlite compact` is explicit offline maintenance for
+the canonical shared state database at
+`<state-dir>/state/openclaw.sqlite`. It does not accept an arbitrary database
+path, is never invoked by normal Gateway operation, and is not part of
+`openclaw doctor --fix`.
+
+Stop the Gateway and create a verified backup first:
+
+```bash
+openclaw gateway stop
+openclaw backup create --verify
+openclaw doctor --state-sqlite compact --json
+openclaw gateway start
+```
+
+The command:
+
+1. Requires a regular file at the canonical shared-state path. A missing
+   database is reported as `skipped` and exits successfully.
+2. Validates the current supported schema version and
+   `schema_meta.role = "global"` before checkpointing or changing the file.
+3. Requires a non-busy `wal_checkpoint(TRUNCATE)`. Stop any remaining OpenClaw
+   process and retry if the checkpoint is busy.
+4. Sets `auto_vacuum` to `INCREMENTAL`, runs a full `VACUUM`, and checkpoints
+   again.
+5. Runs both `quick_check` and `integrity_check`, then reapplies owner-only
+   permissions to the database and SQLite sidecar files.
+
+JSON output reports the database and WAL sizes, freelist pages, page size, and
+`auto_vacuum` value before and after compaction, plus reclaimed bytes and both
+verification results. SQLite reports `auto_vacuum` as `0` for none, `1` for
+full, and `2` for incremental.
+
+Compaction fails without mutation when the schema is old, newer than the
+running OpenClaw build, or belongs to an agent database. Run
+`openclaw doctor --fix` first for an older shared-state schema. Restore a
+compatible backup or upgrade OpenClaw for a newer schema.
 
 ## Session SQLite migration
 

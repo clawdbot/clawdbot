@@ -81,6 +81,9 @@ extension RootTabsSourceGuardTests {
         // Gateway problems surface once, as the root toast; the settings page must not
         // embed a second copy of the banner.
         #expect(!sectionsSource.contains("GatewayProblemBanner("))
+        // Sections compare gateway owners byte-exact, not with raw string equality.
+        #expect(!sectionsSource.contains("entry.stableID == self.gatewayRegistry.activeStableID"))
+        #expect(sectionsSource.components(separatedBy: "GatewayStableIdentifier.matches(").count >= 4)
         #expect(rootSource.contains("GatewayProblemBanner("))
         #expect(rootSource.contains(".gesture(self.gatewayToastSwipeGesture)"))
         // Operator auth/pairing problems can coexist with a connected node, so the
@@ -209,7 +212,10 @@ extension RootTabsSourceGuardTests {
         #expect(!stagedSetupConnect.contains("self.appModel.disconnectGateway()"))
         #expect(stagedSetupConnect.contains(
             "self.applyGatewayLink(link, disconnectExistingGatewayForBootstrap: false)"))
-        #expect(stagedSetupConnect.contains("guard self.connectingGatewayID == nil else { return }"))
+        #expect(stagedSetupConnect.contains("guard self.connectingGateway == nil else { return }"))
+        #expect(onboardingSource.contains("case gateway(GatewayStableIdentifier.Key)"))
+        #expect(onboardingSource.contains("self.connectingGateway = .gateway(gateway.id)"))
+        #expect(!onboardingSource.contains("connectingGatewayID"))
         #expect(stagedSetupConnect.contains("self.setConnectionFailure(message)"))
         #expect(connectionFailure.contains("self.localConnectionFailure = message"))
         #expect(!connectionFailure.contains("self.connectMessage = message"))
@@ -247,6 +253,17 @@ extension RootTabsSourceGuardTests {
             "self.gatewayCredentialFieldStableID ?? self.currentManualGatewayStableID"))
         #expect(actionsSource.contains(
             "self.gatewayCredentialFieldStableID ?? self.currentManualGatewayStableID"))
+        // Gateway stable IDs compare byte-exact via GatewayStableIdentifier, never
+        // via trimmed/string equality; a regressed comparison silently reuses
+        // credentials across distinct gateway owners.
+        #expect(onboardingSource.contains(
+            "if !GatewayStableIdentifier.matches(self.gatewayCredentialFieldStableID, stableID)"))
+        #expect(actionsSource.contains(
+            "if !GatewayStableIdentifier.matches(self.gatewayCredentialFieldStableID, stableID)"))
+        #expect(!onboardingSource.contains("gatewayCredentialFieldStableID == stableID"))
+        #expect(!actionsSource.contains("gatewayCredentialFieldStableID == stableID"))
+        #expect(onboardingSource.contains("GatewayStableIdentifier.key(previousStableID) !="))
+        #expect(actionsSource.contains("GatewayStableIdentifier.key(previousStableID) !="))
     }
 
     static func assertGatewayReconnectGuards() throws {
@@ -294,5 +311,6 @@ extension RootTabsSourceGuardTests {
         #expect(backgroundReconnect.contains("expectedGeneration: generation"))
         #expect(modelSource.contains("expectedGeneration: UInt64)"))
         #expect(!modelSource.contains("expectedGeneration: UInt64?"))
+        #expect(modelSource.contains("GatewayStableIdentifier.exact(self.connectedGatewayID)"))
     }
 }

@@ -59,7 +59,7 @@ function sqlitePrimaryResultCode(error: unknown): number | undefined {
   return errcode === undefined ? undefined : errcode & SQLITE_PRIMARY_RESULT_CODE_MASK;
 }
 
-function isTransactionLockError(error: unknown): boolean {
+export function isSqliteLockError(error: unknown): boolean {
   const code = sqliteErrorCode(error);
   if (code !== undefined && SQLITE_LOCK_ERROR_CODES.has(code)) {
     return true;
@@ -141,7 +141,7 @@ function execTimedTransactionStep(params: {
     return elapsedMs;
   } catch (error) {
     const elapsedMs = Date.now() - startedAt;
-    if (isTransactionLockError(error)) {
+    if (isSqliteLockError(error)) {
       const sqliteErrcode = sqliteExtendedResultCode(error);
       const sqlitePrimaryCode = sqlitePrimaryResultCode(error);
       transactionLogger(params.options).warn("SQLite transaction lock wait failed", {

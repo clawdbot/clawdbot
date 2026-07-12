@@ -42,10 +42,8 @@ class SecurePrefs(
   private val securePrefsOverride: SharedPreferences? = null,
 ) {
   companion object {
-    val defaultWakeWords: List<String> = listOf("openclaw", "claude")
     private const val displayNameKey = "node.displayName"
     private const val locationModeKey = "location.enabledMode"
-    private const val voiceWakeModeKey = "voiceWake.mode"
     private const val plainPrefsName = "openclaw.node"
     private const val securePrefsName = "openclaw.node.secure"
     private const val notificationsForwardingEnabledKey = "notifications.forwarding.enabled"
@@ -196,12 +194,6 @@ class SecurePrefs(
     MutableStateFlow(loadNotificationForwardingSessionKey(gatewayRegistry.activeStableId.value))
   }
   val notificationForwardingSessionKey: StateFlow<String?> get() = _notificationForwardingSessionKey
-
-  private val _wakeWords = MutableStateFlow(loadWakeWords())
-  val wakeWords: StateFlow<List<String>> = _wakeWords
-
-  private val _voiceWakeMode = MutableStateFlow(loadVoiceWakeMode())
-  val voiceWakeMode: StateFlow<VoiceWakeMode> = _voiceWakeMode
 
   private val _voiceMicEnabled = MutableStateFlow(plainPrefs.getBoolean(voiceMicEnabledKey, false))
   val voiceMicEnabled: StateFlow<Boolean> = _voiceMicEnabled
@@ -624,20 +616,6 @@ class SecurePrefs(
     return resolved
   }
 
-  /** Persists sanitized voice wake triggers and updates the reactive settings flow. */
-  fun setWakeWords(words: List<String>) {
-    val sanitized = WakeWords.sanitize(words, defaultWakeWords)
-    val encoded =
-      JsonArray(sanitized.map { JsonPrimitive(it) }).toString()
-    plainPrefs.edit { putString("voiceWake.triggerWords", encoded) }
-    _wakeWords.value = sanitized
-  }
-
-  fun setVoiceWakeMode(mode: VoiceWakeMode) {
-    plainPrefs.edit { putString(voiceWakeModeKey, mode.rawValue) }
-    _voiceWakeMode.value = mode
-  }
-
   fun setVoiceMicEnabled(value: Boolean) {
     plainPrefs.edit { putBoolean(voiceMicEnabledKey, value) }
     _voiceMicEnabled.value = value
@@ -709,18 +687,6 @@ class SecurePrefs(
     }
   }
 
-  private fun loadVoiceWakeMode(): VoiceWakeMode {
-    val raw = plainPrefs.getString(voiceWakeModeKey, null)
-    val resolved = VoiceWakeMode.fromRawValue(raw)
-
-    // Default ON (foreground) when unset, but keep "always" opt-in through explicit settings.
-    if (raw.isNullOrBlank()) {
-      plainPrefs.edit { putString(voiceWakeModeKey, resolved.rawValue) }
-    }
-
-    return resolved
-  }
-
   private fun loadLocationMode(): LocationMode {
     val raw = plainPrefs.getString(locationModeKey, "off")
     val stored = LocationMode.fromRawValue(raw)
@@ -743,26 +709,6 @@ class SecurePrefs(
     val migratedValue = hadPlainPrefsBeforeInit
     plainPrefs.edit { putBoolean(cameraEnabledKey, migratedValue) }
     return migratedValue
-  }
-
-  private fun loadWakeWords(): List<String> {
-    val raw = plainPrefs.getString("voiceWake.triggerWords", null)?.trim()
-    if (raw.isNullOrEmpty()) return defaultWakeWords
-    return try {
-      val element = json.parseToJsonElement(raw)
-      val array = element as? JsonArray ?: return defaultWakeWords
-      val decoded =
-        array.mapNotNull { item ->
-          when (item) {
-            is JsonNull -> null
-            is JsonPrimitive -> item.content.trim().takeIf { it.isNotEmpty() }
-            else -> null
-          }
-        }
-      WakeWords.sanitize(decoded, defaultWakeWords)
-    } catch (_: Throwable) {
-      defaultWakeWords
-    }
   }
 
   private fun loadChatModelRefs(key: String): List<String> {

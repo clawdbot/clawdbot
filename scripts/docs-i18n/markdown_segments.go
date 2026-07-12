@@ -129,6 +129,426 @@ func extractMarkdownInlineCodeValues(body string) []string {
 	return values
 }
 
+func extractMarkdownFencedLiteralValues(body string) ([]string, []string, []string) {
+	placeholders := []string{}
+	directiveTokens := []string{}
+	allSquareTokens := []string{}
+	state := markdownLiteralFenceState{}
+	lines := []string{}
+	flush := func() {
+		for _, line := range lines {
+			if state.info != "mermaid" {
+				allSquareTokens = append(allSquareTokens, extractSquareBracketValues(line)...)
+			}
+		}
+		for _, line := range lines {
+			linePlaceholders := extractAngleBracketValues(line)
+			placeholders = append(placeholders, linePlaceholders...)
+			if state.info != "mermaid" {
+				directiveTokens = append(directiveTokens, extractDoubleBracketValues(line)...)
+			}
+		}
+		lines = lines[:0]
+	}
+
+	for _, line := range strings.Split(body, "\n") {
+		if state.delimiter == "" {
+			if opening, ok := parseMarkdownLiteralFenceOpening(line); ok {
+				state = opening
+			}
+			continue
+		}
+		if !continuesMarkdownLiteralFenceContainer(line, state) {
+			flush()
+			state = markdownLiteralFenceState{}
+			if opening, ok := parseMarkdownLiteralFenceOpening(line); ok {
+				state = opening
+			}
+			continue
+		}
+		if isMarkdownLiteralFenceClosing(line, state) {
+			flush()
+			state = markdownLiteralFenceState{}
+			continue
+		}
+		lines = append(lines, strings.TrimSpace(stripMarkdownQuotePrefix(line, state.quoteDepth)))
+	}
+	if state.delimiter != "" {
+		flush()
+	}
+	closingNames := map[string]struct{}{}
+	for _, token := range allSquareTokens {
+		if name, ok := fencedClosingMarkerName(token); ok {
+			closingNames[name] = struct{}{}
+		}
+	}
+	protocolTokens := []string{}
+	for _, token := range allSquareTokens {
+		if isFencedProtocolToken(token, closingNames) {
+			protocolTokens = append(protocolTokens, token)
+		}
+	}
+	return placeholders, protocolTokens, directiveTokens
+}
+
+func markdownLiteralFencesBalanced(body string) bool {
+	state := markdownLiteralFenceState{}
+	for _, line := range strings.Split(body, "\n") {
+		if state.delimiter == "" {
+			if opening, ok := parseMarkdownLiteralFenceOpening(line); ok {
+				state = opening
+			}
+			continue
+		}
+		if !continuesMarkdownLiteralFenceContainer(line, state) {
+			state = markdownLiteralFenceState{}
+			if opening, ok := parseMarkdownLiteralFenceOpening(line); ok {
+				state = opening
+			}
+			continue
+		}
+		if isMarkdownLiteralFenceClosing(line, state) {
+			state = markdownLiteralFenceState{}
+		}
+	}
+	return state.delimiter == ""
+}
+
+type markdownLiteralFenceState struct {
+	delimiter       string
+	quoteDepth      int
+	info            string
+	containerIndent int
+}
+
+func parseMarkdownLiteralFenceOpening(line string) (markdownLiteralFenceState, bool) {
+	leadingIndent := len(line) - len(strings.TrimLeft(line, " \t"))
+	remaining := strings.TrimLeft(line, " \t")
+	quoteDepth := 0
+	containerIndent := 0
+	if leadingIndent >= 4 {
+		containerIndent = leadingIndent
+	}
+	listIndent := leadingIndent
+	for remaining != "" {
+		if strings.HasPrefix(remaining, ">") {
+			quoteDepth++
+			remaining = strings.TrimLeft(remaining[1:], " \t")
+			continue
+		}
+		separator := strings.IndexAny(remaining, " \t")
+		if separator > 0 && isMarkdownListMarker(remaining[:separator]) {
+			listIndent += separator + 1
+			containerIndent = max(containerIndent, listIndent)
+			remaining = strings.TrimLeft(remaining[separator:], " \t")
+			continue
+		}
+		break
+	}
+	delimiter := leadingFenceDelimiter(remaining)
+	if delimiter == "" {
+		return markdownLiteralFenceState{}, false
+	}
+	info := ""
+	if fields := strings.Fields(strings.TrimSpace(remaining[len(delimiter):])); len(fields) > 0 {
+		info = strings.ToLower(fields[0])
+	}
+	return markdownLiteralFenceState{delimiter: delimiter, quoteDepth: quoteDepth, info: info, containerIndent: containerIndent}, true
+}
+
+func continuesMarkdownLiteralFenceContainer(line string, state markdownLiteralFenceState) bool {
+	if strings.TrimSpace(line) == "" {
+		return true
+	}
+	remaining := strings.TrimLeft(line, " \t")
+	for range state.quoteDepth {
+		if !strings.HasPrefix(remaining, ">") {
+			return false
+		}
+		remaining = strings.TrimLeft(remaining[1:], " \t")
+	}
+	if state.quoteDepth == 0 && state.containerIndent > 0 && len(line)-len(strings.TrimLeft(line, " \t")) < state.containerIndent {
+		return false
+	}
+	return true
+}
+
+func isMarkdownLiteralFenceClosing(line string, state markdownLiteralFenceState) bool {
+	remaining := stripMarkdownQuotePrefixPreserveIndent(line, state.quoteDepth)
+	indent := len(remaining) - len(strings.TrimLeft(remaining, " \t"))
+	baseIndent := state.containerIndent
+	if state.quoteDepth > 0 {
+		baseIndent = 0
+	}
+	if indent < baseIndent || indent-baseIndent > 3 {
+		return false
+	}
+	remaining = strings.TrimLeft(remaining, " \t")
+	delimiter := leadingFenceDelimiter(remaining)
+	return delimiter != "" && delimiter[0] == state.delimiter[0] && len(delimiter) >= len(state.delimiter) && isClosingFenceLine(remaining, delimiter)
+}
+
+func stripMarkdownQuotePrefixPreserveIndent(line string, quoteDepth int) string {
+	remaining := line
+	for range quoteDepth {
+		remaining = strings.TrimLeft(remaining, " \t")
+		if !strings.HasPrefix(remaining, ">") {
+			return line
+		}
+		remaining = remaining[1:]
+		if strings.HasPrefix(remaining, " ") {
+			remaining = remaining[1:]
+		}
+	}
+	return remaining
+}
+
+func stripMarkdownQuotePrefix(line string, quoteDepth int) string {
+	remaining := strings.TrimLeft(line, " \t")
+	for range quoteDepth {
+		if !strings.HasPrefix(remaining, ">") {
+			return line
+		}
+		remaining = strings.TrimLeft(remaining[1:], " \t")
+	}
+	return remaining
+}
+
+func extractAngleBracketValues(line string) []string {
+	values := []string{}
+	for offset := 0; offset < len(line); {
+		start := strings.IndexByte(line[offset:], '<')
+		if start < 0 {
+			break
+		}
+		start += offset
+		end := strings.IndexByte(line[start+1:], '>')
+		if end < 0 {
+			break
+		}
+		end += start + 1
+		candidate := line[start : end+1]
+		if isAngleBracketPlaceholder(candidate) && !isAngleBracketComparisonContext(line, start, end, candidate) {
+			values = append(values, candidate)
+			offset = end + 1
+			continue
+		}
+		offset = start + 1
+	}
+	return values
+}
+
+func isAngleBracketComparisonContext(line string, start, end int, candidate string) bool {
+	inner := candidate[1 : len(candidate)-1]
+	if inner[0] < '0' || inner[0] > '9' {
+		return false
+	}
+	return strings.ContainsAny(inner, " \t") || (start > 0 && isASCIIIdentifierByte(line[start-1])) || (end+1 < len(line) && isASCIIIdentifierByte(line[end+1]))
+}
+
+func isAngleBracketPlaceholder(value string) bool {
+	if len(value) < 3 || value[0] != '<' || value[len(value)-1] != '>' {
+		return false
+	}
+	if isFencedMarkupTag(value) {
+		return false
+	}
+	inner := value[1 : len(value)-1]
+	return inner != "" && strings.TrimSpace(inner) == inner && !strings.ContainsAny(inner, "<>")
+}
+
+func isFencedMarkupTag(value string) bool {
+	inner := strings.TrimSpace(value[1 : len(value)-1])
+	if inner == "" {
+		return false
+	}
+	if strings.HasPrefix(inner, "/") || strings.HasSuffix(inner, "/") {
+		return true
+	}
+	first := inner[0]
+	if first >= 'A' && first <= 'Z' {
+		name := inner
+		if separator := strings.IndexAny(name, " \t"); separator >= 0 {
+			name = name[:separator]
+		}
+		return isASCIIComponentTagName(name)
+	}
+	if first < 'a' || first > 'z' {
+		return false
+	}
+	separator := strings.IndexAny(inner, " \t")
+	return separator > 0 && strings.Contains(inner[separator+1:], "=")
+}
+
+func isASCIIComponentTagName(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, char := range value {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func extractSquareBracketValues(line string) []string {
+	values := []string{}
+	for offset := 0; offset < len(line); {
+		start := strings.IndexByte(line[offset:], '[')
+		if start < 0 {
+			break
+		}
+		start += offset
+		if start+1 < len(line) && line[start+1] == '[' {
+			offset = start + 2
+			continue
+		}
+		end := strings.IndexByte(line[start+1:], ']')
+		if end < 0 {
+			offset = start + 1
+			continue
+		}
+		end += start + 1
+		candidate := line[start : end+1]
+		if !isTranslatableBracketLabelContext(line, start, end, candidate) {
+			values = append(values, candidate)
+		}
+		offset = end + 1
+	}
+	return values
+}
+
+func isTranslatableBracketLabelContext(line string, start, end int, candidate string) bool {
+	if _, ok := fencedSingleMarkerName(candidate); !ok {
+		return false
+	}
+	if start > 0 && isASCIIIdentifierByte(line[start-1]) {
+		return true
+	}
+	if end+1 < len(line) && (line[end+1] == '(' || line[end+1] == '[') {
+		return true
+	}
+	return false
+}
+
+func isASCIIIdentifierByte(value byte) bool {
+	return (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') || (value >= '0' && value <= '9') || value == '_'
+}
+
+func extractDoubleBracketValues(line string) []string {
+	values := []string{}
+	for offset := 0; offset < len(line); {
+		start := strings.Index(line[offset:], "[[")
+		if start < 0 {
+			break
+		}
+		start += offset
+		end := strings.Index(line[start+2:], "]]")
+		if end < 0 {
+			break
+		}
+		end += start + 2
+		values = append(values, line[start:end+2])
+		offset = end + 2
+	}
+	return values
+}
+
+func isFencedProtocolToken(token string, closingNames map[string]struct{}) bool {
+	if len(token) < 2 || token[0] != '[' || token[len(token)-1] != ']' {
+		return false
+	}
+	if strings.HasPrefix(token, "[/") || strings.HasSuffix(token, "/]") {
+		return true
+	}
+	if strings.HasPrefix(token, "[Replying to") || strings.HasPrefix(token, "[--") {
+		return true
+	}
+	if isFencedEnvelopeToken(token) {
+		return true
+	}
+	inner := token[1 : len(token)-1]
+	if strings.Contains(inner, "|") || hasCompactEquals(inner) {
+		return true
+	}
+	if _, ok := fencedSingleMarkerName(token); ok {
+		return true
+	}
+	name, ok := fencedOpeningMarkerName(token)
+	if !ok {
+		return false
+	}
+	_, ok = closingNames[name]
+	return ok
+}
+
+func hasCompactEquals(value string) bool {
+	for index := 1; index+1 < len(value); index++ {
+		if value[index] == '=' && value[index-1] != ' ' && value[index-1] != '\t' && value[index+1] != ' ' && value[index+1] != '\t' {
+			return true
+		}
+	}
+	return false
+}
+
+func isFencedEnvelopeToken(token string) bool {
+	for _, prefix := range []string{"[Discord ", "[Google Chat ", "[iMessage ", "[Microsoft Teams ", "[Signal ", "[Slack ", "[Telegram ", "[WhatsApp "} {
+		if strings.HasPrefix(token, prefix) {
+			return true
+		}
+	}
+	inner := token[1 : len(token)-1]
+	if len(inner) < 10 || inner[4] != '-' || inner[7] != '-' {
+		return false
+	}
+	for _, index := range []int{0, 1, 2, 3, 5, 6, 8, 9} {
+		if inner[index] < '0' || inner[index] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func fencedSingleMarkerName(line string) (string, bool) {
+	if len(line) < 3 || line[0] != '[' || strings.HasPrefix(line, "[[") || line[len(line)-1] != ']' {
+		return "", false
+	}
+	return fencedMarkerName(line[1 : len(line)-1])
+}
+
+func fencedClosingMarkerName(line string) (string, bool) {
+	if len(line) < 4 || !strings.HasPrefix(line, "[/") || line[len(line)-1] != ']' {
+		return "", false
+	}
+	return fencedMarkerName(line[2 : len(line)-1])
+}
+
+func fencedOpeningMarkerName(line string) (string, bool) {
+	if len(line) < 3 || line[0] != '[' || strings.HasPrefix(line, "[/") || line[len(line)-1] != ']' {
+		return "", false
+	}
+	inner := strings.TrimSpace(line[1 : len(line)-1])
+	if fields := strings.Fields(inner); len(fields) > 0 {
+		return fencedMarkerName(fields[0])
+	}
+	return "", false
+}
+
+func fencedMarkerName(value string) (string, bool) {
+	if value == "" {
+		return "", false
+	}
+	for _, char := range value {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || char == '_' || char == '-' || char == '.' {
+			continue
+		}
+		return "", false
+	}
+	return value, true
+}
+
 func extractFallbackBacktickValues(body string) []string {
 	fenced := markdownFencedCodeRanges(body)
 	values := []string{}

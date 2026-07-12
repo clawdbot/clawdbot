@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 /** Resolves system.run allowlist matches, argv plans, and truncated command output. */
 import {
   analyzeArgvCommand,
@@ -132,7 +133,9 @@ export function resolvePlannedAllowlistArgv(params: {
   ) {
     return undefined;
   }
-  const plannedAllowlistArgv = resolvePlannedSegmentArgv(params.segments[0]);
+  const plannedAllowlistArgv = resolvePlannedSegmentArgv(
+    expectDefined(params.segments[0], "segments entry at 0"),
+  );
   return plannedAllowlistArgv && plannedAllowlistArgv.length > 0 ? plannedAllowlistArgv : null;
 }
 
@@ -172,7 +175,9 @@ export async function resolveSystemRunExecArgv(params: {
   ) {
     // Exact-path matches stay bound to the resolved executable, while the bare
     // wildcard contract can still authorize unresolved Windows commands.
-    const plannedArgv = resolvePlannedSegmentArgv(params.segments[0]);
+    const plannedArgv = resolvePlannedSegmentArgv(
+      expectDefined(params.segments[0], "segments entry at 0"),
+    );
     if (!plannedArgv) {
       return null;
     }

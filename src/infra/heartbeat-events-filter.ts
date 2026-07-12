@@ -186,7 +186,7 @@ function isHeartbeatAckEvent(evt: string): boolean {
   if (suffix.length === 0) {
     return true;
   }
-  return !/[a-z0-9_]/.test(suffix[0]);
+  return !/[a-z0-9_]/.test(suffix.charAt(0));
 }
 
 function isHeartbeatNoiseEvent(evt: string): boolean {

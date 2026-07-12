@@ -25,7 +25,6 @@ data class NodeRuntimeFlags(
   val smsSearchPossible: Boolean,
   val callLogAvailable: Boolean,
   val photosAvailable: Boolean,
-  val voiceWakeEnabled: Boolean,
   val motionActivityAvailable: Boolean,
   val motionPedometerAvailable: Boolean,
   val installedAppsSharingEnabled: Boolean,
@@ -56,7 +55,6 @@ enum class NodeCapabilityAvailability {
   SmsAvailable,
   CallLogAvailable,
   PhotosAvailable,
-  VoiceWakeEnabled,
   MotionAvailable,
 }
 
@@ -88,10 +86,6 @@ object InvokeCommandRegistry {
       NodeCapabilitySpec(
         name = OpenClawCapability.Sms.rawValue,
         availability = NodeCapabilityAvailability.SmsAvailable,
-      ),
-      NodeCapabilitySpec(
-        name = OpenClawCapability.VoiceWake.rawValue,
-        availability = NodeCapabilityAvailability.VoiceWakeEnabled,
       ),
       NodeCapabilitySpec(name = OpenClawCapability.Talk.rawValue),
       NodeCapabilitySpec(
@@ -268,7 +262,6 @@ object InvokeCommandRegistry {
           NodeCapabilityAvailability.SmsAvailable -> flags.sendSmsAvailable || flags.readSmsAvailable
           NodeCapabilityAvailability.CallLogAvailable -> flags.callLogAvailable
           NodeCapabilityAvailability.PhotosAvailable -> flags.photosAvailable
-          NodeCapabilityAvailability.VoiceWakeEnabled -> flags.voiceWakeEnabled
           NodeCapabilityAvailability.MotionAvailable -> flags.motionActivityAvailable || flags.motionPedometerAvailable
         }
       }.map { it.name }

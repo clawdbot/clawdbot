@@ -898,8 +898,7 @@ export function seedPluginStateDatabaseEntriesForTests(
 
   const now = Date.now();
   runWriteTransaction("register", (store) => {
-    for (let index = 0; index < entries.length; index += 1) {
-      const entry = entries[index];
+    for (const [index, entry] of entries.entries()) {
       upsertPluginStateEntry(
         store.db,
         bindPluginStateEntry({

@@ -1,5 +1,6 @@
 // Normalizes model selection directives into provider and model ids.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { modelKey } from "../../agents/model-ref-shared.js";
 import {
@@ -85,14 +86,19 @@ function boundedLevenshteinDistance(a: string, b: string, maxDistance: number): 
 
   for (let i = 1; i <= aLen; i++) {
     curr[0] = i;
-    let rowMin = curr[0];
+    let rowMin = expectDefined(curr[0], "curr entry at 0");
 
     const aChar = a.charCodeAt(i - 1);
     for (let j = 1; j <= bLen; j++) {
       const cost = aChar === b.charCodeAt(j - 1) ? 0 : 1;
-      curr[j] = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
-      if (curr[j] < rowMin) {
-        rowMin = curr[j];
+      const distance = Math.min(
+        expectDefined(prev[j], "prev entry at j") + 1,
+        expectDefined(curr[j - 1], "curr entry at j 1") + 1,
+        expectDefined(prev[j - 1], "prev entry at j 1") + cost,
+      );
+      curr[j] = distance;
+      if (distance < rowMin) {
+        rowMin = distance;
       }
     }
 
@@ -101,11 +107,11 @@ function boundedLevenshteinDistance(a: string, b: string, maxDistance: number): 
     }
 
     for (let j = 0; j <= bLen; j++) {
-      prev[j] = curr[j];
+      prev[j] = expectDefined(curr[j], "model selection directive edit-distance row");
     }
   }
 
-  const dist = prev[bLen];
+  const dist = expectDefined(prev[bLen], "prev entry at b len");
   if (dist > maxDistance) {
     return null;
   }

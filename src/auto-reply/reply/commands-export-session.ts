@@ -2,6 +2,7 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readAcpSessionMetaForEntry } from "../../acp/runtime/session-meta.js";
 import {
@@ -191,7 +192,15 @@ async function generateHtml(sessionData: SessionData): Promise<string> {
     ["MARKED_JS", markedJs],
     ["HIGHLIGHT_JS", hljsJs],
     ["JS", templateJs],
-  ].reduce((html, [name, value]) => replaceHtmlPlaceholder(html, name, value), template);
+  ].reduce(
+    (html, [name, value]) =>
+      replaceHtmlPlaceholder(
+        html,
+        expectDefined(name, "commands export session name"),
+        expectDefined(value, "commands export session value"),
+      ),
+    template,
+  );
 }
 
 function addCollisionSuffix(filePath: string, suffix: number): string {

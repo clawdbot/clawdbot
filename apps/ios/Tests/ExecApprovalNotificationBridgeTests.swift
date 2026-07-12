@@ -107,8 +107,134 @@ private final class MockNotificationCenter: NotificationCentering, @unchecked Se
             for: push,
             notificationCenter: center)
 
-        #expect(center.pendingRemovedIdentifiers == [["exec.approval.gateway-a.approval-123"]])
+        #expect(center.pendingRemovedIdentifiers == [[
+            "exec.approval-v2.9:gateway-a.approval-123",
+            "exec.approval.gateway-a.approval-123",
+        ]])
         #expect(center.deliveredRemovedIdentifiers == [["remote-approval-1"]])
+    }
+
+    @Test func `approval IDs preserve gateway exact boundary semantics`() throws {
+        for approvalID in [
+            "\u{001C}approval-control",
+            "\u{0085}approval-next-line",
+            "\u{200B}approval-zero-width",
+            " approval",
+            "approval\u{FEFF}",
+        ] {
+            let prompt = try #require(ExecApprovalNotificationBridge.parseRequestedPush(userInfo: [
+                "openclaw": [
+                    "kind": ExecApprovalNotificationBridge.requestedKind,
+                    "approvalId": approvalID,
+                ],
+            ]))
+            #expect(Array(prompt.approvalId.utf8) == Array(approvalID.utf8))
+        }
+
+        for approvalID in ["", ".", ".."] {
+            #expect(ExecApprovalNotificationBridge.parseRequestedPush(userInfo: [
+                "openclaw": [
+                    "kind": ExecApprovalNotificationBridge.requestedKind,
+                    "approvalId": approvalID,
+                ],
+            ]) == nil)
+        }
+    }
+
+    @Test func `gateway device owners preserve all nonempty exact bytes`() throws {
+        for exactOwner in ["\u{0085}gateway-e\u{0301}\u{0085}", " gateway", "gateway\u{FEFF}"] {
+            let prompt = try #require(ExecApprovalNotificationBridge.parseRequestedPush(userInfo: [
+                "openclaw": [
+                    "kind": ExecApprovalNotificationBridge.requestedKind,
+                    "approvalId": "approval-owner-exact",
+                    "gatewayDeviceId": exactOwner,
+                ],
+            ]))
+            #expect(try Array(#require(prompt.gatewayDeviceId).utf8) == Array(exactOwner.utf8))
+        }
+
+        for invalidOwner in [""] {
+            #expect(ExecApprovalNotificationBridge.parseRequestedPush(userInfo: [
+                "openclaw": [
+                    "kind": ExecApprovalNotificationBridge.requestedKind,
+                    "approvalId": "approval-owner-invalid",
+                    "gatewayDeviceId": invalidOwner,
+                ],
+            ]) == nil)
+        }
+    }
+
+    @Test @MainActor func `byte-distinct canonical approval IDs target independently`() async {
+        let composedID = "approval-\u{00E9}"
+        let decomposedID = "approval-e\u{0301}"
+        let composed = ExecApprovalNotificationPrompt(
+            approvalId: composedID,
+            gatewayDeviceId: "gateway-a")
+        let decomposed = ExecApprovalNotificationPrompt(
+            approvalId: decomposedID,
+            gatewayDeviceId: "gateway-a")
+        #expect(composedID == decomposedID)
+        #expect(composed != decomposed)
+        #expect(Set([composed, decomposed]).count == 2)
+
+        let center = MockNotificationCenter()
+        center.delivered = [
+            NotificationSnapshot(
+                identifier: "composed-request",
+                userInfo: [
+                    "openclaw": [
+                        "kind": ExecApprovalNotificationBridge.requestedKind,
+                        "approvalId": composedID,
+                        "gatewayDeviceId": "gateway-a",
+                    ],
+                ]),
+            NotificationSnapshot(
+                identifier: "decomposed-request",
+                userInfo: [
+                    "openclaw": [
+                        "kind": ExecApprovalNotificationBridge.requestedKind,
+                        "approvalId": decomposedID,
+                        "gatewayDeviceId": "gateway-a",
+                    ],
+                ]),
+        ]
+
+        await ExecApprovalNotificationBridge.removeNotifications(
+            for: composed,
+            notificationCenter: center)
+
+        let encodedComposedID = "approval-%C3%A9"
+        let encodedDecomposedID = "approval-e%CC%81"
+        #expect(encodedComposedID != encodedDecomposedID)
+        #expect(center.pendingRemovedIdentifiers == [[
+            "exec.approval-v2.9:gateway-a.\(encodedComposedID)",
+            "exec.approval.gateway-a.\(composedID)",
+        ]])
+        #expect(center.deliveredRemovedIdentifiers == [["composed-request"]])
+    }
+
+    @Test @MainActor func `encoded notification IDs cannot alias legacy raw IDs`() async throws {
+        let slashCenter = MockNotificationCenter()
+        let escapedCenter = MockNotificationCenter()
+
+        await ExecApprovalNotificationBridge.removeNotifications(
+            for: ExecApprovalNotificationPrompt(approvalId: "/", gatewayDeviceId: "gateway-a"),
+            notificationCenter: slashCenter)
+        await ExecApprovalNotificationBridge.removeNotifications(
+            for: ExecApprovalNotificationPrompt(approvalId: "%2F", gatewayDeviceId: "gateway-a"),
+            notificationCenter: escapedCenter)
+
+        let slashIdentifiers = try Set(#require(slashCenter.pendingRemovedIdentifiers.first))
+        let escapedIdentifiers = try Set(#require(escapedCenter.pendingRemovedIdentifiers.first))
+        #expect(slashIdentifiers == [
+            "exec.approval-v2.9:gateway-a.%2F",
+            "exec.approval.gateway-a./",
+        ])
+        #expect(escapedIdentifiers == [
+            "exec.approval-v2.9:gateway-a.%252F",
+            "exec.approval.gateway-a.%2F",
+        ])
+        #expect(slashIdentifiers.isDisjoint(with: escapedIdentifiers))
     }
 
     @Test func `legacy ownerless approval pushes remain parseable for authenticated route validation`() {
@@ -157,9 +283,10 @@ private final class MockNotificationCenter: NotificationCentering, @unchecked Se
             includingLegacyOwnerless: true)
 
         #expect(center.pendingRemovedIdentifiers == [[
+            "exec.approval-v2.9:gateway-a.approval-shared",
             "exec.approval.gateway-a.approval-shared",
             "exec.approval.approval-shared",
-            "exec.approval.legacy.approval-shared",
+            "exec.approval-v2.6:legacy.approval-shared",
         ]])
         #expect(center.deliveredRemovedIdentifiers == [["legacy-ownerless"]])
     }

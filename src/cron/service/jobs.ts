@@ -1,5 +1,6 @@
 /** Cron job scheduling, validation, creation, and patch helpers. */
 import crypto from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   normalizeOptionalString,
   normalizeOptionalThreadValue,
@@ -76,7 +77,10 @@ export function errorBackoffMs(
   scheduleMs = DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
 ): number {
   const idx = Math.min(consecutiveErrors - 1, scheduleMs.length - 1);
-  return scheduleMs[Math.max(0, idx)] ?? DEFAULT_ERROR_BACKOFF_SCHEDULE_MS[0];
+  return (
+    expectDefined(scheduleMs[Math.max(0, idx)], "schedule ms entry at math.max(0, idx)") ??
+    DEFAULT_ERROR_BACKOFF_SCHEDULE_MS[0]
+  );
 }
 
 /** Returns the earliest retry timestamp after a failed cron run and its runtime duration. */

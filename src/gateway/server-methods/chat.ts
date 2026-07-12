@@ -5,6 +5,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { isAudioFileName } from "@openclaw/media-core/mime";
+import { expectDefined } from "@openclaw/normalization-core";
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
@@ -1086,7 +1087,12 @@ function replaceAssistantContentTextBlocks(
       typeof block.text === "string" &&
       transcriptTextIndex < transcriptTextBlocks.length
     ) {
-      merged.push(transcriptTextBlocks[transcriptTextIndex++]);
+      merged.push(
+        expectDefined(
+          transcriptTextBlocks[transcriptTextIndex++],
+          "transcript text blocks entry at transcript text index++",
+        ),
+      );
       continue;
     }
     merged.push(block);
@@ -1535,9 +1541,9 @@ async function prestageMediaPathOffloads(params: {
     }
 
     const stagingCtx: MsgContext = {
-      MediaPath: refsToStage[0].path,
+      MediaPath: expectDefined(refsToStage[0], "refs to stage entry at 0").path,
       MediaPaths: refsToStage.map((ref) => ref.path),
-      MediaType: refsToStage[0].mimeType,
+      MediaType: expectDefined(refsToStage[0], "refs to stage entry at 0").mimeType,
       MediaTypes: refsToStage.map((ref) => ref.mimeType),
     };
     let stageResult: StageSandboxMediaResult;
@@ -5177,7 +5183,10 @@ export const chatHandlers: GatewayRequestHandlers = {
                       runId: clientRunId,
                       sessionKey,
                       ...(sessionKey === "global" && agentId ? { agentId } : {}),
-                      question: btwReplies[0].btw.question.trim(),
+                      question: expectDefined(
+                        btwReplies[0],
+                        "btw replies entry at 0",
+                      ).btw.question.trim(),
                       text: btwText,
                       isError: btwReplies.some((payload) => payload.isError),
                       ts: Date.now(),

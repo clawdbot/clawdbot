@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Internal state and composed-registry view for the global hook runner.
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { GlobalHookRunnerRegistry } from "./hook-registry.types.js";
@@ -89,7 +90,12 @@ function composeLiveHookRegistry(
   // registration that still carries a fail-closed tool-call gate.
   sources.forEach((registry, index) => {
     for (const plugin of registry.plugins) {
-      if (plugin.status === "loaded" && hookPluginIdsBySource[index].has(plugin.id)) {
+      if (
+        plugin.status === "loaded" &&
+        expectDefined(hookPluginIdsBySource[index], "hook plugin ids by source entry at index").has(
+          plugin.id,
+        )
+      ) {
         claimOwner(plugin.id, index);
       }
     }
@@ -133,7 +139,13 @@ function composeLiveHookRegistry(
   });
   sources.forEach((registry, index) => {
     for (const plugin of registry.plugins) {
-      if (plugin.status === "loaded" && trustedPolicyPluginIdsBySource[index].has(plugin.id)) {
+      if (
+        plugin.status === "loaded" &&
+        expectDefined(
+          trustedPolicyPluginIdsBySource[index],
+          "trusted policy plugin ids by source entry at index",
+        ).has(plugin.id)
+      ) {
         claimPolicyOwner(plugin.id, index);
       }
     }

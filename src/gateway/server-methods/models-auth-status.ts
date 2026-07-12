@@ -29,7 +29,7 @@ import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js"
 import type { OpenClawConfig } from "../../config/config.js";
 import { isSecretRef } from "../../config/types.secrets.js";
 import { loadProviderUsageSummary } from "../../infra/provider-usage.load.js";
-import { PROVIDER_LABELS, resolveUsageProviderId } from "../../infra/provider-usage.shared.js";
+import { providerUsageLabel, resolveUsageProviderId } from "../../infra/provider-usage.shared.js";
 import type {
   ProviderUsageBilling,
   ProviderUsageSnapshot,
@@ -204,8 +204,9 @@ function buildExpiry(
 
 function providerDisplayName(provider: string): string {
   const usageId = resolveUsageProviderId(provider);
-  if (usageId && PROVIDER_LABELS[usageId]) {
-    return PROVIDER_LABELS[usageId];
+  const usageLabel = usageId ? providerUsageLabel(usageId) : undefined;
+  if (usageLabel) {
+    return usageLabel;
   }
   return provider;
 }

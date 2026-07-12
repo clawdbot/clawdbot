@@ -5,6 +5,7 @@ import path from "node:path";
 import process from "node:process";
 import { StringDecoder } from "node:string_decoder";
 import { promisify } from "node:util";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { danger, shouldLogVerbose } from "../globals.js";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
@@ -71,10 +72,9 @@ function resolveNpmArgvForWindows(argv: string[]): string[] | null {
   if (process.platform !== "win32" || argv.length === 0) {
     return null;
   }
-  const basename = normalizeLowercaseStringOrEmpty(path.basename(argv[0])).replace(
-    /\.(cmd|exe|bat)$/,
-    "",
-  );
+  const basename = normalizeLowercaseStringOrEmpty(
+    path.basename(expectDefined(argv[0], "argv entry at 0")),
+  ).replace(/\.(cmd|exe|bat)$/, "");
   const cliName = basename === "npx" ? "npx-cli.js" : basename === "npm" ? "npm-cli.js" : null;
   if (!cliName) {
     return null;
@@ -278,7 +278,7 @@ function appendCapturedOutput(
   capture.chunks.push(buffer);
   capture.bytes += buffer.byteLength;
   while (capture.bytes > maxBytes && capture.chunks.length > 0) {
-    const first = capture.chunks[0];
+    const first = expectDefined(capture.chunks[0], "chunks entry at 0");
     const overflow = capture.bytes - maxBytes;
     if (first.byteLength <= overflow) {
       capture.chunks.shift();

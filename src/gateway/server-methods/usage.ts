@@ -1,6 +1,7 @@
 // Usage gateway methods aggregate provider and session cost/token metrics from
 // caches, logs, session stores, and discovered transcript files.
 import fs from "node:fs";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -1424,8 +1425,11 @@ export const usageHandlers: GatewayRequestHandlers = {
         if (!summary) {
           continue;
         }
-        const session = agentSessions[index];
-        const merged = mergedEntries[session.entryIndex];
+        const session = expectDefined(agentSessions[index], "agent sessions entry at index");
+        const merged = expectDefined(
+          mergedEntries[session.entryIndex],
+          "merged entries entry at session.entry index",
+        );
         const usage = usageByEntryIndex[session.entryIndex] ?? createEmptySessionCostSummary();
         usage.sessionId = merged.sessionId;
         usage.sessionFile = merged.sessionFile;
@@ -1590,7 +1594,7 @@ export const usageHandlers: GatewayRequestHandlers = {
           providerOverride: merged.storeEntry?.providerOverride,
           modelProvider: merged.storeEntry?.modelProvider,
           model: merged.storeEntry?.model,
-          usage,
+          usage: expectDefined(usage, "session usage summary"),
           contextWeight: includeContextWeight
             ? (merged.storeEntry?.systemPromptReport ?? null)
             : undefined,

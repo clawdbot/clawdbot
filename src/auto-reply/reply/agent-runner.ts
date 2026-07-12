@@ -1,5 +1,6 @@
 // Orchestrates reply agent execution, payload building, and delivery callbacks.
 import crypto from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   hasSessionAutoModelFallbackProvenance,
@@ -679,7 +680,10 @@ function derivePromptSegments(prompt: string | undefined): TracePromptSegmentVie
           end += 1;
         }
         if (end < lines.length) {
-          addChars(tagMatch[1], lines.slice(index, end + 1).join("\n").length);
+          addChars(
+            expectDefined(tagMatch[1], "tag match capture group 1"),
+            lines.slice(index, end + 1).join("\n").length,
+          );
           index = end + 1;
           while ((lines[index] ?? "") === "") {
             index += 1;

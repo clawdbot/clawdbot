@@ -1202,7 +1202,7 @@ jobs:
             for scenario_id in "${scenario_ids[@]}"; do
               scenario_args+=(--scenario "$scenario_id")
             done
-            node openclaw.mjs qa run \
+            timeout --signal=TERM --kill-after=15s 10m node openclaw.mjs qa run \
               --repo-root . \
               --qa-profile smoke-ci \
               --concurrency 10 \

@@ -36,7 +36,7 @@ function shimmerText(theme: MinimalTheme, text: string, tick: number) {
 
   let out = "";
   for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
+    const ch = text.charAt(i);
     out += i >= start && i <= end ? hi(ch) : theme.dim(ch);
   }
   return out;

@@ -1,3 +1,5 @@
+import { expectDefined } from "@openclaw/normalization-core";
+
 export const TRACEPARENT_VERSION = "00";
 const MAX_TRACEPARENT_LENGTH = 128;
 const TRACE_ID_RE = /^[0-9a-f]{32}$/;
@@ -74,7 +76,7 @@ export function parseDiagnosticTraceparent(
   }
   const [version, traceId, spanId, traceFlags] = parts;
   if (
-    !TRACEPARENT_VERSION_RE.test(version) ||
+    !TRACEPARENT_VERSION_RE.test(expectDefined(version, "diagnostic trace context version")) ||
     version === "ff" ||
     (version === TRACEPARENT_VERSION && parts.length !== 4)
   ) {

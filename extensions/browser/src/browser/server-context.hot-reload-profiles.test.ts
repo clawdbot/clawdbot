@@ -210,6 +210,50 @@ describe("server-context hot-reload profiles", () => {
     ).toBeNull();
   });
 
+  it.each(["constructor", "prototype"] as const)(
+    "treats removed %s profiles as absent during hot reload",
+    (profileName) => {
+      mockState.cfgProfiles = {
+        [profileName]: { cdpPort: 18801, color: "#0066CC" },
+      };
+      const cfg = getRuntimeConfig();
+      const resolved = resolveBrowserConfig(cfg.browser, cfg);
+      const profile = requireValue(
+        resolveProfile(resolved, profileName),
+        `${profileName} profile missing`,
+      );
+      const state: BrowserServerState = {
+        server: null,
+        port: 18791,
+        resolved,
+        profiles: new Map([
+          [
+            profileName,
+            {
+              profile,
+              running: { pid: 123 } as never,
+              lastTargetId: "tab-1",
+              reconcile: null,
+            },
+          ],
+        ]),
+      };
+
+      mockState.cfgProfiles = {};
+      mockState.cachedConfig = null;
+      refreshResolvedBrowserConfigFromDisk({
+        current: state,
+        refreshConfigFromDisk: true,
+      });
+
+      expect(resolveProfile(state.resolved, profileName)).toBeNull();
+      const runtime = requireValue(state.profiles.get(profileName), "runtime missing");
+      const actor = getProfileLifecycle(runtime);
+      expect(actor.terminal).toBe("config-removed");
+      expect(actor.transitionReason).toBe("profile removed from config");
+    },
+  );
+
   it("forProfile refreshes existing profile config after getRuntimeConfig cache updates", () => {
     const cfg = getRuntimeConfig();
     const resolved = resolveBrowserConfig(cfg.browser, cfg);

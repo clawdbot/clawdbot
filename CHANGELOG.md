@@ -30,6 +30,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Plugin SDK API baseline:** cover every public entrypoint, preserve complete declaration shapes without source-line churn, and run baseline and export-surface guards from changed-file validation.
 - **SQLite terminal session recovery:** track physical transcript mutation time in the agent database so killed or timed-out main sessions rotate when transcript writes outlive the registry update, while preserving legacy transcript mtimes during doctor import.
 - **Gateway chat typecheck:** import chat event types from their owning protocol schema after the retired aggregate type module was removed, restoring full project typechecks.
 - **Packaged Crabbox commands:** include the lease-freshness helper imported by the published wrapper so `crabbox:*` commands do not fail with `ERR_MODULE_NOT_FOUND` in npm installs.

@@ -172,7 +172,9 @@ function collectBlockedOverrideFindings(
   }
 
   const findings: BlockedManifestDependencyFinding[] = [];
-  for (const overrideKey of Object.keys(value).toSorted()) {
+  for (const [overrideKey, overrideValue] of Object.entries(value).toSorted(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
     const overrideSelectorPackageName = parsePackageNameFromOverrideSelector(overrideKey);
     if (
       overrideSelectorPackageName &&
@@ -184,7 +186,7 @@ function collectBlockedOverrideFindings(
         field: "overrides",
       });
     }
-    findings.push(...collectBlockedOverrideFindings(value[overrideKey], [...path, overrideKey]));
+    findings.push(...collectBlockedOverrideFindings(overrideValue, [...path, overrideKey]));
   }
   return findings;
 }
@@ -209,13 +211,15 @@ export function findBlockedManifestDependencies(
     if (!dependencyMap) {
       continue;
     }
-    for (const dependencyName of Object.keys(dependencyMap).toSorted()) {
+    for (const [dependencyName, dependencySpec] of Object.entries(dependencyMap).toSorted(
+      ([left], [right]) => left.localeCompare(right),
+    )) {
       if (isBlockedInstallDependencyPackageName(dependencyName)) {
         findings.push({ dependencyName, field });
         continue;
       }
 
-      const aliasTargetPackageName = parseNpmAliasTargetPackageName(dependencyMap[dependencyName]);
+      const aliasTargetPackageName = parseNpmAliasTargetPackageName(dependencySpec);
       if (!aliasTargetPackageName) {
         continue;
       }

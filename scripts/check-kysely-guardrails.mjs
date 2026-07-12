@@ -51,11 +51,12 @@ const rawSqliteAllowPathGroups = {
     "src/commands/doctor-db-bloat.ts",
     "src/commands/status.scan.shared.ts",
   ],
-  "doctor legacy state migration": [
+  "doctor SQLite maintenance and legacy state migration": [
     "src/commands/doctor/cron/migration-ledger.ts",
+    "src/commands/doctor-sqlite-compact.ts",
     "src/commands/doctor-session-sqlite.ts",
-    "src/commands/doctor-session-sqlite-compact.ts",
     "src/commands/doctor-session-sqlite-readers.ts",
+    "src/commands/doctor-state-sqlite-compact.ts",
     "src/infra/state-migrations.ts",
     "src/infra/state-migrations.debug-proxy.ts",
   ],

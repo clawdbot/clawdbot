@@ -176,7 +176,11 @@ export async function getRecentSessionContentWithResetFallback(
       return primary;
     }
 
-    const latestResetPath = path.join(dir, resetCandidates[resetCandidates.length - 1]);
+    const latestReset = resetCandidates.at(-1);
+    if (latestReset === undefined) {
+      return primary;
+    }
+    const latestResetPath = path.join(dir, latestReset);
     return (await getRecentSessionContent(latestResetPath, messageCount)) || primary;
   } catch {
     return primary;
@@ -219,8 +223,9 @@ export async function findPreviousSessionFile(params: {
         .filter((name) => name.startsWith(`${canonicalFile}.reset.`))
         .toSorted()
         .toReversed();
-      if (canonicalResetVariants.length > 0) {
-        return path.join(params.sessionsDir, canonicalResetVariants[0]);
+      const [canonicalResetVariant] = canonicalResetVariants;
+      if (canonicalResetVariant !== undefined) {
+        return path.join(params.sessionsDir, canonicalResetVariant);
       }
 
       const topicVariants = files
@@ -232,8 +237,9 @@ export async function findPreviousSessionFile(params: {
         )
         .toSorted()
         .toReversed();
-      if (topicVariants.length > 0) {
-        return path.join(params.sessionsDir, topicVariants[0]);
+      const [topicVariant] = topicVariants;
+      if (topicVariant !== undefined) {
+        return path.join(params.sessionsDir, topicVariant);
       }
 
       const topicResetVariants = files
@@ -242,8 +248,9 @@ export async function findPreviousSessionFile(params: {
         )
         .toSorted()
         .toReversed();
-      if (topicResetVariants.length > 0) {
-        return path.join(params.sessionsDir, topicResetVariants[0]);
+      const [topicResetVariant] = topicResetVariants;
+      if (topicResetVariant !== undefined) {
+        return path.join(params.sessionsDir, topicResetVariant);
       }
     }
 
@@ -255,16 +262,18 @@ export async function findPreviousSessionFile(params: {
       .filter((name) => name.endsWith(".jsonl") && !name.includes(".reset."))
       .toSorted()
       .toReversed();
-    if (nonResetJsonl.length > 0) {
-      return path.join(params.sessionsDir, nonResetJsonl[0]);
+    const [nonResetFile] = nonResetJsonl;
+    if (nonResetFile !== undefined) {
+      return path.join(params.sessionsDir, nonResetFile);
     }
 
     const resetJsonl = files
       .filter((name) => name.includes(".jsonl.reset."))
       .toSorted()
       .toReversed();
-    if (resetJsonl.length > 0) {
-      return path.join(params.sessionsDir, resetJsonl[0]);
+    const [resetFile] = resetJsonl;
+    if (resetFile !== undefined) {
+      return path.join(params.sessionsDir, resetFile);
     }
   } catch {
     // Ignore directory read errors.

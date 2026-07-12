@@ -48,7 +48,8 @@ export function chunkTextByBreakResolver(
     }
     // Keep separator ownership with the boundary: one matched separator is
     // consumed here, and any adjacent whitespace is trimmed before the next window.
-    const brokeOnSeparator = safeBreakIdx < remaining.length && /\s/.test(remaining[safeBreakIdx]);
+    const brokeOnSeparator =
+      safeBreakIdx < remaining.length && /\s/.test(remaining.charAt(safeBreakIdx));
     const nextStart = Math.min(remaining.length, safeBreakIdx + (brokeOnSeparator ? 1 : 0));
     remaining = remaining.slice(nextStart).trimStart();
   }

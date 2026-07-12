@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -575,11 +576,17 @@ function parseManagedOutgoingRoute(value: string) {
     if (!match) {
       return null;
     }
-    if (!MANAGED_OUTGOING_ATTACHMENT_ID_RE.test(match[2])) {
+    if (
+      !MANAGED_OUTGOING_ATTACHMENT_ID_RE.test(
+        expectDefined(match[2], "managed image attachments regex capture 2"),
+      )
+    ) {
       return null;
     }
     return {
-      sessionKey: decodeURIComponent(match[1]),
+      sessionKey: decodeURIComponent(
+        expectDefined(match[1], "managed image attachments regex capture 1"),
+      ),
       attachmentId: match[2],
     };
   } catch {
@@ -607,8 +614,9 @@ function collectManagedOutgoingAttachmentRefs(
       if (expectedSessionKey && parsed.sessionKey !== expectedSessionKey) {
         continue;
       }
-      refs.set(parsed.attachmentId, {
-        attachmentId: parsed.attachmentId,
+      const attachmentId = expectDefined(parsed.attachmentId, "managed image attachment id");
+      refs.set(attachmentId, {
+        attachmentId,
         sessionKey: parsed.sessionKey,
       });
     }

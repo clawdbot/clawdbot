@@ -181,6 +181,29 @@ describe("native app i18n inventory", () => {
     expect(entries.some((entry) => entry.source === "Open ${row.title}")).toBe(true);
     expect(entries.some((entry) => entry.source === "Preview · $domain")).toBe(true);
     expect(entries.some((entry) => entry.source === "Approval command copied")).toBe(true);
+    const androidSources = new Set(
+      entries.filter((entry) => entry.surface === "android").map((entry) => entry.source),
+    );
+    expect([...androidSources]).toEqual(
+      expect.arrayContaining([
+        "A prior response already allowed this command and saved the choice.",
+        "A prior response already allowed this command once.",
+        "A prior response already resolved this approval.",
+        "Approval allowed and saved.",
+        "Approval allowed once.",
+        "Gateway recorded approval and saved the choice.",
+        "Gateway recorded approval once.",
+        "Gateway recorded a denial.",
+        "This approval expired before it could be resolved.",
+        "This approval was cancelled before it could be resolved.",
+        "Resolution outcome unknown. Actions stay disabled until the Gateway record is verified.",
+        "The Gateway still shows this approval as pending. Review it before trying again.",
+        "Could not load approval details. Refresh and try again.",
+        "Could not load approvals.",
+        "Could not resolve approval. Refresh and try again.",
+        "Command request",
+      ]),
+    );
     expect(entries.some((entry) => entry.source === "Save Profile")).toBe(true);
     expect(entries.some((entry) => entry.source === "Mute")).toBe(true);
     expect(entries.some((entry) => entry.source === "Creating...")).toBe(true);
@@ -290,6 +313,13 @@ describe("native app i18n inventory", () => {
     ).toBe(true);
     expect(entries.some((entry) => entry.source === "Don't show this again")).toBe(true);
     expect(entries.some((entry) => entry.source === "Use Manual Gateway")).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.source ===
+          "Direct mode supports device info, status, and notifications. Chat, Talk, and approvals still use the iPhone.",
+      ),
+    ).toBe(true);
     expect(entries.some((entry) => entry.source === "Session target")).toBe(true);
     expect(
       entries.some(

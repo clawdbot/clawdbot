@@ -42,9 +42,8 @@ extension GatewayConnectionController {
         }
         DeviceAuthStore.discardUnscopedTokens(deviceId: primaryIdentity.deviceId)
         guard let relay else { return }
-        let relayStableID = relay.gatewayStableID?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard relayStableID.isEmpty else { return }
+        // Stable IDs are opaque byte-exact tokens; do not trim or normalize before comparing.
+        guard GatewayStableIdentifier.exact(relay.gatewayStableID) == nil else { return }
         ShareGatewayRelaySettings.saveConfig(ShareGatewayRelayConfig(
             gatewayURLString: relay.gatewayURLString,
             gatewayStableID: migrationGatewayID,
@@ -57,9 +56,7 @@ extension GatewayConnectionController {
 
     private static func legacyDeviceAuthMigrationGatewayID() -> String? {
         guard let relay = ShareGatewayRelaySettings.loadConfig() else { return nil }
-        if let stableID = relay.gatewayStableID?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !stableID.isEmpty
-        {
+        if let stableID = GatewayStableIdentifier.exact(relay.gatewayStableID) {
             return stableID
         }
         guard let active = GatewaySettingsStore.activeGatewayEntry(),
@@ -164,7 +161,9 @@ extension GatewayConnectionController {
             guard let pendingOverride else {
                 return ManualAuthOverride.normalized(token: token, bootstrapToken: nil, password: password)
             }
-            if let pendingTarget = pendingOverride.targetStableID, pendingTarget != targetStableID {
+            if let pendingTarget = pendingOverride.targetStableID,
+               !GatewayStableIdentifier.matches(pendingTarget, targetStableID)
+            {
                 let normalizedInput = ManualAuthOverride.explicit(
                     token: token,
                     bootstrapToken: nil,

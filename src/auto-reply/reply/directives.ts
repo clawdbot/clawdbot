@@ -46,17 +46,17 @@ const matchLevelDirective = (
   const start = match.index;
   const directiveEnd = match.index + match[0].length;
   let i = directiveEnd;
-  while (i < body.length && /\s/.test(body[i])) {
+  while (i < body.length && /\s/.test(body.charAt(i))) {
     i += 1;
   }
   if (body[i] === ":") {
     i += 1;
-    while (i < body.length && /\s/.test(body[i])) {
+    while (i < body.length && /\s/.test(body.charAt(i))) {
       i += 1;
     }
   }
   const argStart = i;
-  while (i < body.length && /[A-Za-z-]/.test(body[i])) {
+  while (i < body.length && /[A-Za-z-]/.test(body.charAt(i))) {
     i += 1;
   }
   const candidate = i > argStart ? body.slice(argStart, i) : undefined;

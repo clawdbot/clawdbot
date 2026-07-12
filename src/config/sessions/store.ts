@@ -1,6 +1,7 @@
 // Session store facade coordinates reads, writes, maintenance, delivery metadata, and exports.
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalAgentRuntimeId } from "../../agents/agent-runtime-id.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
@@ -343,7 +344,7 @@ export type DeletedAgentSessionEntryPurgeParams = {
 };
 
 function cloneSessionEntry(entry: SessionEntry): SessionEntry {
-  return cloneSessionStoreRecord({ entry }).entry;
+  return expectDefined(cloneSessionStoreRecord({ entry }).entry, "cloned session entry");
 }
 
 function cloneSessionEntries(store: Record<string, SessionEntry>): Record<string, SessionEntry> {
@@ -1292,7 +1293,11 @@ export async function applySessionEntryPatchProjection<
       ...target,
       entries: cloneSessionEntryProjectionSnapshot(store).entries,
       ...(store[target.primaryKey]
-        ? { existingEntry: cloneSessionEntry(store[target.primaryKey]) }
+        ? {
+            existingEntry: cloneSessionEntry(
+              expectDefined(store[target.primaryKey], "store entry at target.primary key"),
+            ),
+          }
         : {}),
     });
     if (projected.ok) {

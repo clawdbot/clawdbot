@@ -281,6 +281,12 @@ import {
   resolveHookModelSelection,
   resolveNativeModelOwnedHarnessId,
 } from "./run/setup.js";
+import {
+  isEmbeddedRunTerminalAbort,
+  isEmbeddedRunTerminalInterrupted,
+  isEmbeddedRunTerminalTimeout,
+  resolveEmbeddedRunAttemptTerminalOutcome,
+} from "./run/terminal-outcome.js";
 import { mergeAttemptToolMediaPayloads } from "./run/tool-media-payloads.js";
 import type { EmbeddedRunFastModeParam } from "./run/types.js";
 import {
@@ -2897,13 +2903,43 @@ async function runEmbeddedAgentInternal(
             lastAssistant: sessionLastAssistant,
             currentAttemptAssistant,
           } = attempt;
+          const timedOutDuringToolExecution = attempt.timedOutDuringToolExecution ?? false;
+          const timedOutByRunBudget = attempt.timedOutByRunBudget ?? false;
+          // Transcript fallback can outlive a provider or alias transition.
+          // Reuse it only when it reports the effective model for this attempt.
+          const sessionAssistantForCandidate =
+            !currentAttemptAssistant &&
+            !isAssistantForModelRef(sessionLastAssistant, {
+              provider: effectiveModel.provider,
+              model: effectiveModel.id,
+            })
+              ? undefined
+              : sessionLastAssistant;
+          const attemptAssistant = currentAttemptAssistant ?? sessionAssistantForCandidate;
+          const terminalOutcome = resolveEmbeddedRunAttemptTerminalOutcome({
+            attempt,
+            assistant: currentAttemptAssistant,
+            abortSignal: params.abortSignal,
+          });
+          const terminalAborted = isEmbeddedRunTerminalAbort(terminalOutcome);
+          const terminalTimedOut = isEmbeddedRunTerminalTimeout(terminalOutcome);
+          const terminalInterrupted = isEmbeddedRunTerminalInterrupted(terminalOutcome);
+          const signalOwnedInterruption =
+            terminalInterrupted && params.abortSignal?.aborted === true;
+          const terminalIdleTimedOut = terminalTimedOut && idleTimedOut;
           const setTerminalLifecycleMeta: NonNullable<typeof attempt.setTerminalLifecycleMeta> = (
             meta,
           ) => {
-            attempt.setTerminalLifecycleMeta?.({ ...meta, aborted });
+            const { stopReason, ...remainingMeta } = meta;
+            const terminalStopReason = terminalInterrupted
+              ? terminalOutcome.stopReason
+              : stopReason;
+            attempt.setTerminalLifecycleMeta?.({
+              ...remainingMeta,
+              ...(terminalStopReason ? { stopReason: terminalStopReason } : {}),
+              aborted: terminalAborted,
+            });
           };
-          const timedOutDuringToolExecution = attempt.timedOutDuringToolExecution ?? false;
-          const timedOutByRunBudget = attempt.timedOutByRunBudget ?? false;
           const previousActiveSessionId = activeSessionId;
           const previousActiveSessionFile = activeSessionFile;
           adoptActiveSessionId(sessionIdUsed);
@@ -2956,7 +2992,7 @@ async function runEmbeddedAgentInternal(
           // feeds it the latest attempt outcome and bails through the
           // existing retry-limit exhaustion path when the cap is hit.
           const breakerStep = stepIdleTimeoutBreaker(idleTimeoutBreakerState, {
-            idleTimedOut,
+            idleTimedOut: terminalIdleTimedOut,
             completedModelProgress: hasCompletedModelProgressForIdleBreaker(attempt),
             outputTokens: attemptUsage?.output,
           });
@@ -3013,17 +3049,6 @@ async function runEmbeddedAgentInternal(
           if (attempt.contextBudgetStatus) {
             lastContextBudgetStatus = attempt.contextBudgetStatus;
           }
-          // Transcript fallback can outlive a provider or alias transition.
-          // Reuse it only when it reports the effective model for this attempt.
-          const sessionAssistantForCandidate =
-            !currentAttemptAssistant &&
-            !isAssistantForModelRef(sessionLastAssistant, {
-              provider: effectiveModel.provider,
-              model: effectiveModel.id,
-            })
-              ? undefined
-              : sessionLastAssistant;
-          const attemptAssistant = currentAttemptAssistant ?? sessionAssistantForCandidate;
           const activeErrorContext = resolveActiveErrorContext({
             provider,
             model: modelId,
@@ -3063,7 +3088,7 @@ async function runEmbeddedAgentInternal(
             !attempt.lastToolError &&
             (attempt.toolMetas?.length ?? 0) === 0 &&
             (attempt.assistantTexts?.length ?? 0) === 0;
-          if (!nativeModelOwned && preflightRecovery?.handled) {
+          if (!signalOwnedInterruption && !nativeModelOwned && preflightRecovery?.handled) {
             const retryingFromTranscript = preflightRecovery.source === "mid-turn";
             log.info(
               `[context-overflow-precheck] early recovery route=${preflightRecovery.route} ` +
@@ -3087,7 +3112,7 @@ async function runEmbeddedAgentInternal(
             currentAuthProfileId: preferredProfileId,
             currentAuthProfileIdSource: params.authProfileIdSource,
           });
-          if (requestedSelection && canRestartForLiveSwitch) {
+          if (!signalOwnedInterruption && requestedSelection && canRestartForLiveSwitch) {
             await clearLiveModelSwitchPending({
               cfg: params.config,
               sessionKey: resolvedSessionKey,
@@ -3102,6 +3127,7 @@ async function runEmbeddedAgentInternal(
             genericCompactionRecoveryAllowed &&
             contextTokenBudget !== undefined &&
             timedOut &&
+            !signalOwnedInterruption &&
             !timedOutDuringCompaction &&
             !timedOutDuringToolExecution &&
             !timedOutByRunBudget
@@ -3281,26 +3307,27 @@ async function runEmbeddedAgentInternal(
             }
           }
 
-          const contextOverflowError = !aborted
-            ? (() => {
-                if (promptError) {
-                  const errorText = formatErrorMessage(promptError);
-                  if (isLikelyContextOverflowError(errorText)) {
-                    return { text: errorText, source: "promptError" as const };
+          const contextOverflowError =
+            !aborted && !signalOwnedInterruption
+              ? (() => {
+                  if (promptError) {
+                    const errorText = formatErrorMessage(promptError);
+                    if (isLikelyContextOverflowError(errorText)) {
+                      return { text: errorText, source: "promptError" as const };
+                    }
+                    // Prompt submission failed with a non-overflow error. Do not
+                    // inspect prior assistant errors from history for this attempt.
+                    return null;
                   }
-                  // Prompt submission failed with a non-overflow error. Do not
-                  // inspect prior assistant errors from history for this attempt.
+                  if (assistantErrorText && isLikelyContextOverflowError(assistantErrorText)) {
+                    return {
+                      text: assistantErrorText,
+                      source: "assistantError" as const,
+                    };
+                  }
                   return null;
-                }
-                if (assistantErrorText && isLikelyContextOverflowError(assistantErrorText)) {
-                  return {
-                    text: assistantErrorText,
-                    source: "assistantError" as const,
-                  };
-                }
-                return null;
-              })()
-            : null;
+                })()
+              : null;
 
           if (
             contextOverflowError &&
@@ -3697,7 +3724,7 @@ async function runEmbeddedAgentInternal(
             };
           }
 
-          if (promptErrorSource === "hook:before_agent_run" && !aborted) {
+          if (promptErrorSource === "hook:before_agent_run" && !terminalInterrupted) {
             const errorText = formatErrorMessage(promptError);
             const replayInvalid = resolveReplayInvalidForAttempt();
             setTerminalLifecycleMeta({
@@ -3767,7 +3794,7 @@ async function runEmbeddedAgentInternal(
 
           if (
             promptError &&
-            !aborted &&
+            !terminalInterrupted &&
             promptErrorSource !== "compaction" &&
             !hasRecoverableCodexAppServerTimeoutOutcome &&
             !shouldSurfaceCodexCompletionTimeout
@@ -4048,7 +4075,7 @@ async function runEmbeddedAgentInternal(
             message: attemptAssistant?.errorMessage,
             attempted: attemptedThinking,
           });
-          if (fallbackThinking && !aborted) {
+          if (fallbackThinking && !terminalInterrupted) {
             log.warn(
               `unsupported thinking level for ${provider}/${modelId}; retrying with ${fallbackThinking}`,
             );
@@ -4062,9 +4089,7 @@ async function runEmbeddedAgentInternal(
           const failoverFailure = isFailoverAssistantError(attemptAssistant);
           const assistantFailoverReason = classifyAssistantFailoverReason(attemptAssistant);
           const assistantProviderStarted =
-            Boolean(currentAttemptAssistant?.provider) ||
-            idleTimedOut ||
-            (timedOut && !timedOutDuringCompaction && !timedOutDuringToolExecution);
+            Boolean(currentAttemptAssistant?.provider) || terminalOutcome.providerStarted === true;
           const assistantProfileFailoverReason =
             assistantFailoverReason ??
             (assistantProviderStarted && (timedOut || idleTimedOut) ? "timeout" : null);
@@ -4102,9 +4127,8 @@ async function runEmbeddedAgentInternal(
             !billingFailure &&
             !cloudCodeAssistFormatError &&
             !imageDimensionError &&
-            !aborted &&
+            !terminalInterrupted &&
             !promptError &&
-            !timedOut &&
             silentErrorRetryReason &&
             shouldRetrySilentErrorAssistantTurn({ attempt, assistant: attemptAssistant }) &&
             emptyErrorRetries < MAX_EMPTY_ERROR_RETRIES
@@ -4138,6 +4162,7 @@ async function runEmbeddedAgentInternal(
           });
 
           if (
+            !signalOwnedInterruption &&
             authFailure &&
             (await maybeRefreshRuntimeAuthForAuthError(
               attemptAssistant?.errorMessage ?? "",
@@ -4170,7 +4195,7 @@ async function runEmbeddedAgentInternal(
             stage: "assistant",
             allowFormatRetry: cloudCodeAssistFormatError,
             aborted,
-            externalAbort,
+            externalAbort: externalAbort || signalOwnedInterruption,
             fallbackConfigured,
             failoverFailure,
             failoverReason: assistantFailoverReason,
@@ -4185,7 +4210,7 @@ async function runEmbeddedAgentInternal(
           const assistantFailoverOutcome = await handleAssistantFailover({
             initialDecision: assistantFailoverDecision,
             aborted,
-            externalAbort,
+            externalAbort: externalAbort || signalOwnedInterruption,
             fallbackConfigured,
             failoverFailure,
             failoverReason: assistantFailoverReason,
@@ -4347,7 +4372,7 @@ async function runEmbeddedAgentInternal(
             sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
             agentId: params.agentId,
             runId: params.runId,
-            runAborted: aborted,
+            runAborted: terminalInterrupted,
             didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
             heartbeatToolResponse: attempt.heartbeatToolResponse,
           });
@@ -4359,7 +4384,7 @@ async function runEmbeddedAgentInternal(
             sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
           });
           const timedOutDuringPrompt =
-            timedOut && !timedOutDuringCompaction && !timedOutDuringToolExecution;
+            terminalTimedOut && !timedOutDuringCompaction && !timedOutDuringToolExecution;
           const finalAssistantStopReason = (attemptAssistant?.stopReason ?? "")
             .trim()
             .toLowerCase();
@@ -4429,18 +4454,23 @@ async function runEmbeddedAgentInternal(
               attempt.promptTimeoutOutcome?.livenessState ??
               resolveRunLivenessState({
                 payloadCount: hasPartialAssistantTextAfterPromptTimeout ? 0 : payloads.length,
-                aborted,
-                timedOut,
+                aborted: terminalAborted,
+                timedOut: terminalTimedOut,
                 attempt,
                 incompleteTurnText: null,
               });
-            const timeoutPhase = attempt.promptTimeoutOutcome?.timeoutPhase ?? "provider";
-            const providerStarted = attempt.promptTimeoutOutcome?.providerStarted ?? true;
+            const timeoutPhase =
+              attempt.promptTimeoutOutcome?.timeoutPhase ?? terminalOutcome.timeoutPhase;
+            const providerStarted =
+              attempt.promptTimeoutOutcome?.providerStarted ?? terminalOutcome.providerStarted;
+            const timeoutAttribution = {
+              ...(timeoutPhase ? { timeoutPhase } : {}),
+              ...(typeof providerStarted === "boolean" ? { providerStarted } : {}),
+            };
             setTerminalLifecycleMeta({
               replayInvalid,
               livenessState,
-              timeoutPhase,
-              providerStarted,
+              ...timeoutAttribution,
             });
             return {
               payloads: [
@@ -4453,15 +4483,14 @@ async function runEmbeddedAgentInternal(
               meta: {
                 durationMs: Date.now() - started,
                 agentMeta,
-                aborted,
+                aborted: terminalAborted,
                 systemPromptReport: attempt.systemPromptReport,
                 finalPromptText: attempt.finalPromptText,
                 finalAssistantVisibleText,
                 finalAssistantRawText,
                 replayInvalid,
                 livenessState,
-                timeoutPhase,
-                providerStarted,
+                ...timeoutAttribution,
                 // Completion-idle recovery is exhausted here. Keep this terminal so
                 // model fallback cannot replay a potentially still-active Codex turn.
                 ...(shouldSurfaceCodexCompletionTimeout
@@ -4494,8 +4523,8 @@ async function runEmbeddedAgentInternal(
           const silentToolResultReplyPayload = resolveSilentToolResultReplyPayload({
             isCronTrigger: params.trigger === "cron",
             payloadCount: payloadsWithToolMedia?.length ?? 0,
-            aborted,
-            timedOut,
+            aborted: terminalAborted,
+            timedOut: terminalTimedOut,
             attempt,
           });
           const payloadsForTerminalPath = recoveredFinalAssistantPayloadsAfterPromptTimeout
@@ -4509,8 +4538,8 @@ async function runEmbeddedAgentInternal(
           const emptyAssistantReplyIsSilent = shouldTreatEmptyAssistantReplyAsSilent({
             allowEmptyAssistantReplyAsSilent: params.allowEmptyAssistantReplyAsSilent,
             payloadCount,
-            aborted,
-            timedOut,
+            aborted: terminalAborted,
+            timedOut: terminalTimedOut,
             attempt,
           });
           const nextReasoningOnlyRetryInstruction = emptyAssistantReplyIsSilent
@@ -4520,8 +4549,8 @@ async function runEmbeddedAgentInternal(
                 modelId: activeErrorContext.model,
                 modelApi: effectiveModel.api,
                 executionContract,
-                aborted,
-                timedOut,
+                aborted: terminalAborted,
+                timedOut: terminalTimedOut,
                 attempt,
               });
           const nextEmptyResponseRetryInstruction = emptyAssistantReplyIsSilent
@@ -4532,8 +4561,8 @@ async function runEmbeddedAgentInternal(
                 modelApi: effectiveModel.api,
                 executionContract,
                 payloadCount,
-                aborted,
-                timedOut,
+                aborted: terminalAborted,
+                timedOut: terminalTimedOut,
                 attempt,
               });
           if (
@@ -4556,9 +4585,9 @@ async function runEmbeddedAgentInternal(
             !emptyAssistantReplyIsSilent &&
             shouldRetryMissingAssistantTurn({
               payloadCount,
-              aborted,
+              aborted: terminalAborted,
               promptError,
-              timedOut,
+              timedOut: terminalTimedOut,
               attempt,
             }) &&
             missingAssistantRetryAttempts < MAX_MISSING_ASSISTANT_RETRIES
@@ -4588,15 +4617,14 @@ async function runEmbeddedAgentInternal(
             ? null
             : resolveIncompleteTurnPayloadText({
                 payloadCount,
-                aborted,
-                externalAbort,
-                timedOut,
+                aborted: terminalAborted,
+                externalAbort: externalAbort || signalOwnedInterruption,
+                timedOut: terminalTimedOut,
                 attempt,
               });
           const incompleteTurnFallbackSafe = Boolean(
             incompleteTurnText &&
-            !aborted &&
-            !timedOut &&
+            !terminalInterrupted &&
             !promptError &&
             !attempt.lastToolError &&
             !hasAttemptTerminalState(attempt) &&
@@ -4609,9 +4637,8 @@ async function runEmbeddedAgentInternal(
             !emptyAssistantReplyIsSilent &&
             attemptCompactionCount > 0 &&
             payloadCount === 0 &&
-            !aborted &&
+            !terminalInterrupted &&
             !promptError &&
-            !timedOut &&
             !attempt.clientToolCalls &&
             !attempt.yieldDetected &&
             !attempt.didSendDeterministicApprovalPrompt &&
@@ -4645,8 +4672,8 @@ async function runEmbeddedAgentInternal(
             const replayInvalid = resolveReplayInvalidForAttempt(incompletePayloadText);
             const livenessState = resolveRunLivenessState({
               payloadCount: 0,
-              aborted,
-              timedOut,
+              aborted: terminalAborted,
+              timedOut: terminalTimedOut,
               attempt,
               incompleteTurnText: incompletePayloadText,
             });
@@ -4671,7 +4698,7 @@ async function runEmbeddedAgentInternal(
               meta: {
                 durationMs: Date.now() - started,
                 agentMeta,
-                aborted,
+                aborted: terminalAborted,
                 systemPromptReport: attempt.systemPromptReport,
                 finalPromptText: attempt.finalPromptText,
                 finalAssistantVisibleText,
@@ -4715,8 +4742,8 @@ async function runEmbeddedAgentInternal(
             const replayInvalid = resolveReplayInvalidForAttempt(incompleteTurnText);
             const livenessState = resolveRunLivenessState({
               payloadCount,
-              aborted,
-              timedOut,
+              aborted: terminalAborted,
+              timedOut: terminalTimedOut,
               attempt,
               incompleteTurnText,
             });
@@ -4763,7 +4790,7 @@ async function runEmbeddedAgentInternal(
               meta: {
                 durationMs: Date.now() - started,
                 agentMeta,
-                aborted,
+                aborted: terminalAborted,
                 systemPromptReport: attempt.systemPromptReport,
                 finalPromptText: attempt.finalPromptText,
                 finalAssistantVisibleText,
@@ -4796,9 +4823,8 @@ async function runEmbeddedAgentInternal(
 
           const beforeAgentFinalizeRevisionReason = attempt.beforeAgentFinalizeRevisionReason;
           const shouldHonorBeforeAgentFinalizeRevision =
-            !aborted &&
+            !terminalInterrupted &&
             !promptError &&
-            !timedOut &&
             !attempt.clientToolCalls &&
             !attempt.yieldDetected &&
             !emptyAssistantReplyIsSilent;
@@ -4912,8 +4938,8 @@ async function runEmbeddedAgentInternal(
             ? "paused"
             : resolveRunLivenessState({
                 payloadCount,
-                aborted,
-                timedOut,
+                aborted: terminalAborted,
+                timedOut: terminalTimedOut,
                 attempt,
                 incompleteTurnText: null,
               });
@@ -4939,7 +4965,7 @@ async function runEmbeddedAgentInternal(
             meta: {
               durationMs: Date.now() - started,
               agentMeta,
-              aborted,
+              aborted: terminalAborted,
               systemPromptReport: attempt.systemPromptReport,
               finalPromptText: attempt.finalPromptText,
               finalAssistantVisibleText,

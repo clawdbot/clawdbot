@@ -146,8 +146,9 @@ export async function getTailnetHostname(exec: typeof runExec = runExec, detecte
       if (dns && dns.length > 0) {
         return dns.replace(/\.$/, "");
       }
-      if (ips.length > 0) {
-        return ips[0];
+      const [firstIp] = ips;
+      if (firstIp !== undefined) {
+        return firstIp;
       }
       throw new Error("Could not determine Tailscale DNS or IP");
     } catch (err) {

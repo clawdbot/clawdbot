@@ -10,8 +10,7 @@ import { usesFastLoopbackCdpProbeClass } from "./cdp-timeouts.js";
 import { redactCdpUrl } from "./cdp.helpers.js";
 import { countChromeMcpTabs } from "./chrome-mcp.js";
 import { isChromeReachable, resolveOpenClawUserDataDir } from "./chrome.js";
-import type { ResolvedBrowserProfile } from "./config.js";
-import { resolveProfile } from "./config.js";
+import { getOwnBrowserProfile, resolveProfile, type ResolvedBrowserProfile } from "./config.js";
 import {
   BrowserProfileNotFoundError,
   BrowserProfileUnavailableError,
@@ -366,7 +365,8 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
         tabCount,
         isDefault: name === current.resolved.defaultProfile,
         isRemote: !statusProfile.cdpIsLoopback,
-        missingFromConfig: !(name in current.resolved.profiles) || undefined,
+        missingFromConfig:
+          getOwnBrowserProfile(current.resolved.profiles, name) === undefined || undefined,
         reconcileReason: unavailableReason,
       });
     }

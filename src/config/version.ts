@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Normalizes config version metadata and compatibility comparisons.
 import {
   comparePrereleaseIdentifiers,
@@ -27,9 +28,9 @@ export function parseOpenClawVersion(raw: string | null | undefined): OpenClawVe
   const [, major, minor, patch, suffix] = match;
   const revision = suffix && /^[0-9]+$/.test(suffix) ? Number.parseInt(suffix, 10) : null;
   return {
-    major: Number.parseInt(major, 10),
-    minor: Number.parseInt(minor, 10),
-    patch: Number.parseInt(patch, 10),
+    major: Number.parseInt(expectDefined(major, "version major"), 10),
+    minor: Number.parseInt(expectDefined(minor, "version minor"), 10),
+    patch: Number.parseInt(expectDefined(patch, "version patch"), 10),
     revision,
     prerelease: suffix && revision == null ? suffix.split(".").filter(Boolean) : null,
   };

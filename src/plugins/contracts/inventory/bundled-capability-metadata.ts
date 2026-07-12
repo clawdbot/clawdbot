@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { tryReadJsonSync } from "../../../infra/json-files.js";
 import {
   normalizeBundledPluginStringList,
@@ -224,7 +225,11 @@ export const BUNDLED_AUTO_ENABLE_PROVIDER_PLUGIN_IDS = Object.fromEntries(
       providerId,
       manifest.id,
     ]),
-  ).toSorted(([left], [right]) => left.localeCompare(right)),
+  ).toSorted(([left], [right]) =>
+    expectDefined(left, "bundled capability metadata left").localeCompare(
+      expectDefined(right, "bundled capability metadata right"),
+    ),
+  ),
 ) as Readonly<Record<string, string>>;
 
 type BundledContractIdSnapshotKey = Exclude<

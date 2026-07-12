@@ -235,20 +235,21 @@ export async function sendPayloadWithChunkedTextAndMedia<
   if (!text && urls.length === 0) {
     return params.emptyResult;
   }
-  if (urls.length > 0) {
+  const [firstUrl, ...remainingUrls] = urls;
+  if (firstUrl !== undefined) {
     // Caption-limited transports get text only on the first media item; the
     // final result still represents the last platform send.
     let lastResult = await params.sendMedia({
       ...params.ctx,
       text,
-      mediaUrl: urls[0],
+      mediaUrl: firstUrl,
     });
     await params.onResult?.(lastResult);
-    for (let i = 1; i < urls.length; i++) {
+    for (const mediaUrl of remainingUrls) {
       lastResult = await params.sendMedia({
         ...params.ctx,
         text: "",
-        mediaUrl: urls[i],
+        mediaUrl,
       });
       await params.onResult?.(lastResult);
     }
@@ -256,12 +257,17 @@ export async function sendPayloadWithChunkedTextAndMedia<
   }
   const limit = params.textChunkLimit;
   const chunks = limit && params.chunker ? params.chunker(text, limit) : [text];
-  let lastResult: TResult;
-  for (const chunk of chunks) {
+  const [firstChunk, ...remainingChunks] = chunks;
+  if (firstChunk === undefined) {
+    return params.emptyResult;
+  }
+  let lastResult = await params.sendText({ ...params.ctx, text: firstChunk });
+  await params.onResult?.(lastResult);
+  for (const chunk of remainingChunks) {
     lastResult = await params.sendText({ ...params.ctx, text: chunk });
     await params.onResult?.(lastResult);
   }
-  return lastResult!;
+  return lastResult;
 }
 
 /** Sends a media sequence with caption text on the first item and returns the last send result. */

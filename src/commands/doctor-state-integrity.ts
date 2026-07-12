@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -434,9 +435,9 @@ function parseLinuxMountInfo(rawMountInfo: string): LinuxMountInfoEntry[] {
     }
 
     entries.push({
-      mountPoint: decodeMountInfoPath(leftFields[4]),
-      fsType: rightFields[0],
-      source: decodeMountInfoPath(rightFields[1]),
+      mountPoint: decodeMountInfoPath(expectDefined(leftFields[4], "left fields entry at 4")),
+      fsType: expectDefined(rightFields[0], "right fields entry at 0"),
+      source: decodeMountInfoPath(expectDefined(rightFields[1], "right fields entry at 1")),
     });
   }
   return entries;

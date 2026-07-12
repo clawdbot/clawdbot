@@ -2630,6 +2630,9 @@ describe("ci workflow guards", () => {
     expect(smokeRunStep.run).toContain("No QA smoke runs assigned");
     expect(smokeRunStep.run).toContain("node openclaw.mjs qa run");
     expect(smokeRunStep.run).not.toContain("pnpm openclaw qa run");
+    expect(smokeRunStep.run).toContain(
+      "timeout --signal=TERM --kill-after=15s 10m node openclaw.mjs qa run",
+    );
     expect(smokeRunStep.run).toContain("--qa-profile smoke-ci");
     expect(smokeRunStep.run).toContain("--concurrency 10");
     expect(smokeRunStep.env.OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS).toContain(

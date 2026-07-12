@@ -2,6 +2,7 @@
 // cron state, and REM harness previews for operator diagnostics.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -263,7 +264,11 @@ function groundedMarkdownToDiaryLines(markdown: string): string[] {
   return markdown
     .split("\n")
     .map((line) => line.replace(/^##\s+/, "").trimEnd())
-    .filter((line, index, lines) => line.length > 0 || (index > 0 && lines[index - 1]?.length > 0));
+    .filter(
+      (line, index, lines) =>
+        line.length > 0 ||
+        (index > 0 && expectDefined(lines[index - 1], "lines entry at index 1")?.length > 0),
+    );
 }
 
 async function listWorkspaceDailyFiles(memoryDir: string): Promise<string[]> {
@@ -435,7 +440,7 @@ function trimDreamingEntries(
     // Keep the public status payload bounded while preserving the comparator's best entries.
     let insertAt = selected.length;
     for (let index = 0; index < selected.length; index += 1) {
-      if (compare(entry, selected[index]) < 0) {
+      if (compare(entry, expectDefined(selected[index], "selected entry at index")) < 0) {
         insertAt = index;
         break;
       }

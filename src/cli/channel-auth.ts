@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Channel login/logout command helpers for local config and gateway reconciliation.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
@@ -74,7 +75,7 @@ function resolveConfiguredAuthChannelInput(cfg: OpenClawConfig, mode: ChannelAut
     .map((plugin) => plugin.id);
 
   if (configured.length === 1) {
-    return configured[0];
+    return expectDefined(configured[0], "configured entry at 0");
   }
   if (configured.length === 0) {
     throw new Error(

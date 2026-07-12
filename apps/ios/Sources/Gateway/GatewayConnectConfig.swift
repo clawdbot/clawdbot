@@ -21,14 +21,12 @@ struct GatewayConnectConfig {
     /// Stable, non-empty route identifier used for UI/event ownership.
     /// If the caller doesn't provide a stableID, fall back to URL identity.
     var effectiveStableID: String {
-        let trimmed = self.stableID.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return self.url.absoluteString }
-        return trimmed
+        GatewayStableIdentifier.exact(self.stableID) ?? self.url.absoluteString
     }
 
     func hasSameConnectionInputs(as other: GatewayConnectConfig) -> Bool {
         self.url == other.url &&
-            self.stableID == other.stableID &&
+            Self.sameStableID(self.effectiveStableID, other.effectiveStableID) &&
             Self.sameTLS(self.tls, other.tls) &&
             self.token == other.token &&
             self.bootstrapToken == other.bootstrapToken &&
@@ -65,7 +63,7 @@ struct GatewayConnectConfig {
             lhs.deviceIdentityProfile == rhs.deviceIdentityProfile &&
             lhs.includeDeviceIdentity == rhs.includeDeviceIdentity &&
             lhs.allowStoredDeviceAuth == rhs.allowStoredDeviceAuth &&
-            lhs.deviceAuthGatewayID == rhs.deviceAuthGatewayID &&
+            Self.sameOptionalStableID(lhs.deviceAuthGatewayID, rhs.deviceAuthGatewayID) &&
             lhsScopes == rhsScopes &&
             lhsCaps == rhsCaps &&
             lhsCommands == rhsCommands &&
@@ -76,5 +74,20 @@ struct GatewayConnectConfig {
         values.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
             .sorted()
+    }
+
+    private static func sameStableID(_ lhs: String, _ rhs: String) -> Bool {
+        ExactOpaqueIdentifierKey(lhs) == ExactOpaqueIdentifierKey(rhs)
+    }
+
+    private static func sameOptionalStableID(_ lhs: String?, _ rhs: String?) -> Bool {
+        switch (lhs, rhs) {
+        case (nil, nil):
+            true
+        case let (lhs?, rhs?):
+            self.sameStableID(lhs, rhs)
+        default:
+            false
+        }
     }
 }

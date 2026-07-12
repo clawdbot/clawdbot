@@ -320,7 +320,7 @@ jobs:
                     trusted_reason="release-tag"
                     break
                   fi
-                done < <(git -C .candidate for-each-ref --format='%(refname)' refs/tags/v)
+                done < <(git -C .candidate for-each-ref --format='%(refname)' 'refs/tags/v*')
               fi
             fi
           fi
@@ -339,18 +339,27 @@ jobs:
                 -f name="$repository_name" \
                 -f oid="$candidate_sha"
             )"
-            signer="$(
+            signature_status="$(
               jq -er \
                 --arg sha "$candidate_sha" \
                 '.data.repository.object |
-                 select(.oid == $sha and .signature.isValid == true and .signature.state == "VALID") |
-                 .signature.signer.login' \
+                 select(.oid == $sha) |
+                 if .signature == null then "missing"
+                 elif .signature.isValid == true and .signature.state == "VALID" and
+                   (.signature.signer.login // "") != "" then "valid"
+                 else "invalid"
+                 end' \
                 <<<"$signature_json"
             )"
+            if [[ "$signature_status" == "invalid" ]]; then
+              echo "Release candidate ${candidate_sha} has an invalid commit signature." >&2
+              exit 1
+            fi
+            signer="$(jq -r '.data.repository.object.signature.signer.login // ""' <<<"$signature_json")"
             permission_actor="$signer"
-            if [[ "$signer" == "web-flow" ]]; then
+            if [[ "$signature_status" == "missing" || "$signer" == "web-flow" ]]; then
               if [[ "$trusted_reason" != "release-branch-head" || -z "$trusted_release_branch" ]]; then
-                echo "GitHub web-flow candidates require an exact release branch head." >&2
+                echo "Unsigned or GitHub web-flow candidates require an exact release branch head." >&2
                 exit 1
               fi
               permission_actor="$(
@@ -1002,7 +1011,7 @@ jobs:
                     trusted_reason="release-tag"
                     break
                   fi
-                done < <(git for-each-ref --format='%(refname)' refs/tags/v)
+                done < <(git for-each-ref --format='%(refname)' 'refs/tags/v*')
               fi
             fi
           fi
@@ -1018,18 +1027,27 @@ jobs:
                 -f name="$repository_name" \
                 -f oid="$candidate_sha"
             )"
-            signer="$(
+            signature_status="$(
               jq -er \
                 --arg sha "$candidate_sha" \
                 '.data.repository.object |
-                 select(.oid == $sha and .signature.isValid == true and .signature.state == "VALID") |
-                 .signature.signer.login' \
+                 select(.oid == $sha) |
+                 if .signature == null then "missing"
+                 elif .signature.isValid == true and .signature.state == "VALID" and
+                   (.signature.signer.login // "") != "" then "valid"
+                 else "invalid"
+                 end' \
                 <<<"$signature_json"
             )"
+            if [[ "$signature_status" == "invalid" ]]; then
+              echo "Release candidate ${candidate_sha} has an invalid commit signature." >&2
+              exit 1
+            fi
+            signer="$(jq -r '.data.repository.object.signature.signer.login // ""' <<<"$signature_json")"
             permission_actor="$signer"
-            if [[ "$signer" == "web-flow" ]]; then
+            if [[ "$signature_status" == "missing" || "$signer" == "web-flow" ]]; then
               if [[ "$trusted_reason" != "release-branch-head" || -z "$trusted_release_branch" ]]; then
-                echo "GitHub web-flow candidates require an exact release branch head." >&2
+                echo "Unsigned or GitHub web-flow candidates require an exact release branch head." >&2
                 exit 1
               fi
               permission_actor="$(

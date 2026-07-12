@@ -39,6 +39,10 @@ const RUNTIME_SIDECAR_BASELINE_PATH_RE =
   /^(?:scripts\/generate-runtime-sidecar-paths-baseline\.ts|scripts\/lib\/bundled-runtime-sidecar-paths\.json|src\/plugins\/runtime-sidecar-paths(?:-baseline)?\.ts)$/u;
 const SQLITE_SESSION_SCHEMA_BASELINE_PATH_RE =
   /^(?:src\/state\/openclaw-agent-schema\.sql|scripts\/(?:generate-sqlite-session-schema-baseline\.ts|lib\/sqlite-session-schema-baseline\.ts)|test\/scripts\/sqlite-session-schema-baseline\.test\.ts|docs\/\.generated\/sqlite-session-transcript-schema-baseline\.sha256)$/u;
+const PLUGIN_SDK_API_BASELINE_PATH_RE =
+  /^(?:src\/|packages\/|extensions\/|pnpm-lock\.yaml$|tsconfig\.json$|scripts\/(?:generate-plugin-sdk-api-baseline\.ts|lib\/plugin-sdk-(?:doc-metadata\.ts|entries\.mjs|entrypoints\.json|private-local-only-subpaths\.json))|docs\/\.generated\/plugin-sdk-api-baseline\.sha256$)/u;
+const PLUGIN_SDK_SURFACE_PATH_RE =
+  /^(?:package\.json$|src\/plugin-sdk\/|scripts\/(?:plugin-sdk-surface-report\.mjs|sync-plugin-sdk-exports\.mjs|lib\/plugin-sdk-(?:declaration-budget\.mjs|deprecated-barrel-subpaths\.json|deprecated-public-subpaths\.json|entries\.mjs|entrypoints\.json|private-local-only-subpaths\.json)))/u;
 const CANVAS_A2UI_NATIVE_RESOURCE_PATH_RE =
   /^(?:pnpm-lock\.yaml$|apps\/shared\/OpenClawKit\/Sources\/OpenClawKit\/Resources\/CanvasA2UI\/|extensions\/canvas\/(?:package\.json$|scripts\/bundle-a2ui\.mjs$|src\/host\/a2ui(?:\/(?:index\.html|a2ui\.bundle\.js|\.bundle\.hash)$|-app\/))|scripts\/(?:bundle-a2ui|sync-native-a2ui)\.mjs$)/u;
 const CORE_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.core.json";
@@ -208,6 +212,24 @@ export function shouldRunSqliteSessionSchemaBaselineCheck(paths) {
   );
 }
 
+/** Returns whether changed files can alter the published Plugin SDK API contract. */
+export function shouldRunPluginSdkApiBaselineCheck(paths) {
+  return paths.some((changedPath) => {
+    const normalizedPath = normalizeChangedPath(changedPath);
+    return (
+      !getChangedPathFacts(normalizedPath).isTestOnly &&
+      PLUGIN_SDK_API_BASELINE_PATH_RE.test(normalizedPath)
+    );
+  });
+}
+
+/** Returns whether changed files can alter Plugin SDK exports or surface budgets. */
+export function shouldRunPluginSdkSurfaceChecks(paths) {
+  return paths.some((changedPath) =>
+    PLUGIN_SDK_SURFACE_PATH_RE.test(normalizeChangedPath(changedPath)),
+  );
+}
+
 export function shouldRunCanvasA2uiNativeResourceCheck(paths) {
   return paths.some((changedPath) =>
     CANVAS_A2UI_NATIVE_RESOURCE_PATH_RE.test(normalizeChangedPath(changedPath)),
@@ -334,6 +356,13 @@ export function createChangedCheckPlan(result, options = {}) {
   }
   if (shouldRunSqliteSessionSchemaBaselineCheck(result.paths)) {
     add("SQLite sessions/transcripts schema baseline", ["sqlite:sessions-schema:check"]);
+  }
+  if (shouldRunPluginSdkApiBaselineCheck(result.paths)) {
+    add("Plugin SDK API baseline", ["plugin-sdk:api:check"]);
+  }
+  if (!result.lanes.releaseMetadata && shouldRunPluginSdkSurfaceChecks(result.paths)) {
+    add("Plugin SDK package exports", ["plugin-sdk:check-exports"]);
+    add("Plugin SDK surface budget", ["plugin-sdk:surface:check"]);
   }
   if (shouldRunCanvasA2uiNativeResourceCheck(result.paths)) {
     addCommand(

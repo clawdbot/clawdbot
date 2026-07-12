@@ -182,6 +182,63 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(runtime.exit).toHaveBeenCalledWith(0);
   });
 
+  it("passes shared-state sqlite compact mode and JSON output to doctor command", async () => {
+    doctorCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli(["doctor", "--state-sqlite", "compact", "--json"]);
+
+    expect(doctorCommand).toHaveBeenCalledTimes(1);
+    const [, options] = commandCall(doctorCommand);
+    expect(options.stateSqlite).toBe("compact");
+    expect(options.json).toBe(true);
+    expect(runtime.exit).toHaveBeenCalledWith(0);
+  });
+
+  it("rejects simultaneous shared-state and session SQLite modes", async () => {
+    await runMaintenanceCli(["doctor", "--state-sqlite", "compact", "--session-sqlite", "compact"]);
+
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      "doctor shared-state SQLite maintenance can only be combined with --json.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
+
+  it("rejects shared-state SQLite maintenance combined with lint mode", async () => {
+    await runMaintenanceCli(["doctor", "--state-sqlite", "compact", "--lint"]);
+
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runDoctorLintCli).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      "doctor shared-state SQLite maintenance can only be combined with --json.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
+
+  it.each([
+    ["workspace suggestions", ["--no-workspace-suggestions"]],
+    ["yes mode", ["--yes"]],
+    ["repair mode", ["--repair"]],
+    ["fix mode", ["--fix"]],
+    ["force mode", ["--force"]],
+    ["non-interactive mode", ["--non-interactive"]],
+    ["gateway token generation", ["--generate-gateway-token"]],
+    ["exec secret resolution", ["--allow-exec"]],
+    ["deep scans", ["--deep"]],
+    ["post-upgrade mode", ["--post-upgrade"]],
+    ["session SQLite selectors", ["--session-sqlite-agent", "main"]],
+    ["lint selectors", ["--only", "core/example"]],
+  ])("rejects shared-state SQLite maintenance combined with %s", async (_label, args) => {
+    await runMaintenanceCli(["doctor", "--state-sqlite", "compact", ...args]);
+
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runDoctorLintCli).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      "doctor shared-state SQLite maintenance can only be combined with --json.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
+
   it("rejects session sqlite selectors without session sqlite mode", async () => {
     await runMaintenanceCli(["doctor", "--session-sqlite-agent", "main"]);
 

@@ -273,138 +273,138 @@
         }
       }
     },
-    "Approve": {
+    "Allow Once": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Approve"
+            "value": "Allow Once"
           }
         },
         "zh-CN": {
           "stringUnit": {
             "state": "translated",
-            "value": "批准"
+            "value": "允许一次"
           }
         },
         "zh-TW": {
           "stringUnit": {
             "state": "translated",
-            "value": "核准"
+            "value": "允許一次"
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Aprovar"
+            "value": "Permitir uma vez"
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Genehmigen"
+            "value": "Einmal erlauben"
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Aprobar"
+            "value": "Permitir una vez"
           }
         },
         "ja-JP": {
           "stringUnit": {
             "state": "translated",
-            "value": "承認"
+            "value": "一度だけ許可"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "승인"
+            "value": "한 번 허용"
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Approuver"
+            "value": "Autoriser une fois"
           }
         },
         "hi": {
           "stringUnit": {
             "state": "translated",
-            "value": "स्वीकृत करें"
+            "value": "एक बार अनुमति दें"
           }
         },
         "ar": {
           "stringUnit": {
             "state": "translated",
-            "value": "موافقة"
+            "value": "السماح مرة واحدة"
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Approva"
+            "value": "Consenti una volta"
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Onayla"
+            "value": "Bir kez izin ver"
           }
         },
         "uk": {
           "stringUnit": {
             "state": "translated",
-            "value": "Схвалити"
+            "value": "Дозволити один раз"
           }
         },
         "id": {
           "stringUnit": {
             "state": "translated",
-            "value": "Setujui"
+            "value": "Izinkan sekali"
           }
         },
         "pl": {
           "stringUnit": {
             "state": "translated",
-            "value": "Zatwierdź"
+            "value": "Zezwól raz"
           }
         },
         "th": {
           "stringUnit": {
             "state": "translated",
-            "value": "อนุมัติ"
+            "value": "อนุญาตครั้งเดียว"
           }
         },
         "vi": {
           "stringUnit": {
             "state": "translated",
-            "value": "Phê duyệt"
+            "value": "Cho phép một lần"
           }
         },
         "nl": {
           "stringUnit": {
             "state": "translated",
-            "value": "Goedkeuren"
+            "value": "Eén keer toestaan"
           }
         },
         "fa": {
           "stringUnit": {
             "state": "translated",
-            "value": "تأیید"
+            "value": "یک‌بار اجازه دادن"
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Одобрить"
+            "value": "Разрешить один раз"
           }
         },
         "sv": {
           "stringUnit": {
             "state": "translated",
-            "value": "Godkänn"
+            "value": "Tillåt en gång"
           }
         }
       }

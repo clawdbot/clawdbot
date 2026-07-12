@@ -75,7 +75,7 @@ extension GatewayConnectionController {
             clientMode: "node",
             clientDisplayName: displayName,
             allowStoredDeviceAuth: allowStoredDeviceAuth,
-            deviceAuthGatewayID: deviceAuthGatewayID)
+            deviceAuthGatewayID: GatewayStableIdentifier.exact(deviceAuthGatewayID))
     }
 
     private func resolvedClientId(defaults: UserDefaults, stableID: String?) -> String {

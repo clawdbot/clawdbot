@@ -2,6 +2,7 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import process from "node:process";
+import { expectDefined } from "@openclaw/normalization-core";
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { getRuntimeConfig } from "../config/config.js";
 import {
@@ -100,7 +101,7 @@ export async function runDebugProxyRunCommand(opts: {
   });
   try {
     await new Promise<void>((resolve, reject) => {
-      const child = spawn(command, args, {
+      const child = spawn(expectDefined(command, "proxy cli.runtime command"), args, {
         stdio: "inherit",
         env: childEnv,
         cwd: process.cwd(),

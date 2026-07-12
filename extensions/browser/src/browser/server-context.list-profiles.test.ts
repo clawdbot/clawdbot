@@ -4,7 +4,7 @@ import "./server-context.chrome-test-harness.js";
 import * as chromeModule from "./chrome.js";
 import { createBrowserRouteContext } from "./server-context.js";
 import { beginProfileTransition } from "./server-context.lifecycle.js";
-import { makeBrowserServerState } from "./server-context.test-harness.js";
+import { makeBrowserProfile, makeBrowserServerState } from "./server-context.test-harness.js";
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -136,4 +136,27 @@ describe("browser server-context listProfiles", () => {
     );
     expect(profiles[0]?.cdpUrl).toBe("http://127.0.0.1:9222");
   });
+
+  it.each(["constructor", "prototype"] as const)(
+    "marks runtime-only %s profiles as missing from config",
+    async (profileName) => {
+      const profile = makeBrowserProfile({ name: profileName });
+      const state = makeBrowserServerState({
+        profile,
+        resolvedOverrides: { profiles: {} },
+      });
+      state.profiles.set(profileName, {
+        profile,
+        running: { pid: 123 } as never,
+        lastTargetId: null,
+        reconcile: null,
+      });
+
+      const ctx = createBrowserRouteContext({ getState: () => state });
+      const profiles = await ctx.listProfiles();
+
+      expect(profiles).toHaveLength(1);
+      expect(profiles[0]).toMatchObject({ name: profileName, missingFromConfig: true });
+    },
+  );
 });

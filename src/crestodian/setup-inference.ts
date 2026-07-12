@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { expectDefined } from "@openclaw/normalization-core";
 import { resolveAgentEffectiveModelPrimary, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { normalizeAuthProfileCredential } from "../agents/auth-profiles/credential-normalize.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
@@ -708,7 +709,12 @@ function copySelectedModelMetadata(params: {
         ...params.target.agents?.defaults,
         models: {
           ...params.target.agents?.defaults?.models,
-          [params.modelRef]: structuredClone(preparedDefaultModels[params.modelRef]),
+          [params.modelRef]: structuredClone(
+            expectDefined(
+              preparedDefaultModels[params.modelRef],
+              "prepared default models entry at params.model ref",
+            ),
+          ),
         },
       },
     };
@@ -725,13 +731,18 @@ function copySelectedModelMetadata(params: {
     return;
   }
   const nextAgents = structuredClone(targetAgents);
-  const targetAgent = nextAgents[targetAgentIndex];
+  const targetAgent = expectDefined(
+    nextAgents[targetAgentIndex],
+    "next agents entry at target agent index",
+  );
   if (!targetAgent) {
     return;
   }
   targetAgent.models = {
     ...targetAgent.models,
-    [params.modelRef]: structuredClone(preparedAgent.models[params.modelRef]),
+    [params.modelRef]: structuredClone(
+      expectDefined(preparedAgent.models[params.modelRef], "models entry at params.model ref"),
+    ),
   };
   params.target.agents = { ...params.target.agents, list: nextAgents };
 }
@@ -782,13 +793,15 @@ function projectManualInferenceConfig(params: {
 
   const providerConfigKey = findSelectedProviderConfigKey(params.preparedConfig, params.providerId);
   if (providerConfigKey) {
+    const preparedProvider = params.preparedConfig.models?.providers?.[providerConfigKey];
+    if (preparedProvider === undefined) {
+      throw new Error(`Prepared provider config missing for ${providerConfigKey}`);
+    }
     config.models = {
       ...config.models,
       providers: {
         ...config.models?.providers,
-        [providerConfigKey]: structuredClone(
-          params.preparedConfig.models!.providers![providerConfigKey],
-        ),
+        [providerConfigKey]: structuredClone(preparedProvider),
       },
     };
   }

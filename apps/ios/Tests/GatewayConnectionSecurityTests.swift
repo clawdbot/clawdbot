@@ -570,6 +570,83 @@ import Testing
         #expect(GatewayTLSStore.loadFingerprint(stableID: stableID2) == nil)
     }
 
+    @Test func `TLS fingerprints preserve exact unicode gateway owners`() {
+        let suffix = UUID().uuidString
+        let composedOwner = "gateway-\u{00E9}-\(suffix)"
+        let decomposedOwner = "gateway-e\u{0301}-\(suffix)"
+        defer {
+            GatewayTLSStore.clearFingerprint(stableID: composedOwner)
+            GatewayTLSStore.clearFingerprint(stableID: decomposedOwner)
+        }
+
+        #expect(composedOwner == decomposedOwner)
+        GatewayTLSStore.saveFingerprint("composed-pin", stableID: composedOwner)
+        GatewayTLSStore.saveFingerprint("decomposed-pin", stableID: decomposedOwner)
+
+        #expect(GatewayTLSStore.loadFingerprint(stableID: composedOwner) == "composed-pin")
+        #expect(GatewayTLSStore.loadFingerprint(stableID: decomposedOwner) == "decomposed-pin")
+        #expect(GatewayTLSStore.clearFingerprint(stableID: decomposedOwner))
+        #expect(GatewayTLSStore.loadFingerprint(stableID: composedOwner) == "composed-pin")
+        #expect(GatewayTLSStore.loadFingerprint(stableID: decomposedOwner) == nil)
+    }
+
+    @Test func `ASCII legacy TLS fingerprint migrates to encoded account`() {
+        let stableID = "legacy-tls-owner-\(UUID().uuidString)"
+        let service = "ai.openclaw.tls-pinning"
+        defer {
+            GatewayTLSStore.clearFingerprint(stableID: stableID)
+            GenericPasswordKeychainStore.delete(service: service, account: stableID)
+        }
+        GatewayTLSStore.clearFingerprint(stableID: stableID)
+        #expect(GenericPasswordKeychainStore.saveString(
+            "legacy-pin",
+            service: service,
+            account: stableID))
+
+        #expect(GatewayTLSStore.loadFingerprint(stableID: stableID) == "legacy-pin")
+        #expect(GenericPasswordKeychainStore.loadString(service: service, account: stableID) == nil)
+    }
+
+    @Test func `ambiguous unicode legacy TLS fingerprint fails closed`() {
+        let suffix = UUID().uuidString
+        let composedOwner = "legacy-gateway-\u{00E9}-\(suffix)"
+        let decomposedOwner = "legacy-gateway-e\u{0301}-\(suffix)"
+        let service = "ai.openclaw.tls-pinning"
+        defer {
+            GatewayTLSStore.clearFingerprint(stableID: composedOwner)
+            GatewayTLSStore.clearFingerprint(stableID: decomposedOwner)
+            GenericPasswordKeychainStore.delete(service: service, account: composedOwner)
+        }
+        GatewayTLSStore.clearFingerprint(stableID: composedOwner)
+        GatewayTLSStore.clearFingerprint(stableID: decomposedOwner)
+        #expect(GenericPasswordKeychainStore.saveString(
+            "ambiguous-legacy-pin",
+            service: service,
+            account: composedOwner))
+
+        #expect(GatewayTLSStore.loadFingerprint(stableID: composedOwner) == nil)
+        #expect(GatewayTLSStore.loadFingerprint(stableID: decomposedOwner) == nil)
+    }
+
+    @Test func `legacy TLS account cannot alias encoded owner account`() {
+        let exactOwner = "gateway-\(UUID().uuidString)"
+        let component = Data(exactOwner.utf8).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        let collidingLegacyOwner = "fingerprint.v2.\(component)"
+        defer {
+            GatewayTLSStore.clearFingerprint(stableID: exactOwner)
+            GatewayTLSStore.clearFingerprint(stableID: collidingLegacyOwner)
+        }
+
+        GatewayTLSStore.saveFingerprint("exact-owner-pin", stableID: exactOwner)
+
+        #expect(GatewayTLSStore.loadFingerprint(stableID: collidingLegacyOwner) == nil)
+        #expect(GatewayTLSStore.clearFingerprint(stableID: collidingLegacyOwner))
+        #expect(GatewayTLSStore.loadFingerprint(stableID: exactOwner) == "exact-owner-pin")
+    }
+
     @Test func `trusted pin mismatch can be recovered by replacing stored pin`() {
         let stableID = "test|\(UUID().uuidString)"
         defer { GatewayTLSStore.clearFingerprint(stableID: stableID) }

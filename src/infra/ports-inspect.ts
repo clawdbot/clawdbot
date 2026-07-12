@@ -1,5 +1,6 @@
 // Inspects gateway port listeners and connection state.
 import os from "node:os";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { parseStrictPositiveInteger } from "./parse-finite-number.js";
@@ -182,7 +183,7 @@ function parseSsConnections(output: string, port: number): PortConnection[] {
     };
     const pidMatch = line.match(/pid=(\d+)/);
     if (pidMatch) {
-      const pid = Number.parseInt(pidMatch[1], 10);
+      const pid = Number.parseInt(expectDefined(pidMatch[1], "pid match capture group 1"), 10);
       if (Number.isFinite(pid)) {
         connection.pid = pid;
       }
@@ -330,7 +331,7 @@ function parseSsListeners(output: string, port: number): PortListener[] {
     };
     const pidMatch = line.match(/pid=(\d+)/);
     if (pidMatch) {
-      const pid = Number.parseInt(pidMatch[1], 10);
+      const pid = Number.parseInt(expectDefined(pidMatch[1], "pid match capture group 1"), 10);
       if (Number.isFinite(pid)) {
         listener.pid = pid;
       }

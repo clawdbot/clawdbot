@@ -30,9 +30,10 @@ describe("terminal main session transcript freshness", () => {
   });
 
   async function createEntry(params: {
+    endedAt?: number;
     sessionFile?: string;
     sessionKey?: string;
-    status: SessionEntry["status"];
+    status?: SessionEntry["status"];
     updatedAt: number;
   }): Promise<{ entry: SessionEntry; sessionKey: string }> {
     const sessionKey = params.sessionKey ?? "agent:main:main";
@@ -45,8 +46,9 @@ describe("terminal main session transcript freshness", () => {
           env: { OPENCLAW_STATE_DIR: stateDir },
         })}`,
       sessionId,
-      status: params.status,
       updatedAt: params.updatedAt,
+      ...(params.endedAt !== undefined ? { endedAt: params.endedAt } : {}),
+      ...(params.status !== undefined ? { status: params.status } : {}),
     };
     await upsertSessionEntry({ agentId: "main", sessionKey, storePath }, sessionEntry);
     await appendTranscriptEvent(
@@ -64,8 +66,9 @@ describe("terminal main session transcript freshness", () => {
       entry: {
         ...storedEntry,
         sessionFile: sessionEntry.sessionFile,
-        status: params.status,
         updatedAt: params.updatedAt,
+        ...(params.endedAt !== undefined ? { endedAt: params.endedAt } : {}),
+        ...(params.status !== undefined ? { status: params.status } : {}),
       },
       sessionKey,
     };
@@ -106,6 +109,16 @@ describe("terminal main session transcript freshness", () => {
     });
 
     expect(check(entry, sessionKey)).toBe(false);
+  });
+
+  it("rotates endedAt-only main sessions after a later transcript mutation", async () => {
+    const { entry, sessionKey } = await createEntry({
+      endedAt: Date.now() - 20_000,
+      updatedAt: Date.now() - 10_000,
+    });
+
+    expect(entry.status).toBeUndefined();
+    expect(check(entry, sessionKey)).toBe(true);
   });
 
   it("uses SQLite freshness for entries that still contain legacy transcript paths", async () => {

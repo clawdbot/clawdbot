@@ -1,5 +1,6 @@
 /** Selection helpers for filtering migration plan items before apply. */
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -130,7 +131,9 @@ function resolveSelectedMigrationItemIds(params: {
     const available = params.items
       .map(params.formatSelectionLabel)
       .toSorted((a, b) => a.localeCompare(b));
-    const titleKind = params.kindLabel[0].toUpperCase() + params.kindLabel.slice(1);
+    const titleKind =
+      expectDefined(params.kindLabel[0], "kind label entry at 0").toUpperCase() +
+      params.kindLabel.slice(1);
     const parts: string[] = [];
     if (unknownRefs.length > 0) {
       parts.push(

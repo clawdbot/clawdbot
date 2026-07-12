@@ -1,5 +1,6 @@
 // Plugin contract registry assembles bundled plugin fixtures for shared contract tests.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { loadBundledCapabilityRuntimeRegistry } from "../bundled-capability-runtime.js";
 import { discoverOpenClawPlugins } from "../discovery.js";
@@ -383,7 +384,7 @@ export function requireProviderContractProvider(providerId: string): ProviderPlu
       ...new Map(entries.map((entry) => [entry.provider.id, entry.provider])).values(),
     ];
     if (pluginIds.length === 1 && pluginScopedProviders.length === 1) {
-      return pluginScopedProviders[0];
+      return expectDefined(pluginScopedProviders[0], "plugin scoped providers entry at 0");
     }
     if (providerContractLoadError) {
       throw new Error(

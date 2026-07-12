@@ -448,6 +448,21 @@ struct RootTabsPresentationTests {
         #expect(!embedded.ownsNavigationStack)
     }
 
+    @Test func `settings sidebar route follows navigation top then direct base`() {
+        #expect(RootTabs.visibleSettingsRoute(
+            navigationPath: [.approvals],
+            baseRoute: nil) == .approvals)
+        #expect(RootTabs.visibleSettingsRoute(
+            navigationPath: [.approvals, .notifications],
+            baseRoute: .gateway) == .notifications)
+        #expect(RootTabs.visibleSettingsRoute(
+            navigationPath: [],
+            baseRoute: .approvals) == .approvals)
+        #expect(RootTabs.visibleSettingsRoute(
+            navigationPath: [],
+            baseRoute: nil) == nil)
+    }
+
     @Test func `i pad portrait uses hidden drawer sidebar`() {
         let mode = RootTabs.sidebarLayoutMode(containerSize: CGSize(width: 1024, height: 1366))
 

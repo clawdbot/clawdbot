@@ -1,4 +1,5 @@
 // Discovers gateways over Bonjour and normalizes service records.
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   normalizeStringEntries,
@@ -526,7 +527,9 @@ function parseAvahiBrowse(stdout: string): GatewayBonjourBeacon[] {
     }
 
     if (trimmed.startsWith("txt =")) {
-      const tokens = Array.from(trimmed.matchAll(/"([^"]*)"/g), (m) => m[1]);
+      const tokens = Array.from(trimmed.matchAll(/"([^"]*)"/g), (match) =>
+        expectDefined(match.at(1), "Bonjour TXT token"),
+      );
       const txt = parseTxtTokens(tokens);
       current.txt = Object.keys(txt).length ? txt : undefined;
       if (txt.displayName) {

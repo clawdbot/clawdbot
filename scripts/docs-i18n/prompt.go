@@ -131,7 +131,8 @@ Rules:
 - Preserve Markdown structure exactly: headings, list nesting, tables, links, emphasis, and line-level content order.
 - Preserve HTML/MDX tag names, attribute names, nesting, and structural attribute values exactly. Never change resource or behavior attributes such as “href”, “src”, “id”, “icon”, “path”, “type”, or “default”.
 - Translate user-visible prose inside string-valued component attributes such as “title”, “label”, “description”, and “placeholder”, unless a higher-precedence literal UI-label rule protects that value. Do not translate code-like attribute values.
-- Do not translate or modify code spans, code blocks, config keys, CLI flags, environment variables, commands, or placeholders such as __OC_I18N_####__.
+- Do not translate or modify code spans, executable code or config blocks, config keys, CLI flags, environment variables, commands, or placeholders such as __OC_I18N_####__.
+- Fenced text, transcript, output, and documentation examples are an exception to the preceding block rule: preserve angle-bracket placeholders, square-bracket config/protocol markers, and double-bracket directive tokens exactly, but translate ordinary human prose, including prose surrounding protected directive tokens.
 - Do not alter URLs, anchors, path fragments, or identifier spelling.
 - Do not remove, reorder, merge, summarize, or duplicate content.
 - Use fluent, idiomatic technical language in the target language with a neutral documentation tone; avoid slang and jokes.
