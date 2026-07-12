@@ -1,4 +1,5 @@
 // Tests before-agent-reply hooks in the get-reply pipeline.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HookRunner } from "../../plugins/hooks.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -99,27 +100,32 @@ describe("getReplyFromConfig before_agent_reply wiring", () => {
 
     expect(result).toEqual({ text: "plugin reply" });
     expect(mocks.runBeforeAgentReply).toHaveBeenCalledTimes(1);
-    const [[body, hookCtx]] = mocks.runBeforeAgentReply.mock.calls as unknown as Array<
-      [
-        { cleanedBody?: string },
-        {
-          agentId?: string;
-          sessionKey?: string;
-          sessionId?: string;
-          workspaceDir?: string;
-          messageProvider?: string;
-          trigger?: string;
-          channelId?: string;
-          senderId?: string;
-          chatId?: string;
-          channel?: string;
-          channelContext?: {
-            sender?: { id?: string };
-            chat?: { id?: string };
-          };
-        },
-      ]
-    >;
+    const [body, hookCtx] = expectDefined(
+      (
+        mocks.runBeforeAgentReply.mock.calls as unknown as Array<
+          [
+            { cleanedBody?: string },
+            {
+              agentId?: string;
+              sessionKey?: string;
+              sessionId?: string;
+              workspaceDir?: string;
+              messageProvider?: string;
+              trigger?: string;
+              channelId?: string;
+              senderId?: string;
+              chatId?: string;
+              channel?: string;
+              channelContext?: {
+                sender?: { id?: string };
+                chat?: { id?: string };
+              };
+            },
+          ]
+        >
+      )[0],
+      "(mocks.runBeforeAgentReply.mock.calls as unknown as Array<\n        [\n          { cleanedBody?: string },\n          {\n            agentId?: string;\n            sessionKey?: string;\n            sessionId?: string;\n            workspaceDir?: string;\n            messageProvider?: string;\n            trigger?: string;\n            channelId?: string;\n            senderId?: string;\n            chatId?: string;\n            channel?: string;\n            channelContext?: {\n              sender?: { id?: string };\n              chat?: { id?: string };\n            };\n          },\n        ]\n      >)[0] test invariant",
+    );
     expect(body.cleanedBody).toBe("hello world");
     expect(hookCtx.agentId).toBe("main");
     expect(hookCtx.sessionKey).toBe("agent:main:telegram:-100123");
@@ -146,14 +152,10 @@ describe("getReplyFromConfig before_agent_reply wiring", () => {
 
     await getReplyFromConfig(buildGetReplyGroupCtx(), { continuationTrigger: "work-wake" }, {});
 
-    const [[, hookCtx]] = mocks.runBeforeAgentReply.mock.calls as unknown as Array<
-      [
-        { cleanedBody?: string },
-        {
-          trigger?: string;
-        },
-      ]
-    >;
+    const [, hookCtx] = expectDefined(
+      mocks.runBeforeAgentReply.mock.calls.at(0),
+      "before-agent-reply call",
+    );
     expect(hookCtx.trigger).toBe("heartbeat");
   });
 

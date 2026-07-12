@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
@@ -2544,7 +2545,7 @@ describe("archiveSessionTranscripts", () => {
         expect(archived).toHaveLength(1);
         expect(archived[0]).toContain(".reset.");
         expect(fs.existsSync(transcriptPath)).toBe(false);
-        expect(fs.existsSync(archived[0])).toBe(true);
+        expect(fs.existsSync(expectDefined(archived[0], "archived[0] test invariant"))).toBe(true);
       });
     },
   );

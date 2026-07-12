@@ -1,4 +1,5 @@
 // Verifies marketplace feed and source profile config parsing.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { OpenClawSchema } from "./zod-schema.js";
 
@@ -55,8 +56,9 @@ describe("OpenClawSchema marketplaces config", () => {
       },
     });
 
-    expect(marketplaces?.feeds?.acme.url).toBe("https://packages.acme.example/openclaw/feed");
-    expect(marketplaces?.feeds?.acme.verification).toEqual({
+    const acmeFeed = expectDefined(marketplaces?.feeds?.acme, "Acme marketplace feed");
+    expect(acmeFeed.url).toBe("https://packages.acme.example/openclaw/feed");
+    expect(acmeFeed.verification).toEqual({
       mode: "signed",
       keys: [
         {
@@ -70,7 +72,12 @@ describe("OpenClawSchema marketplaces config", () => {
       ],
       threshold: 2,
     });
-    expect(marketplaces?.sources?.["acme-git"].type).toBe("git");
+    expect(
+      expectDefined(
+        marketplaces?.sources?.["acme-git"],
+        'marketplaces?.sources?.["acme-git"] test invariant',
+      ).type,
+    ).toBe("git");
   });
 
   it.each([

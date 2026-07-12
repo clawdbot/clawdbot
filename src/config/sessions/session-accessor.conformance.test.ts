@@ -24,6 +24,7 @@ import {
   loadExactSessionEntry,
   loadSessionEntry,
   loadTranscriptEvents,
+  onSessionIdentityMutation,
   patchSessionEntry,
   publishTranscriptUpdate,
   readSessionUpdatedAt,
@@ -1525,10 +1526,16 @@ describe("sqlite session normalization", () => {
       }).map((summary) => summary.sessionKey),
     ).toEqual(["agent:main:active", "agent:main:older", "agent:main:stale"]);
 
+    const notify = vi.fn();
+    const unsubscribe = onSessionIdentityMutation(notify);
     await updateSqliteSessionEntry(scopeFor("agent:main:active"), () => ({
       providerOverride: "openai",
     }));
+    unsubscribe();
 
+    expect(new Set(notify.mock.calls.map(([mutation]) => mutation.previous.sessionId))).toEqual(
+      new Set(["older-session", "stale-session"]),
+    );
     expect(
       listSqliteSessionEntries({
         agentId: "main",
@@ -1979,6 +1986,8 @@ describe("sqlite session normalization", () => {
       compactionCheckpoints: [checkpoint],
     });
 
+    const notify = vi.fn();
+    const unsubscribe = onSessionIdentityMutation(notify);
     const result = await branchSqliteCompactionCheckpointSession({
       agentId: "main",
       env,
@@ -1987,6 +1996,7 @@ describe("sqlite session normalization", () => {
       nextKey: branchKey,
       checkpointId: checkpoint.checkpointId,
     });
+    unsubscribe();
     if (result.status !== "created") {
       throw new Error(`expected branch creation, got ${result.status}`);
     }
@@ -1999,6 +2009,11 @@ describe("sqlite session normalization", () => {
     expect(loadSqliteSessionEntry({ ...sourceEntryScope, sessionKey: branchKey })).toEqual(
       result.entry,
     );
+    expect(notify).toHaveBeenCalledWith({
+      kind: "create",
+      previous: { sessionKeys: [] },
+      current: { sessionId: result.entry.sessionId, sessionKeys: [branchKey] },
+    });
     expect(result.entry).toEqual(
       expect.objectContaining({
         label: "Source (checkpoint)",

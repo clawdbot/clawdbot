@@ -4,6 +4,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 
@@ -68,7 +69,10 @@ const invokeDoctorMemoryStatus = async (
     vi.fn(async () => {
       return [];
     });
-  await doctorHandlers["doctor.memory.status"]({
+  await expectDefined(
+    doctorHandlers["doctor.memory.status"],
+    'doctorHandlers["doctor.memory.status"] test invariant',
+  )({
     req: {} as never,
     params: (options?.params ?? {}) as never,
     respond: respond as never,
@@ -87,7 +91,10 @@ const invokeDoctorMemoryDreamDiary = async (
   respond: ReturnType<typeof vi.fn>,
   params: unknown = {},
 ) => {
-  await doctorHandlers["doctor.memory.dreamDiary"]({
+  await expectDefined(
+    doctorHandlers["doctor.memory.dreamDiary"],
+    'doctorHandlers["doctor.memory.dreamDiary"] test invariant',
+  )({
     req: {} as never,
     params: params as never,
     respond: respond as never,
@@ -98,7 +105,10 @@ const invokeDoctorMemoryDreamDiary = async (
 };
 
 const invokeDoctorMemoryBackfillDreamDiary = async (respond: ReturnType<typeof vi.fn>) => {
-  await doctorHandlers["doctor.memory.backfillDreamDiary"]({
+  await expectDefined(
+    doctorHandlers["doctor.memory.backfillDreamDiary"],
+    'doctorHandlers["doctor.memory.backfillDreamDiary"] test invariant',
+  )({
     req: {} as never,
     params: {} as never,
     respond: respond as never,
@@ -109,7 +119,10 @@ const invokeDoctorMemoryBackfillDreamDiary = async (respond: ReturnType<typeof v
 };
 
 const invokeDoctorMemoryResetDreamDiary = async (respond: ReturnType<typeof vi.fn>) => {
-  await doctorHandlers["doctor.memory.resetDreamDiary"]({
+  await expectDefined(
+    doctorHandlers["doctor.memory.resetDreamDiary"],
+    'doctorHandlers["doctor.memory.resetDreamDiary"] test invariant',
+  )({
     req: {} as never,
     params: {} as never,
     respond: respond as never,
@@ -120,7 +133,10 @@ const invokeDoctorMemoryResetDreamDiary = async (respond: ReturnType<typeof vi.f
 };
 
 const invokeDoctorMemoryResetGroundedShortTerm = async (respond: ReturnType<typeof vi.fn>) => {
-  await doctorHandlers["doctor.memory.resetGroundedShortTerm"]({
+  await expectDefined(
+    doctorHandlers["doctor.memory.resetGroundedShortTerm"],
+    'doctorHandlers["doctor.memory.resetGroundedShortTerm"] test invariant',
+  )({
     req: {} as never,
     params: {} as never,
     respond: respond as never,
@@ -131,7 +147,10 @@ const invokeDoctorMemoryResetGroundedShortTerm = async (respond: ReturnType<type
 };
 
 const invokeDoctorMemoryRepairDreamingArtifacts = async (respond: ReturnType<typeof vi.fn>) => {
-  await doctorHandlers["doctor.memory.repairDreamingArtifacts"]({
+  await expectDefined(
+    doctorHandlers["doctor.memory.repairDreamingArtifacts"],
+    'doctorHandlers["doctor.memory.repairDreamingArtifacts"] test invariant',
+  )({
     req: {} as never,
     params: {} as never,
     respond: respond as never,
@@ -142,7 +161,10 @@ const invokeDoctorMemoryRepairDreamingArtifacts = async (respond: ReturnType<typ
 };
 
 const invokeDoctorMemoryDedupeDreamDiary = async (respond: ReturnType<typeof vi.fn>) => {
-  await doctorHandlers["doctor.memory.dedupeDreamDiary"]({
+  await expectDefined(
+    doctorHandlers["doctor.memory.dedupeDreamDiary"],
+    'doctorHandlers["doctor.memory.dedupeDreamDiary"] test invariant',
+  )({
     req: {} as never,
     params: {} as never,
     respond: respond as never,
@@ -156,7 +178,10 @@ const invokeDoctorMemoryRemHarness = async (
   respond: ReturnType<typeof vi.fn>,
   params: Record<string, unknown> = {},
 ) => {
-  await doctorHandlers["doctor.memory.remHarness"]({
+  await expectDefined(
+    doctorHandlers["doctor.memory.remHarness"],
+    'doctorHandlers["doctor.memory.remHarness"] test invariant',
+  )({
     req: {} as never,
     params: params as never,
     respond: respond as never,
@@ -1350,7 +1375,10 @@ describe("doctor.memory.dreamDiary", () => {
         inputPaths: [path.join(workspaceDir, "memory", "2026-02-19.md")],
       });
       const writeInput = mockCallArg(writeBackfillDiaryEntries);
-      const entry = (writeInput.entries as Array<Record<string, unknown>>)[0];
+      const entry = expectDefined(
+        (writeInput.entries as Array<Record<string, unknown>>)[0],
+        "(writeInput.entries as Array<Record<string, unknown>>)[0] test invariant",
+      );
       expect(entry.bodyLines).toContain("What Happened");
       expect(entry.bodyLines).toContain("1. Bunji — partner");
       expectRecordFields(respondPayload(respond), {
@@ -1398,7 +1426,10 @@ describe("doctor.memory.dreamDiary", () => {
       });
       const writeInput = mockCallArg(writeBackfillDiaryEntries);
       expect(writeInput.workspaceDir).toBe(workspaceDir);
-      const entry = (writeInput.entries as Array<Record<string, unknown>>)[0];
+      const entry = expectDefined(
+        (writeInput.entries as Array<Record<string, unknown>>)[0],
+        "(writeInput.entries as Array<Record<string, unknown>>)[0] test invariant",
+      );
       expectRecordFields(entry, {
         isoDay: "2026-02-19",
         sourcePath,

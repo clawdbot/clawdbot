@@ -1,5 +1,7 @@
 // Device method tests cover pairing approval/rejection, paired-device lookup,
 // token rotation/revocation, and operator scope enforcement.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   onInternalDiagnosticEvent,
@@ -153,7 +155,10 @@ describe("deviceHandlers", () => {
     removePairedDeviceMock.mockResolvedValue({ deviceId: "device-1", removedAtMs: 123 });
     const opts = createOptions("device.pair.remove", { deviceId: " device-1 " });
 
-    await deviceHandlers["device.pair.remove"](opts);
+    await expectDefined(
+      deviceHandlers["device.pair.remove"],
+      'deviceHandlers["device.pair.remove"] test invariant',
+    )(opts);
     await Promise.resolve();
 
     expect(removePairedDeviceMock).toHaveBeenCalledWith(" device-1 ");
@@ -180,7 +185,10 @@ describe("deviceHandlers", () => {
       expect(disconnect).not.toHaveBeenCalled();
     });
 
-    await deviceHandlers["device.pair.remove"](opts);
+    await expectDefined(
+      deviceHandlers["device.pair.remove"],
+      'deviceHandlers["device.pair.remove"] test invariant',
+    )(opts);
     await Promise.resolve();
 
     expect(respond).toHaveBeenCalled();
@@ -191,7 +199,10 @@ describe("deviceHandlers", () => {
     removePairedDeviceMock.mockResolvedValue(null);
     const opts = createOptions("device.pair.remove", { deviceId: "device-1" });
 
-    await deviceHandlers["device.pair.remove"](opts);
+    await expectDefined(
+      deviceHandlers["device.pair.remove"],
+      'deviceHandlers["device.pair.remove"] test invariant',
+    )(opts);
 
     expect(opts.context.disconnectClientsForDevice).not.toHaveBeenCalled();
     expectRespondedErrorMessage(opts, "unknown deviceId");
@@ -204,7 +215,10 @@ describe("deviceHandlers", () => {
       { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
     );
 
-    await deviceHandlers["device.pair.remove"](opts);
+    await expectDefined(
+      deviceHandlers["device.pair.remove"],
+      'deviceHandlers["device.pair.remove"] test invariant',
+    )(opts);
 
     expect(removePairedDeviceMock).not.toHaveBeenCalled();
     expectRespondedErrorMessage(opts, "device pairing removal denied");
@@ -218,7 +232,10 @@ describe("deviceHandlers", () => {
       { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
     );
 
-    await deviceHandlers["device.pair.remove"](opts);
+    await expectDefined(
+      deviceHandlers["device.pair.remove"],
+      'deviceHandlers["device.pair.remove"] test invariant',
+    )(opts);
 
     expect(removePairedDeviceMock).toHaveBeenCalledWith(" device-1 ");
     expect(opts.respond).toHaveBeenCalledWith(
@@ -255,7 +272,10 @@ describe("deviceHandlers", () => {
       { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
     );
 
-    await deviceHandlers["device.pair.remove"](opts);
+    await expectDefined(
+      deviceHandlers["device.pair.remove"],
+      'deviceHandlers["device.pair.remove"] test invariant',
+    )(opts);
 
     expect(removePairedDeviceMock).not.toHaveBeenCalled();
     expect(opts.context.disconnectClientsForDevice).not.toHaveBeenCalled();
@@ -274,7 +294,10 @@ describe("deviceHandlers", () => {
     const captured = captureSecurityEvents();
 
     try {
-      await deviceHandlers["device.token.revoke"](opts);
+      await expectDefined(
+        deviceHandlers["device.token.revoke"],
+        'deviceHandlers["device.token.revoke"] test invariant',
+      )(opts);
       await Promise.resolve();
     } finally {
       captured.stop();
@@ -321,7 +344,10 @@ describe("deviceHandlers", () => {
       { client: createClient(["operator.admin"], "device-1", { isDeviceTokenAuth: true }) },
     );
 
-    await deviceHandlers["device.token.revoke"](opts);
+    await expectDefined(
+      deviceHandlers["device.token.revoke"],
+      'deviceHandlers["device.token.revoke"] test invariant',
+    )(opts);
 
     expect(revokeDeviceTokenMock).toHaveBeenCalledWith({
       deviceId: "device-2",
@@ -344,7 +370,10 @@ describe("deviceHandlers", () => {
     const captured = captureSecurityEvents();
 
     try {
-      await deviceHandlers["device.token.revoke"](opts);
+      await expectDefined(
+        deviceHandlers["device.token.revoke"],
+        'deviceHandlers["device.token.revoke"] test invariant',
+      )(opts);
     } finally {
       captured.stop();
     }
@@ -385,7 +414,10 @@ describe("deviceHandlers", () => {
       { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
     );
 
-    await deviceHandlers["device.token.revoke"](opts);
+    await expectDefined(
+      deviceHandlers["device.token.revoke"],
+      'deviceHandlers["device.token.revoke"] test invariant',
+    )(opts);
 
     expect(revokeDeviceTokenMock).toHaveBeenCalledWith({
       deviceId: " device-1 ",
@@ -418,7 +450,10 @@ describe("deviceHandlers", () => {
       },
     );
 
-    await deviceHandlers["device.token.rotate"](opts);
+    await expectDefined(
+      deviceHandlers["device.token.rotate"],
+      'deviceHandlers["device.token.rotate"] test invariant',
+    )(opts);
     await Promise.resolve();
 
     expect(rotateDeviceTokenMock).toHaveBeenCalledWith({
@@ -462,7 +497,10 @@ describe("deviceHandlers", () => {
       expect(disconnect).not.toHaveBeenCalled();
     });
 
-    await deviceHandlers["device.token.rotate"](opts);
+    await expectDefined(
+      deviceHandlers["device.token.rotate"],
+      'deviceHandlers["device.token.rotate"] test invariant',
+    )(opts);
     await Promise.resolve();
 
     expect(respond).toHaveBeenCalled();
@@ -491,7 +529,10 @@ describe("deviceHandlers", () => {
       expect(disconnect).not.toHaveBeenCalled();
     });
 
-    await deviceHandlers["device.token.revoke"](opts);
+    await expectDefined(
+      deviceHandlers["device.token.revoke"],
+      'deviceHandlers["device.token.revoke"] test invariant',
+    )(opts);
     await Promise.resolve();
 
     expect(respond).toHaveBeenCalled();
@@ -511,7 +552,10 @@ describe("deviceHandlers", () => {
       { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
     );
 
-    await deviceHandlers["device.token.rotate"](opts);
+    await expectDefined(
+      deviceHandlers["device.token.rotate"],
+      'deviceHandlers["device.token.rotate"] test invariant',
+    )(opts);
 
     expect(rotateDeviceTokenMock).toHaveBeenCalledWith({
       deviceId: " device-1 ",
@@ -559,8 +603,14 @@ describe("deviceHandlers", () => {
       { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
     );
 
-    await deviceHandlers["device.token.rotate"](rotateOpts);
-    await deviceHandlers["device.token.revoke"](revokeOpts);
+    await expectDefined(
+      deviceHandlers["device.token.rotate"],
+      'deviceHandlers["device.token.rotate"] test invariant',
+    )(rotateOpts);
+    await expectDefined(
+      deviceHandlers["device.token.revoke"],
+      'deviceHandlers["device.token.revoke"] test invariant',
+    )(revokeOpts);
 
     expect(rotateDeviceTokenMock).toHaveBeenCalledWith({
       deviceId: "device-1",
@@ -608,7 +658,10 @@ describe("deviceHandlers", () => {
       },
     );
 
-    await deviceHandlers["device.token.rotate"](opts);
+    await expectDefined(
+      deviceHandlers["device.token.rotate"],
+      'deviceHandlers["device.token.rotate"] test invariant',
+    )(opts);
 
     expect(opts.respond).toHaveBeenCalledWith(
       true,
@@ -630,7 +683,10 @@ describe("deviceHandlers", () => {
       { client: createClient(["operator.admin"], "admin-device", { isDeviceTokenAuth: true }) },
     );
 
-    await deviceHandlers["device.token.rotate"](opts);
+    await expectDefined(
+      deviceHandlers["device.token.rotate"],
+      'deviceHandlers["device.token.rotate"] test invariant',
+    )(opts);
 
     expect(rotateDeviceTokenMock).toHaveBeenCalledWith({
       deviceId: "device-1",
@@ -659,7 +715,10 @@ describe("deviceHandlers", () => {
       },
     );
 
-    await deviceHandlers["device.token.rotate"](opts);
+    await expectDefined(
+      deviceHandlers["device.token.rotate"],
+      'deviceHandlers["device.token.rotate"] test invariant',
+    )(opts);
 
     expect(rotateDeviceTokenMock).not.toHaveBeenCalled();
     expect(opts.context.disconnectClientsForDevice).not.toHaveBeenCalled();
@@ -673,7 +732,10 @@ describe("deviceHandlers", () => {
       role: "operator",
     });
 
-    await deviceHandlers["device.token.revoke"](opts);
+    await expectDefined(
+      deviceHandlers["device.token.revoke"],
+      'deviceHandlers["device.token.revoke"] test invariant',
+    )(opts);
 
     expect(opts.context.disconnectClientsForDevice).not.toHaveBeenCalled();
     expectRespondedErrorMessage(opts, "device token revocation denied");
@@ -708,7 +770,10 @@ describe("deviceHandlers", () => {
       },
     );
 
-    await deviceHandlers["device.pair.list"](opts);
+    await expectDefined(
+      deviceHandlers["device.pair.list"],
+      'deviceHandlers["device.pair.list"] test invariant',
+    )(opts);
 
     expect(opts.respond).toHaveBeenCalledWith(
       true,
@@ -750,7 +815,10 @@ describe("deviceHandlers", () => {
       },
     );
 
-    await deviceHandlers["device.pair.list"](opts);
+    await expectDefined(
+      deviceHandlers["device.pair.list"],
+      'deviceHandlers["device.pair.list"] test invariant',
+    )(opts);
 
     expect(opts.respond).toHaveBeenCalledWith(
       true,
@@ -795,7 +863,10 @@ describe("deviceHandlers", () => {
       },
     );
 
-    await deviceHandlers["device.pair.list"](opts);
+    await expectDefined(
+      deviceHandlers["device.pair.list"],
+      'deviceHandlers["device.pair.list"] test invariant',
+    )(opts);
 
     expect(opts.respond).toHaveBeenCalledWith(
       true,
@@ -832,7 +903,10 @@ describe("deviceHandlers", () => {
       },
     );
 
-    await deviceHandlers["device.pair.list"](opts);
+    await expectDefined(
+      deviceHandlers["device.pair.list"],
+      'deviceHandlers["device.pair.list"] test invariant',
+    )(opts);
 
     expect(opts.respond).toHaveBeenCalledWith(
       true,
@@ -873,7 +947,10 @@ describe("deviceHandlers", () => {
       opts.context as { hasConnectedClientsForDevice?: (deviceId: string) => boolean }
     ).hasConnectedClientsForDevice = (deviceId) => deviceId === "device-2";
 
-    await deviceHandlers["device.pair.list"](opts);
+    await expectDefined(
+      deviceHandlers["device.pair.list"],
+      'deviceHandlers["device.pair.list"] test invariant',
+    )(opts);
 
     const respond = opts.respond as ReturnType<typeof vi.fn>;
     const payload = respond.mock.calls[0]?.[1] as {
@@ -898,7 +975,10 @@ describe("deviceHandlers", () => {
       { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
     );
 
-    await deviceHandlers["device.pair.approve"](opts);
+    await expectDefined(
+      deviceHandlers["device.pair.approve"],
+      'deviceHandlers["device.pair.approve"] test invariant',
+    )(opts);
 
     expect(approveDevicePairingMock).not.toHaveBeenCalled();
     expectRespondedErrorMessage(opts, "device pairing approval denied");
@@ -927,7 +1007,10 @@ describe("deviceHandlers", () => {
     const captured = captureSecurityEvents();
 
     try {
-      await deviceHandlers["device.pair.approve"](opts);
+      await expectDefined(
+        deviceHandlers["device.pair.approve"],
+        'deviceHandlers["device.pair.approve"] test invariant',
+      )(opts);
     } finally {
       captured.stop();
     }
@@ -994,7 +1077,10 @@ describe("deviceHandlers", () => {
       { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
     );
 
-    await deviceHandlers["device.pair.approve"](opts);
+    await expectDefined(
+      deviceHandlers["device.pair.approve"],
+      'deviceHandlers["device.pair.approve"] test invariant',
+    )(opts);
 
     expect(approveDevicePairingMock).toHaveBeenCalledWith("req-1", {
       callerScopes: ["operator.pairing"],
@@ -1044,7 +1130,10 @@ describe("deviceHandlers", () => {
       { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: false }) },
     );
 
-    await deviceHandlers["device.pair.approve"](opts);
+    await expectDefined(
+      deviceHandlers["device.pair.approve"],
+      'deviceHandlers["device.pair.approve"] test invariant',
+    )(opts);
 
     expect(getPendingDevicePairingMock).toHaveBeenCalledWith("req-1");
     expect(approveDevicePairingMock).toHaveBeenCalledWith("req-1", {
@@ -1085,7 +1174,10 @@ describe("deviceHandlers", () => {
     const captured = captureSecurityEvents();
 
     try {
-      await deviceHandlers["device.pair.approve"](opts);
+      await expectDefined(
+        deviceHandlers["device.pair.approve"],
+        'deviceHandlers["device.pair.approve"] test invariant',
+      )(opts);
     } finally {
       captured.stop();
     }
@@ -1122,7 +1214,10 @@ describe("deviceHandlers", () => {
       { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: false }) },
     );
 
-    await deviceHandlers["device.pair.approve"](opts);
+    await expectDefined(
+      deviceHandlers["device.pair.approve"],
+      'deviceHandlers["device.pair.approve"] test invariant',
+    )(opts);
 
     expect(approveDevicePairingMock).not.toHaveBeenCalled();
     expectRespondedErrorMessage(opts, "device pairing approval denied");
@@ -1144,7 +1239,10 @@ describe("deviceHandlers", () => {
       { client: createClient(["operator.pairing"]) },
     );
 
-    await deviceHandlers["device.pair.approve"](opts);
+    await expectDefined(
+      deviceHandlers["device.pair.approve"],
+      'deviceHandlers["device.pair.approve"] test invariant',
+    )(opts);
 
     expect(approveDevicePairingMock).not.toHaveBeenCalled();
     expectRespondedErrorMessage(opts, "device pairing approval denied");
@@ -1158,7 +1256,10 @@ describe("deviceHandlers", () => {
       { client: createClient(["operator.pairing"]) },
     );
 
-    await deviceHandlers["device.pair.approve"](opts);
+    await expectDefined(
+      deviceHandlers["device.pair.approve"],
+      'deviceHandlers["device.pair.approve"] test invariant',
+    )(opts);
 
     expect(approveDevicePairingMock).not.toHaveBeenCalled();
     expectRespondedErrorMessage(opts, "device pairing approval denied");
@@ -1179,7 +1280,10 @@ describe("deviceHandlers", () => {
       },
     );
 
-    await deviceHandlers["device.pair.reject"](opts);
+    await expectDefined(
+      deviceHandlers["device.pair.reject"],
+      'deviceHandlers["device.pair.reject"] test invariant',
+    )(opts);
 
     expect(rejectDevicePairingMock).not.toHaveBeenCalled();
     expectRespondedErrorMessage(opts, "device pairing rejection denied");
@@ -1205,7 +1309,10 @@ describe("deviceHandlers", () => {
       },
     );
 
-    await deviceHandlers["device.pair.reject"](opts);
+    await expectDefined(
+      deviceHandlers["device.pair.reject"],
+      'deviceHandlers["device.pair.reject"] test invariant',
+    )(opts);
 
     expect(rejectDevicePairingMock).toHaveBeenCalledWith("req-1");
     expect(opts.respond).toHaveBeenCalledWith(
@@ -1233,7 +1340,10 @@ describe("deviceHandlers", () => {
     const captured = captureSecurityEvents();
 
     try {
-      await deviceHandlers["device.pair.reject"](opts);
+      await expectDefined(
+        deviceHandlers["device.pair.reject"],
+        'deviceHandlers["device.pair.reject"] test invariant',
+      )(opts);
     } finally {
       captured.stop();
     }
@@ -1269,7 +1379,10 @@ describe("deviceHandlers", () => {
       label: "  Kitchen Mac  ",
     });
 
-    await deviceHandlers["device.pair.rename"](opts);
+    await expectDefined(
+      deviceHandlers["device.pair.rename"],
+      'deviceHandlers["device.pair.rename"] test invariant',
+    )(opts);
 
     expect(updatePairedDeviceMetadataMock).toHaveBeenCalledWith("device-1", {
       operatorLabel: "Kitchen Mac",
@@ -1291,7 +1404,10 @@ describe("deviceHandlers", () => {
       { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
     );
 
-    await deviceHandlers["device.pair.rename"](opts);
+    await expectDefined(
+      deviceHandlers["device.pair.rename"],
+      'deviceHandlers["device.pair.rename"] test invariant',
+    )(opts);
 
     expect(updatePairedDeviceMetadataMock).not.toHaveBeenCalled();
     expectRespondedErrorMessage(opts, "device pairing rename denied");
@@ -1304,7 +1420,10 @@ describe("deviceHandlers", () => {
       label: "Ghost",
     });
 
-    await deviceHandlers["device.pair.rename"](opts);
+    await expectDefined(
+      deviceHandlers["device.pair.rename"],
+      'deviceHandlers["device.pair.rename"] test invariant',
+    )(opts);
 
     expect(updatePairedDeviceMetadataMock).toHaveBeenCalledWith("missing-device", {
       operatorLabel: "Ghost",
@@ -1318,7 +1437,10 @@ describe("deviceHandlers", () => {
       label: "   ",
     });
 
-    await deviceHandlers["device.pair.rename"](opts);
+    await expectDefined(
+      deviceHandlers["device.pair.rename"],
+      'deviceHandlers["device.pair.rename"] test invariant',
+    )(opts);
 
     expect(updatePairedDeviceMetadataMock).not.toHaveBeenCalled();
     expectRespondedErrorMessage(opts, "label required");
@@ -1330,7 +1452,10 @@ describe("deviceHandlers", () => {
       label: "x".repeat(65),
     });
 
-    await deviceHandlers["device.pair.rename"](opts);
+    await expectDefined(
+      deviceHandlers["device.pair.rename"],
+      'deviceHandlers["device.pair.rename"] test invariant',
+    )(opts);
 
     expect(updatePairedDeviceMetadataMock).not.toHaveBeenCalled();
     const respond = opts.respond as ReturnType<typeof vi.fn>;

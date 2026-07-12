@@ -1,6 +1,8 @@
 /**
  * Tests shared gateway auth behavior across config method updates.
  */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
@@ -175,7 +177,10 @@ async function runConfigPatch(
     },
   });
 
-  await configHandlers["config.patch"](options);
+  await expectDefined(
+    configHandlers["config.patch"],
+    'configHandlers["config.patch"] test invariant',
+  )(options);
   await flushConfigHandlerMicrotasks();
   return { disconnectClientsUsingSharedGatewayAuth };
 }
@@ -234,7 +239,10 @@ describe("config shared auth disconnects", () => {
       },
     });
 
-    await configHandlers["config.set"](options);
+    await expectDefined(
+      configHandlers["config.set"],
+      'configHandlers["config.set"] test invariant',
+    )(options);
     await flushConfigHandlerMicrotasks();
 
     expect(writeConfigFileMock).toHaveBeenCalledWith(submittedConfig, GATEWAY_CONFIG_WRITE_OPTIONS);
@@ -261,7 +269,10 @@ describe("config shared auth disconnects", () => {
       },
     });
 
-    await configHandlers["config.set"](options);
+    await expectDefined(
+      configHandlers["config.set"],
+      'configHandlers["config.set"] test invariant',
+    )(options);
     await flushConfigHandlerMicrotasks();
 
     expect(writeConfigFileMock).toHaveBeenCalledWith(nextConfig, GATEWAY_CONFIG_WRITE_OPTIONS);
@@ -390,7 +401,10 @@ describe("config shared auth disconnects", () => {
       },
     });
 
-    await configHandlers["config.patch"](options);
+    await expectDefined(
+      configHandlers["config.patch"],
+      'configHandlers["config.patch"] test invariant',
+    )(options);
     await flushConfigHandlerMicrotasks();
 
     expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();

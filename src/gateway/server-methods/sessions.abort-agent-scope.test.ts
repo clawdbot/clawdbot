@@ -1,6 +1,8 @@
 /**
  * Tests that session abort requests stay scoped to the targeted agent.
  */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -115,7 +117,10 @@ async function callSessions(
   },
 ): Promise<RespondFn> {
   const respond = options.respond ?? createRespond();
-  await sessionsHandlers[method]({
+  await expectDefined(
+    sessionsHandlers[method],
+    "sessionsHandlers[method] test invariant",
+  )({
     req: { id: options.reqId ?? `req-${method}` } as never,
     params,
     respond,

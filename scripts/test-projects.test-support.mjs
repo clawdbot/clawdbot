@@ -291,6 +291,7 @@ const BROAD_TOOLING_SCRIPT_TEST_PATTERNS = new Set([
   "test/scripts/*.test.ts",
 ]);
 const BROAD_TOOLING_SCRIPT_TEST_TARGET_CHUNK_SIZE = 60;
+const FULL_SUITE_AGENTS_CORE_TEST_TARGET_CHUNK_COUNT = 6;
 const FULL_SUITE_TOOLING_TEST_TARGET_CHUNK_SIZE = 2;
 const FULL_SUITE_UNIT_FAST_TEST_TARGET_CHUNK_SIZE = 70;
 const TUI_VITEST_CONFIG = "test/vitest/vitest.tui.config.ts";
@@ -2515,6 +2516,18 @@ function listUnitFastFullSuiteTestTargets() {
   return getUnitFastTestFiles().filter((file) => !timerTargets.has(file));
 }
 
+function listAgentsCoreFullSuiteTestTargets(cwd) {
+  const agentsDir = path.join(cwd, "src/agents");
+  if (!fs.existsSync(agentsDir)) {
+    return [];
+  }
+  return fs
+    .readdirSync(agentsDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".test.ts"))
+    .map((entry) => `src/agents/${entry.name}`)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
 function createBroadToolingScriptPlans({ config, forwardedArgs, includePatterns, watchMode, cwd }) {
   if (watchMode || config !== TOOLING_VITEST_CONFIG || !includePatterns) {
     return null;
@@ -4232,7 +4245,14 @@ export function buildFullSuiteVitestRunPlans(args, cwd = process.cwd()) {
     return configs.flatMap((config) => {
       if (expandShard && targetArgs.length === 0) {
         let chunks = [];
-        if (config === UNIT_FAST_VITEST_CONFIG) {
+        if (config === AGENTS_CORE_VITEST_CONFIG) {
+          // A single non-isolated agents-core process grows until its worker can
+          // exit under the full-suite memory load. Bound each process lifetime.
+          chunks = splitTargetChunks(
+            listAgentsCoreFullSuiteTestTargets(cwd),
+            FULL_SUITE_AGENTS_CORE_TEST_TARGET_CHUNK_COUNT,
+          );
+        } else if (config === UNIT_FAST_VITEST_CONFIG) {
           const targets = listUnitFastFullSuiteTestTargets();
           const chunkCount = Math.ceil(
             targets.length / FULL_SUITE_UNIT_FAST_TEST_TARGET_CHUNK_SIZE,

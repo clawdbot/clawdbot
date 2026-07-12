@@ -1,5 +1,6 @@
 // Gmail watcher tests cover watcher events and Gmail hook message flow.
 import { EventEmitter } from "node:events";
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -224,12 +225,16 @@ describe("startGmailWatcher", () => {
     // First start
     await startGmailWatcher(createGmailConfig());
     expect(spawnedChildren).toHaveLength(1);
-    expect(spawnedChildren[0].kill).not.toHaveBeenCalled();
+    expect(
+      expectDefined(spawnedChildren[0], "spawnedChildren[0] test invariant").kill,
+    ).not.toHaveBeenCalled();
 
     // Second start (re-entry) should kill the first process
     await startGmailWatcher(createGmailConfig());
     expect(spawnedChildren).toHaveLength(2);
-    expect(spawnedChildren[0].kill).toHaveBeenCalledWith("SIGTERM");
+    expect(
+      expectDefined(spawnedChildren[0], "spawnedChildren[0] test invariant").kill,
+    ).toHaveBeenCalledWith("SIGTERM");
   });
 
   it("clears existing renewInterval on re-entry to prevent interval leak", async () => {
@@ -347,7 +352,7 @@ describe("startGmailWatcher", () => {
       expect(spawnedChildren).toHaveLength(1);
 
       // Process crashes (exit code 1). This queues a 5s respawn timeout.
-      spawnedChildren[0].emit("exit", 1, null);
+      expectDefined(spawnedChildren[0], "spawnedChildren[0] test invariant").emit("exit", 1, null);
 
       // Before the 5s timer fires, a config reload triggers re-entry.
       // The re-entry guard should cancel the stale respawn timeout.

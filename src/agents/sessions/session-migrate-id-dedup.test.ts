@@ -1,6 +1,7 @@
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 
 const { uuidQueue } = vi.hoisted(() => ({ uuidQueue: [] as string[] }));
@@ -65,8 +66,12 @@ describe("v1 session migration id assignment", () => {
     expect(messages).toHaveLength(2);
     const ids = messages.map((m) => m.id);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(messages[1].parentId).toBe(messages[0].id);
-    expect(messages[1].parentId).not.toBe(messages[1].id);
+    expect(expectDefined(messages[1], "messages[1] test invariant").parentId).toBe(
+      expectDefined(messages[0], "messages[0] test invariant").id,
+    );
+    expect(expectDefined(messages[1], "messages[1] test invariant").parentId).not.toBe(
+      expectDefined(messages[1], "messages[1] test invariant").id,
+    );
   });
 
   it("preserves compaction indexes across opaque rows", () => {

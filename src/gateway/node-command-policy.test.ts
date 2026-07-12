@@ -313,6 +313,8 @@ describe("gateway/node-command-policy", () => {
     });
     expect(iosAllowlist.has("device.info")).toBe(true);
     expect(iosAllowlist.has("photos.latest")).toBe(true);
+    expect(iosAllowlist.has("watch.status")).toBe(true);
+    expect(iosAllowlist.has("watch.notify")).toBe(true);
     expect(iosAllowlist.has("system.run")).toBe(false);
 
     const ipadAllowlist = resolveNodeCommandAllowlist(cfg, {
@@ -321,6 +323,8 @@ describe("gateway/node-command-policy", () => {
     });
     expect(ipadAllowlist.has("device.info")).toBe(true);
     expect(ipadAllowlist.has("motion.activity")).toBe(true);
+    expect(ipadAllowlist.has("watch.status")).toBe(false);
+    expect(ipadAllowlist.has("watch.notify")).toBe(false);
     expect(ipadAllowlist.has("system.run")).toBe(false);
 
     const macAllowlist = resolveNodeCommandAllowlist(cfg, {
@@ -338,6 +342,8 @@ describe("gateway/node-command-policy", () => {
     expect(watchAllowlist.has("device.info")).toBe(true);
     expect(watchAllowlist.has("device.status")).toBe(true);
     expect(watchAllowlist.has("system.notify")).toBe(true);
+    expect(watchAllowlist.has("watch.status")).toBe(false);
+    expect(watchAllowlist.has("watch.notify")).toBe(false);
     expect(watchAllowlist.has("camera.list")).toBe(false);
     expect(watchAllowlist.has("system.run")).toBe(false);
   });

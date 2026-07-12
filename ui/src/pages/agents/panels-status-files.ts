@@ -505,11 +505,14 @@ export function renderAgentFiles(params: {
                 ${files.map((file) => {
                   const isActive = active === file.name;
                   const label = file.name.replace(/\.md$/i, "");
+                  // File reads are serialized; changing the active tab mid-read would
+                  // expose an editor whose content request was never accepted.
                   return html`
                     <button
                       class="agent-tab ${isActive ? "active" : ""} ${file.missing
                         ? "agent-tab--missing"
                         : ""}"
+                      ?disabled=${params.agentFilesLoading}
                       @click=${() => params.onSelectFile(file.name)}
                     >
                       ${label}${file.missing

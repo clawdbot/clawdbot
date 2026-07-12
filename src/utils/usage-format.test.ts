@@ -3,6 +3,7 @@ import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -886,7 +887,7 @@ describe("usage-format", () => {
     });
     const tiers1 = requireTieredPricing(requireCostConfig(cost1, "open-ended"), "open-ended");
     expect(tiers1).toHaveLength(2);
-    expect(tiers1[1].range).toEqual([32000, Infinity]);
+    expect(expectDefined(tiers1[1], "tiers1[1] test invariant").range).toEqual([32000, Infinity]);
 
     // [32000, -1] should also be normalized to [32000, Infinity]
     const cost2 = resolveModelCostConfig({
@@ -895,7 +896,7 @@ describe("usage-format", () => {
     });
     const tiers2 = requireTieredPricing(requireCostConfig(cost2, "negative-end"), "negative-end");
     expect(tiers2).toHaveLength(2);
-    expect(tiers2[1].range).toEqual([32000, Infinity]);
+    expect(expectDefined(tiers2[1], "tiers2[1] test invariant").range).toEqual([32000, Infinity]);
   });
 
   it("resolves tiered pricing from models.json", async () => {
@@ -942,8 +943,8 @@ describe("usage-format", () => {
     const tiers = requireTieredPricing(requireCostConfig(cost, "models.json"), "models.json");
 
     expect(tiers).toHaveLength(2);
-    expect(tiers[0].range).toEqual([0, 32000]);
-    expect(tiers[1].input).toBe(0.7);
+    expect(expectDefined(tiers[0], "tiers[0] test invariant").range).toEqual([0, 32000]);
+    expect(expectDefined(tiers[1], "tiers[1] test invariant").input).toBe(0.7);
   });
 
   it("resolves tiered pricing from cached gateway (LiteLLM)", () => {

@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CONTINUATION_SIGNAL_KINDS,
@@ -440,7 +441,7 @@ describe("continuation-tracer :: emitContinuationWorkSpan helper", () => {
       reason: "more work to do",
     });
     expect(spans).toHaveLength(1);
-    const span = spans[0];
+    const span = expectDefined(spans.at(0), "work span");
     expect(span.name).toBe("continuation.work");
     expect(span.options?.attributes).toEqual({
       "delay.ms": 30000,
@@ -469,7 +470,7 @@ describe("continuation-tracer :: emitContinuationWorkSpan helper", () => {
     });
 
     expect(spans).toHaveLength(1);
-    expect(spans[0].options?.traceparent).toBe(traceparent);
+    expect(expectDefined(spans.at(0), "work span").options?.traceparent).toBe(traceparent);
   });
 
   it("omits chain.id and reason metadata when not provided", () => {
@@ -480,7 +481,7 @@ describe("continuation-tracer :: emitContinuationWorkSpan helper", () => {
       chainStepRemaining: 0,
       delayMs: 5000,
     });
-    expect(spans[0].options?.attributes).toEqual({
+    expect(expectDefined(spans.at(0), "work span").options?.attributes).toEqual({
       "delay.ms": 5000,
       "chain.step.remaining": 0,
     });
@@ -496,7 +497,8 @@ describe("continuation-tracer :: emitContinuationWorkSpan helper", () => {
       delayMs: 100,
       reason: long,
     });
-    const attrs = spans[0].options?.attributes as ContinuationSpanAttrs;
+    const attrs = expectDefined(spans.at(0), "work span").options
+      ?.attributes as ContinuationSpanAttrs;
     expectSafeReasonAttributes(attrs, long);
   });
 
@@ -504,14 +506,28 @@ describe("continuation-tracer :: emitContinuationWorkSpan helper", () => {
     const { tracer, spans } = makeRecordingTracer();
     setContinuationTracer(tracer);
     emitContinuationWorkSpan({ chainId: undefined, chainStepRemaining: 0, delayMs: 1234.7 });
-    expect((spans[0].options!.attributes as ContinuationSpanAttrs)["delay.ms"]).toBe(1235);
+    expect(
+      (
+        expectDefined(
+          expectDefined(spans.at(0), "work span").options?.attributes,
+          "work span attributes",
+        ) as ContinuationSpanAttrs
+      )["delay.ms"],
+    ).toBe(1235);
   });
 
   it("clamps negative chainStepRemaining to 0", () => {
     const { tracer, spans } = makeRecordingTracer();
     setContinuationTracer(tracer);
     emitContinuationWorkSpan({ chainId: undefined, chainStepRemaining: -3, delayMs: 0 });
-    expect((spans[0].options!.attributes as ContinuationSpanAttrs)["chain.step.remaining"]).toBe(0);
+    expect(
+      (
+        expectDefined(
+          expectDefined(spans.at(0), "work span").options?.attributes,
+          "work span attributes",
+        ) as ContinuationSpanAttrs
+      )["chain.step.remaining"],
+    ).toBe(0);
   });
 
   it("swallows tracer errors and forwards them to the log callback", () => {
@@ -602,7 +618,7 @@ describe("continuation-tracer :: emitContinuationDelegateSpan helper", () => {
       reason: "fan out three queries",
     });
     expect(spans).toHaveLength(1);
-    const span = spans[0];
+    const span = expectDefined(spans.at(0), "delegate span");
     expect(span.name).toBe("continuation.delegate.dispatch");
     expect(span.options?.attributes).toEqual({
       "delay.ms": 60000,
@@ -629,7 +645,7 @@ describe("continuation-tracer :: emitContinuationDelegateSpan helper", () => {
       delayMs: 0,
       delivery: "immediate",
     });
-    expect(spans[0].options?.attributes).toEqual({
+    expect(expectDefined(spans.at(0), "delegate span").options?.attributes).toEqual({
       "delay.ms": 0,
       "chain.step.remaining": 0,
       "delegate.delivery": "immediate",
@@ -649,7 +665,7 @@ describe("continuation-tracer :: emitContinuationDelegateSpan helper", () => {
       traceparent,
     });
 
-    expect(spans[0].options?.traceparent).toBe(traceparent);
+    expect(expectDefined(spans.at(0), "delegate span").options?.traceparent).toBe(traceparent);
   });
 
   it("omits traceparent options when no parent carrier is supplied", () => {
@@ -663,7 +679,7 @@ describe("continuation-tracer :: emitContinuationDelegateSpan helper", () => {
       delivery: "immediate",
     });
 
-    expect(spans[0].options?.traceparent).toBeUndefined();
+    expect(expectDefined(spans.at(0), "delegate span").options?.traceparent).toBeUndefined();
   });
 
   it("threads delegate.mode through unchanged", () => {
@@ -694,7 +710,13 @@ describe("continuation-tracer :: emitContinuationDelegateSpan helper", () => {
       delivery: "timer",
       reason,
     });
-    expectSafeReasonAttributes(spans[0].options!.attributes as ContinuationSpanAttrs, reason);
+    expectSafeReasonAttributes(
+      expectDefined(
+        expectDefined(spans.at(0), "delegate span").options?.attributes,
+        "delegate span attributes",
+      ) as ContinuationSpanAttrs,
+      reason,
+    );
   });
 
   it("rounds delayMs and clamps negative chainStepRemaining", () => {
@@ -706,7 +728,8 @@ describe("continuation-tracer :: emitContinuationDelegateSpan helper", () => {
       delayMs: 4567.89,
       delivery: "timer",
     });
-    const attrs = spans[0].options?.attributes as ContinuationSpanAttrs;
+    const attrs = expectDefined(spans.at(0), "delegate span").options
+      ?.attributes as ContinuationSpanAttrs;
     expect(attrs["delay.ms"]).toBe(4568);
     expect(attrs["chain.step.remaining"]).toBe(0);
   });
@@ -802,7 +825,7 @@ describe("continuation-tracer :: emitContinuationDisabledSpan helper", () => {
       reason: "fan out three queries",
     });
     expect(spans).toHaveLength(1);
-    const span = spans[0];
+    const span = expectDefined(spans.at(0), "disabled span");
     expect(span.name).toBe("continuation.disabled");
     expect(span.options?.attributes).toEqual({
       "chain.step.remaining": 0,
@@ -832,7 +855,7 @@ describe("continuation-tracer :: emitContinuationDisabledSpan helper", () => {
       signalKind: "bracket-work",
     });
     expect(spans).toHaveLength(1);
-    const attrs = spans[0].options?.attributes;
+    const attrs = expectDefined(spans.at(0), "disabled span").options?.attributes;
     expect(attrs).toEqual({
       "chain.step.remaining": 0,
       "disabled.reason": "cap.chain",
@@ -855,7 +878,7 @@ describe("continuation-tracer :: emitContinuationDisabledSpan helper", () => {
       delegateDelivery: "immediate",
       delegateMode: "normal",
     });
-    expect(spans[0].options?.attributes).toMatchObject({
+    expect(expectDefined(spans.at(0), "disabled span").options?.attributes).toMatchObject({
       "disabled.reason": "cap.cost",
       "signal.kind": "bracket-delegate",
       "delegate.delivery": "immediate",
@@ -876,7 +899,7 @@ describe("continuation-tracer :: emitContinuationDisabledSpan helper", () => {
       delegateMode: "silent-wake",
       reason: "poll PR #999 status",
     });
-    expect(spans[0].options?.attributes).toMatchObject({
+    expect(expectDefined(spans.at(0), "disabled span").options?.attributes).toMatchObject({
       "disabled.reason": "cap.delegates_per_turn",
       "signal.kind": "tool-delegate",
       "delegate.delivery": "timer",
@@ -889,7 +912,10 @@ describe("continuation-tracer :: emitContinuationDisabledSpan helper", () => {
       "reason.redacted": false,
       "continuation.disabled": true,
     });
-    expectNoAttributeValueContains(spans[0].options?.attributes, "poll PR #999 status");
+    expectNoAttributeValueContains(
+      expectDefined(spans.at(0), "disabled span").options?.attributes,
+      "poll PR #999 status",
+    );
   });
 
   it("emits safe reason metadata instead of raw reason text", () => {
@@ -903,7 +929,10 @@ describe("continuation-tracer :: emitContinuationDisabledSpan helper", () => {
       signalKind: "tool-delegate",
       reason: longReason,
     });
-    expectSafeReasonAttributes(spans[0].options?.attributes as ContinuationSpanAttrs, longReason);
+    expectSafeReasonAttributes(
+      expectDefined(spans.at(0), "disabled span").options?.attributes as ContinuationSpanAttrs,
+      longReason,
+    );
   });
 
   it("clamps negative chainStepRemaining to 0", () => {
@@ -915,7 +944,9 @@ describe("continuation-tracer :: emitContinuationDisabledSpan helper", () => {
       disabledReason: "cap.chain",
       signalKind: "tool-delegate",
     });
-    expect(spans[0].options?.attributes?.["chain.step.remaining"]).toBe(0);
+    expect(
+      expectDefined(spans.at(0), "disabled span").options?.attributes?.["chain.step.remaining"],
+    ).toBe(0);
   });
 
   it("swallows tracer errors and forwards them to the log callback", () => {
@@ -962,7 +993,7 @@ describe("continuation-tracer :: emitContinuationDisabledSpan helper", () => {
       delegateDelivery: "immediate",
       delegateMode: "normal",
     });
-    expect(spans[0].options?.attributes).toMatchObject({
+    expect(expectDefined(spans.at(0), "disabled span").options?.attributes).toMatchObject({
       "disabled.reason": "policy.cross_session_targeting",
       "signal.kind": "bracket-delegate",
       "delegate.delivery": "immediate",
@@ -1026,7 +1057,7 @@ describe("continuation-tracer :: emitContinuationDelegateFireSpan helper", () =>
       reason: "fan out three queries",
     });
     expect(spans).toHaveLength(1);
-    const span = spans[0];
+    const span = expectDefined(spans.at(0), "delegate fire span");
     expect(span.name).toBe("continuation.delegate.fire");
     expect(span.options?.attributes).toEqual({
       "chain.id": "019dcf57-b536-77cc-834b-b803d9262032",
@@ -1055,7 +1086,14 @@ describe("continuation-tracer :: emitContinuationDelegateFireSpan helper", () =>
       delayMs: 1_000,
       fireDeferredMs: 1_234.9, // floored to 1234
     });
-    expect((spans[0].options!.attributes as ContinuationSpanAttrs)["fire.deferred_ms"]).toBe(1234);
+    expect(
+      (
+        expectDefined(
+          expectDefined(spans.at(0), "delegate fire span").options?.attributes,
+          "delegate fire span attributes",
+        ) as ContinuationSpanAttrs
+      )["fire.deferred_ms"],
+    ).toBe(1234);
   });
 
   it("clamps negative fireDeferredMs to 0 (defense; should never happen in practice)", () => {
@@ -1068,7 +1106,14 @@ describe("continuation-tracer :: emitContinuationDelegateFireSpan helper", () =>
       delayMs: 0,
       fireDeferredMs: -3,
     });
-    expect((spans[0].options!.attributes as ContinuationSpanAttrs)["fire.deferred_ms"]).toBe(0);
+    expect(
+      (
+        expectDefined(
+          expectDefined(spans.at(0), "delegate fire span").options?.attributes,
+          "delegate fire span attributes",
+        ) as ContinuationSpanAttrs
+      )["fire.deferred_ms"],
+    ).toBe(0);
   });
 
   it("emits safe reason metadata instead of raw reason text", () => {
@@ -1083,7 +1128,13 @@ describe("continuation-tracer :: emitContinuationDelegateFireSpan helper", () =>
       fireDeferredMs: 105,
       reason,
     });
-    expectSafeReasonAttributes(spans[0].options!.attributes as ContinuationSpanAttrs, reason);
+    expectSafeReasonAttributes(
+      expectDefined(
+        expectDefined(spans.at(0), "delegate fire span").options?.attributes,
+        "delegate fire span attributes",
+      ) as ContinuationSpanAttrs,
+      reason,
+    );
   });
 
   it("clamps negative chainStepRemainingAtDispatch to 0", () => {
@@ -1096,7 +1147,14 @@ describe("continuation-tracer :: emitContinuationDelegateFireSpan helper", () =>
       delayMs: 0,
       fireDeferredMs: 1,
     });
-    expect((spans[0].options!.attributes as ContinuationSpanAttrs)["chain.step.remaining"]).toBe(0);
+    expect(
+      (
+        expectDefined(
+          expectDefined(spans.at(0), "delegate fire span").options?.attributes,
+          "delegate fire span attributes",
+        ) as ContinuationSpanAttrs
+      )["chain.step.remaining"],
+    ).toBe(0);
   });
 
   it("threads each delegateMode through unchanged", () => {
@@ -1126,9 +1184,14 @@ describe("continuation-tracer :: emitContinuationDelegateFireSpan helper", () =>
       delayMs: 0,
       fireDeferredMs: 0,
     });
-    expect((spans[0].options!.attributes as ContinuationSpanAttrs)["delegate.delivery"]).toBe(
-      "timer",
-    );
+    expect(
+      (
+        expectDefined(
+          expectDefined(spans.at(0), "delegate fire span").options?.attributes,
+          "delegate fire span attributes",
+        ) as ContinuationSpanAttrs
+      )["delegate.delivery"],
+    ).toBe("timer");
   });
 
   it("swallows tracer errors and forwards them to the log callback", () => {
@@ -1285,7 +1348,7 @@ describe("continuation-tracer :: reason/task text privacy", () => {
       if (!attrs) {
         throw new Error(`missing attributes for span ${span.name}`);
       }
-      expectSafeReasonAttributes(attrs, reasons[index]);
+      expectSafeReasonAttributes(attrs, expectDefined(reasons.at(index), "reason"));
       expectNoAttributeValueContains(attrs, sentinel);
     }
   });
@@ -1342,12 +1405,13 @@ describe("continuation-tracer :: emitContinuationQueueDrainSpan helper", () => {
       drainedContinuationCount: 1,
     });
     expect(spans).toHaveLength(1);
-    expect(spans[0].name).toBe("continuation.queue.drain");
-    const attrs = spans[0].options?.attributes as ContinuationSpanAttrs;
+    const span = expectDefined(spans.at(0), "queue drain span");
+    expect(span.name).toBe("continuation.queue.drain");
+    const attrs = span.options?.attributes as ContinuationSpanAttrs;
     expect(attrs["queue.drained_count"]).toBe(3);
     expect(attrs["queue.drained_continuation_count"]).toBe(1);
-    expect(spans[0].statusCalls).toEqual([{ status: "OK", message: undefined }]);
-    expect(spans[0].ended).toBe(true);
+    expect(span.statusCalls).toEqual([{ status: "OK", message: undefined }]);
+    expect(span.ended).toBe(true);
   });
 
   it("emits a 0/0 span on empty drain (absence-of-work, not rejection)", () => {
@@ -1358,7 +1422,8 @@ describe("continuation-tracer :: emitContinuationQueueDrainSpan helper", () => {
       drainedContinuationCount: 0,
     });
     expect(spans).toHaveLength(1);
-    const attrs = spans[0].options?.attributes as ContinuationSpanAttrs;
+    const attrs = expectDefined(spans.at(0), "queue drain span").options
+      ?.attributes as ContinuationSpanAttrs;
     expect(attrs["queue.drained_count"]).toBe(0);
     expect(attrs["queue.drained_continuation_count"]).toBe(0);
     // No `continuation.disabled` attr on empty drain — drain has no gate.
@@ -1377,7 +1442,7 @@ describe("continuation-tracer :: emitContinuationQueueDrainSpan helper", () => {
       traceparent,
     });
 
-    expect(spans[0].options?.traceparent).toBe(traceparent);
+    expect(expectDefined(spans.at(0), "queue drain span").options?.traceparent).toBe(traceparent);
   });
 
   it("omits traceparent options for untraced drains", () => {
@@ -1389,7 +1454,7 @@ describe("continuation-tracer :: emitContinuationQueueDrainSpan helper", () => {
       drainedContinuationCount: 1,
     });
 
-    expect(spans[0].options?.traceparent).toBeUndefined();
+    expect(expectDefined(spans.at(0), "queue drain span").options?.traceparent).toBeUndefined();
   });
 
   it("does NOT carry chain.id or chain.step.remaining (multi-chain seam)", () => {
@@ -1399,7 +1464,8 @@ describe("continuation-tracer :: emitContinuationQueueDrainSpan helper", () => {
       drainedCount: 5,
       drainedContinuationCount: 2,
     });
-    const attrs = spans[0].options?.attributes as ContinuationSpanAttrs;
+    const attrs = expectDefined(spans.at(0), "queue drain span").options
+      ?.attributes as ContinuationSpanAttrs;
     expect(attrs["chain.id"]).toBeUndefined();
     expect(attrs["chain.step.remaining"]).toBeUndefined();
     expect(attrs["delay.ms"]).toBeUndefined();
@@ -1415,7 +1481,8 @@ describe("continuation-tracer :: emitContinuationQueueDrainSpan helper", () => {
       drainedCount: -1,
       drainedContinuationCount: -3,
     });
-    const attrs = spans[0].options?.attributes as ContinuationSpanAttrs;
+    const attrs = expectDefined(spans.at(0), "queue drain span").options
+      ?.attributes as ContinuationSpanAttrs;
     expect(attrs["queue.drained_count"]).toBe(0);
     expect(attrs["queue.drained_continuation_count"]).toBe(0);
   });
@@ -1430,7 +1497,8 @@ describe("continuation-tracer :: emitContinuationQueueDrainSpan helper", () => {
       drainedCount: 2,
       drainedContinuationCount: 5,
     });
-    const attrs = spans[0].options?.attributes as ContinuationSpanAttrs;
+    const attrs = expectDefined(spans.at(0), "queue drain span").options
+      ?.attributes as ContinuationSpanAttrs;
     expect(attrs["queue.drained_count"]).toBe(2);
     expect(attrs["queue.drained_continuation_count"]).toBe(2);
   });
@@ -1442,7 +1510,8 @@ describe("continuation-tracer :: emitContinuationQueueDrainSpan helper", () => {
       drainedCount: 4.7,
       drainedContinuationCount: 2.9,
     });
-    const attrs = spans[0].options?.attributes as ContinuationSpanAttrs;
+    const attrs = expectDefined(spans.at(0), "queue drain span").options
+      ?.attributes as ContinuationSpanAttrs;
     expect(attrs["queue.drained_count"]).toBe(4);
     expect(attrs["queue.drained_continuation_count"]).toBe(2);
   });
@@ -1527,9 +1596,10 @@ describe("continuation-tracer :: emitContinuationFanoutSpan helper", () => {
     });
 
     expect(spans).toHaveLength(1);
-    expect(spans[0].name).toBe("continuation.queue.fanout");
-    expect(spans[0].options?.traceparent).toBe(traceparent);
-    const attrs = spans[0].options?.attributes as ContinuationSpanAttrs;
+    const span = expectDefined(spans.at(0), "fanout span");
+    expect(span.name).toBe("continuation.queue.fanout");
+    expect(span.options?.traceparent).toBe(traceparent);
+    const attrs = span.options?.attributes as ContinuationSpanAttrs;
     expect(attrs["fanout.mode"]).toBe("all");
     expect(attrs["fanout.recipient_count"]).toBe(3);
     expect(attrs["fanout.delivered_count"]).toBe(3);
@@ -1540,8 +1610,8 @@ describe("continuation-tracer :: emitContinuationFanoutSpan helper", () => {
     ]);
     expect(attrs["fanout.recipient.outcomes"]).toEqual(["delivered", "delivered", "delivered"]);
     expect(attrs["chain.step.remaining"]).toBe(8);
-    expect(spans[0].statusCalls).toEqual([{ status: "OK", message: undefined }]);
-    expect(spans[0].ended).toBe(true);
+    expect(span.statusCalls).toEqual([{ status: "OK", message: undefined }]);
+    expect(span.ended).toBe(true);
   });
 
   it("omits traceparent when mercy-cap forwarding is disabled", () => {
@@ -1556,8 +1626,9 @@ describe("continuation-tracer :: emitContinuationFanoutSpan helper", () => {
     });
 
     expect(spans).toHaveLength(1);
-    expect(spans[0].options?.traceparent).toBeUndefined();
-    const attrs = spans[0].options?.attributes as ContinuationSpanAttrs;
+    const span = expectDefined(spans.at(0), "fanout span");
+    expect(span.options?.traceparent).toBeUndefined();
+    const attrs = span.options?.attributes as ContinuationSpanAttrs;
     expect(attrs["chain.step.remaining"]).toBe(0);
   });
 });
@@ -1610,7 +1681,7 @@ describe("continuation-tracer :: emitContinuationCompactionReleasedSpan helper",
     setContinuationTracer(tracer);
     emitContinuationCompactionReleasedSpan({ releasedCount: 3, compactionId: 1 });
     expect(spans).toHaveLength(1);
-    const span = spans[0];
+    const span = expectDefined(spans.at(0), "compaction released span");
     expect(span.name).toBe("continuation.compaction.released");
     expect(span.options?.attributes).toEqual({
       "signal.kind": "compaction-release",
@@ -1628,7 +1699,9 @@ describe("continuation-tracer :: emitContinuationCompactionReleasedSpan helper",
     emitContinuationCompactionReleasedSpan({ releasedCount: 3, compactionId: 1, traceparent });
 
     expect(spans).toHaveLength(1);
-    expect(spans[0].options?.traceparent).toBe(traceparent);
+    expect(expectDefined(spans.at(0), "compaction released span").options?.traceparent).toBe(
+      traceparent,
+    );
   });
 
   it("emits span with compaction.released: 0 on zero-release (compaction event still recorded)", () => {
@@ -1636,7 +1709,8 @@ describe("continuation-tracer :: emitContinuationCompactionReleasedSpan helper",
     setContinuationTracer(tracer);
     emitContinuationCompactionReleasedSpan({ releasedCount: 0, compactionId: 2 });
     expect(spans).toHaveLength(1);
-    const attrs = spans[0].options?.attributes as ContinuationSpanAttrs;
+    const attrs = expectDefined(spans.at(0), "compaction released span").options
+      ?.attributes as ContinuationSpanAttrs;
     expect(attrs["compaction.released"]).toBe(0);
     expect(attrs["signal.kind"]).toBe("compaction-release");
     expect(attrs["compaction.id"]).toBe(2);
@@ -1646,14 +1720,28 @@ describe("continuation-tracer :: emitContinuationCompactionReleasedSpan helper",
     const { tracer, spans } = makeRecordingTracer();
     setContinuationTracer(tracer);
     emitContinuationCompactionReleasedSpan({ releasedCount: 3.7 });
-    expect((spans[0].options!.attributes as ContinuationSpanAttrs)["compaction.released"]).toBe(3);
+    expect(
+      (
+        expectDefined(
+          expectDefined(spans.at(0), "compaction released span").options?.attributes,
+          "compaction released span attributes",
+        ) as ContinuationSpanAttrs
+      )["compaction.released"],
+    ).toBe(3);
   });
 
   it("clamps negative releasedCount to 0 (defense-in-depth)", () => {
     const { tracer, spans } = makeRecordingTracer();
     setContinuationTracer(tracer);
     emitContinuationCompactionReleasedSpan({ releasedCount: -1 });
-    expect((spans[0].options!.attributes as ContinuationSpanAttrs)["compaction.released"]).toBe(0);
+    expect(
+      (
+        expectDefined(
+          expectDefined(spans.at(0), "compaction released span").options?.attributes,
+          "compaction released span attributes",
+        ) as ContinuationSpanAttrs
+      )["compaction.released"],
+    ).toBe(0);
   });
 
   it("swallows tracer errors and forwards them to the log callback", () => {
@@ -1773,7 +1861,8 @@ describe("continuation-tracer :: compaction.id cross-cutting attr", () => {
     setContinuationTracer(tracer);
     emitContinuationCompactionReleasedSpan({ releasedCount: 3, compactionId: 7 });
     expect(spans).toHaveLength(1);
-    const attrs = spans[0].options?.attributes as ContinuationSpanAttrs;
+    const attrs = expectDefined(spans.at(0), "compaction released span").options
+      ?.attributes as ContinuationSpanAttrs;
     expect(attrs["signal.kind"]).toBe("compaction-release");
     expect(attrs["compaction.released"]).toBe(3);
     expect(attrs["compaction.id"]).toBe(7);
@@ -1783,14 +1872,22 @@ describe("continuation-tracer :: compaction.id cross-cutting attr", () => {
     const { tracer, spans } = makeRecordingTracer();
     setContinuationTracer(tracer);
     emitContinuationCompactionReleasedSpan({ releasedCount: 1, compactionId: 1 });
-    expect((spans[0].options!.attributes as ContinuationSpanAttrs)["compaction.id"]).toBe(1);
+    expect(
+      (
+        expectDefined(
+          expectDefined(spans.at(0), "compaction released span").options?.attributes,
+          "compaction released span attributes",
+        ) as ContinuationSpanAttrs
+      )["compaction.id"],
+    ).toBe(1);
   });
 
   it("compactionId 0 ordinal-valid: emits compaction.id: 0 (NOT clamped, NOT dropped)", () => {
     const { tracer, spans } = makeRecordingTracer();
     setContinuationTracer(tracer);
     emitContinuationCompactionReleasedSpan({ releasedCount: 0, compactionId: 0 });
-    const attrs = spans[0].options?.attributes as ContinuationSpanAttrs;
+    const attrs = expectDefined(spans.at(0), "compaction released span").options
+      ?.attributes as ContinuationSpanAttrs;
     expect(attrs["compaction.id"]).toBe(0);
     // Signal.kind and compaction.released still present.
     expect(attrs["signal.kind"]).toBe("compaction-release");
@@ -1807,7 +1904,8 @@ describe("continuation-tracer :: compaction.id cross-cutting attr", () => {
       log: (m) => logged.push(m),
     });
     expect(spans).toHaveLength(1);
-    const attrs = spans[0].options?.attributes as ContinuationSpanAttrs;
+    const attrs = expectDefined(spans.at(0), "compaction released span").options
+      ?.attributes as ContinuationSpanAttrs;
     // compaction.id dropped due to non-integer invariant.
     expect(attrs["compaction.id"]).toBeUndefined();
     // Span still has signal.kind + compaction.released.
@@ -1829,7 +1927,8 @@ describe("continuation-tracer :: compaction.id cross-cutting attr", () => {
       log: (m) => logged.push(m),
     });
     expect(spans).toHaveLength(1);
-    const attrs = spans[0].options?.attributes as ContinuationSpanAttrs;
+    const attrs = expectDefined(spans.at(0), "compaction released span").options
+      ?.attributes as ContinuationSpanAttrs;
     // compaction.id dropped due to negative invariant.
     expect(attrs["compaction.id"]).toBeUndefined();
     // Span survives with signal.kind + compaction.released.
@@ -1851,7 +1950,8 @@ describe("continuation-tracer :: compaction.id cross-cutting attr", () => {
       log: (m) => logged.push(m),
     });
     expect(spans).toHaveLength(1);
-    const attrs = spans[0].options?.attributes as ContinuationSpanAttrs;
+    const attrs = expectDefined(spans.at(0), "compaction released span").options
+      ?.attributes as ContinuationSpanAttrs;
     expect(attrs["compaction.id"]).toBeUndefined();
     expect(attrs["signal.kind"]).toBe("compaction-release");
     // No log emitted — undefined is a valid "not provided" sentinel.

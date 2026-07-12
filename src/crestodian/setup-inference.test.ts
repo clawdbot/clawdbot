@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import {
@@ -4125,17 +4126,17 @@ describe("activateSetupInference", () => {
     expect(second).toMatchObject({ ok: true, modelRef: "openai/gpt-5.6-sol" });
     expect(createdRecords).toStrictEqual(installRecords);
     expect(markRetained).toHaveBeenNthCalledWith(1, {
-      packageDir: installRecords[0].installPath,
+      packageDir: expectDefined(installRecords[0], "installRecords[0] test invariant").installPath,
       pluginId: "codex",
       reason: "crestodian-inference-activation-not-committed",
     });
     expect(markRetained).toHaveBeenNthCalledWith(2, {
-      packageDir: installRecords[0].installPath,
+      packageDir: expectDefined(installRecords[0], "installRecords[0] test invariant").installPath,
       pluginId: "codex",
       reason: "crestodian-inference-activation-not-committed",
     });
     expect(markRetained).toHaveBeenNthCalledWith(3, {
-      packageDir: installRecords[1].installPath,
+      packageDir: expectDefined(installRecords[1], "installRecords[1] test invariant").installPath,
       pluginId: "codex",
       reason: "crestodian-inference-activation-not-committed",
     });

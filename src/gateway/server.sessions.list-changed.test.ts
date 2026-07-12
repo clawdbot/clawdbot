@@ -1,6 +1,8 @@
 /**
  * Gateway sessions.list changed-state tests.
  */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   createPluginRegistryFixture,
   registerTestPlugin,
@@ -129,7 +131,10 @@ async function invokeSessionsList({
   const respond = vi.fn();
   const sessionsHandlers = await getSessionsHandlers();
   const { getRuntimeConfig } = await getGatewayConfigModule();
-  const request = sessionsHandlers["sessions.list"]({
+  const request = expectDefined(
+    sessionsHandlers["sessions.list"],
+    'sessionsHandlers["sessions.list"] test invariant',
+  )({
     req: {
       type: "req",
       id: requestId,
@@ -167,7 +172,10 @@ async function invokeSessionMutation({
   const respond = vi.fn();
   const sessionsHandlers = await getSessionsHandlers();
   const { getRuntimeConfig } = await getGatewayConfigModule();
-  await sessionsHandlers[method]({
+  await expectDefined(
+    sessionsHandlers[method],
+    "sessionsHandlers[method] test invariant",
+  )({
     req: {} as never,
     params,
     respond,

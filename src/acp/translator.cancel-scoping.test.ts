@@ -1,6 +1,7 @@
-/** Tests prompt cancellation scoping across concurrent ACP sessions and Gateway runs. */
 import type { CancelNotification, PromptRequest, PromptResponse } from "@agentclientprotocol/sdk";
 import { createInMemorySessionStore } from "@openclaw/acp-core/session";
+/** Tests prompt cancellation scoping across concurrent ACP sessions and Gateway runs. */
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import type { GatewayClient } from "../gateway/client.js";
@@ -97,7 +98,7 @@ async function startPendingPrompt(
   });
   return {
     promptPromise,
-    runId: harness.sentRunIds[before],
+    runId: expectDefined(harness.sentRunIds[before], "harness.sentRunIds[before] test invariant"),
   };
 }
 

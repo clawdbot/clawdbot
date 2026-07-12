@@ -1,5 +1,7 @@
 // Restart method tests cover safe restart scheduling, deferral flags, and
 // response payloads returned by gateway.restart.request.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { restartHandlers } from "./restart.js";
 
@@ -23,7 +25,10 @@ vi.mock("../../infra/restart-coordinator.js", () => ({
 
 function invokeRestartRequest(params: unknown) {
   const respond = vi.fn();
-  const handler = restartHandlers["gateway.restart.request"];
+  const handler = expectDefined(
+    restartHandlers["gateway.restart.request"],
+    'restartHandlers["gateway.restart.request"] test invariant',
+  );
   return Promise.resolve(
     handler({
       respond,

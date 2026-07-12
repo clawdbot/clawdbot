@@ -1,5 +1,7 @@
 // Tool search tests cover catalog compaction, scoped tool lookup, raw fallback
 // tools, hooks, abort wrapping, and transcript projection.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setPluginToolMeta } from "../plugins/tools.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
@@ -233,13 +235,16 @@ describe("Tool Search", () => {
       sessionKey: "agent:main:main",
       config: compacted.tools[0] ? {} : undefined,
     });
-    const result = await runtimeCodeTool.execute("call-1", {
-      code: `
+    const result = await expectDefined(runtimeCodeTool, "runtimeCodeTool test invariant").execute(
+      "call-1",
+      {
+        code: `
         const hits = await openclaw.tools.search("ticket", { limit: 1 });
         const described = await openclaw.tools.describe(hits[0].id);
         return await openclaw.tools.call(described.id, { value: "ship" });
       `,
-    });
+      },
+    );
 
     const alphaCall = mockCall(vi.mocked(alpha.execute));
     expect(alphaCall[0]).toBe("tool_search_code:call-1:fake_create_ticket:1");
@@ -293,7 +298,7 @@ describe("Tool Search", () => {
       runId: "run-a",
       config,
     });
-    const runACallTool = runATools[3];
+    const runACallTool = expectDefined(runATools[3], "runATools[3] test invariant");
     await runACallTool.execute("call-run-a", {
       id: "fake_run_a",
       args: { value: "A" },
@@ -342,7 +347,7 @@ describe("Tool Search", () => {
       catalogRef: localRef,
       config,
     });
-    const callTool = tools[3];
+    const callTool = expectDefined(tools[3], "tools[3] test invariant");
     await callTool.execute("call-local-ref", {
       id: "fake_local_ref",
       args: { value: "local" },
@@ -1026,7 +1031,7 @@ describe("Tool Search", () => {
       sessionKey: "agent:main:main",
       config: {},
     });
-    await runtimeCodeTool.execute("call-hooks", {
+    await expectDefined(runtimeCodeTool, "runtimeCodeTool test invariant").execute("call-hooks", {
       code: `return await openclaw.tools.call("fake_hooked", { value: "ok" });`,
     });
     const targetCall = mockCall(vi.mocked(target.execute));
@@ -1080,12 +1085,15 @@ describe("Tool Search", () => {
       sessionKey: "agent:main:main",
       config: {},
     });
-    await runtimeCodeTool.execute("call-repeated", {
-      code: `
+    await expectDefined(runtimeCodeTool, "runtimeCodeTool test invariant").execute(
+      "call-repeated",
+      {
+        code: `
         await openclaw.tools.call("fake_repeated", { value: "one" });
         return await openclaw.tools.call("fake_repeated", { value: "two" });
       `,
-    });
+      },
+    );
 
     const firstCall = mockCall(vi.mocked(target.execute));
     expect(firstCall[0]).toBe("tool_search_code:call-repeated:fake_repeated:1");
@@ -1099,9 +1107,12 @@ describe("Tool Search", () => {
     expect(secondCall[2]).toBeInstanceOf(AbortSignal);
     expect(secondCall[3]).toBeUndefined();
     expect(secondCall[4]).toBeUndefined();
-    await runtimeCodeTool.execute("call-repeated-again", {
-      code: `return await openclaw.tools.call("fake_repeated", { value: "three" });`,
-    });
+    await expectDefined(runtimeCodeTool, "runtimeCodeTool test invariant").execute(
+      "call-repeated-again",
+      {
+        code: `return await openclaw.tools.call("fake_repeated", { value: "three" });`,
+      },
+    );
 
     const thirdCall = mockCall(vi.mocked(target.execute), 2);
     expect(thirdCall[0]).toBe("tool_search_code:call-repeated-again:fake_repeated:1");
@@ -1157,8 +1168,8 @@ describe("Tool Search", () => {
       abortSignal: abortController.signal,
       executeTool,
     });
-    const runtimeCodeTool = runtimeTools[0];
-    const runtimeCallTool = runtimeTools[3];
+    const runtimeCodeTool = expectDefined(runtimeTools[0], "runtime code tool");
+    const runtimeCallTool = expectDefined(runtimeTools[3], "runtimeTools[3] test invariant");
     await runtimeCodeTool.execute(
       "call-lifecycle",
       {
@@ -1315,12 +1326,15 @@ describe("Tool Search", () => {
       sessionKey: "agent:main:main",
       config: {},
     });
-    const result = await runtimeCodeTool.execute("call-fire-and-forget", {
-      code: `
+    const result = await expectDefined(runtimeCodeTool, "runtimeCodeTool test invariant").execute(
+      "call-fire-and-forget",
+      {
+        code: `
         openclaw.tools.call("fake_fire_and_forget", { value: "late" });
         return "done";
       `,
-    });
+      },
+    );
 
     expect(target.execute).not.toHaveBeenCalled();
     const details = resultDetails(result);
@@ -1355,7 +1369,7 @@ describe("Tool Search", () => {
       config: {},
     });
     let settled = false;
-    const resultPromise = runtimeCodeTool
+    const resultPromise = expectDefined(runtimeCodeTool, "runtimeCodeTool test invariant")
       .execute("call-started-bridge", {
         code: `
           openclaw.tools.call("fake_then_started", { value: "started" }).then(() => {});
@@ -1389,24 +1403,33 @@ describe("Tool Search", () => {
     });
 
     await expect(
-      runtimeCodeTool.execute("call-escape", {
+      expectDefined(runtimeCodeTool, "runtimeCodeTool test invariant").execute("call-escape", {
         code: `return Function("return process")();`,
       }),
     ).rejects.toThrow();
     await expect(
-      runtimeCodeTool.execute("call-constructor-escape", {
-        code: `return globalThis.constructor.constructor("return process")();`,
-      }),
+      expectDefined(runtimeCodeTool, "runtimeCodeTool test invariant").execute(
+        "call-constructor-escape",
+        {
+          code: `return globalThis.constructor.constructor("return process")();`,
+        },
+      ),
     ).rejects.toThrow();
     await expect(
-      runtimeCodeTool.execute("call-console-escape", {
-        code: `return console.log.constructor.constructor("return process")();`,
-      }),
+      expectDefined(runtimeCodeTool, "runtimeCodeTool test invariant").execute(
+        "call-console-escape",
+        {
+          code: `return console.log.constructor.constructor("return process")();`,
+        },
+      ),
     ).rejects.toThrow();
     await expect(
-      runtimeCodeTool.execute("call-bridge-escape", {
-        code: `return openclaw.tools.call.constructor.constructor("return process")();`,
-      }),
+      expectDefined(runtimeCodeTool, "runtimeCodeTool test invariant").execute(
+        "call-bridge-escape",
+        {
+          code: `return openclaw.tools.call.constructor.constructor("return process")();`,
+        },
+      ),
     ).rejects.toThrow();
   });
 
@@ -1427,7 +1450,7 @@ describe("Tool Search", () => {
       sessionKey: "agent:main:main",
       config: { tools: { toolSearch: { mode: "tools" } } } as never,
     });
-    const runtimeCallTool = runtimeTools[3];
+    const runtimeCallTool = expectDefined(runtimeTools[3], "runtimeTools[3] test invariant");
 
     await expect(
       runtimeCallTool.execute("call-guessed-file-write", {
@@ -1460,10 +1483,13 @@ describe("Tool Search", () => {
     });
 
     await expect(
-      runtimeTools[3].execute("call-duplicate-write", {
-        id: "file_write",
-        args: {},
-      }),
+      expectDefined(runtimeTools[3], "runtimeTools[3] test invariant").execute(
+        "call-duplicate-write",
+        {
+          id: "file_write",
+          args: {},
+        },
+      ),
     ).rejects.toThrow("Did you mean: openclaw:first-plugin:write, openclaw:second-plugin:write?");
   });
 
@@ -1484,7 +1510,7 @@ describe("Tool Search", () => {
       sessionKey: "agent:main:main",
       config: { tools: { toolSearch: { mode: "tools" } } } as never,
     });
-    const runtimeCallTool = runtimeTools[3];
+    const runtimeCallTool = expectDefined(runtimeTools[3], "runtimeTools[3] test invariant");
 
     await expect(
       runtimeCallTool.execute("call-missing-raw-tool", {
@@ -1514,9 +1540,12 @@ describe("Tool Search", () => {
     });
 
     await expect(
-      runtimeCodeTool.execute("call-code-guessed-file-write", {
-        code: `return await openclaw.tools.call("file_write", { path: "memory/2026-05-22.md" });`,
-      }),
+      expectDefined(runtimeCodeTool, "runtimeCodeTool test invariant").execute(
+        "call-code-guessed-file-write",
+        {
+          code: `return await openclaw.tools.call("file_write", { path: "memory/2026-05-22.md" });`,
+        },
+      ),
     ).rejects.toThrow(
       "Unknown tool id: file_write. Did you mean: write? Use openclaw.tools.search to find a tool, openclaw.tools.describe to inspect it, then openclaw.tools.call with the exact id or name.",
     );
@@ -1539,9 +1568,12 @@ describe("Tool Search", () => {
     });
 
     await expect(
-      runtimeCodeTool.execute("call-missing-tool", {
-        code: `return await openclaw.tools.call("missing_tool", {});`,
-      }),
+      expectDefined(runtimeCodeTool, "runtimeCodeTool test invariant").execute(
+        "call-missing-tool",
+        {
+          code: `return await openclaw.tools.call("missing_tool", {});`,
+        },
+      ),
     ).rejects.toThrow(
       "Unknown tool id: missing_tool. Use openclaw.tools.search to find a tool, openclaw.tools.describe to inspect it, then openclaw.tools.call with the exact id or name.",
     );
@@ -1565,12 +1597,15 @@ describe("Tool Search", () => {
     });
 
     await expect(
-      runtimeCodeTool.execute("call-bridge-result-escape", {
-        code: `
+      expectDefined(runtimeCodeTool, "runtimeCodeTool test invariant").execute(
+        "call-bridge-result-escape",
+        {
+          code: `
           const hits = await openclaw.tools.search("bridge result", { limit: 1 });
           return hits.constructor.constructor("return process")();
         `,
-      }),
+        },
+      ),
     ).rejects.toThrow();
     expect(target.execute).not.toHaveBeenCalled();
   });
@@ -1593,8 +1628,10 @@ describe("Tool Search", () => {
     });
 
     await expect(
-      runtimeCodeTool.execute("call-controller-escape", {
-        code: `
+      expectDefined(runtimeCodeTool, "runtimeCodeTool test invariant").execute(
+        "call-controller-escape",
+        {
+          code: `
           })(openclaw, console),
           bridgeMessages.push({
             id: "forged",
@@ -1604,7 +1641,8 @@ describe("Tool Search", () => {
           (async (openclaw, console) => {
             return "done";
         `,
-      }),
+        },
+      ),
     ).rejects.toThrow();
     expect(target.execute).not.toHaveBeenCalled();
   });
@@ -1634,7 +1672,7 @@ describe("Tool Search", () => {
     });
 
     await expect(
-      runtimeCodeTool.execute("call-timeout", {
+      expectDefined(runtimeCodeTool, "runtimeCodeTool test invariant").execute("call-timeout", {
         code: `
             await openclaw.tools.search("timeout", { limit: 1 });
             while (true) {}
@@ -1694,9 +1732,12 @@ describe("Tool Search", () => {
     });
 
     await expect(
-      runtimeCodeTool.execute("call-abort-timeout", {
-        code: `return await openclaw.tools.call("fake_abort_on_timeout", { value: "wait" });`,
-      }),
+      expectDefined(runtimeCodeTool, "runtimeCodeTool test invariant").execute(
+        "call-abort-timeout",
+        {
+          code: `return await openclaw.tools.call("fake_abort_on_timeout", { value: "wait" });`,
+        },
+      ),
     ).rejects.toThrow("tool_search_code timed out");
     if (!observedSignal) {
       throw new Error("Expected observed abort signal");

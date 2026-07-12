@@ -1,5 +1,6 @@
 // Top-level migrate command tests cover provider planning, interactive selection, apply flow, and JSON output.
 import fs from "node:fs/promises";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MigrationApplyResult, MigrationPlan } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -856,8 +857,8 @@ describe("migrateApplyCommand", () => {
             pluginName: "google-calendar",
           },
         },
-        codexPluginPlan().items[1],
-        codexPluginPlan().items[2],
+        expectDefined(codexPluginPlan().items[1], "codexPluginPlan().items[1] test invariant"),
+        expectDefined(codexPluginPlan().items[2], "codexPluginPlan().items[2] test invariant"),
       ],
     });
     mocks.provider.plan.mockResolvedValue(planned);

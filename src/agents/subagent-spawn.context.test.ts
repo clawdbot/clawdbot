@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -405,7 +406,10 @@ describe("sessions_spawn context modes", () => {
     expect(ensureContextEnginesInitializedMock).toHaveBeenCalledTimes(1);
     expect(resolveContextEngineMock).toHaveBeenCalledTimes(1);
     expect(ensureContextEnginesInitializedMock.mock.invocationCallOrder[0]).toBeLessThan(
-      resolveContextEngineMock.mock.invocationCallOrder[0],
+      expectDefined(
+        resolveContextEngineMock.mock.invocationCallOrder[0],
+        "resolveContextEngineMock.mock.invocationCallOrder[0] test invariant",
+      ),
     );
   });
 

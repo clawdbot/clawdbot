@@ -1,4 +1,5 @@
 // Verifies default config values and environment-sensitive overrides.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_AGENT_MAX_CONCURRENT,
@@ -87,8 +88,14 @@ describe("config defaults", () => {
     const manifestRegistry = { plugins: [] };
     expect(applyContextPruningDefaults(cfg as never, { manifestRegistry })).toBe(nextCfg);
     expect(mocks.applyProviderConfigDefaultsForConfig).toHaveBeenCalledTimes(1);
-    const [[defaultsParams]] = mocks.applyProviderConfigDefaultsForConfig.mock
-      .calls as unknown as Array<[{ manifestRegistry?: unknown }]>;
+    const [defaultsParams] = expectDefined(
+      (
+        mocks.applyProviderConfigDefaultsForConfig.mock.calls as unknown as Array<
+          [{ manifestRegistry?: unknown }]
+        >
+      )[0],
+      "(mocks.applyProviderConfigDefaultsForConfig.mock.calls as unknown as Array<\n        [{ manifestRegistry?: unknown }]\n      >)[0] test invariant",
+    );
     expect(defaultsParams.manifestRegistry).toBe(manifestRegistry);
   });
 

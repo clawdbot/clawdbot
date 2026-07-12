@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { sanitizeInboundSystemTags } from "../../security/system-tags.js";
 import { parseContinuationSignal, stripContinuationSignal } from "../tokens.js";
@@ -205,7 +206,7 @@ describe("continuation RFC contract scenarios", () => {
       });
 
       expect(result).toEqual({ signal: null, fromBracket: false });
-      expect(payloads[0].text).toBe("reply\nCONTINUE_WORK:5");
+      expect(expectDefined(payloads.at(0), "payload").text).toBe("reply\nCONTINUE_WORK:5");
     });
 
     it("scans backward through payloads so a later non-marker block does not hide the marker", () => {
@@ -228,8 +229,10 @@ describe("continuation RFC contract scenarios", () => {
         silentWake: undefined,
       });
       expect(result.fromBracket).toBe(true);
-      expect(payloads[0].text).toBe("model handoff");
-      expect(payloads[1].text).toBe("warning: tool call failed, will retry");
+      expect(expectDefined(payloads.at(0), "first payload").text).toBe("model handoff");
+      expect(expectDefined(payloads.at(1), "second payload").text).toBe(
+        "warning: tool call failed, will retry",
+      );
     });
   });
 
@@ -441,8 +444,12 @@ describe("continuation RFC contract scenarios", () => {
       );
 
       expect(result.enqueued).toBe(1);
-      expect(deps.enqueueSessionDelivery.mock.calls[0][0]).not.toHaveProperty("traceparent");
-      expect(deps.enqueueSystemEvent.mock.calls[0][1]).not.toHaveProperty("traceparent");
+      expect(
+        expectDefined(deps.enqueueSessionDelivery.mock.calls.at(0)?.at(0), "delivery"),
+      ).not.toHaveProperty("traceparent");
+      expect(
+        expectDefined(deps.enqueueSystemEvent.mock.calls.at(0)?.at(1), "system event options"),
+      ).not.toHaveProperty("traceparent");
       expect(deps.requestHeartbeatNow).toHaveBeenCalledTimes(1);
     });
   });

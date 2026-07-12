@@ -3595,7 +3595,9 @@ describe("chat attachment picker", () => {
       expect(attachments[0]?.fileName).toMatch(/^pasted-text-\d+\.txt$/u);
       expect(attachments[0]?.mimeType).toBe("text/plain");
       expect(attachments[0]?.sizeBytes).toBe(new Blob([pastedText]).size);
-      expect(getChatAttachmentDataUrl(attachments[0])).toMatch(/^data:text\/plain;base64,/u);
+      expect(
+        getChatAttachmentDataUrl(expectDefined(attachments[0], "attachments[0] test invariant")),
+      ).toMatch(/^data:text\/plain;base64,/u);
     });
   });
 
@@ -3739,7 +3741,9 @@ describe("chat attachment picker", () => {
         configurable: true,
         value: `data:application/pdf;base64,${btoa("%PDF-1.4\n")}`,
       });
-      readers[0].dispatchEvent(new ProgressEvent("load"));
+      expectDefined(readers[0], "readers[0] test invariant").dispatchEvent(
+        new ProgressEvent("load"),
+      );
 
       await vi.waitFor(() => expect(attachments).toHaveLength(2));
       expect(attachments.map((attachment) => attachment.fileName)).toEqual([
@@ -3883,16 +3887,22 @@ describe("chat attachment picker", () => {
     await vi.waitFor(() => {
       expect(onAttachmentsChange).toHaveBeenCalled();
     });
-    const [attachment] = requireFirstAttachmentsChange(onAttachmentsChange);
+    const attachment = expectDefined(
+      requireFirstAttachmentsChange(onAttachmentsChange)[0],
+      "pasted attachment",
+    );
     const onDraftChange = vi.fn();
     const onShowAttachmentsChange = vi.fn();
-    const preview = renderChatView({
-      attachments: [attachment],
-      draft: "intro",
-      getDraft: () => "intro",
-      onAttachmentsChange: onShowAttachmentsChange,
-      onDraftChange,
-    });
+    const preview = expectDefined(
+      renderChatView({
+        attachments: [attachment],
+        draft: "intro",
+        getDraft: () => "intro",
+        onAttachmentsChange: onShowAttachmentsChange,
+        onDraftChange,
+      }),
+      'renderChatView({ attachments: [attachment], draft: "intro", getDraft:... test invariant',
+    );
     const showButton = requireElement(
       preview,
       '[aria-label="Restore"]',
@@ -3903,7 +3913,9 @@ describe("chat attachment picker", () => {
 
     expect(onShowAttachmentsChange).toHaveBeenCalledWith([]);
     expect(onDraftChange).toHaveBeenCalledWith(`intro\n\n${pastedText}`);
-    expect(getChatAttachmentDataUrl(attachment)).toBeNull();
+    expect(
+      getChatAttachmentDataUrl(expectDefined(attachment, "attachment test invariant")),
+    ).toBeNull();
   });
 
   it("converts pasted data image text into an attachment", () => {

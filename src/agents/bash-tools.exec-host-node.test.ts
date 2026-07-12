@@ -4,6 +4,7 @@
  * auto-review, and follow-up execution paths.
  */
 import crypto from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecAllowlistEntry } from "../infra/exec-approvals.types.js";
 import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../utils/timer-delay.js";
@@ -288,7 +289,7 @@ const resolveNodeIdFromListMock = vi.hoisted(() =>
   vi.fn((nodes: Array<{ nodeId: string; displayName?: string }>, query?: string) => {
     if (!query) {
       if (nodes.length === 1) {
-        return nodes[0].nodeId;
+        return expectDefined(nodes[0], "nodes[0] test invariant").nodeId;
       }
       throw new Error("node required");
     }

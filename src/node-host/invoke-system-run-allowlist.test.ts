@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { resolveExecApprovalsFromFile, type ExecCommandSegment } from "../infra/exec-approvals.js";
 import { planShellAuthorization } from "../infra/exec-authorization-plan.js";
@@ -58,12 +59,16 @@ function runExecutable(params: {
   env: NodeJS.ProcessEnv;
 }): Promise<{ exitCode: number | null; stdout: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(params.argv[0], params.argv.slice(1), {
-      cwd: params.cwd,
-      env: params.env,
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
-    });
+    const child = spawn(
+      expectDefined(params.argv[0], "params.argv[0] test invariant"),
+      params.argv.slice(1),
+      {
+        cwd: params.cwd,
+        env: params.env,
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+      },
+    );
     const stdout: Buffer[] = [];
     child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
     child.once("error", reject);

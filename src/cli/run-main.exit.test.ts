@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { expectDefined } from "@openclaw/normalization-core";
 import { CommanderError } from "commander";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
@@ -3652,10 +3653,16 @@ describe("runCli exit behavior", () => {
     expect(ensureGlobalUndiciEnvProxyDispatcherMock).toHaveBeenCalledTimes(1);
     expect(launchTuiCliMock).toHaveBeenCalledOnce();
     expect(ensureGlobalUndiciEnvProxyDispatcherMock.mock.invocationCallOrder[0]).toBeLessThan(
-      probeGatewayConfiguredModelMock.mock.invocationCallOrder[0],
+      expectDefined(
+        probeGatewayConfiguredModelMock.mock.invocationCallOrder[0],
+        "probeGatewayConfiguredModelMock.mock.invocationCallOrder[0] test invariant",
+      ),
     );
     expect(ensureGlobalUndiciEnvProxyDispatcherMock.mock.invocationCallOrder[0]).toBeLessThan(
-      launchTuiCliMock.mock.invocationCallOrder[0],
+      expectDefined(
+        launchTuiCliMock.mock.invocationCallOrder[0],
+        "launchTuiCliMock.mock.invocationCallOrder[0] test invariant",
+      ),
     );
   });
 

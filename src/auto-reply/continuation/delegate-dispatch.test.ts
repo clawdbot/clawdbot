@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { readFileSync } from "node:fs";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock TaskFlow registry — delegate-store resolves it transitively.
@@ -736,9 +737,11 @@ describe("hedge timer ref/handle cleanup", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
-    expect(mockFlows.get(flowIds[0])).toMatchObject({ status: "running" });
+    const firstFlowId = expectDefined(flowIds.at(0), "first flow id");
+    const secondFlowId = expectDefined(flowIds.at(1), "second flow id");
+    expect(mockFlows.get(firstFlowId)).toMatchObject({ status: "running" });
 
-    const digest = crypto.createHash("sha256").update(flowIds[0]).digest("hex").slice(0, 32);
+    const digest = crypto.createHash("sha256").update(firstFlowId).digest("hex").slice(0, 32);
     acceptedChildSessionKeys.add(`agent:main:subagent:continuation-${digest}`);
 
     await vi.advanceTimersByTimeAsync(30_000);
@@ -747,8 +750,8 @@ describe("hedge timer ref/handle cleanup", () => {
 
     expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
     expect(persisted.currentChainCount).toBe(1);
-    expect(mockFlows.get(flowIds[0])).toMatchObject({ status: "succeeded" });
-    expect(mockFlows.get(flowIds[1])).toMatchObject({ status: "failed" });
+    expect(mockFlows.get(firstFlowId)).toMatchObject({ status: "succeeded" });
+    expect(mockFlows.get(secondFlowId)).toMatchObject({ status: "failed" });
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
       expect.stringContaining("chain-capped"),
       expect.objectContaining({ sessionKey }),
@@ -887,7 +890,7 @@ describe("tool delegate dispatch contract", () => {
   it("recovers a running delegate by reconciling the deterministic live child", async () => {
     const sessionKey = "agent:main:root";
     enqueuePendingDelegate(sessionKey, { task: "recover already spawned child" });
-    const flowId = [...mockFlows.keys()][0];
+    const flowId = expectDefined([...mockFlows.keys()].at(0), "flow id");
     const digest = crypto.createHash("sha256").update(flowId).digest("hex").slice(0, 32);
     activeRegistryChildSessionKeys.add(`agent:main:subagent:continuation-${digest}`);
 
@@ -1310,7 +1313,10 @@ describe("tool delegate dispatch contract", () => {
       maxChainLength: 10,
     });
 
-    const spawnParams = spawnSubagentDirectMock.mock.calls[0][0] as Record<string, unknown>;
+    const spawnParams = expectDefined(
+      spawnSubagentDirectMock.mock.calls.at(0)?.at(0),
+      "spawn params",
+    ) as Record<string, unknown>;
     expect(spawnParams.task).toEqual(expect.stringContaining("continue with inherited model"));
     expect(spawnParams).not.toHaveProperty("model");
   });
@@ -1463,9 +1469,15 @@ describe("tool delegate dispatch contract", () => {
       expect.stringContaining("DELEGATE spawn failed: spawn unavailable"),
       { sessionKey, trusted: true },
     );
-    expect(mockFlows.get(queuedBefore[0])?.status).toBe("failed");
-    expect(mockFlows.get(queuedBefore[1])?.status).toBe("failed");
-    expect(mockFlows.get(queuedBefore[2])?.status).toBe("succeeded");
+    expect(mockFlows.get(expectDefined(queuedBefore.at(0), "first flow id"))?.status).toBe(
+      "failed",
+    );
+    expect(mockFlows.get(expectDefined(queuedBefore.at(1), "second flow id"))?.status).toBe(
+      "failed",
+    );
+    expect(mockFlows.get(expectDefined(queuedBefore.at(2), "third flow id"))?.status).toBe(
+      "succeeded",
+    );
   });
 
   it("marks over-limit delegates failed instead of leaving them as silent success", async () => {
@@ -1485,7 +1497,9 @@ describe("tool delegate dispatch contract", () => {
       maxChainLength: 10,
     });
 
-    expect(mockFlows.get(queuedBefore[5])?.status).toBe("failed");
+    expect(mockFlows.get(expectDefined(queuedBefore.at(5), "sixth flow id"))?.status).toBe(
+      "failed",
+    );
   });
 });
 
@@ -1526,7 +1540,7 @@ describe("dispatchToolDelegates — TaskFlow status after spawn failure", () => 
       (f) => f.ownerKey === sessionKey && f.status === "queued",
     );
     expect(queuedBefore).toHaveLength(1);
-    const flowId = queuedBefore[0].flowId as string;
+    const flowId = expectDefined(queuedBefore.at(0), "queued delegate").flowId as string;
 
     const result = await dispatchToolDelegates({
       sessionKey,
@@ -1552,7 +1566,7 @@ describe("dispatchToolDelegates — TaskFlow status after spawn failure", () => 
       (f) => f.ownerKey === sessionKey && f.status === "queued",
     );
     expect(queuedBefore).toHaveLength(1);
-    const flowId = queuedBefore[0].flowId as string;
+    const flowId = expectDefined(queuedBefore.at(0), "queued delegate").flowId as string;
 
     const result = await dispatchToolDelegates({
       sessionKey,
@@ -1591,9 +1605,15 @@ describe("dispatchToolDelegates — TaskFlow status after spawn failure", () => 
       maxChainLength: 10,
     });
 
-    expect(mockFlows.get(queuedBefore[0])?.status).toBe("failed");
-    expect(mockFlows.get(queuedBefore[1])?.status).toBe("failed");
-    expect(mockFlows.get(queuedBefore[2])?.status).toBe("succeeded");
+    expect(mockFlows.get(expectDefined(queuedBefore.at(0), "first flow id"))?.status).toBe(
+      "failed",
+    );
+    expect(mockFlows.get(expectDefined(queuedBefore.at(1), "second flow id"))?.status).toBe(
+      "failed",
+    );
+    expect(mockFlows.get(expectDefined(queuedBefore.at(2), "third flow id"))?.status).toBe(
+      "succeeded",
+    );
   });
 });
 
@@ -1677,7 +1697,10 @@ describe("dispatchToolDelegates — nonexistent target session", () => {
 
     expect(result.dispatched).toBe(1);
     expect(result.rejected).toBe(0);
-    const spawnParams = spawnSubagentDirectMock.mock.calls[0][0] as Record<string, unknown>;
+    const spawnParams = expectDefined(
+      spawnSubagentDirectMock.mock.calls.at(0)?.at(0),
+      "spawn params",
+    ) as Record<string, unknown>;
     expect(spawnParams).not.toHaveProperty("continuationTargetSessionKey");
   });
 
@@ -1731,7 +1754,7 @@ describe("dispatchToolDelegates — nonexistent target session", () => {
       (f) => f.ownerKey === sessionKey && f.status === "queued",
     );
     expect(queuedBefore).toHaveLength(1);
-    const flowId = queuedBefore[0].flowId as string;
+    const flowId = expectDefined(queuedBefore.at(0), "queued delegate").flowId as string;
 
     await dispatchToolDelegates({
       sessionKey,

@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -74,7 +75,10 @@ function runtime() {
 
 async function invoke(method: keyof typeof mcpAppHandlers, params: Record<string, unknown>) {
   const respond = vi.fn();
-  await mcpAppHandlers[method]({
+  await expectDefined(
+    mcpAppHandlers[method],
+    "mcpAppHandlers[method] test invariant",
+  )({
     respond,
     params,
     context: {

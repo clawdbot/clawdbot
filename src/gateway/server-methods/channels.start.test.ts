@@ -1,6 +1,8 @@
 /**
  * Gateway channels.start method tests.
  */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -73,7 +75,10 @@ async function runChannelsStart(running: boolean) {
   const startChannel = vi.fn();
   const respond = vi.fn();
 
-  await channelsHandlers["channels.start"](
+  await expectDefined(
+    channelsHandlers["channels.start"],
+    'channelsHandlers["channels.start"] test invariant',
+  )(
     createOptions(
       { channel: "whatsapp" },
       {
@@ -158,7 +163,10 @@ describe("channelsHandlers channels.stop", () => {
     const stopChannel = vi.fn(async () => undefined);
     const respond = vi.fn();
 
-    await channelsHandlers["channels.stop"](
+    await expectDefined(
+      channelsHandlers["channels.stop"],
+      'channelsHandlers["channels.stop"] test invariant',
+    )(
       createOptions(
         { channel: "whatsapp" },
         {
@@ -238,7 +246,10 @@ describe("channelsHandlers channels.logout", () => {
       },
     });
 
-    await channelsHandlers["channels.logout"](
+    await expectDefined(
+      channelsHandlers["channels.logout"],
+      'channelsHandlers["channels.logout"] test invariant',
+    )(
       createOptions(
         { channel: "whatsapp" },
         {

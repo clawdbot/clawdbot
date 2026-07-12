@@ -778,6 +778,17 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain("package_integrity=${PACKAGE_INTEGRITY_RESULT}");
   });
 
+  it("keeps ref packaging independent of workflow-checkout dependencies", () => {
+    const workflow = readFileSync(PACKAGE_ACCEPTANCE_WORKFLOW, "utf8");
+    const resolveJob = workflow.slice(
+      workflow.indexOf("  resolve_package:"),
+      workflow.indexOf("  package_integrity:"),
+    );
+
+    expect(resolveJob).toContain("scripts/resolve-openclaw-package-candidate.mjs");
+    expect(resolveJob).not.toContain("pnpm install");
+  });
+
   it("offers bounded product profiles and can run Telegram against the resolved artifact", () => {
     const workflow = readFileSync(PACKAGE_ACCEPTANCE_WORKFLOW, "utf8");
     const npmTelegramWorkflow = readFileSync(NPM_TELEGRAM_WORKFLOW, "utf8");

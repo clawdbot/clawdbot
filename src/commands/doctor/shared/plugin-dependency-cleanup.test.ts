@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { testing, cleanupLegacyPluginDependencyState } from "./plugin-dependency-cleanup.js";
 
@@ -162,7 +163,11 @@ describe("cleanupLegacyPluginDependencyState", () => {
       kind: "legacy-plugin-dependency-state",
       path: legacyRuntimeRoot,
     });
-    expect(testing.legacyPluginDependencyStateIssueToHealthFinding(issue)).toEqual({
+    expect(
+      testing.legacyPluginDependencyStateIssueToHealthFinding(
+        expectDefined(issue, "issue test invariant"),
+      ),
+    ).toEqual({
       checkId: "core/doctor/legacy-plugin-dependencies",
       severity: "warning",
       message: `Legacy plugin dependency state remains at ${legacyRuntimeRoot}.`,

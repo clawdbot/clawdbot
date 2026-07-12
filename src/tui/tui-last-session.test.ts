@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildTuiLastSessionScopeKey,
@@ -107,7 +108,9 @@ describe("tui last session state", () => {
       { key: "agent:main:tui-123" },
     ];
 
-    expect(isHeartbeatLikeTuiSession(sessions[0])).toBe(true);
+    expect(
+      isHeartbeatLikeTuiSession(expectDefined(sessions[0], "sessions[0] test invariant")),
+    ).toBe(true);
     expect(
       resolveRememberedTuiSessionKey({
         rememberedKey: "agent:main:main",

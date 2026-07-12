@@ -1,6 +1,7 @@
 /**
  * Tests delivery queue runtime ordering and retry behavior.
  */
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getActiveGatewayRootWorkCount,
@@ -141,8 +142,10 @@ describe("plugin-sdk delivery queue drainPendingDeliveries", () => {
     });
 
     expect(mocks.coreDrainPendingDeliveries).toHaveBeenCalledTimes(1);
-    const [[{ deliver: lazyDeliver }]] = mocks.coreDrainPendingDeliveries.mock
-      .calls as unknown as Array<[{ deliver?: unknown }]>;
+    const [{ deliver: lazyDeliver }] = expectDefined(
+      (mocks.coreDrainPendingDeliveries.mock.calls as unknown as Array<[{ deliver?: unknown }]>)[0],
+      "(mocks.coreDrainPendingDeliveries.mock.calls as unknown as Array<[{ deliver?: unknown }]>)[0] test invariant",
+    );
     expect(lazyDeliver).toBe(mocks.deliverOutboundPayloads);
   });
 
@@ -159,8 +162,10 @@ describe("plugin-sdk delivery queue drainPendingDeliveries", () => {
     });
 
     expect(mocks.coreDrainPendingDeliveries).toHaveBeenCalledTimes(1);
-    const [[{ deliver: explicitDeliver }]] = mocks.coreDrainPendingDeliveries.mock
-      .calls as unknown as Array<[{ deliver?: unknown }]>;
+    const [{ deliver: explicitDeliver }] = expectDefined(
+      (mocks.coreDrainPendingDeliveries.mock.calls as unknown as Array<[{ deliver?: unknown }]>)[0],
+      "(mocks.coreDrainPendingDeliveries.mock.calls as unknown as Array<[{ deliver?: unknown }]>)[0] test invariant",
+    );
     expect(explicitDeliver).toBe(deliver);
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
   });

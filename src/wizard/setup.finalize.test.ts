@@ -1,5 +1,6 @@
 // Setup finalize tests cover writing final onboarding config and artifacts.
 import fs from "node:fs/promises";
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type {
@@ -947,7 +948,10 @@ describe("finalizeSetupWizard", () => {
     );
     expect(launchTuiCli).toHaveBeenCalledOnce();
     expect(vi.mocked(prompter.outro).mock.invocationCallOrder[0]).toBeLessThan(
-      launchTuiCli.mock.invocationCallOrder[0],
+      expectDefined(
+        launchTuiCli.mock.invocationCallOrder[0],
+        "launchTuiCli.mock.invocationCallOrder[0] test invariant",
+      ),
     );
   });
 

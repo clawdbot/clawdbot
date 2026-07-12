@@ -1,4 +1,6 @@
 // Session action contract tests cover plugin session action metadata and execution contracts.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   createPluginRegistryFixture,
   registerTestPlugin,
@@ -39,7 +41,10 @@ async function callPluginSessionActionForTest(params: {
   const respond: RespondFn = (ok, payload, error) => {
     response = { ok, payload, error };
   };
-  await pluginHostHookHandlers["plugins.sessionAction"]({
+  await expectDefined(
+    pluginHostHookHandlers["plugins.sessionAction"],
+    'pluginHostHookHandlers["plugins.sessionAction"] test invariant',
+  )({
     req: { id: "test", type: "req", method: "plugins.sessionAction", params: params.body },
     params: params.body,
     client: {
@@ -623,7 +628,10 @@ describe("plugin session actions", () => {
     registry.plugins = [createPluginRecord({ id: "scope-copy-fixture" })];
     setActivePluginRegistry(registry);
 
-    await pluginHostHookHandlers["plugins.sessionAction"]({
+    await expectDefined(
+      pluginHostHookHandlers["plugins.sessionAction"],
+      'pluginHostHookHandlers["plugins.sessionAction"] test invariant',
+    )({
       req: {
         id: "scope-copy",
         type: "req",

@@ -296,4 +296,3 @@ export const testing = {
   normalizeProviderConfig,
   toElevenLabsRealtimeWsUrl,
 };
-export { testing as __testing };

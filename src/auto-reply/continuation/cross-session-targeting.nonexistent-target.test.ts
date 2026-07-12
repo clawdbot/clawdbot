@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { QueuedSessionDeliveryPayload } from "../../infra/session-delivery-queue-storage.js";
 import {
@@ -190,8 +191,9 @@ describe("nonexistent-target-session: delivery resilience (targeting.ts)", () =>
     expect(result).toMatchObject({ enqueued: 1, delivered: 1 });
     expect(result.deliveryIds).toHaveLength(1);
     expect(enqueued).toHaveLength(1);
-    expect(enqueued[0].sessionKey).toBe("agent:main:never-existed");
-    expect(enqueued[0].kind).toBe("systemEvent");
+    const delivery = expectDefined(enqueued.at(0), "enqueued delivery");
+    expect(delivery.sessionKey).toBe("agent:main:never-existed");
+    expect(delivery.kind).toBe("systemEvent");
     expect(systemEvents).toEqual([
       {
         text: "[continuation:enrichment-return] nonexistent target",
@@ -292,7 +294,7 @@ describe("nonexistent-target-session: delivery resilience (targeting.ts)", () =>
       const persistedEntries = await loadPendingSessionDeliveries(stateDir);
       expect(persistedEntries).toHaveLength(1);
 
-      const persisted = persistedEntries[0];
+      const persisted = expectDefined(persistedEntries.at(0), "persisted delivery");
       expect(persisted.kind).toBe("systemEvent");
       expect(persisted.sessionKey).toBe("agent:main:never-existed");
     });

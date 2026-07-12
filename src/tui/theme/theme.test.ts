@@ -1,4 +1,6 @@
 // TUI theme tests cover theme defaults and environment-driven variants.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -15,12 +17,24 @@ afterEach(() => {
   process.env = { ...originalEnv };
 });
 
-async function importThemeWithEnv(env: Record<string, string | undefined>) {
-  for (const [key, value] of Object.entries(env)) {
-    if (value === undefined) {
-      delete process.env[key];
+type ThemeEnvOverrides = {
+  OPENCLAW_THEME?: string | undefined;
+  COLORFGBG?: string | undefined;
+};
+
+async function importThemeWithEnv(env: ThemeEnvOverrides) {
+  if (Object.hasOwn(env, "OPENCLAW_THEME")) {
+    if (env.OPENCLAW_THEME === undefined) {
+      delete process.env.OPENCLAW_THEME;
     } else {
-      process.env[key] = value;
+      process.env.OPENCLAW_THEME = env.OPENCLAW_THEME;
+    }
+  }
+  if (Object.hasOwn(env, "COLORFGBG")) {
+    if (env.COLORFGBG === undefined) {
+      delete process.env.COLORFGBG;
+    } else {
+      process.env.COLORFGBG = env.COLORFGBG;
     }
   }
   return importFreshModule<typeof import("./theme.js")>(
@@ -38,14 +52,21 @@ function relativeLuminance(hex: string): number {
   if (!channels || channels.length !== 3) {
     throw new Error(`invalid color: ${hex}`);
   }
-  return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+  return (
+    0.2126 * expectDefined(channels[0], "channels[0] test invariant") +
+    0.7152 * expectDefined(channels[1], "channels[1] test invariant") +
+    0.0722 * expectDefined(channels[2], "channels[2] test invariant")
+  );
 }
 
 function contrastRatio(foreground: string, background: string): number {
   const [lighter, darker] = [relativeLuminance(foreground), relativeLuminance(background)].toSorted(
     (a, b) => b - a,
   );
-  return (lighter + 0.05) / (darker + 0.05);
+  return (
+    (expectDefined(lighter, "lighter test invariant") + 0.05) /
+    (expectDefined(darker, "darker test invariant") + 0.05)
+  );
 }
 
 describe("markdownTheme", () => {

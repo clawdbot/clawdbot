@@ -3,6 +3,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "openclaw/plugin-sdk/llm";
@@ -1638,8 +1639,8 @@ describe("truncateOversizedToolResultsInSession", () => {
     );
 
     expect(toolTexts[0]).toContain("truncated");
-    expect(toolTexts[1].length).toBeGreaterThan(0);
-    expect(toolTexts[2].length).toBeGreaterThan(0);
+    expect(expectDefined(toolTexts[1], "toolTexts[1] test invariant").length).toBeGreaterThan(0);
+    expect(expectDefined(toolTexts[2], "toolTexts[2] test invariant").length).toBeGreaterThan(0);
   });
 
   it("lets aggregate recovery honor a tiny explicit cap during persisted rewrite", async () => {

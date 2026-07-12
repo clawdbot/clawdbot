@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../../sessions/agent-harness-session-key.js";
 import {
@@ -69,7 +70,10 @@ describe("agent harness session store invariant", () => {
     await updateSessionStore(
       storePath,
       (store) => {
-        store[sessionKey] = { ...store[sessionKey], label: "Legacy notes" };
+        store[sessionKey] = {
+          ...expectDefined(store[sessionKey], "stored harness session"),
+          label: "Legacy notes",
+        };
       },
       { skipMaintenance: true },
     );
@@ -91,7 +95,10 @@ describe("agent harness session store invariant", () => {
     await updateSessionStore(
       storePath,
       (store) => {
-        store[sessionKey] = { ...store[sessionKey], sessionId: "generated-session" };
+        store[sessionKey] = {
+          ...expectDefined(store[sessionKey], "stored legacy session"),
+          sessionId: "generated-session",
+        };
       },
       { skipMaintenance: true },
     );
@@ -204,7 +211,10 @@ describe("agent harness session store invariant", () => {
       updateSessionStore(
         storePath,
         (store) => {
-          store[sessionKey] = { ...store[sessionKey], agentHarnessId: "other" };
+          store[sessionKey] = {
+            ...expectDefined(store[sessionKey], "stored harness session"),
+            agentHarnessId: "other",
+          };
         },
         { skipMaintenance: true },
       ),
@@ -213,7 +223,10 @@ describe("agent harness session store invariant", () => {
       updateSessionStore(
         storePath,
         (store) => {
-          store[sessionKey] = { ...store[sessionKey], agentHarnessId: "codex-app-server" };
+          store[sessionKey] = {
+            ...expectDefined(store[sessionKey], "stored harness session"),
+            agentHarnessId: "codex-app-server",
+          };
         },
         { skipMaintenance: true },
       ),
@@ -222,7 +235,10 @@ describe("agent harness session store invariant", () => {
       updateSessionStore(
         storePath,
         (store) => {
-          store[sessionKey] = { ...store[sessionKey], sessionId: "replacement-session" };
+          store[sessionKey] = {
+            ...expectDefined(store[sessionKey], "stored harness session"),
+            sessionId: "replacement-session",
+          };
         },
         { skipMaintenance: true },
       ),
@@ -245,7 +261,10 @@ describe("agent harness session store invariant", () => {
       updateSessionStore(
         storePath,
         (store) => {
-          store[sessionKey] = { ...store[sessionKey], sessionId: "replacement-session" };
+          store[sessionKey] = {
+            ...expectDefined(store[sessionKey], "stored harness session"),
+            sessionId: "replacement-session",
+          };
         },
         { skipMaintenance: true },
       ),

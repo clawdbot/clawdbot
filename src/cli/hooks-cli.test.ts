@@ -1,4 +1,5 @@
 // Hooks CLI tests cover hook command registration and output behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import type { HookStatusReport } from "../hooks/hooks-status.js";
 import { formatHookInfo, formatHooksCheck, formatHooksList } from "./hooks-cli.js";
@@ -87,7 +88,7 @@ describe("hooks cli formatting", () => {
       managedHooksDir: "/tmp/hooks",
       hooks: [
         {
-          ...report.hooks[0],
+          ...expectDefined(report.hooks[0], "report.hooks[0] test invariant"),
           name: "typo-hook",
           events: ["command:nwe", "command:new"],
           unknownEvents: ["command:nwe"],

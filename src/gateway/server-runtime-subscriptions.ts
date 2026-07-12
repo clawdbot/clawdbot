@@ -4,7 +4,11 @@ import { isAuditLedgerEnabled, resolveAuditMessageMode } from "../audit/audit-co
 import { createAuditEventRecorder } from "../audit/audit-recorder.js";
 import { onTrustedMessageAuditEvent } from "../audit/message-audit-events.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { clearAgentRunContext, onAgentAuditEvent, onAgentEvent } from "../infra/agent-events.js";
+import {
+  clearAgentRunContext,
+  onAgentAuditEvent,
+  onAgentRuntimeEvent,
+} from "../infra/agent-events.js";
 import { onTrustedToolExecutionEvent } from "../infra/diagnostic-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
@@ -242,7 +246,7 @@ export function startGatewayEventSubscriptions(params: {
     return lifecycleEventHandlerPromise;
   };
 
-  const unsubscribeAgentEvents = onAgentEvent((evt) => {
+  const unsubscribeAgentEvents = onAgentRuntimeEvent((evt) => {
     if (auditEnabled) {
       auditRecorder.record(evt);
     }
@@ -251,7 +255,9 @@ export function startGatewayEventSubscriptions(params: {
         ? evt.data.phase
         : undefined;
     if (lifecyclePhase === "end" || lifecyclePhase === "error") {
-      const chatLink = params.chatRunState.registry.peek(evt.runId);
+      const chatLink = evt.contextClaimId
+        ? undefined
+        : params.chatRunState.registry.peek(evt.runId);
       const clientRunId = chatLink?.clientRunId ?? evt.runId;
       const candidateRunIds = evt.runId === clientRunId ? [evt.runId] : [evt.runId, clientRunId];
       for (const candidateRunId of candidateRunIds) {
@@ -271,7 +277,9 @@ export function startGatewayEventSubscriptions(params: {
         }
       }
     } else if (lifecyclePhase === "start") {
-      const chatLink = params.chatRunState.registry.peek(evt.runId);
+      const chatLink = evt.contextClaimId
+        ? undefined
+        : params.chatRunState.registry.peek(evt.runId);
       const clientRunId = chatLink?.clientRunId ?? evt.runId;
       const candidateRunIds = evt.runId === clientRunId ? [evt.runId] : [evt.runId, clientRunId];
       const eventLifecycleGeneration = evt.lifecycleGeneration?.trim();

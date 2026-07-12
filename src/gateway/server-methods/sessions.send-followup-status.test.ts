@@ -1,6 +1,8 @@
 /**
  * Tests follow-up session send status transitions and broadcasts.
  */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { expectSubagentFollowupReactivation } from "./subagent-followup.test-helpers.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
@@ -100,7 +102,10 @@ describe("sessions.send completed subagent follow-up status", () => {
       getRuntimeConfig: () => ({}),
     } as unknown as GatewayRequestContext;
 
-    await sessionsHandlers["sessions.send"]({
+    await expectDefined(
+      sessionsHandlers["sessions.send"],
+      'sessionsHandlers["sessions.send"] test invariant',
+    )({
       req: { id: "req-1" } as never,
       params: {
         key: childSessionKey,
@@ -155,7 +160,10 @@ describe("sessions.send completed subagent follow-up status", () => {
         getRuntimeConfig: () => cfg,
       } as unknown as GatewayRequestContext;
 
-      await sessionsHandlers[method]({
+      await expectDefined(
+        sessionsHandlers[method],
+        "sessionsHandlers[method] test invariant",
+      )({
         req: { id: "req-1" } as never,
         params: {
           key: "global",

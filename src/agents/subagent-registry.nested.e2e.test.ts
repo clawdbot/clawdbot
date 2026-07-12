@@ -1,5 +1,7 @@
 // Nested subagent registry e2e tests cover requester/controller relationships
 // across orchestrator and leaf child sessions.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import "./subagent-registry.mocks.shared.js";
 
@@ -62,12 +64,12 @@ describe("subagent registry nested agent tracking", () => {
     // Main sees its direct child (the orchestrator)
     const mainRuns = listSubagentRunsForRequester("agent:main:main");
     expect(mainRuns).toHaveLength(1);
-    expect(mainRuns[0].runId).toBe("run-orch");
+    expect(expectDefined(mainRuns[0], "mainRuns[0] test invariant").runId).toBe("run-orch");
 
     // Orchestrator sees its direct child (the leaf)
     const orchRuns = listSubagentRunsForRequester("agent:main:subagent:orch-uuid");
     expect(orchRuns).toHaveLength(1);
-    expect(orchRuns[0].runId).toBe("run-leaf");
+    expect(expectDefined(orchRuns[0], "orchRuns[0] test invariant").runId).toBe("run-leaf");
 
     // Leaf has no children
     const leafRuns = listSubagentRunsForRequester(
@@ -94,8 +96,12 @@ describe("subagent registry nested agent tracking", () => {
     const { listSubagentRunsForRequester } = subagentRegistry;
     const orchRuns = listSubagentRunsForRequester("agent:main:subagent:orch");
     expect(orchRuns).toHaveLength(1);
-    expect(orchRuns[0].requesterSessionKey).toBe("agent:main:subagent:orch");
-    expect(orchRuns[0].childSessionKey).toBe("agent:main:subagent:orch:subagent:child");
+    expect(expectDefined(orchRuns[0], "orchRuns[0] test invariant").requesterSessionKey).toBe(
+      "agent:main:subagent:orch",
+    );
+    expect(expectDefined(orchRuns[0], "orchRuns[0] test invariant").childSessionKey).toBe(
+      "agent:main:subagent:orch:subagent:child",
+    );
   });
 
   it("countActiveRunsForSession only counts active children of the specific session", () => {

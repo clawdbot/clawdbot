@@ -4,6 +4,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearActiveSessionsForShutdownTracker } from "../active-sessions-shutdown-tracker.js";
 
@@ -75,28 +76,31 @@ describe("agent handler session create events", () => {
     const broadcastToConnIds = vi.fn();
     const respond = vi.fn();
 
-    await agentHandlers.agent({
-      params: {
-        message: "hi",
-        sessionKey: "agent:main:subagent:create-test",
-        idempotencyKey: "idem-agent-create-event",
+    await expectDefined(agentHandlers.agent, "agentHandlers.agent test invariant").call(
+      agentHandlers,
+      {
+        params: {
+          message: "hi",
+          sessionKey: "agent:main:subagent:create-test",
+          idempotencyKey: "idem-agent-create-event",
+        },
+        respond,
+        context: {
+          dedupe: new Map(),
+          deps: {} as never,
+          logGateway: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() } as never,
+          chatAbortControllers: new Map(),
+          addChatRun: vi.fn(),
+          registerToolEventRecipient: vi.fn(),
+          getRuntimeConfig: configMocks.getRuntimeConfig,
+          getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+          broadcastToConnIds,
+        } as never,
+        client: null,
+        isWebchatConnect: () => false,
+        req: { id: "req-agent-create-event" } as never,
       },
-      respond,
-      context: {
-        dedupe: new Map(),
-        deps: {} as never,
-        logGateway: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() } as never,
-        chatAbortControllers: new Map(),
-        addChatRun: vi.fn(),
-        registerToolEventRecipient: vi.fn(),
-        getRuntimeConfig: configMocks.getRuntimeConfig,
-        getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
-        broadcastToConnIds,
-      } as never,
-      client: null,
-      isWebchatConnect: () => false,
-      req: { id: "req-agent-create-event" } as never,
-    });
+    );
 
     const responseCall = firstMockCall(respond) as
       | [boolean, { status?: string; runId?: string }, unknown, { runId?: string }]

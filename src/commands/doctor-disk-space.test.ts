@@ -1,4 +1,5 @@
 // Doctor disk-space tests cover byte formatting, warning generation, and note rendering.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildDiskSpaceWarnings,
@@ -126,7 +127,10 @@ describe("noteDiskSpace", () => {
     });
 
     expect(mockNote).toHaveBeenCalledOnce();
-    const [message, title] = vi.mocked(mockNote).mock.calls[0];
+    const [message, title] = expectDefined(
+      vi.mocked(mockNote).mock.calls[0],
+      "vi.mocked(mockNote).mock.calls[0] test invariant",
+    );
     expect(title).toBe("Disk space");
     expect(message).toContain("Low disk space");
   });
@@ -141,7 +145,10 @@ describe("noteDiskSpace", () => {
     });
 
     expect(mockNote).toHaveBeenCalledOnce();
-    const [message] = vi.mocked(mockNote).mock.calls[0];
+    const [message] = expectDefined(
+      vi.mocked(mockNote).mock.calls[0],
+      "vi.mocked(mockNote).mock.calls[0] test invariant",
+    );
     expect(message).toContain("CRITICAL");
   });
 

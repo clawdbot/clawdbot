@@ -346,7 +346,10 @@ describe("cost-cap exhaustion mid-chain", () => {
       (f) => f.ownerKey === sessionKey && f.status === "queued",
     );
     expect(queuedBefore).toHaveLength(1);
-    const flowId = queuedBefore[0].flowId as string;
+    const flowId = queuedBefore.at(0)?.flowId;
+    if (typeof flowId !== "string") {
+      throw new Error("expected queued flow id");
+    }
 
     await dispatchToolDelegates({
       sessionKey,

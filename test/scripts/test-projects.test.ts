@@ -4323,9 +4323,11 @@ describe("scripts/test-projects full-suite sharding", () => {
 
   it("can expand full-suite shards to project configs for perf experiments", () => {
     const gatewayServerConfig = "test/vitest/vitest.gateway-server.config.ts";
+    const agentsCoreConfig = "test/vitest/vitest.agents-core.config.ts";
     const toolingConfig = "test/vitest/vitest.tooling.config.ts";
     const unitFastConfig = "test/vitest/vitest.unit-fast.config.ts";
     const plans = leafShardPlans;
+    const agentsCorePlans = plans.filter((plan) => plan.config === agentsCoreConfig);
     const toolingPlans = plans.filter((plan) => plan.config === toolingConfig);
     const unitFastPlans = plans.filter((plan) => plan.config === unitFastConfig);
 
@@ -4375,7 +4377,7 @@ describe("scripts/test-projects full-suite sharding", () => {
       "test/vitest/vitest.cli.config.ts",
       "test/vitest/vitest.commands-light.config.ts",
       "test/vitest/vitest.commands.config.ts",
-      "test/vitest/vitest.agents-core.config.ts",
+      ...agentsCorePlans.map(() => agentsCoreConfig),
       "test/vitest/vitest.agents-embedded-agent.config.ts",
       "test/vitest/vitest.agents-support.config.ts",
       "test/vitest/vitest.agents-tools.config.ts",
@@ -4432,6 +4434,18 @@ describe("scripts/test-projects full-suite sharding", () => {
     expect(gatewayTargets).toContain("src/gateway/server-network-runtime.e2e.test.ts");
     expect(gatewayTargets).not.toContain("src/gateway/gateway.test.ts");
     expect(Math.max(...gatewayChunkSizes) - Math.min(...gatewayChunkSizes)).toBeLessThanOrEqual(1);
+    const agentsCoreTargets = agentsCorePlans.flatMap((plan) => plan.forwardedArgs);
+    const agentsCoreChunkSizes = agentsCorePlans.map((plan) => plan.forwardedArgs.length);
+    expect(agentsCorePlans).toHaveLength(6);
+    expect(agentsCoreTargets.length).toBeGreaterThan(500);
+    expect(new Set(agentsCoreTargets).size).toBe(agentsCoreTargets.length);
+    expect(agentsCoreTargets).toContain("src/agents/agent-command.live-model-switch.test.ts");
+    expect(agentsCoreTargets).not.toContain(
+      "src/agents/embedded-agent-runner/run.incomplete-turn.test.ts",
+    );
+    expect(
+      Math.max(...agentsCoreChunkSizes) - Math.min(...agentsCoreChunkSizes),
+    ).toBeLessThanOrEqual(1);
     const unitFastTargets = unitFastPlans.flatMap((plan) => plan.forwardedArgs);
     expect(unitFastPlans.length).toBeGreaterThan(10);
     expect(unitFastPlans.every((plan) => plan.forwardedArgs.length <= 70)).toBe(true);
@@ -4451,6 +4465,7 @@ describe("scripts/test-projects full-suite sharding", () => {
       plans.filter(
         (plan) =>
           plan.config !== gatewayServerConfig &&
+          plan.config !== agentsCoreConfig &&
           plan.config !== toolingConfig &&
           plan.config !== unitFastConfig,
       ),
@@ -4459,6 +4474,7 @@ describe("scripts/test-projects full-suite sharding", () => {
         .filter(
           (plan) =>
             plan.config !== gatewayServerConfig &&
+            plan.config !== agentsCoreConfig &&
             plan.config !== toolingConfig &&
             plan.config !== unitFastConfig,
         )

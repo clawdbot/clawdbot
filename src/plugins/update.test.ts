@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { bundledPluginRootAt } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
@@ -346,7 +347,11 @@ function createOpenClawPeerLinkFixtures(plugins: Array<{ pluginId: string; packa
     ]),
   );
   const peerLinkPath = (pluginId: string) =>
-    path.join(installPaths[pluginId], "node_modules", "openclaw");
+    path.join(
+      expectDefined(installPaths[pluginId], "installPaths[pluginId] test invariant"),
+      "node_modules",
+      "openclaw",
+    );
   const linkPeer = (pluginId: string) => {
     fs.mkdirSync(path.dirname(peerLinkPath(pluginId)), { recursive: true });
     fs.symlinkSync(peerTarget, peerLinkPath(pluginId), "junction");

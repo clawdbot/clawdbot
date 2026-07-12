@@ -437,6 +437,50 @@ describe("renderAgents", () => {
 });
 
 describe("renderAgentFiles", () => {
+  it("does not accept another file selection while a file request is loading", () => {
+    const container = document.createElement("div");
+    const onSelectFile = vi.fn();
+
+    render(
+      renderAgentFiles({
+        agentId: "alpha",
+        agentFilesList: {
+          agentId: "alpha",
+          workspace: "/tmp/workspace",
+          files: [
+            {
+              name: "AGENTS.md",
+              path: "/tmp/workspace/AGENTS.md",
+              missing: false,
+            },
+            {
+              name: "HEARTBEAT.md",
+              path: "/tmp/workspace/HEARTBEAT.md",
+              missing: false,
+            },
+          ],
+        },
+        agentFilesLoading: true,
+        agentFilesError: null,
+        agentFileActive: "AGENTS.md",
+        agentFileContents: { "AGENTS.md": "# Instructions" },
+        agentFileDrafts: { "AGENTS.md": "# Instructions" },
+        agentFileSaving: false,
+        onLoadFiles: () => undefined,
+        onSelectFile,
+        onFileDraftChange: () => undefined,
+        onFileReset: () => undefined,
+        onFileSave: () => undefined,
+      }),
+      container,
+    );
+
+    const heartbeatTab = expectAgentTab(container, "HEARTBEAT");
+    expect(heartbeatTab.disabled).toBe(true);
+    heartbeatTab.click();
+    expect(onSelectFile).not.toHaveBeenCalled();
+  });
+
   it("renders the upgraded markdown preview structure with file metadata", () => {
     const container = document.createElement("div");
 

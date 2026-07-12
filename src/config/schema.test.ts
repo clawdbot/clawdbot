@@ -1,5 +1,6 @@
-// Covers canonical config schema defaults, validation, and sensitive redaction.
 import { SENSITIVE_URL_HINT_TAG } from "@openclaw/net-policy/redact-sensitive-url";
+// Covers canonical config schema defaults, validation, and sensitive redaction.
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, describe, expect, it } from "vitest";
 import { buildConfigSchema, lookupConfigSchema } from "./schema.js";
 import { applyDerivedTags, CONFIG_TAGS, deriveTagsForPath } from "./schema.tags.js";
@@ -564,9 +565,11 @@ describe("config schema", () => {
 
   it("caches merged schemas for identical plugin/channel metadata", () => {
     const first = buildConfigSchema(cachedMergeInput);
+    const plugin = expectDefined(cachedMergeInput.plugins?.[0], "cached plugin metadata");
+    const channel = expectDefined(cachedMergeInput.channels?.[0], "cached channel metadata");
     const second = buildConfigSchema({
-      plugins: [{ ...cachedMergeInput.plugins![0] }],
-      channels: [{ ...cachedMergeInput.channels![0] }],
+      plugins: [{ ...plugin }],
+      channels: [{ ...channel }],
     });
     expect(second).toBe(first);
   });

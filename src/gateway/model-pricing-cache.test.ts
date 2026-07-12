@@ -1,5 +1,7 @@
 // Model pricing cache tests protect provider/model normalization, manifest
 // metadata lookup, fetch preconnect behavior, cache refresh, and logging.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { modelKey } from "../agents/model-selection.js";
 import type { normalizeProviderModelIdWithRuntime } from "../agents/provider-model-normalization.runtime.js";
@@ -904,8 +906,8 @@ describe("model-pricing-cache", () => {
       cacheWrite: expect.closeTo(0.092),
       range: [0, 32000],
     });
-    expect(tiers[2].cacheWrite).toBeCloseTo(0.28);
-    expect(tiers[2].range).toEqual([128000, 256000]);
+    expect(expectDefined(tiers[2], "tiers[2] test invariant").cacheWrite).toBeCloseTo(0.28);
+    expect(expectDefined(tiers[2], "tiers[2] test invariant").range).toEqual([128000, 256000]);
   });
 
   it("normalizes LiteLLM open-ended range [start] to [start, Infinity]", async () => {
@@ -965,9 +967,9 @@ describe("model-pricing-cache", () => {
     );
 
     expect(tiers).toHaveLength(2);
-    expect(tiers[0].range).toEqual([0, 32000]);
-    expect(tiers[1].range).toEqual([32000, Infinity]);
-    expect(tiers[1].cacheWrite).toBeCloseTo(0.14);
+    expect(expectDefined(tiers[0], "tiers[0] test invariant").range).toEqual([0, 32000]);
+    expect(expectDefined(tiers[1], "tiers[1] test invariant").range).toEqual([32000, Infinity]);
+    expect(expectDefined(tiers[1], "tiers[1] test invariant").cacheWrite).toBeCloseTo(0.14);
   });
 
   it("merges OpenRouter flat pricing with LiteLLM tiered pricing", async () => {
@@ -1043,8 +1045,8 @@ describe("model-pricing-cache", () => {
     expect(cached.output).toBeCloseTo(2.4);
     // LiteLLM tiered pricing is merged in
     expect(tiers).toHaveLength(2);
-    expect(tiers[1].range).toEqual([256000, 1000000]);
-    expect(tiers[1].cacheWrite).toBeCloseTo(0.1);
+    expect(expectDefined(tiers[1], "tiers[1] test invariant").range).toEqual([256000, 1000000]);
+    expect(expectDefined(tiers[1], "tiers[1] test invariant").cacheWrite).toBeCloseTo(0.1);
   });
 
   it("falls back gracefully when LiteLLM fetch fails", async () => {

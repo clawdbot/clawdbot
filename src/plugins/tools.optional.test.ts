@@ -1,4 +1,5 @@
 // Verifies optional plugin tool registration and absence handling.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY } from "../agents/tool-policy.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
@@ -1289,7 +1290,9 @@ describe("resolvePluginTools optional tools", () => {
     });
 
     expectResolvedToolNames(tools, ["x_search"]);
-    expect(getPluginToolMeta(tools[0])?.replaySafe).toBe(true);
+    expect(getPluginToolMeta(expectDefined(tools[0], "tools[0] test invariant"))?.replaySafe).toBe(
+      true,
+    );
     expect(factory).toHaveBeenCalledTimes(1);
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
@@ -1797,12 +1800,24 @@ describe("resolvePluginTools optional tools", () => {
 
     expectResolvedToolNames(first, ["other_tool", "optional_tool"]);
     expectResolvedToolNames(second, ["other_tool", "optional_tool"]);
-    expect(getPluginToolMeta(first[0])?.optional).toBe(false);
-    expect(getPluginToolMeta(first[0])?.trustedLocalMedia).toBe(true);
-    expect(getPluginToolMeta(first[1])?.optional).toBe(true);
-    expect(getPluginToolMeta(first[1])?.trustedLocalMedia).toBe(true);
-    expect(getPluginToolMeta(second[1])?.optional).toBe(true);
-    expect(getPluginToolMeta(second[1])?.trustedLocalMedia).toBe(true);
+    expect(getPluginToolMeta(expectDefined(first[0], "first[0] test invariant"))?.optional).toBe(
+      false,
+    );
+    expect(
+      getPluginToolMeta(expectDefined(first[0], "first[0] test invariant"))?.trustedLocalMedia,
+    ).toBe(true);
+    expect(getPluginToolMeta(expectDefined(first[1], "first[1] test invariant"))?.optional).toBe(
+      true,
+    );
+    expect(
+      getPluginToolMeta(expectDefined(first[1], "first[1] test invariant"))?.trustedLocalMedia,
+    ).toBe(true);
+    expect(getPluginToolMeta(expectDefined(second[1], "second[1] test invariant"))?.optional).toBe(
+      true,
+    );
+    expect(
+      getPluginToolMeta(expectDefined(second[1], "second[1] test invariant"))?.trustedLocalMedia,
+    ).toBe(true);
     expect(factory).toHaveBeenCalledTimes(1);
   });
 

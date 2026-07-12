@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -150,7 +151,7 @@ describe("subagent announce targeted continuation return integration", () => {
       const queuedDeliveries = await loadPendingSessionDeliveries(stateDir);
       expect(queuedDeliveries).toHaveLength(1);
 
-      const persisted = queuedDeliveries[0];
+      const persisted = expectDefined(queuedDeliveries.at(0), "queued delivery");
       if (persisted.kind !== "systemEvent") {
         throw new Error(`expected systemEvent delivery, received ${persisted.kind}`);
       }
@@ -229,7 +230,9 @@ describe("subagent announce targeted continuation return integration", () => {
 
       for (const sessionKey of [requesterSessionKey, rootSessionKey]) {
         expect(peekSystemEventEntries(sessionKey)).toHaveLength(1);
-        expect(peekSystemEventEntries(sessionKey)[0].text).toContain(nonce);
+        expect(
+          expectDefined(peekSystemEventEntries(sessionKey).at(0), "system event").text,
+        ).toContain(nonce);
       }
       expect(requestHeartbeatNowMock).toHaveBeenCalledTimes(2);
       expect(requestHeartbeatNowMock).toHaveBeenCalledWith(
@@ -296,7 +299,9 @@ describe("subagent announce targeted continuation return integration", () => {
       ]);
       for (const sessionKey of [requesterSessionKey, rootSessionKey]) {
         expect(peekSystemEventEntries(sessionKey)).toHaveLength(1);
-        expect(peekSystemEventEntries(sessionKey)[0].text).toContain(nonce);
+        expect(
+          expectDefined(peekSystemEventEntries(sessionKey).at(0), "system event").text,
+        ).toContain(nonce);
       }
       expect(requestHeartbeatNowMock).toHaveBeenCalledTimes(2);
     });

@@ -1,5 +1,7 @@
 // Cron validation tests cover channel target validation against plugin
 // prefixes/aliases and runtime config for cron delivery destinations.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -176,7 +178,10 @@ async function invokeCron(
 ) {
   const context = options.context ?? createCronContext(options.currentJob);
   const respond = vi.fn();
-  await cronHandlers[method]({
+  await expectDefined(
+    cronHandlers[method],
+    "cronHandlers[method] test invariant",
+  )({
     req: {} as never,
     params: params as never,
     respond: respond as never,
@@ -1774,7 +1779,10 @@ describe("cron method validation", () => {
     const context = createCronContext(createCronJob());
     context.cron.getJob.mockReturnValue(undefined);
     const respond = vi.fn();
-    await cronHandlers["cron.update"]({
+    await expectDefined(
+      cronHandlers["cron.update"],
+      'cronHandlers["cron.update"] test invariant',
+    )({
       req: {} as never,
       params: {
         id: "cron-1",
@@ -2030,7 +2038,10 @@ describe("cron method validation", () => {
     context.cron.add.mockRejectedValueOnce(new Error("DB write failed"));
     const respond = vi.fn();
     await expect(
-      cronHandlers["cron.add"]({
+      expectDefined(
+        cronHandlers["cron.add"],
+        'cronHandlers["cron.add"] test invariant',
+      )({
         req: {} as never,
         params: agentTurnCronParams({
           name: "db-fail",

@@ -1,4 +1,6 @@
 // Verifies tool planner filtering, ordering, and unsupported-tool reporting.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { ToolPlanContractError } from "./diagnostics.js";
 import { formatToolExecutorRef } from "./execution.js";
@@ -123,7 +125,11 @@ describe("buildToolPlan", () => {
       ],
     });
 
-    expect(formatToolExecutorRef(plan.visible[0].executor)).toBe("plugin:demo:plugin_tool");
+    expect(
+      formatToolExecutorRef(
+        expectDefined(plan.visible[0], "plan.visible[0] test invariant").executor,
+      ),
+    ).toBe("plugin:demo:plugin_tool");
     expect(toToolProtocolDescriptors(plan.visible)).toEqual([
       {
         name: "plugin_tool",

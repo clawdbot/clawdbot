@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -884,7 +885,10 @@ async function runNonStreamingChatSend(params: {
   if (typeof params.deliver === "boolean") {
     sendParams.deliver = params.deliver;
   }
-  await chatHandlers["chat.send"]({
+  await expectDefined(
+    chatHandlers["chat.send"],
+    'chatHandlers["chat.send"] test invariant',
+  )({
     params: {
       ...sendParams,
       ...params.requestParams,
@@ -1323,7 +1327,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const context = createChatContext();
     mockState.loadSessionEntryCalls = [];
 
-    await chatHandlers["chat.history"]({
+    await expectDefined(
+      chatHandlers["chat.history"],
+      'chatHandlers["chat.history"] test invariant',
+    )({
       params: { sessionKey: "agent:work:main" },
       respond: respond as never,
       req: {} as never,
@@ -3452,7 +3459,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const respond = vi.fn();
     const context = createChatContext();
 
-    await chatHandlers["chat.inject"]({
+    await expectDefined(
+      chatHandlers["chat.inject"],
+      'chatHandlers["chat.inject"] test invariant',
+    )({
       params: { sessionKey: "main", message: "[[reply_to_current]]" },
       respond,
       req: {} as never,
@@ -3479,7 +3489,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const respond = vi.fn();
     const context = createChatContext();
 
-    await chatHandlers["chat.inject"]({
+    await expectDefined(
+      chatHandlers["chat.inject"],
+      'chatHandlers["chat.inject"] test invariant',
+    )({
       params: { sessionKey: "main", message: "must stay read-only" },
       respond,
       req: {} as never,
@@ -3513,7 +3526,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const context = createChatContext();
 
     try {
-      const inject = chatHandlers["chat.inject"]({
+      const inject = expectDefined(
+        chatHandlers["chat.inject"],
+        'chatHandlers["chat.inject"] test invariant',
+      )({
         params: { sessionKey: "main", message: "must lose the archive race" },
         respond,
         req: {} as never,
@@ -3543,7 +3559,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       const respond = vi.fn();
       const context = createChatContext();
 
-      await chatHandlers["chat.inject"]({
+      await expectDefined(
+        chatHandlers["chat.inject"],
+        'chatHandlers["chat.inject"] test invariant',
+      )({
         params: { sessionKey: "main", message: "hello sqlite inject" },
         respond,
         req: {} as never,
@@ -3610,7 +3629,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const respond = vi.fn();
     const context = createChatContext();
 
-    await chatHandlers["chat.send"]({
+    await expectDefined(
+      chatHandlers["chat.send"],
+      'chatHandlers["chat.send"] test invariant',
+    )({
       params: {
         sessionKey: `agent:main:${"x".repeat(CHAT_SEND_SESSION_KEY_MAX_LENGTH)}`,
         message: "hello",
@@ -3636,7 +3658,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const respond = vi.fn();
     const context = createChatContext();
 
-    await chatHandlers["chat.send"]({
+    await expectDefined(
+      chatHandlers["chat.send"],
+      'chatHandlers["chat.send"] test invariant',
+    )({
       params: {
         sessionKey: "agent:main:harness:codex:supervision:native-thread",
         message: "claim reserved session",
@@ -3664,7 +3689,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const respond = vi.fn();
     const context = createChatContext();
 
-    await chatHandlers["chat.inject"]({
+    await expectDefined(
+      chatHandlers["chat.inject"],
+      'chatHandlers["chat.inject"] test invariant',
+    )({
       params: {
         sessionKey: "main",
         message: `hello\n\n${UNTRUSTED_CONTEXT_SUFFIX}`,
@@ -3690,7 +3718,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const respond = vi.fn();
     const context = createChatContext();
 
-    await chatHandlers["chat.inject"]({
+    await expectDefined(
+      chatHandlers["chat.inject"],
+      'chatHandlers["chat.inject"] test invariant',
+    )({
       params: {
         sessionKey: "legacy-key",
         message: "hello",
@@ -3726,7 +3757,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(appendedAt);
     try {
-      await chatHandlers["chat.inject"]({
+      await expectDefined(
+        chatHandlers["chat.inject"],
+        'chatHandlers["chat.inject"] test invariant',
+      )({
         params: {
           sessionKey: "main",
           message: "hello with registry marker",
@@ -3759,7 +3793,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const respond = vi.fn();
     const context = createChatContext();
 
-    await chatHandlers["chat.inject"]({
+    await expectDefined(
+      chatHandlers["chat.inject"],
+      'chatHandlers["chat.inject"] test invariant',
+    )({
       params: {
         sessionKey: "main",
         agentId: "work",

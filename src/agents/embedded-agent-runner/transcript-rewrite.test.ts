@@ -3,6 +3,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -168,15 +169,18 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
   it("branches from the first replaced message and re-appends the remaining suffix", () => {
     const { sessionManager, toolResultEntryId } = createReadRewriteSession();
 
-    const result = rewriteTranscriptEntriesInSessionManager({
-      sessionManager,
-      replacements: [
-        {
-          entryId: toolResultEntryId,
-          message: createToolResultReplacement("read", "[externalized file_123]", 3),
-        },
-      ],
-    });
+    const result = expectDefined(
+      rewriteTranscriptEntriesInSessionManager({
+        sessionManager,
+        replacements: [
+          {
+            entryId: expectDefined(toolResultEntryId, "toolResultEntryId test invariant"),
+            message: createToolResultReplacement("read", "[externalized file_123]", 3),
+          },
+        ],
+      }),
+      "rewriteTranscriptEntriesInSessionManager({ sessionManager, replacemen... test invariant",
+    );
 
     expect(result.changed).toBe(true);
     expect(result.rewrittenEntries).toBe(1);
@@ -203,15 +207,18 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
     );
     sessionManager.appendLabelChange(summaryEntry.id, "bookmark");
 
-    const result = rewriteTranscriptEntriesInSessionManager({
-      sessionManager,
-      replacements: [
-        {
-          entryId: toolResultEntryId,
-          message: createToolResultReplacement("read", "[externalized file_123]", 3),
-        },
-      ],
-    });
+    const result = expectDefined(
+      rewriteTranscriptEntriesInSessionManager({
+        sessionManager,
+        replacements: [
+          {
+            entryId: expectDefined(toolResultEntryId, "toolResultEntryId test invariant"),
+            message: createToolResultReplacement("read", "[externalized file_123]", 3),
+          },
+        ],
+      }),
+      "rewriteTranscriptEntriesInSessionManager({ sessionManager, replacemen... test invariant",
+    );
 
     expect(result.changed).toBe(true);
     const rewrittenSummaryEntry = requireValue(
@@ -230,17 +237,24 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
       toolResultEntryId,
       tailAssistantEntryId: keptAssistantEntryId,
     } = createReadRewriteSession({ tailAssistantText: "keep me" });
-    sessionManager.appendCompaction("summary", keptAssistantEntryId, 123);
+    sessionManager.appendCompaction(
+      "summary",
+      expectDefined(keptAssistantEntryId, "keptAssistantEntryId test invariant"),
+      123,
+    );
 
-    const result = rewriteTranscriptEntriesInSessionManager({
-      sessionManager,
-      replacements: [
-        {
-          entryId: toolResultEntryId,
-          message: createToolResultReplacement("read", "[externalized file_123]", 3),
-        },
-      ],
-    });
+    const result = expectDefined(
+      rewriteTranscriptEntriesInSessionManager({
+        sessionManager,
+        replacements: [
+          {
+            entryId: expectDefined(toolResultEntryId, "toolResultEntryId test invariant"),
+            message: createToolResultReplacement("read", "[externalized file_123]", 3),
+          },
+        ],
+      }),
+      "rewriteTranscriptEntriesInSessionManager({ sessionManager, replacemen... test invariant",
+    );
 
     expect(result.changed).toBe(true);
     const branch = sessionManager.getBranch();
@@ -273,15 +287,18 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
         message.role === "assistant" ? { block: true } : undefined,
     });
 
-    const result = rewriteTranscriptEntriesInSessionManager({
-      sessionManager,
-      replacements: [
-        {
-          entryId: toolResultEntryId,
-          message: createToolResultReplacement("exec", "[exact replacement]", 2),
-        },
-      ],
-    });
+    const result = expectDefined(
+      rewriteTranscriptEntriesInSessionManager({
+        sessionManager,
+        replacements: [
+          {
+            entryId: expectDefined(toolResultEntryId, "toolResultEntryId test invariant"),
+            message: createToolResultReplacement("exec", "[exact replacement]", 2),
+          },
+        ],
+      }),
+      "rewriteTranscriptEntriesInSessionManager({ sessionManager, replacemen... test invariant",
+    );
 
     expect(result.changed).toBe(true);
     const branchMessages = getBranchMessages(sessionManager);

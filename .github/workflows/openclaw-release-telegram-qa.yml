@@ -2170,6 +2170,7 @@ jobs:
         env:
           BOUNDARY_EVIDENCE_DIR: ${{ steps.create_sut.outputs.boundary_evidence_dir }}
           OUTPUT_DIR: ${{ steps.run_lane.outputs.output_dir }}
+          RUN_LANE_OUTCOME: ${{ steps.run_lane.outcome }}
         shell: bash
         run: |
           set -euo pipefail
@@ -2213,6 +2214,7 @@ jobs:
               (.candidateArtifact.version | length > 0)
             ' "$context_path" >/dev/null
           jq -e \
+            --arg runLaneOutcome "$RUN_LANE_OUTCOME" \
             '
               .version == 1 and
               .kind == "qa-gateway-process-boundary" and
@@ -2243,7 +2245,10 @@ jobs:
                   )
                 )
               ) and
-              ([.launches[] | select(.terminalState == "ready-exited")] | length >= 2)
+              (
+                [.launches[] | select(.terminalState == "ready-exited")] | length >=
+                  (if $runLaneOutcome == "success" then 2 else 1 end)
+              )
             ' "$runtime_path" >/dev/null
 
           while IFS=$'\t' read -r relative_path expected_sha256; do

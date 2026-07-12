@@ -1,6 +1,7 @@
 // Doctor config-flow tests cover config repair, migration, stripping, and validation orchestration.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
@@ -1774,8 +1775,14 @@ describe("doctor config flow", () => {
     });
 
     expect(noteImplicitFallbackClobberWarningsMock).toHaveBeenCalledTimes(1);
-    const [[warningParams]] = noteImplicitFallbackClobberWarningsMock.mock
-      .calls as unknown as Array<[{ agents?: unknown }]>;
+    const [warningParams] = expectDefined(
+      (
+        noteImplicitFallbackClobberWarningsMock.mock.calls as unknown as Array<
+          [{ agents?: unknown }]
+        >
+      )[0],
+      "(noteImplicitFallbackClobberWarningsMock.mock.calls as unknown as Array<\n        [{ agents?: unknown }]\n      >)[0] test invariant",
+    );
     expect(warningParams.agents).toStrictEqual(config.agents);
     const doctorWarnings = terminalNoteMock.mock.calls
       .filter(([, title]) => title === "Doctor warnings")
@@ -2567,23 +2574,52 @@ describe("doctor config flow", () => {
         expect(cfg.channels.discord.dm.allowFrom).toEqual(["456"]);
         expect(cfg.channels.discord.dm.groupChannels).toEqual(["789"]);
         expect(cfg.channels.discord.execApprovals.approvers).toEqual(["321"]);
-        expect(cfg.channels.discord.guilds["100"].users).toEqual(["111"]);
-        expect(cfg.channels.discord.guilds["100"].roles).toEqual(["222"]);
-        expect(cfg.channels.discord.guilds["100"].channels.general.users).toEqual(["333"]);
-        expect(cfg.channels.discord.guilds["100"].channels.general.roles).toEqual(["444"]);
+        expect(
+          expectDefined(
+            cfg.channels.discord.guilds["100"],
+            'cfg.channels.discord.guilds["100"] test invariant',
+          ).users,
+        ).toEqual(["111"]);
+        expect(
+          expectDefined(
+            cfg.channels.discord.guilds["100"],
+            'cfg.channels.discord.guilds["100"] test invariant',
+          ).roles,
+        ).toEqual(["222"]);
+        const defaultGuild = expectDefined(
+          cfg.channels.discord.guilds["100"],
+          "default Discord guild",
+        );
+        const generalChannel = expectDefined(
+          defaultGuild.channels.general,
+          "general Discord channel",
+        );
+        expect(generalChannel.users).toEqual(["333"]);
+        expect(generalChannel.roles).toEqual(["444"]);
         expect(cfg.channels.discord.accounts.default.allowFrom).toEqual(["123"]);
         expect(cfg.channels.discord.accounts.work.allowFrom).toEqual(["555"]);
         expect(cfg.channels.discord.accounts.work.dm.allowFrom).toEqual(["666"]);
         expect(cfg.channels.discord.accounts.work.dm.groupChannels).toEqual(["777"]);
         expect(cfg.channels.discord.accounts.work.execApprovals.approvers).toEqual(["888"]);
-        expect(cfg.channels.discord.accounts.work.guilds["200"].users).toEqual(["999"]);
-        expect(cfg.channels.discord.accounts.work.guilds["200"].roles).toEqual(["1010"]);
-        expect(cfg.channels.discord.accounts.work.guilds["200"].channels.help.users).toEqual([
-          "1111",
-        ]);
-        expect(cfg.channels.discord.accounts.work.guilds["200"].channels.help.roles).toEqual([
-          "1212",
-        ]);
+        expect(
+          expectDefined(
+            cfg.channels.discord.accounts.work.guilds["200"],
+            'cfg.channels.discord.accounts.work.guilds["200"] test invariant',
+          ).users,
+        ).toEqual(["999"]);
+        expect(
+          expectDefined(
+            cfg.channels.discord.accounts.work.guilds["200"],
+            'cfg.channels.discord.accounts.work.guilds["200"] test invariant',
+          ).roles,
+        ).toEqual(["1010"]);
+        const workGuild = expectDefined(
+          cfg.channels.discord.accounts.work.guilds["200"],
+          "work Discord guild",
+        );
+        const helpChannel = expectDefined(workGuild.channels.help, "help Discord channel");
+        expect(helpChannel.users).toEqual(["1111"]);
+        expect(helpChannel.roles).toEqual(["1212"]);
       },
       { skipSessionCleanup: true },
     );
@@ -2615,7 +2651,12 @@ describe("doctor config flow", () => {
     };
 
     expect(cfg.channels.discord.allowFrom).toBeUndefined();
-    expect(cfg.channels.discord.accounts.default.allowFrom).toEqual(["123"]);
+    expect(
+      expectDefined(
+        cfg.channels.discord.accounts.default,
+        "cfg.channels.discord.accounts.default test invariant",
+      ).allowFrom,
+    ).toEqual(["123"]);
   });
 
   it('repairs open dmPolicy allowFrom variants with ["*"] in one pass', async () => {

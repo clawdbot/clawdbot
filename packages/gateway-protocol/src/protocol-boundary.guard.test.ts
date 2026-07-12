@@ -35,6 +35,9 @@ describe("gateway protocol package boundary", () => {
       const content = await fs.readFile(source, "utf8");
       for (const match of content.matchAll(importSpecifierPattern)) {
         const specifier = match[1] ?? match[2];
+        if (!specifier) {
+          continue;
+        }
         if (!specifier.startsWith(".")) {
           continue;
         }

@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LocalAudioSelection } from "../media-understanding/local-audio.js";
@@ -2621,9 +2622,12 @@ describe("capability cli", () => {
       }),
     );
     expect(
-      (firstCommandConfigResolutionCall().targetIds as Set<string>).has(
-        "models.providers.*.apiKey",
-      ),
+      (
+        expectDefined(
+          firstCommandConfigResolutionCall(),
+          "firstCommandConfigResolutionCall() test invariant",
+        ).targetIds as Set<string>
+      ).has("models.providers.*.apiKey"),
     ).toBe(true);
     expect(firstAudioTranscriptionCall()?.cfg).toBe(resolvedConfig);
   });
@@ -3089,9 +3093,12 @@ describe("capability cli", () => {
       }),
     );
     expect(
-      (firstCommandConfigResolutionCall().targetIds as Set<string>).has(
-        "models.providers.*.apiKey",
-      ),
+      (
+        expectDefined(
+          firstCommandConfigResolutionCall(),
+          "firstCommandConfigResolutionCall() test invariant",
+        ).targetIds as Set<string>
+      ).has("models.providers.*.apiKey"),
     ).toBe(true);
     expect(firstPreparedModelParams()?.cfg).toBe(resolvedConfig);
     expect(mocks.setRuntimeConfigSnapshot).toHaveBeenCalledWith(resolvedConfig);

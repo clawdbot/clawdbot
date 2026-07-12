@@ -5,12 +5,19 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
+import type { RawData } from "ws";
 import {
   loadTranscriptEvents,
   persistSessionTranscriptTurn,
 } from "../config/sessions/session-accessor.js";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  claimAgentRunContext,
+  clearAgentRunContext,
+  emitAgentEvent,
+} from "../infra/agent-events.js";
+import { rawDataToString } from "../infra/ws.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import * as transcriptEvents from "../sessions/transcript-events.js";
 import {
@@ -27,6 +34,7 @@ import {
   writeSessionStore,
 } from "./test-helpers.server.js";
 import type { WorkerConnectionIdentity } from "./worker-environments/connection-identity.js";
+import { createWorkerLiveEventReceiver } from "./worker-environments/live-events.js";
 import type { WorkerTranscriptCommitStore } from "./worker-environments/transcript-commit-store.js";
 import { createWorkerTranscriptCommitter } from "./worker-environments/transcript-commit.js";
 
@@ -1214,7 +1222,7 @@ describe("session.message websocket events", () => {
     }
   });
 
-  test("streams every worker transcript commit entry to the selected session subscriber", async () => {
+  test("streams worker commits and local-equivalent live events to the selected session", async () => {
     const storePath = await createSessionStoreFile();
     const sessionId = "sess-worker-commit-fanout";
     const sessionKey = "agent:main:worker";
@@ -1243,11 +1251,31 @@ describe("session.message websocket events", () => {
       sessionId,
       ownerEpoch: 4,
       rpcSetVersion: 1,
-      protocolFeatures: ["worker-transcript-commit-v1"],
+      protocolFeatures: ["worker-live-event-v1", "worker-transcript-commit-v1"],
       credentialExpiresAtMs: Date.now() + 10_000,
     };
-
+    const receiver = createWorkerLiveEventReceiver({
+      getConfig: () => config,
+      startupBindings: [{ environmentId: identity.environmentId, runEpoch: 4, sessionId }],
+      startupOwners: new Map([[identity.environmentId, 4]]),
+    });
     const ws = await harness.openWs();
+    const workerChats: Record<string, unknown>[] = [];
+    const collectWorkerChats = (data: RawData) => {
+      const message = JSON.parse(rawDataToString(data)) as {
+        type?: string;
+        event?: string;
+        payload?: Record<string, unknown>;
+      };
+      if (
+        message.type === "event" &&
+        message.event === "chat" &&
+        message.payload?.runId === "worker"
+      ) {
+        workerChats.push(message.payload);
+      }
+    };
+    ws.on("message", collectWorkerChats);
     try {
       await connectOk(ws, { scopes: ["operator.read"] });
       const subscribeRes = await rpcReq(ws, "sessions.messages.subscribe", { key: sessionKey });
@@ -1300,7 +1328,65 @@ describe("session.message websocket events", () => {
           return requireRecord(message["__openclaw"], "session.message metadata").seq;
         }),
       ).toEqual([1, 2, 3]);
+
+      const waitForChat = (runId: string, timeoutMs?: number) =>
+        onceMessage(
+          ws,
+          ({ type, event, payload }) =>
+            type === "event" &&
+            event === "chat" &&
+            (payload as Record<string, unknown>).runId === runId,
+          timeoutMs,
+        );
+      const liveEvent = {
+        event: { kind: "assistant", payload: { text: "hello", delta: "hello" } },
+        lastAckedSeq: 0,
+        seq: 1,
+      } as const;
+      const push = (runEpoch = 4, runId = "worker") =>
+        receiver.apply({ identity, request: { ...liveEvent, runEpoch, runId } });
+      const [workerEvent] = await Promise.all([
+        waitForChat("worker"),
+        expectNoMessageWithin({
+          watch: (timeoutMs) => waitForSessionMessageEvent(ws, sessionKey, timeoutMs),
+          action: () => expect(push().ok).toBe(true),
+        }),
+      ]);
+      const workerChat = requireRecord(workerEvent.payload, "worker chat");
+      await expectNoMessageWithin({
+        watch: (timeoutMs) => waitForChat("worker", timeoutMs),
+        action: () => {
+          expect(push()).toEqual({ ok: true, result: { ackedSeq: 1 } });
+        },
+      });
+      expect(workerChats).toHaveLength(1);
+
+      claimAgentRunContext("local", {
+        sessionKey,
+        sessionId,
+        agentId: "main",
+        isControlUiVisible: false,
+      });
+      const localEvent = waitForChat("local");
+      emitAgentEvent({
+        runId: "local",
+        stream: "assistant",
+        data: { text: "hello", delta: "hello" },
+      });
+      const localChat = requireRecord((await localEvent).payload, "local chat");
+      for (const payload of [workerChat, localChat]) {
+        payload.runId = "normalized";
+        requireRecord(payload.message, "chat message").timestamp = 0;
+      }
+      expect(workerChat).toEqual(localChat);
+      await expectNoMessageWithin({
+        watch: (timeoutMs) => waitForChat("stale", timeoutMs),
+        action: () => expect(push(3, "stale").ok).toBe(false),
+      });
     } finally {
+      receiver.clear();
+      clearAgentRunContext("local");
+      ws.off("message", collectWorkerChats);
       ws.close();
     }
   });

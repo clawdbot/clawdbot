@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   validateApprovalGetResult,
@@ -194,7 +195,10 @@ async function invoke(params: {
 }) {
   const respond = vi.fn();
   const context = params.context ?? createContext();
-  await params.handlers[params.method]({
+  await expectDefined(
+    params.handlers[params.method],
+    "params.handlers[params.method] test invariant",
+  )({
     req: { id: "req-1", type: "req", method: params.method, params: params.body },
     params: params.body,
     client: params.client,
@@ -920,7 +924,10 @@ describe("unified approval handlers", () => {
       databaseOptions,
     });
     const respond = vi.fn();
-    const handler = handlers["approval.resolve"]({
+    const handler = expectDefined(
+      handlers["approval.resolve"],
+      'handlers["approval.resolve"] test invariant',
+    )({
       req: {
         id: "req-slow-forwarder",
         type: "req",

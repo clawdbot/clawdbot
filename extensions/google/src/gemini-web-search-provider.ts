@@ -152,4 +152,3 @@ export const testing = {
   resolveGeminiModel,
   withGoogleModelProviderFallbacks,
 } as const;
-export { testing as __testing };

@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { CronJob } from "../cron/types.js";
 import {
@@ -129,7 +130,10 @@ describe("createCronExitWatchers", () => {
     expect(fireOnExit).not.toHaveBeenCalled();
 
     // Watched command exits → job fires through the run pipeline.
-    runs[0].deferred.resolve({ exitCode: 0, reason: "exit" });
+    expectDefined(runs[0], "runs[0] test invariant").deferred.resolve({
+      exitCode: 0,
+      reason: "exit",
+    });
     await flush();
     expect(fireOnExit).toHaveBeenCalledTimes(1);
     expect(fireOnExit.mock.calls[0]?.[0].id).toBe("job-a");
@@ -156,7 +160,10 @@ describe("createCronExitWatchers", () => {
     });
     w.reconcile([onExitJob("job-a")]);
     await flush();
-    runs[0].deferred.resolve({ exitCode: 0, reason: "exit" });
+    expectDefined(runs[0], "runs[0] test invariant").deferred.resolve({
+      exitCode: 0,
+      reason: "exit",
+    });
     await flush();
     expect(supervisor.spawn).toHaveBeenCalledTimes(1);
     // Simulate restart: a fresh manager reconciling the now-disabled persisted job.
@@ -185,7 +192,10 @@ describe("createCronExitWatchers", () => {
     });
     w.reconcile([onExitJob("job-a")]);
     await flush();
-    runs[0].deferred.resolve({ exitCode: 0, reason: "exit" });
+    expectDefined(runs[0], "runs[0] test invariant").deferred.resolve({
+      exitCode: 0,
+      reason: "exit",
+    });
     await flush();
     expect(fireOnExit).not.toHaveBeenCalled();
     expect(w.activeJobIds()).toEqual([]);
@@ -212,7 +222,9 @@ describe("createCronExitWatchers", () => {
     expect(w.activeJobIds()).toEqual(["job-a"]);
 
     // wait() rejects (e.g. supervisor error) instead of resolving with an exit.
-    runs[0].deferred.reject(new Error("supervisor wait blew up"));
+    expectDefined(runs[0], "runs[0] test invariant").deferred.reject(
+      new Error("supervisor wait blew up"),
+    );
     await flush();
 
     // Fail closed: no fire, no persisted terminal state on an unknown outcome.
@@ -262,7 +274,10 @@ describe("createCronExitWatchers", () => {
         payload: { kind: "systemEvent", text: "updated" },
       } as CronJob,
     ]);
-    runs[0].deferred.resolve({ exitCode: 0, reason: "exit" });
+    expectDefined(runs[0], "runs[0] test invariant").deferred.resolve({
+      exitCode: 0,
+      reason: "exit",
+    });
     await flush();
 
     expect(supervisor.spawn).toHaveBeenCalledTimes(1);
@@ -290,7 +305,10 @@ describe("createCronExitWatchers", () => {
     expect(fake.runCancels.length).toBe(1);
     expect(fireOnExit).not.toHaveBeenCalled();
     expect(w.activeJobIds()).toEqual(["job-a"]);
-    fake.runs[0].deferred.resolve({ exitCode: null, reason: "manual-cancel" });
+    expectDefined(fake.runs[0], "fake.runs[0] test invariant").deferred.resolve({
+      exitCode: null,
+      reason: "manual-cancel",
+    });
     await vi.waitFor(() => expect(w.activeJobIds()).toEqual([]));
   });
 
@@ -341,7 +359,10 @@ describe("createCronExitWatchers", () => {
     expect(cancelled).toContain("cron-exit:job-a");
     expect(w.activeJobIds()).toEqual(["job-a"]);
 
-    runs[0].deferred.resolve({ exitCode: null, reason: "manual-cancel" });
+    expectDefined(runs[0], "runs[0] test invariant").deferred.resolve({
+      exitCode: null,
+      reason: "manual-cancel",
+    });
     await vi.waitFor(() => expect(w.activeJobIds()).toEqual([]));
   });
 
@@ -357,7 +378,10 @@ describe("createCronExitWatchers", () => {
     w.reconcile([onExitJob("job-a")]);
     await flush();
     w.reconcile([]); // cancel before the command exits
-    runs[0].deferred.resolve({ exitCode: 0, reason: "manual-cancel" });
+    expectDefined(runs[0], "runs[0] test invariant").deferred.resolve({
+      exitCode: 0,
+      reason: "manual-cancel",
+    });
     await flush();
     expect(fireOnExit).not.toHaveBeenCalled();
   });
@@ -381,7 +405,10 @@ describe("createCronExitWatchers", () => {
     w.reconcile([onExitJob("job-a")]);
     await flush();
 
-    runs[0].deferred.resolve({ exitCode: 0, reason: "exit" });
+    expectDefined(runs[0], "runs[0] test invariant").deferred.resolve({
+      exitCode: 0,
+      reason: "exit",
+    });
     await vi.waitFor(() => expect(persistCompletion).toHaveBeenCalledOnce());
     w.reconcile([]);
     expect(w.activeJobIds()).toEqual(["job-a"]);
@@ -401,7 +428,10 @@ describe("createCronExitWatchers", () => {
     });
     w.reconcile([onExitJob("job-a")]);
     await flush();
-    runs[0].deferred.resolve({ exitCode: 0, reason: "exit" });
+    expectDefined(runs[0], "runs[0] test invariant").deferred.resolve({
+      exitCode: 0,
+      reason: "exit",
+    });
     await flush();
     w.reconcile([onExitJob("job-a")]);
     await flush();

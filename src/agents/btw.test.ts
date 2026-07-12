@@ -1,4 +1,6 @@
 /** Tests BTW side-question execution, session context, auth, and harness routing. */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
@@ -2245,7 +2247,10 @@ describe("runBtwSideQuestion", () => {
     const [message] = contextMessages(streamContext());
     expectRecordFields(message, { role: "user" });
     expectTextBlockContains(
-      (message.content as Array<unknown>)[0],
+      expectDefined(
+        (expectDefined(message, "message test invariant").content as Array<unknown>)[0],
+        "(message.content as Array<unknown>)[0] test invariant",
+      ),
       "<in_flight_main_task>\nbuild me a tic-tac-toe game in brainfuck\n</in_flight_main_task>",
     );
   });

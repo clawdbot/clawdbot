@@ -1,6 +1,8 @@
 /**
  * Tests for text-to-speech gateway methods and provider error envelopes.
  */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { expectGatewayErrorResponse } from "./gateway-response.test-helpers.js";
@@ -99,7 +101,10 @@ describe("ttsHandlers", () => {
     const { ttsHandlers } = await import("./tts.js");
     const respond = vi.fn();
 
-    await ttsHandlers["tts.convert"]({
+    await expectDefined(
+      ttsHandlers["tts.convert"],
+      'ttsHandlers["tts.convert"] test invariant',
+    )({
       params: {
         text: "hello",
         provider: "bad",
@@ -119,7 +124,10 @@ describe("ttsHandlers", () => {
     const { ttsHandlers } = await import("./tts.js");
     const respond = vi.fn();
 
-    await ttsHandlers["tts.speak"]({
+    await expectDefined(
+      ttsHandlers["tts.speak"],
+      'ttsHandlers["tts.speak"] test invariant',
+    )({
       params: { text: "Hello there." },
       respond,
       context: { getRuntimeConfig: mocks.getRuntimeConfig },
@@ -139,7 +147,10 @@ describe("ttsHandlers", () => {
     const { ttsHandlers } = await import("./tts.js");
     const respond = vi.fn();
 
-    await ttsHandlers["tts.speak"]({
+    await expectDefined(
+      ttsHandlers["tts.speak"],
+      'ttsHandlers["tts.speak"] test invariant',
+    )({
       params: { text: "   " },
       respond,
       context: { getRuntimeConfig: mocks.getRuntimeConfig },
@@ -158,7 +169,10 @@ describe("ttsHandlers", () => {
     const { ttsHandlers } = await import("./tts.js");
     const respond = vi.fn();
 
-    await ttsHandlers["tts.speak"]({
+    await expectDefined(
+      ttsHandlers["tts.speak"],
+      'ttsHandlers["tts.speak"] test invariant',
+    )({
       params: { text: "This text is definitely too long." },
       respond,
       context: { getRuntimeConfig: mocks.getRuntimeConfig },
@@ -180,7 +194,10 @@ describe("ttsHandlers", () => {
     const { ttsHandlers } = await import("./tts.js");
     const respond = vi.fn();
 
-    await ttsHandlers["tts.speak"]({
+    await expectDefined(
+      ttsHandlers["tts.speak"],
+      'ttsHandlers["tts.speak"] test invariant',
+    )({
       params: { text: "Hello there." },
       respond,
       context: { getRuntimeConfig: mocks.getRuntimeConfig },

@@ -1,5 +1,7 @@
 // Push method tests cover APNs direct/relay registrations, alert delivery,
 // stale registration cleanup, config resolution, and error mapping.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { pushHandlers } from "./push.js";
@@ -98,7 +100,10 @@ function createInvokeParams(params: Record<string, unknown>) {
   return {
     respond,
     invoke: async () =>
-      await pushHandlers["push.test"]({
+      await expectDefined(
+        pushHandlers["push.test"],
+        'pushHandlers["push.test"] test invariant',
+      )({
         params,
         respond: respond as never,
         context: { getRuntimeConfig: () => mocks.getRuntimeConfig() } as never,

@@ -23,6 +23,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveStoredSessionOwnerAgentId } from "../gateway/session-store-key.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { closeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
 import { compactDoctorSessionSqliteTarget } from "./doctor-session-sqlite-compact.js";
 import {
   assertSafeSessionSqliteMigrationDirectory,
@@ -295,7 +296,7 @@ async function inspectOrMigrateTarget(params: {
     if (validationPassed) {
       // Post-import compact retrofits auto_vacuum=INCREMENTAL onto pre-flip
       // databases and returns the pages the import churn freed.
-      compactSqliteDatabase(params.target, report);
+      compactSqliteDatabase(params.target, report, { closeImportedHandle: true });
     }
   }
   report.unreferencedJsonlFiles = listUnreferencedJsonlFiles(params.target.storePath, [
@@ -983,8 +984,12 @@ function appendSqliteDbStats(
 function compactSqliteDatabase(
   target: SessionStoreTarget,
   report: DoctorSessionSqliteTargetReport,
+  options: { closeImportedHandle?: boolean } = {},
 ): void {
   try {
+    if (options.closeImportedHandle) {
+      closeOpenClawAgentDatabaseByPath(resolveTargetSqlitePath(target));
+    }
     report.compact = compactDoctorSessionSqliteTarget(target);
   } catch (err) {
     report.issues.push({

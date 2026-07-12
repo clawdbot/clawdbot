@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveTerminalLaunch } from "../terminal/launch.js";
@@ -66,7 +67,10 @@ describe("terminal.open policy snapshot", () => {
       { gateway: { terminal: { enabled: false } } },
     );
 
-    await terminalHandlers["terminal.open"](opts);
+    await expectDefined(
+      terminalHandlers["terminal.open"],
+      'terminalHandlers["terminal.open"] test invariant',
+    )(opts);
 
     expect(sessions.open).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
@@ -82,7 +86,10 @@ describe("terminal.open policy snapshot", () => {
       },
     );
 
-    await terminalHandlers["terminal.open"](opts);
+    await expectDefined(
+      terminalHandlers["terminal.open"],
+      'terminalHandlers["terminal.open"] test invariant',
+    )(opts);
 
     expect(sessions.open).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
@@ -95,7 +102,10 @@ describe("terminal.input kill switch", () => {
       { sessionId: "s1", data: "ls\n" },
       { enabled: true },
     );
-    await terminalHandlers["terminal.input"](opts);
+    await expectDefined(
+      terminalHandlers["terminal.input"],
+      'terminalHandlers["terminal.input"] test invariant',
+    )(opts);
     expect(sessions.write).toHaveBeenCalledWith("conn-1", "s1", "ls\n");
     expect(respond).toHaveBeenCalledWith(true, { ok: true });
   });
@@ -105,7 +115,10 @@ describe("terminal.input kill switch", () => {
       { sessionId: "s1", data: "ls\n" },
       { enabled: false },
     );
-    await terminalHandlers["terminal.input"](opts);
+    await expectDefined(
+      terminalHandlers["terminal.input"],
+      'terminalHandlers["terminal.input"] test invariant',
+    )(opts);
     // The disabled kill switch must stop live input and tear the session down.
     expect(sessions.write).not.toHaveBeenCalled();
     expect(sessions.close).toHaveBeenCalledWith("conn-1", "s1");
@@ -114,7 +127,10 @@ describe("terminal.input kill switch", () => {
 
   it("defaults to disabled when terminal config is absent", async () => {
     const { opts, sessions, respond } = makeOpts({ sessionId: "s1", data: "ls\n" }, undefined);
-    await terminalHandlers["terminal.input"](opts);
+    await expectDefined(
+      terminalHandlers["terminal.input"],
+      'terminalHandlers["terminal.input"] test invariant',
+    )(opts);
     expect(sessions.write).not.toHaveBeenCalled();
     expect(sessions.close).toHaveBeenCalledWith("conn-1", "s1");
     expect(respond).toHaveBeenCalledWith(true, { ok: false });
@@ -127,7 +143,10 @@ describe("terminal.resize kill switch", () => {
       { sessionId: "s1", cols: 80, rows: 24 },
       { enabled: false },
     );
-    await terminalHandlers["terminal.resize"](opts);
+    await expectDefined(
+      terminalHandlers["terminal.resize"],
+      'terminalHandlers["terminal.resize"] test invariant',
+    )(opts);
     expect(sessions.resize).not.toHaveBeenCalled();
     expect(sessions.close).toHaveBeenCalledWith("conn-1", "s1");
     expect(respond).toHaveBeenCalledWith(true, { ok: false });
@@ -137,7 +156,10 @@ describe("terminal.resize kill switch", () => {
 describe("terminal.attach", () => {
   it("returns the session facts plus the replay buffer", async () => {
     const { opts, sessions, respond } = makeOpts({ sessionId: "s1" }, { enabled: true });
-    await terminalHandlers["terminal.attach"](opts);
+    await expectDefined(
+      terminalHandlers["terminal.attach"],
+      'terminalHandlers["terminal.attach"] test invariant',
+    )(opts);
     expect(sessions.attach).toHaveBeenCalledWith("conn-1", "s1");
     expect(respond).toHaveBeenCalledWith(true, {
       sessionId: "s1",
@@ -151,23 +173,36 @@ describe("terminal.attach", () => {
 
   it("refuses to hand out a PTY stream when the terminal is disabled", async () => {
     const { opts, sessions, respond } = makeOpts({ sessionId: "s1" }, { enabled: false });
-    await terminalHandlers["terminal.attach"](opts);
+    await expectDefined(
+      terminalHandlers["terminal.attach"],
+      'terminalHandlers["terminal.attach"] test invariant',
+    )(opts);
     expect(sessions.attach).not.toHaveBeenCalled();
-    expect(respond.mock.calls[0][0]).toBe(false);
+    expect(expectDefined(respond.mock.calls[0], "respond.mock.calls[0] test invariant")[0]).toBe(
+      false,
+    );
   });
 
   it("rejects unknown sessions", async () => {
     const { opts, sessions, respond } = makeOpts({ sessionId: "gone" }, { enabled: true });
     sessions.attach.mockReturnValue(undefined as never);
-    await terminalHandlers["terminal.attach"](opts);
-    expect(respond.mock.calls[0][0]).toBe(false);
+    await expectDefined(
+      terminalHandlers["terminal.attach"],
+      'terminalHandlers["terminal.attach"] test invariant',
+    )(opts);
+    expect(expectDefined(respond.mock.calls[0], "respond.mock.calls[0] test invariant")[0]).toBe(
+      false,
+    );
   });
 });
 
 describe("terminal.list", () => {
   it("lists sessions with the confined flag applied", async () => {
     const { opts, respond } = makeOpts(undefined, { enabled: true });
-    await terminalHandlers["terminal.list"](opts);
+    await expectDefined(
+      terminalHandlers["terminal.list"],
+      'terminalHandlers["terminal.list"] test invariant',
+    )(opts);
     expect(respond).toHaveBeenCalledWith(true, {
       sessions: [
         {
@@ -185,7 +220,10 @@ describe("terminal.list", () => {
 
   it("returns an empty list when the terminal is disabled", async () => {
     const { opts, sessions, respond } = makeOpts(undefined, { enabled: false });
-    await terminalHandlers["terminal.list"](opts);
+    await expectDefined(
+      terminalHandlers["terminal.list"],
+      'terminalHandlers["terminal.list"] test invariant',
+    )(opts);
     expect(sessions.list).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(true, { sessions: [] });
   });
@@ -194,7 +232,10 @@ describe("terminal.list", () => {
 describe("terminal.text", () => {
   it("returns the buffer rendered as plain text", async () => {
     const { opts, respond } = makeOpts({ sessionId: "s1" }, { enabled: true });
-    await terminalHandlers["terminal.text"](opts);
+    await expectDefined(
+      terminalHandlers["terminal.text"],
+      'terminalHandlers["terminal.text"] test invariant',
+    )(opts);
     // The raw snapshot carries a CR overwrite; the handler collapses it.
     expect(respond).toHaveBeenCalledWith(true, { text: "100%" });
   });
@@ -209,7 +250,10 @@ describe("terminal.text", () => {
       .join("");
     sessions.snapshot.mockReturnValue(`before${sequences}after`);
 
-    await terminalHandlers["terminal.text"](opts);
+    await expectDefined(
+      terminalHandlers["terminal.text"],
+      'terminalHandlers["terminal.text"] test invariant',
+    )(opts);
 
     expect(respond).toHaveBeenCalledWith(true, { text: "beforeafter" });
   });
@@ -217,12 +261,28 @@ describe("terminal.text", () => {
   it("rejects unknown sessions and disabled terminals", async () => {
     const unknown = makeOpts({ sessionId: "gone" }, { enabled: true });
     unknown.sessions.snapshot.mockReturnValue(undefined as never);
-    await terminalHandlers["terminal.text"](unknown.opts);
-    expect(unknown.respond.mock.calls[0][0]).toBe(false);
+    await expectDefined(
+      terminalHandlers["terminal.text"],
+      'terminalHandlers["terminal.text"] test invariant',
+    )(unknown.opts);
+    expect(
+      expectDefined(
+        unknown.respond.mock.calls[0],
+        "unknown.respond.mock.calls[0] test invariant",
+      )[0],
+    ).toBe(false);
 
     const disabled = makeOpts({ sessionId: "s1" }, { enabled: false });
-    await terminalHandlers["terminal.text"](disabled.opts);
+    await expectDefined(
+      terminalHandlers["terminal.text"],
+      'terminalHandlers["terminal.text"] test invariant',
+    )(disabled.opts);
     expect(disabled.sessions.snapshot).not.toHaveBeenCalled();
-    expect(disabled.respond.mock.calls[0][0]).toBe(false);
+    expect(
+      expectDefined(
+        disabled.respond.mock.calls[0],
+        "disabled.respond.mock.calls[0] test invariant",
+      )[0],
+    ).toBe(false);
   });
 });

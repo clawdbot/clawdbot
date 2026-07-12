@@ -1,5 +1,7 @@
 // Models method tests cover slow catalog timeouts, configured/all views,
 // validation errors, and protocol response shapes.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import {
@@ -53,7 +55,10 @@ function requestModelsList(params: {
   reqId?: string;
 }) {
   const respond = params.respond ?? vi.fn();
-  const request = modelsHandlers["models.list"]({
+  const request = expectDefined(
+    modelsHandlers["models.list"],
+    'modelsHandlers["models.list"] test invariant',
+  )({
     req: {
       type: "req",
       id: params.reqId ?? `req-models-list-${params.view}`,
@@ -790,12 +795,16 @@ describe("models.list", () => {
         },
       },
     };
+    const sourceProvider = expectDefined(
+      sourceConfig.models?.providers?.vllm,
+      "source vLLM provider",
+    );
     const runtimeConfig: OpenClawConfig = {
       ...sourceConfig,
       models: {
         providers: {
           vllm: {
-            ...sourceConfig.models!.providers!.vllm,
+            ...sourceProvider,
             apiKey: "resolved-runtime-key",
           },
         },

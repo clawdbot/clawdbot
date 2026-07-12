@@ -1,5 +1,6 @@
 // Tests dispatch-from-config runtime selection, hooks, and provider handoff.
 import { AsyncResource } from "node:async_hooks";
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { clearAgentHarnesses, registerAgentHarness } from "../../agents/harness/registry.js";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.core.js";
@@ -1230,7 +1231,10 @@ describe("dispatchReplyFromConfig", () => {
     expect(pluginLoadOptions.config).toBe(cfg);
     expect(typeof pluginLoadOptions.workspaceDir).toBe("string");
     expect(runtimePluginMocks.ensureRuntimePluginsLoaded.mock.invocationCallOrder[0]).toBeLessThan(
-      hookMocks.runner.hasHooks.mock.invocationCallOrder[0],
+      expectDefined(
+        hookMocks.runner.hasHooks.mock.invocationCallOrder[0],
+        "hookMocks.runner.hasHooks.mock.invocationCallOrder[0] test invariant",
+      ),
     );
   });
 

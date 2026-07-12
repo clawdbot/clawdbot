@@ -3,6 +3,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
@@ -224,7 +225,10 @@ test("chat.send replays a cached result after the session is archived", async ()
       [];
     const { chatHandlers } = await import("./server-methods/chat.js");
 
-    await chatHandlers["chat.send"]({
+    await expectDefined(
+      chatHandlers["chat.send"],
+      'chatHandlers["chat.send"] test invariant',
+    )({
       req: { type: "req", id: "cached", method: "chat.send" },
       params: {
         sessionKey: "main",
@@ -381,7 +385,10 @@ describe("gateway server chat", () => {
       } as unknown as GatewayRequestContext;
       const { chatHandlers } = await import("./server-methods/chat.js");
 
-      await chatHandlers["chat.history"]({
+      await expectDefined(
+        chatHandlers["chat.history"],
+        'chatHandlers["chat.history"] test invariant',
+      )({
         req: {
           type: "req",
           id: "history-no-catalog",
@@ -636,7 +643,10 @@ describe("gateway server chat", () => {
       } as unknown as GatewayRequestContext;
       const { chatHandlers } = await import("./server-methods/chat.js");
 
-      await chatHandlers["chat.startup"]({
+      await expectDefined(
+        chatHandlers["chat.startup"],
+        'chatHandlers["chat.startup"] test invariant',
+      )({
         req: {
           type: "req",
           id: "startup-slow-catalog",
@@ -839,7 +849,10 @@ describe("gateway server chat", () => {
           });
           const { chatHandlers } = await import("./server-methods/chat.js");
 
-          await chatHandlers["chat.startup"]({
+          await expectDefined(
+            chatHandlers["chat.startup"],
+            'chatHandlers["chat.startup"] test invariant',
+          )({
             req: {
               type: "req",
               id: "startup-dual-route-catalog",
@@ -898,7 +911,10 @@ describe("gateway server chat", () => {
             ["agent:work:legacy-auto", "platform"],
           ].entries()) {
             responses.length = 0;
-            await chatHandlers["chat.startup"]({
+            await expectDefined(
+              chatHandlers["chat.startup"],
+              'chatHandlers["chat.startup"] test invariant',
+            )({
               req: {
                 type: "req",
                 id: `startup-preferred-route-${index}`,
@@ -1057,7 +1073,10 @@ describe("gateway server chat", () => {
       } as unknown as GatewayRequestContext;
       const { chatHandlers } = await import("./server-methods/chat.js");
 
-      await chatHandlers["chat.startup"]({
+      await expectDefined(
+        chatHandlers["chat.startup"],
+        'chatHandlers["chat.startup"] test invariant',
+      )({
         req: {
           type: "req",
           id: "startup-agent-scoped-metadata",
@@ -1242,7 +1261,10 @@ describe("gateway server chat", () => {
       };
       const { chatHandlers } = await import("./server-methods/chat.js");
       const callSend = (id: string) =>
-        chatHandlers["chat.send"]({
+        expectDefined(
+          chatHandlers["chat.send"],
+          'chatHandlers["chat.send"] test invariant',
+        )({
           req: { type: "req", id, method: "chat.send", params },
           params,
           client: null,
@@ -1384,7 +1406,10 @@ describe("gateway server chat", () => {
       } as never;
       const { chatHandlers } = await import("./server-methods/chat.js");
       const first = Promise.resolve(
-        chatHandlers["chat.send"]({
+        expectDefined(
+          chatHandlers["chat.send"],
+          'chatHandlers["chat.send"] test invariant',
+        )({
           req: { type: "req", id: "first", method: "chat.send", params },
           params,
           client,
@@ -1400,7 +1425,10 @@ describe("gateway server chat", () => {
         expect(context.chatAbortControllers.has("idem-attachment-abort")).toBe(true);
       }, FAST_WAIT_OPTS);
 
-      await chatHandlers["chat.abort"]({
+      await expectDefined(
+        chatHandlers["chat.abort"],
+        'chatHandlers["chat.abort"] test invariant',
+      )({
         req: {
           type: "req",
           id: "abort",
@@ -1425,7 +1453,10 @@ describe("gateway server chat", () => {
       ]);
       expect(context.chatAbortControllers.has("idem-attachment-abort")).toBe(false);
 
-      await chatHandlers["chat.send"]({
+      await expectDefined(
+        chatHandlers["chat.send"],
+        'chatHandlers["chat.send"] test invariant',
+      )({
         req: { type: "req", id: "retry", method: "chat.send", params },
         params,
         client,
@@ -1546,7 +1577,10 @@ describe("gateway server chat", () => {
       } as never;
       const { chatHandlers } = await import("./server-methods/chat.js");
       const send = Promise.resolve(
-        chatHandlers["chat.send"]({
+        expectDefined(
+          chatHandlers["chat.send"],
+          'chatHandlers["chat.send"] test invariant',
+        )({
           req: { type: "req", id: "send", method: "chat.send", params },
           params,
           client,
@@ -1564,7 +1598,10 @@ describe("gateway server chat", () => {
       expect(context.chatAbortControllers.has(runId)).toBe(false);
 
       const retryResponses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
-      await chatHandlers["chat.send"]({
+      await expectDefined(
+        chatHandlers["chat.send"],
+        'chatHandlers["chat.send"] test invariant',
+      )({
         req: { type: "req", id: "retry", method: "chat.send", params },
         params,
         client,
@@ -1583,7 +1620,10 @@ describe("gateway server chat", () => {
       ]);
       expect(context.dedupe.has(pendingChatSendDedupeKey(runId))).toBe(true);
 
-      await chatHandlers["chat.abort"]({
+      await expectDefined(
+        chatHandlers["chat.abort"],
+        'chatHandlers["chat.abort"] test invariant',
+      )({
         req: {
           type: "req",
           id: "abort",
@@ -1669,7 +1709,10 @@ describe("gateway server chat", () => {
       };
       const { chatHandlers } = await import("./server-methods/chat.js");
       const send = Promise.resolve(
-        chatHandlers["chat.send"]({
+        expectDefined(
+          chatHandlers["chat.send"],
+          'chatHandlers["chat.send"] test invariant',
+        )({
           req: { type: "req", id: "send", method: "chat.send", params },
           params,
           client: null,
@@ -1777,7 +1820,10 @@ describe("gateway server chat", () => {
       };
       const { chatHandlers } = await import("./server-methods/chat.js");
       const send = Promise.resolve(
-        chatHandlers["chat.send"]({
+        expectDefined(
+          chatHandlers["chat.send"],
+          'chatHandlers["chat.send"] test invariant',
+        )({
           req: { type: "req", id: "send", method: "chat.send", params },
           params,
           client: null,
@@ -1852,7 +1898,10 @@ describe("gateway server chat", () => {
       };
       const { chatHandlers } = await import("./server-methods/chat.js");
       const send = Promise.resolve(
-        chatHandlers["chat.send"]({
+        expectDefined(
+          chatHandlers["chat.send"],
+          'chatHandlers["chat.send"] test invariant',
+        )({
           req: { type: "req", id: "send", method: "chat.send", params },
           params,
           client: null,
@@ -1931,7 +1980,10 @@ describe("gateway server chat", () => {
       };
       const { chatHandlers } = await import("./server-methods/chat.js");
       const send = Promise.resolve(
-        chatHandlers["chat.send"]({
+        expectDefined(
+          chatHandlers["chat.send"],
+          'chatHandlers["chat.send"] test invariant',
+        )({
           req: { type: "req", id: "send", method: "chat.send", params },
           params,
           client: null,
@@ -1992,7 +2044,10 @@ describe("gateway server chat", () => {
       };
       const terminalResponses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
       const terminalSend = Promise.resolve(
-        chatHandlers["chat.send"]({
+        expectDefined(
+          chatHandlers["chat.send"],
+          'chatHandlers["chat.send"] test invariant',
+        )({
           req: { type: "req", id: "terminal-send", method: "chat.send", params: terminalParams },
           params: terminalParams,
           client: null,
@@ -2128,7 +2183,10 @@ describe("gateway server chat", () => {
 
         const { chatHandlers } = await import("./server-methods/chat.js");
         const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
-        await chatHandlers["chat.send"]({
+        await expectDefined(
+          chatHandlers["chat.send"],
+          'chatHandlers["chat.send"] test invariant',
+        )({
           req: {
             type: "req",
             id: `configured-image-model-${id}`,
@@ -2237,7 +2295,10 @@ describe("gateway server chat", () => {
         systemProvenanceReceipt?: string,
         thinking = "low",
       ) =>
-        chatHandlers["chat.send"]({
+        expectDefined(
+          chatHandlers["chat.send"],
+          'chatHandlers["chat.send"] test invariant',
+        )({
           req: {
             type: "req",
             id,
@@ -2438,7 +2499,10 @@ describe("gateway server chat", () => {
           message: "create this session once",
           idempotencyKey,
         };
-        return chatHandlers["chat.send"]({
+        return expectDefined(
+          chatHandlers["chat.send"],
+          'chatHandlers["chat.send"] test invariant',
+        )({
           req: { type: "req", id, method: "chat.send", params },
           params,
           client: null,
@@ -2541,7 +2605,10 @@ describe("gateway server chat", () => {
       dispatchInboundMessageMock.mockResolvedValue({});
 
       const { chatHandlers } = await import("./server-methods/chat.js");
-      await chatHandlers["chat.send"]({
+      await expectDefined(
+        chatHandlers["chat.send"],
+        'chatHandlers["chat.send"] test invariant',
+      )({
         req: {
           type: "req",
           id: "suppressed-command",
@@ -2658,7 +2725,10 @@ describe("gateway server chat", () => {
 
       const { chatHandlers } = await import("./server-methods/chat.js");
       const callSend = (id: string, message: string, idempotencyKey: string) =>
-        chatHandlers["chat.send"]({
+        expectDefined(
+          chatHandlers["chat.send"],
+          'chatHandlers["chat.send"] test invariant',
+        )({
           req: {
             type: "req",
             id,
@@ -2802,7 +2872,10 @@ describe("gateway server chat", () => {
       });
 
       const { chatHandlers } = await import("./server-methods/chat.js");
-      await chatHandlers["chat.send"]({
+      await expectDefined(
+        chatHandlers["chat.send"],
+        'chatHandlers["chat.send"] test invariant',
+      )({
         req: {
           type: "req",
           id: "queued-followup",
@@ -2861,7 +2934,10 @@ describe("gateway server chat", () => {
 
       context.dedupe.delete("chat:idem-queued-followup");
       const replayRespond = vi.fn() as RespondFn;
-      await chatHandlers["chat.send"]({
+      await expectDefined(
+        chatHandlers["chat.send"],
+        'chatHandlers["chat.send"] test invariant',
+      )({
         req: {
           type: "req",
           id: "queued-followup-replay",
@@ -2915,7 +2991,10 @@ describe("gateway server chat", () => {
         failedDispatchLifecycle?.onEnqueued?.();
         throw new Error("post-enqueue bookkeeping failed");
       });
-      await chatHandlers["chat.send"]({
+      await expectDefined(
+        chatHandlers["chat.send"],
+        'chatHandlers["chat.send"] test invariant',
+      )({
         req: {
           type: "req",
           id: "queued-followup-post-error",
@@ -3026,7 +3105,10 @@ describe("gateway server chat", () => {
       });
 
       const { chatHandlers } = await import("./server-methods/chat.js");
-      await chatHandlers["chat.send"]({
+      await expectDefined(
+        chatHandlers["chat.send"],
+        'chatHandlers["chat.send"] test invariant',
+      )({
         req: {
           type: "req",
           id: "operator-timing",
@@ -3184,7 +3266,10 @@ describe("gateway server chat", () => {
       });
 
       const { chatHandlers } = await import("./server-methods/chat.js");
-      await chatHandlers["chat.send"]({
+      await expectDefined(
+        chatHandlers["chat.send"],
+        'chatHandlers["chat.send"] test invariant',
+      )({
         req: {
           type: "req",
           id: "operator-direct-timing",
@@ -3268,7 +3353,12 @@ describe("gateway server chat", () => {
       expect(firstAssistantTimingCallIndex).toBeGreaterThanOrEqual(0);
       expect(
         broadcastToConnIds.mock.invocationCallOrder[firstAssistantTimingCallIndex],
-      ).toBeLessThan(broadcast.mock.invocationCallOrder[0]);
+      ).toBeLessThan(
+        expectDefined(
+          broadcast.mock.invocationCallOrder[0],
+          "broadcast.mock.invocationCallOrder[0] test invariant",
+        ),
+      );
     } finally {
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;

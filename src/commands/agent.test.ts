@@ -1,6 +1,7 @@
 // Agent command tests cover local agent runs, session routing, and command runtime behavior.
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { buildChannelOutboundSessionRoute } from "openclaw/plugin-sdk/core";
 import { withTempHome as withTempHomeBase } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
@@ -867,7 +868,10 @@ describe("agentCommand", () => {
       );
 
       const saved = readSessionStore<{ thinkingLevel?: string; verboseLevel?: string }>(store);
-      const entry = Object.values(saved)[0];
+      const entry = expectDefined(
+        Object.values(saved)[0],
+        "Object.values(saved)[0] test invariant",
+      );
       expect(entry.thinkingLevel).toBe("high");
       expect(entry.verboseLevel).toBe("on");
 
@@ -883,8 +887,12 @@ describe("agentCommand", () => {
         payloads: Array<{ text: string; mediaUrl?: string | null }>;
         meta: { durationMs: number };
       };
-      expect(parsed.payloads[0].text).toBe("json-reply");
-      expect(parsed.payloads[0].mediaUrl).toBe("http://x.test/a.jpg");
+      expect(expectDefined(parsed.payloads[0], "parsed.payloads[0] test invariant").text).toBe(
+        "json-reply",
+      );
+      expect(expectDefined(parsed.payloads[0], "parsed.payloads[0] test invariant").mediaUrl).toBe(
+        "http://x.test/a.jpg",
+      );
       expect(parsed.meta.durationMs).toBe(42);
     });
   });

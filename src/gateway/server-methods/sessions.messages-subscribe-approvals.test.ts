@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionApprovalReplay } from "../../../packages/gateway-protocol/src/index.js";
 import type {
@@ -75,7 +76,10 @@ async function subscribe(params: {
   context: GatewayRequestContext;
 }) {
   const respond = vi.fn();
-  await sessionsHandlers["sessions.messages.subscribe"]({
+  await expectDefined(
+    sessionsHandlers["sessions.messages.subscribe"],
+    'sessionsHandlers["sessions.messages.subscribe"] test invariant',
+  )({
     req: { id: "req-subscribe-approvals" } as never,
     params: params.body,
     respond,

@@ -1,4 +1,6 @@
 // Channel plugin blocker tests cover doctor diagnostics for blocked channel plugin setup.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import * as manifestRegistry from "../../../plugins/manifest-registry.js";
@@ -64,7 +66,9 @@ describe("channel plugin blockers", () => {
     expect(collectConfiguredChannelPluginBlockerWarnings(hits)).toEqual([
       '- channels.discord: channel is configured, but external plugin "discord" is installed without explicit trust. Add plugins.entries.discord.enabled=true. Fix plugin enablement before relying on setup guidance for this channel.',
     ]);
-    expect(channelPluginBlockerHitToHealthFinding(hits[0])).toEqual({
+    expect(
+      channelPluginBlockerHitToHealthFinding(expectDefined(hits[0], "hits[0] test invariant")),
+    ).toEqual({
       checkId: "core/doctor/channel-plugin-blockers",
       severity: "warning",
       message:

@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_USAGE_BAR_TEMPLATE } from "./default-template.js";
 import { clearUsageBarTemplateCacheForTest, loadUsageBarTemplate } from "./template.js";
@@ -176,7 +177,10 @@ describe("loadUsageBarTemplate", () => {
       // disk — not return stale in-memory data. This proves both eviction and
       // watcher closure. Re-accessing paths[0] may evict another entry, but
       // the non-evicted check above has already completed.
-      writeFileSync(paths[0], JSON.stringify({ segments: [{ text: "v2-0" }] }));
+      writeFileSync(
+        expectDefined(paths[0], "paths[0] test invariant"),
+        JSON.stringify({ segments: [{ text: "v2-0" }] }),
+      );
       expect(loadUsageBarTemplate(paths[0])).toMatchObject({
         segments: [{ text: "v2-0" }],
       });
@@ -208,7 +212,10 @@ describe("loadUsageBarTemplate", () => {
       expect(loadUsageBarTemplate(invalidPath)).toMatchObject(tplB);
 
       // validPaths[0] should still be cached — not evicted by the retry.
-      writeFileSync(validPaths[0], JSON.stringify({ segments: [{ text: "changed" }] }));
+      writeFileSync(
+        expectDefined(validPaths[0], "validPaths[0] test invariant"),
+        JSON.stringify({ segments: [{ text: "changed" }] }),
+      );
       expect(loadUsageBarTemplate(validPaths[0])).toMatchObject({
         segments: [{ text: `v1-0` }],
       });

@@ -1,6 +1,7 @@
 // Session utility performance tests protect resolver cache scaling for large
 // session lists with repeated provider/model tuples.
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, describe, test, expect, vi } from "vitest";
 import * as thinking from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -91,7 +92,10 @@ describe("listSessionsFromStore resolver cache", () => {
       const now = Date.now();
       const rowCount = 30;
       for (let i = 0; i < rowCount; i++) {
-        const tuple = tuples[i % tuples.length];
+        const tuple = expectDefined(
+          tuples[i % tuples.length],
+          "tuples[i % tuples.length] test invariant",
+        );
         store[`agent:default:webchat:dm:${i}`] = {
           updatedAt: now - i,
           modelProvider: tuple.modelProvider,

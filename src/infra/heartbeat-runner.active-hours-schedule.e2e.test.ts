@@ -1,4 +1,6 @@
 // Covers heartbeat scheduling within active hours.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { startHeartbeatRunner } from "./heartbeat-runner.js";
@@ -82,7 +84,9 @@ describe("heartbeat scheduler: activeHours-aware scheduling (#75487)", () => {
     await vi.advanceTimersByTimeAsync(safeEndOfWindow - Date.now());
 
     expect(runSpy).toHaveBeenCalled();
-    const firstCallHourUTC = new Date(callTimes[0]).getUTCHours();
+    const firstCallHourUTC = new Date(
+      expectDefined(callTimes[0], "callTimes[0] test invariant"),
+    ).getUTCHours();
     expect(firstCallHourUTC).toBeGreaterThanOrEqual(9);
     expect(firstCallHourUTC).toBeLessThan(17);
 
@@ -176,7 +180,9 @@ describe("heartbeat scheduler: activeHours-aware scheduling (#75487)", () => {
     await vi.advanceTimersByTimeAsync(48 * 60 * 60_000);
 
     expect(runSpy).toHaveBeenCalled();
-    const firstCallHourUTC = new Date(callTimes[0]).getUTCHours();
+    const firstCallHourUTC = new Date(
+      expectDefined(callTimes[0], "callTimes[0] test invariant"),
+    ).getUTCHours();
     expect(firstCallHourUTC).toBeGreaterThanOrEqual(13);
     expect(firstCallHourUTC).toBeLessThan(21);
 
@@ -276,10 +282,14 @@ describe("heartbeat scheduler: activeHours-aware scheduling (#75487)", () => {
 
     await vi.advanceTimersByTimeAsync(8 * 60 * 60_000);
     expect(runSpy).toHaveBeenCalled();
-    const firstCallHour = new Date(callTimes[0]).getUTCHours();
+    const firstCallHour = new Date(
+      expectDefined(callTimes[0], "callTimes[0] test invariant"),
+    ).getUTCHours();
     expect(firstCallHour).toBeGreaterThanOrEqual(8);
     expect(firstCallHour).toBeLessThan(20);
-    expect(new Date(callTimes[0]).getUTCDate()).toBe(15); // today, not tomorrow
+    expect(new Date(expectDefined(callTimes[0], "callTimes[0] test invariant")).getUTCDate()).toBe(
+      15,
+    ); // today, not tomorrow
 
     runner.stop();
   });
@@ -320,7 +330,7 @@ describe("heartbeat scheduler: activeHours-aware scheduling (#75487)", () => {
     await vi.advanceTimersByTimeAsync(endOfUtcWindow - Date.now());
 
     expect(runSpy).toHaveBeenCalled();
-    const firstCall = new Date(callTimes[0]);
+    const firstCall = new Date(expectDefined(callTimes[0], "callTimes[0] test invariant"));
     expect(firstCall.getUTCHours()).toBe(16);
     expect(firstCall.getUTCDate()).toBe(15);
 

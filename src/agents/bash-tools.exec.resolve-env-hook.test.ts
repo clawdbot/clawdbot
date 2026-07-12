@@ -3,6 +3,7 @@
  * Verifies plugin-provided env values are filtered and forwarded to the chosen
  * exec host without leaking unsafe overrides.
  */
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { OPENCLAW_CLI_ENV_VALUE } from "../infra/openclaw-exec-env.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
@@ -403,7 +404,7 @@ describe("exec resolve_exec_env hook wiring", () => {
       sessionKey: "agent:main:telegram:chat-1",
     });
 
-    const result = await definition.execute(
+    const result = await expectDefined(definition, "definition test invariant").execute(
       "call-invalid-wrapped-cwd-before-hooks",
       {
         command: "echo ok",
@@ -449,7 +450,7 @@ describe("exec resolve_exec_env hook wiring", () => {
       sessionKey: "agent:main:telegram:chat-1",
     });
 
-    const result = await definition.execute(
+    const result = await expectDefined(definition, "definition test invariant").execute(
       "call-backend-cwd-vetoed-before-validation",
       {
         command: "echo ok",
@@ -498,7 +499,7 @@ describe("exec resolve_exec_env hook wiring", () => {
       sessionKey: "agent:main:telegram:chat-1",
     });
 
-    const result = await definition.execute(
+    const result = await expectDefined(definition, "definition test invariant").execute(
       "call-backend-invalid-cwd-before-env",
       {
         command: "echo ok",
@@ -552,7 +553,7 @@ describe("exec resolve_exec_env hook wiring", () => {
       channelId: "ctx-channel",
     });
 
-    const result = await definition.execute(
+    const result = await expectDefined(definition, "definition test invariant").execute(
       "call-backend-deferred-env-context",
       {
         command: "echo ok",
@@ -604,7 +605,7 @@ describe("exec resolve_exec_env hook wiring", () => {
       channelId: "chat-1",
     });
 
-    const result = await definition.execute(
+    const result = await expectDefined(definition, "definition test invariant").execute(
       "call-invalid-lazy-cwd-before-hooks",
       {
         command: "echo ok",
@@ -667,7 +668,7 @@ describe("exec resolve_exec_env hook wiring", () => {
       channelId: "chat-1",
     });
 
-    await definition.execute(
+    await expectDefined(definition, "definition test invariant").execute(
       "call-before",
       {
         command: "echo ok",
@@ -715,7 +716,7 @@ describe("exec resolve_exec_env hook wiring", () => {
       channelId: "chat-1",
     });
 
-    await definition.execute(
+    await expectDefined(definition, "definition test invariant").execute(
       "call-lazy",
       {
         command: "echo ok",
@@ -761,7 +762,7 @@ describe("exec resolve_exec_env hook wiring", () => {
       sessionKey: "agent:main:telegram:chat-1",
     });
 
-    await definition.execute(
+    await expectDefined(definition, "definition test invariant").execute(
       "call-host-rewrite",
       {
         command: "echo ok",
@@ -814,7 +815,7 @@ describe("exec resolve_exec_env hook wiring", () => {
       sessionKey: "agent:main:telegram:chat-1",
     });
 
-    await definition.execute(
+    await expectDefined(definition, "definition test invariant").execute(
       "call-host-rewrite-with-remote-cwd",
       {
         command: "echo ok",
@@ -861,7 +862,7 @@ describe("exec resolve_exec_env hook wiring", () => {
       sessionKey: "agent:main:telegram:chat-1",
     });
 
-    await definition.execute(
+    await expectDefined(definition, "definition test invariant").execute(
       "call-host-sanitize",
       {
         command: "echo ok",
@@ -927,7 +928,7 @@ describe("exec resolve_exec_env hook wiring", () => {
       sessionKey: "agent:main:telegram:chat-1",
     });
 
-    await definition.execute(
+    await expectDefined(definition, "definition test invariant").execute(
       "call-command-rewrite",
       {
         env: { REQUEST_SAFE: "request" },

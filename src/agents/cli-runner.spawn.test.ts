@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   testing as replyRunTesting,
@@ -1063,7 +1064,10 @@ describe("runCliAgent spawn path", () => {
       const input = (args[0] ?? {}) as { argv?: string[] };
       const configArg = requireArgAfter(input.argv, "-c");
       const match = requireRegexMatch(configArg, /^model_instructions_file="(.+)"$/);
-      promptFileText = await fs.readFile(match[1], "utf-8");
+      promptFileText = await fs.readFile(
+        expectDefined(match[1], "match[1] test invariant"),
+        "utf-8",
+      );
       return createManagedRun({
         reason: "exit",
         exitCode: 0,

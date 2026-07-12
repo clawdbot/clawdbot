@@ -215,7 +215,11 @@ describe("control UI assets helpers (fs-mocked)", () => {
         message: `Control UI build failed: ${"y".repeat(238)}…`,
       });
     } finally {
-      process.argv[1] = originalArgv1;
+      if (originalArgv1 === undefined) {
+        process.argv.splice(1, 1);
+      } else {
+        process.argv[1] = originalArgv1;
+      }
     }
   });
 

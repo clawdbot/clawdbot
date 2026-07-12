@@ -1,5 +1,7 @@
 // Update method tests cover update.run/status, restart sentinel metadata,
 // managed-service handoff, restart scheduling, and delivery context preservation.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
@@ -250,7 +252,10 @@ async function invokeUpdateRun(
 ) {
   const { updateHandlers } = await import("./update.js");
   const onRespond = respond ?? (() => {});
-  await updateHandlers["update.run"]({
+  await expectDefined(
+    updateHandlers["update.run"],
+    'updateHandlers["update.run"] test invariant',
+  )({
     params,
     respond: onRespond as never,
     context: { getRuntimeConfig: () => runtimeConfig },
@@ -952,7 +957,10 @@ describe("update.status", () => {
     const { updateHandlers } = await import("./update.js");
     const respond = vi.fn();
 
-    await updateHandlers["update.status"]({
+    await expectDefined(
+      updateHandlers["update.status"],
+      'updateHandlers["update.status"] test invariant',
+    )({
       params: {},
       respond,
     } as never);
@@ -982,7 +990,10 @@ describe("update.status", () => {
     const { updateHandlers } = await import("./update.js");
     const respond = vi.fn();
 
-    await updateHandlers["update.status"]({
+    await expectDefined(
+      updateHandlers["update.status"],
+      'updateHandlers["update.status"] test invariant',
+    )({
       params: {},
       respond,
       context: { logGateway: { warn } },

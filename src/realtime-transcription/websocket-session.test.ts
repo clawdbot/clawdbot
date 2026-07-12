@@ -1,6 +1,7 @@
 // Realtime transcription websocket tests cover websocket session lifecycle.
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type WebSocket from "ws";
 import { WebSocketServer } from "ws";
@@ -101,7 +102,7 @@ function requireFirstMockArg<T>(mock: { mock: { calls: T[][] } }, label: string)
     throw new Error(`expected ${label} call`);
   }
   const [arg] = call;
-  return arg;
+  return expectDefined(arg, "arg test invariant");
 }
 
 describe("createRealtimeTranscriptionWebSocketSession", () => {

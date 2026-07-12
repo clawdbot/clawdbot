@@ -11,6 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   clampThinkingLevel,
   type Api,
@@ -2676,7 +2677,7 @@ function randomImageProbeCode(len = 6): string {
   const bytes = randomBytes(len);
   let out = "";
   for (let i = 0; i < len; i += 1) {
-    out += alphabet[bytes[i] % alphabet.length];
+    out += alphabet[expectDefined(bytes[i], "bytes[i] test invariant") % alphabet.length];
   }
   return out;
 }
@@ -2703,9 +2704,9 @@ function editDistance(a: string, b: string): number {
     for (let j = 1; j <= bLen; j += 1) {
       const cost = aCh === b.charCodeAt(j - 1) ? 0 : 1;
       curr[j] = Math.min(
-        prev[j] + 1, // delete
-        curr[j - 1] + 1, // insert
-        prev[j - 1] + cost, // substitute
+        expectDefined(prev[j], "prev[j] test invariant") + 1, // delete
+        expectDefined(curr[j - 1], "curr[j - 1] test invariant") + 1, // insert
+        expectDefined(prev[j - 1], "prev[j - 1] test invariant") + cost, // substitute
       );
     }
     [prev, curr] = [curr, prev];
@@ -2762,7 +2763,7 @@ function sanitizeAuthProfileStoreForLiveGateway(store: AuthProfileStore): AuthPr
         Object.entries(store.order)
           .filter(([provider]) => !envBackedProviders.has(normalizeProviderId(provider)))
           .map(([provider, ids]) => [provider, ids.filter((id) => keepProfileIds.has(id))])
-          .filter(([, ids]) => ids.length > 0),
+          .filter(([, ids]) => expectDefined(ids, "ids test invariant").length > 0),
       )
     : undefined;
 

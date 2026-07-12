@@ -1,5 +1,7 @@
 /** Tests materializing MCP catalog tools into agent tool definitions and results. */
+
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { expectDefined } from "@openclaw/normalization-core";
 import { validateToolArguments } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getPluginToolMeta } from "../plugins/tools.js";
@@ -170,7 +172,10 @@ describe("createBundleMcpToolRuntime", () => {
     const materialized = await materializeBundleMcpToolsForRun({ runtime: sessionRuntime });
     materialized.restrictAppTools?.(materialized.tools);
 
-    const result = await materialized.tools[0].execute("call-1", {}, undefined, undefined);
+    const result = await expectDefined(
+      materialized.tools[0],
+      "materialized.tools[0] test invariant",
+    ).execute("call-1", {}, undefined, undefined);
     expect(result.content).toEqual([{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }]);
     expect(result.details).toMatchObject({
       mcpAppPreview: { mcpApp: { viewId: "cv_app" } },
@@ -186,8 +191,12 @@ describe("createBundleMcpToolRuntime", () => {
     });
 
     expect(runtime.tools.map((tool) => tool.name)).toEqual(["bundleProbe__bundle_probe"]);
-    expect(runtime.tools[0].executionMode).toBe("sequential");
-    expect(getPluginToolMeta(runtime.tools[0])).toMatchObject({
+    expect(expectDefined(runtime.tools[0], "runtime.tools[0] test invariant").executionMode).toBe(
+      "sequential",
+    );
+    expect(
+      getPluginToolMeta(expectDefined(runtime.tools[0], "runtime.tools[0] test invariant")),
+    ).toMatchObject({
       pluginId: "bundle-mcp",
       mcp: {
         serverName: "bundleProbe",
@@ -196,7 +205,12 @@ describe("createBundleMcpToolRuntime", () => {
         operation: "tool",
       },
     });
-    const result = await runtime.tools[0].execute("call-bundle-probe", {}, undefined, undefined);
+    const result = await expectDefined(runtime.tools[0], "runtime.tools[0] test invariant").execute(
+      "call-bundle-probe",
+      {},
+      undefined,
+      undefined,
+    );
     expectTextContentBlock(result.content[0], "FROM-BUNDLE");
     expect(result.details).toEqual({
       mcpServer: "bundleProbe",
@@ -211,7 +225,9 @@ describe("createBundleMcpToolRuntime", () => {
       }),
     });
 
-    expect(runtime.tools[0].executionMode).toBe("parallel");
+    expect(expectDefined(runtime.tools[0], "runtime.tools[0] test invariant").executionMode).toBe(
+      "parallel",
+    );
   });
 
   it("keeps structuredContent visible when MCP tools also return text content", async () => {
@@ -228,7 +244,12 @@ describe("createBundleMcpToolRuntime", () => {
       }),
     });
 
-    const result = await runtime.tools[0].execute("call-bundle-probe", {}, undefined, undefined);
+    const result = await expectDefined(runtime.tools[0], "runtime.tools[0] test invariant").execute(
+      "call-bundle-probe",
+      {},
+      undefined,
+      undefined,
+    );
 
     expectTextContentBlock(
       result.content[0],
@@ -288,7 +309,12 @@ describe("createBundleMcpToolRuntime", () => {
       }),
     });
 
-    const result = await runtime.tools[0].execute("call-bundle-probe", {}, undefined, undefined);
+    const result = await expectDefined(runtime.tools[0], "runtime.tools[0] test invariant").execute(
+      "call-bundle-probe",
+      {},
+      undefined,
+      undefined,
+    );
 
     expect(result.content).toEqual([
       { type: "text", text: "intro" },
@@ -312,7 +338,12 @@ describe("createBundleMcpToolRuntime", () => {
       }),
     });
 
-    const result = await runtime.tools[0].execute("call-bundle-probe", {}, undefined, undefined);
+    const result = await expectDefined(runtime.tools[0], "runtime.tools[0] test invariant").execute(
+      "call-bundle-probe",
+      {},
+      undefined,
+      undefined,
+    );
 
     expect(result.content).toHaveLength(1);
     expect(result.content[0]).toEqual({ type: "text", text: JSON.stringify({ type: "image" }) });
@@ -483,9 +514,14 @@ describe("createBundleMcpToolRuntime", () => {
       "knowledge__resources_list",
       "knowledge__resources_read",
     ]);
-    await expect(tools[0].execute("inventory-only", {}, undefined, undefined)).rejects.toThrow(
-      "bundle-mcp catalog projection cannot execute tools",
-    );
+    await expect(
+      expectDefined(tools[0], "tools[0] test invariant").execute(
+        "inventory-only",
+        {},
+        undefined,
+        undefined,
+      ),
+    ).rejects.toThrow("bundle-mcp catalog projection cannot execute tools");
   });
 
   it("materializes configured MCP tools through the session runtime boundary", async () => {
@@ -517,13 +553,21 @@ describe("createBundleMcpToolRuntime", () => {
     });
 
     expect(created).toHaveLength(1);
-    expect(created[0].sessionId).toMatch(/^bundle-mcp:/);
-    expect(created[0].workspaceDir).toBe("/workspace");
-    expect(created[0].cfg?.mcp?.servers?.configuredProbe?.command).toBe("node");
-    expect(created[0].cfg?.mcp?.servers?.configuredProbe?.args).toEqual(["configured-probe.mjs"]);
+    expect(expectDefined(created[0], "created[0] test invariant").sessionId).toMatch(
+      /^bundle-mcp:/,
+    );
+    expect(expectDefined(created[0], "created[0] test invariant").workspaceDir).toBe("/workspace");
+    expect(
+      expectDefined(created[0], "created[0] test invariant").cfg?.mcp?.servers?.configuredProbe
+        ?.command,
+    ).toBe("node");
+    expect(
+      expectDefined(created[0], "created[0] test invariant").cfg?.mcp?.servers?.configuredProbe
+        ?.args,
+    ).toEqual(["configured-probe.mjs"]);
 
     expect(runtime.tools.map((tool) => tool.name)).toEqual(["configuredProbe__bundle_probe"]);
-    const result = await runtime.tools[0].execute(
+    const result = await expectDefined(runtime.tools[0], "runtime.tools[0] test invariant").execute(
       "call-configured-probe",
       {},
       undefined,
@@ -634,7 +678,7 @@ describe("createBundleMcpToolRuntime", () => {
       },
     });
     expect(
-      validateToolArguments(runtime.tools[0], {
+      validateToolArguments(expectDefined(runtime.tools[0], "runtime.tools[0] test invariant"), {
         type: "toolCall",
         id: "call-page",
         name: "notion__API-post-page",

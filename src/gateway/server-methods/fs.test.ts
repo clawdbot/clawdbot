@@ -2,6 +2,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fsHandlers } from "./fs.js";
 
@@ -39,7 +40,10 @@ describe("fs.listDir", () => {
     await fs.mkdir(path.join(root, ".hidden"));
     await fs.writeFile(path.join(root, "file.txt"), "not a directory");
 
-    const [ok, result] = await call({ path: root });
+    const [ok, result] = expectDefined(
+      await call({ path: root }),
+      "await call({ path: root }) test invariant",
+    );
     expect(ok).toBe(true);
     expect(result).toEqual({
       path: root,
@@ -61,7 +65,10 @@ describe("fs.listDir", () => {
     fsSync.symlinkSync(path.join(root, "plain.txt"), path.join(root, "linked-file"));
     fsSync.symlinkSync(path.join(root, "missing"), path.join(root, "broken"));
 
-    const [ok, result] = await call({ path: root });
+    const [ok, result] = expectDefined(
+      await call({ path: root }),
+      "await call({ path: root }) test invariant",
+    );
     expect(ok).toBe(true);
     expect((result as { entries: Array<{ name: string }> }).entries.map((e) => e.name)).toEqual([
       "linked-dir",
@@ -70,24 +77,33 @@ describe("fs.listDir", () => {
   });
 
   it("defaults to the host home directory", async () => {
-    const [ok, result] = await call({});
+    const [ok, result] = expectDefined(await call({}), "await call({}) test invariant");
     expect(ok).toBe(true);
     expect((result as { path: string }).path).toBe(os.homedir());
     expect((result as { home: string }).home).toBe(os.homedir());
   });
 
   it("rejects relative paths and invalid params", async () => {
-    const [relativeOk, , relativeError] = await call({ path: "relative/dir" });
+    const [relativeOk, , relativeError] = expectDefined(
+      await call({ path: "relative/dir" }),
+      'await call({ path: "relative/dir" }) test invariant',
+    );
     expect(relativeOk).toBe(false);
     expect(String((relativeError as { message?: string })?.message)).toContain("absolute");
 
-    const [invalidOk] = await call({ path: 42 });
+    const [invalidOk] = expectDefined(
+      await call({ path: 42 }),
+      "await call({ path: 42 }) test invariant",
+    );
     expect(invalidOk).toBe(false);
   });
 
   it("reports missing directories as request errors", async () => {
     const root = await makeTempRoot();
-    const [ok, , error] = await call({ path: path.join(root, "does-not-exist") });
+    const [ok, , error] = expectDefined(
+      await call({ path: path.join(root, "does-not-exist") }),
+      'await call({ path: path.join(root, "does-not-exist") }) test invariant',
+    );
     expect(ok).toBe(false);
     expect((error as { message?: string })?.message).toContain("ENOENT");
   });
@@ -111,7 +127,10 @@ describe("fs.listDir", () => {
       },
     };
 
-    const [ok, result] = await call({ nodeId: "macbook" }, context);
+    const [ok, result] = expectDefined(
+      await call({ nodeId: "macbook" }, context),
+      'await call({ nodeId: "macbook" }, context) test invariant',
+    );
 
     expect(ok).toBe(true);
     expect(result).toMatchObject({ path: "/Users/peter", home: "/Users/peter" });
@@ -124,24 +143,29 @@ describe("fs.listDir", () => {
   });
 
   it("rejects disconnected and directory-browse-incompatible nodes", async () => {
-    const disconnected = await call(
-      { nodeId: "offline" },
-      { nodeRegistry: { get: vi.fn(), invoke: vi.fn() } },
+    const disconnected = expectDefined(
+      await call({ nodeId: "offline" }, { nodeRegistry: { get: vi.fn(), invoke: vi.fn() } }),
+      'await call( { nodeId: "offline" }, { nodeRegistry: { get: vi.fn(), in... test invariant',
     );
-    expect(disconnected[0]).toBe(false);
-    expect(disconnected[2]).toMatchObject({ code: "UNAVAILABLE" });
+    expect(expectDefined(disconnected[0], "disconnected[0] test invariant")).toBe(false);
+    expect(expectDefined(disconnected[2], "disconnected[2] test invariant")).toMatchObject({
+      code: "UNAVAILABLE",
+    });
 
-    const unsupported = await call(
-      { nodeId: "old-node" },
-      {
-        nodeRegistry: {
-          get: vi.fn().mockReturnValue({ connId: "conn-2", commands: ["system.run"] }),
-          invoke: vi.fn(),
+    const unsupported = expectDefined(
+      await call(
+        { nodeId: "old-node" },
+        {
+          nodeRegistry: {
+            get: vi.fn().mockReturnValue({ connId: "conn-2", commands: ["system.run"] }),
+            invoke: vi.fn(),
+          },
         },
-      },
+      ),
+      'await call( { nodeId: "old-node" }, { nodeRegistry: { get: vi.fn().mo... test invariant',
     );
-    expect(unsupported[0]).toBe(false);
-    expect(unsupported[2]).toMatchObject({
+    expect(expectDefined(unsupported[0], "unsupported[0] test invariant")).toBe(false);
+    expect(expectDefined(unsupported[2], "unsupported[2] test invariant")).toMatchObject({
       code: "INVALID_REQUEST",
       message: expect.stringContaining("does not support"),
     });

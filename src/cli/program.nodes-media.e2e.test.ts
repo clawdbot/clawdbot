@@ -1,5 +1,6 @@
 // Program nodes media e2e tests cover media-oriented node commands through the full CLI program.
 import * as fs from "node:fs/promises";
+import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { IOS_NODE, createIosNodeListResponse } from "./program.nodes-test-helpers.js";
@@ -156,8 +157,12 @@ describe("cli program (nodes media)", () => {
     try {
       // Content bytes are covered by single-output camera/file tests; here we
       // only verify dual snapshot behavior and that both paths were written.
-      expect((await fs.stat(mediaPaths[0])).isFile()).toBe(true);
-      expect((await fs.stat(mediaPaths[1])).isFile()).toBe(true);
+      expect(
+        (await fs.stat(expectDefined(mediaPaths[0], "mediaPaths[0] test invariant"))).isFile(),
+      ).toBe(true);
+      expect(
+        (await fs.stat(expectDefined(mediaPaths[1], "mediaPaths[1] test invariant"))).isFile(),
+      ).toBe(true);
     } finally {
       await Promise.all(mediaPaths.map((p) => fs.unlink(p).catch(() => {})));
     }

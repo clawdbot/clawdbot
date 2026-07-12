@@ -1,5 +1,6 @@
 // Tests abort request handling, cutoff persistence, and active run cleanup.
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -1381,8 +1382,14 @@ describe("abort detection", () => {
     expect(result.stoppedSubagents).toBe(1);
     expectSessionLaneCleared(depth2Key);
     expect(subagentRegistryMocks.markSubagentRunTerminated).toHaveBeenCalledTimes(1);
-    const [[terminatedRun]] = subagentRegistryMocks.markSubagentRunTerminated.mock
-      .calls as unknown as Array<[{ runId?: string; childSessionKey?: string }]>;
+    const [terminatedRun] = expectDefined(
+      (
+        subagentRegistryMocks.markSubagentRunTerminated.mock.calls as unknown as Array<
+          [{ runId?: string; childSessionKey?: string }]
+        >
+      )[0],
+      "(subagentRegistryMocks.markSubagentRunTerminated.mock.calls as unknown as Array<\n        [{ runId?: string; childSessionKey?: string }]\n      >)[0] test invariant",
+    );
     expect(terminatedRun.runId).toBe("run-2");
     expect(terminatedRun.childSessionKey).toBe(depth2Key);
   });
@@ -1481,8 +1488,14 @@ describe("abort detection", () => {
     expect(result.stoppedSubagents).toBe(1);
     expectSessionLaneCleared(depth2Key);
     expect(subagentRegistryMocks.markSubagentRunTerminated).toHaveBeenCalledTimes(1);
-    const [[terminatedRun]] = subagentRegistryMocks.markSubagentRunTerminated.mock
-      .calls as unknown as Array<[{ runId?: string; childSessionKey?: string }]>;
+    const [terminatedRun] = expectDefined(
+      (
+        subagentRegistryMocks.markSubagentRunTerminated.mock.calls as unknown as Array<
+          [{ runId?: string; childSessionKey?: string }]
+        >
+      )[0],
+      "(subagentRegistryMocks.markSubagentRunTerminated.mock.calls as unknown as Array<\n        [{ runId?: string; childSessionKey?: string }]\n      >)[0] test invariant",
+    );
     expect(terminatedRun.runId).toBe("run-active-child");
     expect(terminatedRun.childSessionKey).toBe(depth2Key);
   });

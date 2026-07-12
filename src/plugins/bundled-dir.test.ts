@@ -177,7 +177,11 @@ afterEach(() => {
   } else {
     process.env.VITEST = originalVitest;
   }
-  process.argv[1] = originalArgv1;
+  if (originalArgv1 === undefined) {
+    process.argv.splice(1, 1);
+  } else {
+    process.argv[1] = originalArgv1;
+  }
   process.execArgv.length = 0;
   process.execArgv.push(...originalExecArgv);
   cleanupTrackedTempDirs(tempDirs);

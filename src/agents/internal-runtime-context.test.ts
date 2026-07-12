@@ -2,6 +2,8 @@
  * Regression coverage for internal runtime-context stripping and extraction.
  * Verifies protected delimiters, legacy blocks, and custom-message filtering.
  */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   escapeInternalRuntimeContextDelimiters,
@@ -119,7 +121,10 @@ describe("internal runtime context codec", () => {
       const lineCount = 4 + Math.floor(rng() * 12);
       const payloadLines: string[] = [];
       for (let i = 0; i < lineCount; i++) {
-        const token = tokenPool[Math.floor(rng() * tokenPool.length)];
+        const token = expectDefined(
+          tokenPool[Math.floor(rng() * tokenPool.length)],
+          "tokenPool[Math.floor(rng() * tokenPool.length)] test invariant",
+        );
         payloadLines.push(token);
       }
       const escapedPayload = payloadLines.map((line) =>

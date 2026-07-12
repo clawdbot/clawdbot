@@ -1,4 +1,5 @@
 // Verifies plugin readonly-scope audit findings.
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const applyPluginAutoEnableMock = vi.hoisted(() => vi.fn());
@@ -58,7 +59,7 @@ function requireFirstMockArg<T>(mock: { mock: { calls: T[][] } }, label: string)
     throw new Error(`expected ${label} call`);
   }
   const [arg] = call;
-  return arg;
+  return expectDefined(arg, "arg test invariant");
 }
 
 describe("security audit read-only plugin scope", () => {

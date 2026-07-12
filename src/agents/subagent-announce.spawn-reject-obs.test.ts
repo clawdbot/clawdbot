@@ -24,6 +24,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // --- Mocks that DO intercept the SUT (non-barrel modules) ---
@@ -242,12 +243,20 @@ describe("subagent-announce tool-delegate rejection observability (PR #889 / #87
     expect(rejectionLogs[0]).toContain("(forbidden)");
 
     expect(mockedMarkPendingDelegateFailed).toHaveBeenCalledTimes(1);
-    const summaryArg = mockedMarkPendingDelegateFailed.mock.calls[0][1];
+    const summaryArg = expectDefined(
+      mockedMarkPendingDelegateFailed.mock.calls.at(0)?.at(1),
+      "delegate failure summary",
+    );
     expect(summaryArg).toContain(REASON);
     expect(summaryArg).toContain("forbidden");
     // Reason text must replace the canned "delegation was not accepted." string
     expect(summaryArg).not.toContain("delegation was not accepted.");
-    expect(mockedMarkPendingDelegateFailed.mock.calls[0][2]).toBe("Delegate rejected");
+    expect(
+      expectDefined(
+        mockedMarkPendingDelegateFailed.mock.calls.at(0)?.at(2),
+        "delegate failure title",
+      ),
+    ).toBe("Delegate rejected");
   });
 
   it("falls back to `delegation was not accepted.` when spawnResult.error is absent", async () => {
@@ -268,8 +277,16 @@ describe("subagent-announce tool-delegate rejection observability (PR #889 / #87
     expect(rejectionLogs[0]).toContain("reason=delegation was not accepted.");
 
     expect(mockedMarkPendingDelegateFailed).toHaveBeenCalledTimes(1);
-    const summaryArg = mockedMarkPendingDelegateFailed.mock.calls[0][1];
+    const summaryArg = expectDefined(
+      mockedMarkPendingDelegateFailed.mock.calls.at(0)?.at(1),
+      "delegate failure summary",
+    );
     expect(summaryArg).toContain("delegation was not accepted.");
-    expect(mockedMarkPendingDelegateFailed.mock.calls[0][2]).toBe("Delegate rejected");
+    expect(
+      expectDefined(
+        mockedMarkPendingDelegateFailed.mock.calls.at(0)?.at(2),
+        "delegate failure title",
+      ),
+    ).toBe("Delegate rejected");
   });
 });

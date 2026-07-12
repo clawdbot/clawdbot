@@ -1,4 +1,5 @@
 // Tests reply payload helper behavior and delivery metadata.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -104,10 +105,13 @@ describe("filterMessagingToolMediaDuplicates", () => {
   });
 
   it("dedupes encoded file:// paths against local paths", () => {
-    const result = filterMessagingToolMediaDuplicates({
-      payloads: [{ text: "hello", mediaUrl: "/tmp/photo one.jpg" }],
-      sentMediaUrls: ["file:///tmp/photo%20one.jpg"],
-    });
+    const result = expectDefined(
+      filterMessagingToolMediaDuplicates({
+        payloads: [{ text: "hello", mediaUrl: "/tmp/photo one.jpg" }],
+        sentMediaUrls: ["file:///tmp/photo%20one.jpg"],
+      }),
+      'filterMessagingToolMediaDuplicates({ payloads: [{ text: "hello", medi... test invariant',
+    );
     expect(result).toEqual([{ text: "hello", mediaUrl: undefined, mediaUrls: undefined }]);
   });
 
@@ -121,7 +125,7 @@ describe("filterMessagingToolMediaDuplicates", () => {
       sentMediaUrls: ["file:///tmp/photo.jpg"],
     });
 
-    expect(getReplyPayloadMetadata(result)).toEqual({
+    expect(getReplyPayloadMetadata(expectDefined(result, "result test invariant"))).toEqual({
       assistantTranscriptOwned: true,
     });
   });

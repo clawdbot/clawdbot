@@ -11,18 +11,12 @@ import {
   loadSessionEntry,
   publishTranscriptUpdate,
   replaceSessionEntrySync,
-  type SessionTranscriptWriteScope,
   withTranscriptWriteTransaction,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
-import { resolveSessionIdMatchSelection } from "../../sessions/session-id-resolution.js";
-import {
-  loadCombinedSessionStoreForGateway,
-  resolveFreshestSessionEntryFromStoreKeys,
-  resolveGatewaySessionStoreTargetWithStore,
-} from "../session-utils.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import { resolveWorkerSessionTarget, type ResolvedWorkerSessionTarget } from "./session-target.js";
 import {
   createWorkerTranscriptCommitStore,
   type WorkerTranscriptCommitInput,
@@ -33,19 +27,6 @@ import {
 type WorkerTranscriptCommitterOptions = {
   getConfig: () => OpenClawConfig;
   store?: WorkerTranscriptCommitStore;
-};
-
-type ResolvedWorkerTranscriptTarget = Omit<
-  SessionTranscriptWriteScope,
-  "sessionId" | "sessionKey"
-> & {
-  sessionEntry: NonNullable<ReturnType<typeof resolveFreshestSessionEntryFromStoreKeys>>;
-  sessionId: string;
-  sessionKey: string;
-  sessionStore: Record<
-    string,
-    NonNullable<ReturnType<typeof resolveFreshestSessionEntryFromStoreKeys>>
-  >;
 };
 
 type SemanticAgentMessage = Extract<AgentMessage, { role: "assistant" | "toolResult" | "user" }>;
@@ -202,35 +183,6 @@ function messageIdempotencyKey(params: {
   return `worker-commit-${digest}`;
 }
 
-function resolveWorkerTranscriptTarget(
-  cfg: OpenClawConfig,
-  sessionId: string,
-): ResolvedWorkerTranscriptTarget | undefined {
-  const { store } = loadCombinedSessionStoreForGateway(cfg);
-  const matches = Object.entries(store).filter(([, entry]) => entry.sessionId === sessionId);
-  const selection = resolveSessionIdMatchSelection(matches, sessionId);
-  if (selection.kind !== "selected") {
-    return undefined;
-  }
-  const target = resolveGatewaySessionStoreTargetWithStore({
-    cfg,
-    key: selection.sessionKey,
-    clone: false,
-  });
-  const entry = resolveFreshestSessionEntryFromStoreKeys(target.store, target.storeKeys);
-  if (!entry || entry.sessionId !== sessionId) {
-    return undefined;
-  }
-  return {
-    agentId: target.agentId,
-    sessionEntry: entry,
-    sessionId,
-    sessionKey: target.canonicalKey,
-    sessionStore: target.store,
-    storePath: target.storePath,
-  };
-}
-
 function readMessageIdempotencyKey(message: unknown): string | undefined {
   if (!message || typeof message !== "object" || Array.isArray(message)) {
     return undefined;
@@ -362,7 +314,7 @@ async function applyWorkerTranscriptCommit(params: {
   recoverPersistedBatch: boolean;
   requestedBaseLeafId: string | null;
   sessionId: string;
-  target: ResolvedWorkerTranscriptTarget;
+  target: ResolvedWorkerSessionTarget;
 }): Promise<ApplyTranscriptCommitResult> {
   const redactedMessages = params.messages.map(
     (message) => redactTranscriptMessage(message, params.config) as CommittedAgentMessage,
@@ -479,7 +431,7 @@ export function createWorkerTranscriptCommitter(options: WorkerTranscriptCommitt
       }
 
       const config = options.getConfig();
-      const target = resolveWorkerTranscriptTarget(config, sessionId);
+      const target = resolveWorkerSessionTarget(config, sessionId);
       if (!target) {
         return store.complete({
           ...input,

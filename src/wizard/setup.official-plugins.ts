@@ -136,4 +136,3 @@ export async function setupOfficialPluginInstalls(params: {
   }
   return next;
 }
-export { testing as __testing };

@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
@@ -661,7 +662,10 @@ describe("sqlite WAL maintenance", () => {
     expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA page_count");
     expect(db["exec"]).toHaveBeenNthCalledWith(2, "PRAGMA auto_vacuum = INCREMENTAL;");
     expect(vi.mocked(db["exec"]).mock.invocationCallOrder[0]).toBeLessThan(
-      vi.mocked(db["prepare"]).mock.invocationCallOrder[0],
+      expectDefined(
+        vi.mocked(db["prepare"]).mock.invocationCallOrder[0],
+        'vi.mocked(db["prepare"]).mock.invocationCallOrder[0] test invariant',
+      ),
     );
   });
 

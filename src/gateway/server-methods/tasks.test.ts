@@ -4,6 +4,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import {
@@ -102,7 +103,10 @@ async function runTaskHandler(
   params: Record<string, unknown>,
 ) {
   const { calls, respond } = captureRespond();
-  await tasksHandlers[method]({
+  await expectDefined(
+    tasksHandlers[method],
+    "tasksHandlers[method] test invariant",
+  )({
     req: { type: "req", id: `req-${method}`, method },
     params,
     respond,

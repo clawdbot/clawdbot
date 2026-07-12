@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   bundledDistPluginFile,
   bundledPluginFile,
@@ -2424,7 +2425,11 @@ export const syntheticRuntimeMarker = {
         }),
       ).toBe(distFile);
     } finally {
-      process.argv[1] = originalArgv1;
+      if (originalArgv1 === undefined) {
+        process.argv.splice(1, 1);
+      } else {
+        process.argv[1] = originalArgv1;
+      }
     }
   });
 
@@ -2845,7 +2850,7 @@ describe("buildPluginLoaderJitiOptions", () => {
 
     const alias = buildPluginLoaderJitiOptions(aliasMap).alias as Record<string, string>;
 
-    expect(alias.gamma.length).toBeLessThan(32);
+    expect(expectDefined(alias.gamma, "alias.gamma test invariant").length).toBeLessThan(32);
   });
 
   it("does not attach an empty alias map", () => {

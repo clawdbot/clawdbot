@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import {
@@ -1578,9 +1579,14 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     expectRecordFields(authProfiles["openai:work"], { provider: "openai" });
     expect(harnessParams.toolAuthProfileStore).toBe(codexAuthStore);
     expect(mockedMarkAuthProfileSuccess).toHaveBeenCalledTimes(1);
-    const [[successParams]] = mockedMarkAuthProfileSuccess.mock.calls as unknown as Array<
-      [{ provider?: string; profileId?: string }]
-    >;
+    const [successParams] = expectDefined(
+      (
+        mockedMarkAuthProfileSuccess.mock.calls as unknown as Array<
+          [{ provider?: string; profileId?: string }]
+        >
+      )[0],
+      "(mockedMarkAuthProfileSuccess.mock.calls as unknown as Array<\n        [{ provider?: string; profileId?: string }]\n      >)[0] test invariant",
+    );
     expect(successParams.provider).toBe("openai");
     expect(successParams.profileId).toBe("openai:work");
   });

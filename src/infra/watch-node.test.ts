@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { runNodeWatchedPaths } from "../../scripts/run-node.mjs";
@@ -258,7 +259,10 @@ describe("watch-node script", () => {
     expect(spawn).toHaveBeenCalledTimes(1);
     expect(loadChokidar).toHaveBeenCalledTimes(1);
     expect(spawn.mock.invocationCallOrder[0]).toBeLessThan(
-      loadChokidar.mock.invocationCallOrder[0],
+      expectDefined(
+        loadChokidar.mock.invocationCallOrder[0],
+        "loadChokidar.mock.invocationCallOrder[0] test invariant",
+      ),
     );
 
     resolveLoadChokidar({ watch });

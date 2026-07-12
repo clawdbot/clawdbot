@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   executeSqliteQuerySync,
@@ -895,7 +896,7 @@ describe("channel ingress queue", () => {
         await queue.enqueue("null-ok", null);
         const pending = await queue.listPending();
         expect(pending).toHaveLength(1);
-        expect(pending[0].payload).toBeNull();
+        expect(expectDefined(pending[0], "pending[0] test invariant").payload).toBeNull();
       });
     });
 

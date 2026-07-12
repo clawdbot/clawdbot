@@ -1,5 +1,7 @@
 // Active-session shutdown tracker tests protect the in-memory drain list used
 // when gateway shutdown, restart, or lifecycle cleanup must emit one session_end.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -46,8 +48,10 @@ describe("active-sessions-shutdown-tracker", () => {
 
     const entries = listActiveSessionsForShutdown();
     expect(entries).toHaveLength(1);
-    expect(entries[0].sessionId).toBe("session-A");
-    expect(entries[0].sessionFile).toBe("/tmp/new.jsonl");
+    expect(expectDefined(entries[0], "entries[0] test invariant").sessionId).toBe("session-A");
+    expect(expectDefined(entries[0], "entries[0] test invariant").sessionFile).toBe(
+      "/tmp/new.jsonl",
+    );
   });
 
   it("ignores empty sessionId notes", () => {

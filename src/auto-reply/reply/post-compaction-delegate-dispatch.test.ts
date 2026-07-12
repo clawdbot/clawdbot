@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as sessionStoreModule from "../../config/sessions/store.js";
 import type { SessionEntry, SessionPostCompactionDelegate } from "../../config/sessions/types.js";
@@ -552,7 +553,12 @@ describe("post-compaction delegate dispatch extraction", () => {
     await flushMicrotasks();
 
     expect(result).toEqual({ queuedDelegates: 1, droppedDelegates: 0 });
-    expect(enqueuePostCompactionDelegateDelivery.mock.calls[0][0].delegate).toMatchObject({
+    expect(
+      expectDefined(
+        enqueuePostCompactionDelegateDelivery.mock.calls.at(0)?.at(0),
+        "queued delegate delivery",
+      ).delegate,
+    ).toMatchObject({
       task: "staged",
       model: "github-copilot/claude-haiku-4.5",
     });
@@ -588,7 +594,12 @@ describe("post-compaction delegate dispatch extraction", () => {
     await flushMicrotasks();
 
     expect(result).toEqual({ queuedDelegates: 1, droppedDelegates: 0 });
-    expect(enqueuePostCompactionDelegateDelivery.mock.calls[0][0].delegate).toMatchObject({
+    expect(
+      expectDefined(
+        enqueuePostCompactionDelegateDelivery.mock.calls.at(0)?.at(0),
+        "queued delegate delivery",
+      ).delegate,
+    ).toMatchObject({
       task: "staged from taskflow",
       flowId: "pc-flow-source",
       expectedRevision: 4,

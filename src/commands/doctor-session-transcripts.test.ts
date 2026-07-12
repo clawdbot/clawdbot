@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 
@@ -516,7 +517,7 @@ describe("doctor session transcript repair", () => {
     expect(result.repaired).toBe(true);
     expect(result.legacyOpenAICodexEntries).toBe(1);
     const lines = (await fs.readFile(filePath, "utf-8")).trim().split(/\r?\n/);
-    const assistant = JSON.parse(lines[1]);
+    const assistant = JSON.parse(expectDefined(lines[1], "lines[1] test invariant"));
     expect(assistant.message.provider).toBe("openai");
     expect(assistant.message.api).toBe("openai-chatgpt-responses");
   });

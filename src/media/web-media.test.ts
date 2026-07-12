@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import JSZip from "jszip";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
@@ -151,7 +152,7 @@ describe("loadWebMedia", () => {
         offset += 1;
         continue;
       }
-      const marker = buffer[offset + 1];
+      const marker = expectDefined(buffer[offset + 1], "buffer[offset + 1] test invariant");
       offset += 2;
       if (marker === 0xd8 || marker === 0xd9 || (marker >= 0xd0 && marker <= 0xd7)) {
         continue;

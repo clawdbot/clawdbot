@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.js";
 import { resolveRegistryUpdateChannel } from "../../../infra/update-channels.js";
@@ -397,13 +398,17 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       pluginId: "matrix",
       installSpec: "@openclaw/plugin-matrix@1.2.3",
     });
-    expect(configuredPluginInstallIssueToHealthFinding(issue)).toMatchObject({
+    expect(
+      configuredPluginInstallIssueToHealthFinding(expectDefined(issue, "issue test invariant")),
+    ).toMatchObject({
       checkId: "core/doctor/configured-plugin-installs",
       severity: "warning",
       target: "matrix",
       fixHint: "Run `openclaw doctor --fix` to install @openclaw/plugin-matrix@1.2.3.",
     });
-    expect(configuredPluginInstallIssueToRepairEffect(issue)).toEqual({
+    expect(
+      configuredPluginInstallIssueToRepairEffect(expectDefined(issue, "issue test invariant")),
+    ).toEqual({
       kind: "package",
       action: "would-install-configured-plugin",
       target: "matrix",
@@ -461,13 +466,17 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       pluginId: "discord",
       installPath: missingDiscordPath,
     });
-    expect(configuredPluginInstallIssueToHealthFinding(issue)).toMatchObject({
+    expect(
+      configuredPluginInstallIssueToHealthFinding(expectDefined(issue, "issue test invariant")),
+    ).toMatchObject({
       checkId: "core/doctor/configured-plugin-installs",
       severity: "warning",
       path: missingDiscordPath,
       target: "discord",
     });
-    expect(configuredPluginInstallIssueToRepairEffect(issue)).toEqual({
+    expect(
+      configuredPluginInstallIssueToRepairEffect(expectDefined(issue, "issue test invariant")),
+    ).toEqual({
       kind: "package",
       action: "would-defer-configured-plugin-install-repair",
       target: "discord",

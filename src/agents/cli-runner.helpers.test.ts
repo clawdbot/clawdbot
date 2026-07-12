@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { ImageContent } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
@@ -258,9 +259,11 @@ describe("writeCliImages", () => {
         ),
       ]);
       expect(second.paths).toEqual(first.paths);
-      await expect(fs.readFile(first.paths[0])).resolves.toEqual(Buffer.from(image.data, "base64"));
+      await expect(
+        fs.readFile(expectDefined(first.paths[0], "first.paths[0] test invariant")),
+      ).resolves.toEqual(Buffer.from(image.data, "base64"));
     } finally {
-      await fs.rm(first.paths[0], { force: true });
+      await fs.rm(expectDefined(first.paths[0], "first.paths[0] test invariant"), { force: true });
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
   });
@@ -284,7 +287,9 @@ describe("writeCliImages", () => {
     try {
       expect(written.paths[0]).toMatch(/\.heic$/);
     } finally {
-      await fs.rm(written.paths[0], { force: true });
+      await fs.rm(expectDefined(written.paths[0], "written.paths[0] test invariant"), {
+        force: true,
+      });
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
   });
@@ -317,9 +322,9 @@ describe("writeCliImages", () => {
     try {
       await expect(fs.access(stalePath)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(fs.readFile(freshPath, "utf-8")).resolves.toBe("fresh");
-      await expect(fs.readFile(written.paths[0])).resolves.toEqual(
-        Buffer.from(image.data, "base64"),
-      );
+      await expect(
+        fs.readFile(expectDefined(written.paths[0], "written.paths[0] test invariant")),
+      ).resolves.toEqual(Buffer.from(image.data, "base64"));
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }

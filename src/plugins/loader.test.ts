@@ -1,6 +1,7 @@
 /** Broad plugin loader coverage for manifest discovery, runtime registration, and diagnostics. */
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { applyBootstrapHookOverrides } from "../agents/bootstrap-hooks.js";
 import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
@@ -467,9 +468,9 @@ function runSinglePluginRegistryScenarios<
 function loadRegistryFromScenarioPlugins(plugins: readonly TempPlugin[]) {
   return plugins.length === 1
     ? loadRegistryFromSinglePlugin({
-        plugin: plugins[0],
+        plugin: expectDefined(plugins[0], "plugins[0] test invariant"),
         pluginConfig: {
-          allow: [plugins[0].id],
+          allow: [expectDefined(plugins[0], "plugins[0] test invariant").id],
         },
       })
     : loadRegistryFromAllowedPlugins([...plugins]);

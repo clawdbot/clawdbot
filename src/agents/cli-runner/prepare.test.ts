@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
+import { expectDefined } from "@openclaw/normalization-core";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -3414,7 +3415,10 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         native: [],
         mcp: ["mcp__openclaw__crestodian"],
       });
-      const mcpConfigPath = args[args.indexOf("--mcp-config") + 1];
+      const mcpConfigPath = expectDefined(
+        args[args.indexOf("--mcp-config") + 1],
+        'args[args.indexOf("--mcp-config") + 1] test invariant',
+      );
       const raw = JSON.parse(fs.readFileSync(mcpConfigPath, "utf-8")) as {
         mcpServers?: Record<string, { env?: Record<string, string> }>;
       };

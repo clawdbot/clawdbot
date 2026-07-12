@@ -1,6 +1,7 @@
 // Verifies bundled capability metadata emitted by plugins.
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoRelativePath } from "../test-utils/repo-files.js";
@@ -113,7 +114,11 @@ describe("bundled capability metadata", () => {
         .flatMap((manifest) =>
           (manifest.legacyPluginIds ?? []).map((legacyPluginId) => [legacyPluginId, manifest.id]),
         )
-        .toSorted(([left], [right]) => left.localeCompare(right)),
+        .toSorted(([left], [right]) =>
+          expectDefined(left, "left test invariant").localeCompare(
+            expectDefined(right, "right test invariant"),
+          ),
+        ),
     );
     const expectedAutoEnableProviderPluginIds = Object.fromEntries(
       manifests
@@ -123,7 +128,11 @@ describe("bundled capability metadata", () => {
             manifest.id,
           ]),
         )
-        .toSorted(([left], [right]) => left.localeCompare(right)),
+        .toSorted(([left], [right]) =>
+          expectDefined(left, "left test invariant").localeCompare(
+            expectDefined(right, "right test invariant"),
+          ),
+        ),
     );
 
     expect(BUNDLED_LEGACY_PLUGIN_ID_ALIASES).toEqual(expectedLegacyAliases);

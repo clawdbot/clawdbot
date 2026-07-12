@@ -1,4 +1,6 @@
 // Command group descriptor tests cover grouped CLI command metadata and help organization.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildCommandGroupEntries,
@@ -80,8 +82,8 @@ describe("command-group-descriptors", () => {
       },
     ]);
 
-    await specs[0].register("program-one" as never);
-    await specs[1].register("program-two" as never);
+    await expectDefined(specs[0], "specs[0] test invariant").register("program-one" as never);
+    await expectDefined(specs[1], "specs[1] test invariant").register("program-two" as never);
 
     expect(alpha.registerAlpha).toHaveBeenCalledWith("program-one");
     expect(beta.registerBeta).toHaveBeenCalledWith("program-two");

@@ -10,6 +10,7 @@
  * child's internal continuation marker) and routes it through the SAME durable
  * work scheduler, guarded so it never double-arms the wake.
  */
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./subagent-announce.runtime.js", async (importOriginal) => ({
@@ -174,7 +175,10 @@ describe("#952 subagent self-continuation via announce/completion flow", () => {
 
     const flows = continuationWorkFlows();
     expect(flows).toHaveLength(1);
-    expect((flows[0].stateJson as { sessionKey?: string }).sessionKey).toBe(childSessionKey);
+    expect(
+      (expectDefined(flows.at(0), "continuation flow").stateJson as { sessionKey?: string })
+        .sessionKey,
+    ).toBe(childSessionKey);
   });
 
   it("strips the CONTINUE_WORK token from the findings announced to the parent", async () => {
@@ -188,7 +192,10 @@ describe("#952 subagent self-continuation via announce/completion flow", () => {
     });
 
     expect(deliverSubagentAnnouncementMock).toHaveBeenCalledTimes(1);
-    const arg = deliverSubagentAnnouncementMock.mock.calls[0][0] as {
+    const arg = expectDefined(
+      deliverSubagentAnnouncementMock.mock.calls.at(0)?.at(0),
+      "announcement delivery",
+    ) as {
       internalEvents: { result?: string }[];
       triggerMessage?: string;
     };

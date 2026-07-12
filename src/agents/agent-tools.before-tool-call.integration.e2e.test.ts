@@ -6,6 +6,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
@@ -339,7 +340,7 @@ describe("before_tool_call hook deduplication (#15502)", () => {
       agentId: "main",
       sessionKey: "main",
     });
-    const [def] = toToolDefinitions([wrapped]);
+    const def = expectDefined(toToolDefinitions([wrapped])[0], "wrapped web-fetch definition");
     const extensionContext = {} as Parameters<typeof def.execute>[4];
     await def.execute(
       "call-dedup",
@@ -980,7 +981,7 @@ describe("before_tool_call hook deduplication (#15502)", () => {
       sessionKey: "main",
     });
     const withAbort = wrapToolWithAbortSignal(wrapped, abortController.signal);
-    const [def] = toToolDefinitions([withAbort]);
+    const def = expectDefined(toToolDefinitions([withAbort])[0], "abort-wrapped Bash definition");
     const extensionContext = {} as Parameters<typeof def.execute>[4];
 
     await def.execute(
@@ -1010,12 +1011,15 @@ describe("before_tool_call hook deduplication (#15502)", () => {
         text: `Fetched with status ${(result.details as { status: number }).status}`,
       }),
     );
-    const tool = wrapToolWithBeforeToolCallHook(
-      normalizeToolParameters(sourceTool, { modelProvider: "openai" }),
-      {
-        sessionId: "session-terminal-presentation",
-        onToolOutcome,
-      },
+    const tool = expectDefined(
+      wrapToolWithBeforeToolCallHook(
+        normalizeToolParameters(sourceTool, { modelProvider: "openai" }),
+        {
+          sessionId: "session-terminal-presentation",
+          onToolOutcome,
+        },
+      ),
+      "wrapToolWithBeforeToolCallHook( normalizeToolParameters(sourceTool, {... test invariant",
     );
     await tool.execute("call-terminal-presentation", {
       url: "https://example.com",
@@ -1116,13 +1120,16 @@ describe("before_tool_call hook deduplication (#15502)", () => {
   it("passes hook context for unwrapped tool definitions", async () => {
     const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
     const baseTool = { name: "exec", execute, description: "exec", parameters: {} } as any;
-    const [def] = toToolDefinitions([baseTool], {
-      agentId: "code-agent",
-      sessionKey: "agent:code-agent:main",
-      sessionId: "session-code",
-      runId: "run-code",
-      channelId: "channel-code",
-    });
+    const def = expectDefined(
+      toToolDefinitions([baseTool], {
+        agentId: "code-agent",
+        sessionKey: "agent:code-agent:main",
+        sessionId: "session-code",
+        runId: "run-code",
+        channelId: "channel-code",
+      })[0],
+      "unwrapped exec definition",
+    );
     const extensionContext = {} as Parameters<typeof def.execute>[4];
 
     await def.execute(
@@ -1178,7 +1185,7 @@ describe("before_tool_call hook integration for client tools", () => {
       runBeforeToolCallImpl: async () => ({ params: { extra: true } }),
     });
     const onClientToolCall = vi.fn();
-    const [tool] = toClientToolDefinitions(
+    const clientTools = toClientToolDefinitions(
       [
         {
           type: "function",
@@ -1192,6 +1199,7 @@ describe("before_tool_call hook integration for client tools", () => {
       onClientToolCall,
       { agentId: "main", sessionKey: "main" },
     );
+    const tool = expectDefined(clientTools[0], "client tool definition");
     const extensionContext = {} as Parameters<typeof tool.execute>[4];
     await tool.execute("client-call-1", { value: "ok" }, undefined, undefined, extensionContext);
 
@@ -1360,7 +1368,7 @@ describe("before_tool_call hook integration for client tools", () => {
         value: { gate: "client" },
       });
 
-      const [tool] = toClientToolDefinitions(
+      const clientTools = toClientToolDefinitions(
         [
           {
             type: "function",
@@ -1379,6 +1387,7 @@ describe("before_tool_call hook integration for client tools", () => {
           config: config as never,
         },
       );
+      const tool = expectDefined(clientTools[0], "client tool definition");
       const extensionContext = {} as Parameters<typeof tool.execute>[4];
       await tool.execute("client-call-policy", {}, undefined, undefined, extensionContext);
 

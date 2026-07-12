@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Logger mock for corrupt-payload breadcrumb assertions.
@@ -189,7 +190,7 @@ describe("delegate store — TaskFlow-backed", () => {
     expect(pendingDelegateCount("session-1")).toBe(1);
     const delegates = consumePendingDelegates("session-1");
     expect(delegates).toHaveLength(1);
-    expect(delegates[0].task).toBe("check CI");
+    expect(expectDefined(delegates.at(0), "delegate").task).toBe("check CI");
     expect(pendingDelegateCount("session-1")).toBe(0);
   });
 
@@ -239,8 +240,10 @@ describe("delegate store — TaskFlow-backed", () => {
 
   it("logs when acceptance cannot be committed after a claim", () => {
     enqueuePendingDelegate("session-accept-conflict", { task: "accept conflict" });
-    const [delegate] = consumePendingDelegates("session-accept-conflict");
-    expect(delegate).toBeDefined();
+    const delegate = expectDefined(
+      consumePendingDelegates("session-accept-conflict").at(0),
+      "delegate",
+    );
     const flow = mockFlows.get(delegate.flowId!);
     expect(flow).toBeDefined();
     flow!.revision = flow!.revision + 1;
@@ -254,8 +257,10 @@ describe("delegate store — TaskFlow-backed", () => {
 
   it("does not treat a stale failed row as an accepted spawn commit", () => {
     enqueuePendingDelegate("session-accept-failed", { task: "accept failed" });
-    const [delegate] = consumePendingDelegates("session-accept-failed");
-    expect(delegate).toBeDefined();
+    const delegate = expectDefined(
+      consumePendingDelegates("session-accept-failed").at(0),
+      "delegate",
+    );
     const flow = mockFlows.get(delegate.flowId!);
     expect(flow).toBeDefined();
     flow!.status = "failed";
@@ -347,7 +352,7 @@ describe("delegate store — TaskFlow-backed", () => {
   it("omits traceparent when the TaskFlow row has no carrier", () => {
     enqueuePendingDelegate("session-1", { task: "untraced task" });
 
-    const delegate = consumePendingDelegates("session-1")[0];
+    const delegate = expectDefined(consumePendingDelegates("session-1").at(0), "delegate");
     expect(delegate.task).toBe("untraced task");
     expect(delegate.traceparent).toBeUndefined();
   });
@@ -367,7 +372,7 @@ describe("delegate store — TaskFlow-backed", () => {
   it("omits model when the TaskFlow row has no override", () => {
     enqueuePendingDelegate("session-1", { task: "modelless task" });
 
-    const delegate = consumePendingDelegates("session-1")[0];
+    const delegate = expectDefined(consumePendingDelegates("session-1").at(0), "delegate");
     expect(delegate.task).toBe("modelless task");
     expect(delegate.model).toBeUndefined();
   });
@@ -432,8 +437,12 @@ describe("delegate store — TaskFlow-backed", () => {
     stagePostCompactionDelegate("session-1", { task: "post-compact", stagedAt: Date.now() });
 
     const flows = [...mockFlows.values()];
-    expect(flows[0].controllerId).toBe(CONTINUATION_DELEGATE_CONTROLLER_ID);
-    expect(flows[1].controllerId).toBe(CONTINUATION_POST_COMPACTION_CONTROLLER_ID);
+    expect(expectDefined(flows.at(0), "first flow").controllerId).toBe(
+      CONTINUATION_DELEGATE_CONTROLLER_ID,
+    );
+    expect(expectDefined(flows.at(1), "second flow").controllerId).toBe(
+      CONTINUATION_POST_COMPACTION_CONTROLLER_ID,
+    );
   });
 
   it("reports global continuation queue depth and drain-rate diagnostics", () => {
@@ -494,8 +503,9 @@ describe("post-compaction delegate staging", () => {
     expect(stagedPostCompactionDelegateCount("session-1")).toBe(1);
     const delegates = consumeStagedPostCompactionDelegates("session-1");
     expect(delegates).toHaveLength(1);
-    expect(delegates[0].task).toBe("rehydrate state");
-    expect(delegates[0].mode).toBe("post-compaction");
+    const delegate = expectDefined(delegates.at(0), "delegate");
+    expect(delegate.task).toBe("rehydrate state");
+    expect(delegate.mode).toBe("post-compaction");
     expect(stagedPostCompactionDelegateCount("session-1")).toBe(0);
   });
 
@@ -549,9 +559,9 @@ describe("post-compaction delegate staging", () => {
     const regular = consumePendingDelegates("session-1");
     const postCompact = consumeStagedPostCompactionDelegates("session-1");
     expect(regular).toHaveLength(1);
-    expect(regular[0].task).toBe("regular");
+    expect(expectDefined(regular.at(0), "regular delegate").task).toBe("regular");
     expect(postCompact).toHaveLength(1);
-    expect(postCompact[0].task).toBe("post-compact");
+    expect(expectDefined(postCompact.at(0), "post-compaction delegate").task).toBe("post-compact");
   });
 });
 
@@ -569,7 +579,7 @@ describe("consumePendingDelegates — delayMs gating", () => {
 
     const matured = consumePendingDelegates("session-1");
     expect(matured).toHaveLength(1);
-    expect(matured[0].task).toBe("due");
+    expect(expectDefined(matured.at(0), "matured delegate").task).toBe("due");
     expect(pendingDelegateCount("session-1")).toBe(0);
   });
 
@@ -588,7 +598,7 @@ describe("consumePendingDelegates — delayMs gating", () => {
 
     const matured = consumePendingDelegates("session-1");
     expect(matured).toHaveLength(1);
-    expect(matured[0].task).toBe("no-delay");
+    expect(expectDefined(matured.at(0), "matured delegate").task).toBe("no-delay");
   });
 });
 
@@ -657,7 +667,7 @@ describe("consumePendingDelegates — concurrent-consumer race contract", () => 
 
     const first = consumePendingDelegates("session-1");
     expect(first).toHaveLength(1);
-    expect(first[0].task).toBe("single");
+    expect(expectDefined(first.at(0), "delegate").task).toBe("single");
 
     // The flow is now status=succeeded; second call sees nothing in queued.
     const second = consumePendingDelegates("session-1");
@@ -676,8 +686,9 @@ describe("consumePendingDelegates — concurrent-consumer race contract", () => 
       (f) => f.ownerKey === "session-1" && f.status === "queued",
     );
     expect(queuedBefore).toHaveLength(1);
-    const sharedRevision = queuedBefore[0].revision;
-    const flowId = queuedBefore[0].flowId;
+    const queuedDelegate = expectDefined(queuedBefore.at(0), "queued delegate");
+    const sharedRevision = queuedDelegate.revision;
+    const flowId = queuedDelegate.flowId;
 
     // Consumer A and Consumer B both attempt finishFlow with the same
     // expectedRevision. The mock implements the same revision-check as the
@@ -773,13 +784,13 @@ describe("consumePendingDelegates — concurrent-consumer race contract", () => 
     // B's call). Order is deterministic in this test (A always first per the
     // sync mock) — proves the contract holds even when A wins every race.
     for (let i = 0; i < queuedBefore.length; i++) {
-      const a = aResults[i];
-      const b = bResults[i];
+      const a = expectDefined(aResults.at(i), "consumer A result");
+      const b = expectDefined(bResults.at(i), "consumer B result");
       const winners = [a, b].filter((r) => r.applied);
       const losers = [a, b].filter((r) => !r.applied);
       expect(winners).toHaveLength(1);
       expect(losers).toHaveLength(1);
-      expect(losers[0].reason).toBe("revision_conflict");
+      expect(expectDefined(losers.at(0), "losing result").reason).toBe("revision_conflict");
     }
 
     // All three flows are now status=succeeded.
@@ -872,7 +883,7 @@ describe("consume-paths corrupt-payload breadcrumbs", () => {
 
     // Only the valid delegate returned.
     expect(result).toHaveLength(1);
-    expect(result[0].task).toBe("valid task");
+    expect(expectDefined(result.at(0), "valid delegate").task).toBe("valid task");
 
     // Both corrupt rows failed.
     expect(mockFlows.get(corruptId1)?.status).toBe("failed");

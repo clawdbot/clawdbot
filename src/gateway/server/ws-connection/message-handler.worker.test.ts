@@ -8,6 +8,8 @@ import {
   PROTOCOL_VERSION,
   type WorkerAdmissionFailureReason,
   type WorkerConnectParams,
+  type WorkerLiveEventErrorDetails,
+  WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
   type WorkerTranscriptCommitErrorReason,
   WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE,
 } from "../../../../packages/gateway-protocol/src/index.js";
@@ -24,7 +26,11 @@ const CREDENTIAL = ["worker", "credential", "fixture"].join("-");
 const HANDSHAKE = {
   bundleHash: "a".repeat(64),
   openclawVersion: "2026.7.11",
-  protocolFeatures: ["worker-heartbeat-v1", WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE],
+  protocolFeatures: [
+    "worker-heartbeat-v1",
+    WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE,
+    WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
+  ],
 };
 const WORKER_CONNECT: WorkerConnectParams = {
   minProtocol: PROTOCOL_VERSION,
@@ -67,6 +73,13 @@ const TRANSCRIPT_COMMIT = {
     },
   ],
 };
+const LIVE_EVENT = {
+  runEpoch: 1,
+  lastAckedSeq: 0,
+  seq: 1,
+  runId: "r",
+  event: { kind: "assistant" as const, payload: { text: "x", delta: "x" } },
+};
 const cleanups: Array<() => void> = [];
 
 function createLogger() {
@@ -78,6 +91,7 @@ function attachHarness(
     admissionFailure?: WorkerAdmissionFailureReason;
     commitFailure?: WorkerTranscriptCommitErrorReason;
     identity?: WorkerConnectionIdentity;
+    liveFailure?: WorkerLiveEventErrorDetails;
     validationFailure?: ReturnType<WorkerConnectionService["validateWorkerConnection"]>;
   } = {},
 ) {
@@ -97,6 +111,11 @@ function attachHarness(
             ok: true as const,
             result: { entryIds: ["entry-1"], newLeafId: "entry-1" },
           },
+    ),
+    pushLiveEvent: vi.fn(async () =>
+      options.liveFailure
+        ? { ok: false as const, details: options.liveFailure }
+        : { ok: true as const, result: { ackedSeq: LIVE_EVENT.seq } },
     ),
     validateWorkerConnection: vi.fn(() => options.validationFailure ?? null),
   } as WorkerConnectionService;
@@ -223,6 +242,46 @@ describe("dedicated worker websocket protocol", () => {
       method: "worker.transcript.commit",
     });
     expect(harness.close).not.toHaveBeenCalled();
+  });
+
+  it("gates live-event features, schema, and closed errors", async () => {
+    const unsupported = attachHarness({
+      identity: {
+        ...IDENTITY,
+        protocolFeatures: HANDSHAKE.protocolFeatures.filter(
+          (feature) => feature !== WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
+        ),
+      },
+    });
+    await admit(unsupported);
+    unsupported.sendRequest("worker.live-event", LIVE_EVENT);
+    await vi.waitFor(() => expect(unsupported.close).toHaveBeenCalled());
+    expect(unsupported.service.pushLiveEvent).not.toHaveBeenCalled();
+
+    const resync = attachHarness({
+      liveFailure: { reason: "resync-required", ackedSeq: 2, expectedSeq: 3 },
+    });
+    await admit(resync);
+    resync.sendRequest("worker.live-event", { ...LIVE_EVENT, seq: 7 });
+    await vi.waitFor(() =>
+      expect(resync.responses[1]).toMatchObject({
+        error: { details: { reason: "resync-required" } },
+      }),
+    );
+    expect(resync.service.pushLiveEvent).toHaveBeenCalledOnce();
+
+    const invalid = attachHarness();
+    await admit(invalid);
+    invalid.sendRequest("worker.live-event", {
+      ...LIVE_EVENT,
+      event: { kind: "assistant", payload: { delta: "x" } },
+    });
+    await vi.waitFor(() =>
+      expect(invalid.responses[1]).toMatchObject({
+        error: { details: { reason: "invalid-event" } },
+      }),
+    );
+    expect(invalid.service.pushLiveEvent).not.toHaveBeenCalled();
   });
 
   it("rejects transcript commits when the admitted worker lacks the feature", async () => {

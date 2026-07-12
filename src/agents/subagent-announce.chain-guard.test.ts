@@ -6,6 +6,7 @@
  *
  * Coverage gap from CODEWALK.md: "No existing test for announce-side chain guard"
  */
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // --- Mocks that DO intercept the SUT (non-barrel modules) ---
@@ -591,7 +592,10 @@ describe("announce-path post-compaction routing (stage at seam, skip spawn)", ()
     });
 
     expect(mockedStagePostCompactionDelegate).toHaveBeenCalledTimes(1);
-    const [stagedSessionKey, stagedDelegate] = mockedStagePostCompactionDelegate.mock.calls[0];
+    const [stagedSessionKey, stagedDelegate] = expectDefined(
+      mockedStagePostCompactionDelegate.mock.calls.at(0),
+      "staged post-compaction delegate call",
+    );
     expect(stagedSessionKey).toBe(params.requesterSessionKey);
     expect(stagedDelegate).toMatchObject({ task: "resume migration step 3" });
     // Mutual exclusion: staging at-seam must NOT also chain-spawn now.

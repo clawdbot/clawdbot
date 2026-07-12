@@ -3,6 +3,8 @@
  * Covers target resolution, cursor mode tracking, exit outcome classification,
  * system events, and process lifecycle behavior.
  */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
 import type { RunExit } from "../process/supervisor/types.js";
@@ -872,7 +874,10 @@ describe("runExecProcess POSIX command wrapper", () => {
     void ignoredRun;
 
     expect(supervisorMock.spawn).toHaveBeenCalledTimes(1);
-    const spawnCall = supervisorMock.spawn.mock.calls[0][0];
+    const spawnCall = expectDefined(
+      supervisorMock.spawn.mock.calls[0],
+      "supervisorMock.spawn.mock.calls[0] test invariant",
+    )[0];
 
     const commandStr = spawnCall.argv.join(" ");
     expect(commandStr).toContain(
@@ -916,7 +921,10 @@ describe("runExecProcess POSIX command wrapper", () => {
     void ignoredRun;
 
     expect(supervisorMock.spawn).toHaveBeenCalledTimes(1);
-    const spawnCall = supervisorMock.spawn.mock.calls[0][0];
+    const spawnCall = expectDefined(
+      supervisorMock.spawn.mock.calls[0],
+      "supervisorMock.spawn.mock.calls[0] test invariant",
+    )[0];
 
     const commandStr = spawnCall.argv.join(" ");
     expect(commandStr).not.toContain("export PATH=");

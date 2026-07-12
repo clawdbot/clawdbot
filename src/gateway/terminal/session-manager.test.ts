@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { TerminalPtyHandle } from "./pty.js";
 import {
@@ -129,7 +130,10 @@ describe("TerminalSessionManager", () => {
     const emit = vi.fn();
     const ptys = [makeFakePty(), makeFakePty()];
     let idx = 0;
-    const manager = new TerminalSessionManager({ emit, spawn: async () => ptys[idx++] });
+    const manager = new TerminalSessionManager({
+      emit,
+      spawn: async () => expectDefined(ptys[idx++], "ptys[idx++] test invariant"),
+    });
     await manager.open(baseRequest());
     await manager.open(baseRequest());
     expect(manager.size).toBe(2);
@@ -137,8 +141,8 @@ describe("TerminalSessionManager", () => {
 
     manager.handleDisconnect("conn-1");
     expect(manager.size).toBe(0);
-    expect(ptys[0].killed).toBe(true);
-    expect(ptys[1].killed).toBe(true);
+    expect(expectDefined(ptys[0], "ptys[0] test invariant").killed).toBe(true);
+    expect(expectDefined(ptys[1], "ptys[1] test invariant").killed).toBe(true);
     // Silent teardown: the socket is already gone.
     expect(emit).not.toHaveBeenCalled();
   });
@@ -188,15 +192,18 @@ describe("TerminalSessionManager", () => {
     const emit = vi.fn();
     const ptys = [makeFakePty(), makeFakePty()];
     let idx = 0;
-    const manager = new TerminalSessionManager({ emit, spawn: async () => ptys[idx++] });
+    const manager = new TerminalSessionManager({
+      emit,
+      spawn: async () => expectDefined(ptys[idx++], "ptys[idx++] test invariant"),
+    });
     await manager.open(baseRequest());
     await manager.open(baseRequest({ connId: "conn-2" }));
     emit.mockClear();
 
     manager.disposeAll();
     expect(manager.size).toBe(0);
-    expect(ptys[0].killed).toBe(true);
-    expect(ptys[1].killed).toBe(true);
+    expect(expectDefined(ptys[0], "ptys[0] test invariant").killed).toBe(true);
+    expect(expectDefined(ptys[1], "ptys[1] test invariant").killed).toBe(true);
     // Shutdown drops the sockets, so notifying clients is pointless.
     expect(emit).not.toHaveBeenCalled();
   });
@@ -408,7 +415,9 @@ describe("TerminalSessionManager detach/reattach", () => {
     emit.mockClear();
     fake.emitData("output");
     expect(emit).toHaveBeenCalledTimes(1);
-    expect(emit.mock.calls[0][0]).toBe("conn-2");
+    expect(expectDefined(emit.mock.calls[0], "emit.mock.calls[0] test invariant")[0]).toBe(
+      "conn-2",
+    );
     // The old owner's disconnect later must not tear down the stolen session.
     manager.handleDisconnect("conn-1");
     expect(manager.size).toBe(1);
@@ -453,7 +462,7 @@ describe("TerminalSessionManager detach/reattach", () => {
       let idx = 0;
       const manager = new TerminalSessionManager({
         emit: vi.fn(),
-        spawn: async () => ptys[idx++],
+        spawn: async () => expectDefined(ptys[idx++], "ptys[idx++] test invariant"),
         detachGraceMs: 60_000,
         maxDetachedSessions: 1,
       });
@@ -462,8 +471,8 @@ describe("TerminalSessionManager detach/reattach", () => {
       manager.handleDisconnect("conn-1");
       vi.advanceTimersByTime(1);
       manager.handleDisconnect("conn-2");
-      expect(ptys[0].killed).toBe(true);
-      expect(ptys[1].killed).toBe(false);
+      expect(expectDefined(ptys[0], "ptys[0] test invariant").killed).toBe(true);
+      expect(expectDefined(ptys[1], "ptys[1] test invariant").killed).toBe(false);
       expect(manager.size).toBe(1);
     } finally {
       vi.useRealTimers();
@@ -477,7 +486,7 @@ describe("TerminalSessionManager detach/reattach", () => {
       let idx = 0;
       const manager = new TerminalSessionManager({
         emit: vi.fn(),
-        spawn: async () => ptys[idx++],
+        spawn: async () => expectDefined(ptys[idx++], "ptys[idx++] test invariant"),
         detachGraceMs: 60_000,
       });
       const first = await manager.open(baseRequest({ connId: "conn-1" }));
@@ -491,7 +500,9 @@ describe("TerminalSessionManager detach/reattach", () => {
       expect(listed.map((s) => s.sessionId)).toEqual([first.sessionId, second.sessionId]);
       expect(listed[0]).toMatchObject({ attached: true, agentId: "main", shell: "/bin/zsh" });
       expect(listed[1]).toMatchObject({ attached: false });
-      expect(listed[1].createdAtMs).toBeGreaterThan(listed[0].createdAtMs);
+      expect(expectDefined(listed[1], "listed[1] test invariant").createdAtMs).toBeGreaterThan(
+        expectDefined(listed[0], "listed[0] test invariant").createdAtMs,
+      );
     } finally {
       vi.useRealTimers();
     }

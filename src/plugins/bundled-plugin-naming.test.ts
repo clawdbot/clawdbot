@@ -2,6 +2,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoRelativePath } from "../test-utils/repo-files.js";
@@ -78,9 +79,10 @@ function listExternalBundledPluginDirs(): string[] | null {
       continue;
     }
     const [, dirName, fileName] = match;
-    const metadataFiles = metadataByDir.get(dirName) ?? new Set<string>();
-    metadataFiles.add(fileName);
-    metadataByDir.set(dirName, metadataFiles);
+    const metadataFiles =
+      metadataByDir.get(expectDefined(dirName, "dirName test invariant")) ?? new Set<string>();
+    metadataFiles.add(expectDefined(fileName, "fileName test invariant"));
+    metadataByDir.set(expectDefined(dirName, "dirName test invariant"), metadataFiles);
   }
 
   return [...metadataByDir.entries()]

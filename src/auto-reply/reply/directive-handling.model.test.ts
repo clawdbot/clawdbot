@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../../sessions/model-overrides.js";
@@ -1801,7 +1802,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     );
 
     await vi.waitFor(() => expect(events).toHaveLength(1));
-    const event = events[0];
+    const event = expectDefined(events[0], "events[0] test invariant");
     expect(event.type).toBe("session");
     expect(event.action).toBe("patch");
     expect(event.sessionKey).toBe(sessionKey);

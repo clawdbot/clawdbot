@@ -3,6 +3,7 @@
  * Covers request construction, SSE parsing, aborts, tool calls, usage, and
  * provider transport hooks.
  */
+import { expectDefined } from "@openclaw/normalization-core";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { attachModelProviderRequestTransport } from "./provider-request-config.js";
@@ -3159,9 +3160,10 @@ describe("anthropic transport stream", () => {
           ],
         },
       ]);
-      const [[url, fetchOptions]] = guardedFetchMock.mock.calls as unknown as Array<
-        [string, { method?: string }]
-      >;
+      const [url, fetchOptions] = expectDefined(
+        (guardedFetchMock.mock.calls as unknown as Array<[string, { method?: string }]>)[0],
+        "(guardedFetchMock.mock.calls as unknown as Array<[string, { method?: string }]>)[0] test invariant",
+      );
       expect(url).toBe("https://api.minimax.io/anthropic/v1/messages");
       expect(fetchOptions.method).toBe("POST");
     },

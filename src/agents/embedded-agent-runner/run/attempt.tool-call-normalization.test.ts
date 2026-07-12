@@ -1,4 +1,6 @@
 // Coverage for normalizing tool calls before and during model replay.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -163,7 +165,9 @@ describe("wrapStreamFnPromoteStandaloneTextToolCalls", () => {
       arguments: { command: "cat /proc/mounts 2>/dev/null | head -20" },
       partialArgs: '{"command":"cat /proc/mounts 2>/dev/null | head -20"}',
     });
-    expect(String(content[1].id)).toMatch(/^call_[a-f0-9]{24}$/);
+    expect(String(expectDefined(content[1], "content[1] test invariant").id)).toMatch(
+      /^call_[a-f0-9]{24}$/,
+    );
     expect(content[2]).toMatchObject({
       type: "toolCall",
       name: "exec",

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 
 type SessionEntry = {
@@ -162,7 +163,7 @@ function selectorSpecificity(selector: string): [number, number, number] {
 function compareSpecificity(left: [number, number, number], right: [number, number, number]) {
   for (let index = 0; index < left.length; index += 1) {
     if (left[index] !== right[index]) {
-      return left[index] - right[index];
+      return expectDefined(left[index], "left[index] test invariant") - expectDefined(right[index], "right[index] test invariant");
     }
   }
   return 0;

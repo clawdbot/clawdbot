@@ -1,4 +1,5 @@
 // Covers exec approval forwarding to channel plugins.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
@@ -794,8 +795,11 @@ describe("exec approval forwarder", () => {
 
       expect(deliver).toHaveBeenCalledTimes(1);
       const expiryText =
-        (deliver.mock.calls[0][0] as { payloads?: Array<{ text?: string }> }).payloads?.[0]?.text ??
-        "";
+        (
+          expectDefined(deliver.mock.calls[0], "deliver.mock.calls[0] test invariant")[0] as {
+            payloads?: Array<{ text?: string }>;
+          }
+        ).payloads?.[0]?.text ?? "";
       expect(expiryText).toContain("expired");
 
       // After expiry, the pending entry should be cleaned up.

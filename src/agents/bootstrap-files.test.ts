@@ -1,6 +1,7 @@
 /** Tests agent bootstrap file discovery, filtering, and injected context modes. */
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   clearInternalHooks,
@@ -298,7 +299,11 @@ describe("resolveBootstrapFilesForRun", () => {
         ["HEARTBEAT.md", "heartbeat"],
         ["BOOTSTRAP.md", "setup"],
       ].map(([fileName, content]) =>
-        fs.writeFile(path.join(workspaceDir, fileName), content, "utf8"),
+        fs.writeFile(
+          path.join(workspaceDir, expectDefined(fileName, "fileName test invariant")),
+          expectDefined(content, "content test invariant"),
+          "utf8",
+        ),
       ),
     );
 
@@ -323,7 +328,11 @@ describe("resolveBootstrapFilesForRun", () => {
         ["HEARTBEAT.md", "heartbeat"],
         ["BOOTSTRAP.md", "setup"],
       ].map(([fileName, content]) =>
-        fs.writeFile(path.join(workspaceDir, fileName), content, "utf8"),
+        fs.writeFile(
+          path.join(workspaceDir, expectDefined(fileName, "fileName test invariant")),
+          expectDefined(content, "content test invariant"),
+          "utf8",
+        ),
       ),
     );
 

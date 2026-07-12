@@ -1,4 +1,6 @@
 /** Tests cron before_agent_reply gating at the CLI runner entrypoint. */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { CliOutput } from "./cli-output.js";
@@ -338,7 +340,10 @@ describe("runCliAgent cron before_agent_reply seam", () => {
     expect(executePreparedCliRunMock).toHaveBeenCalledTimes(1);
     expect(closeClaudeLiveSessionForContextMock).toHaveBeenCalledTimes(1);
     expect(closeClaudeLiveSessionForContextMock).toHaveBeenCalledWith(
-      await prepareCliRunContextMock.mock.results[0].value,
+      await expectDefined(
+        prepareCliRunContextMock.mock.results[0],
+        "prepareCliRunContextMock.mock.results[0] test invariant",
+      ).value,
     );
   });
 

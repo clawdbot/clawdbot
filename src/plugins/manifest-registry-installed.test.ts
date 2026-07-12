@@ -1,6 +1,7 @@
 // Covers installed plugin manifest registry behavior.
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   readPersistedInstalledPluginIndex,
@@ -468,7 +469,7 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
         ...index,
         plugins: [
           {
-            ...index.plugins[0],
+            ...expectDefined(index.plugins[0], "index.plugins[0] test invariant"),
             pluginId: "claude-bundle",
             manifestPath: path.join(rootDir, ".claude-plugin", "plugin.json"),
             source: rootDir,
@@ -518,7 +519,7 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
         ...index,
         plugins: [
           {
-            ...index.plugins[0],
+            ...expectDefined(index.plugins[0], "index.plugins[0] test invariant"),
             packageChannel: {
               id: "installed",
               label: "Installed",
@@ -570,7 +571,7 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
         ...index,
         plugins: [
           {
-            ...index.plugins[0],
+            ...expectDefined(index.plugins[0], "index.plugins[0] test invariant"),
             packageJson: {
               path: "..meta/package.json",
               hash: "old-index-hash",
@@ -623,7 +624,7 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
           ...index,
           plugins: [
             {
-              ...index.plugins[0],
+              ...expectDefined(index.plugins[0], "index.plugins[0] test invariant"),
               packageJson: {
                 path: "package.json",
                 hash: "old-index-hash",
@@ -692,7 +693,7 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
 
     const index = createIndex(rootDir);
     const persistedPlugin = {
-      ...index.plugins[0],
+      ...expectDefined(index.plugins[0], "index.plugins[0] test invariant"),
       pluginId: "claude-bundle",
       manifestPath: path.join(rootDir, ".claude-plugin", "plugin.json"),
       source: rootDir,

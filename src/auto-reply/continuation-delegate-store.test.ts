@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, it, expect, beforeEach } from "vitest";
 import {
   cancelPendingDelegates,
@@ -27,8 +28,9 @@ describe("continuation-delegate-store", () => {
 
     const delegates = consumePendingDelegates("test-session");
     expect(delegates).toHaveLength(1);
-    expect(delegates[0].task).toBe("summarize the RFC");
-    expect(delegates[0].delayMs).toBe(0);
+    const delegate = expectDefined(delegates.at(0), "delegate");
+    expect(delegate.task).toBe("summarize the RFC");
+    expect(delegate.delayMs).toBe(0);
   });
 
   it("consumes removes delegates from store", () => {
@@ -48,11 +50,13 @@ describe("continuation-delegate-store", () => {
 
     const delegates = consumePendingDelegates("test-session");
     expect(delegates).toHaveLength(3);
-    expect(delegates[0].task).toBe("arrow 1");
-    expect(delegates[1].task).toBe("arrow 2");
-    expect(delegates[1].mode).toBe("silent");
-    expect(delegates[2].task).toBe("arrow 3");
-    expect(delegates[2].mode).toBe("silent-wake");
+    expect(expectDefined(delegates.at(0), "first delegate").task).toBe("arrow 1");
+    const secondDelegate = expectDefined(delegates.at(1), "second delegate");
+    expect(secondDelegate.task).toBe("arrow 2");
+    expect(secondDelegate.mode).toBe("silent");
+    const thirdDelegate = expectDefined(delegates.at(2), "third delegate");
+    expect(thirdDelegate.task).toBe("arrow 3");
+    expect(thirdDelegate.mode).toBe("silent-wake");
   });
 
   it("isolates delegates by session key", () => {
@@ -63,9 +67,9 @@ describe("continuation-delegate-store", () => {
     const b = consumePendingDelegates("other-session");
 
     expect(a).toHaveLength(1);
-    expect(a[0].task).toBe("session A task");
+    expect(expectDefined(a.at(0), "session A delegate").task).toBe("session A task");
     expect(b).toHaveLength(1);
-    expect(b[0].task).toBe("session B task");
+    expect(expectDefined(b.at(0), "session B delegate").task).toBe("session B task");
   });
 
   it("pendingDelegateCount reflects current queue depth", () => {
@@ -91,21 +95,22 @@ describe("continuation-delegate-store", () => {
     // without re-querying. The minimal-fields test only cares that no
     // optional caller-set fields leak through, so assert on `task` and
     // check the carry-through metadata shape separately.
-    expect(delegates[0].task).toBe("minimal task");
-    expect(typeof delegates[0].flowId).toBe("string");
-    expect(delegates[0].expectedRevision).toBe(1);
-    expect(delegates[0].delayMs).toBeUndefined();
-    expect(delegates[0].mode).toBeUndefined();
-    expect(delegates[0].targetSessionKey).toBeUndefined();
-    expect(delegates[0].targetSessionKeys).toBeUndefined();
-    expect(delegates[0].fanoutMode).toBeUndefined();
+    const delegate = expectDefined(delegates.at(0), "delegate");
+    expect(delegate.task).toBe("minimal task");
+    expect(typeof delegate.flowId).toBe("string");
+    expect(delegate.expectedRevision).toBe(1);
+    expect(delegate.delayMs).toBeUndefined();
+    expect(delegate.mode).toBeUndefined();
+    expect(delegate.targetSessionKey).toBeUndefined();
+    expect(delegate.targetSessionKeys).toBeUndefined();
+    expect(delegate.fanoutMode).toBeUndefined();
   });
 
   it("handles zero delay (immediate dispatch)", () => {
     enqueuePendingDelegate("test-session", { task: "immediate", delayMs: 0 });
 
     const delegates = consumePendingDelegates("test-session");
-    expect(delegates[0].delayMs).toBe(0);
+    expect(expectDefined(delegates.at(0), "delegate").delayMs).toBe(0);
   });
 });
 
@@ -127,8 +132,9 @@ describe("post-compaction delegate staging", () => {
 
     const delegates = consumeStagedPostCompactionDelegates("test-session");
     expect(delegates).toHaveLength(1);
-    expect(delegates[0].task).toBe("carry working state past compaction");
-    expect(typeof delegates[0].createdAt).toBe("number");
+    const delegate = expectDefined(delegates.at(0), "post-compaction delegate");
+    expect(delegate.task).toBe("carry working state past compaction");
+    expect(typeof delegate.createdAt).toBe("number");
   });
 
   it("consuming removes staged delegates from store", () => {
@@ -168,11 +174,11 @@ describe("post-compaction delegate staging", () => {
 
     const immediate = consumePendingDelegates("test-session");
     expect(immediate).toHaveLength(1);
-    expect(immediate[0].task).toBe("immediate task");
+    expect(expectDefined(immediate.at(0), "immediate delegate").task).toBe("immediate task");
 
     const compaction = consumeStagedPostCompactionDelegates("test-session");
     expect(compaction).toHaveLength(1);
-    expect(compaction[0].task).toBe("compaction task");
+    expect(expectDefined(compaction.at(0), "compaction delegate").task).toBe("compaction task");
   });
 
   it("stagedPostCompactionDelegateCount reflects current queue depth", () => {

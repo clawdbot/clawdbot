@@ -1,4 +1,5 @@
 // Tool result cap advice tests cover doctor guidance for capped tool output.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   buildToolResultCapDoctorAdvice,
@@ -63,7 +64,9 @@ describe("buildToolResultCapDoctorAdvice", () => {
       target: "agents.writer",
     });
 
-    expect(toolResultCapDoctorIssueToHealthFinding(issue)).toEqual({
+    expect(
+      toolResultCapDoctorIssueToHealthFinding(expectDefined(issue, "issue test invariant")),
+    ).toEqual({
       checkId: "core/doctor/tool-result-cap",
       severity: "warning",
       message:

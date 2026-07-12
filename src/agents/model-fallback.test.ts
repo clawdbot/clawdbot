@@ -1,6 +1,7 @@
 // Covers model fallback ordering, error classification, and auth cooldown behavior.
 import crypto from "node:crypto";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { TranscriptNotContinuableError } from "../../packages/agent-core/src/errors.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -904,8 +905,12 @@ describe("runWithModelFallback", () => {
     expect(result.result).toBe("ok");
     expect(run).toHaveBeenCalledTimes(2);
     expect(result.attempts).toHaveLength(1);
-    expect(result.attempts[0].error).toBe("bad request");
-    expect(result.attempts[0].reason).toBe("unknown");
+    expect(expectDefined(result.attempts[0], "result.attempts[0] test invariant").error).toBe(
+      "bad request",
+    );
+    expect(expectDefined(result.attempts[0], "result.attempts[0] test invariant").reason).toBe(
+      "unknown",
+    );
   });
 
   it("does not treat Codex missing tool-result failures as model fallback candidates", async () => {
@@ -986,7 +991,9 @@ describe("runWithModelFallback", () => {
       { isFinalFallbackAttempt: false },
     ]);
     expect(result.attempts).toHaveLength(1);
-    expect(result.attempts[0].reason).toBe("overloaded");
+    expect(expectDefined(result.attempts[0], "result.attempts[0] test invariant").reason).toBe(
+      "overloaded",
+    );
   });
 
   it("does not prepare agent harness plugins for forced OpenClaw candidates", async () => {

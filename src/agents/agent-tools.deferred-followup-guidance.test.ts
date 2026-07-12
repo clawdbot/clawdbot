@@ -2,6 +2,7 @@
  * Tests cron-aware deferred follow-up guidance in exec/process descriptions.
  * Protects the model-facing text selected after tool filtering.
  */
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tools.js";
 import { applyDeferredFollowupToolDescriptions } from "./agent-tools.deferred-followup.js";
@@ -59,7 +60,10 @@ describe("createOpenClawCodingTools deferred follow-up guidance", () => {
     const [updated] = applyDeferredFollowupToolDescriptions([processTool]);
 
     expect(updated).not.toBe(processTool);
-    expect(getPluginToolMeta(updated)).toEqual({ pluginId: "example", optional: false });
+    expect(getPluginToolMeta(expectDefined(updated, "updated test invariant"))).toEqual({
+      pluginId: "example",
+      optional: false,
+    });
     expect(getChannelAgentToolMeta(updated as never)).toEqual({
       channelId: "example-channel",
     });

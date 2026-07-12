@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cancelPendingDelegates,
@@ -470,7 +471,7 @@ describe("continue_delegate tool", () => {
 
     const delegates = consumePendingDelegates("test-session");
     expect(delegates).toHaveLength(1);
-    expect(delegates[0].traceparent).toBeUndefined();
+    expect(expectDefined(delegates.at(0), "delegate").traceparent).toBeUndefined();
   });
 
   it("fails loudly for invalid target arrays and fanout conflicts", async () => {
@@ -572,7 +573,7 @@ describe("continue_delegate tool", () => {
     expect(result).not.toHaveProperty("model");
     const delegates = consumePendingDelegates("test-session");
     expect(delegates).toHaveLength(1);
-    expect(delegates[0].model).toBeUndefined();
+    expect(expectDefined(delegates.at(0), "delegate").model).toBeUndefined();
   });
 
   it('treats model="default" as no override (inherits the parent model)', async () => {
@@ -586,7 +587,7 @@ describe("continue_delegate tool", () => {
     expect(result).not.toHaveProperty("model");
     const delegates = consumePendingDelegates("test-session");
     expect(delegates).toHaveLength(1);
-    expect(delegates[0].model).toBeUndefined();
+    expect(expectDefined(delegates.at(0), "delegate").model).toBeUndefined();
   });
 
   it("threads the model override into staged post-compaction delegates", async () => {

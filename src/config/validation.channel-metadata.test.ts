@@ -1,4 +1,6 @@
 // Verifies channel metadata validation and plugin capability lookups.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
@@ -125,7 +127,10 @@ function createExternalFeishuSchemaWithCloserMetadataRegistry(): PluginManifestR
 }
 
 function createExternalFeishuSchemaWithRootOnlyShadowRegistry(): PluginManifestRegistry {
-  const firstSchema = createExternalFeishuSchemaRegistry().plugins[0];
+  const firstSchema = expectDefined(
+    createExternalFeishuSchemaRegistry().plugins[0],
+    "createExternalFeishuSchemaRegistry().plugins[0] test invariant",
+  );
   return {
     diagnostics: [],
     plugins: [
@@ -679,8 +684,9 @@ describe("validateConfigObjectRawWithPlugins channel metadata", () => {
   it("sanitizes the schema owner in validation diagnostics", () => {
     const unsafeId = `openclaw${String.fromCharCode(10)}${String.fromCharCode(27)}[31m-lark`;
     const registry = createExternalFeishuSchemaRegistry();
+    const plugin = expectDefined(registry.plugins[0], "external Feishu plugin manifest");
     registry.plugins[0] = {
-      ...registry.plugins[0],
+      ...plugin,
       id: unsafeId,
     };
     mockLoadPluginManifestRegistry.mockReturnValue(registry);

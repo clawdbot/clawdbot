@@ -127,6 +127,13 @@ export type AgentEventPayload = {
   agentId?: string;
 };
 
+/** Gateway-only routing metadata stamped onto events after public input validation. */
+export type AgentEventRuntimePayload = AgentEventPayload & {
+  readonly controlUiVisible?: boolean;
+  readonly contextClaimId?: string;
+  readonly deliverySessionKey?: string;
+};
+
 /** Per-run metadata used to stamp events and gate Control UI visibility. */
 export type AgentRunContext = {
   sessionKey?: string;
@@ -140,6 +147,7 @@ export type AgentRunContext = {
   isHeartbeat?: boolean;
   /** Whether control UI clients should receive chat/agent updates for this run. */
   isControlUiVisible?: boolean;
+  projectSessionActive?: boolean;
   /** Timestamp when this context was first registered (for TTL-based cleanup). */
   registeredAt?: number;
   /** Timestamp of last activity (updated on every emitAgentEvent). */
@@ -148,16 +156,18 @@ export type AgentRunContext = {
 
 type AgentEventState = {
   seqByRun: Map<string, number>;
-  listeners: Set<(evt: AgentEventPayload) => void>;
+  listeners: Set<(evt: AgentEventRuntimePayload) => void>;
   auditListeners: Set<(evt: AgentEventPayload) => void>;
   runContextById: Map<string, AgentRunContext>;
   runContextOwnersById?: Map<
     string,
     {
       lifecycleGeneration: string;
-      ownerTokens: Set<string>;
+      claimIds: Set<string>;
       preserveAfterRelease: boolean;
       clearRequested: boolean;
+      exclusiveClaimId?: string;
+      clearListeners?: Map<string, (claimId: string) => void>;
     }
   >;
   lifecycleGeneration: string;
@@ -173,7 +183,7 @@ type AgentEventExecutionContext = {
 function getAgentEventState(): AgentEventState {
   return resolveGlobalSingleton<AgentEventState>(AGENT_EVENT_STATE_KEY, () => ({
     seqByRun: new Map<string, number>(),
-    listeners: new Set<(evt: AgentEventPayload) => void>(),
+    listeners: new Set<(evt: AgentEventRuntimePayload) => void>(),
     auditListeners: new Set<(evt: AgentEventPayload) => void>(),
     runContextById: new Map<string, AgentRunContext>(),
     lifecycleGeneration: randomUUID(),
@@ -221,11 +231,20 @@ export function rotateAgentEventLifecycleGeneration(): string {
 }
 
 /** Registers or merges per-run context used by later agent event emissions. */
-export function registerAgentRunContext(runId: string, context: AgentRunContext) {
+export function registerAgentRunContext(runId: string, context: AgentRunContext, claimId?: string) {
   if (!runId) {
     return;
   }
   const state = getAgentEventState();
+  const lifecycleGeneration = context.lifecycleGeneration ?? state.lifecycleGeneration;
+  const owners = getAgentRunContextOwners(state).get(runId);
+  if (
+    owners?.lifecycleGeneration === lifecycleGeneration &&
+    owners.exclusiveClaimId &&
+    (owners.exclusiveClaimId !== claimId || owners.clearRequested)
+  ) {
+    return;
+  }
   const existing = state.runContextById.get(runId);
   if (!existing) {
     state.runContextById.set(runId, {
@@ -257,6 +276,9 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext)
   if (context.isControlUiVisible !== undefined) {
     existing.isControlUiVisible = context.isControlUiVisible;
   }
+  if (context.projectSessionActive !== undefined) {
+    existing.projectSessionActive = context.projectSessionActive;
+  }
   if (context.isHeartbeat !== undefined && existing.isHeartbeat !== context.isHeartbeat) {
     existing.isHeartbeat = context.isHeartbeat;
   }
@@ -277,7 +299,12 @@ function getAgentRunContextOwners(state = getAgentEventState()) {
 export function claimAgentRunContext(
   runId: string,
   context: AgentRunContext,
-  options: { trackOwner?: boolean; ownsContext?: boolean } = {},
+  options: {
+    trackOwner?: boolean;
+    ownsContext?: boolean;
+    exclusive?: boolean;
+    onClearRequested?: (claimId: string) => void;
+  } = {},
 ): string | undefined {
   if (!runId) {
     return undefined;
@@ -287,21 +314,39 @@ export function claimAgentRunContext(
   const existing = state.runContextById.get(runId);
   const ownersById = getAgentRunContextOwners(state);
   const existingOwners = ownersById.get(runId);
-  let ownerToken: string | undefined;
+  const currentOwners =
+    existingOwners?.lifecycleGeneration === lifecycleGeneration ? existingOwners : undefined;
+  if (
+    currentOwners?.exclusiveClaimId ||
+    (options.exclusive &&
+      (existing?.lifecycleGeneration === lifecycleGeneration ||
+        (currentOwners?.claimIds.size ?? 0) > 0))
+  ) {
+    return undefined;
+  }
+  let claimId: string | undefined;
   if (options.trackOwner) {
-    ownerToken = randomUUID();
-    if (existingOwners?.lifecycleGeneration === lifecycleGeneration) {
-      existingOwners.ownerTokens.add(ownerToken);
+    claimId = randomUUID();
+    if (currentOwners) {
+      currentOwners.claimIds.add(claimId);
       if (options.ownsContext) {
-        existingOwners.preserveAfterRelease = false;
+        currentOwners.preserveAfterRelease = false;
+      }
+      if (options.onClearRequested) {
+        currentOwners.clearListeners ??= new Map();
+        currentOwners.clearListeners.set(claimId, options.onClearRequested);
       }
     } else {
       ownersById.set(runId, {
         lifecycleGeneration,
-        ownerTokens: new Set([ownerToken]),
+        claimIds: new Set([claimId]),
         preserveAfterRelease:
           options.ownsContext !== true && existing?.lifecycleGeneration === lifecycleGeneration,
         clearRequested: false,
+        ...(options.exclusive ? { exclusiveClaimId: claimId } : {}),
+        ...(options.onClearRequested
+          ? { clearListeners: new Map([[claimId, options.onClearRequested]]) }
+          : {}),
       });
     }
   } else if (existingOwners?.lifecycleGeneration !== lifecycleGeneration) {
@@ -310,11 +355,15 @@ export function claimAgentRunContext(
     ownersById.delete(runId);
   }
   if (existing?.lifecycleGeneration === lifecycleGeneration) {
-    registerAgentRunContext(runId, {
-      ...context,
-      lifecycleGeneration,
-    });
-    return ownerToken;
+    registerAgentRunContext(
+      runId,
+      {
+        ...context,
+        lifecycleGeneration,
+      },
+      claimId,
+    );
+    return claimId;
   }
   state.runContextById.set(runId, {
     ...context,
@@ -322,12 +371,29 @@ export function claimAgentRunContext(
     registeredAt: context.registeredAt ?? Date.now(),
   });
   state.seqByRun.delete(runId);
-  return ownerToken;
+  return claimId;
 }
 
 /** Returns the currently registered context for a run, if it has not been cleared or swept. */
 export function getAgentRunContext(runId: string) {
   return getAgentEventState().runContextById.get(runId);
+}
+
+export function getAgentRunContextOwnerStatus(
+  runId: string,
+  claimId: string,
+  lifecycleGeneration: string,
+): "active" | "clear-requested" | undefined {
+  const state = getAgentEventState();
+  const owners = getAgentRunContextOwners(state).get(runId);
+  if (
+    lifecycleGeneration !== state.lifecycleGeneration ||
+    owners?.lifecycleGeneration !== lifecycleGeneration ||
+    !owners.claimIds.has(claimId)
+  ) {
+    return undefined;
+  }
+  return owners.clearRequested ? "clear-requested" : "active";
 }
 
 /** Lists active runs bound to one current session identity. */
@@ -352,17 +418,56 @@ export function listAgentRunsForSession(params: {
   );
 }
 
+export function hasProjectedAgentRunForSession(params: {
+  sessionKeys: readonly string[];
+  sessionId?: string;
+}): boolean {
+  const lifecycleGeneration = getAgentEventState().lifecycleGeneration;
+  for (const context of getAgentEventState().runContextById.values()) {
+    const matches =
+      (context.sessionKey !== undefined && params.sessionKeys.includes(context.sessionKey)) ||
+      (params.sessionId !== undefined && context.sessionId === params.sessionId);
+    if (
+      matches &&
+      context.projectSessionActive === true &&
+      context.lifecycleGeneration === lifecycleGeneration
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** Clears context and sequence state for a run that has ended or been discarded. */
-export function clearAgentRunContext(runId: string, lifecycleGeneration?: string) {
+export function clearAgentRunContext(
+  runId: string,
+  lifecycleGeneration?: string,
+  claimId?: string,
+) {
   const state = getAgentEventState();
   const existing = state.runContextById.get(runId);
   if (lifecycleGeneration && existing && existing.lifecycleGeneration !== lifecycleGeneration) {
     return;
   }
   const owners = getAgentRunContextOwners(state).get(runId);
-  if (owners?.ownerTokens.size) {
+  if (
+    claimId &&
+    (!owners ||
+      (lifecycleGeneration && owners.lifecycleGeneration !== lifecycleGeneration) ||
+      !owners.claimIds.has(claimId))
+  ) {
+    return;
+  }
+  // A rejected claimant's cleanup must not evict the exclusive owner.
+  if (owners?.exclusiveClaimId && owners.exclusiveClaimId !== claimId) {
+    return;
+  }
+  if (owners?.claimIds.size) {
     if (!lifecycleGeneration || owners.lifecycleGeneration === lifecycleGeneration) {
       owners.clearRequested = true;
+      for (const [ownerClaimId, listener] of owners.clearListeners ?? []) {
+        listener(ownerClaimId);
+      }
     }
     return;
   }
@@ -371,17 +476,21 @@ export function clearAgentRunContext(runId: string, lifecycleGeneration?: string
 }
 
 /** Releases one tracked owner and clears its context after the final owner exits. */
-export function releaseAgentRunContext(runId: string, ownerToken: string | undefined) {
-  if (!runId || !ownerToken) {
+export function releaseAgentRunContext(runId: string, claimId: string | undefined) {
+  if (!runId || !claimId) {
     return;
   }
   const state = getAgentEventState();
   const ownersById = getAgentRunContextOwners(state);
   const owners = ownersById.get(runId);
-  if (!owners?.ownerTokens.delete(ownerToken)) {
+  if (!owners?.claimIds.delete(claimId)) {
     return;
   }
-  if (owners.ownerTokens.size > 0) {
+  owners.clearListeners?.delete(claimId);
+  if (owners.exclusiveClaimId === claimId) {
+    owners.exclusiveClaimId = undefined;
+  }
+  if (owners.claimIds.size > 0) {
     return;
   }
   ownersById.delete(runId);
@@ -423,8 +532,22 @@ export function resetAgentRunContextForTest() {
 
 function enrichAgentEvent(
   event: Omit<AgentEventPayload, "seq" | "ts">,
-): AgentEventPayload | undefined {
+  claimId?: string,
+): AgentEventRuntimePayload | undefined {
   const state = getAgentEventState();
+  const owners = getAgentRunContextOwners(state).get(event.runId);
+  if (claimId !== undefined) {
+    if (
+      owners?.lifecycleGeneration !== state.lifecycleGeneration ||
+      owners.exclusiveClaimId !== claimId ||
+      !owners.claimIds.has(claimId) ||
+      owners.clearRequested
+    ) {
+      return undefined;
+    }
+  } else if (owners?.lifecycleGeneration === state.lifecycleGeneration && owners.exclusiveClaimId) {
+    return undefined;
+  }
   const context = state.runContextById.get(event.runId);
   const executionLifecycleGeneration =
     event.lifecycleGeneration ?? getAgentEventExecutionContext().getStore()?.lifecycleGeneration;
@@ -447,6 +570,7 @@ function enrichAgentEvent(
   const isControlUiVisible = context?.isControlUiVisible ?? true;
   const eventSessionKey =
     typeof event.sessionKey === "string" && event.sessionKey.trim() ? event.sessionKey : undefined;
+  const deliverySessionKey = eventSessionKey ?? context?.sessionKey;
   // Hidden channel-routed runs should not leak live assistant/tool traffic into
   // Control UI, but lifecycle events still need the session key so gateway
   // listeners can persist terminal session state even if run-context lookup is
@@ -464,7 +588,7 @@ function enrichAgentEvent(
       ? (ownedLifecycleGeneration ?? state.lifecycleGeneration)
       : ownedLifecycleGeneration;
   const agentId = event.agentId ?? context?.agentId;
-  const enriched: AgentEventPayload = {
+  const enriched: AgentEventRuntimePayload = {
     ...event,
     sessionKey,
     ...(sessionId ? { sessionId } : {}),
@@ -480,12 +604,40 @@ function enrichAgentEvent(
       enumerable: false,
     });
   }
+  if (context?.isControlUiVisible !== undefined) {
+    Object.defineProperty(enriched, "controlUiVisible", {
+      value: context.isControlUiVisible,
+      enumerable: false,
+    });
+  }
+  if (claimId !== undefined) {
+    Object.defineProperty(enriched, "contextClaimId", {
+      value: claimId,
+      enumerable: false,
+    });
+    if (deliverySessionKey) {
+      Object.defineProperty(enriched, "deliverySessionKey", {
+        value: deliverySessionKey,
+        enumerable: false,
+      });
+    }
+  }
   return enriched;
 }
 
 /** Emits an agent event after assigning per-run sequence, timestamp, and context metadata. */
 export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
   const enriched = enrichAgentEvent(event);
+  if (enriched) {
+    notifyListeners(getAgentEventState().listeners, enriched);
+  }
+}
+
+export function emitAgentEventForOwner(
+  event: Omit<AgentEventPayload, "seq" | "ts">,
+  claimId: string,
+) {
+  const enriched = enrichAgentEvent(event, claimId);
   if (enriched) {
     notifyListeners(getAgentEventState().listeners, enriched);
   }
@@ -566,6 +718,11 @@ export function emitAgentPatchSummaryEvent(params: {
 export function onAgentEvent(listener: (evt: AgentEventPayload) => void) {
   const state = getAgentEventState();
   return registerListener(state.listeners, listener);
+}
+
+/** Subscribes Gateway internals that consume non-public ownership and routing metadata. */
+export function onAgentRuntimeEvent(listener: (evt: AgentEventRuntimePayload) => void) {
+  return registerListener(getAgentEventState().listeners, listener);
 }
 
 /** Subscribes to private audit-only agent events; returns an unsubscribe callback. */

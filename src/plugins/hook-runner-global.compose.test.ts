@@ -4,6 +4,8 @@
  * mock registries, complementing the real-load kill-chain coverage in
  * loader.hook-runner-live-view.test.ts.
  */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getGlobalHookRunnerRegistry } from "./hook-runner-global-state.js";
 import {
@@ -41,8 +43,9 @@ describe("global hook runner composition (#91918)", () => {
     // Scoped reload where the gate plugin failed to register: record present,
     // status not loaded, no hooks.
     const scopedFailure = createMockPluginRegistry([]);
-    scopedFailure.plugins[0].id = "gate";
-    scopedFailure.plugins[0].status = "error";
+    expectDefined(scopedFailure.plugins[0], "scopedFailure.plugins[0] test invariant").id = "gate";
+    expectDefined(scopedFailure.plugins[0], "scopedFailure.plugins[0] test invariant").status =
+      "error";
 
     setActivePluginRegistry(boot);
     pinActivePluginChannelRegistry(boot);
@@ -64,8 +67,9 @@ describe("global hook runner composition (#91918)", () => {
     // Scoped reload where C is present and loaded but registered no hooks
     // (e.g. a setup-runtime channel load registers the channel, not api.on).
     const scopedHookless = createMockPluginRegistry([]);
-    scopedHookless.plugins[0].id = "C";
-    scopedHookless.plugins[0].status = "loaded";
+    expectDefined(scopedHookless.plugins[0], "scopedHookless.plugins[0] test invariant").id = "C";
+    expectDefined(scopedHookless.plugins[0], "scopedHookless.plugins[0] test invariant").status =
+      "loaded";
 
     pinActivePluginChannelRegistry(boot);
     setActivePluginRegistry(scopedHookless);

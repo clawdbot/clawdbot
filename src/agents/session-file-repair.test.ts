@@ -5,6 +5,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../shared/transcript-only-openclaw-assistant.js";
 import { repairSessionFileIfNeeded } from "./session-file-repair.js";
@@ -374,7 +375,7 @@ describe("repairSessionFileIfNeeded", () => {
     const repairedLines = repaired.trim().split("\n");
     expect(repairedLines).toHaveLength(4);
     const repairedEntry: { message: { content: { type: string; text: string }[] } } = JSON.parse(
-      repairedLines[2],
+      expectDefined(repairedLines[2], "repairedLines[2] test invariant"),
     );
     expect(repairedEntry.message.content).toEqual([
       { type: "text", text: "[assistant turn failed before producing content]" },
@@ -408,7 +409,9 @@ describe("repairSessionFileIfNeeded", () => {
     const repaired = await fs.readFile(file, "utf-8");
     const repairedLines = repaired.trim().split("\n");
     expect(repairedLines).toHaveLength(3);
-    const rewrittenEntry = JSON.parse(repairedLines[1]);
+    const rewrittenEntry = JSON.parse(
+      expectDefined(repairedLines[1], "repairedLines[1] test invariant"),
+    );
     expect(rewrittenEntry.id).toBe("msg-blank");
     expect(rewrittenEntry.message.content).toEqual([
       { type: "text", text: BLANK_USER_FALLBACK_TEXT },
@@ -439,7 +442,9 @@ describe("repairSessionFileIfNeeded", () => {
     const repaired = await fs.readFile(file, "utf-8");
     const repairedLines = repaired.trim().split("\n");
     expect(repairedLines).toHaveLength(3);
-    const rewrittenEntry = JSON.parse(repairedLines[1]);
+    const rewrittenEntry = JSON.parse(
+      expectDefined(repairedLines[1], "repairedLines[1] test invariant"),
+    );
     expect(rewrittenEntry.message.content).toBe(BLANK_USER_FALLBACK_TEXT);
   });
 
@@ -861,7 +866,7 @@ describe("repairSessionFileIfNeeded", () => {
 
     const lines = (await fs.readFile(file, "utf-8")).trimEnd().split("\n");
     expect(lines).toHaveLength(5);
-    const inserted = JSON.parse(lines[3]);
+    const inserted = JSON.parse(expectDefined(lines[3], "lines[3] test invariant"));
     expect(inserted.type).toBe("message");
     expect(inserted.parentId).toBe("msg-asst-process");
     expect(inserted.message.role).toBe("toolResult");
@@ -869,7 +874,7 @@ describe("repairSessionFileIfNeeded", () => {
     expect(inserted.message.toolName).toBe("process");
     expect(inserted.message.isError).toBe(true);
     expect(inserted.message.content[0].text).toBe("aborted");
-    expect(JSON.parse(lines[4])).toEqual(deliveryMirror);
+    expect(JSON.parse(expectDefined(lines[4], "lines[4] test invariant"))).toEqual(deliveryMirror);
   });
 
   it("inserts missing Responses message-tool results before delivery mirrors", async () => {
@@ -921,7 +926,7 @@ describe("repairSessionFileIfNeeded", () => {
 
     const lines = (await fs.readFile(file, "utf-8")).trimEnd().split("\n");
     expect(lines).toHaveLength(5);
-    const inserted = JSON.parse(lines[3]);
+    const inserted = JSON.parse(expectDefined(lines[3], "lines[3] test invariant"));
     expect(inserted.type).toBe("message");
     expect(inserted.parentId).toBe("msg-asst-message-tool");
     expect(inserted.message.role).toBe("toolResult");
@@ -929,7 +934,7 @@ describe("repairSessionFileIfNeeded", () => {
     expect(inserted.message.toolName).toBe("message");
     expect(inserted.message.isError).toBe(true);
     expect(inserted.message.content[0].text).toBe("aborted");
-    expect(JSON.parse(lines[4])).toEqual(deliveryMirror);
+    expect(JSON.parse(expectDefined(lines[4], "lines[4] test invariant"))).toEqual(deliveryMirror);
   });
 
   it("does not duplicate code-mode tool results that are already persisted", async () => {
@@ -1166,8 +1171,8 @@ describe("repairSessionFileIfNeeded", () => {
     const after = await fs.readFile(file, "utf-8");
     const lines = after.trimEnd().split("\n");
     expect(lines).toHaveLength(2);
-    expect(JSON.parse(lines[0])).toEqual(header);
-    expect(JSON.parse(lines[1])).toEqual(message);
+    expect(JSON.parse(expectDefined(lines[0], "lines[0] test invariant"))).toEqual(header);
+    expect(JSON.parse(expectDefined(lines[1], "lines[1] test invariant"))).toEqual(message);
     expect(after).not.toContain('"role":null');
   });
 

@@ -1,4 +1,6 @@
 // Verifies redacted snapshot schema metadata stays aligned with config schema.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { redactSnapshotTestHints as mainSchemaHints } from "../../test/helpers/config/redact-snapshot-test-hints.js";
 import { REDACTED_SENTINEL, redactConfigSnapshot } from "./redact-snapshot.js";
@@ -31,10 +33,16 @@ describe("realredactConfigSnapshot_real", () => {
     const result = redactConfigSnapshot(snapshot, mainSchemaHints);
     const config = result.config as typeof snapshot.config;
     expect(config.agents.defaults.memorySearch.remote.apiKey).toBe(REDACTED_SENTINEL);
-    expect(config.agents.list[0].memorySearch.remote.apiKey).toBe(REDACTED_SENTINEL);
+    expect(
+      expectDefined(config.agents.list[0], "config.agents.list[0] test invariant").memorySearch
+        .remote.apiKey,
+    ).toBe(REDACTED_SENTINEL);
     const restored = restoreRedactedValues(result.config, snapshot.config, mainSchemaHints);
     expect(restored.agents.defaults.memorySearch.remote.apiKey).toBe("1234");
-    expect(restored.agents.list[0].memorySearch.remote.apiKey).toBe("6789");
+    expect(
+      expectDefined(restored.agents.list[0], "restored.agents.list[0] test invariant").memorySearch
+        .remote.apiKey,
+    ).toBe("6789");
   });
 
   it("redacts bundled channel private keys from generated schema hints", () => {
@@ -50,7 +58,9 @@ describe("realredactConfigSnapshot_real", () => {
 
     const result = redactConfigSnapshot(snapshot, hints);
     const channels = result.config.channels as Record<string, Record<string, unknown>>;
-    expect(channels.nostr.privateKey).toBe(REDACTED_SENTINEL);
+    expect(expectDefined(channels.nostr, "channels.nostr test invariant").privateKey).toBe(
+      REDACTED_SENTINEL,
+    );
 
     const restored = restoreRedactedValues(result.config, snapshot.config, hints);
     expect(restored.channels.nostr.privateKey).toBe(

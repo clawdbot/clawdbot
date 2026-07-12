@@ -1,5 +1,7 @@
 // Covers session-message sanitization for empty blocks, tool ids, and
 // thought-signature replay rules.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
@@ -67,13 +69,13 @@ function makeOpenAiResponsesAssistantMessage(
 function expectToolCallAndResultIds(out: AgentMessage[], expectedId: string) {
   // Tool call and result ids must stay in lockstep or replayed transcripts break
   // provider tool-result matching.
-  const assistant = out[0];
+  const assistant = expectDefined(out[0], "out[0] test invariant");
   expect(assistant.role).toBe("assistant");
   const assistantContent = assistant.role === "assistant" ? assistant.content : [];
   const toolCall = assistantContent.find((block) => block.type === "toolCall");
   expect(toolCall?.id).toBe(expectedId);
 
-  const toolResult = out[1];
+  const toolResult = expectDefined(out[1], "out[1] test invariant");
   expect(toolResult.role).toBe("toolResult");
   if (toolResult.role === "toolResult") {
     expect(toolResult.toolCallId).toBe(expectedId);

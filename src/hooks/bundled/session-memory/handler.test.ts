@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { replaceTranscriptEvents } from "../../../config/sessions/session-accessor.js";
@@ -114,7 +115,12 @@ async function runNewWithPreviousSessionEntry(params: {
   const memoryDir = path.join(params.tempDir, "memory");
   const files = await fs.readdir(memoryDir);
   const memoryContent =
-    files.length > 0 ? await fs.readFile(path.join(memoryDir, files[0]), "utf-8") : "";
+    files.length > 0
+      ? await fs.readFile(
+          path.join(memoryDir, expectDefined(files[0], "files[0] test invariant")),
+          "utf-8",
+        )
+      : "";
   return { files, memoryContent };
 }
 

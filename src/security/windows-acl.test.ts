@@ -1,4 +1,6 @@
 // Covers Windows ACL audit and permission detection behavior.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_WINDOWS_SYSTEM_ROOT,
@@ -55,7 +57,7 @@ function aclEntry(params: {
 
 function expectSinglePrincipal(entries: WindowsAclEntry[], principal: string): void {
   expect(entries).toHaveLength(1);
-  expect(entries[0].principal).toBe(principal);
+  expect(expectDefined(entries[0], "entries[0] test invariant").principal).toBe(principal);
 }
 
 function expectAccessRights(
@@ -64,8 +66,12 @@ function expectAccessRights(
 ): void {
   const output = `C:\\test\\file.txt BUILTIN\\Users:${rights}`;
   const entries = parseIcaclsOutput(output, "C:\\test\\file.txt");
-  expect(entries[0].canWrite, rights).toBe(expected.canWrite);
-  expect(entries[0].canRead, rights).toBe(expected.canRead);
+  expect(expectDefined(entries[0], "entries[0] test invariant").canWrite, rights).toBe(
+    expected.canWrite,
+  );
+  expect(expectDefined(entries[0], "entries[0] test invariant").canRead, rights).toBe(
+    expected.canRead,
+  );
 }
 
 function expectTrustedOnly(
@@ -154,9 +160,9 @@ Successfully processed 1 files`;
       const output = `C:\\test\\dir BUILTIN\\Users:(OI)(CI)(R)`;
       const entries = parseIcaclsOutput(output, "C:\\test\\dir");
       expect(entries).toHaveLength(1);
-      expect(entries[0].rights).toEqual(["R"]);
-      expect(entries[0].canRead).toBe(true);
-      expect(entries[0].canWrite).toBe(false);
+      expect(expectDefined(entries[0], "entries[0] test invariant").rights).toEqual(["R"]);
+      expect(expectDefined(entries[0], "entries[0] test invariant").canRead).toBe(true);
+      expect(expectDefined(entries[0], "entries[0] test invariant").canWrite).toBe(false);
     });
 
     it("filters out DENY entries", () => {
@@ -182,7 +188,9 @@ Successfully processed 1 files`;
         "\u043d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0431\u0440\u0430\u0431\u043e\u0442\u0430\u0442\u044c 0 \u0444\u0430\u0439\u043b\u043e\u0432";
       const entries = parseIcaclsOutput(output, "C:\\Users\\karte\\.openclaw");
       expect(entries).toHaveLength(1);
-      expect(entries[0].principal).toBe("NT AUTHORITY\\\u0421\u0418\u0421\u0422\u0415\u041c\u0410");
+      expect(expectDefined(entries[0], "entries[0] test invariant").principal).toBe(
+        "NT AUTHORITY\\\u0421\u0418\u0421\u0422\u0415\u041c\u0410",
+      );
     });
 
     it("parses SID-format principals", () => {
@@ -191,8 +199,10 @@ Successfully processed 1 files`;
         "                  S-1-5-21-1824257776-4070701511-781240313-1001:(F)";
       const entries = parseIcaclsOutput(output, "C:\\test\\file.txt");
       expect(entries).toHaveLength(2);
-      expect(entries[0].principal).toBe("S-1-5-18");
-      expect(entries[1].principal).toBe("S-1-5-21-1824257776-4070701511-781240313-1001");
+      expect(expectDefined(entries[0], "entries[0] test invariant").principal).toBe("S-1-5-18");
+      expect(expectDefined(entries[1], "entries[1] test invariant").principal).toBe(
+        "S-1-5-21-1824257776-4070701511-781240313-1001",
+      );
     });
 
     it("ignores malformed ACL lines that contain ':' but no rights tokens", () => {

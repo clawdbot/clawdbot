@@ -1,5 +1,6 @@
 // Tests session export command packaging, filesystem writes, and prompt bundle capture.
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HandleCommandsParams } from "./commands-types.js";
 
@@ -175,7 +176,11 @@ function sessionDataFromHtml(html: string): Record<string, unknown> {
   if (!match) {
     throw new Error("Expected session-data script in exported HTML");
   }
-  return JSON.parse(Buffer.from(match[1].trim(), "base64").toString("utf-8"));
+  return JSON.parse(
+    Buffer.from(expectDefined(match[1], "match[1] test invariant").trim(), "base64").toString(
+      "utf-8",
+    ),
+  );
 }
 
 describe("buildExportSessionReply", () => {
@@ -258,8 +263,14 @@ describe("buildExportSessionReply", () => {
     });
 
     expect(reply.text).toContain("✅ Session exported!");
-    const [[systemPromptBundleParams]] = hoisted.resolveCommandsSystemPromptBundleMock.mock
-      .calls as unknown as Array<[{ sessionEntry?: { sessionId?: string; updatedAt?: number } }]>;
+    const [systemPromptBundleParams] = expectDefined(
+      (
+        hoisted.resolveCommandsSystemPromptBundleMock.mock.calls as unknown as Array<
+          [{ sessionEntry?: { sessionId?: string; updatedAt?: number } }]
+        >
+      )[0],
+      "(hoisted.resolveCommandsSystemPromptBundleMock.mock.calls as unknown as Array<\n        [{ sessionEntry?: { sessionId?: string; updatedAt?: number } }]\n      >)[0] test invariant",
+    );
     expect(systemPromptBundleParams?.sessionEntry?.sessionId).toBe("session-from-store");
     expect(systemPromptBundleParams?.sessionEntry?.updatedAt).toBe(2);
   });

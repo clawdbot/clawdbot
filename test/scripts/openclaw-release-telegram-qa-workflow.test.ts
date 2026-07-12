@@ -550,6 +550,13 @@ describe("release Telegram QA workflow", () => {
     expect(
       runStep?.run?.indexOf("run_qa_attempt preflight --scenario channel-canary"),
     ).toBeLessThan(runStep?.run?.indexOf("for attempt in 1 2") ?? -1);
+
+    const finalizeStep = job?.steps?.find(
+      (step) => step.name === "Finalize trusted Telegram process-boundary evidence",
+    );
+    expect(finalizeStep?.env?.RUN_LANE_OUTCOME).toBe("${{ steps.run_lane.outcome }}");
+    expect(finalizeStep?.run).toContain('--arg runLaneOutcome "$RUN_LANE_OUTCOME"');
+    expect(finalizeStep?.run).toContain('if $runLaneOutcome == "success" then 2 else 1 end');
   });
 
   it("serializes stderr behind the workflow-command pause", () => {

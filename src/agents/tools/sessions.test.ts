@@ -2,6 +2,7 @@
 // announce-target resolution, and assistant-visible text sanitization.
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.js";
@@ -1033,8 +1034,12 @@ describe("sessions_send gating", () => {
       if (kind !== "group") {
         return null;
       }
-      const [id, threadId] = rawId.split(":topic:");
-      return threadId ? { id, threadId, baseConversationId: id } : null;
+      const [rawConversationId, threadId] = rawId.split(":topic:");
+      if (!threadId) {
+        return null;
+      }
+      const id = expectDefined(rawConversationId, "Telegram conversation id");
+      return { id, threadId, baseConversationId: id };
     });
     setRuntimeConfigSnapshot({ plugins: { entries: { telegram: { enabled: true } } } });
     expect(parseSessionThreadInfo(topicSessionKey).threadId).toBe("77");

@@ -1,4 +1,6 @@
 // Target parsing tests cover channel target syntax parsing and validation.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   channelRouteTargetsMatchExact,
@@ -25,17 +27,22 @@ function parseThreadedTargetForTest(raw: string): {
   const prefixedTopic = /^group:([^:]+):topic:(\d+)$/i.exec(trimmed);
   if (prefixedTopic) {
     return {
-      to: prefixedTopic[1],
-      threadId: Number.parseInt(prefixedTopic[2], 10),
+      to: expectDefined(prefixedTopic[1], "prefixedTopic[1] test invariant"),
+      threadId: Number.parseInt(
+        expectDefined(prefixedTopic[2], "prefixedTopic[2] test invariant"),
+        10,
+      ),
       chatType: "group",
     };
   }
   const topic = /^([^:]+):topic:(\d+)$/i.exec(trimmed);
   if (topic) {
     return {
-      to: topic[1],
-      threadId: Number.parseInt(topic[2], 10),
-      chatType: topic[1].startsWith("-") ? "group" : "direct",
+      to: expectDefined(topic[1], "topic[1] test invariant"),
+      threadId: Number.parseInt(expectDefined(topic[2], "topic[2] test invariant"), 10),
+      chatType: expectDefined(topic[1], "topic[1] test invariant").startsWith("-")
+        ? "group"
+        : "direct",
     };
   }
   return {

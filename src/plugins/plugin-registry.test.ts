@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -422,7 +423,10 @@ describe("plugin registry facade", () => {
     const index = createIndex("openai", {
       plugins: [
         {
-          ...createIndex("openai").plugins[0],
+          ...expectDefined(
+            createIndex("openai").plugins[0],
+            'createIndex("openai").plugins[0] test invariant',
+          ),
           manifestPath: path.join(rootDir, "openclaw.plugin.json"),
           source: path.join(rootDir, "index.ts"),
           rootDir,
@@ -498,7 +502,10 @@ describe("plugin registry facade", () => {
         policyHash: resolveInstalledPluginIndexPolicyHash(config),
         plugins: [
           {
-            ...createIndex("persisted").plugins[0],
+            ...expectDefined(
+              createIndex("persisted").plugins[0],
+              'createIndex("persisted").plugins[0] test invariant',
+            ),
             manifestPath: path.join(persistedRootDir, "openclaw.plugin.json"),
             manifestHash: hashFile(path.join(persistedRootDir, "openclaw.plugin.json")),
             source: path.join(persistedRootDir, "index.ts"),
@@ -670,7 +677,10 @@ describe("plugin registry facade", () => {
       createIndex("persisted", {
         plugins: [
           {
-            ...createIndex("persisted").plugins[0],
+            ...expectDefined(
+              createIndex("persisted").plugins[0],
+              'createIndex("persisted").plugins[0] test invariant',
+            ),
             manifestPath: path.join(staleBundledRootDir, "openclaw.plugin.json"),
             source: path.join(staleBundledRootDir, "index.ts"),
             rootDir: staleBundledRootDir,

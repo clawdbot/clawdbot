@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setImmediate as setImmediatePromise } from "node:timers/promises";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type WebSocket from "ws";
 import { resetConfigRuntimeState } from "../config/config.js";
@@ -264,7 +265,10 @@ async function directCronReq(
     };
   };
   try {
-    await cronHandlers[method]({
+    await expectDefined(
+      cronHandlers[method],
+      "cronHandlers[method] test invariant",
+    )({
       req: {} as never,
       params,
       respond,

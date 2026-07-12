@@ -299,6 +299,15 @@ describe("worker environment store", () => {
       to: "attached",
       patch: attachedPatch("shared-session", firstReady.environmentId),
     });
+    const secondReady = makeReady("worker-owner-b", "lease-owner-b");
+    expect(() =>
+      store.transition({
+        environmentId: secondReady.environmentId,
+        from: secondReady.state,
+        to: "attached",
+        patch: attachedPatch("shared-session", secondReady.environmentId),
+      }),
+    ).toThrow("already attached to worker environment worker-owner-a");
     store.transition({
       environmentId: first.environmentId,
       from: first.state,
@@ -314,7 +323,6 @@ describe("worker environment store", () => {
     database.db
       .prepare("DELETE FROM worker_environments WHERE environment_id = ?")
       .run(first.environmentId);
-    const secondReady = makeReady("worker-owner-b", "lease-owner-b");
     const second = store.transition({
       environmentId: secondReady.environmentId,
       from: secondReady.state,

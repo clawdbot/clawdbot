@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -702,7 +703,10 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       { sessionKey: targetSessionKey, agentId: "main", reason: "command-metadata" },
     ]);
     expect(onSessionMetadataChanges.mock.invocationCallOrder[0]).toBeLessThan(
-      vi.mocked(runPreparedReplyMock).mock.invocationCallOrder[0],
+      expectDefined(
+        vi.mocked(runPreparedReplyMock).mock.invocationCallOrder[0],
+        "vi.mocked(runPreparedReplyMock).mock.invocationCallOrder[0] test invariant",
+      ),
     );
     expect(
       (readFastPathSessionEntry(storePath, targetSessionKey) as SessionEntry).goal?.objective,

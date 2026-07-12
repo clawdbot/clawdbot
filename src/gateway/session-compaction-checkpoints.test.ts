@@ -5,6 +5,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { CURRENT_SESSION_VERSION, SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -1384,9 +1385,24 @@ describe("session-compaction-checkpoints", () => {
     });
     expect(stored?.preCompaction.sessionFile).toBeUndefined();
     expect(stored?.postCompaction.sessionFile).toBe(path.join(dir, "sess.compacted.jsonl"));
-    expect(fsSync.existsSync(existingCheckpoints[0].preCompaction.sessionFile)).toBe(false);
-    expect(fsSync.existsSync(existingCheckpoints[1].preCompaction.sessionFile)).toBe(false);
-    expect(fsSync.existsSync(existingCheckpoints[2].preCompaction.sessionFile)).toBe(true);
+    expect(
+      fsSync.existsSync(
+        expectDefined(existingCheckpoints[0], "existingCheckpoints[0] test invariant").preCompaction
+          .sessionFile,
+      ),
+    ).toBe(false);
+    expect(
+      fsSync.existsSync(
+        expectDefined(existingCheckpoints[1], "existingCheckpoints[1] test invariant").preCompaction
+          .sessionFile,
+      ),
+    ).toBe(false);
+    expect(
+      fsSync.existsSync(
+        expectDefined(existingCheckpoints[2], "existingCheckpoints[2] test invariant").preCompaction
+          .sessionFile,
+      ),
+    ).toBe(true);
     expect(fsSync.readdirSync(dir).some((file) => file.includes("99999999"))).toBe(false);
 
     expect(await readFirstCompactionCheckpoints(storePath)).toHaveLength(25);
@@ -1483,10 +1499,30 @@ describe("session-compaction-checkpoints", () => {
       createdAt: now + 100,
     });
 
-    expect(fsSync.existsSync(existingCheckpoints[0].preCompaction.sessionFile)).toBe(false);
-    expect(fsSync.existsSync(existingCheckpoints[1].preCompaction.sessionFile)).toBe(false);
-    expect(fsSync.existsSync(existingCheckpoints[2].preCompaction.sessionFile)).toBe(false);
-    expect(fsSync.existsSync(existingCheckpoints[3].preCompaction.sessionFile)).toBe(true);
+    expect(
+      fsSync.existsSync(
+        expectDefined(existingCheckpoints[0], "existingCheckpoints[0] test invariant").preCompaction
+          .sessionFile,
+      ),
+    ).toBe(false);
+    expect(
+      fsSync.existsSync(
+        expectDefined(existingCheckpoints[1], "existingCheckpoints[1] test invariant").preCompaction
+          .sessionFile,
+      ),
+    ).toBe(false);
+    expect(
+      fsSync.existsSync(
+        expectDefined(existingCheckpoints[2], "existingCheckpoints[2] test invariant").preCompaction
+          .sessionFile,
+      ),
+    ).toBe(false);
+    expect(
+      fsSync.existsSync(
+        expectDefined(existingCheckpoints[3], "existingCheckpoints[3] test invariant").preCompaction
+          .sessionFile,
+      ),
+    ).toBe(true);
     expect(fsSync.existsSync(currentSnapshotFile)).toBe(true);
 
     const retained = await readFirstCompactionCheckpoints<{ checkpointId?: string }>(storePath);

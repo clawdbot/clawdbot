@@ -1,5 +1,7 @@
 // Runtime plan tool tests cover schema normalization and diagnostics when the
 // runtime plan owns tool policy, with legacy provider fallback still available.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
 import {
   createNativeOpenAIResponsesModel,
@@ -228,7 +230,7 @@ describe("AgentRuntimePlan tool policy helpers", () => {
     });
 
     expect(result[0]).toBe(normalized);
-    expect(getPluginToolMeta(result[0])).toMatchObject({
+    expect(getPluginToolMeta(expectDefined(result[0], "result[0] test invariant"))).toMatchObject({
       pluginId: "bundle-mcp",
       mcp: {
         serverName: "fixture",
@@ -267,8 +269,12 @@ describe("AgentRuntimePlan tool policy helpers", () => {
 
     expect(result[0]).toBe(normalized);
     expect((result[0] as AnyAgentTool).catalogMode).toBe("direct-only");
-    expect(isToolWrappedWithBeforeToolCallHook(result[0])).toBe(true);
-    expect(getToolTerminalPresentation(result[0])).toBe(formatter);
+    expect(
+      isToolWrappedWithBeforeToolCallHook(expectDefined(result[0], "result[0] test invariant")),
+    ).toBe(true);
+    expect(getToolTerminalPresentation(expectDefined(result[0], "result[0] test invariant"))).toBe(
+      formatter,
+    );
   });
 
   it("does not reread quarantined tools while preserving normalized metadata", () => {
@@ -306,7 +312,7 @@ describe("AgentRuntimePlan tool policy helpers", () => {
     });
 
     expect(result).toEqual([normalized]);
-    expect(getPluginToolMeta(result[0])).toMatchObject({
+    expect(getPluginToolMeta(expectDefined(result[0], "result[0] test invariant"))).toMatchObject({
       pluginId: "bundle-mcp",
       mcp: {
         serverName: "fixture",

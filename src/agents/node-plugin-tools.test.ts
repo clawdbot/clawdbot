@@ -1,4 +1,6 @@
 /** Tests connected node-hosted plugin tool materialization. */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/index.js";
 import {
@@ -61,11 +63,13 @@ describe("createNodePluginTools", () => {
     });
 
     const tools = createNodePluginTools({ existingToolNames: new Set(["read"]) });
-    const result = await tools[0].execute("call-1", { text: "ping" });
+    const result = await expectDefined(tools[0], "tools[0] test invariant").execute("call-1", {
+      text: "ping",
+    });
 
     expect(tools.map((tool) => tool.name)).toEqual(["remote_echo"]);
-    expect(tools[0].description).toContain("Studio Node");
-    expect(getPluginToolMeta(tools[0])).toMatchObject({
+    expect(expectDefined(tools[0], "tools[0] test invariant").description).toContain("Studio Node");
+    expect(getPluginToolMeta(expectDefined(tools[0], "tools[0] test invariant"))).toMatchObject({
       pluginId: "remote-demo",
       mcp: {
         serverName: "remote-demo",
@@ -112,7 +116,10 @@ describe("createNodePluginTools", () => {
       },
     });
 
-    const tool = createNodePluginTools({})[0];
+    const tool = expectDefined(
+      createNodePluginTools({})[0],
+      "createNodePluginTools({})[0] test invariant",
+    );
     const result = await tool.execute("call-mcp", { query: "needle" });
 
     expect(callGatewayTool).toHaveBeenCalledWith(
@@ -187,7 +194,9 @@ describe("createNodePluginTools", () => {
     });
 
     const tools = createNodePluginTools({});
-    const result = await tools[1].execute("call-2", { text: "ping" });
+    const result = await expectDefined(tools[1], "tools[1] test invariant").execute("call-2", {
+      text: "ping",
+    });
 
     expect(tools.map((tool) => tool.name)).toEqual(["node_a_remote_echo", "node_b_remote_echo"]);
     expect(callGatewayTool).toHaveBeenCalledWith(

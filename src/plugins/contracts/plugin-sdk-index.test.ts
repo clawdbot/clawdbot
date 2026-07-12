@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import { buildPluginSdkPackageExports } from "../../plugin-sdk/entrypoints.js";
 import type { ClawdbotConfig, OpenClawConfig, OpenClawSchemaType } from "../../plugin-sdk/index.js";
@@ -19,7 +20,7 @@ async function collectRuntimeExports(filePath: string, seen = new Set<string>())
   const exportNames = new Set<string>();
 
   for (const match of source.matchAll(/export\s+(?!type\b)\{([\s\S]*?)\}\s+from\s+"([^"]+)";/g)) {
-    for (const part of match[1].split(",")) {
+    for (const part of expectDefined(match[1], "match[1] test invariant").split(",")) {
       const trimmed = part.trim();
       if (trimmed.length === 0) {
         continue;
@@ -30,7 +31,7 @@ async function collectRuntimeExports(filePath: string, seen = new Set<string>())
   }
 
   for (const match of source.matchAll(/export\s+\*\s+from\s+"([^"]+)";/g)) {
-    const specifier = match[1];
+    const specifier = expectDefined(match[1], "match[1] test invariant");
     if (!specifier.startsWith(".")) {
       continue;
     }

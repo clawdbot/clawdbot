@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, describe, expect, it } from "vitest";
 
 const {
@@ -796,7 +797,9 @@ describe("test-projects args", () => {
         const source = fs.readFileSync(file, "utf8");
         return [...source.matchAll(/from\s+["'](\.[^"']+)["']/gu)].some((match) => {
           const importerDir = path.posix.dirname(file);
-          const resolved = path.posix.normalize(path.posix.join(importerDir, match[1]));
+          const resolved = path.posix.normalize(
+            path.posix.join(importerDir, expectDefined(match[1], "match[1] test invariant")),
+          );
           return resolved.replace(/\.(?:js|ts)$/u, "") === "test/helpers/temp-dir";
         });
       });

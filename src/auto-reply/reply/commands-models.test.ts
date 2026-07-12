@@ -1,4 +1,5 @@
 // Tests model command output, catalog loading, and provider auth status rendering.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
@@ -995,8 +996,14 @@ describe("handleModelsCommand", () => {
     const result = await handleModelsCommand(params, true);
 
     expect(result?.reply?.text).toContain("Models (anthropic · 🔑 target-auth) — showing 1-2 of 2");
-    const [[authLabelParams]] = modelAuthLabelMocks.resolveModelAuthLabel.mock
-      .calls as unknown as Array<[{ provider?: string; workspaceDir?: string }]>;
+    const [authLabelParams] = expectDefined(
+      (
+        modelAuthLabelMocks.resolveModelAuthLabel.mock.calls as unknown as Array<
+          [{ provider?: string; workspaceDir?: string }]
+        >
+      )[0],
+      "(modelAuthLabelMocks.resolveModelAuthLabel.mock.calls as unknown as Array<\n        [{ provider?: string; workspaceDir?: string }]\n      >)[0] test invariant",
+    );
     expect(authLabelParams.provider).toBe("anthropic");
     expect(authLabelParams.workspaceDir).toBe("/tmp");
   });

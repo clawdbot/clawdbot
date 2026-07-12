@@ -7,7 +7,6 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { pipeline } from "node:stream/promises";
 import { resolveDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
 import {
   buildBackupArchiveBasename,
   buildBackupArchivePath,
@@ -24,8 +23,7 @@ import { resolveRuntimeServiceVersion } from "../version.js";
 import { isVolatileBackupPath } from "./backup-volatile-filter.js";
 import { formatErrorMessage } from "./errors.js";
 import { writeJson } from "./json-files.js";
-import { requireNodeSqlite } from "./node-sqlite.js";
-import { assertSqliteIntegrity } from "./sqlite-integrity.js";
+import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 
 const loadTarRuntime = createLazyRuntimeModule(() => import("tar"));
 
@@ -631,7 +629,6 @@ function tableExistsSql(db: DatabaseSync, tableName: string): boolean {
 function sanitizeGlobalStateSqliteSnapshot(db: DatabaseSync): void {
   if (tableExistsSql(db, "delivery_queue_entries")) {
     db.prepare("DELETE FROM delivery_queue_entries").run();
-    db.exec("VACUUM;");
   }
 }
 
@@ -738,7 +735,6 @@ async function createStateSqliteBackupPlan(params: {
     stateDir: params.stateDir,
     globalStateSqlitePath,
   });
-  const sqlite = requireNodeSqlite();
   const snapshots: SqliteBackupAsset[] = [];
   for (const archiveSourcePath of discovery.snapshotPaths) {
     // A discovered *.sqlite file that SQLite cannot snapshot aborts backup.
@@ -749,44 +745,21 @@ async function createStateSqliteBackupPlan(params: {
       path.resolve(archiveSourcePath) === globalStateSqlitePath
         ? await fs.realpath(archiveSourcePath)
         : archiveSourcePath;
-    const source = new sqlite.DatabaseSync(sourceDatabasePath, {
-      allowExtension: true,
-      readOnly: true,
-    });
     const sourcePath = path.join(params.tempDir, `openclaw-state-db-${snapshots.length}.sqlite`);
     try {
-      source.exec("PRAGMA busy_timeout = 30000;");
-      try {
-        // VACUUM INTO removes deleted-page remnants before the snapshot enters
-        // the archive. Load known bundled extensions, but fail closed when an
-        // owner schema needs capabilities core cannot safely reproduce.
-        await loadSqliteVecExtension({ db: source });
-        assertSqliteIntegrity(source, archiveSourcePath);
-        source.prepare("VACUUM INTO ?").run(sourcePath);
-      } catch (err) {
-        throw new Error(
-          `SQLite database cannot be compacted safely for backup: ${archiveSourcePath}. ${formatErrorMessage(err)}. The source must pass full integrity checks and VACUUM INTO with its required SQLite capabilities; raw page backup was refused because it can retain deleted data.`,
-          { cause: err },
-        );
-      }
-    } finally {
-      source.close();
-    }
-    await fs.chmod(sourcePath, 0o600);
-    const snapshot = new sqlite.DatabaseSync(sourcePath, { allowExtension: true });
-    try {
-      await loadSqliteVecExtension({ db: snapshot });
-      if (path.resolve(archiveSourcePath) === globalStateSqlitePath) {
-        sanitizeGlobalStateSqliteSnapshot(snapshot);
-      }
-      assertSqliteIntegrity(snapshot, sourcePath);
+      await createVerifiedSqliteSnapshot({
+        sourcePath: sourceDatabasePath,
+        targetPath: sourcePath,
+        transform:
+          path.resolve(archiveSourcePath) === globalStateSqlitePath
+            ? sanitizeGlobalStateSqliteSnapshot
+            : undefined,
+      });
     } catch (err) {
       throw new Error(
-        `SQLite backup snapshot failed verification for ${archiveSourcePath}: ${formatErrorMessage(err)}`,
+        `SQLite database cannot be compacted safely for backup: ${archiveSourcePath}. ${formatErrorMessage(err)}. The source must pass full integrity checks and VACUUM INTO with its required SQLite capabilities; raw page backup was refused because it can retain deleted data.`,
         { cause: err },
       );
-    } finally {
-      snapshot.close();
     }
     snapshots.push({
       sourcePath,

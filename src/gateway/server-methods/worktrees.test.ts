@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { WorktreeSnapshotError } from "../../agents/worktrees/service.js";
 import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
@@ -59,7 +60,11 @@ describe("worktrees gateway methods", () => {
       { removed: true, snapshotRef: "refs/snapshot" },
       undefined,
     ]);
-    expect((await call(handlers, "worktrees.restore", { id: record.id }))[0]).toBe(true);
+    const restoreResult = expectDefined(
+      await call(handlers, "worktrees.restore", { id: record.id }),
+      "worktree restore response",
+    );
+    expect(expectDefined(restoreResult[0], "worktree restore success flag")).toBe(true);
     expect(await call(handlers, "worktrees.gc", {})).toEqual([
       true,
       { removed: [record.id], orphansDeleted: 1, snapshotsPruned: 2 },

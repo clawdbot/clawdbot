@@ -17,6 +17,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { clearSessionStoreCacheForTest, type SessionEntry } from "../../config/sessions.js";
@@ -163,7 +164,10 @@ describe("#952 subagent CONTINUE_WORK token self-continuation (token-form parity
     // hop-2: the work dispatcher re-drove the subagent session through the
     // normal reply entrypoint with the work-wake trigger.
     expect(getReplyFromConfigMock).toHaveBeenCalledTimes(1);
-    const [ctxArg, optsArg] = getReplyFromConfigMock.mock.calls[0];
+    const [ctxArg, optsArg] = expectDefined(
+      getReplyFromConfigMock.mock.calls.at(0),
+      "getReplyFromConfig call",
+    );
     expect((ctxArg as { SessionKey?: string }).SessionKey).toBe(sessionKey);
     expect((optsArg as { continuationTrigger?: string }).continuationTrigger).toBe("work-wake");
   });

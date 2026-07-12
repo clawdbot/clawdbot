@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureFullEnv } from "../test-utils/env.js";
 import { getWindowsCmdExePath } from "./windows-install-roots.js";
@@ -95,8 +96,8 @@ describe("relaunchGatewayScheduledTask", () => {
     const unref = vi.fn();
     let seenCommandArg = "";
     spawnMock.mockImplementation((_file: string, args: string[]) => {
-      seenCommandArg = args[3];
-      createdScriptPaths.add(decodeCmdPathArg(args[3]));
+      seenCommandArg = expectDefined(args[3], "scheduled-task command argument");
+      createdScriptPaths.add(decodeCmdPathArg(seenCommandArg));
       return { unref };
     });
 
@@ -141,7 +142,7 @@ describe("relaunchGatewayScheduledTask", () => {
 
   it("prefers OPENCLAW_WINDOWS_TASK_NAME overrides", () => {
     spawnMock.mockImplementation((_file: string, args: string[]) => {
-      createdScriptPaths.add(decodeCmdPathArg(args[3]));
+      createdScriptPaths.add(decodeCmdPathArg(expectDefined(args[3], "args[3] test invariant")));
       return { unref: vi.fn() };
     });
 
@@ -150,14 +151,17 @@ describe("relaunchGatewayScheduledTask", () => {
       OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway (custom)",
     });
 
-    const scriptPath = [...createdScriptPaths][0];
+    const scriptPath = expectDefined(
+      [...createdScriptPaths][0],
+      "[...createdScriptPaths][0] test invariant",
+    );
     const script = fs.readFileSync(scriptPath, "utf8");
     expect(script).toContain('schtasks /Run /TN "OpenClaw Gateway (custom)" >>');
   });
 
   it("escapes custom task names in the PowerShell running-task probe", () => {
     spawnMock.mockImplementation((_file: string, args: string[]) => {
-      createdScriptPaths.add(decodeCmdPathArg(args[3]));
+      createdScriptPaths.add(decodeCmdPathArg(expectDefined(args[3], "args[3] test invariant")));
       return { unref: vi.fn() };
     });
 
@@ -165,7 +169,10 @@ describe("relaunchGatewayScheduledTask", () => {
       OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway (Bob's work)",
     });
 
-    const scriptPath = [...createdScriptPaths][0];
+    const scriptPath = expectDefined(
+      [...createdScriptPaths][0],
+      "[...createdScriptPaths][0] test invariant",
+    );
     const script = fs.readFileSync(scriptPath, "utf8");
     expect(script).toContain(
       `-Command "$task = Get-ScheduledTask -TaskName 'OpenClaw Gateway (Bob''s work)' -ErrorAction SilentlyContinue; if ($null -ne $task -and $task.State -eq 'Running') { exit 0 }; exit 1"`,
@@ -224,14 +231,17 @@ describe("relaunchGatewayScheduledTask", () => {
     resolveTaskScriptPathMock.mockReturnValue(taskScriptPath);
 
     spawnMock.mockImplementation((_file: string, args: string[]) => {
-      createdScriptPaths.add(decodeCmdPathArg(args[3]));
+      createdScriptPaths.add(decodeCmdPathArg(expectDefined(args[3], "args[3] test invariant")));
       return { unref: vi.fn() };
     });
 
     const result = relaunchGatewayScheduledTask({ OPENCLAW_PROFILE: "work" });
 
     expect(result.ok).toBe(true);
-    const scriptPath = [...createdScriptPaths][0];
+    const scriptPath = expectDefined(
+      [...createdScriptPaths][0],
+      "[...createdScriptPaths][0] test invariant",
+    );
     const script = fs.readFileSync(scriptPath, "utf8");
     expect(script).toContain(`schtasks /Query /TN`);
     expect(script).toContain(":fallback");

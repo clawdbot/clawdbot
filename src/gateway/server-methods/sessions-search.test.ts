@@ -1,4 +1,6 @@
 /** Gateway session-search validation and agent-scoping tests. */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -16,7 +18,10 @@ const cfg = {
 
 async function callSearch(params: Record<string, unknown>): Promise<ReturnType<typeof vi.fn>> {
   const respond = vi.fn();
-  await sessionsHandlers["sessions.search"]({
+  await expectDefined(
+    sessionsHandlers["sessions.search"],
+    'sessionsHandlers["sessions.search"] test invariant',
+  )({
     req: { id: "req-search" } as never,
     params,
     respond: respond as unknown as RespondFn,

@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
@@ -75,7 +76,7 @@ describe("trajectory runtime", () => {
     });
 
     expect(writes).toHaveLength(1);
-    const parsed = JSON.parse(writes[0]);
+    const parsed = JSON.parse(expectDefined(writes[0], "writes[0] test invariant"));
     expect(parsed.type).toBe("context.compiled");
     expect(parsed.source).toBe("runtime");
     expect(parsed.sessionId).toBe("session-1");
@@ -196,12 +197,12 @@ describe("trajectory runtime", () => {
     });
 
     expect(writes).toHaveLength(1);
-    const parsed = JSON.parse(writes[0]);
+    const parsed = JSON.parse(expectDefined(writes[0], "writes[0] test invariant"));
     expect(parsed.data.prompt.truncated).toBe(true);
     expect(parsed.data.prompt.reason).toBe("trajectory-field-size-limit");
-    expect(Buffer.byteLength(writes[0], "utf8")).toBeLessThanOrEqual(
-      TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1,
-    );
+    expect(
+      Buffer.byteLength(expectDefined(writes[0], "writes[0] test invariant"), "utf8"),
+    ).toBeLessThanOrEqual(TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1);
   });
 
   it("preserves usage when truncating oversized runtime events", () => {
@@ -237,7 +238,7 @@ describe("trajectory runtime", () => {
     });
 
     expect(writes).toHaveLength(1);
-    const parsed = JSON.parse(writes[0]);
+    const parsed = JSON.parse(expectDefined(writes[0], "writes[0] test invariant"));
     expect(parsed.type).toBe("model.completed");
     expect(parsed.data).toMatchObject({
       truncated: true,
@@ -247,9 +248,9 @@ describe("trajectory runtime", () => {
     });
     expect(parsed.data.messagesSnapshot).toBeUndefined();
     expect(parsed.data.droppedFields).toContain("messagesSnapshot");
-    expect(Buffer.byteLength(writes[0], "utf8")).toBeLessThanOrEqual(
-      TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1,
-    );
+    expect(
+      Buffer.byteLength(expectDefined(writes[0], "writes[0] test invariant"), "utf8"),
+    ).toBeLessThanOrEqual(TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1);
   });
 
   it("drops oversized preserved fields when needed to keep runtime events bounded", () => {
@@ -278,7 +279,7 @@ describe("trajectory runtime", () => {
     });
 
     expect(writes).toHaveLength(1);
-    const parsed = JSON.parse(writes[0]);
+    const parsed = JSON.parse(expectDefined(writes[0], "writes[0] test invariant"));
     expect(parsed.data).toMatchObject({
       truncated: true,
       reason: "trajectory-event-size-limit",
@@ -288,9 +289,9 @@ describe("trajectory runtime", () => {
     expect(parsed.data.droppedFields).toEqual(
       expect.arrayContaining(["usage", "messagesSnapshot"]),
     );
-    expect(Buffer.byteLength(writes[0], "utf8")).toBeLessThanOrEqual(
-      TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1,
-    );
+    expect(
+      Buffer.byteLength(expectDefined(writes[0], "writes[0] test invariant"), "utf8"),
+    ).toBeLessThanOrEqual(TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1);
   });
 
   it("preserves usage on non-final oversized runtime completions", () => {
@@ -330,8 +331,8 @@ describe("trajectory runtime", () => {
     });
 
     expect(writes).toHaveLength(2);
-    const first = JSON.parse(writes[0]);
-    const second = JSON.parse(writes[1]);
+    const first = JSON.parse(expectDefined(writes[0], "writes[0] test invariant"));
+    const second = JSON.parse(expectDefined(writes[1], "writes[1] test invariant"));
     expect(first.data).toMatchObject({
       truncated: true,
       usage: firstUsage,
@@ -373,7 +374,7 @@ describe("trajectory runtime", () => {
     });
 
     expect(writes).toHaveLength(1);
-    const parsed = JSON.parse(writes[0]);
+    const parsed = JSON.parse(expectDefined(writes[0], "writes[0] test invariant"));
     const preservedUsage = JSON.stringify(parsed.data.usage);
     expect(parsed.data.truncated).toBe(true);
     expect(preservedUsage).toContain("redacted");

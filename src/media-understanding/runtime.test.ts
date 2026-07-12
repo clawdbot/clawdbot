@@ -1,5 +1,6 @@
 // Media-understanding runtime tests cover file APIs, provider dispatch, disabled
 // state, cleanup, remote references, and direct model-backed image calls.
+import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
@@ -668,19 +669,24 @@ describe("media-understanding runtime", () => {
     });
 
     expect(mocks.normalizeMediaProviderId).toHaveBeenCalledWith("gemini");
-    const [[describeImageOptions]] = describeImage.mock.calls as unknown as Array<
-      [
-        {
-          buffer?: Buffer;
-          fileName?: string;
-          mime?: string;
-          provider?: string;
-          model?: string;
-          prompt?: string;
-          agentDir?: string;
-        },
-      ]
-    >;
+    const [describeImageOptions] = expectDefined(
+      (
+        describeImage.mock.calls as unknown as Array<
+          [
+            {
+              buffer?: Buffer;
+              fileName?: string;
+              mime?: string;
+              provider?: string;
+              model?: string;
+              prompt?: string;
+              agentDir?: string;
+            },
+          ]
+        >
+      )[0],
+      "(describeImage.mock.calls as unknown as Array<\n        [\n          {\n            buffer?: Buffer;\n            fileName?: string;\n            mime?: string;\n            provider?: string;\n            model?: string;\n            prompt?: string;\n            agentDir?: string;\n          },\n        ]\n      >)[0] test invariant",
+    );
     expect(describeImageOptions?.buffer).toEqual(Buffer.from("image-bytes"));
     expect(describeImageOptions?.fileName).toBe("sample.jpg");
     expect(describeImageOptions?.mime).toBe("image/jpeg");
@@ -737,21 +743,26 @@ describe("media-understanding runtime", () => {
       "Vision-Plugin",
       providerRegistry,
     );
-    const [[extractOptions]] = extractStructured.mock.calls as unknown as Array<
-      [
-        {
-          input?: unknown;
-          instructions?: string;
-          provider?: string;
-          model?: string;
-          profile?: string;
-          preferredProfile?: string;
-          authStore?: AuthProfileStore;
-          timeoutMs?: number;
-          agentDir?: string;
-        },
-      ]
-    >;
+    const [extractOptions] = expectDefined(
+      (
+        extractStructured.mock.calls as unknown as Array<
+          [
+            {
+              input?: unknown;
+              instructions?: string;
+              provider?: string;
+              model?: string;
+              profile?: string;
+              preferredProfile?: string;
+              authStore?: AuthProfileStore;
+              timeoutMs?: number;
+              agentDir?: string;
+            },
+          ]
+        >
+      )[0],
+      "(extractStructured.mock.calls as unknown as Array<\n        [\n          {\n            input?: unknown;\n            instructions?: string;\n            provider?: string;\n            model?: string;\n            profile?: string;\n            preferredProfile?: string;\n            authStore?: AuthProfileStore;\n            timeoutMs?: number;\n            agentDir?: string;\n          },\n        ]\n      >)[0] test invariant",
+    );
     expect(extractOptions?.input).toEqual([
       { type: "text", text: "Extract the fact." },
       {

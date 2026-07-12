@@ -1,4 +1,5 @@
 /** Covers bundled plugin source overlays and packaged load-path decisions. */
+import { expectDefined } from "@openclaw/normalization-core";
 import { bundledPluginRootAt } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -60,10 +61,13 @@ function setBundledManifestIdsByRoot(
             typeof manifestIds[rootDir] === "string"
               ? { id: manifestIds[rootDir] }
               : {
-                  id: manifestIds[rootDir].id,
+                  id: expectDefined(manifestIds[rootDir], "manifestIds[rootDir] test invariant").id,
                   configSchema: {
                     type: "object",
-                    required: manifestIds[rootDir].required,
+                    required: expectDefined(
+                      manifestIds[rootDir],
+                      "manifestIds[rootDir] test invariant",
+                    ).required,
                   },
                 },
         }

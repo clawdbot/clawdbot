@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   onInternalSessionTranscriptUpdate,
@@ -38,12 +39,12 @@ describe("archiveFileOnDisk transcript updates", () => {
       expect(fs.existsSync(sessionFile)).toBe(false);
       expect(archived).toContain(".jsonl.reset.");
       expect(updates).toHaveLength(1);
-      expect(updates[0].sessionFile).toBe(archived);
+      expect(expectDefined(updates[0], "updates[0] test invariant").sessionFile).toBe(archived);
       // Archive does not carry a messageId/message payload — this is a
       // pure-path mutation notification, matching how compaction-only
       // emits (sessionFile + sessionKey-only) behave.
-      expect(updates[0].message).toBeUndefined();
-      expect(updates[0].messageId).toBeUndefined();
+      expect(expectDefined(updates[0], "updates[0] test invariant").message).toBeUndefined();
+      expect(expectDefined(updates[0], "updates[0] test invariant").messageId).toBeUndefined();
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -103,7 +104,7 @@ describe("archiveSessionTranscriptsDetailed failure surface", () => {
 
       expect(archived).toEqual([]);
       expect(errors.length).toBeGreaterThan(0);
-      expect(errors[0].err).toBe(renameError);
+      expect(expectDefined(errors[0], "errors[0] test invariant").err).toBe(renameError);
       expect(fs.existsSync(sessionFile)).toBe(true);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -126,8 +127,12 @@ describe("archiveSessionTranscriptsDetailed failure surface", () => {
       });
 
       expect(archived.length).toBe(1);
-      expect(archived[0].archivedPath).toContain(".jsonl.reset.");
-      expect(fs.existsSync(archived[0].archivedPath)).toBe(true);
+      expect(expectDefined(archived[0], "archived[0] test invariant").archivedPath).toContain(
+        ".jsonl.reset.",
+      );
+      expect(
+        fs.existsSync(expectDefined(archived[0], "archived[0] test invariant").archivedPath),
+      ).toBe(true);
       expect(fs.existsSync(sessionFile)).toBe(false);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -168,8 +173,8 @@ describe("archiveSessionTranscriptsDetailed failure surface", () => {
 
       expect(archived).toEqual([]);
       expect(errors.length).toBeGreaterThan(0);
-      expect(errors[0].sourcePath).toBe(sessionFile);
-      expect(errors[0].code).toMatch(/^(EACCES|EPERM)$/);
+      expect(expectDefined(errors[0], "errors[0] test invariant").sourcePath).toBe(sessionFile);
+      expect(expectDefined(errors[0], "errors[0] test invariant").code).toMatch(/^(EACCES|EPERM)$/);
       expect(fs.existsSync(sessionFile)).toBe(true);
     } finally {
       try {

@@ -3,6 +3,8 @@
  * with no pending tool calls, so the parent session is idle when subagent
  * results arrive.
  */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
@@ -80,8 +82,9 @@ describe("sessions_yield orchestration", () => {
 
     // clientToolCalls wins — tool_calls stopReason, pendingToolCalls populated
     expect(result.meta.stopReason).toBe("tool_calls");
-    expect(result.meta.pendingToolCalls).toHaveLength(1);
-    expect(result.meta.pendingToolCalls![0].name).toBe("hosted_tool");
+    const pendingToolCalls = expectDefined(result.meta.pendingToolCalls, "pending tool calls");
+    expect(pendingToolCalls).toHaveLength(1);
+    expect(expectDefined(pendingToolCalls[0], "hosted tool call").name).toBe("hosted_tool");
   });
 
   it("preserves order across multiple client tool calls in one attempt (#52288)", async () => {
@@ -105,13 +108,16 @@ describe("sessions_yield orchestration", () => {
     });
 
     expect(result.meta.stopReason).toBe("tool_calls");
-    expect(result.meta.pendingToolCalls).toHaveLength(3);
-    expect(result.meta.pendingToolCalls!.map((c) => c.name)).toEqual([
+    const pendingToolCalls = expectDefined(result.meta.pendingToolCalls, "pending tool calls");
+    expect(pendingToolCalls).toHaveLength(3);
+    expect(pendingToolCalls.map((c) => c.name)).toEqual([
       "create_graph",
       "activate_graph",
       "get_status",
     ]);
-    expect(JSON.parse(result.meta.pendingToolCalls![0].arguments)).toEqual({
+    expect(
+      JSON.parse(expectDefined(pendingToolCalls[0], "first pending tool call").arguments),
+    ).toEqual({
       nodes: ["a", "b"],
     });
   });

@@ -1,5 +1,6 @@
 // Gateway call helper tests pin URL override, token, and RPC scope behavior for
 // agent tools that route through the local gateway client.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { verifyAgentRuntimeIdentityToken } from "../../gateway/agent-runtime-identity-token.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
@@ -269,9 +270,12 @@ describe("gateway tool defaults", () => {
     );
 
     expect(mocks.callGateway).toHaveBeenCalledTimes(1);
-    const [[callParams]] = mocks.callGateway.mock.calls as unknown as Array<
-      [{ method?: string; scopes?: string[] }]
-    >;
+    const [callParams] = expectDefined(
+      (
+        mocks.callGateway.mock.calls as unknown as Array<[{ method?: string; scopes?: string[] }]>
+      )[0],
+      "(mocks.callGateway.mock.calls as unknown as Array<[{ method?: string; scopes?: string[] }]>)[0] test invariant",
+    );
     expect(callParams.method).toBe("plugins.sessionAction");
     expect(callParams.scopes).toEqual(["operator.approvals"]);
   });
@@ -290,9 +294,12 @@ describe("gateway tool defaults", () => {
     );
 
     expect(mocks.callGateway).toHaveBeenCalledTimes(1);
-    const [[callParams]] = mocks.callGateway.mock.calls as unknown as Array<
-      [{ method?: string; scopes?: string[] }]
-    >;
+    const [callParams] = expectDefined(
+      (
+        mocks.callGateway.mock.calls as unknown as Array<[{ method?: string; scopes?: string[] }]>
+      )[0],
+      "(mocks.callGateway.mock.calls as unknown as Array<[{ method?: string; scopes?: string[] }]>)[0] test invariant",
+    );
     expect(callParams.method).toBe("plugins.sessionAction");
     expect(callParams.scopes).toEqual([
       "operator.admin",

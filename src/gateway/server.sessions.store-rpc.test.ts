@@ -3,6 +3,7 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, test, vi } from "vitest";
 import {
   loadSessionEntry,
@@ -147,7 +148,10 @@ test("lists and patches session store via sessions.* RPC", async () => {
           error?: unknown;
         }
       | undefined;
-    await sessionsHandlers[method]({
+    await expectDefined(
+      sessionsHandlers[method],
+      "sessionsHandlers[method] test invariant",
+    )({
       req: {} as never,
       params,
       respond: (ok, payload, error) => {

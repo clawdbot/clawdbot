@@ -1,4 +1,6 @@
 /** Tests CLI backend config resolution, normalization, and live-test defaults. */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { CliBackendConfig } from "../config/types.js";
@@ -166,7 +168,7 @@ function normalizeTestClaudeArgs(
   let hasSettingSources = false;
   let hasPermissionMode = false;
   for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i];
+    const arg = expectDefined(args[i], "args[i] test invariant");
     if (arg === "--dangerously-skip-permissions") {
       continue;
     }

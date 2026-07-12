@@ -1,4 +1,6 @@
 // Covers external content tokenization and source tagging.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   buildSafeExternalPrompt,
@@ -13,8 +15,12 @@ const START_MARKER_REGEX = /<<<EXTERNAL_UNTRUSTED_CONTENT id="([a-f0-9]{16})">>>
 const END_MARKER_REGEX = /<<<END_EXTERNAL_UNTRUSTED_CONTENT id="([a-f0-9]{16})">>>/g;
 
 function extractMarkerIds(content: string): { start: string[]; end: string[] } {
-  const start = [...content.matchAll(START_MARKER_REGEX)].map((match) => match[1]);
-  const end = [...content.matchAll(END_MARKER_REGEX)].map((match) => match[1]);
+  const start = [...content.matchAll(START_MARKER_REGEX)].map((match) =>
+    expectDefined(match[1], "match[1] test invariant"),
+  );
+  const end = [...content.matchAll(END_MARKER_REGEX)].map((match) =>
+    expectDefined(match[1], "match[1] test invariant"),
+  );
   return { start, end };
 }
 

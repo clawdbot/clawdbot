@@ -1,4 +1,6 @@
 // Crestodian gateway tests cover activation serialization and chat sessions.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { CrestodianChatEngine } from "../../crestodian/chat-engine.js";
@@ -153,7 +155,10 @@ async function callChat(
   params: Record<string, unknown>,
 ): Promise<RespondCall> {
   const { calls, respond } = makeRespond();
-  await crestodianHandlers["crestodian.chat"]({
+  await expectDefined(
+    crestodianHandlers["crestodian.chat"],
+    'crestodianHandlers["crestodian.chat"] test invariant',
+  )({
     params,
     respond,
     context,
@@ -209,7 +214,10 @@ describe("crestodian.setup.activate", () => {
 
     try {
       const { calls, respond } = makeRespond();
-      await crestodianHandlers["crestodian.setup.activate"]({
+      await expectDefined(
+        crestodianHandlers["crestodian.setup.activate"],
+        'crestodianHandlers["crestodian.setup.activate"] test invariant',
+      )({
         params: { kind: "claude-cli" },
         respond,
       } as never);
@@ -258,7 +266,10 @@ describe("crestodian.setup.auth.start", () => {
     });
     const { calls, respond } = makeRespond();
 
-    await crestodianHandlers["crestodian.setup.auth.start"]({
+    await expectDefined(
+      crestodianHandlers["crestodian.setup.auth.start"],
+      'crestodianHandlers["crestodian.setup.auth.start"] test invariant',
+    )({
       params: { sessionId: "auth-session-1", authChoice: "github-copilot" },
       respond,
       context,
@@ -354,7 +365,10 @@ describe("crestodian.chat", () => {
     });
     const activeAtResponse: number[] = [];
 
-    const pending = crestodianHandlers["crestodian.setup.detect"]({
+    const pending = expectDefined(
+      crestodianHandlers["crestodian.setup.detect"],
+      'crestodianHandlers["crestodian.setup.detect"] test invariant',
+    )({
       params: {},
       respond: () => {
         activeAtResponse.push(getCommandLaneSnapshot(CommandLane.Crestodian).activeCount);
@@ -387,7 +401,10 @@ describe("crestodian.chat", () => {
     setupInferenceMocks.verifySetupInference.mockResolvedValueOnce(result);
     const { calls, respond } = makeRespond();
 
-    await crestodianHandlers["crestodian.setup.verify"]({ params: {}, respond } as never);
+    await expectDefined(
+      crestodianHandlers["crestodian.setup.verify"],
+      'crestodianHandlers["crestodian.setup.verify"] test invariant',
+    )({ params: {}, respond } as never);
 
     expect(setupInferenceMocks.verifySetupInference).toHaveBeenCalledWith({
       runtime: defaultRuntime,
@@ -398,7 +415,10 @@ describe("crestodian.chat", () => {
   it("rejects unknown setup verification params without running inference", async () => {
     const { calls, respond } = makeRespond();
 
-    await crestodianHandlers["crestodian.setup.verify"]({
+    await expectDefined(
+      crestodianHandlers["crestodian.setup.verify"],
+      'crestodianHandlers["crestodian.setup.verify"] test invariant',
+    )({
       params: { modelRef: "openai/gpt-5.5" },
       respond,
     } as never);
@@ -424,7 +444,10 @@ describe("crestodian.chat", () => {
     const { calls, respond } = makeRespond();
     const activeAtResponse: number[] = [];
 
-    const pending = crestodianHandlers["crestodian.setup.activate"]({
+    const pending = expectDefined(
+      crestodianHandlers["crestodian.setup.activate"],
+      'crestodianHandlers["crestodian.setup.activate"] test invariant',
+    )({
       params: {
         kind: "api-key",
         modelRef: "openai/gpt-5.5",
@@ -546,14 +569,20 @@ describe("crestodian.chat", () => {
     ]);
     const activeAtResponse: number[] = [];
 
-    const first = crestodianHandlers["crestodian.chat"]({
+    const first = expectDefined(
+      crestodianHandlers["crestodian.chat"],
+      'crestodianHandlers["crestodian.chat"] test invariant',
+    )({
       params: { sessionId: "s1", message: "yes" },
       context: makeContext(sessions),
       respond: () => {
         activeAtResponse.push(getCommandLaneSnapshot(CommandLane.Crestodian).activeCount);
       },
     } as never);
-    const second = crestodianHandlers["crestodian.chat"]({
+    const second = expectDefined(
+      crestodianHandlers["crestodian.chat"],
+      'crestodianHandlers["crestodian.chat"] test invariant',
+    )({
       params: { sessionId: "s2", message: "yes" },
       context: makeContext(sessions),
       respond: () => {
@@ -654,7 +683,10 @@ describe("crestodian.chat", () => {
     // asserting the old engine is gone instead.
     const { calls, respond } = makeRespond();
     const context = makeContext(sessions);
-    const pending = crestodianHandlers["crestodian.chat"]({
+    const pending = expectDefined(
+      crestodianHandlers["crestodian.chat"],
+      'crestodianHandlers["crestodian.chat"] test invariant',
+    )({
       params: { sessionId: "s1", reset: true },
       respond,
       context,

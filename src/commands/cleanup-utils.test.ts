@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, test, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -177,7 +178,9 @@ describe("cleanup path removals", () => {
     expect(result.ok).toBe(false);
     expect(result.skipped).toBeUndefined();
     expect(runtime.error.mock.calls.length).toBe(1);
-    expect(runtime.error.mock.calls[0][0]).toMatch(/Refusing to remove unsafe path/);
+    expect(
+      expectDefined(runtime.error.mock.calls[0], "runtime.error.mock.calls[0] test invariant")[0],
+    ).toMatch(/Refusing to remove unsafe path/);
     expect(runtime.log.mock.calls.length).toBe(0);
   });
 
@@ -196,7 +199,9 @@ describe("cleanup path removals", () => {
       expect(result.ok).toBe(false);
       expect(result.skipped).toBeUndefined();
       expect(runtime.error.mock.calls.length).toBe(1);
-      expect(runtime.error.mock.calls[0][0]).toMatch(/Refusing to remove unsafe path/);
+      expect(
+        expectDefined(runtime.error.mock.calls[0], "runtime.error.mock.calls[0] test invariant")[0],
+      ).toMatch(/Refusing to remove unsafe path/);
       expect(runtime.log.mock.calls.length).toBe(0);
     } finally {
       cwdSpy.mockRestore();

@@ -1,4 +1,6 @@
 // Verifies session status output across scoped stores, tasks, and runtime hooks.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionStoreEntry } from "../config/sessions/store-entry.js";
 import { mergeSessionEntry, type SessionEntry } from "../config/sessions/types.js";
@@ -1279,7 +1281,10 @@ describe("session_status tool", () => {
     expect(details.modelOverride).toBe("anthropic/claude-sonnet-4-6");
     expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
     const savedStore = latestMockCallArg(updateSessionStoreMock, 1) as Record<string, SessionEntry>;
-    const saved = savedStore["agent:main:scope:scopy:direct:scopy"];
+    const saved = expectDefined(
+      savedStore["agent:main:scope:scopy:direct:scopy"],
+      'savedStore["agent:main:scope:scopy:direct:scopy"] test invariant',
+    );
     expectRecordFields(saved, {
       providerOverride: "anthropic",
       modelOverride: "claude-sonnet-4-6",
@@ -1342,7 +1347,7 @@ describe("session_status tool", () => {
     });
 
     await vi.waitFor(() => expect(events).toHaveLength(1));
-    const event = events[0];
+    const event = expectDefined(events[0], "events[0] test invariant");
     expect(event.type).toBe("session");
     expect(event.action).toBe("patch");
     expect(event.sessionKey).toBe("main");
@@ -1398,7 +1403,10 @@ describe("session_status tool", () => {
     expect(details.sessionKey).toBe("agent:main:scope:scopy:direct:scopy");
     expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
     const savedStore = latestMockCallArg(updateSessionStoreMock, 1) as Record<string, SessionEntry>;
-    const saved = savedStore["agent:main:scope:scopy:direct:scopy"];
+    const saved = expectDefined(
+      savedStore["agent:main:scope:scopy:direct:scopy"],
+      'savedStore["agent:main:scope:scopy:direct:scopy"] test invariant',
+    );
     expectRecordFields(saved, {
       providerOverride: "anthropic",
       modelOverride: "claude-sonnet-4-6",

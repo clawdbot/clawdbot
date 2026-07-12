@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -198,7 +199,12 @@ describe("runPostCorePluginConvergence", () => {
     ]);
     expect(
       mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot.mock.invocationCallOrder[0],
-    ).toBeLessThan(mocks.runPluginPayloadSmokeCheck.mock.invocationCallOrder[0]);
+    ).toBeLessThan(
+      expectDefined(
+        mocks.runPluginPayloadSmokeCheck.mock.invocationCallOrder[0],
+        "mocks.runPluginPayloadSmokeCheck.mock.invocationCallOrder[0] test invariant",
+      ),
+    );
   });
 
   it("forwards baselineInstallRecords to repair so sync/npm in-memory mutations are preserved", async () => {

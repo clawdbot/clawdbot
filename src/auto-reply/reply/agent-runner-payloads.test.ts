@@ -1,4 +1,6 @@
 // Tests reply payload construction and metadata propagation from agent runs.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { ChannelThreadingAdapter } from "../../channels/plugins/types.public.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -167,7 +169,10 @@ describe("buildReplyPayloads media filter integration", () => {
       originatingChatType: "dm",
     });
 
-    expect(getReplyPayloadMetadata(replyPayloads[0])?.replyDelivery).toEqual({
+    expect(
+      getReplyPayloadMetadata(expectDefined(replyPayloads[0], "replyPayloads[0] test invariant"))
+        ?.replyDelivery,
+    ).toEqual({
       chatType: "direct",
       replyToMode: "first",
     });
@@ -210,9 +215,12 @@ describe("buildReplyPayloads media filter integration", () => {
       text: "⚠️ API rate limit reached.",
       replyToId: "msg-1",
     });
-    expectFields(getReplyPayloadMetadata(replyPayloads[0]), {
-      deliverDespiteSourceReplySuppression: true,
-    });
+    expectFields(
+      getReplyPayloadMetadata(expectDefined(replyPayloads[0], "replyPayloads[0] test invariant")),
+      {
+        deliverDespiteSourceReplySuppression: true,
+      },
+    );
   });
 
   it("sanitizes source reply transcript mirror text with final payload text", async () => {
@@ -241,9 +249,10 @@ describe("buildReplyPayloads media filter integration", () => {
 
     expect(replyPayloads).toHaveLength(1);
     expect(replyPayloads[0]?.text).toBe("Visible\n\nDone");
-    expect(getReplyPayloadMetadata(replyPayloads[0])?.sourceReplyTranscriptMirror?.text).toBe(
-      "Visible\n\nDone",
-    );
+    expect(
+      getReplyPayloadMetadata(expectDefined(replyPayloads[0], "replyPayloads[0] test invariant"))
+        ?.sourceReplyTranscriptMirror?.text,
+    ).toBe("Visible\n\nDone");
   });
 
   it("strips media URL from payload when in messagingToolSentMediaUrls", async () => {
@@ -254,7 +263,9 @@ describe("buildReplyPayloads media filter integration", () => {
     });
 
     expect(replyPayloads).toHaveLength(1);
-    expect(replyPayloads[0].mediaUrl).toBeUndefined();
+    expect(
+      expectDefined(replyPayloads[0], "replyPayloads[0] test invariant").mediaUrl,
+    ).toBeUndefined();
   });
 
   it("preserves media URL when not in messagingToolSentMediaUrls", async () => {
@@ -265,7 +276,9 @@ describe("buildReplyPayloads media filter integration", () => {
     });
 
     expect(replyPayloads).toHaveLength(1);
-    expect(replyPayloads[0].mediaUrl).toBe("file:///tmp/photo.jpg");
+    expect(expectDefined(replyPayloads[0], "replyPayloads[0] test invariant").mediaUrl).toBe(
+      "file:///tmp/photo.jpg",
+    );
   });
 
   it("normalizes sent media URLs before deduping normalized reply media", async () => {

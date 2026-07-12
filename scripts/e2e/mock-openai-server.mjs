@@ -196,7 +196,7 @@ function writeImageGeneration(res) {
 }
 
 function resolveResponseText(bodyText) {
-  const matches = Array.from(bodyText.matchAll(/\bOPENCLAW_E2E_OK(?:_\d+)?\b/gu));
+  const matches = Array.from(bodyText.matchAll(/\bOPENCLAW_E2E_[A-Z0-9]+(?:_[A-Z0-9]+)*\b/gu));
   return matches.at(-1)?.[0] ?? successMarker;
 }
 

@@ -1,7 +1,6 @@
 {
   "extends": "./tsconfig.test.json",
   "compilerOptions": {
-    "noUncheckedIndexedAccess": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "tsBuildInfoFile": ".artifacts/tsgo-cache/test-root.tsbuildinfo"

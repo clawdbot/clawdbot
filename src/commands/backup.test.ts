@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
@@ -54,7 +55,7 @@ describe("backup commands", () => {
       throw new Error(`expected ${label} call`);
     }
     const [arg] = call;
-    return arg;
+    return expectDefined(arg, "arg test invariant");
   }
 
   async function mockWorkspaceBackupPlan(stateDir: string, workspaceDir: string, nowMs: number) {
@@ -271,7 +272,10 @@ describe("backup commands", () => {
           createMockTarStream({
             beforeRead: async () => {
               capturedManifest = JSON.parse(
-                await fs.readFile(entryPaths[0], "utf8"),
+                await fs.readFile(
+                  expectDefined(entryPaths[0], "entryPaths[0] test invariant"),
+                  "utf8",
+                ),
               ) as CapturedBackupManifest;
               capturedEntryPaths = entryPaths;
               capturedOnWriteEntry = options.onWriteEntry ?? null;
@@ -325,7 +329,7 @@ describe("backup commands", () => {
       }
       expect(capturedEntryPaths).toHaveLength(result.assets.length + 1);
 
-      const manifestPath = capturedEntryPaths[0];
+      const manifestPath = expectDefined(capturedEntryPaths[0], "manifest archive path");
       const remappedManifestEntry = { path: manifestPath };
       onWriteEntry(remappedManifestEntry);
       expect(remappedManifestEntry.path).toBe(

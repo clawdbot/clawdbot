@@ -662,6 +662,138 @@ describe("collectPluginClawHubReleasePlan", () => {
     expect(plan.candidates.map((plugin) => plugin.packageName)).toEqual(["@openclaw/demo-plugin"]);
   });
 
+  it("retries a transient package lookup and cancels the discarded response", async () => {
+    const repoDir = createTempPluginRepo();
+    let packageRequests = 0;
+    let transientBodyCanceled = false;
+    const retryDelays: number[] = [];
+    const fetchImpl: typeof fetch = async (input) => {
+      const requestUrl =
+        typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const pathname = new URL(requestUrl).pathname;
+      if (pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin") {
+        packageRequests += 1;
+        if (packageRequests === 1) {
+          return new Response(
+            new ReadableStream({
+              cancel() {
+                transientBodyCanceled = true;
+              },
+            }),
+            {
+              status: 503,
+              headers: { "retry-after": "1" },
+            },
+          );
+        }
+        return new Response("{}", { status: 200 });
+      }
+      if (pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin/trusted-publisher") {
+        return new Response(
+          JSON.stringify({
+            trustedPublisher: {
+              repository: "openclaw/openclaw",
+              workflowFilename: "plugin-clawhub-release.yml",
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin/versions/2026.4.1") {
+        return new Response("", { status: 404 });
+      }
+      throw new Error(`Unexpected ClawHub request to ${pathname}`);
+    };
+
+    const plan = await collectPluginClawHubReleasePlan({
+      rootDir: repoDir,
+      selection: ["@openclaw/demo-plugin"],
+      fetchImpl,
+      registryBaseUrl: "https://clawhub.ai",
+      sleep: async (ms) => {
+        retryDelays.push(ms);
+      },
+    });
+
+    expect(packageRequests).toBe(2);
+    expect(transientBodyCanceled).toBe(true);
+    expect(retryDelays).toEqual([1_000]);
+    expect(plan.candidates.map((plugin) => plugin.packageName)).toEqual(["@openclaw/demo-plugin"]);
+  });
+
+  it("retries a transient transport failure during version lookup", async () => {
+    const repoDir = createTempPluginRepo();
+    let versionRequests = 0;
+    const retryDelays: number[] = [];
+    const fetchImpl: typeof fetch = async (input) => {
+      const requestUrl =
+        typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const pathname = new URL(requestUrl).pathname;
+      if (pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin") {
+        return new Response("{}", { status: 200 });
+      }
+      if (pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin/trusted-publisher") {
+        return new Response(
+          JSON.stringify({
+            trustedPublisher: {
+              repository: "openclaw/openclaw",
+              workflowFilename: "plugin-clawhub-release.yml",
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin/versions/2026.4.1") {
+        versionRequests += 1;
+        if (versionRequests === 1) {
+          throw new TypeError("fetch failed");
+        }
+        return new Response("", { status: 404 });
+      }
+      throw new Error(`Unexpected ClawHub request to ${pathname}`);
+    };
+
+    const plan = await collectPluginClawHubReleasePlan({
+      rootDir: repoDir,
+      selection: ["@openclaw/demo-plugin"],
+      fetchImpl,
+      registryBaseUrl: "https://clawhub.ai",
+      sleep: async (ms) => {
+        retryDelays.push(ms);
+      },
+    });
+
+    expect(versionRequests).toBe(2);
+    expect(retryDelays).toEqual([1_000]);
+    expect(plan.candidates.map((plugin) => plugin.packageName)).toEqual(["@openclaw/demo-plugin"]);
+  });
+
+  it("preserves ClawHub response details after package retries are exhausted", async () => {
+    const repoDir = createTempPluginRepo();
+    let packageRequests = 0;
+    await expect(
+      collectPluginClawHubReleasePlan({
+        rootDir: repoDir,
+        selection: ["@openclaw/demo-plugin"],
+        registryBaseUrl: "https://clawhub.ai",
+        fetchImpl: async () => {
+          packageRequests += 1;
+          return new Response("Rate limit temporarily unavailable", {
+            status: 503,
+            headers: {
+              "Retry-After": "1",
+              "x-request-id": "request-123",
+            },
+          });
+        },
+        sleep: async () => {},
+      }),
+    ).rejects.toThrow(
+      "Failed to query ClawHub package @openclaw/demo-plugin: 503 Rate limit temporarily unavailable [retry-after=1; x-request-id=request-123]",
+    );
+    expect(packageRequests).toBe(4);
+  });
+
   it("honors an HTTP-date Retry-After header", async () => {
     const repoDir = createTempPluginRepo();
     const retryAfter = "Wed, 21 Oct 2030 07:28:00 GMT";

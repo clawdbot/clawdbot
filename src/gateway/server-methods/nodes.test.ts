@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   approveDevicePairing,
@@ -121,7 +122,10 @@ describe("nodeHandlers node.skills.update", () => {
       nodeSkills: [skill],
     });
 
-    await nodeHandlers["node.skills.update"](opts);
+    await expectDefined(
+      nodeHandlers["node.skills.update"],
+      'nodeHandlers["node.skills.update"] test invariant',
+    )(opts);
 
     expect(context.nodeRegistry.updateNodeSkills).toHaveBeenCalledWith("node-1", "conn-1", [skill]);
     expect(opts.respond).toHaveBeenCalledWith(
@@ -225,7 +229,10 @@ describe("nodeHandlers node.pair.remove", () => {
     });
 
     try {
-      await nodeHandlers["node.pair.remove"](opts);
+      await expectDefined(
+        nodeHandlers["node.pair.remove"],
+        'nodeHandlers["node.pair.remove"] test invariant',
+      )(opts);
       await Promise.resolve();
     } finally {
       captured.stop();
@@ -289,7 +296,10 @@ describe("nodeHandlers node.pair.remove", () => {
       }
 
       const { context, opts } = createOptions({ nodeId });
-      await nodeHandlers["node.pair.remove"](opts);
+      await expectDefined(
+        nodeHandlers["node.pair.remove"],
+        'nodeHandlers["node.pair.remove"] test invariant',
+      )(opts);
       await Promise.resolve();
 
       expect(opts.respond).toHaveBeenCalledWith(true, { nodeId }, undefined);
@@ -316,7 +326,10 @@ describe("nodeHandlers node.pair.remove", () => {
       expect(context.disconnectClientsForDevice).not.toHaveBeenCalled();
     });
 
-    await nodeHandlers["node.pair.remove"](opts);
+    await expectDefined(
+      nodeHandlers["node.pair.remove"],
+      'nodeHandlers["node.pair.remove"] test invariant',
+    )(opts);
     await Promise.resolve();
 
     expect(respond).toHaveBeenCalledWith(true, { nodeId }, undefined);
@@ -354,7 +367,10 @@ describe("nodeHandlers node.pair.remove", () => {
 
     const { context, opts } = createOptions({ nodeId });
 
-    await nodeHandlers["node.pair.remove"](opts);
+    await expectDefined(
+      nodeHandlers["node.pair.remove"],
+      'nodeHandlers["node.pair.remove"] test invariant',
+    )(opts);
     await Promise.resolve();
 
     expect(opts.respond).toHaveBeenCalledWith(true, { nodeId }, undefined);
@@ -394,7 +410,10 @@ describe("nodeHandlers node.pair.remove", () => {
       { client: createClient(["operator.pairing"]) },
     );
 
-    await nodeHandlers["node.pair.remove"](opts);
+    await expectDefined(
+      nodeHandlers["node.pair.remove"],
+      'nodeHandlers["node.pair.remove"] test invariant',
+    )(opts);
     await Promise.resolve();
 
     expect(opts.respond).toHaveBeenCalledWith(true, { nodeId }, undefined);
@@ -422,7 +441,10 @@ describe("nodeHandlers node.pair.remove", () => {
     const captured = captureSecurityEvents();
 
     try {
-      await nodeHandlers["node.pair.remove"](opts);
+      await expectDefined(
+        nodeHandlers["node.pair.remove"],
+        'nodeHandlers["node.pair.remove"] test invariant',
+      )(opts);
     } finally {
       captured.stop();
     }

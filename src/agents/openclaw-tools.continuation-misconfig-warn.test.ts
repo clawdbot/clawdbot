@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { warnSpy, debugSpy, infoSpy, errorSpy, traceSpy, fatalSpy, rawSpy } = vi.hoisted(() => ({
@@ -93,7 +94,7 @@ describe("createOpenClawTools — silent partial-registration guard", () => {
     });
 
     expect(warnSpy).toHaveBeenCalledOnce();
-    const [message, meta] = warnSpy.mock.calls[0];
+    const [message, meta] = expectDefined(warnSpy.mock.calls.at(0), "warning call");
     expect(message).toContain("continuation.enabled=true");
     expect(message).toContain("only continue_delegate will register");
     expect(meta).toMatchObject({ agentSessionKey: "main" });

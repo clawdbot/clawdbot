@@ -2,6 +2,7 @@
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import { basename, join } from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { slugifySessionKey } from "../agents/sandbox/shared.js";
 import { CONFIG_DIR } from "../utils.js";
@@ -171,7 +172,10 @@ describe("stageSandboxMedia scp remote paths", () => {
       sessionCtx.MediaPaths = [remotePath];
       childProcessMocks.spawn.mockImplementation((_command, argsUnknown) => {
         const args = argsUnknown as string[];
-        const localPath = args[args.length - 1];
+        const localPath = expectDefined(
+          args[args.length - 1],
+          "args[args.length - 1] test invariant",
+        );
         const child = new EventEmitter() as EventEmitter & {
           stderr: EventEmitter & { setEncoding: (_encoding: string) => void };
         };
@@ -230,7 +234,10 @@ describe("stageSandboxMedia scp remote paths", () => {
       sessionCtx.MediaPaths = [remotePath];
       childProcessMocks.spawn.mockImplementation((_command, argsUnknown) => {
         const args = argsUnknown as string[];
-        const localPath = args[args.length - 1];
+        const localPath = expectDefined(
+          args[args.length - 1],
+          "args[args.length - 1] test invariant",
+        );
         const child = new EventEmitter() as EventEmitter & {
           stderr: EventEmitter & { setEncoding: (_encoding: string) => void };
         };

@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getWindowsCmdExePath,
@@ -82,7 +83,7 @@ const {
 function resolveStartupEntryPath(env: Record<string, string>, extension = "cmd") {
   const taskName = env.OPENCLAW_WINDOWS_TASK_NAME ?? "OpenClaw Gateway";
   return path.join(
-    env.APPDATA,
+    expectDefined(env.APPDATA, "env.APPDATA test invariant"),
     "Microsoft",
     "Windows",
     "Start Menu",

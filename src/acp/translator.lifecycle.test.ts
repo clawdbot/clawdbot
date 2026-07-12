@@ -1,4 +1,3 @@
-/** Tests ACP translator initialize/session lifecycle and prompt bridge behavior. */
 import type {
   CloseSessionRequest,
   InitializeRequest,
@@ -9,6 +8,8 @@ import type {
 } from "@agentclientprotocol/sdk";
 import { PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
 import { createInMemorySessionStore } from "@openclaw/acp-core/session";
+/** Tests ACP translator initialize/session lifecycle and prompt bridge behavior. */
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
 import type { GatewaySessionRow } from "../gateway/session-utils.js";
@@ -132,7 +133,7 @@ async function startPendingPrompt(params: {
   });
   return {
     promptPromise,
-    runId: params.sentRunIds[before],
+    runId: expectDefined(params.sentRunIds[before], "params.sentRunIds[before] test invariant"),
   };
 }
 

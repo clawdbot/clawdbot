@@ -41,4 +41,3 @@ export function wrapCloudflareAiGatewayProviderStream(
 
 /** Test-only access to wrapper decisions and logger injection points. */
 export const testing = { log, shouldPatchAnthropicMessagesPayload };
-export { testing as __testing };

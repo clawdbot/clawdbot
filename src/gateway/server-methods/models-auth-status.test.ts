@@ -1,5 +1,7 @@
 // Model auth status tests cover profile health summaries, provider usage,
 // credential cleanup, secret refresh, and provider run abort side effects.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthHealthSummary } from "../../agents/auth-health.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
@@ -107,8 +109,14 @@ function createOptions(
   } as unknown as GatewayRequestHandlerOptions & { respond: ReturnType<typeof vi.fn> };
 }
 
-const handler = modelsAuthStatusHandlers["models.authStatus"];
-const logoutHandler = modelsAuthStatusHandlers["models.authLogout"];
+const handler = expectDefined(
+  modelsAuthStatusHandlers["models.authStatus"],
+  'modelsAuthStatusHandlers["models.authStatus"] test invariant',
+);
+const logoutHandler = expectDefined(
+  modelsAuthStatusHandlers["models.authLogout"],
+  'modelsAuthStatusHandlers["models.authLogout"] test invariant',
+);
 
 function createActiveRun(providerId: string, authProviderId?: string) {
   return {
@@ -309,10 +317,21 @@ describe("models.authStatus", () => {
     expect(error).toBeUndefined();
     const result = payload as ModelAuthStatusResult;
     expect(result.providers).toHaveLength(1);
-    expect(result.providers[0].provider).toBe("openai");
-    expect(result.providers[0].status).toBe("ok");
-    expect(result.providers[0].expiry?.at).toBe(1_000_000);
-    expect(result.providers[0].profiles[0].type).toBe("oauth");
+    expect(expectDefined(result.providers[0], "result.providers[0] test invariant").provider).toBe(
+      "openai",
+    );
+    expect(expectDefined(result.providers[0], "result.providers[0] test invariant").status).toBe(
+      "ok",
+    );
+    expect(
+      expectDefined(result.providers[0], "result.providers[0] test invariant").expiry?.at,
+    ).toBe(1_000_000);
+    expect(
+      expectDefined(
+        expectDefined(result.providers[0], "result.providers[0] test invariant").profiles[0],
+        'expectDefined(result.providers[0], "result.providers[0] test invarian... test invariant',
+      ).type,
+    ).toBe("oauth");
   });
 
   it("forwards unresolved auth reason codes to status clients", async () => {
@@ -551,7 +570,9 @@ describe("models.authStatus", () => {
     expect(ok).toBe(true);
     const result = payload as ModelAuthStatusResult;
     expect(result.providers).toHaveLength(1);
-    expect(result.providers[0].usage).toBeUndefined();
+    expect(
+      expectDefined(result.providers[0], "result.providers[0] test invariant").usage,
+    ).toBeUndefined();
   });
 
   it("does not leak secret-looking fields from upstream profile data", async () => {

@@ -1,4 +1,5 @@
 // Gateway status command tests cover probe targets, JSON/text output, SSH tunnels, and warnings.
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayProbeResult } from "../gateway/probe.js";
 import type { GatewayBonjourBeacon } from "../infra/bonjour-discovery.js";
@@ -200,8 +201,8 @@ vi.mock("../infra/ssh-tunnel.js", () => ({
       return null;
     }
     const [userHost, rawPort] = trimmed.split(":");
-    const [maybeUser, maybeHost] = userHost.includes("@")
-      ? userHost.split("@", 2)
+    const [maybeUser, maybeHost] = expectDefined(userHost, "userHost test invariant").includes("@")
+      ? expectDefined(userHost, "userHost test invariant").split("@", 2)
       : [undefined, userHost];
     if (!maybeHost) {
       return null;

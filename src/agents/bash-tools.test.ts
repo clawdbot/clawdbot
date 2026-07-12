@@ -3,6 +3,7 @@
  * Exercises exec and process behavior through the shared exported tool factory.
  */
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -907,7 +908,9 @@ describe("exec PATH handling", () => {
       expect(index).toBeGreaterThanOrEqual(0);
     }
     for (let i = 1; i < prependIndexes.length; i += 1) {
-      expect(prependIndexes[i]).toBeGreaterThan(prependIndexes[i - 1]);
+      expect(prependIndexes[i]).toBeGreaterThan(
+        expectDefined(prependIndexes[i - 1], "prependIndexes[i - 1] test invariant"),
+      );
     }
     const baseIndex = entries.indexOf(basePath);
     expect(baseIndex).toBeGreaterThanOrEqual(0);
@@ -972,7 +975,7 @@ describe("applyPathPrepend with case-insensitive PATH key", () => {
     const existingPath = existing.join(delim);
     const env: Record<string, string> = { Path: existingPath };
     applyPathPrepend(env, prepend);
-    const parts = env.Path.split(delim);
+    const parts = expectDefined(env.Path, "env.Path test invariant").split(delim);
     expect(parts[0]).toBe(prepend[0]);
     for (const entry of existing) {
       expect(parts).toContain(entry);

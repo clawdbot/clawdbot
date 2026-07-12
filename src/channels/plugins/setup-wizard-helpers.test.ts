@@ -1,4 +1,5 @@
 // Setup wizard helper tests cover channel setup step formatting and config writes.
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   resolveSetupWizardAllowFromEntries,
   resolveSetupWizardGroupAllowlist,
@@ -109,7 +110,9 @@ function resolveMatrixSingleAccountPromotionTarget(params: {
     );
   }
   const namedAccounts = collectNamedAccountIds(accounts);
-  return namedAccounts.length === 1 ? namedAccounts[0] : DEFAULT_ACCOUNT_ID;
+  return namedAccounts.length === 1
+    ? expectDefined(namedAccounts[0], "namedAccounts[0] test invariant")
+    : DEFAULT_ACCOUNT_ID;
 }
 
 beforeEach(() => {

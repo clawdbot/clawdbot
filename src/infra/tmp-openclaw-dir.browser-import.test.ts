@@ -1,6 +1,7 @@
 // Covers browser-safe importing of temp-dir helpers with fs shims.
 import { Buffer } from "node:buffer";
 import crypto from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core";
 import { build, type Plugin } from "esbuild";
 import { describe, expect, it } from "vitest";
 
@@ -52,7 +53,9 @@ describe("tmp-openclaw-dir browser-safe import", () => {
     const bundledSource = bundled.outputFiles[0]?.text;
     expect(bundledSource).toContain(resultKey);
 
-    await import(`data:text/javascript;base64,${Buffer.from(bundledSource).toString("base64")}`);
+    await import(
+      `data:text/javascript;base64,${Buffer.from(expectDefined(bundledSource, "bundledSource test invariant")).toString("base64")}`
+    );
 
     try {
       expect((globalThis as Record<string, unknown>)[resultKey]).toEqual({

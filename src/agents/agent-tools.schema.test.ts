@@ -1,4 +1,5 @@
 import { normalizeToolParameterSchema } from "@openclaw/ai/internal/openai";
+import { expectDefined } from "@openclaw/normalization-core";
 /**
  * Tests provider-compatible tool schema normalization.
  * Protects caching, ref inlining, OpenAPI keyword cleanup, and no-parameter
@@ -1085,13 +1086,16 @@ describe("normalizeToolParameters", () => {
       required?: string[];
       properties?: Record<string, Record<string, unknown>>;
     };
+    const properties = expectDefined(parameters.properties, "normalized schema properties");
+    const count = expectDefined(properties.count, "normalized count property");
+    const query = expectDefined(properties.query, "normalized query property");
 
     expect(parameters.required).toEqual(["count"]);
-    expect(parameters.properties?.count.minimum).toBeUndefined();
-    expect(parameters.properties?.count.maximum).toBeUndefined();
-    expect(parameters.properties?.count.type).toBe("integer");
-    expect(parameters.properties?.query.minLength).toBeUndefined();
-    expect(parameters.properties?.query.type).toBe("string");
+    expect(count.minimum).toBeUndefined();
+    expect(count.maximum).toBeUndefined();
+    expect(count.type).toBe("integer");
+    expect(query.minLength).toBeUndefined();
+    expect(query.type).toBe("string");
   });
 
   it("omits empty array items when model compat requires it", () => {

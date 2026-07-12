@@ -10,7 +10,13 @@ import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js"
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
+import {
+  type AgentEventPayload,
+  type AgentEventRuntimePayload,
+  getAgentEventLifecycleGeneration,
+  getAgentRunContext,
+  getAgentRunContextOwnerStatus,
+} from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import { logError } from "../logger.js";
@@ -163,6 +169,10 @@ function shouldMirrorAssistantEventToHiddenSessionMessages(data: unknown): boole
   return resolveAssistantEventPhase(data) === "commentary";
 }
 
+function shouldMirrorAgentEventToHiddenSessionMessages(evt: AgentEventPayload): boolean {
+  return evt.stream === "thinking" || evt.stream === "approval" || evt.stream === "lifecycle";
+}
+
 function normalizeHeartbeatChatFinalText(params: {
   runId: string;
   sourceRunId?: string;
@@ -303,7 +313,11 @@ export type AgentEventHandlerOptions = {
   agentRunSeq: Map<string, number>;
   chatRunState: ChatRunState;
   resolveSessionKeyForRun: (runId: string) => string | undefined;
-  clearAgentRunContext: (runId: string) => void;
+  clearAgentRunContext: (
+    runId: string,
+    lifecycleGeneration?: string,
+    contextClaimId?: string,
+  ) => void;
   toolEventRecipients: ToolEventRecipientRegistry;
   sessionEventSubscribers: SessionEventSubscriberRegistry;
   sessionMessageSubscribers: SessionMessageSubscriberRegistry;
@@ -366,7 +380,27 @@ export function createAgentEventHandler({
   resolveActiveLifecycleGenerationForRun = () => undefined,
   updateRunToolErrorSummary,
   resolveSessionActiveRunState,
-}: AgentEventHandlerOptions) {
+}: AgentEventHandlerOptions): (event: AgentEventPayload) => void {
+  const shouldProcessOwnedEvent = (evt: AgentEventRuntimePayload): boolean => {
+    const claimId = evt.contextClaimId;
+    if (!claimId) {
+      return true;
+    }
+    const lifecycleGeneration = evt.lifecycleGeneration;
+    if (!lifecycleGeneration || lifecycleGeneration !== getAgentEventLifecycleGeneration()) {
+      return false;
+    }
+    // A missing claim means detach or supersession revoked this terminal event.
+    return getAgentRunContextOwnerStatus(evt.runId, claimId, lifecycleGeneration) === "active";
+  };
+  const clearRunContextForEvent = (evt: AgentEventRuntimePayload): void => {
+    if (evt.contextClaimId) {
+      clearAgentRunContext(evt.runId, evt.lifecycleGeneration, evt.contextClaimId);
+      return;
+    }
+    clearAgentRunContext(evt.runId);
+  };
+
   type TerminalLifecycleOptions = {
     skipChatErrorFinal?: boolean;
     suppressRestartRecoveryProjection?: boolean;
@@ -374,7 +408,7 @@ export function createAgentEventHandler({
   };
   type PendingTerminalLifecycleError = {
     timer: NodeJS.Timeout;
-    event: AgentEventPayload;
+    event: AgentEventRuntimePayload;
     opts?: TerminalLifecycleOptions;
   };
 
@@ -612,7 +646,13 @@ export function createAgentEventHandler({
     );
   };
 
-  const finalizeLifecycleEvent = (evt: AgentEventPayload, opts?: TerminalLifecycleOptions) => {
+  const finalizeLifecycleEvent = (
+    evt: AgentEventRuntimePayload,
+    opts?: TerminalLifecycleOptions,
+  ) => {
+    if (!shouldProcessOwnedEvent(evt)) {
+      return;
+    }
     const lifecyclePhase =
       evt.stream === "lifecycle" && typeof evt.data?.phase === "string" ? evt.data.phase : null;
     if (lifecyclePhase !== "end" && lifecyclePhase !== "error") {
@@ -624,11 +664,13 @@ export function createAgentEventHandler({
     const currentLifecycleGeneration =
       activeLifecycleGeneration ?? currentRunContext?.lifecycleGeneration;
 
-    const chatLink = chatRunState.registry.peek(evt.runId);
+    const chatLink = evt.contextClaimId ? undefined : chatRunState.registry.peek(evt.runId);
     const sessionAgentId = chatLink?.agentId ?? evt.agentId;
     const eventSessionKey =
-      typeof evt.sessionKey === "string" && evt.sessionKey.trim() ? evt.sessionKey : undefined;
-    const isControlUiVisible = currentRunContext?.isControlUiVisible ?? true;
+      evt.deliverySessionKey ??
+      (typeof evt.sessionKey === "string" && evt.sessionKey.trim() ? evt.sessionKey : undefined);
+    const isControlUiVisible =
+      evt.controlUiVisible ?? currentRunContext?.isControlUiVisible ?? true;
     const sessionKey =
       chatLink?.sessionKey ?? eventSessionKey ?? resolveSessionKeyForRun(evt.runId);
     const restartRecoverySessionKey = eventSessionKey ?? sessionKey;
@@ -681,7 +723,7 @@ export function createAgentEventHandler({
           typeof evt.data?.stopReason === "string" ? evt.data.stopReason : undefined;
         const finished = chatLink ? chatRunState.registry.shift(evt.runId) : undefined;
         if (chatLink && !finished) {
-          clearAgentRunContext(evt.runId);
+          clearRunContextForEvent(evt);
           return;
         }
 
@@ -739,7 +781,7 @@ export function createAgentEventHandler({
     if (suppressRestartRecoveryProjection && chatLink) {
       chatRunState.registry.remove(evt.runId, clientRunId, sessionKey);
     }
-    clearAgentRunContext(evt.runId);
+    clearRunContextForEvent(evt);
     agentRunSeq.delete(evt.runId);
     agentRunSeq.delete(clientRunId);
 
@@ -809,7 +851,7 @@ export function createAgentEventHandler({
   };
 
   const scheduleTerminalLifecycleError = (
-    evt: AgentEventPayload,
+    evt: AgentEventRuntimePayload,
     opts?: TerminalLifecycleOptions,
   ) => {
     clearPendingTerminalLifecycleError(evt.runId);
@@ -1224,17 +1266,22 @@ export function createAgentEventHandler({
     }
   };
 
-  return (evt: AgentEventPayload) => {
+  return (event: AgentEventPayload) => {
+    const evt = event as AgentEventRuntimePayload;
+    if (!shouldProcessOwnedEvent(evt)) {
+      return;
+    }
     const lifecyclePhase =
       evt.stream === "lifecycle" && typeof evt.data?.phase === "string" ? evt.data.phase : null;
 
-    const chatLink = chatRunState.registry.peek(evt.runId);
+    const chatLink = evt.contextClaimId ? undefined : chatRunState.registry.peek(evt.runId);
     const sessionAgentId = chatLink?.agentId ?? evt.agentId;
     const eventSessionKey =
-      typeof evt.sessionKey === "string" && evt.sessionKey.trim() ? evt.sessionKey : undefined;
+      evt.deliverySessionKey ??
+      (typeof evt.sessionKey === "string" && evt.sessionKey.trim() ? evt.sessionKey : undefined);
     const runContext = getAgentRunContext(evt.runId);
     const activeLifecycleGeneration = resolveActiveLifecycleGenerationForRun(evt.runId);
-    const isControlUiVisible = runContext?.isControlUiVisible ?? true;
+    const isControlUiVisible = evt.controlUiVisible ?? runContext?.isControlUiVisible ?? true;
     const isHeartbeat = runContext?.isHeartbeat;
     const sessionKey =
       chatLink?.sessionKey ?? eventSessionKey ?? resolveSessionKeyForRun(evt.runId);
@@ -1450,11 +1497,12 @@ export function createAgentEventHandler({
           }
         }
       } else if (
-        !isAborted &&
         sessionKey &&
         hasSessionMessageSubscribers &&
-        evt.stream === "assistant" &&
-        shouldMirrorAssistantEventToHiddenSessionMessages(evt.data)
+        (shouldMirrorAgentEventToHiddenSessionMessages(evt) ||
+          (!isAborted &&
+            evt.stream === "assistant" &&
+            shouldMirrorAssistantEventToHiddenSessionMessages(evt.data)))
       ) {
         sendAgentPayload(
           sessionKey,

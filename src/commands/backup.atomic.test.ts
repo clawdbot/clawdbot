@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import {
@@ -143,7 +144,9 @@ describe("backupCreateCommand atomic archive write", () => {
         `${attemptFiles[0]}.retry-2`,
         `${attemptFiles[0]}.retry-3`,
       ]);
-      expect(rmAttempts.get(attemptFiles[1])).toBeGreaterThanOrEqual(2);
+      expect(
+        rmAttempts.get(expectDefined(attemptFiles[1], "attemptFiles[1] test invariant")),
+      ).toBeGreaterThanOrEqual(2);
       expect((await fs.readdir(archiveDir)).toSorted()).toStrictEqual([path.basename(outputPath)]);
     } finally {
       rmSpy.mockRestore();

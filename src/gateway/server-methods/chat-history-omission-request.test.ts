@@ -10,6 +10,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, test } from "vitest";
 import type { WebSocket } from "ws";
 import { appendTranscriptMessageSync } from "../../config/sessions/session-accessor.js";
@@ -88,7 +89,7 @@ describe("chat.history request emits truncation diagnostic (real WS gateway)", (
       expect(returned.length).toBeLessThan(MESSAGE_COUNT);
 
       expect(captured).toHaveLength(1);
-      const event = captured[0];
+      const event = expectDefined(captured[0], "captured[0] test invariant");
       expect(event.action).toBe("truncated");
       expect(event.reason).toBe("chat_history_budget");
       expect(event.count).toBeGreaterThan(0);

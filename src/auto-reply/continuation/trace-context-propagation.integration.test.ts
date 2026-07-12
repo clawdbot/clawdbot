@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type MockTaskFlowRecord = {
@@ -320,7 +321,9 @@ describe("continuation trace-context propagation integration", () => {
     );
 
     expect(enqueuedTargeted).toHaveLength(1);
-    expect(enqueuedTargeted[0].traceparent).toBe(carriedTraceparent);
+    expect(expectDefined(enqueuedTargeted.at(0), "targeted delivery").traceparent).toBe(
+      carriedTraceparent,
+    );
     expect(targetedSystemEvents).toEqual([
       { sessionKey: "agent:main:root", traceparent: carriedTraceparent },
     ]);
@@ -381,8 +384,9 @@ describe("continuation trace-context propagation integration", () => {
 
       expect(summary.recovered).toBe(1);
       expect(replayed).toHaveLength(1);
-      expect(replayed[0].traceparent).toBe(carriedTraceparent);
-      const wakeSideLink = parseDiagnosticTraceparent(replayed[0].traceparent);
+      const replayedDelivery = expectDefined(replayed.at(0), "replayed delivery");
+      expect(replayedDelivery.traceparent).toBe(carriedTraceparent);
+      const wakeSideLink = parseDiagnosticTraceparent(replayedDelivery.traceparent);
       expect(wakeSideLink?.traceId).toBe(rootTraceId);
       expect(wakeSideLink?.spanId).toBe(parseDiagnosticTraceparent(carriedTraceparent)?.spanId);
     });

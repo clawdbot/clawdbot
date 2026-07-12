@@ -1,4 +1,6 @@
 // Search setup tests cover search provider setup and config changes.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { createNonExitingRuntime } from "../runtime.js";
@@ -358,7 +360,12 @@ describe("runSearchSetupFlow", () => {
 
     expect(note).toHaveBeenCalledWith(mockGrokProvider.credentialNote, mockGrokProvider.label);
     expect(text).toHaveBeenCalledTimes(1);
-    expect(note.mock.invocationCallOrder[1]).toBeLessThan(text.mock.invocationCallOrder[0]);
+    expect(note.mock.invocationCallOrder[1]).toBeLessThan(
+      expectDefined(
+        text.mock.invocationCallOrder[0],
+        "text.mock.invocationCallOrder[0] test invariant",
+      ),
+    );
   });
 
   it("shows provider credential notes before SecretRef setup notes", async () => {

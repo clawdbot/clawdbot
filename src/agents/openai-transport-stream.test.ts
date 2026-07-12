@@ -1,6 +1,7 @@
 // Verifies OpenAI-compatible streaming payloads, failures, and transport wrapping.
 import { createServer } from "node:http";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
+import { expectDefined } from "@openclaw/normalization-core";
 import OpenAI from "openai";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type { Api, Model } from "openclaw/plugin-sdk/llm";
@@ -6359,7 +6360,9 @@ describe("openai transport stream", () => {
       nested: { keep: "value" },
     });
     expect(stripped.input[0]).not.toHaveProperty("encrypted_content");
-    expect(stripped.input[0].nested).not.toHaveProperty("encrypted_content");
+    expect(
+      expectDefined(stripped.input[0], "stripped.input[0] test invariant").nested,
+    ).not.toHaveProperty("encrypted_content");
     expect(stripped.input[1]).toEqual(params.input[1]);
   });
 
@@ -8199,7 +8202,10 @@ describe("openai transport stream", () => {
     ) as { reasoning_effort?: unknown; tools?: unknown };
 
     expect(params.tools).toHaveLength(1);
-    const tool = (params.tools as Array<Record<string, unknown>>)[0];
+    const tool = expectDefined(
+      (params.tools as Array<Record<string, unknown>>)[0],
+      "(params.tools as Array<Record<string, unknown>>)[0] test invariant",
+    );
     expectRecordFields(tool, { type: "function" });
     expectRecordFields(tool.function, { name: "lookup_weather" });
     expect(params).not.toHaveProperty("reasoning_effort");
@@ -12077,7 +12083,7 @@ describe("openai transport stream", () => {
       maxTokens: 8192,
     } satisfies Model<"openai-completions">;
 
-    const output = {
+    const output: OpenAICompletionsOutput = {
       role: "assistant" as const,
       content: [],
       api: model.api,
@@ -12151,8 +12157,14 @@ describe("openai transport stream", () => {
 
     await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
-    const thinkingBlock = output.content[0] as { type: string; thinking: string };
-    const textBlock = output.content[1] as { type: string; text: string };
+    const thinkingBlock = expectDefined(output.content[0], "output.content[0] test invariant") as {
+      type: string;
+      thinking: string;
+    };
+    const textBlock = expectDefined(output.content[1], "output.content[1] test invariant") as {
+      type: string;
+      text: string;
+    };
 
     expect(output.content.length).toBe(2);
     expect(thinkingBlock.type).toBe("thinking");

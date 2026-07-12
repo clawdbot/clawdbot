@@ -1,4 +1,6 @@
 // Verifies default model alias config values and overrides.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
@@ -370,7 +372,10 @@ describe("applyModelDefaults", () => {
 
   it("normalizes nested retired Gemini ids in proxy provider rows", () => {
     const cfg = buildProxyProviderConfig();
-    const model = cfg.models.providers.myproxy.models[0];
+    const model = expectDefined(
+      cfg.models.providers.myproxy.models[0],
+      "cfg.models.providers.myproxy.models[0] test invariant",
+    );
     model.id = "google/gemini-3-pro-preview";
     model.name = "Gemini via proxy";
 
@@ -381,7 +386,10 @@ describe("applyModelDefaults", () => {
 
   it("normalizes provider-prefixed nested retired Gemini ids in proxy provider rows", () => {
     const cfg = buildProxyProviderConfig();
-    const model = cfg.models.providers.myproxy.models[0];
+    const model = expectDefined(
+      cfg.models.providers.myproxy.models[0],
+      "cfg.models.providers.myproxy.models[0] test invariant",
+    );
     model.id = "myproxy/google/gemini-3-pro-preview";
     model.name = "Gemini via proxy";
 
@@ -394,7 +402,10 @@ describe("applyModelDefaults", () => {
 
   it("normalizes configured provider rows with explicit manifest registry policies", () => {
     const cfg = buildProxyProviderConfig();
-    const model = cfg.models.providers.myproxy.models[0];
+    const model = expectDefined(
+      cfg.models.providers.myproxy.models[0],
+      "cfg.models.providers.myproxy.models[0] test invariant",
+    );
     model.id = "latest";
     model.name = "Custom latest";
 

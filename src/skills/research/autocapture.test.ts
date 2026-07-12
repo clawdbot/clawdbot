@@ -1,6 +1,7 @@
 // Research autocapture tests cover capture policy, persistence, and config gating.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadSessionEntry, upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
@@ -89,7 +90,10 @@ describe("skill research auto-capture", () => {
       skillKey: "github-pr-workflow",
       scanState: "clean",
     });
-    const proposal = await inspectSkillProposal(proposals.proposals[0].id, { workspaceDir });
+    const proposal = await inspectSkillProposal(
+      expectDefined(proposals.proposals[0], "proposals.proposals[0] test invariant").id,
+      { workspaceDir },
+    );
     expect(proposal?.content).toContain("status: proposal");
     expect(proposal?.content).toContain("always check CI before final response");
   });
@@ -252,7 +256,10 @@ describe("skill research auto-capture", () => {
       skillKey: "github-pr-workflow",
     });
 
-    await applySkillProposal({ workspaceDir, proposalId: proposals.proposals[0].id });
+    await applySkillProposal({
+      workspaceDir,
+      proposalId: expectDefined(proposals.proposals[0], "proposals.proposals[0] test invariant").id,
+    });
     const updatedSkill = await fs.readFile(skillFile, "utf8");
     expect(updatedSkill).toContain("Preserve this original review checklist.");
     expect(updatedSkill).toContain("always check CI before final response");
@@ -291,7 +298,10 @@ describe("skill research auto-capture", () => {
       status: "pending",
       skillKey: "learned-workflows",
     });
-    const proposal = await inspectSkillProposal(proposals.proposals[0].id, { workspaceDir });
+    const proposal = await inspectSkillProposal(
+      expectDefined(proposals.proposals[0], "proposals.proposals[0] test invariant").id,
+      { workspaceDir },
+    );
     expect(proposal?.content).toContain("should not be included as voice material");
   });
 
@@ -346,7 +356,10 @@ describe("skill research auto-capture", () => {
       skillKey: "signal-scout",
     });
 
-    await applySkillProposal({ workspaceDir, proposalId: proposals.proposals[0].id });
+    await applySkillProposal({
+      workspaceDir,
+      proposalId: expectDefined(proposals.proposals[0], "proposals.proposals[0] test invariant").id,
+    });
     const updatedSkill = await fs.readFile(skillFile, "utf8");
     expect(updatedSkill).toContain("Capture first, score later.");
     expect(updatedSkill).toContain("capture real market signals with quoted evidence");
@@ -403,7 +416,10 @@ describe("skill research auto-capture", () => {
       skillKey: "signal-scout",
     });
 
-    await applySkillProposal({ workspaceDir, proposalId: proposals.proposals[0].id });
+    await applySkillProposal({
+      workspaceDir,
+      proposalId: expectDefined(proposals.proposals[0], "proposals.proposals[0] test invariant").id,
+    });
     const updatedSkill = await fs.readFile(skillFile, "utf8");
     expect(updatedSkill).toContain("Capture first, score later.");
     expect(updatedSkill).toContain("capture real market signals with quoted evidence");
@@ -589,7 +605,9 @@ describe("skill research auto-capture", () => {
 
     const proposals = await listSkillProposals({ workspaceDir });
     expect(proposals.proposals).toHaveLength(1);
-    expect(proposals.proposals[0].skillKey).toBe("github-pr-workflow");
+    expect(
+      expectDefined(proposals.proposals[0], "proposals.proposals[0] test invariant").skillKey,
+    ).toBe("github-pr-workflow");
   });
 
   it("does not let a historical skill_workshop call suppress a later correction", async () => {
@@ -635,7 +653,9 @@ describe("skill research auto-capture", () => {
 
     const proposals = await listSkillProposals({ workspaceDir });
     expect(proposals.proposals).toHaveLength(1);
-    expect(proposals.proposals[0].skillKey).toBe("screenshot-asset-workflow");
+    expect(
+      expectDefined(proposals.proposals[0], "proposals.proposals[0] test invariant").skillKey,
+    ).toBe("screenshot-asset-workflow");
   });
 
   it("revises the pending autocapture proposal with a second correction", async () => {
@@ -664,7 +684,10 @@ describe("skill research auto-capture", () => {
 
     const proposals = await listSkillProposals({ workspaceDir });
     expect(proposals.proposals).toHaveLength(1);
-    const proposal = await inspectSkillProposal(proposals.proposals[0].id, { workspaceDir });
+    const proposal = await inspectSkillProposal(
+      expectDefined(proposals.proposals[0], "proposals.proposals[0] test invariant").id,
+      { workspaceDir },
+    );
     expect(proposal?.record.proposedVersion).toBe("v2");
     expect(proposal?.content).toContain("inspect the exact head before landing");
     expect(proposal?.content.match(/check CI before final response/g)).toHaveLength(1);
@@ -707,7 +730,10 @@ describe("skill research auto-capture", () => {
 
     const proposals = await listSkillProposals({ workspaceDir });
     expect(proposals.proposals).toHaveLength(1);
-    const proposal = await inspectSkillProposal(proposals.proposals[0].id, { workspaceDir });
+    const proposal = await inspectSkillProposal(
+      expectDefined(proposals.proposals[0], "proposals.proposals[0] test invariant").id,
+      { workspaceDir },
+    );
     expect(proposal?.record.proposedVersion).toBe("v3");
     expect(proposal?.content).toContain("inspect the exact head");
     expect(proposal?.content).toContain("read GitHub review comments");
@@ -731,7 +757,10 @@ describe("skill research auto-capture", () => {
       const config = { skills: { workshop: { autonomous: { enabled: true } } } };
 
       await runSkillResearchAutoCapture({ event, ctx, config });
-      const proposalId = (await listSkillProposals({ workspaceDir })).proposals[0].id;
+      const proposalId = expectDefined(
+        (await listSkillProposals({ workspaceDir })).proposals[0],
+        "(await listSkillProposals({ workspaceDir })).proposals[0] test invariant",
+      ).id;
       if (status === "applied") {
         await applySkillProposal({ workspaceDir, proposalId });
       } else {
@@ -741,7 +770,9 @@ describe("skill research auto-capture", () => {
 
       const proposals = await listSkillProposals({ workspaceDir });
       expect(proposals.proposals).toHaveLength(1);
-      expect(proposals.proposals[0].status).toBe(status);
+      expect(
+        expectDefined(proposals.proposals[0], "proposals.proposals[0] test invariant").status,
+      ).toBe(status);
     },
   );
 

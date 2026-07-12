@@ -4,6 +4,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TEST_BUNDLED_RUNTIME_SIDECAR_PATHS } from "../../test/helpers/bundled-runtime-sidecars.js";
@@ -168,7 +169,9 @@ vi.mock("../infra/update-check.js", () => ({
       return null;
     }
     for (let index = 0; index < a.length; index += 1) {
-      const diff = a[index] - b[index];
+      const diff =
+        expectDefined(a[index], "a[index] test invariant") -
+        expectDefined(b[index], "b[index] test invariant");
       if (diff !== 0) {
         return diff;
       }
@@ -542,11 +545,13 @@ describe("update-cli", () => {
     const [repo] = target.split("#", 1);
     const isGitHubShorthand =
       Boolean(repo) &&
-      !repo.startsWith(".") &&
-      !repo.startsWith("/") &&
-      !repo.startsWith("@") &&
-      repo.split("/").length === 2 &&
-      repo.split("/").every((part) => /^[^\s/:@]+$/u.test(part));
+      !expectDefined(repo, "repo test invariant").startsWith(".") &&
+      !expectDefined(repo, "repo test invariant").startsWith("/") &&
+      !expectDefined(repo, "repo test invariant").startsWith("@") &&
+      expectDefined(repo, "repo test invariant").split("/").length === 2 &&
+      expectDefined(repo, "repo test invariant")
+        .split("/")
+        .every((part) => /^[^\s/:@]+$/u.test(part));
     let isHttpGitUrl;
     try {
       const url = new URL(target);

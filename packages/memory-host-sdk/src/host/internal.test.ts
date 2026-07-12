@@ -3,6 +3,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildFileEntry,
@@ -251,7 +252,9 @@ describe("memory host SDK package internals", () => {
 
     remapChunkLines(chunks, lineMap);
 
-    expect(chunks[0].startLine).toBe(4);
-    expect(chunks[chunks.length - 1].endLine).toBe(13);
+    expect(expectDefined(chunks[0], "chunks[0] test invariant").startLine).toBe(4);
+    expect(
+      expectDefined(chunks[chunks.length - 1], "chunks[chunks.length - 1] test invariant").endLine,
+    ).toBe(13);
   });
 });

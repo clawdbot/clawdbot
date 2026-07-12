@@ -121,6 +121,7 @@ const cachedDatabases = new Map<string, OpenClawAgentDatabase>();
 type ExistingSchemaMeta = {
   agentId: string | null;
   role: string | null;
+  schemaVersion: number | null;
 };
 
 type MigratedSessionEntry = Record<string, unknown>;
@@ -509,7 +510,7 @@ function backfillOpenClawAgentSchema(db: DatabaseSync, previousVersion: number):
   }
 }
 
-function ensureOpenClawAgentDatabasePermissions(
+export function ensureOpenClawAgentDatabasePermissions(
   pathname: string,
   options: OpenClawAgentDatabaseOptions,
 ): void {
@@ -540,14 +541,15 @@ function readExistingSchemaMeta(db: DatabaseSync): ExistingSchemaMeta | null {
     return null;
   }
   const row = db
-    .prepare("SELECT role, agent_id FROM schema_meta WHERE meta_key = 'primary'")
-    .get() as { agent_id?: unknown; role?: unknown } | undefined;
+    .prepare("SELECT role, schema_version, agent_id FROM schema_meta WHERE meta_key = 'primary'")
+    .get() as { agent_id?: unknown; role?: unknown; schema_version?: unknown } | undefined;
   if (!row) {
     return null;
   }
   return {
     agentId: typeof row.agent_id === "string" ? row.agent_id : null,
     role: typeof row.role === "string" ? row.role : null,
+    schemaVersion: typeof row.schema_version === "number" ? row.schema_version : null,
   };
 }
 
@@ -571,6 +573,41 @@ function assertExistingSchemaOwner(
   if (normalizeAgentId(existing.agentId) !== agentId) {
     throw new Error(
       `OpenClaw agent database ${pathname} belongs to agent ${existing.agentId}; requested agent ${agentId}.`,
+    );
+  }
+}
+
+/** Require the exact agent owner and schema before offline file maintenance. */
+export function assertOpenClawAgentDatabaseForMaintenance(
+  database: DatabaseSync,
+  options: { agentId: string; pathname: string },
+): void {
+  const agentId = normalizeAgentId(options.agentId);
+  const metadata = readExistingSchemaMeta(database);
+  if (!metadata) {
+    throw new Error(
+      `OpenClaw agent database ${options.pathname} has no schema ownership metadata.`,
+    );
+  }
+  assertExistingSchemaOwner(metadata, agentId, options.pathname);
+
+  const userVersion = readSqliteUserVersion(database);
+  if (userVersion > OPENCLAW_AGENT_SCHEMA_VERSION) {
+    throw createNewerSqliteSchemaVersionError(
+      "OpenClaw agent database",
+      options.pathname,
+      userVersion,
+      OPENCLAW_AGENT_SCHEMA_VERSION,
+    );
+  }
+  if (userVersion !== OPENCLAW_AGENT_SCHEMA_VERSION) {
+    throw new Error(
+      `OpenClaw agent database ${options.pathname} uses schema version ${userVersion}; run openclaw doctor --fix before compacting it.`,
+    );
+  }
+  if (metadata.schemaVersion !== OPENCLAW_AGENT_SCHEMA_VERSION) {
+    throw new Error(
+      `OpenClaw agent database ${options.pathname} metadata schema version ${metadata.schemaVersion ?? "invalid"} does not match ${OPENCLAW_AGENT_SCHEMA_VERSION}; run openclaw doctor --fix before compacting it.`,
     );
   }
 }
@@ -951,6 +988,12 @@ function closeCachedOpenClawAgentDatabase(database: OpenClawAgentDatabase): void
   if (database.db.isOpen) {
     database.db.close();
   }
+}
+
+/** Return whether the exact cached agent database pathname is still open. */
+export function isOpenClawAgentDatabaseOpen(pathname: string): boolean {
+  const database = cachedDatabases.get(path.resolve(pathname));
+  return database?.db.isOpen === true;
 }
 
 /** Close one cached agent database identified by its exact resolved pathname. */

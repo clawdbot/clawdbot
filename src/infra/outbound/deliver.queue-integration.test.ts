@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   onTrustedMessageAuditEvent,
@@ -133,7 +134,7 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
     expect(stateBeforeSecondSend).toBe("unknown_after_send");
     const entries = await loadPendingDeliveries(tmpDir);
     expect(entries).toHaveLength(1);
-    const entry = entries[0];
+    const entry = expectDefined(entries[0], "entries[0] test invariant");
     expect(entry.recoveryState).toBe("unknown_after_send");
     expect(entry.retryCount).toBe(1);
     expect(entry.lastError).toContain("second payload send failed");
@@ -215,7 +216,7 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
       m.loadPendingDeliveries(tmpDir),
     );
     expect(entries).toHaveLength(1);
-    const entry = entries[0];
+    const entry = expectDefined(entries[0], "entries[0] test invariant");
     expect(entry.retryCount).toBe(1);
     expect(entry.recoveryState).toBe("send_attempt_started");
     expect(entry.lastError).toContain("first payload send failed");

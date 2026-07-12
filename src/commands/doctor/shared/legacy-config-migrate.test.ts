@@ -1,4 +1,6 @@
 // Legacy config migration tests cover generic doctor repair of old config layouts.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import type { OpenClawConfig } from "../../../config/types.js";
@@ -1086,7 +1088,7 @@ describe("legacy agent model timeout migrate", () => {
     const defaults = agents.defaults as Record<string, unknown>;
     const defaultSubagents = defaults.subagents as Record<string, unknown>;
     const list = agents.list as Array<Record<string, unknown>>;
-    const firstAgent = list[0];
+    const firstAgent = expectDefined(list[0], "list[0] test invariant");
     const firstSubagents = firstAgent.subagents as Record<string, unknown>;
 
     expect(defaults.model).toEqual({

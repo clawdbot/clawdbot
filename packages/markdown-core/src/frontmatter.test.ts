@@ -1,4 +1,5 @@
 // Markdown Core tests cover frontmatter behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import JSON5 from "json5";
 import { describe, expect, it } from "vitest";
 import { parseFrontmatterBlock, stripFrontmatterBlock } from "./frontmatter.js";
@@ -33,7 +34,7 @@ metadata:
     const result = parseFrontmatterBlock(content);
     expect(result.metadata).toBe('{"openclaw":{"emoji":"disk","events":["command:new"]}}');
 
-    const parsed = JSON5.parse(result.metadata);
+    const parsed = JSON5.parse(expectDefined(result.metadata, "result.metadata test invariant"));
     expect(parsed.openclaw?.emoji).toBe("disk");
   });
 

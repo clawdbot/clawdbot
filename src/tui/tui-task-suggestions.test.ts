@@ -1,4 +1,5 @@
 import type { Component, OverlayHandle, SelectItem } from "@earendil-works/pi-tui";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import {
@@ -129,7 +130,9 @@ describe("TUI task suggestions", () => {
 
     expect(harness.openOverlay).toHaveBeenCalledTimes(1);
     const prompt = harness.openOverlay.mock.calls[0]?.[0];
-    const renderedPrompt = stripAnsi(prompt.render(80).join("\n"));
+    const renderedPrompt = stripAnsi(
+      expectDefined(prompt, "prompt test invariant").render(80).join("\n"),
+    );
     expect(renderedPrompt).toContain("Suggested follow-up: Remove stale adapter");
     expect(renderedPrompt).toContain("Project: /repo/project");
     expect(renderedPrompt).toContain("Why: The adapter is unreachable");
@@ -141,7 +144,9 @@ describe("TUI task suggestions", () => {
     const accept = { value: "accept", label: "Start in worktree" };
     harness.selectors[0]?.onSelect?.(accept);
     expect(harness.acceptTaskSuggestion).not.toHaveBeenCalled();
-    expect(stripAnsi(prompt.render(80).join("\n"))).toContain("Press Enter again");
+    expect(
+      stripAnsi(expectDefined(prompt, "prompt test invariant").render(80).join("\n")),
+    ).toContain("Press Enter again");
     harness.selectors[0]?.onSelect?.(accept);
 
     await vi.waitFor(() => {
@@ -163,7 +168,9 @@ describe("TUI task suggestions", () => {
     });
 
     const prompt = harness.openOverlay.mock.calls[0]?.[0];
-    const firstPage = stripAnsi(prompt.render(80).join("\n"));
+    const firstPage = stripAnsi(
+      expectDefined(prompt, "prompt test invariant").render(80).join("\n"),
+    );
     expect(firstPage).toContain("instruction-01");
     expect(firstPage).not.toContain("instruction-20");
     expect(firstPage).toContain("PgUp/PgDn to inspect");
@@ -171,8 +178,10 @@ describe("TUI task suggestions", () => {
 
     const pages = [firstPage];
     for (let page = 0; page < 3; page += 1) {
-      prompt.handleInput?.("\u001b[6~");
-      const rendered = stripAnsi(prompt.render(80).join("\n"));
+      expectDefined(prompt, "prompt test invariant").handleInput?.("\u001b[6~");
+      const rendered = stripAnsi(
+        expectDefined(prompt, "prompt test invariant").render(80).join("\n"),
+      );
       pages.push(rendered);
       expect(rendered).toContain("TASK ACTIONS");
     }
@@ -191,10 +200,12 @@ describe("TUI task suggestions", () => {
     const prompt = harness.openOverlay.mock.calls[0]?.[0];
     const pages: string[] = [];
     for (let page = 0; page < 20; page += 1) {
-      const rendered = stripAnsi(prompt.render(24).join("\n"));
+      const rendered = stripAnsi(
+        expectDefined(prompt, "prompt test invariant").render(24).join("\n"),
+      );
       pages.push(rendered);
       expect(rendered).toContain("TASK ACTIONS");
-      prompt.handleInput?.("\u001b[6~");
+      expectDefined(prompt, "prompt test invariant").handleInput?.("\u001b[6~");
     }
     expect(pages.join("\n").replace(/\s/g, "")).toContain("distinguishing-project");
   });
@@ -212,7 +223,9 @@ describe("TUI task suggestions", () => {
     });
 
     const prompt = harness.openOverlay.mock.calls[0]?.[0];
-    const rendered = stripAnsi(prompt.render(80).join("\n"));
+    const rendered = stripAnsi(
+      expectDefined(prompt, "prompt test invariant").render(80).join("\n"),
+    );
     expect(rendered).toContain("safeevil");
     expect(rendered).toContain("/repo/project");
     expect(rendered).toContain("why now");

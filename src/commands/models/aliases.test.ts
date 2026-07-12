@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
@@ -227,7 +228,10 @@ describe("modelsAliasesListCommand <-> modelsAliasesRemoveCommand agreement", ()
     for (const alias of listed) {
       mocks.replaceConfigFile.mockClear();
       const removeRuntime = makeRuntime();
-      const result = await modelsAliasesRemoveCommand(alias, removeRuntime).then(
+      const result = await modelsAliasesRemoveCommand(
+        expectDefined(alias, "alias test invariant"),
+        removeRuntime,
+      ).then(
         () => ({ ok: true as const }),
         (err: unknown) => ({
           ok: false as const,

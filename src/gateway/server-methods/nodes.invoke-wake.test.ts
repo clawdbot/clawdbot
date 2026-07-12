@@ -1,5 +1,7 @@
 // Node invoke wake tests cover APNs wake attempts, reconnect waits, nudge
 // throttling, command policy, and foreground-restricted command handling.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
@@ -344,7 +346,10 @@ async function invokeNode(params: {
     info: vi.fn(),
     warn: vi.fn(),
   };
-  await nodeHandlers["node.invoke"]({
+  await expectDefined(
+    nodeHandlers["node.invoke"],
+    'nodeHandlers["node.invoke"] test invariant',
+  )({
     params: makeNodeInvokeParams(params.requestParams),
     respond: respond as never,
     context: {
@@ -425,7 +430,10 @@ function createMissingNodeRegistry() {
 
 async function pullPending(nodeId: string, commands?: string[]) {
   const respond = vi.fn();
-  await nodeHandlers["node.pending.pull"]({
+  await expectDefined(
+    nodeHandlers["node.pending.pull"],
+    'nodeHandlers["node.pending.pull"] test invariant',
+  )({
     params: {},
     respond: respond as never,
     context: { getRuntimeConfig: () => mocks.getRuntimeConfig() } as never,
@@ -438,7 +446,10 @@ async function pullPending(nodeId: string, commands?: string[]) {
 
 async function ackPending(nodeId: string, ids: string[], commands?: string[]) {
   const respond = vi.fn();
-  await nodeHandlers["node.pending.ack"]({
+  await expectDefined(
+    nodeHandlers["node.pending.ack"],
+    'nodeHandlers["node.pending.ack"] test invariant',
+  )({
     params: { ids },
     respond: respond as never,
     context: { getRuntimeConfig: () => mocks.getRuntimeConfig() } as never,
@@ -466,7 +477,10 @@ describe("node plugin surface refresh", () => {
       },
     };
 
-    await nodeHandlers["node.pluginSurface.refresh"]({
+    await expectDefined(
+      nodeHandlers["node.pluginSurface.refresh"],
+      'nodeHandlers["node.pluginSurface.refresh"] test invariant',
+    )({
       req: { type: "req", id: "r1", method: "node.pluginSurface.refresh", params: {} },
       params: { surface: "canvas" },
       client: client as never,
@@ -959,7 +973,10 @@ describe("node.invoke APNs wake path", () => {
       }),
     };
 
-    await nodeHandlers["node.invoke"]({
+    await expectDefined(
+      nodeHandlers["node.invoke"],
+      'nodeHandlers["node.invoke"] test invariant',
+    )({
       params: {
         nodeId: "android-talk-node",
         command: "talk.ptt.start",

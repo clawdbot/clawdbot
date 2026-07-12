@@ -1,6 +1,8 @@
 /**
  * Tests for config gateway methods, writes, validation, and auth transitions.
  */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
@@ -50,7 +52,10 @@ function mockExecFileError(error: Error) {
 
 async function invokeConfigOpenFile() {
   const harness = createConfigHandlerHarness({ method: "config.openFile" });
-  await configHandlers["config.openFile"](harness.options);
+  await expectDefined(
+    configHandlers["config.openFile"],
+    'configHandlers["config.openFile"] test invariant',
+  )(harness.options);
   return harness;
 }
 

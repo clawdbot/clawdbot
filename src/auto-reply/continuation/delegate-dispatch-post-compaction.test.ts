@@ -5,6 +5,7 @@
  * This test verifies that spawn failures are now properly logged and surfaced
  * as system events, matching the pattern in the regular delegate dispatch path.
  */
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 
@@ -351,7 +352,7 @@ describe("dispatchStagedPostCompactionDelegates error handling", () => {
 
     // Verify warn log was called with the correct anchor
     expect(mockState.warnLog).toHaveBeenCalledOnce();
-    const warnCall = mockState.warnLog.mock.calls[0][0];
+    const warnCall = expectDefined(mockState.warnLog.mock.calls.at(0)?.at(0), "warning call");
     expect(warnCall).toContain("[continuation:post-compaction-spawn-failed]");
     expect(warnCall).toContain("registry rejection: chain depth exceeded");
     expect(warnCall).toContain(sessionKey);
@@ -359,7 +360,10 @@ describe("dispatchStagedPostCompactionDelegates error handling", () => {
 
     // Verify system event was enqueued
     expect(mockState.enqueueSystemEvent).toHaveBeenCalledOnce();
-    const [eventMessage, eventOpts] = mockState.enqueueSystemEvent.mock.calls[0];
+    const [eventMessage, eventOpts] = expectDefined(
+      mockState.enqueueSystemEvent.mock.calls.at(0),
+      "system event call",
+    );
     expect(eventMessage).toContain("[continuation] Post-compaction delegate spawn failed");
     expect(eventMessage).toContain("registry rejection: chain depth exceeded");
     expect(eventMessage).toContain("rehydrate workspace state after compaction");
@@ -378,7 +382,7 @@ describe("dispatchStagedPostCompactionDelegates error handling", () => {
 
     // Verify info log was called with delegate count
     expect(mockState.infoLog).toHaveBeenCalledOnce();
-    const infoCall = mockState.infoLog.mock.calls[0][0];
+    const infoCall = expectDefined(mockState.infoLog.mock.calls.at(0)?.at(0), "info call");
     expect(infoCall).toContain("[continuation:compaction-delegate]");
     expect(infoCall).toContain("Consuming 1 compaction delegate(s)");
     expect(infoCall).toContain(sessionKey);
@@ -399,10 +403,14 @@ describe("dispatchStagedPostCompactionDelegates error handling", () => {
 
     // Should still log and enqueue event with the string value
     expect(mockState.warnLog).toHaveBeenCalledOnce();
-    expect(mockState.warnLog.mock.calls[0][0]).toContain("lane queue full");
+    expect(expectDefined(mockState.warnLog.mock.calls.at(0)?.at(0), "warning call")).toContain(
+      "lane queue full",
+    );
 
     expect(mockState.enqueueSystemEvent).toHaveBeenCalledOnce();
-    expect(mockState.enqueueSystemEvent.mock.calls[0][0]).toContain("lane queue full");
+    expect(
+      expectDefined(mockState.enqueueSystemEvent.mock.calls.at(0)?.at(0), "system event message"),
+    ).toContain("lane queue full");
   });
 
   it("continues dispatching remaining delegates after a failure", async () => {
@@ -440,9 +448,9 @@ describe("dispatchStagedPostCompactionDelegates error handling", () => {
     );
     expect(mockState.warnLog).toHaveBeenCalledWith(expect.stringContaining("status=forbidden"));
     expect(mockState.enqueueSystemEvent).toHaveBeenCalledOnce();
-    expect(mockState.enqueueSystemEvent.mock.calls[0][0]).toContain(
-      "Post-compaction delegate spawn forbidden",
-    );
+    expect(
+      expectDefined(mockState.enqueueSystemEvent.mock.calls.at(0)?.at(0), "system event message"),
+    ).toContain("Post-compaction delegate spawn forbidden");
   });
 
   it("truncates long task strings in warn log to 80 chars", async () => {
@@ -456,13 +464,16 @@ describe("dispatchStagedPostCompactionDelegates error handling", () => {
       agentSessionKey: sessionKey,
     });
 
-    const warnCall = mockState.warnLog.mock.calls[0][0];
+    const warnCall = expectDefined(mockState.warnLog.mock.calls.at(0)?.at(0), "warning call");
     // The task in the log should be truncated
     expect(warnCall).toContain(longTask.slice(0, 80));
     expect(warnCall).not.toContain(longTask.slice(80));
 
     // But the system event should contain the full task
-    const eventMessage = mockState.enqueueSystemEvent.mock.calls[0][0];
+    const eventMessage = expectDefined(
+      mockState.enqueueSystemEvent.mock.calls.at(0)?.at(0),
+      "system event message",
+    );
     expect(eventMessage).toContain(longTask);
   });
 });

@@ -1,6 +1,7 @@
 // Host hook contract tests cover plugin host hook registration and runtime behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   createPluginRegistryFixture,
   registerTestPlugin,
@@ -1962,7 +1963,10 @@ describe("host-hook fixture plugin contract", () => {
     setActivePluginRegistry(registry.registry);
 
     const calls: Array<[boolean, unknown, unknown]> = [];
-    void pluginHostHookHandlers["plugins.uiDescriptors"]({
+    void expectDefined(
+      pluginHostHookHandlers["plugins.uiDescriptors"],
+      'pluginHostHookHandlers["plugins.uiDescriptors"] test invariant',
+    )({
       params: {},
       respond: (ok: boolean, payload: unknown, error: unknown) => {
         calls.push([ok, payload, error]);

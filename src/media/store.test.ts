@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
+import { expectDefined } from "@openclaw/normalization-core";
 import JSZip from "jszip";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -189,7 +190,10 @@ describe("media store", () => {
         expect(saved.id).not.toContain("---");
       }
       if (params.maxBaseNameLength !== undefined) {
-        const baseName = path.parse(saved.id).name.split("---")[0];
+        const baseName = expectDefined(
+          path.parse(saved.id).name.split("---")[0],
+          'path.parse(saved.id).name.split("---")[0] test invariant',
+        );
         expect(baseName.length).toBeLessThanOrEqual(params.maxBaseNameLength);
       }
     });

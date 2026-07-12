@@ -1,6 +1,8 @@
 /**
  * Tests pending-node gateway method responses and state filtering.
  */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { nodePendingHandlers } from "./nodes-pending.js";
 
@@ -70,7 +72,10 @@ describe("node.pending handlers", () => {
     });
     const respond = vi.fn();
 
-    await nodePendingHandlers["node.pending.drain"]({
+    await expectDefined(
+      nodePendingHandlers["node.pending.drain"],
+      'nodePendingHandlers["node.pending.drain"] test invariant',
+    )({
       params: { maxItems: 3 },
       respond: respond as never,
       client: { connect: { device: { id: "ios-node-1" } } } as never,
@@ -98,7 +103,10 @@ describe("node.pending handlers", () => {
   it("rejects node.pending.drain without a connected device identity", async () => {
     const respond = vi.fn();
 
-    await nodePendingHandlers["node.pending.drain"]({
+    await expectDefined(
+      nodePendingHandlers["node.pending.drain"],
+      'nodePendingHandlers["node.pending.drain"] test invariant',
+    )({
       params: {},
       respond: respond as never,
       client: null,
@@ -144,7 +152,10 @@ describe("node.pending handlers", () => {
     });
     const respond = vi.fn();
 
-    await nodePendingHandlers["node.pending.enqueue"]({
+    await expectDefined(
+      nodePendingHandlers["node.pending.enqueue"],
+      'nodePendingHandlers["node.pending.enqueue"] test invariant',
+    )({
       params: {
         nodeId: "ios-node-2",
         type: "location.request",

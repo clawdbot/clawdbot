@@ -1,4 +1,5 @@
 // Docs command tests cover docs lookup, fetch handling, and runtime output.
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 
@@ -53,7 +54,10 @@ describe("docsSearchCommand", () => {
     await docsSearchCommand(["plugin", "allowlist"], runtime);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchMock.mock.calls[0];
+    const [url, init] = expectDefined(
+      fetchMock.mock.calls[0],
+      "fetchMock.mock.calls[0] test invariant",
+    );
     if (!(url instanceof URL)) {
       throw new Error("expected docs search to call fetch with a URL");
     }

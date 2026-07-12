@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { upsertAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import * as jsonFiles from "../../infra/json-files.js";
@@ -642,7 +643,7 @@ describe("session store writer queue", () => {
     await updateSessionStore(
       storePath,
       async (store) => {
-        store[key].displayName = "saved once";
+        expectDefined(store[key], "store[key] test invariant").displayName = "saved once";
       },
       { skipMaintenance: true },
     );
@@ -705,7 +706,7 @@ describe("session store writer queue", () => {
       await updateSessionStore(
         storePath,
         async (store) => {
-          store[key].displayName = "saved once";
+          expectDefined(store[key], "store[key] test invariant").displayName = "saved once";
         },
         { skipMaintenance: true },
       );
@@ -806,12 +807,15 @@ describe("session store writer queue", () => {
     const parseSpy = vi.spyOn(JSON, "parse");
     try {
       const loaded = loadSessionStore(storePath, { skipCache: true, clone: false });
-      loaded[key].sessionId = "mutated-owned-store";
+      expectDefined(loaded[key], "loaded[key] test invariant").sessionId = "mutated-owned-store";
 
       expect(parseSpy).toHaveBeenCalledTimes(1);
-      expect(loadSessionStore(storePath, { skipCache: true, clone: false })[key].sessionId).toBe(
-        "s-owned-skip-cache",
-      );
+      expect(
+        expectDefined(
+          loadSessionStore(storePath, { skipCache: true, clone: false })[key],
+          "loadSessionStore(storePath, { skipCache: true, clone: false })[key] test invariant",
+        ).sessionId,
+      ).toBe("s-owned-skip-cache");
     } finally {
       parseSpy.mockRestore();
     }
@@ -1022,7 +1026,7 @@ describe("session store writer queue", () => {
     });
 
     await updateSessionStore(storePath, async (store) => {
-      const entry = store[key];
+      const entry = expectDefined(store[key], "store[key] test invariant");
       entry.updatedAt = Date.now();
     });
 

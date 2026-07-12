@@ -19,6 +19,7 @@
  *      a positive assertion — the disk shape stays back-compat for historical
  *      rows — and is what justifies the runtime/disk encoding split.
  */
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock the TaskFlow registry before importing the store. Identical fixture
@@ -132,7 +133,7 @@ describe("keeps PendingContinuationDelegate mode-only at runtime boundaries", ()
         });
         const consumed = consumePendingDelegates(SESSION_KEY);
         expect(consumed).toHaveLength(1);
-        const delegate = consumed[0];
+        const delegate = expectDefined(consumed.at(0), "delegate");
         for (const field of RUNTIME_BOOLEAN_FIELDS) {
           expect(
             Object.hasOwn(delegate, field),
@@ -152,7 +153,7 @@ describe("keeps PendingContinuationDelegate mode-only at runtime boundaries", ()
       });
       const consumed = consumeStagedPostCompactionDelegates(SESSION_KEY);
       expect(consumed).toHaveLength(1);
-      const delegate = consumed[0];
+      const delegate = expectDefined(consumed.at(0), "post-compaction delegate");
       expect(delegate.mode).toBe("post-compaction");
       for (const field of RUNTIME_BOOLEAN_FIELDS) {
         expect(
@@ -179,7 +180,7 @@ describe("keeps PendingContinuationDelegate mode-only at runtime boundaries", ()
         } else {
           enqueuePendingDelegate(SESSION_KEY, { task: "back-compat", mode });
         }
-        const flow = [...mockFlows.values()][0];
+        const flow = expectDefined([...mockFlows.values()].at(0), "flow");
         const stateJson = flow.stateJson as Record<string, unknown>;
         expect(stateJson[expectedBooleanField]).toBe(true);
       },
@@ -187,7 +188,7 @@ describe("keeps PendingContinuationDelegate mode-only at runtime boundaries", ()
 
     it("persisted stateJson for normal mode projects no boolean mode flags", () => {
       enqueuePendingDelegate(SESSION_KEY, { task: "normal" });
-      const flow = [...mockFlows.values()][0];
+      const flow = expectDefined([...mockFlows.values()].at(0), "flow");
       const stateJson = flow.stateJson as Record<string, unknown>;
       for (const field of RUNTIME_BOOLEAN_FIELDS) {
         expect(stateJson[field]).toBeUndefined();

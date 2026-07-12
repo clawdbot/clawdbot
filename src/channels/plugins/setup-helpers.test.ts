@@ -1,4 +1,5 @@
 // Setup helper tests cover channel setup helper outputs and lifecycle cleanup.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -82,7 +83,9 @@ function resolveMatrixSingleAccountPromotionTarget(params: {
     );
   }
   const namedAccounts = collectNamedAccountIds(accounts);
-  return namedAccounts.length === 1 ? namedAccounts[0] : DEFAULT_ACCOUNT_ID;
+  return namedAccounts.length === 1
+    ? expectDefined(namedAccounts[0], "namedAccounts[0] test invariant")
+    : DEFAULT_ACCOUNT_ID;
 }
 
 beforeEach(() => {

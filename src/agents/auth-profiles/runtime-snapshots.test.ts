@@ -2,6 +2,8 @@
  * Regression coverage for process-local auth profile snapshots.
  * Verifies snapshots are cloned and isolated across agent-specific stores.
  */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -58,15 +60,23 @@ describe("runtime auth profile snapshots", () => {
     try {
       const stored = createStore("access-1");
       setRuntimeAuthProfileStoreSnapshot(stored, agentDir);
-      stored.profiles["openai:default"].provider = "mutated";
-      stored.order!["openai"].push("mutated");
+      expectDefined(
+        stored.profiles["openai:default"],
+        'stored.profiles["openai:default"] test invariant',
+      ).provider = "mutated";
+      expectDefined(stored.order?.openai, "stored OpenAI profile order").push("mutated");
 
       const first = getRuntimeAuthProfileStoreSnapshot(agentDir);
       expectOpenAICodexSnapshotCredential(first, { access: "access-1" });
       expect(first?.order?.["openai"]).toEqual(["openai:default"]);
 
-      first!.profiles["openai:default"].provider = "mutated-again";
-      first!.usageStats!["openai:default"].lastUsed = 99;
+      const firstSnapshot = expectDefined(first, "first auth profile snapshot");
+      expectDefined(firstSnapshot.profiles["openai:default"], "first OpenAI profile").provider =
+        "mutated-again";
+      expectDefined(
+        firstSnapshot.usageStats?.["openai:default"],
+        "first OpenAI usage stats",
+      ).lastUsed = 99;
 
       const second = getRuntimeAuthProfileStoreSnapshot(agentDir);
       expectOpenAICodexSnapshotCredential(second, { access: "access-1" });

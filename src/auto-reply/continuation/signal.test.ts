@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { extractContinuationSignal } from "./signal.js";
 
@@ -20,7 +21,7 @@ describe("extractContinuationSignal", () => {
     expect(result.signal?.kind).toBe("delegate");
     expect(result.fromBracket).toBe(true);
     // Text should be stripped
-    expect(payloads[0].text).toBe("Here is my reply.");
+    expect(expectDefined(payloads.at(0), "payload").text).toBe("Here is my reply.");
   });
 
   it("extracts CONTINUE_WORK from text", () => {
@@ -124,9 +125,11 @@ describe("extractContinuationSignal", () => {
     expect(result.signal).toEqual({ kind: "work", delayMs: 45_000 });
     expect(result.fromBracket).toBe(true);
     // Text on the marker-bearing payload was stripped.
-    expect(payloads[0].text).toBe("Investigating a thing.");
+    expect(expectDefined(payloads.at(0), "first payload").text).toBe("Investigating a thing.");
     // Later non-marker payload is left untouched.
-    expect(payloads[1].text).toBe("warning: tool call failed, will retry");
+    expect(expectDefined(payloads.at(1), "second payload").text).toBe(
+      "warning: tool call failed, will retry",
+    );
   });
 
   it("when two payloads carry markers, the latest one wins (regression #622)", () => {
@@ -143,8 +146,10 @@ describe("extractContinuationSignal", () => {
       expect(result.signal.task).toBe("real-task");
     }
     // Only the winning payload's text should be stripped.
-    expect(payloads[1].text).toBe("actual final intent");
+    expect(expectDefined(payloads.at(1), "second payload").text).toBe("actual final intent");
     // The earlier payload's text is left untouched (not consulted further).
-    expect(payloads[0].text).toBe("earlier intent\n[[CONTINUE_DELEGATE: stale-task]]");
+    expect(expectDefined(payloads.at(0), "first payload").text).toBe(
+      "earlier intent\n[[CONTINUE_DELEGATE: stale-task]]",
+    );
   });
 });

@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   fingerprintAuthProfileCredential,
@@ -1434,7 +1435,10 @@ describe("CrestodianChatEngine", () => {
 
     expect(reply.text).toContain("I checked your shell");
     expect(planner).not.toHaveBeenCalled();
-    const call = runAgentTurn.mock.calls[0][0];
+    const call = expectDefined(
+      runAgentTurn.mock.calls[0],
+      "runAgentTurn.mock.calls[0] test invariant",
+    )[0];
     expect(call.input).toContain("setup looking");
     expect(call.surface).toBe("gateway");
     // A question is not consent: mutations stay locked for this turn.
@@ -1464,7 +1468,7 @@ describe("CrestodianChatEngine", () => {
 
     expect(reply.text).toContain("setup custodian");
     expect(reply.action).toBe("none");
-    const call = planner.mock.calls[0][0];
+    const call = expectDefined(planner.mock.calls[0], "planner.mock.calls[0] test invariant")[0];
     expect(call.input).toContain("machine");
     expect(call.history?.[0]).toEqual({ role: "assistant", text: "welcome text" });
   });
@@ -1543,7 +1547,7 @@ describe("CrestodianChatEngine", () => {
 
     expect(reply.text).toContain("agent keeps its files");
     expect(engine.hasPendingProposal()).toBe(true);
-    const call = planner.mock.calls[0][0];
+    const call = expectDefined(planner.mock.calls[0], "planner.mock.calls[0] test invariant")[0];
     expect(call.pendingOperation).toContain("gateway.port");
   });
 
@@ -1744,7 +1748,10 @@ describe("Crestodian agent loop backends", () => {
 
     expect(reply.text).toContain("CLI loop checked your shell");
     expect(planner).not.toHaveBeenCalled();
-    const call = runCliAgent.mock.calls[0][0];
+    const call = expectDefined(
+      runCliAgent.mock.calls[0],
+      "runCliAgent.mock.calls[0] test invariant",
+    )[0];
     expect(call.provider).toBe("claude-cli");
     expect(call.model).toBe("claude-opus-4-8");
     expect(call.crestodianTool).toEqual({
@@ -1760,7 +1767,10 @@ describe("Crestodian agent loop backends", () => {
 
     // The captured native CLI session resumes on the next turn.
     await engine.handle("and the gateway?");
-    expect(runCliAgent.mock.calls[1][0].cliSessionBinding).toEqual({ sessionId: "native-1" });
+    expect(
+      expectDefined(runCliAgent.mock.calls[1], "runCliAgent.mock.calls[1] test invariant")[0]
+        .cliSessionBinding,
+    ).toEqual({ sessionId: "native-1" });
   });
 
   it("falls back to the single-turn planner when the CLI loop fails", async () => {

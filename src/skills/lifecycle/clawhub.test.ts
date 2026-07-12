@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 
@@ -2264,7 +2265,8 @@ describe("skills-clawhub", () => {
         const lock = JSON.parse(await fs.readFile(lockPath, "utf8")) as {
           skills: Record<string, { ownerHandle?: string }>;
         };
-        lock.skills.weather.ownerHandle = "other-owner";
+        expectDefined(lock.skills.weather, "lock.skills.weather test invariant").ownerHandle =
+          "other-owner";
         await fs.writeFile(lockPath, `${JSON.stringify(lock, null, 2)}\n`, "utf8");
 
         const result = await resolveClawHubSkillVerificationTarget({
@@ -2344,7 +2346,7 @@ describe("skills-clawhub", () => {
           skills: Record<string, { version: string; installedAt: number; registry: string }>;
         };
         lock.skills.agentreceipt = {
-          ...lock.skills.agentreceipt,
+          ...expectDefined(lock.skills.agentreceipt, "agentreceipt lock entry"),
           version: "1.0.0",
         };
         await fs.writeFile(lockPath, `${JSON.stringify(lock, null, 2)}\n`, "utf8");
@@ -2379,7 +2381,7 @@ describe("skills-clawhub", () => {
           skills: Record<string, { version: string; installedAt: number; registry: string }>;
         };
         lock.skills.agentreceipt = {
-          ...lock.skills.agentreceipt,
+          ...expectDefined(lock.skills.agentreceipt, "agentreceipt lock entry"),
           registry: "https://other.example.com/clawhub",
         };
         await fs.writeFile(lockPath, `${JSON.stringify(lock, null, 2)}\n`, "utf8");

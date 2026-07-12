@@ -1,6 +1,7 @@
 // Covers reported host-env security baseline parity.
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { describe, expect, it } from "vitest";
 import {
@@ -176,7 +177,12 @@ describe("host env reported baseline coverage", () => {
     );
 
     for (const key of expectedAllowlistKeys) {
-      expect(INHERITED_ALLOWLIST_RATIONALE[key].trim().length).toBeGreaterThan(0);
+      expect(
+        expectDefined(
+          INHERITED_ALLOWLIST_RATIONALE[key],
+          "INHERITED_ALLOWLIST_RATIONALE[key] test invariant",
+        ).trim().length,
+      ).toBeGreaterThan(0);
       expect(isDangerousHostInheritedEnvVarName(key)).toBe(false);
       expect([isDangerousHostEnvVarName(key), isDangerousHostEnvOverrideVarName(key)]).toContain(
         true,

@@ -1,4 +1,6 @@
 // Plugin management Gateway handler tests cover DTO mapping, trust errors, and reload planning.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const managementMocks = vi.hoisted(() => {
@@ -58,7 +60,10 @@ async function callHandler(
   let ok: boolean | null = null;
   let response: unknown;
   let error: unknown;
-  await pluginsHandlers[method]({
+  await expectDefined(
+    pluginsHandlers[method],
+    "pluginsHandlers[method] test invariant",
+  )({
     params,
     req: {} as never,
     client: null as never,

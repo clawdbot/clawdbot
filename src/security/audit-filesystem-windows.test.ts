@@ -1,6 +1,7 @@
 // Covers Windows filesystem security audit behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { collectFilesystemFindings } from "./audit.js";
 import { AsyncTempCaseFactory } from "./test-temp-cases.js";
@@ -66,7 +67,7 @@ describe("security audit filesystem Windows findings", () => {
           platform: "win32",
           env: windowsAuditEnv,
           execIcacls: async (_cmd: string, args: string[]) => {
-            const target = args[0];
+            const target = expectDefined(args[0], "args[0] test invariant");
             if (target.endsWith(`${path.sep}state`)) {
               return {
                 stdout: `${target} NT AUTHORITY\\SYSTEM:(F)\n BUILTIN\\Users:(RX)\n DESKTOP-TEST\\Tester:(F)\n`,
@@ -98,7 +99,7 @@ describe("security audit filesystem Windows findings", () => {
           platform: "win32",
           env: windowsAuditEnv,
           execIcacls: async (_cmd: string, args: string[]) => {
-            const target = args[0];
+            const target = expectDefined(args[0], "args[0] test invariant");
             if (target.endsWith(`${path.sep}state`)) {
               return {
                 stdout: `${target} *S-1-5-18:(F)\n *S-1-5-7:(F)\n`,

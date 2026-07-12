@@ -139,6 +139,27 @@ async function withMockServer(
   }
 }
 
+describe("mock OpenAI response markers", () => {
+  it("echoes dynamic OpenClaw E2E markers", async () => {
+    await withMockServer(mockOpenAiPath, {}, async (baseUrl) => {
+      for (const marker of ["OPENCLAW_E2E_SEED_0_123", "OPENCLAW_E2E_ANDROID_OK"]) {
+        const response = await fetch(`${baseUrl}/v1/responses`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            input: `Reply exactly with ${marker}.`,
+            stream: false,
+          }),
+        });
+        const body = await response.json();
+
+        expect(response.status).toBe(200);
+        expect(body.output?.[0]?.content?.[0]?.text).toBe(marker);
+      }
+    });
+  });
+});
+
 describe("e2e mock and config helper numeric limits", () => {
   it("rejects loose mock OpenAI port env values", () => {
     const mockPort = runScript(mockOpenAiPath, { MOCK_PORT: "44080tcp" });

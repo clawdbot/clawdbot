@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
@@ -684,8 +685,18 @@ describe("secrets apply", () => {
       "openai:sidecar",
       "openai:static",
     ]);
-    expect(nextAuthStore.profiles["openai:static"].key).toBeUndefined();
-    expect(nextAuthStore.profiles["openai:static"].keyRef).toEqual(OPENAI_API_KEY_ENV_REF);
+    expect(
+      expectDefined(
+        nextAuthStore.profiles["openai:static"],
+        'nextAuthStore.profiles["openai:static"] test invariant',
+      ).key,
+    ).toBeUndefined();
+    expect(
+      expectDefined(
+        nextAuthStore.profiles["openai:static"],
+        'nextAuthStore.profiles["openai:static"] test invariant',
+      ).keyRef,
+    ).toEqual(OPENAI_API_KEY_ENV_REF);
     expect(nextAuthStore.profiles["openai:sidecar"]).toMatchObject({
       type: "oauth",
       provider: "openai",

@@ -3,6 +3,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { applyPatch } from "diff";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -373,7 +374,7 @@ describe("edit tool", () => {
       undefined,
     );
 
-    const tc0 = result.content[0];
+    const tc0 = expectDefined(result.content[0], "result.content[0] test invariant");
     expect("text" in tc0 ? tc0.text : "").toContain("No changes made");
     expect((result as any).terminate).toBe(true);
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("unchanged content\n");
@@ -599,7 +600,7 @@ describe("edit tool", () => {
       undefined,
     );
 
-    const tcText = result.content[0];
+    const tcText = expectDefined(result.content[0], "result.content[0] test invariant");
     expect("text" in tcText ? tcText.text : "").toContain("Successfully replaced");
     expect((result as any).terminate).toBeFalsy();
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("alpha beta GAMMA\n");
@@ -618,7 +619,7 @@ describe("edit tool", () => {
       undefined,
     );
 
-    const tc1 = result.content[0];
+    const tc1 = expectDefined(result.content[0], "result.content[0] test invariant");
     expect("text" in tc1 ? tc1.text : "").toContain("Successfully replaced");
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("new content\n");
   });

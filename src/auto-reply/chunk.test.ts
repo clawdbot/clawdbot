@@ -1,4 +1,6 @@
 /** Tests text chunking helpers used by auto-reply delivery. */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import * as fences from "../../packages/markdown-core/src/fences.js";
 import { hasBalancedFences } from "../test-utils/chunk-test-helpers.js";
@@ -223,7 +225,9 @@ describe("chunkText", () => {
     expectChunkTextCase({ text, limit, assert });
   });
 
-  runChunkCases(chunkText, [parentheticalCases[0]]);
+  runChunkCases(chunkText, [
+    expectDefined(parentheticalCases[0], "parentheticalCases[0] test invariant"),
+  ]);
 });
 
 describe("resolveTextChunkLimit", () => {

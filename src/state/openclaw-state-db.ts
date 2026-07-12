@@ -99,6 +99,44 @@ function assertSupportedSchemaVersion(db: DatabaseSync, pathname: string): void 
   }
 }
 
+/** Require the canonical shared-state owner and schema before offline file maintenance. */
+export function assertOpenClawStateDatabaseForMaintenance(
+  database: DatabaseSync,
+  options: { pathname: string },
+): void {
+  const userVersion = readSqliteUserVersion(database);
+  if (userVersion > OPENCLAW_STATE_SCHEMA_VERSION) {
+    throw createNewerSqliteSchemaVersionError(
+      "OpenClaw state database",
+      options.pathname,
+      userVersion,
+      OPENCLAW_STATE_SCHEMA_VERSION,
+    );
+  }
+  if (userVersion !== OPENCLAW_STATE_SCHEMA_VERSION) {
+    throw new Error(
+      `OpenClaw state database ${options.pathname} uses schema version ${userVersion}; run openclaw doctor --fix before compacting it.`,
+    );
+  }
+
+  const metadata = database
+    .prepare("SELECT role, schema_version FROM schema_meta WHERE meta_key = 'primary' LIMIT 1")
+    .get() as { role?: unknown; schema_version?: unknown } | undefined;
+  if (metadata?.role !== "global") {
+    const role = typeof metadata?.role === "string" ? metadata.role : "missing";
+    throw new Error(
+      `OpenClaw state database ${options.pathname} has schema role ${role}; expected global.`,
+    );
+  }
+  if (metadata.schema_version !== OPENCLAW_STATE_SCHEMA_VERSION) {
+    const schemaVersion =
+      typeof metadata.schema_version === "number" ? metadata.schema_version : "invalid";
+    throw new Error(
+      `OpenClaw state database ${options.pathname} metadata schema version ${schemaVersion} does not match ${OPENCLAW_STATE_SCHEMA_VERSION}; run openclaw doctor --fix before compacting it.`,
+    );
+  }
+}
+
 const stateDbLog = createSubsystemLogger("state/db");
 
 /** Targets already warned about, so chmod-less filesystems warn once per path. */

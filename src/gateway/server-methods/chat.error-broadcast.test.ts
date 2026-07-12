@@ -1,5 +1,7 @@
 // Chat error broadcast tests ensure chat.send failures still respond and emit
 // error-state broadcasts for connected UI clients.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { chatHandlers } from "./chat.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -31,7 +33,10 @@ describe("chat.send error broadcast", () => {
     const ctx = createMockContext();
     const respond = vi.fn();
 
-    await chatHandlers["chat.send"]({
+    await expectDefined(
+      chatHandlers["chat.send"],
+      'chatHandlers["chat.send"] test invariant',
+    )({
       params: {
         sessionKey: "main",
         message: "hello",
@@ -66,7 +71,10 @@ describe("chat.send error broadcast", () => {
       payload: { runId: "test-cached-routing", status: "started" },
     });
 
-    await chatHandlers["chat.send"]({
+    await expectDefined(
+      chatHandlers["chat.send"],
+      'chatHandlers["chat.send"] test invariant',
+    )({
       params: {
         sessionKey: "main",
         message: "hello",
@@ -92,7 +100,10 @@ describe("chat.send error broadcast", () => {
     const ctx = createMockContext();
     const respond = vi.fn();
 
-    await chatHandlers["chat.send"]({
+    await expectDefined(
+      chatHandlers["chat.send"],
+      'chatHandlers["chat.send"] test invariant',
+    )({
       params: {
         sessionKey: "main",
         message: "/stop",
@@ -123,7 +134,10 @@ describe("chat.send error broadcast", () => {
       throw Object.assign(new Error("LLM timeout"), { code: "TIMEOUT" });
     });
 
-    await chatHandlers["chat.send"]({
+    await expectDefined(
+      chatHandlers["chat.send"],
+      'chatHandlers["chat.send"] test invariant',
+    )({
       params: {
         sessionKey: "main",
         message: "hello",
@@ -172,7 +186,10 @@ describe("chat.send error broadcast", () => {
       throw Object.assign(new Error("LLM timeout"), { code: "TIMEOUT" });
     });
 
-    await chatHandlers["chat.send"]({
+    await expectDefined(
+      chatHandlers["chat.send"],
+      'chatHandlers["chat.send"] test invariant',
+    )({
       params: {
         sessionKey: "global",
         agentId: "main",

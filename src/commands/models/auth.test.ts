@@ -1,4 +1,6 @@
 // Model auth tests cover provider auth status, expiry, and display helpers.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -484,7 +486,10 @@ describe("modelsAuthLoginCommand", () => {
       agentDir: "/tmp/openclaw/agents/main",
     });
     expect(mocks.clearAuthProfileCooldown.mock.invocationCallOrder[0]).toBeLessThan(
-      runProviderAuth.mock.invocationCallOrder[0],
+      expectDefined(
+        runProviderAuth.mock.invocationCallOrder[0],
+        "runProviderAuth.mock.invocationCallOrder[0] test invariant",
+      ),
     );
     expect(runProviderAuth).toHaveBeenCalledOnce();
     const upsertCall = readMockCallArg(mocks.upsertAuthProfileWithLock) as UpsertAuthProfileCall;
@@ -1034,7 +1039,12 @@ describe("modelsAuthLoginCommand", () => {
     });
     expect(
       mocks.clearAuthProfileCooldown.mock.invocationCallOrder.every(
-        (order) => order < runClaudeCliMigration.mock.invocationCallOrder[0],
+        (order) =>
+          order <
+          expectDefined(
+            runClaudeCliMigration.mock.invocationCallOrder[0],
+            "runClaudeCliMigration.mock.invocationCallOrder[0] test invariant",
+          ),
       ),
     ).toBe(true);
     expect(mocks.upsertAuthProfileWithLock).not.toHaveBeenCalled();

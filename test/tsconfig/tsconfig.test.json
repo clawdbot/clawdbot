@@ -1,9 +1,6 @@
 {
   "extends": "../../tsconfig.json",
   "compilerOptions": {
-    // Test lanes opt out of noUncheckedIndexedAccess for now (~4,400 fixture
-    // indexing sites); tracked as a lane-by-lane follow-up to #104600.
-    "noUncheckedIndexedAccess": false,
     "rootDir": "../.."
   },
   "include": [

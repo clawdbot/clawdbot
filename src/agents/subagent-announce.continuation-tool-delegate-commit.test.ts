@@ -5,6 +5,7 @@
 // and restart recovery re-drove it as duplicate continuation work. Mirrors the
 // mocked chain-guard harness so only the announce tool path is exercised.
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./subagent-announce.runtime.js", async (importOriginal) => ({
@@ -159,7 +160,10 @@ describe("announce tool-delegate accepted spawn commits the TaskFlow row (C2)", 
 
     // Accepted spawn commits the consumed row so recovery does not re-drive it.
     expect(mockedMarkPendingDelegateSpawnAccepted).toHaveBeenCalledTimes(1);
-    const acceptArgs = mockedMarkPendingDelegateSpawnAccepted.mock.calls[0];
+    const acceptArgs = expectDefined(
+      mockedMarkPendingDelegateSpawnAccepted.mock.calls.at(0),
+      "spawn acceptance call",
+    );
     expect(acceptArgs[0]).toMatchObject({ flowId: "flow-tool-c2", expectedRevision: 3 });
     expect(acceptArgs[1]).toBe("agent:main:subagent:continuation-child");
     expect(mockedMarkPendingDelegateFailed).not.toHaveBeenCalled();

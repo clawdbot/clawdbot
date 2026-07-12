@@ -1,4 +1,6 @@
 // Migration selection tests cover skill/plugin filtering, defaults, shortcuts, and skipped-item reasons.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import type { MigrationItem, MigrationPlan } from "../../plugins/types.js";
 import {
@@ -491,9 +493,9 @@ describe("applyMigrationPluginSelection", () => {
       "plugin:google-calendar",
       "plugin:gmail",
     ]);
-    expect(formatMigrationPluginSelectionHint(items[1])).toBe(
-      "openai-curated plugin already installed in workspace",
-    );
+    expect(
+      formatMigrationPluginSelectionHint(expectDefined(items[1], "items[1] test invariant")),
+    ).toBe("openai-curated plugin already installed in workspace");
   });
 
   it("resolves interactive plugin special options with toggle-off precedence", () => {

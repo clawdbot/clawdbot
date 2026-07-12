@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
@@ -310,7 +311,7 @@ function expectSingleWarningContaining(warnings: string[], text: string): string
   expect(warnings).toHaveLength(1);
   const warning = warnings[0];
   expect(warning).toContain(text);
-  return warning;
+  return expectDefined(warning, "warning test invariant");
 }
 
 function expectWarningsContaining(warnings: string[], texts: string[]): void {

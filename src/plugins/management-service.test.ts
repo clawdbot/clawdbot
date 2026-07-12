@@ -1,4 +1,5 @@
 // Plugin management service tests cover cold state, catalog identity, and guarded mutations.
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -932,7 +933,12 @@ describe("plugin management service", () => {
       }),
     );
     // Transient install records never persist into the written config document.
-    expect(mocks.commitRecords.mock.calls[0][0].nextConfig.plugins?.installs).toBeUndefined();
+    expect(
+      expectDefined(
+        mocks.commitRecords.mock.calls[0],
+        "mocks.commitRecords.mock.calls[0] test invariant",
+      )[0].nextConfig.plugins?.installs,
+    ).toBeUndefined();
     expect(mocks.applyUninstall).toHaveBeenCalledWith({ target: "/tmp/extensions/diffs" });
     expect(mocks.refreshRegistry).toHaveBeenCalledWith(
       expect.objectContaining({ reason: "source-changed", installRecords: {} }),

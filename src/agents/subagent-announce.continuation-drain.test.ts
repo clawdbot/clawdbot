@@ -1,4 +1,5 @@
 // "RFC §" references herein cite docs/design/continue-work-signal-v2.md (Agent Self-Elected Turn Continuation / CONTINUE_WORK).
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createSubagentAnnounceDeliveryRuntimeMock } from "./subagent-announce.test-support.js";
 import type { SpawnSubagentResult } from "./subagent-spawn.js";
@@ -1702,7 +1703,7 @@ describe("subagent-announce continuation drain (F7)", () => {
 
     expect(consumePendingDelegatesMock).toHaveBeenCalledWith("agent:main:subagent:test");
     expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
-    const spawnParams = spawnSubagentDirectMock.mock.calls[0]?.[0];
+    const [spawnParams] = expectDefined(spawnSubagentDirectMock.mock.calls.at(0), "spawn call");
     expect(spawnParams.task).toEqual(
       expect.stringContaining("[continuation:chain-hop:2] Tool-delegated from sub-agent"),
     );
@@ -1740,7 +1741,7 @@ describe("subagent-announce continuation drain (F7)", () => {
     });
 
     expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
-    const spawnParams = spawnSubagentDirectMock.mock.calls[0]?.[0];
+    const [spawnParams] = expectDefined(spawnSubagentDirectMock.mock.calls.at(0), "spawn call");
     expect(spawnParams.task).toEqual(
       expect.stringContaining("[continuation:chain-hop:2] Tool-delegated from sub-agent"),
     );
@@ -1786,7 +1787,11 @@ describe("subagent-announce continuation drain (F7)", () => {
     });
 
     expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(2);
-    const [bracketSpawn, toolSpawn] = spawnSubagentDirectMock.mock.calls.map(([params]) => params);
+    const [bracketSpawnValue, toolSpawnValue] = spawnSubagentDirectMock.mock.calls.map(
+      ([params]) => params,
+    );
+    const bracketSpawn = expectDefined(bracketSpawnValue, "bracket spawn");
+    const toolSpawn = expectDefined(toolSpawnValue, "tool spawn");
     expect(bracketSpawn.task).toEqual(expect.stringContaining("[continuation:chain-hop:2]"));
     expect(bracketSpawn.continuationChainState).toMatchObject({ count: 2, tokens: 7_000 });
     expect(toolSpawn.task).toEqual(expect.stringContaining("[continuation:chain-hop:3]"));
@@ -1913,7 +1918,11 @@ describe("subagent-announce continuation drain (F7)", () => {
     });
 
     expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(2);
-    const [bracketSpawn, toolSpawn] = spawnSubagentDirectMock.mock.calls.map(([params]) => params);
+    const [bracketSpawnValue, toolSpawnValue] = spawnSubagentDirectMock.mock.calls.map(
+      ([params]) => params,
+    );
+    const bracketSpawn = expectDefined(bracketSpawnValue, "bracket spawn");
+    const toolSpawn = expectDefined(toolSpawnValue, "tool spawn");
     expect(bracketSpawn.task).toEqual(expect.stringContaining("[continuation:chain-hop:2]"));
     expect(toolSpawn.task).toEqual(expect.stringContaining("[continuation:chain-hop:2]"));
     expect(toolSpawn.continuationChainState).toMatchObject({ count: 2, tokens: 7_000 });
@@ -1982,7 +1991,7 @@ describe("subagent-announce continuation drain (F7)", () => {
     });
     expect(markPendingDelegateFailedMock).not.toHaveBeenCalled();
     expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
-    const toolSpawn = spawnSubagentDirectMock.mock.calls[0]?.[0];
+    const [toolSpawn] = expectDefined(spawnSubagentDirectMock.mock.calls.at(0), "spawn call");
     expect(toolSpawn.task).toEqual(expect.stringContaining("[continuation:chain-hop:2]"));
     expect(toolSpawn.continuationChainState).toMatchObject({ count: 2, tokens: 7_000 });
     expect(toolSpawn.continuationDelegateFlowId).toBe("flow-tool-post-compaction");

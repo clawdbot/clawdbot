@@ -3,6 +3,8 @@
  * Ensures gateway approval requests use non-blocking semantics and preserve
  * plugin hook decisions.
  */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
@@ -185,7 +187,10 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     await vi.waitFor(() => {
       expect(broker.listPending()).toHaveLength(1);
     });
-    const approval = broker.listPending()[0];
+    const approval = expectDefined(
+      broker.listPending()[0],
+      "broker.listPending()[0] test invariant",
+    );
     expect(approval?.request.toolName).toBe("skill_workshop");
     expect(broker.resolve(approval?.id, "allow-once")).toBe(true);
 

@@ -4,6 +4,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
   addSubagentRunForTests,
@@ -809,6 +810,9 @@ describe("listSessionsFromStore subagent metadata", () => {
       "agent:main:subagent:cache-child-b",
       "agent:main:subagent:cache-child-c",
     ];
+    const firstChildKey = expectDefined(childKeys[0], "first child session key");
+    const secondChildKey = expectDefined(childKeys[1], "second child session key");
+    const thirdChildKey = expectDefined(childKeys[2], "third child session key");
     fs.writeFileSync(
       registryPath,
       JSON.stringify(
@@ -841,15 +845,15 @@ describe("listSessionsFromStore subagent metadata", () => {
       [controllerSessionKey]: {
         updatedAt: now,
       } as SessionEntry,
-      [childKeys[0]]: {
+      [firstChildKey]: {
         updatedAt: now - 1_000,
         spawnedBy: controllerSessionKey,
       } as SessionEntry,
-      [childKeys[1]]: {
+      [secondChildKey]: {
         updatedAt: now - 2_000,
         spawnedBy: controllerSessionKey,
       } as SessionEntry,
-      [childKeys[2]]: {
+      [thirdChildKey]: {
         updatedAt: now - 3_000,
         spawnedBy: controllerSessionKey,
       } as SessionEntry,

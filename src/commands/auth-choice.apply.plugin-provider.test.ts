@@ -1,4 +1,5 @@
 // Auth-choice plugin provider tests cover loaded provider setup, plugin install, and credential routing.
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyAuthChoiceLoadedPluginProvider,
@@ -238,7 +239,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     resolvePluginProviders.mockReturnValue([provider]);
     resolveProviderPluginChoice.mockReturnValue({
       provider,
-      method: provider.auth[0],
+      method: expectDefined(provider.auth[0], "provider.auth[0] test invariant"),
     });
 
     const result = await applyAuthChoiceLoadedPluginProvider(
@@ -303,7 +304,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     resolvePluginProviders.mockReturnValue([provider]);
     resolveProviderPluginChoice.mockReturnValue({
       provider,
-      method: provider.auth[0],
+      method: expectDefined(provider.auth[0], "provider.auth[0] test invariant"),
     });
 
     const result = await applyAuthChoiceLoadedPluginProvider(
@@ -346,7 +347,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     resolvePluginProviders.mockReturnValue([provider]);
     resolveProviderPluginChoice.mockReturnValue({
       provider,
-      method: provider.auth[0],
+      method: expectDefined(provider.auth[0], "provider.auth[0] test invariant"),
     });
 
     const result = await applyAuthChoiceLoadedPluginProvider(buildParams());
@@ -378,7 +379,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     resolvePluginProviders.mockReturnValue([provider]);
     resolveProviderPluginChoice.mockReturnValue({
       provider,
-      method: provider.auth[0],
+      method: expectDefined(provider.auth[0], "provider.auth[0] test invariant"),
     });
     const note = vi.fn(async () => {});
 
@@ -427,7 +428,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     resolvePluginSetupProvider.mockReturnValue(provider);
     resolveProviderPluginChoice.mockReturnValue({
       provider,
-      method: provider.auth[0],
+      method: expectDefined(provider.auth[0], "provider.auth[0] test invariant"),
     });
 
     const result = await applyAuthChoiceLoadedPluginProvider(buildParams());
@@ -460,7 +461,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     resolvePluginProviders.mockReturnValue([provider]);
     resolveProviderPluginChoice.mockReturnValueOnce(null).mockReturnValueOnce({
       provider,
-      method: provider.auth[0],
+      method: expectDefined(provider.auth[0], "provider.auth[0] test invariant"),
     });
 
     const result = await applyAuthChoiceLoadedPluginProvider(buildParams());

@@ -15,6 +15,7 @@
  * Mock infrastructure mirrors delegate-dispatch.test.ts to keep TaskFlow,
  * subagent-spawn, system-events, and subsystem logger all stubbed.
  */
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // ---------------------------------------------------------------------------
@@ -212,9 +213,15 @@ describe("fanout error isolation", () => {
     expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(3);
 
     // Per-delegate TaskFlow status is recorded independently.
-    expect(mockFlows.get(queuedBefore[0])?.status).toBe("succeeded");
-    expect(mockFlows.get(queuedBefore[1])?.status).toBe("failed");
-    expect(mockFlows.get(queuedBefore[2])?.status).toBe("succeeded");
+    expect(mockFlows.get(expectDefined(queuedBefore.at(0), "first flow id"))?.status).toBe(
+      "succeeded",
+    );
+    expect(mockFlows.get(expectDefined(queuedBefore.at(1), "second flow id"))?.status).toBe(
+      "failed",
+    );
+    expect(mockFlows.get(expectDefined(queuedBefore.at(2), "third flow id"))?.status).toBe(
+      "succeeded",
+    );
 
     // The targetSessionKey was preserved end-to-end for the surviving siblings —
     // proves the third delegate's fanout target was NOT clobbered by the
@@ -285,8 +292,14 @@ describe("fanout error isolation", () => {
     expect(result.dispatched).toBe(2);
     expect(result.rejected).toBe(1);
     expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(3);
-    expect(mockFlows.get(queuedBefore[0])?.status).toBe("failed");
-    expect(mockFlows.get(queuedBefore[1])?.status).toBe("succeeded");
-    expect(mockFlows.get(queuedBefore[2])?.status).toBe("succeeded");
+    expect(mockFlows.get(expectDefined(queuedBefore.at(0), "first flow id"))?.status).toBe(
+      "failed",
+    );
+    expect(mockFlows.get(expectDefined(queuedBefore.at(1), "second flow id"))?.status).toBe(
+      "succeeded",
+    );
+    expect(mockFlows.get(expectDefined(queuedBefore.at(2), "third flow id"))?.status).toBe(
+      "succeeded",
+    );
   });
 });

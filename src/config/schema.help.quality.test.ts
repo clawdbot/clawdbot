@@ -1,4 +1,6 @@
 // Checks config help text quality and coverage.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { MEDIA_AUDIO_FIELD_KEYS } from "./media-audio-field-metadata.js";
 import { FIELD_HELP } from "./schema.help.js";
@@ -727,7 +729,10 @@ describe("config help copy quality", () => {
   });
 
   it("explains memory citations mode semantics", () => {
-    const help = FIELD_HELP["memory.citations"];
+    const help = expectDefined(
+      FIELD_HELP["memory.citations"],
+      'FIELD_HELP["memory.citations"] test invariant',
+    );
     expect(help.includes('"auto"')).toBe(true);
     expect(help.includes('"on"')).toBe(true);
     expect(help.includes('"off"')).toBe(true);
@@ -736,230 +741,395 @@ describe("config help copy quality", () => {
   });
 
   it("includes concrete examples on path and interval fields", () => {
-    expect(FIELD_HELP["memory.qmd.paths.pattern"].includes("**/*.md")).toBe(true);
-    expect(FIELD_HELP["memory.qmd.update.interval"].includes("5m")).toBe(true);
-    expect(FIELD_HELP["memory.qmd.update.embedInterval"].includes("60m")).toBe(true);
+    expect(
+      expectDefined(
+        FIELD_HELP["memory.qmd.paths.pattern"],
+        'FIELD_HELP["memory.qmd.paths.pattern"] test invariant',
+      ).includes("**/*.md"),
+    ).toBe(true);
+    expect(
+      expectDefined(
+        FIELD_HELP["memory.qmd.update.interval"],
+        'FIELD_HELP["memory.qmd.update.interval"] test invariant',
+      ).includes("5m"),
+    ).toBe(true);
+    expect(
+      expectDefined(
+        FIELD_HELP["memory.qmd.update.embedInterval"],
+        'FIELD_HELP["memory.qmd.update.embedInterval"] test invariant',
+      ).includes("60m"),
+    ).toBe(true);
   });
 
   it("documents cron deprecation, migration, and retention formats", () => {
-    const legacy = FIELD_HELP["cron.webhook"];
+    const legacy = expectDefined(
+      FIELD_HELP["cron.webhook"],
+      'FIELD_HELP["cron.webhook"] test invariant',
+    );
     expect(/deprecated|legacy/i.test(legacy)).toBe(true);
     expect(legacy.includes('delivery.mode="webhook"')).toBe(true);
     expect(legacy.includes("delivery.to")).toBe(true);
 
-    const retention = FIELD_HELP["cron.sessionRetention"];
+    const retention = expectDefined(
+      FIELD_HELP["cron.sessionRetention"],
+      'FIELD_HELP["cron.sessionRetention"] test invariant',
+    );
     expect(retention.includes("24h")).toBe(true);
     expect(retention.includes("7d")).toBe(true);
     expect(retention.includes("1h30m")).toBe(true);
     expect(/false/i.test(retention)).toBe(true);
 
-    const token = FIELD_HELP["cron.webhookToken"];
+    const token = expectDefined(
+      FIELD_HELP["cron.webhookToken"],
+      'FIELD_HELP["cron.webhookToken"] test invariant',
+    );
     expect(/token|bearer/i.test(token)).toBe(true);
     expect(/secret|env|rotate/i.test(token)).toBe(true);
   });
 
   it("documents session send-policy examples and prefix semantics", () => {
-    const rules = FIELD_HELP["session.sendPolicy.rules"];
+    const rules = expectDefined(
+      FIELD_HELP["session.sendPolicy.rules"],
+      'FIELD_HELP["session.sendPolicy.rules"] test invariant',
+    );
     expect(rules.includes("{ action:")).toBe(true);
     expect(rules.includes('"deny"')).toBe(true);
     expect(rules.includes('"discord"')).toBe(true);
 
-    const keyPrefix = FIELD_HELP["session.sendPolicy.rules[].match.keyPrefix"];
+    const keyPrefix = expectDefined(
+      FIELD_HELP["session.sendPolicy.rules[].match.keyPrefix"],
+      'FIELD_HELP["session.sendPolicy.rules[].match.keyPrefix"] test invariant',
+    );
     expect(/normalized/i.test(keyPrefix)).toBe(true);
 
-    const rawKeyPrefix = FIELD_HELP["session.sendPolicy.rules[].match.rawKeyPrefix"];
+    const rawKeyPrefix = expectDefined(
+      FIELD_HELP["session.sendPolicy.rules[].match.rawKeyPrefix"],
+      'FIELD_HELP["session.sendPolicy.rules[].match.rawKeyPrefix"] test invariant',
+    );
     expect(/raw|unnormalized/i.test(rawKeyPrefix)).toBe(true);
   });
 
   it("documents session write-lock policy defaults", () => {
-    const acquireTimeout = FIELD_HELP["session.writeLock.acquireTimeoutMs"];
+    const acquireTimeout = expectDefined(
+      FIELD_HELP["session.writeLock.acquireTimeoutMs"],
+      'FIELD_HELP["session.writeLock.acquireTimeoutMs"] test invariant',
+    );
     expect(acquireTimeout.includes("60000")).toBe(true);
     expect(/transcript|lock/i.test(acquireTimeout)).toBe(true);
 
-    const stale = FIELD_HELP["session.writeLock.staleMs"];
+    const stale = expectDefined(
+      FIELD_HELP["session.writeLock.staleMs"],
+      'FIELD_HELP["session.writeLock.staleMs"] test invariant',
+    );
     expect(stale.includes("1800000")).toBe(true);
     expect(stale.includes("OPENCLAW_SESSION_WRITE_LOCK_STALE_MS")).toBe(true);
 
-    const maxHold = FIELD_HELP["session.writeLock.maxHoldMs"];
+    const maxHold = expectDefined(
+      FIELD_HELP["session.writeLock.maxHoldMs"],
+      'FIELD_HELP["session.writeLock.maxHoldMs"] test invariant',
+    );
     expect(maxHold.includes("300000")).toBe(true);
     expect(maxHold.includes("OPENCLAW_SESSION_WRITE_LOCK_MAX_HOLD_MS")).toBe(true);
   });
 
   it("documents session maintenance duration/size examples and deprecations", () => {
-    const pruneAfter = FIELD_HELP["session.maintenance.pruneAfter"];
+    const pruneAfter = expectDefined(
+      FIELD_HELP["session.maintenance.pruneAfter"],
+      'FIELD_HELP["session.maintenance.pruneAfter"] test invariant',
+    );
     expect(pruneAfter.includes("30d")).toBe(true);
     expect(pruneAfter.includes("12h")).toBe(true);
 
-    const rotate = FIELD_HELP["session.maintenance.rotateBytes"];
+    const rotate = expectDefined(
+      FIELD_HELP["session.maintenance.rotateBytes"],
+      'FIELD_HELP["session.maintenance.rotateBytes"] test invariant',
+    );
     expect(/deprecated/i.test(rotate)).toBe(true);
     expect(rotate.includes("doctor --fix")).toBe(true);
 
-    const deprecated = FIELD_HELP["session.maintenance.pruneDays"];
+    const deprecated = expectDefined(
+      FIELD_HELP["session.maintenance.pruneDays"],
+      'FIELD_HELP["session.maintenance.pruneDays"] test invariant',
+    );
     expect(/deprecated/i.test(deprecated)).toBe(true);
     expect(deprecated.includes("session.maintenance.pruneAfter")).toBe(true);
 
-    const resetRetention = FIELD_HELP["session.maintenance.resetArchiveRetention"];
+    const resetRetention = expectDefined(
+      FIELD_HELP["session.maintenance.resetArchiveRetention"],
+      'FIELD_HELP["session.maintenance.resetArchiveRetention"] test invariant',
+    );
     expect(resetRetention.includes(".reset.")).toBe(true);
     expect(/false/i.test(resetRetention)).toBe(true);
 
-    const maxDisk = FIELD_HELP["session.maintenance.maxDiskBytes"];
+    const maxDisk = expectDefined(
+      FIELD_HELP["session.maintenance.maxDiskBytes"],
+      'FIELD_HELP["session.maintenance.maxDiskBytes"] test invariant',
+    );
     expect(maxDisk.includes("500mb")).toBe(true);
 
-    const highWater = FIELD_HELP["session.maintenance.highWaterBytes"];
+    const highWater = expectDefined(
+      FIELD_HELP["session.maintenance.highWaterBytes"],
+      'FIELD_HELP["session.maintenance.highWaterBytes"] test invariant',
+    );
     expect(highWater.includes("80%")).toBe(true);
   });
 
   it("documents cron run-log retention controls", () => {
-    const runLog = FIELD_HELP["cron.runLog"];
+    const runLog = expectDefined(
+      FIELD_HELP["cron.runLog"],
+      'FIELD_HELP["cron.runLog"] test invariant',
+    );
     expect(runLog.includes("SQLite")).toBe(true);
 
-    const maxBytes = FIELD_HELP["cron.runLog.maxBytes"];
+    const maxBytes = expectDefined(
+      FIELD_HELP["cron.runLog.maxBytes"],
+      'FIELD_HELP["cron.runLog.maxBytes"] test invariant',
+    );
     expect(maxBytes.includes("2mb")).toBe(true);
 
-    const keepLines = FIELD_HELP["cron.runLog.keepLines"];
+    const keepLines = expectDefined(
+      FIELD_HELP["cron.runLog.keepLines"],
+      'FIELD_HELP["cron.runLog.keepLines"] test invariant',
+    );
     expect(keepLines.includes("2000")).toBe(true);
   });
 
   it("documents approvals filters and target semantics", () => {
-    const sessionFilter = FIELD_HELP["approvals.exec.sessionFilter"];
+    const sessionFilter = expectDefined(
+      FIELD_HELP["approvals.exec.sessionFilter"],
+      'FIELD_HELP["approvals.exec.sessionFilter"] test invariant',
+    );
     expect(/substring|regex/i.test(sessionFilter)).toBe(true);
     expect(sessionFilter.includes("discord:")).toBe(true);
     expect(sessionFilter.includes("^agent:ops:")).toBe(true);
 
-    const agentFilter = FIELD_HELP["approvals.exec.agentFilter"];
+    const agentFilter = expectDefined(
+      FIELD_HELP["approvals.exec.agentFilter"],
+      'FIELD_HELP["approvals.exec.agentFilter"] test invariant',
+    );
     expect(agentFilter.includes("primary")).toBe(true);
     expect(agentFilter.includes("ops-agent")).toBe(true);
 
-    const targetTo = FIELD_HELP["approvals.exec.targets[].to"];
+    const targetTo = expectDefined(
+      FIELD_HELP["approvals.exec.targets[].to"],
+      'FIELD_HELP["approvals.exec.targets[].to"] test invariant',
+    );
     expect(/channel ID|user ID|thread root/i.test(targetTo)).toBe(true);
     expect(/differs|per provider/i.test(targetTo)).toBe(true);
   });
 
   it("documents broadcast and audio command examples", () => {
-    const audioCmd = FIELD_HELP["audio.transcription.command"];
+    const audioCmd = expectDefined(
+      FIELD_HELP["audio.transcription.command"],
+      'FIELD_HELP["audio.transcription.command"] test invariant',
+    );
     expect(audioCmd.includes("whisper-cli")).toBe(true);
     expect(audioCmd.includes("{input}")).toBe(true);
 
-    const broadcastMap = FIELD_HELP["broadcast.*"];
+    const broadcastMap = expectDefined(
+      FIELD_HELP["broadcast.*"],
+      'FIELD_HELP["broadcast.*"] test invariant',
+    );
     expect(/source peer ID/i.test(broadcastMap)).toBe(true);
     expect(/destination peer IDs/i.test(broadcastMap)).toBe(true);
   });
 
   it("documents hook transform safety and queue behavior options", () => {
-    const transformModule = FIELD_HELP["hooks.mappings[].transform.module"];
+    const transformModule = expectDefined(
+      FIELD_HELP["hooks.mappings[].transform.module"],
+      'FIELD_HELP["hooks.mappings[].transform.module"] test invariant',
+    );
     expect(/relative/i.test(transformModule)).toBe(true);
     expect(/path traversal|reviewed|controlled/i.test(transformModule)).toBe(true);
 
-    const queueMode = FIELD_HELP["messages.queue.mode"];
+    const queueMode = expectDefined(
+      FIELD_HELP["messages.queue.mode"],
+      'FIELD_HELP["messages.queue.mode"] test invariant',
+    );
     expect(queueMode.includes('"interrupt"')).toBe(true);
     expect(queueMode.includes('"steer"')).toBe(true);
   });
 
   it("documents gateway bind modes and web reconnect semantics", () => {
-    const bind = FIELD_HELP["gateway.bind"];
+    const bind = expectDefined(
+      FIELD_HELP["gateway.bind"],
+      'FIELD_HELP["gateway.bind"] test invariant',
+    );
     expect(bind.includes('"loopback"')).toBe(true);
     expect(bind.includes('"tailnet"')).toBe(true);
 
-    const reconnect = FIELD_HELP["web.reconnect.maxAttempts"];
+    const reconnect = expectDefined(
+      FIELD_HELP["web.reconnect.maxAttempts"],
+      'FIELD_HELP["web.reconnect.maxAttempts"] test invariant',
+    );
     expect(/0 means no retries|no retries/i.test(reconnect)).toBe(true);
     expect(/failure sequence|retry/i.test(reconnect)).toBe(true);
   });
 
   it("documents metadata/admin semantics for logging, wizard, and plugins", () => {
-    const wizardMode = FIELD_HELP["wizard.lastRunMode"];
+    const wizardMode = expectDefined(
+      FIELD_HELP["wizard.lastRunMode"],
+      'FIELD_HELP["wizard.lastRunMode"] test invariant',
+    );
     expect(wizardMode.includes('"local"')).toBe(true);
     expect(wizardMode.includes('"remote"')).toBe(true);
 
-    const consoleStyle = FIELD_HELP["logging.consoleStyle"];
+    const consoleStyle = expectDefined(
+      FIELD_HELP["logging.consoleStyle"],
+      'FIELD_HELP["logging.consoleStyle"] test invariant',
+    );
     expect(consoleStyle.includes('"pretty"')).toBe(true);
     expect(consoleStyle.includes('"compact"')).toBe(true);
     expect(consoleStyle.includes('"json"')).toBe(true);
 
-    const pluginApiKey = FIELD_HELP["plugins.entries.*.apiKey"];
+    const pluginApiKey = expectDefined(
+      FIELD_HELP["plugins.entries.*.apiKey"],
+      'FIELD_HELP["plugins.entries.*.apiKey"] test invariant',
+    );
     expect(/secret|env|credential/i.test(pluginApiKey)).toBe(true);
 
-    const pluginEnv = FIELD_HELP["plugins.entries.*.env"];
+    const pluginEnv = expectDefined(
+      FIELD_HELP["plugins.entries.*.env"],
+      'FIELD_HELP["plugins.entries.*.env"] test invariant',
+    );
     expect(/scope|plugin|environment/i.test(pluginEnv)).toBe(true);
 
-    const pluginPromptPolicy = FIELD_HELP["plugins.entries.*.hooks.allowPromptInjection"];
+    const pluginPromptPolicy = expectDefined(
+      FIELD_HELP["plugins.entries.*.hooks.allowPromptInjection"],
+      'FIELD_HELP["plugins.entries.*.hooks.allowPromptInjection"] test invariant',
+    );
     expect(pluginPromptPolicy.includes("before_prompt_build")).toBe(true);
     expect(pluginPromptPolicy.includes("before_agent_start")).toBe(true);
     expect(pluginPromptPolicy.includes("modelOverride")).toBe(true);
 
-    const pluginConversationPolicy = FIELD_HELP["plugins.entries.*.hooks.allowConversationAccess"];
+    const pluginConversationPolicy = expectDefined(
+      FIELD_HELP["plugins.entries.*.hooks.allowConversationAccess"],
+      'FIELD_HELP["plugins.entries.*.hooks.allowConversationAccess"] test invariant',
+    );
     expect(pluginConversationPolicy.includes("llm_input")).toBe(true);
     expect(pluginConversationPolicy.includes("llm_output")).toBe(true);
     expect(pluginConversationPolicy.includes("before_agent_finalize")).toBe(true);
 
-    const pluginHookTimeout = FIELD_HELP["plugins.entries.*.hooks.timeoutMs"];
+    const pluginHookTimeout = expectDefined(
+      FIELD_HELP["plugins.entries.*.hooks.timeoutMs"],
+      'FIELD_HELP["plugins.entries.*.hooks.timeoutMs"] test invariant',
+    );
     expect(pluginHookTimeout.includes("typed hooks")).toBe(true);
     expect(pluginHookTimeout.includes("hooks.timeouts")).toBe(true);
 
-    const pluginHookTimeouts = FIELD_HELP["plugins.entries.*.hooks.timeouts"];
+    const pluginHookTimeouts = expectDefined(
+      FIELD_HELP["plugins.entries.*.hooks.timeouts"],
+      'FIELD_HELP["plugins.entries.*.hooks.timeouts"] test invariant',
+    );
     expect(pluginHookTimeouts.includes("before_prompt_build")).toBe(true);
     expect(pluginHookTimeouts.includes("agent_end")).toBe(true);
     expect(pluginConversationPolicy.includes("agent_end")).toBe(true);
   });
 
   it("documents auth/model root semantics and provider secret handling", () => {
-    const providerKey = FIELD_HELP["models.providers.*.apiKey"];
+    const providerKey = expectDefined(
+      FIELD_HELP["models.providers.*.apiKey"],
+      'FIELD_HELP["models.providers.*.apiKey"] test invariant',
+    );
     expect(/secret|env|credential/i.test(providerKey)).toBe(true);
-    const modelsMode = FIELD_HELP["models.mode"];
+    const modelsMode = expectDefined(
+      FIELD_HELP["models.mode"],
+      'FIELD_HELP["models.mode"] test invariant',
+    );
     expect(modelsMode.includes("SecretRef-managed")).toBe(true);
     expect(modelsMode.includes("preserve")).toBe(true);
 
-    const authCooldowns = FIELD_HELP["auth.cooldowns"];
+    const authCooldowns = expectDefined(
+      FIELD_HELP["auth.cooldowns"],
+      'FIELD_HELP["auth.cooldowns"] test invariant',
+    );
     expect(/cooldown|backoff|retry/i.test(authCooldowns)).toBe(true);
   });
 
   it("documents agent compaction safeguards and memory flush behavior", () => {
-    const mode = FIELD_HELP["agents.defaults.compaction.mode"];
+    const mode = expectDefined(
+      FIELD_HELP["agents.defaults.compaction.mode"],
+      'FIELD_HELP["agents.defaults.compaction.mode"] test invariant',
+    );
     expect(mode.includes('"default"')).toBe(true);
     expect(mode.includes('"safeguard"')).toBe(true);
 
-    const historyShare = FIELD_HELP["agents.defaults.compaction.maxHistoryShare"];
+    const historyShare = expectDefined(
+      FIELD_HELP["agents.defaults.compaction.maxHistoryShare"],
+      'FIELD_HELP["agents.defaults.compaction.maxHistoryShare"] test invariant',
+    );
     expect(/0\\.1-0\\.9|fraction|share/i.test(historyShare)).toBe(true);
 
-    const identifierPolicy = FIELD_HELP["agents.defaults.compaction.identifierPolicy"];
+    const identifierPolicy = expectDefined(
+      FIELD_HELP["agents.defaults.compaction.identifierPolicy"],
+      'FIELD_HELP["agents.defaults.compaction.identifierPolicy"] test invariant',
+    );
     expect(identifierPolicy.includes('"strict"')).toBe(true);
     expect(identifierPolicy.includes('"off"')).toBe(true);
     expect(identifierPolicy.includes('"custom"')).toBe(true);
 
-    const recentTurnsPreserve = FIELD_HELP["agents.defaults.compaction.recentTurnsPreserve"];
+    const recentTurnsPreserve = expectDefined(
+      FIELD_HELP["agents.defaults.compaction.recentTurnsPreserve"],
+      'FIELD_HELP["agents.defaults.compaction.recentTurnsPreserve"] test invariant',
+    );
     expect(/recent.*turn|verbatim/i.test(recentTurnsPreserve)).toBe(true);
     expect(/default:\s*3/i.test(recentTurnsPreserve)).toBe(true);
 
-    const midTurnPrecheck = FIELD_HELP["agents.defaults.compaction.midTurnPrecheck.enabled"];
+    const midTurnPrecheck = expectDefined(
+      FIELD_HELP["agents.defaults.compaction.midTurnPrecheck.enabled"],
+      'FIELD_HELP["agents.defaults.compaction.midTurnPrecheck.enabled"] test invariant',
+    );
     expect(/mid-turn|tool loop|default:\s*false/i.test(midTurnPrecheck)).toBe(true);
 
-    const postCompactionSections = FIELD_HELP["agents.defaults.compaction.postCompactionSections"];
+    const postCompactionSections = expectDefined(
+      FIELD_HELP["agents.defaults.compaction.postCompactionSections"],
+      'FIELD_HELP["agents.defaults.compaction.postCompactionSections"] test invariant',
+    );
     expect(/opt-in|Leave unset/i.test(postCompactionSections)).toBe(true);
     expect(/Session Startup|Red Lines/i.test(postCompactionSections)).toBe(true);
     expect(/Every Session|Safety/i.test(postCompactionSections)).toBe(true);
     expect(/\[\]|disable/i.test(postCompactionSections)).toBe(true);
     expect(/duplicate project context/i.test(postCompactionSections)).toBe(true);
 
-    const compactionModel = FIELD_HELP["agents.defaults.compaction.model"];
+    const compactionModel = expectDefined(
+      FIELD_HELP["agents.defaults.compaction.model"],
+      'FIELD_HELP["agents.defaults.compaction.model"] test invariant',
+    );
     expect(/provider\/model|different model|primary agent model/i.test(compactionModel)).toBe(true);
     expect(/alias/i.test(compactionModel)).toBe(true);
 
-    const transcriptBytes = FIELD_HELP["agents.defaults.compaction.maxActiveTranscriptBytes"];
+    const transcriptBytes = expectDefined(
+      FIELD_HELP["agents.defaults.compaction.maxActiveTranscriptBytes"],
+      'FIELD_HELP["agents.defaults.compaction.maxActiveTranscriptBytes"] test invariant',
+    );
     expect(/transcript|bytes|compaction/i.test(transcriptBytes)).toBe(true);
     expect(/never splits raw transcript bytes/i.test(transcriptBytes)).toBe(true);
 
-    const flush = FIELD_HELP["agents.defaults.compaction.memoryFlush.enabled"];
+    const flush = expectDefined(
+      FIELD_HELP["agents.defaults.compaction.memoryFlush.enabled"],
+      'FIELD_HELP["agents.defaults.compaction.memoryFlush.enabled"] test invariant',
+    );
     expect(/pre-compaction|memory flush|token/i.test(flush)).toBe(true);
   });
 
   it("documents agent startup-context preload controls", () => {
-    const startupContext = FIELD_HELP["agents.defaults.startupContext"];
+    const startupContext = expectDefined(
+      FIELD_HELP["agents.defaults.startupContext"],
+      'FIELD_HELP["agents.defaults.startupContext"] test invariant',
+    );
     expect(/first-turn|\/new|\/reset|daily memory/i.test(startupContext)).toBe(true);
 
-    const applyOn = FIELD_HELP["agents.defaults.startupContext.applyOn"];
+    const applyOn = expectDefined(
+      FIELD_HELP["agents.defaults.startupContext.applyOn"],
+      'FIELD_HELP["agents.defaults.startupContext.applyOn"] test invariant',
+    );
     expect(applyOn.includes('"new"')).toBe(true);
     expect(applyOn.includes('"reset"')).toBe(true);
 
-    const dailyMemoryDays = FIELD_HELP["agents.defaults.startupContext.dailyMemoryDays"];
+    const dailyMemoryDays = expectDefined(
+      FIELD_HELP["agents.defaults.startupContext.dailyMemoryDays"],
+      'FIELD_HELP["agents.defaults.startupContext.dailyMemoryDays"] test invariant',
+    );
     expect(/today \+ yesterday|default:\s*2/i.test(dailyMemoryDays)).toBe(true);
   });
 });

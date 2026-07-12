@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import officialExternalPluginCatalog from "../../scripts/lib/official-external-plugin-catalog.json" with { type: "json" };
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -554,7 +555,11 @@ describe("official external plugin catalog", () => {
 
     expect(result.source).toBe("hosted");
     expect(result.entries.map((entry) => entry.id)).toEqual(["@openclaw/live-feed-proof"]);
-    expect(resolveOfficialExternalPluginInstall(result.entries[0])).toEqual({
+    expect(
+      resolveOfficialExternalPluginInstall(
+        expectDefined(result.entries[0], "result.entries[0] test invariant"),
+      ),
+    ).toEqual({
       clawhubSpec: "clawhub:@openclaw/live-feed-proof@1.0.0",
       defaultChoice: "clawhub",
       expectedIntegrity: "sha256-s1XdoEQDvsqri7qwaf0eewV4Ji50WeWYzFsZYVtb2rk=",

@@ -1,5 +1,7 @@
 // Covers TUI slash command handlers and backend call wiring.
+
 import type { OverlayHandle } from "@earendil-works/pi-tui";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import {
@@ -1281,7 +1283,10 @@ describe("tui command handlers", () => {
     });
     expect(reserveAssistantSlot).toHaveBeenCalledWith("run-active");
     const reserveCallOrder = reserveAssistantSlot.mock.invocationCallOrder[0];
-    const addPendingUserCallOrder = addPendingUser.mock.invocationCallOrder[0];
+    const addPendingUserCallOrder = expectDefined(
+      addPendingUser.mock.invocationCallOrder[0],
+      "addPendingUser.mock.invocationCallOrder[0] test invariant",
+    );
     expect(reserveCallOrder).toBeLessThan(addPendingUserCallOrder);
     expect(addPendingUser).toHaveBeenCalledWith(expect.any(String), "continue here");
     expect(addSystem).not.toHaveBeenCalledWith(

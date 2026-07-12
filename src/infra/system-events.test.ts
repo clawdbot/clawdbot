@@ -1,4 +1,6 @@
 // Covers system event queue routing, draining, and formatting.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it } from "vitest";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -216,7 +218,7 @@ describe("system events (session routing)", () => {
     const peeked = peekSystemEventEntries(key);
     expect(hasSystemEvents(key)).toBe(true);
     expect(peeked).toHaveLength(1);
-    peeked[0].text = "mutated";
+    expectDefined(peeked[0], "peeked[0] test invariant").text = "mutated";
     expect(peekSystemEvents(key)).toEqual(["Node connected"]);
 
     expect(drainSystemEventEntries(key).map((entry) => entry.text)).toEqual(["Node connected"]);
@@ -260,7 +262,10 @@ describe("system events (session routing)", () => {
       },
     });
     const inspected = peekSystemEventEntries(key);
-    inspected[0].deliveryContext!.threadId = "42";
+    expectDefined(
+      expectDefined(inspected[0], "inspected event").deliveryContext,
+      "inspected delivery context",
+    ).threadId = "42";
 
     expect(consumeSystemEventEntries(key, inspected).map((entry) => entry.text)).toEqual(["first"]);
     expect(peekSystemEvents(key)).toStrictEqual([]);
@@ -284,7 +289,10 @@ describe("system events (session routing)", () => {
 
     const events = peekSystemEventEntries(key);
     const resolved = resolveSystemEventDeliveryContext(events);
-    events[0].deliveryContext!.to = "mutated";
+    expectDefined(
+      expectDefined(events[0], "first system event").deliveryContext,
+      "first event delivery context",
+    ).to = "mutated";
 
     expect(resolved).toEqual({
       channel: "telegram",
@@ -334,7 +342,7 @@ describe("system events (session routing)", () => {
 
     const events = peekSystemEventEntries(key);
     expect(events).toHaveLength(1);
-    expect(events[0].traceparent).toBe(tp);
+    expect(expectDefined(events.at(0), "system event").traceparent).toBe(tp);
   });
 
   it("silently drops a malformed traceparent (additive: never fail-the-write)", () => {
@@ -346,7 +354,7 @@ describe("system events (session routing)", () => {
 
     const events = peekSystemEventEntries(key);
     expect(events).toHaveLength(1);
-    expect(events[0].traceparent).toBeUndefined();
+    expect(expectDefined(events.at(0), "system event").traceparent).toBeUndefined();
   });
 
   it("omits the traceparent field entirely when not provided", () => {
@@ -355,7 +363,7 @@ describe("system events (session routing)", () => {
 
     const events = peekSystemEventEntries(key);
     expect(events).toHaveLength(1);
-    expect("traceparent" in events[0]).toBe(false);
+    expect("traceparent" in expectDefined(events.at(0), "system event")).toBe(false);
   });
 
   it("filters heartbeat/noise lines, returning undefined", async () => {
@@ -661,8 +669,9 @@ describe("drainFormattedSystemEvents :: continuation.queue.drain span emission",
       });
     });
     expect(drainSpans).toHaveLength(1);
-    expect(drainSpans[0].attributes?.["queue.drained_count"]).toBe(3);
-    expect(drainSpans[0].attributes?.["queue.drained_continuation_count"]).toBe(2);
+    const drainSpan = expectDefined(drainSpans.at(0), "queue drain span");
+    expect(drainSpan.attributes?.["queue.drained_count"]).toBe(3);
+    expect(drainSpan.attributes?.["queue.drained_continuation_count"]).toBe(2);
   });
 
   it("emits a 0/0 span on empty drain (absence-of-work, not rejection)", async () => {
@@ -671,8 +680,9 @@ describe("drainFormattedSystemEvents :: continuation.queue.drain span emission",
       // intentionally enqueue nothing
     });
     expect(drainSpans).toHaveLength(1);
-    expect(drainSpans[0].attributes?.["queue.drained_count"]).toBe(0);
-    expect(drainSpans[0].attributes?.["queue.drained_continuation_count"]).toBe(0);
+    const drainSpan = expectDefined(drainSpans.at(0), "queue drain span");
+    expect(drainSpan.attributes?.["queue.drained_count"]).toBe(0);
+    expect(drainSpan.attributes?.["queue.drained_continuation_count"]).toBe(0);
   });
 });
 

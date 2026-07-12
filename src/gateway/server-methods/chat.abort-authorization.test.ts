@@ -1,6 +1,7 @@
 /**
  * Tests chat abort authorization checks for gateway clients and session owners.
  */
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   createActiveRun,
@@ -33,7 +34,7 @@ async function invokeAbort({
   scopes?: string[];
 }) {
   return await invokeChatAbortHandler({
-    handler: chatHandlers["chat.abort"],
+    handler: expectDefined(chatHandlers["chat.abort"], 'chatHandlers["chat.abort"] test invariant'),
     context,
     request: {
       sessionKey,

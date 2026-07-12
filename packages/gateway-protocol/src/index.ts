@@ -423,6 +423,20 @@ import {
   type WorkerHeartbeatResponseFrame,
   WorkerHeartbeatResponseFrameSchema,
   type WorkerHelloOk,
+  type WorkerLiveEvent,
+  WorkerLiveEventSchema,
+  type WorkerLiveEventErrorDetails,
+  WorkerLiveEventErrorDetailsSchema,
+  type WorkerLiveEventErrorShape,
+  WorkerLiveEventErrorShapeSchema,
+  type WorkerLiveEventParams,
+  WorkerLiveEventParamsSchema,
+  type WorkerLiveEventRequestFrame,
+  WorkerLiveEventRequestFrameSchema,
+  type WorkerLiveEventResponseFrame,
+  WorkerLiveEventResponseFrameSchema,
+  type WorkerLiveEventResult,
+  WorkerLiveEventResultSchema,
   type WorkerProtocolCloseReason,
   WorkerProtocolCloseReasonSchema,
   type WorkerTranscriptCommitErrorReason,
@@ -440,6 +454,7 @@ import {
   type WorkerTranscriptMessage,
   WorkerTranscriptMessageSchema,
   WORKER_HEARTBEAT_INTERVAL_MS,
+  WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
   WORKER_PROTOCOL_FEATURES,
   WORKER_PROTOCOL_MAX_FEATURE_LENGTH,
   WORKER_PROTOCOL_MAX_FEATURES,
@@ -952,7 +967,7 @@ export const validateWorkerHeartbeatParams = lazyCompile<WorkerHeartbeatParams>(
   WorkerHeartbeatParamsSchema,
 );
 
-function checkWorkerTranscriptCommitJson(data: unknown): ValidationError | undefined {
+function checkWorkerProtocolJson(data: unknown): ValidationError | undefined {
   const stack: Array<{ depth: number; value: unknown }> = [{ depth: 0, value: data }];
   const seen = new WeakSet<object>();
   while (stack.length > 0) {
@@ -999,7 +1014,11 @@ function checkWorkerTranscriptCommitJson(data: unknown): ValidationError | undef
 
 export const validateWorkerTranscriptCommitParams = lazyCompile<WorkerTranscriptCommitParams>(
   WorkerTranscriptCommitParamsSchema,
-  checkWorkerTranscriptCommitJson,
+  checkWorkerProtocolJson,
+);
+export const validateWorkerLiveEventParams = lazyCompile<WorkerLiveEventParams>(
+  WorkerLiveEventParamsSchema,
+  checkWorkerProtocolJson,
 );
 export const validateGatewaySuspendPrepareParams = lazyCompile<GatewaySuspendPrepareParams>(
   GatewaySuspendPrepareParamsSchema,
@@ -1620,6 +1639,13 @@ export {
   WorkerHeartbeatParamsSchema,
   WorkerHeartbeatRequestFrameSchema,
   WorkerHeartbeatResponseFrameSchema,
+  WorkerLiveEventSchema,
+  WorkerLiveEventErrorDetailsSchema,
+  WorkerLiveEventErrorShapeSchema,
+  WorkerLiveEventParamsSchema,
+  WorkerLiveEventRequestFrameSchema,
+  WorkerLiveEventResponseFrameSchema,
+  WorkerLiveEventResultSchema,
   WorkerProtocolCloseReasonSchema,
   WorkerTranscriptCommitErrorReasonSchema,
   WorkerTranscriptCommitErrorShapeSchema,
@@ -1629,6 +1655,7 @@ export {
   WorkerTranscriptCommitResultSchema,
   WorkerTranscriptMessageSchema,
   WORKER_HEARTBEAT_INTERVAL_MS,
+  WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
   WORKER_PROTOCOL_FEATURES,
   WORKER_PROTOCOL_MAX_FEATURE_LENGTH,
   WORKER_PROTOCOL_MAX_FEATURES,
@@ -2023,6 +2050,13 @@ export type {
   WorkerHeartbeatResult,
   WorkerHeartbeatResponseFrame,
   WorkerHelloOk,
+  WorkerLiveEvent,
+  WorkerLiveEventErrorDetails,
+  WorkerLiveEventErrorShape,
+  WorkerLiveEventParams,
+  WorkerLiveEventRequestFrame,
+  WorkerLiveEventResponseFrame,
+  WorkerLiveEventResult,
   WorkerProtocolCloseReason,
   WorkerTranscriptCommitErrorReason,
   WorkerTranscriptCommitErrorShape,

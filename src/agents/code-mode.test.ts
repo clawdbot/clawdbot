@@ -1,4 +1,6 @@
 /** Tests Code Mode tool registration, namespace filtering, and run lifecycle. */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
@@ -304,8 +306,10 @@ describe("Code Mode", () => {
   it("marks only the internal wait control as hidden from channel progress", () => {
     const { tools } = createCodeModeHarness();
 
-    expect(tools[0].hideFromChannelProgress).toBeUndefined();
-    expect(tools[1].hideFromChannelProgress).toBe(true);
+    expect(
+      expectDefined(tools[0], "tools[0] test invariant").hideFromChannelProgress,
+    ).toBeUndefined();
+    expect(expectDefined(tools[1], "tools[1] test invariant").hideFromChannelProgress).toBe(true);
   });
 
   it("tells models to return the final code value", () => {
@@ -358,7 +362,7 @@ describe("Code Mode", () => {
 
   it("uses a flat enum for the exec language schema", () => {
     const { tools } = createCodeModeHarness();
-    const parameters = tools[0].parameters as {
+    const parameters = expectDefined(tools[0], "tools[0] test invariant").parameters as {
       properties?: Record<string, Record<string, unknown>>;
     };
     const language = parameters.properties?.language;
@@ -373,7 +377,7 @@ describe("Code Mode", () => {
 
   it("describes code-mode runtime constraints in the model-visible exec schema", () => {
     const { tools } = createCodeModeHarness();
-    const execTool = tools[0];
+    const execTool = expectDefined(tools[0], "tools[0] test invariant");
     const parameters = execTool.parameters as {
       properties?: Record<string, Record<string, unknown>>;
     };
@@ -539,7 +543,7 @@ describe("Code Mode", () => {
     });
 
     await expect(
-      tools[0].execute("code-call-bad-path", {
+      expectDefined(tools[0], "tools[0] test invariant").execute("code-call-bad-path", {
         code: "return 1;",
       }),
     ).rejects.toThrow("Invalid code mode namespace path segment: constructor");
@@ -556,7 +560,7 @@ describe("Code Mode", () => {
     });
 
     await expect(
-      tools[0].execute("code-call-circular", {
+      expectDefined(tools[0], "tools[0] test invariant").execute("code-call-circular", {
         code: "return 1;",
       }),
     ).rejects.toThrow("Circular code mode namespace scope at self");
@@ -573,7 +577,7 @@ describe("Code Mode", () => {
     });
 
     await expect(
-      tools[0].execute("code-call-raw-function", {
+      expectDefined(tools[0], "tools[0] test invariant").execute("code-call-raw-function", {
         code: "return 1;",
       }),
     ).rejects.toThrow("must be created with createCodeModeNamespaceTool");
@@ -600,8 +604,8 @@ describe("Code Mode", () => {
     });
 
     const details = await runUntilCompleted({
-      execTool: codeModeTools[0],
-      waitTool: codeModeTools[1],
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
       code: 'return { global: typeof Hidden, mapped: "Hidden" in namespaces };',
     });
 
@@ -633,8 +637,8 @@ describe("Code Mode", () => {
     expect(compacted.tools[0]?.description).not.toContain("Hidden: Hidden helpers.");
 
     const details = await runUntilCompleted({
-      execTool: codeModeTools[0],
-      waitTool: codeModeTools[1],
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
       code: 'return { global: typeof Hidden, mapped: "Hidden" in namespaces };',
     });
 
@@ -667,8 +671,8 @@ describe("Code Mode", () => {
     });
 
     const details = await runUntilCompleted({
-      execTool: codeModeTools[0],
-      waitTool: codeModeTools[1],
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
       code: `
         const left = await Shared.left.read();
         const right = await Shared.right.read();
@@ -707,8 +711,8 @@ describe("Code Mode", () => {
     });
 
     const details = await runUntilCompleted({
-      execTool: codeModeTools[0],
-      waitTool: codeModeTools[1],
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
       code: `
         globalThis.__openclawHostRequest("namespace", JSON.stringify(["leaky", ["hidden"], []]));
         await yield_control("pause");
@@ -757,7 +761,7 @@ describe("Code Mode", () => {
       catalogRef,
     });
     const result = resultDetails(
-      await tools[0].execute("code-call-command-alias", {
+      await expectDefined(tools[0], "tools[0] test invariant").execute("code-call-command-alias", {
         command: "return 7;",
       }),
     );
@@ -778,7 +782,7 @@ describe("Code Mode", () => {
     });
 
     await expect(
-      tools[0].execute("code-call-divergent-alias", {
+      expectDefined(tools[0], "tools[0] test invariant").execute("code-call-divergent-alias", {
         code: "return 1;",
         command: "return 2;",
       }),
@@ -798,8 +802,8 @@ describe("Code Mode", () => {
     });
 
     const details = await runUntilCompleted({
-      execTool: codeModeTools[0],
-      waitTool: codeModeTools[1],
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
       code: `
         const hits = await tools.search("ticket", { limit: 1 });
         const described = await tools.describe(hits[0].id);
@@ -831,8 +835,8 @@ describe("Code Mode", () => {
     });
 
     const details = await runUntilCompleted({
-      execTool: codeModeTools[0],
-      waitTool: codeModeTools[1],
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
       code: `
         try {
           await tools.call("file_write", {
@@ -865,8 +869,8 @@ describe("Code Mode", () => {
     });
 
     const details = await runUntilCompleted({
-      execTool: codeModeTools[0],
-      waitTool: codeModeTools[1],
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
       code: `
         try {
           await tools.call("missing_tool", {});
@@ -913,8 +917,8 @@ describe("Code Mode", () => {
     expect(compacted.tools[0]?.description).toContain("visible servers: github");
 
     const details = await runUntilCompleted({
-      execTool: codeModeTools[0],
-      waitTool: codeModeTools[1],
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
       code: `
         const rootApi = await MCP.$api();
         const api = await MCP.github.$api("createIssue", { schema: true });
@@ -1046,8 +1050,8 @@ describe("Code Mode", () => {
     });
 
     const details = await runUntilCompleted({
-      execTool: codeModeTools[0],
-      waitTool: codeModeTools[1],
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
       code: `
         const files = await API.list("mcp");
         const api = await API.read("mcp/github.d.ts");
@@ -1120,8 +1124,8 @@ describe("Code Mode", () => {
     });
 
     const details = await runUntilCompleted({
-      execTool: codeModeTools[0],
-      waitTool: codeModeTools[1],
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
       code: `
         const api = await MCP.docs.$api();
         const resource = await MCP.docs.resources.read({ uri: "memo://one" });
@@ -1168,8 +1172,8 @@ describe("Code Mode", () => {
     });
 
     const details = await runUntilCompleted({
-      execTool: codeModeTools[0],
-      waitTool: codeModeTools[1],
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
       code: 'return (await MCP.constructor2.prototype2({ value: "safe" })).details;',
     });
 
@@ -1228,8 +1232,8 @@ describe("Code Mode", () => {
     });
 
     const details = await runUntilCompleted({
-      execTool: codeModeTools[0],
-      waitTool: codeModeTools[1],
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
       code: `
         const direct = await Tickets.issues.list({ state: "open" });
         const mapped = await namespaces.Tickets.issues.list({ state: "closed" });
@@ -1288,8 +1292,8 @@ describe("Code Mode", () => {
     });
 
     const details = await runUntilCompleted({
-      execTool: codeModeTools[0],
-      waitTool: codeModeTools[1],
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
       code: 'return await Owned.list({ value: "safe" });',
     });
 
@@ -1340,8 +1344,8 @@ describe("Code Mode", () => {
     });
 
     const details = await runUntilCompleted({
-      execTool: codeModeTools[0],
-      waitTool: codeModeTools[1],
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
       code: "return await Context.read();",
     });
 
@@ -1379,8 +1383,8 @@ describe("Code Mode", () => {
     });
 
     const details = await runUntilCompleted({
-      execTool: codeModeTools[0],
-      waitTool: codeModeTools[1],
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
       code: `
         try {
           await Broken.fail();
@@ -1407,15 +1411,18 @@ describe("Code Mode", () => {
     });
 
     const first = resultDetails(
-      await codeModeTools[0].execute("code-call-yield", {
-        restartSafe: true,
-        code: `
+      await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
+        "code-call-yield",
+        {
+          restartSafe: true,
+          code: `
           text("before");
           await yield_control("pause");
           text("after");
           return "done";
         `,
-      }),
+        },
+      ),
     );
 
     expect(first.status).toBe("waiting");
@@ -1425,7 +1432,12 @@ describe("Code Mode", () => {
 
     const runId = first.runId;
     expect(typeof runId).toBe("string");
-    const resumed = resultDetails(await codeModeTools[1].execute("code-wait-yield", { runId }));
+    const resumed = resultDetails(
+      await expectDefined(codeModeTools[1], "codeModeTools[1] test invariant").execute(
+        "code-wait-yield",
+        { runId },
+      ),
+    );
 
     expect(resumed.status).toBe("completed");
     expect(resumed.value).toBe("done");
@@ -1448,27 +1460,36 @@ describe("Code Mode", () => {
     });
 
     const first = resultDetails(
-      await codeModeTools[0].execute("code-call-replay-safety", {
-        restartSafe: true,
-        code: `
+      await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
+        "code-call-replay-safety",
+        {
+          restartSafe: true,
+          code: `
           const matches = await tools.search(${JSON.stringify(targetTool.name)});
           return await tools.call(matches[0].id, {});
         `,
-      }),
+        },
+      ),
     );
     expect(first.status).toBe("waiting");
     expect(first.replaySafe).toBe(true);
 
     const second = resultDetails(
-      await codeModeTools[1].execute("code-wait-replay-safety", { runId: first.runId }),
+      await expectDefined(codeModeTools[1], "codeModeTools[1] test invariant").execute(
+        "code-wait-replay-safety",
+        { runId: first.runId },
+      ),
     );
     expect(second.status).toBe("waiting");
     expect(second.replaySafe).toBe(true);
 
     const completed = resultDetails(
-      await codeModeTools[1].execute("code-wait-replay-safety-complete", {
-        runId: second.runId,
-      }),
+      await expectDefined(codeModeTools[1], "codeModeTools[1] test invariant").execute(
+        "code-wait-replay-safety-complete",
+        {
+          runId: second.runId,
+        },
+      ),
     );
     expect(completed.status).toBe("completed");
   });
@@ -1491,8 +1512,8 @@ describe("Code Mode", () => {
     });
 
     const completed = await runUntilCompleted({
-      execTool: codeModeTools[0],
-      waitTool: codeModeTools[1],
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
       restartSafe: true,
       code: `
         const matches = await tools.search("fake_plugin_read");
@@ -1533,8 +1554,8 @@ describe("Code Mode", () => {
     });
 
     const completed = await runUntilCompleted({
-      execTool: codeModeTools[0],
-      waitTool: codeModeTools[1],
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
       restartSafe: true,
       code: 'return await MCP.github.readFile({ path: "README.md" });',
     });
@@ -1558,19 +1579,25 @@ describe("Code Mode", () => {
     });
 
     const first = resultDetails(
-      await codeModeTools[0].execute("code-call-unsafe-restart", {
-        restartSafe: true,
-        code: `
+      await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
+        "code-call-unsafe-restart",
+        {
+          restartSafe: true,
+          code: `
           const matches = await tools.search("fake_write");
           return await tools.call(matches[0].id, {});
         `,
-      }),
+        },
+      ),
     );
     expect(first.status).toBe("waiting");
     expect(first.replaySafe).toBe(true);
 
     const failed = resultDetails(
-      await codeModeTools[1].execute("code-wait-unsafe-restart", { runId: first.runId }),
+      await expectDefined(codeModeTools[1], "codeModeTools[1] test invariant").execute(
+        "code-wait-unsafe-restart",
+        { runId: first.runId },
+      ),
     );
     expect(failed.status).toBe("failed");
     expect(failed.error).toContain("cannot call side-effecting tools");
@@ -1596,19 +1623,25 @@ describe("Code Mode", () => {
     });
 
     const first = resultDetails(
-      await codeModeTools[0].execute("code-call-forced-restart", {
-        restartSafe: false,
-        code: `
+      await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
+        "code-call-forced-restart",
+        {
+          restartSafe: false,
+          code: `
           const matches = await tools.search("fake_forced_write");
           return await tools.call(matches[0].id, {});
         `,
-      }),
+        },
+      ),
     );
     expect(first.status).toBe("waiting");
     expect(first.replaySafe).toBe(true);
 
     const failed = resultDetails(
-      await codeModeTools[1].execute("code-wait-forced-restart", { runId: first.runId }),
+      await expectDefined(codeModeTools[1], "codeModeTools[1] test invariant").execute(
+        "code-wait-forced-restart",
+        { runId: first.runId },
+      ),
     );
     expect(failed.status).toBe("failed");
     expect(failed.error).toContain("cannot call side-effecting tools");
@@ -1629,9 +1662,12 @@ describe("Code Mode", () => {
     let details: Record<string, unknown>;
     try {
       details = resultDetails(
-        await codeModeTools[0].execute("code-call-yield-overflow", {
-          code: 'await yield_control("pause"); return "done";',
-        }),
+        await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
+          "code-call-yield-overflow",
+          {
+            code: 'await yield_control("pause"); return "done";',
+          },
+        ),
       );
     } finally {
       nowSpy.mockRestore();
@@ -1649,7 +1685,10 @@ describe("Code Mode", () => {
     } as never);
 
     await expect(
-      codeModeTools[1].execute("code-wait-invalid-expiry", { runId: "invalid-expiry-run" }),
+      expectDefined(codeModeTools[1], "codeModeTools[1] test invariant").execute(
+        "code-wait-invalid-expiry",
+        { runId: "invalid-expiry-run" },
+      ),
     ).rejects.toThrow("code mode run is unavailable or expired");
     expect(testing.activeRuns.has("invalid-expiry-run")).toBe(false);
   });
@@ -1666,19 +1705,25 @@ describe("Code Mode", () => {
     });
 
     const first = resultDetails(
-      await codeModeTools[0].execute("code-call-wrong-session", {
-        code: 'await yield_control("pause"); return "done";',
-      }),
+      await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
+        "code-call-wrong-session",
+        {
+          code: 'await yield_control("pause"); return "done";',
+        },
+      ),
     );
     expect(first.status).toBe("waiting");
-    const otherWaitTool = createCodeModeTools({
-      config,
-      runtimeConfig: config,
-      sessionId: "other-session",
-      sessionKey: "agent:other:main",
-      runId: "run-code-mode",
-      catalogRef,
-    })[1];
+    const otherWaitTool = expectDefined(
+      createCodeModeTools({
+        config,
+        runtimeConfig: config,
+        sessionId: "other-session",
+        sessionKey: "agent:other:main",
+        runId: "run-code-mode",
+        catalogRef,
+      })[1],
+      'createCodeModeTools({ config, runtimeConfig: config, sessionId: "othe... test invariant',
+    );
 
     await expect(
       otherWaitTool.execute("code-wait-wrong-session", { runId: first.runId }),
@@ -1721,17 +1766,26 @@ describe("Code Mode", () => {
     });
 
     const first = resultDetails(
-      await codeModeTools[0].execute("code-call-concurrent-wait", {
-        code: "await tools.fake_slow({}); return 'done';",
-      }),
+      await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
+        "code-call-concurrent-wait",
+        {
+          code: "await tools.fake_slow({}); return 'done';",
+        },
+      ),
     );
     expect(first.status).toBe("waiting");
 
-    const firstWait = codeModeTools[1].execute("code-wait-concurrent-a", {
-      runId: first.runId,
-    });
+    const firstWait = expectDefined(codeModeTools[1], "codeModeTools[1] test invariant").execute(
+      "code-wait-concurrent-a",
+      {
+        runId: first.runId,
+      },
+    );
     await expect(
-      codeModeTools[1].execute("code-wait-concurrent-b", { runId: first.runId }),
+      expectDefined(codeModeTools[1], "codeModeTools[1] test invariant").execute(
+        "code-wait-concurrent-b",
+        { runId: first.runId },
+      ),
     ).rejects.toThrow("already being resumed");
     const stillWaiting = resultDetails(await firstWait);
 
@@ -1776,15 +1830,18 @@ describe("Code Mode", () => {
     });
 
     const first = resultDetails(
-      await codeModeTools[0].execute("code-call-timeout", {
-        code: `
+      await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
+        "code-call-timeout",
+        {
+          code: `
           const fast = tools.fake_fast({});
           const slow = tools.fake_slow({});
           await fast;
           await slow;
           return "done";
         `,
-      }),
+        },
+      ),
     );
     expect(first.status).toBe("waiting");
     expect(first.pendingToolCalls).toHaveLength(2);
@@ -1798,7 +1855,12 @@ describe("Code Mode", () => {
     expect(activeRun).toBeDefined();
     activeRun!.config.timeoutMs = 100;
 
-    const second = resultDetails(await codeModeTools[1].execute("code-wait-timeout", { runId }));
+    const second = resultDetails(
+      await expectDefined(codeModeTools[1], "codeModeTools[1] test invariant").execute(
+        "code-wait-timeout",
+        { runId },
+      ),
+    );
 
     expect(second.status).toBe("waiting");
     expect(second.pendingToolCalls).toEqual([expect.objectContaining({ method: "call" })]);
@@ -1816,8 +1878,8 @@ describe("Code Mode", () => {
     });
 
     const details = await runUntilCompleted({
-      execTool: codeModeTools[0],
-      waitTool: codeModeTools[1],
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
       code: "return 42;",
     });
 
@@ -1838,8 +1900,8 @@ describe("Code Mode", () => {
     });
 
     const details = await runUntilCompleted({
-      execTool: codeModeTools[0],
-      waitTool: codeModeTools[1],
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
       code: `
         const important = 41;
         const message = "import docs later";
@@ -1864,9 +1926,12 @@ describe("Code Mode", () => {
 
     const beforeRunCount = testing.activeRuns.size;
     const details = resultDetails(
-      await codeModeTools[0].execute("code-call-empty-wait", {
-        code: "await new Promise(() => undefined); return 'never';",
-      }),
+      await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
+        "code-call-empty-wait",
+        {
+          code: "await new Promise(() => undefined); return 'never';",
+        },
+      ),
     );
 
     expect(details.status).toBe("failed");
@@ -1886,7 +1951,10 @@ describe("Code Mode", () => {
     });
 
     const details = resultDetails(
-      await codeModeTools[0].execute("code-call-syntax", { code: "const x = ;" }),
+      await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
+        "code-call-syntax",
+        { code: "const x = ;" },
+      ),
     );
 
     expect(details.status).toBe("failed");
@@ -1911,7 +1979,10 @@ describe("Code Mode", () => {
     });
 
     const details = resultDetails(
-      await codeModeTools[0].execute("code-call-runtime", { code: "return missingFn();" }),
+      await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
+        "code-call-runtime",
+        { code: "return missingFn();" },
+      ),
     );
 
     expect(details.status).toBe("failed");
@@ -1933,9 +2004,12 @@ describe("Code Mode", () => {
     });
 
     const details = resultDetails(
-      await codeModeTools[0].execute("code-call-host-error", {
-        code: 'return globalThis.__openclawHostRequest("unsupported", "[]");',
-      }),
+      await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
+        "code-call-host-error",
+        {
+          code: 'return globalThis.__openclawHostRequest("unsupported", "[]");',
+        },
+      ),
     );
 
     expect(details).toMatchObject({
@@ -1980,8 +2054,8 @@ describe("Code Mode", () => {
     });
 
     const details = await runUntilCompleted({
-      execTool: codeModeTools[0],
-      waitTool: codeModeTools[1],
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
       code: 'const hits = await tools.search("ticket"); return hits.length;',
     });
 
@@ -2012,8 +2086,8 @@ describe("Code Mode", () => {
     });
 
     const details = await runUntilCompleted({
-      execTool: codeModeTools[0],
-      waitTool: codeModeTools[1],
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
       language: "typescript",
       code: `
         const value: number = 40 + 2;
@@ -2042,9 +2116,12 @@ describe("Code Mode", () => {
     });
 
     const details = resultDetails(
-      await codeModeTools[0].execute("code-call-import", {
-        code,
-      }),
+      await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
+        "code-call-import",
+        {
+          code,
+        },
+      ),
     );
 
     expect(details.status).toBe("failed");
@@ -2080,7 +2157,7 @@ describe("Code Mode", () => {
     });
 
     const details = resultDetails(
-      await tools[0].execute("code-call-large", {
+      await expectDefined(tools[0], "tools[0] test invariant").execute("code-call-large", {
         code: "return 'x'.repeat(2048);",
       }),
     );
@@ -2120,7 +2197,7 @@ describe("Code Mode", () => {
 
     const beforeRunCount = testing.activeRuns.size;
     const details = resultDetails(
-      await tools[0].execute("code-call-large-suspend", {
+      await expectDefined(tools[0], "tools[0] test invariant").execute("code-call-large-suspend", {
         code: "text('x'.repeat(2048)); await yield_control('pause'); return 1;",
       }),
     );
@@ -2172,9 +2249,12 @@ describe("Code Mode", () => {
     });
 
     const details = resultDetails(
-      await tools[0].execute("code-call-large-namespace", {
-        code: 'text("x".repeat(2048)); await Tickets.list({ state: "open" }); return 1;',
-      }),
+      await expectDefined(tools[0], "tools[0] test invariant").execute(
+        "code-call-large-namespace",
+        {
+          code: 'text("x".repeat(2048)); await Tickets.list({ state: "open" }); return 1;',
+        },
+      ),
     );
 
     expect(details.status).toBe("failed");
@@ -2195,9 +2275,12 @@ describe("Code Mode", () => {
     });
 
     const details = resultDetails(
-      await tools[0].execute("code-call-output-before-error", {
-        code: 'text("before"); throw new Error("boom");',
-      }),
+      await expectDefined(tools[0], "tools[0] test invariant").execute(
+        "code-call-output-before-error",
+        {
+          code: 'text("before"); throw new Error("boom");',
+        },
+      ),
     );
 
     expect(details.status).toBe("failed");
@@ -2257,7 +2340,7 @@ describe("Code Mode", () => {
 
     const heartbeat = Promise.resolve("main-event-loop-alive");
     const details = resultDetails(
-      await tools[0].execute("code-call-loop", {
+      await expectDefined(tools[0], "tools[0] test invariant").execute("code-call-loop", {
         code: "while (true) {}",
       }),
     );

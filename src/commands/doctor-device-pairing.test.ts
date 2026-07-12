@@ -1,6 +1,7 @@
 // Doctor device pairing tests cover device-pairing checks, repair prompts, and diagnostics.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { storeDeviceAuthToken } from "../infra/device-auth-store.js";
 import {
@@ -214,7 +215,7 @@ describe("noteDevicePairingHealth", () => {
           { token: string; role: string; scopes: string[]; updatedAtMs: number }
         >;
       };
-      store.tokens.operator.updatedAtMs = 1;
+      expectDefined(store.tokens.operator, "store.tokens.operator test invariant").updatedAtMs = 1;
       await fs.writeFile(deviceAuthPath, `${JSON.stringify(store, null, 2)}\n`, "utf8");
 
       const rotated = await rotateDeviceToken({

@@ -1,6 +1,11 @@
 /** Runs doctor-owned SQLite file compaction for migrated session stores. */
 import fs from "node:fs";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
+import {
+  assertOpenClawAgentDatabaseForMaintenance,
+  ensureOpenClawAgentDatabasePermissions,
+  isOpenClawAgentDatabaseOpen,
+} from "../state/openclaw-agent-db.js";
 import { resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
 import type { DoctorSessionSqliteCompactReport } from "./doctor-session-sqlite-types.js";
 import { compactDoctorSqliteFile } from "./doctor-sqlite-compact.js";
@@ -11,7 +16,8 @@ export function compactDoctorSessionSqliteTarget(
 ): DoctorSessionSqliteCompactReport {
   const sqlitePath = resolveTargetSqlitePath(target);
   const beforeFileSizes = readSqliteFileSizes(sqlitePath);
-  if (!fs.existsSync(sqlitePath)) {
+  const stat = readSessionDatabaseStat(sqlitePath);
+  if (!stat) {
     return {
       dbSizeAfterBytes: 0,
       dbSizeBeforeBytes: 0,
@@ -24,8 +30,28 @@ export function compactDoctorSessionSqliteTarget(
       walSizeBeforeBytes: beforeFileSizes.walSizeBytes,
     };
   }
+  if (!stat.isFile()) {
+    throw new Error(`OpenClaw agent database is not a regular file: ${sqlitePath}`);
+  }
+  if (isOpenClawAgentDatabaseOpen(sqlitePath)) {
+    throw new Error(
+      `OpenClaw agent database ${sqlitePath} is already open in this process. Stop OpenClaw and retry.`,
+    );
+  }
 
-  const compact = compactDoctorSqliteFile({ sqlitePath });
+  const compact = compactDoctorSqliteFile({
+    afterMutation: () =>
+      ensureOpenClawAgentDatabasePermissions(sqlitePath, {
+        agentId: target.agentId,
+        path: sqlitePath,
+      }),
+    sqlitePath,
+    validateBeforeMutation: (database) =>
+      assertOpenClawAgentDatabaseForMaintenance(database, {
+        agentId: target.agentId,
+        pathname: sqlitePath,
+      }),
+  });
   return {
     dbSizeAfterBytes: compact.after.dbSizeBytes,
     dbSizeBeforeBytes: compact.before.dbSizeBytes,
@@ -37,6 +63,17 @@ export function compactDoctorSessionSqliteTarget(
     walSizeAfterBytes: compact.after.walSizeBytes,
     walSizeBeforeBytes: compact.before.walSizeBytes,
   };
+}
+
+function readSessionDatabaseStat(sqlitePath: string): fs.Stats | undefined {
+  try {
+    return fs.lstatSync(sqlitePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  }
 }
 
 function readSqliteFileSizes(sqlitePath: string): { dbSizeBytes: number; walSizeBytes: number } {

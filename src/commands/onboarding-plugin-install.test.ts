@@ -1,6 +1,7 @@
 // Onboarding plugin install tests cover install sources, trust checks, and install records.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRegistryUpdateChannel } from "../infra/update-channels.js";
@@ -638,7 +639,12 @@ describe("ensureOnboardingPluginInstalled", () => {
     expect(renderedWarning).toContain("Security scan: suspicious");
     expect(renderedWarning).toContain("\n│ Review before installing.");
     expect(renderedWarning).not.toContain("\\n│ Review before installing.");
-    expect(log.mock.invocationCallOrder[0]).toBeLessThan(text.mock.invocationCallOrder[0]);
+    expect(log.mock.invocationCallOrder[0]).toBeLessThan(
+      expectDefined(
+        text.mock.invocationCallOrder[0],
+        "text.mock.invocationCallOrder[0] test invariant",
+      ),
+    );
   });
 
   it("passes npm specs and optional expected integrity to npm installs with progress", async () => {

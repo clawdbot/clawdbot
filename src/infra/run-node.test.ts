@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   bundledDistPluginFile,
   bundledPluginFile,
@@ -805,9 +806,21 @@ describe("run-node script", () => {
       });
 
       expect(exitCode).toBe(0);
-      expect(fsSync.existsSync(path.join(profileDir, oldProfiles[0]))).toBe(false);
-      expect(fsSync.existsSync(path.join(profileDir, oldProfiles[1]))).toBe(false);
-      expect(fsSync.existsSync(path.join(profileDir, oldProfiles[2]))).toBe(true);
+      expect(
+        fsSync.existsSync(
+          path.join(profileDir, expectDefined(oldProfiles[0], "oldProfiles[0] test invariant")),
+        ),
+      ).toBe(false);
+      expect(
+        fsSync.existsSync(
+          path.join(profileDir, expectDefined(oldProfiles[1], "oldProfiles[1] test invariant")),
+        ),
+      ).toBe(false);
+      expect(
+        fsSync.existsSync(
+          path.join(profileDir, expectDefined(oldProfiles[2], "oldProfiles[2] test invariant")),
+        ),
+      ).toBe(true);
       expect(fsSync.existsSync(path.join(profileDir, "openclaw-models-old.cpuprofile"))).toBe(true);
     });
   });

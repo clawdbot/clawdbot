@@ -1,4 +1,5 @@
 // Doctor session state provider tests cover route-state repair and configured provider resolution.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import {
   applySessionRouteStateRepair,
@@ -252,7 +253,12 @@ describe("doctor session state provider routes", () => {
     ]);
 
     expect(
-      applySessionRouteStateRepair({ sessionKey, entry, repair: scan.repairs[0], now: 123 }),
+      applySessionRouteStateRepair({
+        sessionKey,
+        entry,
+        repair: expectDefined(scan.repairs[0], "scan.repairs[0] test invariant"),
+        now: 123,
+      }),
     ).toBe(true);
     expect(entry.sessionId).toBe("sess-stale-codex");
     expect(entry.updatedAt).toBe(123);
@@ -355,7 +361,12 @@ describe("doctor session state provider routes", () => {
     ]);
 
     expect(
-      applySessionRouteStateRepair({ sessionKey, entry, repair: scan.repairs[0], now: 123 }),
+      applySessionRouteStateRepair({
+        sessionKey,
+        entry,
+        repair: expectDefined(scan.repairs[0], "scan.repairs[0] test invariant"),
+        now: 123,
+      }),
     ).toBe(true);
     expect(entry.updatedAt).toBe(123);
     expect(entry.providerOverride).toBe("openai-codex");
@@ -437,7 +448,12 @@ describe("doctor session state provider routes", () => {
     ]);
 
     expect(
-      applySessionRouteStateRepair({ sessionKey, entry, repair: scan.repairs[0], now: 123 }),
+      applySessionRouteStateRepair({
+        sessionKey,
+        entry,
+        repair: expectDefined(scan.repairs[0], "scan.repairs[0] test invariant"),
+        now: 123,
+      }),
     ).toBe(true);
     expect(entry.sessionId).toBe("sess-stale-claude-cli");
     expect(entry.updatedAt).toBe(123);
@@ -518,7 +534,12 @@ describe("doctor session state provider routes", () => {
     ]);
 
     expect(
-      applySessionRouteStateRepair({ sessionKey, entry, repair: scan.repairs[0], now: 123 }),
+      applySessionRouteStateRepair({
+        sessionKey,
+        entry,
+        repair: expectDefined(scan.repairs[0], "scan.repairs[0] test invariant"),
+        now: 123,
+      }),
     ).toBe(true);
     expect(entry.updatedAt).toBe(123);
     expect(entry.agentRuntimeOverride).toBeUndefined();
@@ -558,7 +579,12 @@ describe("doctor session state provider routes", () => {
     ]);
 
     expect(
-      applySessionRouteStateRepair({ sessionKey, entry, repair: scan.repairs[0], now: 123 }),
+      applySessionRouteStateRepair({
+        sessionKey,
+        entry,
+        repair: expectDefined(scan.repairs[0], "scan.repairs[0] test invariant"),
+        now: 123,
+      }),
     ).toBe(true);
     expect(entry.updatedAt).toBe(123);
     expect(entry.agentHarnessId).toBeUndefined();

@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-helpers/schtasks-base-mocks.js";
 import {
@@ -249,7 +250,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
   it("leaves startup-folder fallback installs unchanged when the task is absent", async () => {
     await withPreparedGatewayTask(async ({ env }) => {
       const startupEntry = path.join(
-        env.APPDATA,
+        expectDefined(env.APPDATA, "env.APPDATA test invariant"),
         "Microsoft",
         "Windows",
         "Start Menu",
@@ -283,7 +284,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
   it("fails closed on an ambiguous task query even when a startup entry exists", async () => {
     await withPreparedGatewayTask(async ({ env }) => {
       const startupEntry = path.join(
-        env.APPDATA,
+        expectDefined(env.APPDATA, "env.APPDATA test invariant"),
         "Microsoft",
         "Windows",
         "Start Menu",

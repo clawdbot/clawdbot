@@ -1,5 +1,7 @@
 // Chat attachment tests cover inbound image/file parsing, media-store cleanup,
 // warning surfaces, size limits, and outbound message block assembly.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const saveMediaBufferMock = vi.hoisted(() =>
@@ -227,7 +229,7 @@ describe("parseMessageWithAttachments", () => {
     const { parsed, logs } = await parseWithWarnings("read this", [pdfAttachment()]);
     expect(parsed.images).toHaveLength(0);
     expect(parsed.offloadedRefs).toHaveLength(1);
-    const ref = parsed.offloadedRefs[0];
+    const ref = expectDefined(parsed.offloadedRefs[0], "parsed.offloadedRefs[0] test invariant");
     expect(ref.mimeType).toBe("application/pdf");
     expect(ref.label).toBe("report.pdf");
     expect(ref.mediaRef).toMatch(/^media:\/\/inbound\//);

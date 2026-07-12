@@ -1,4 +1,6 @@
 // Covers Moonshot-specific extra-params thinking payload behavior.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createMoonshotThinkingWrapper,
@@ -228,7 +230,7 @@ describe("applyExtraParamsToAgent Moonshot", () => {
     expect(payload).not.toHaveProperty("presence_penalty");
     expect(payload).not.toHaveProperty("frequency_penalty");
     const messages = payload.messages as Array<Record<string, unknown>>;
-    expect(messages[0].reasoning_content).toBe("");
+    expect(expectDefined(messages[0], "messages[0] test invariant").reasoning_content).toBe("");
   });
 
   it("repairs only missing assistant tool-call reasoning_content when thinking is enabled", () => {
@@ -261,8 +263,10 @@ describe("applyExtraParamsToAgent Moonshot", () => {
 
     expect(payload.thinking).toEqual({ type: "enabled" });
     const messages = payload.messages as Array<Record<string, unknown>>;
-    expect(messages[1].reasoning_content).toBe("");
-    expect(messages[2].reasoning_content).toBe("native reasoning");
+    expect(expectDefined(messages[1], "messages[1] test invariant").reasoning_content).toBe("");
+    expect(expectDefined(messages[2], "messages[2] test invariant").reasoning_content).toBe(
+      "native reasoning",
+    );
     expect(messages[3]).not.toHaveProperty("reasoning_content");
   });
 
@@ -284,6 +288,8 @@ describe("applyExtraParamsToAgent Moonshot", () => {
     });
 
     const messages = payload.messages as Array<Record<string, unknown>>;
-    expect(messages[0].reasoning_content).toBeUndefined();
+    expect(
+      expectDefined(messages[0], "messages[0] test invariant").reasoning_content,
+    ).toBeUndefined();
   });
 });

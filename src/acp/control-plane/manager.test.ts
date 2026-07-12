@@ -1,6 +1,7 @@
 /** Tests ACP session manager resolution, turn execution, state transitions, and cleanup. */
 import { setTimeout as scheduleNativeTimeout } from "node:timers";
 import { setTimeout as sleep } from "node:timers/promises";
+import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -1345,7 +1346,10 @@ describe("AcpSessionManager", () => {
       sessionKey,
     });
     expect(runtimeState.prepareFreshSession.mock.invocationCallOrder[0]).toBeLessThan(
-      runtimeState.ensureSession.mock.invocationCallOrder[0],
+      expectDefined(
+        runtimeState.ensureSession.mock.invocationCallOrder[0],
+        "runtimeState.ensureSession.mock.invocationCallOrder[0] test invariant",
+      ),
     );
   });
 

@@ -876,7 +876,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(send.isEnabled)
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3))
-        send.tap()
+        send.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
 
         XCTAssertTrue(app.staticTexts[replyMarker].waitForExistence(timeout: 60))
         XCTAssertTrue(app.staticTexts["Writing"].waitForNonExistence(timeout: 5))

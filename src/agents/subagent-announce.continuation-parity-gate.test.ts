@@ -20,6 +20,7 @@
  *   7. No bracket in findings                           (negative control)
  *   8. continuationEnabled=false + bracket              (feature-gate control)
  */
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // --- Mocks that DO intercept the SUT (non-barrel modules) ---
@@ -296,7 +297,9 @@ describe("#974-gate: announce-path bracket delegate exactly-once dispatch", () =
     // Exactly-once invariant, post-compaction form: staged once, spawned zero.
     expect(stageMock).toHaveBeenCalledTimes(1);
     expect(spawnSpy).not.toHaveBeenCalled();
-    const stagedTask = (stageMock.mock.calls[0][1] as Record<string, unknown>).task as string;
+    const stagedTask = (
+      expectDefined(stageMock.mock.calls.at(0)?.at(1), "staged delegate") as Record<string, unknown>
+    ).task as string;
     // The staged task is the cleaned delegate body (no immediate chain-hop
     // annotation — that is applied at spawn time, which the post-compaction
     // path bypasses by staging instead).

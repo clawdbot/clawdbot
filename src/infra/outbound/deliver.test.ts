@@ -1,6 +1,7 @@
 // Covers outbound delivery core: hooks, queue cleanup, durable capability
 // checks, adapter sends, transcript mirroring, and payload outcomes.
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   onTrustedMessageAuditEvent,
@@ -696,9 +697,10 @@ describe("deliverOutboundPayloads", () => {
       payloads: [{ text: "hello" }],
     });
 
-    const [[sendTextParams]] = messageSendText.mock.calls as unknown as Array<
-      [Record<string, unknown>]
-    >;
+    const [sendTextParams] = expectDefined(
+      (messageSendText.mock.calls as unknown as Array<[Record<string, unknown>]>)[0],
+      "(messageSendText.mock.calls as unknown as Array<[Record<string, unknown>]>)[0] test invariant",
+    );
     expect(sendTextParams?.to).toBe("!room:example");
     expect(sendTextParams?.text).toBe("hello");
     expect(outboundSendText).not.toHaveBeenCalled();
@@ -797,9 +799,10 @@ describe("deliverOutboundPayloads", () => {
       "ack",
       "commit:pending-1:message-adapter-1",
     ]);
-    const [[beforeParams]] = beforeSendAttempt.mock.calls as unknown as Array<
-      [Record<string, unknown>]
-    >;
+    const [beforeParams] = expectDefined(
+      (beforeSendAttempt.mock.calls as unknown as Array<[Record<string, unknown>]>)[0],
+      "(beforeSendAttempt.mock.calls as unknown as Array<[Record<string, unknown>]>)[0] test invariant",
+    );
     expect(beforeParams?.kind).toBe("text");
     expect(beforeParams?.to).toBe("!room:example");
     expect(beforeParams?.text).toBe("hello");
@@ -809,15 +812,25 @@ describe("deliverOutboundPayloads", () => {
       undefined,
       expect.objectContaining({ replyToId: undefined, threadId: undefined }),
     );
-    const [[successParams]] = afterSendSuccess.mock.calls as unknown as Array<
-      [Record<string, unknown> & { result?: { messageId?: string } }]
-    >;
+    const [successParams] = expectDefined(
+      (
+        afterSendSuccess.mock.calls as unknown as Array<
+          [Record<string, unknown> & { result?: { messageId?: string } }]
+        >
+      )[0],
+      "(afterSendSuccess.mock.calls as unknown as Array<\n        [Record<string, unknown> & { result?: { messageId?: string } }]\n      >)[0] test invariant",
+    );
     expect(successParams?.kind).toBe("text");
     expect(successParams?.attemptToken).toBe("pending-1");
     expect(successParams?.result?.messageId).toBe("message-adapter-1");
-    const [[commitParams]] = afterCommit.mock.calls as unknown as Array<
-      [Record<string, unknown> & { result?: { messageId?: string } }]
-    >;
+    const [commitParams] = expectDefined(
+      (
+        afterCommit.mock.calls as unknown as Array<
+          [Record<string, unknown> & { result?: { messageId?: string } }]
+        >
+      )[0],
+      "(afterCommit.mock.calls as unknown as Array<\n        [Record<string, unknown> & { result?: { messageId?: string } }]\n      >)[0] test invariant",
+    );
     expect(commitParams?.kind).toBe("text");
     expect(commitParams?.attemptToken).toBe("pending-1");
     expect(commitParams?.result?.messageId).toBe("message-adapter-1");
@@ -1296,9 +1309,10 @@ describe("deliverOutboundPayloads", () => {
       }),
     ).rejects.toThrow("native send failed");
 
-    const [[failureParams]] = afterSendFailure.mock.calls as unknown as Array<
-      [Record<string, unknown>]
-    >;
+    const [failureParams] = expectDefined(
+      (afterSendFailure.mock.calls as unknown as Array<[Record<string, unknown>]>)[0],
+      "(afterSendFailure.mock.calls as unknown as Array<[Record<string, unknown>]>)[0] test invariant",
+    );
     expect(failureParams?.kind).toBe("text");
     expect(failureParams?.attemptToken).toBe("pending-2");
     expect(failureParams?.error).toBeInstanceOf(Error);
@@ -1352,9 +1366,10 @@ describe("deliverOutboundPayloads", () => {
       }),
     ).rejects.toThrow("native send failed");
 
-    const [[failureParams]] = afterSendFailure.mock.calls as unknown as Array<
-      [Record<string, unknown>]
-    >;
+    const [failureParams] = expectDefined(
+      (afterSendFailure.mock.calls as unknown as Array<[Record<string, unknown>]>)[0],
+      "(afterSendFailure.mock.calls as unknown as Array<[Record<string, unknown>]>)[0] test invariant",
+    );
     expect(failureParams?.kind).toBe("text");
     expect(failureParams?.attemptToken).toBe("pending-2");
     expect(failureParams?.error).toBeInstanceOf(Error);
@@ -1415,9 +1430,14 @@ describe("deliverOutboundPayloads", () => {
     expect(results[0]?.channel).toBe("matrix");
     expect(results[0]?.messageId).toBe("message-adapter-1");
     expect(afterSendFailure).not.toHaveBeenCalled();
-    const [[commitParams]] = afterCommit.mock.calls as unknown as Array<
-      [Record<string, unknown> & { result?: { messageId?: string } }]
-    >;
+    const [commitParams] = expectDefined(
+      (
+        afterCommit.mock.calls as unknown as Array<
+          [Record<string, unknown> & { result?: { messageId?: string } }]
+        >
+      )[0],
+      "(afterCommit.mock.calls as unknown as Array<\n        [Record<string, unknown> & { result?: { messageId?: string } }]\n      >)[0] test invariant",
+    );
     expect(commitParams?.kind).toBe("text");
     expect(commitParams?.result?.messageId).toBe("message-adapter-1");
     expect(queueMocks.ackDelivery).toHaveBeenCalledWith("mock-queue-id");
@@ -1518,9 +1538,14 @@ describe("deliverOutboundPayloads", () => {
       queuePolicy: "best_effort",
     });
 
-    const [[commitParams]] = afterCommit.mock.calls as unknown as Array<
-      [Record<string, unknown> & { result?: { messageId?: string } }]
-    >;
+    const [commitParams] = expectDefined(
+      (
+        afterCommit.mock.calls as unknown as Array<
+          [Record<string, unknown> & { result?: { messageId?: string } }]
+        >
+      )[0],
+      "(afterCommit.mock.calls as unknown as Array<\n        [Record<string, unknown> & { result?: { messageId?: string } }]\n      >)[0] test invariant",
+    );
     expect(commitParams?.kind).toBe("text");
     expect(commitParams?.result?.messageId).toBe("message-adapter-1");
     expect(queueMocks.ackDelivery).not.toHaveBeenCalled();

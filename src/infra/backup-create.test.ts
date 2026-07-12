@@ -3,6 +3,7 @@ import { rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import * as tar from "tar";
 import { describe, expect, it, vi } from "vitest";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
@@ -933,9 +934,15 @@ describe("createBackupArchive", () => {
           }
 
           await tar.x({ file: result.archivePath, gzip: true, cwd: extractDir });
-          const archivedDb = new sqlite.DatabaseSync(path.join(extractDir, archivedDbEntries[0]), {
-            readOnly: true,
-          });
+          const archivedDb = new sqlite.DatabaseSync(
+            path.join(
+              extractDir,
+              expectDefined(archivedDbEntries[0], "archivedDbEntries[0] test invariant"),
+            ),
+            {
+              readOnly: true,
+            },
+          );
           try {
             expect(archivedDb.prepare("PRAGMA integrity_check").get()).toEqual({
               integrity_check: "ok",
@@ -1315,7 +1322,10 @@ describe("createBackupArchive", () => {
 
           await tar.x({ file: result.archivePath, gzip: true, cwd: extractDir });
           const archivedDb = new sqlite.DatabaseSync(
-            path.join(extractDir, archivedDbEntries[0].path),
+            path.join(
+              extractDir,
+              expectDefined(archivedDbEntries[0], "archivedDbEntries[0] test invariant").path,
+            ),
             { readOnly: true },
           );
           try {
@@ -1559,9 +1569,15 @@ describe("createBackupArchive", () => {
 
           await tar.x({ file: result.archivePath, gzip: true, cwd: extractDir });
           const sqlite = requireNodeSqlite();
-          const archivedDb = new sqlite.DatabaseSync(path.join(extractDir, emptyDbEntries[0]), {
-            readOnly: true,
-          });
+          const archivedDb = new sqlite.DatabaseSync(
+            path.join(
+              extractDir,
+              expectDefined(emptyDbEntries[0], "emptyDbEntries[0] test invariant"),
+            ),
+            {
+              readOnly: true,
+            },
+          );
           try {
             expect(archivedDb.prepare("PRAGMA integrity_check").get()).toEqual({
               integrity_check: "ok",

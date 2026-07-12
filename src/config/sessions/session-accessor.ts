@@ -112,6 +112,13 @@ import {
 import { runWithOwnedSessionTranscriptWriteLock } from "./transcript-write-context.js";
 import type { GroupKeyResolution, SessionCompactionCheckpoint, SessionEntry } from "./types.js";
 
+export { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
+export type {
+  SessionIdentityMutation,
+  SessionIdentityMutationListener,
+  SessionIdentityMutationTarget,
+} from "../../sessions/session-lifecycle-events.js";
+
 /**
  * Session access API for callers that need entries or transcripts without
  * depending on the persisted store layout. Callers provide stable session

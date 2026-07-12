@@ -1,6 +1,8 @@
 /**
  * Tests web.start gateway method behavior and backend launch responses.
  */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -95,7 +97,10 @@ describe("webHandlers web.login.start", () => {
     });
     const respond = vi.fn();
 
-    await webHandlers["web.login.start"](
+    await expectDefined(
+      webHandlers["web.login.start"],
+      'webHandlers["web.login.start"] test invariant',
+    )(
       createOptions(
         { accountId: "default" },
         {
@@ -149,7 +154,10 @@ describe("webHandlers web.login.start", () => {
     );
     const respond = vi.fn();
 
-    await webHandlers["web.login.start"](
+    await expectDefined(
+      webHandlers["web.login.start"],
+      'webHandlers["web.login.start"] test invariant',
+    )(
       createOptions(
         { accountId: "default" },
         {
@@ -214,7 +222,10 @@ describe("webHandlers web.login.start", () => {
     const { context, startChannel, stopChannel } = createRunningWhatsappContext();
     const respond = vi.fn();
 
-    await webHandlers["web.login.start"](
+    await expectDefined(
+      webHandlers["web.login.start"],
+      'webHandlers["web.login.start"] test invariant',
+    )(
       createOptions(
         { accountId: "default", ...params },
         {
@@ -257,7 +268,10 @@ describe("webHandlers web.login.start", () => {
     ]);
     const respond = vi.fn();
 
-    await webHandlers["web.login.start"](
+    await expectDefined(
+      webHandlers["web.login.start"],
+      'webHandlers["web.login.start"] test invariant',
+    )(
       createOptions(
         { accountId: "default" },
         {
@@ -304,7 +318,10 @@ describe("webHandlers web.login.wait", () => {
     ]);
     const respond = vi.fn();
 
-    await webHandlers["web.login.wait"](
+    await expectDefined(
+      webHandlers["web.login.wait"],
+      'webHandlers["web.login.wait"] test invariant',
+    )(
       createOptions(
         {
           accountId: "default",

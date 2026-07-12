@@ -1,6 +1,7 @@
 // Gateway Protocol tests cover native protocol levels.guard behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, it } from "vitest";
 import { ProtocolSchemas } from "./schema/protocol-schemas.js";
 import {
@@ -47,7 +48,7 @@ function extractInteger(
       `${relativePath}: missing ${label}; keep native Gateway protocol levels in sync with packages/gateway-protocol/src/version.ts.`,
     );
   }
-  return Number.parseInt(match[1], 10);
+  return Number.parseInt(expectDefined(match[1], "match[1] test invariant"), 10);
 }
 
 /** Compares native min/max values to the TypeScript version constants. */

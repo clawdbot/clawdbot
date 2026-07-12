@@ -1,4 +1,6 @@
 // Hook integration coverage for direct and queued embedded compaction.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
@@ -792,7 +794,10 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       "compaction system prompt",
     );
     expect(createdSession.session.setActiveToolsByName.mock.invocationCallOrder[0]).toBeLessThan(
-      createdSession.session.setBaseSystemPrompt.mock.invocationCallOrder[0],
+      expectDefined(
+        createdSession.session.setBaseSystemPrompt.mock.invocationCallOrder[0],
+        "createdSession.session.setBaseSystemPrompt.mock.invocationCallOrder[0] test invariant",
+      ),
     );
   });
 
@@ -2079,7 +2084,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     ] as AgentMessage[];
     expect(
       compactTesting.hasRealConversationContent(
-        heartbeatToolResultWindow[1],
+        expectDefined(heartbeatToolResultWindow[1], "heartbeatToolResultWindow[1] test invariant"),
         heartbeatToolResultWindow,
         1,
       ),
@@ -2097,7 +2102,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     ] as AgentMessage[];
     expect(
       compactTesting.hasRealConversationContent(
-        realAskToolResultWindow[2],
+        expectDefined(realAskToolResultWindow[2], "realAskToolResultWindow[2] test invariant"),
         realAskToolResultWindow,
         2,
       ),
@@ -2124,8 +2129,20 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       },
     ] as AgentMessage[];
 
-    expect(compactTesting.hasRealConversationContent(messages[0], messages, 0)).toBe(true);
-    expect(compactTesting.hasRealConversationContent(messages[2], messages, 2)).toBe(true);
+    expect(
+      compactTesting.hasRealConversationContent(
+        expectDefined(messages[0], "messages[0] test invariant"),
+        messages,
+        0,
+      ),
+    ).toBe(true);
+    expect(
+      compactTesting.hasRealConversationContent(
+        expectDefined(messages[2], "messages[2] test invariant"),
+        messages,
+        2,
+      ),
+    ).toBe(true);
   });
 
   it("registers the Ollama api provider before compaction", () => {
@@ -3529,7 +3546,10 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       { nativeCompactionRequest: "after_context_engine" },
     );
     expect(contextEngineCompactMock.mock.invocationCallOrder[0]).toBeLessThan(
-      maybeCompactAgentHarnessSessionMock.mock.invocationCallOrder[0],
+      expectDefined(
+        maybeCompactAgentHarnessSessionMock.mock.invocationCallOrder[0],
+        "maybeCompactAgentHarnessSessionMock.mock.invocationCallOrder[0] test invariant",
+      ),
     );
     const details = result.result?.details as
       | { codexNativeCompaction?: Record<string, unknown> }

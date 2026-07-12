@@ -509,4 +509,3 @@ export const testing = {
   copyPortableAuthProfiles,
   formatSkippedOAuthProfilesMessage,
 };
-export { testing as __testing };

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -1894,7 +1895,7 @@ process.on("SIGINT", shutdown);`,
       },
     });
     const toolsA = await materializeBundleMcpToolsForRun({ runtime: runtimeA });
-    const resultA = await toolsA.tools[0].execute(
+    const resultA = await expectDefined(toolsA.tools[0], "toolsA.tools[0] test invariant").execute(
       "call-configured-probe-a",
       {},
       undefined,
@@ -1920,7 +1921,7 @@ process.on("SIGINT", shutdown);`,
       },
     });
     const toolsB = await materializeBundleMcpToolsForRun({ runtime: runtimeB });
-    const resultB = await toolsB.tools[0].execute(
+    const resultB = await expectDefined(toolsB.tools[0], "toolsB.tools[0] test invariant").execute(
       "call-configured-probe-b",
       {},
       undefined,

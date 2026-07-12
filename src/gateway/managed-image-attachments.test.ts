@@ -5,6 +5,7 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createNoisyPngBuffer as createNoisyPngFixtureBuffer,
@@ -560,7 +561,12 @@ describe("createManagedOutgoingImageBlocks", () => {
 
     const recordsDir = path.join(stateDir, "media", "outgoing", "records");
     const [recordName] = await fs.readdir(recordsDir);
-    const record = JSON.parse(await fs.readFile(path.join(recordsDir, recordName), "utf-8")) as {
+    const record = JSON.parse(
+      await fs.readFile(
+        path.join(recordsDir, expectDefined(recordName, "recordName test invariant")),
+        "utf-8",
+      ),
+    ) as {
       original: { path: string };
     };
     expect(record.original.path).toContain(
@@ -1071,7 +1077,12 @@ describe("attachManagedOutgoingImagesToMessage", () => {
 
     const recordsDir = path.join(stateDir, "media", "outgoing", "records");
     const [recordName] = await fs.readdir(recordsDir);
-    const record = JSON.parse(await fs.readFile(path.join(recordsDir, recordName), "utf-8")) as {
+    const record = JSON.parse(
+      await fs.readFile(
+        path.join(recordsDir, expectDefined(recordName, "recordName test invariant")),
+        "utf-8",
+      ),
+    ) as {
       messageId: string | null;
       retentionClass?: string;
       updatedAt?: string;

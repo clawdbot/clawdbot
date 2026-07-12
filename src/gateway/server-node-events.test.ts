@@ -1,5 +1,6 @@
 // Gateway node event tests protect how node clients surface inbound commands,
 // delivery metadata, pairing state, and outbound payload lifecycle events.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -625,7 +626,10 @@ describe("node exec events", () => {
       }),
     });
 
-    const [[text]] = enqueueSystemEventMock.mock.calls;
+    const [text] = expectDefined(
+      enqueueSystemEventMock.mock.calls[0],
+      "(enqueueSystemEventMock.mock.calls)[0] test invariant",
+    );
     expect(typeof text).toBe("string");
     expect(text.startsWith("Exec finished (node=node-2 id=run-long, code 0)\n")).toBe(true);
     expect(text.endsWith("…")).toBe(true);
@@ -649,7 +653,10 @@ describe("node exec events", () => {
       }),
     });
 
-    const [[text]] = enqueueSystemEventMock.mock.calls;
+    const [text] = expectDefined(
+      enqueueSystemEventMock.mock.calls[0],
+      "(enqueueSystemEventMock.mock.calls)[0] test invariant",
+    );
     // Must not contain a lone high surrogate (U+D800–U+DBFF).
     expect(text).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
     expect(text.endsWith("…")).toBe(true);

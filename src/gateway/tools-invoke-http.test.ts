@@ -2,6 +2,7 @@
 // filtering, plugin metadata, payload validation, and response shaping.
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_MODES,
@@ -433,7 +434,10 @@ const invokeToolsRpc = async (
   caps?: string[],
 ) => {
   const respond = vi.fn();
-  await toolsInvokeHandlers["tools.invoke"]({
+  await expectDefined(
+    toolsInvokeHandlers["tools.invoke"],
+    'toolsInvokeHandlers["tools.invoke"] test invariant',
+  )({
     params,
     respond,
     context: { getRuntimeConfig: () => cfg } as never,

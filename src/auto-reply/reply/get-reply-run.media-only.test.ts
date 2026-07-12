@@ -2,6 +2,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearActiveEmbeddedRun,
@@ -2019,14 +2020,14 @@ describe("runPreparedReply media-only handling", () => {
       baseParams({
         isNewSession: false,
         sessionId: "session-auth-profile",
-        sessionEntry: sessionStore["session-key"],
+        sessionEntry: expectDefined(sessionStore["session-key"], "stored session entry"),
         sessionStore,
       }),
     );
 
     await Promise.resolve();
     sessionStore["session-key"] = {
-      ...sessionStore["session-key"],
+      ...expectDefined(sessionStore["session-key"], "stored session entry"),
       authProfileOverride: "profile-after-wait",
       authProfileOverrideSource: "auto",
       updatedAt: 2,

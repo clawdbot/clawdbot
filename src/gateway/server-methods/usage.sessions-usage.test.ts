@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -115,7 +116,10 @@ async function runSessionsUsage(
   config: OpenClawConfig = TEST_RUNTIME_CONFIG,
 ) {
   const respond = vi.fn();
-  await usageHandlers["sessions.usage"]({
+  await expectDefined(
+    usageHandlers["sessions.usage"],
+    'usageHandlers["sessions.usage"] test invariant',
+  )({
     respond,
     params,
     context: { getRuntimeConfig: () => config },
@@ -125,7 +129,10 @@ async function runSessionsUsage(
 
 async function runSessionsUsageTimeseries(params: Record<string, unknown>) {
   const respond = vi.fn();
-  await usageHandlers["sessions.usage.timeseries"]({
+  await expectDefined(
+    usageHandlers["sessions.usage.timeseries"],
+    'usageHandlers["sessions.usage.timeseries"] test invariant',
+  )({
     respond,
     params,
     context: { getRuntimeConfig: () => TEST_RUNTIME_CONFIG },
@@ -135,7 +142,10 @@ async function runSessionsUsageTimeseries(params: Record<string, unknown>) {
 
 async function runSessionsUsageLogs(params: Record<string, unknown>) {
   const respond = vi.fn();
-  await usageHandlers["sessions.usage.logs"]({
+  await expectDefined(
+    usageHandlers["sessions.usage.logs"],
+    'usageHandlers["sessions.usage.logs"] test invariant',
+  )({
     respond,
     params,
     context: { getRuntimeConfig: () => TEST_RUNTIME_CONFIG },
@@ -213,8 +223,8 @@ describe("sessions.usage", () => {
 
     const sessions = expectSuccessfulSessionsUsage(respond);
     expect(sessions).toHaveLength(1);
-    expect(sessions[0].key).toBe("agent:main:s-main");
-    expect(sessions[0].agentId).toBe("main");
+    expect(expectDefined(sessions[0], "sessions[0] test invariant").key).toBe("agent:main:s-main");
+    expect(expectDefined(sessions[0], "sessions[0] test invariant").agentId).toBe("main");
   });
 
   it("uses explicit all-agent scope for list-style usage queries", async () => {
@@ -270,8 +280,8 @@ describe("sessions.usage", () => {
 
     const sessions = expectSuccessfulSessionsUsage(respond);
     expect(sessions).toHaveLength(1);
-    expect(sessions[0].key).toBe("agent:opus:s-opus");
-    expect(sessions[0].agentId).toBe("opus");
+    expect(expectDefined(sessions[0], "sessions[0] test invariant").key).toBe("agent:opus:s-opus");
+    expect(expectDefined(sessions[0], "sessions[0] test invariant").agentId).toBe("opus");
   });
 
   it("loads selected session summaries in one batched cache read and reports refresh status", async () => {
@@ -431,8 +441,10 @@ describe("sessions.usage", () => {
 
     const sessions = expectSuccessfulSessionsUsage(respond);
     expect(sessions).toHaveLength(1);
-    expect(sessions[0].key).toBe("agent:codex:s-codex");
-    expect(sessions[0].agentId).toBe("codex");
+    expect(expectDefined(sessions[0], "sessions[0] test invariant").key).toBe(
+      "agent:codex:s-codex",
+    );
+    expect(expectDefined(sessions[0], "sessions[0] test invariant").agentId).toBe("codex");
   });
 
   it("does not attach out-of-scope store entries to list-style usage results", async () => {
@@ -876,7 +888,9 @@ describe("sessions.usage", () => {
 
     // Only the most-recent session (s-a, mtime=300) appears in the page
     expect(result.sessions).toHaveLength(1);
-    expect(result.sessions[0].key).toContain("s-a");
+    expect(expectDefined(result.sessions[0], "result.sessions[0] test invariant").key).toContain(
+      "s-a",
+    );
     // Both visible and hidden sessions load through the same batched per-agent
     // cache read, so the whole cache is parsed once per agent, not once per session.
     expect(vi.mocked(loadSessionCostSummariesFromCache)).toHaveBeenCalledTimes(1);

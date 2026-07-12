@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 
 const require = createRequire(import.meta.url);
@@ -269,10 +270,10 @@ function collectRuntimeExports(filePath: string, seen = new Set<string>()): Set<
   const exportNames = new Set<string>();
 
   for (const match of source.matchAll(/export\s+(?:const|function|class)\s+([A-Za-z_$][\w$]*)/g)) {
-    exportNames.add(match[1]);
+    exportNames.add(expectDefined(match[1], "match[1] test invariant"));
   }
   for (const match of source.matchAll(/export\s+(?!type\b)\{([\s\S]*?)\}\s+from\s+"([^"]+)";/g)) {
-    const names = match[1]
+    const names = expectDefined(match[1], "match[1] test invariant")
       .split(",")
       .map((part) => part.trim())
       .filter((part) => part.length > 0 && !part.startsWith("type "))
@@ -288,7 +289,7 @@ function collectRuntimeExports(filePath: string, seen = new Set<string>()): Set<
     }
   }
   for (const match of source.matchAll(/export\s+\*\s+from\s+"([^"]+)";/g)) {
-    const specifier = match[1];
+    const specifier = expectDefined(match[1], "match[1] test invariant");
     if (!specifier.startsWith(".")) {
       continue;
     }

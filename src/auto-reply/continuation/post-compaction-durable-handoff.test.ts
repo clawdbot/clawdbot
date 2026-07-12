@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cancelPendingDelegates,
@@ -109,7 +110,10 @@ describe("post-compaction durable handoff (#1144)", () => {
     expect(stagedPostCompactionDelegateCount(sessionKey)).toBe(0);
 
     // Re-stage a fresh queued row (durable) BEFORE finalizing the claimed row.
-    stagePostCompactionDelegate(sessionKey, released[0]);
+    stagePostCompactionDelegate(
+      sessionKey,
+      expectDefined(released.at(0), "released post-compaction delegate"),
+    );
     const finalized = finalizeStagedPostCompactionDelegates(released.map((d) => d.flowId));
     expect(finalized).toBe(1);
 

@@ -276,4 +276,3 @@ export const testing = {
   normalizeProviderConfig,
   toMistralRealtimeWsUrl,
 };
-export { testing as __testing };

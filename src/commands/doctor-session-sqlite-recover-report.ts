@@ -1,6 +1,13 @@
 /** Builds doctor reports for session SQLite migration recovery mode. */
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
+import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
+import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 import {
   createSessionSqliteMigrationFailureIssue,
   findLatestFailedSessionSqliteMigrationManifest,
@@ -9,7 +16,7 @@ import {
   writeSessionSqliteMigrationFailureReports,
   type SessionSqliteMigrationTargetInput,
 } from "./doctor-session-sqlite-migration-run.js";
-import { readOnlySqliteDbStats, resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
+import { resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
 import type {
   DoctorSessionSqliteOptions,
   DoctorSessionSqliteReport,
@@ -85,27 +92,74 @@ function recoverCorruptSqliteTargets(
 ): DoctorSessionSqliteTargetReport[] {
   return targets.flatMap((target) => {
     const sqlitePath = resolveTargetSqlitePath(target);
-    if (!fs.existsSync(sqlitePath)) {
+    let recoveryFiles: ReturnType<typeof inspectSqliteRecoveryFiles>;
+    try {
+      recoveryFiles = inspectSqliteRecoveryFiles(sqlitePath);
+    } catch (error) {
+      return [createRecoverInspectionFailureTargetReport(target, sqlitePath, error)];
+    }
+    if (recoveryFiles.existing.length === 0) {
       return [];
     }
-    const stats = readOnlySqliteDbStats(target);
-    if (stats.ok) {
-      if (stats.stats.integrityCheck && stats.stats.integrityCheck !== "ok") {
-        return [
-          recoverCorruptSqliteTarget(
-            target,
-            sqlitePath,
-            new Error(`SQLite quick_check reported: ${stats.stats.integrityCheck}`),
-          ),
-        ];
-      }
+    if (!recoveryFiles.existing.includes(sqlitePath)) {
+      return [
+        recoverCorruptSqliteTarget(
+          target,
+          sqlitePath,
+          new Error(`SQLite sidecars exist without their main database: ${sqlitePath}`),
+        ),
+      ];
+    }
+    const inspection = inspectSqliteForRecovery(sqlitePath, recoveryFiles.existing);
+    if (inspection.ok) {
       return [];
     }
-    if (!isSqliteCorruptionError(stats.error)) {
-      return [createRecoverInspectionFailureTargetReport(target, sqlitePath, stats.error)];
+    if (!isSqliteCorruptionError(inspection.error)) {
+      return [createRecoverInspectionFailureTargetReport(target, sqlitePath, inspection.error)];
     }
-    return [recoverCorruptSqliteTarget(target, sqlitePath, stats.error)];
+    return [recoverCorruptSqliteTarget(target, sqlitePath, inspection.error)];
   });
+}
+
+function inspectSqliteForRecovery(
+  sqlitePath: string,
+  sourcePaths: readonly string[],
+): { ok: true } | { error: unknown; ok: false } {
+  let inspectionDir: string | undefined;
+  let database: DatabaseSync | undefined;
+  let inspectionError: unknown;
+  try {
+    const sqlite = requireNodeSqlite();
+    inspectionDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-recovery-"));
+    const inspectionPath = path.join(inspectionDir, path.basename(sqlitePath));
+    for (const sourcePath of sourcePaths) {
+      const suffix = sourcePath.slice(sqlitePath.length);
+      const inspectionFilePath = `${inspectionPath}${suffix}`;
+      fs.copyFileSync(sourcePath, inspectionFilePath, fs.constants.COPYFILE_EXCL);
+      fs.chmodSync(inspectionFilePath, 0o600);
+    }
+    // Writable inspection of the disposable copy lets SQLite roll back a hot
+    // journal without changing the original forensic file set.
+    database = new sqlite.DatabaseSync(inspectionPath);
+    database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
+    database.exec("PRAGMA trusted_schema = OFF;");
+    assertSqliteIntegrity(database, inspectionPath);
+  } catch (error) {
+    inspectionError = error;
+  }
+  try {
+    database?.close();
+  } catch (error) {
+    inspectionError ??= error;
+  }
+  try {
+    if (inspectionDir) {
+      fs.rmSync(inspectionDir, { force: true, recursive: true });
+    }
+  } catch (error) {
+    inspectionError ??= error;
+  }
+  return inspectionError === undefined ? { ok: true } : { error: inspectionError, ok: false };
 }
 
 function recoverCorruptSqliteTarget(
@@ -142,29 +196,106 @@ function moveCorruptSqliteFilesAside(sqlitePath: string): {
   movedFiles: string[];
   skippedFiles: string[];
 } {
-  const movedFiles: string[] = [];
-  const skippedFiles: string[] = [];
-  const suffix = `.corrupt-${Date.now()}`;
-  for (const candidate of [sqlitePath, `${sqlitePath}-wal`, `${sqlitePath}-shm`]) {
-    if (!fs.existsSync(candidate)) {
-      skippedFiles.push(candidate);
-      continue;
+  const recoveryFiles = inspectSqliteRecoveryFiles(sqlitePath);
+  const moves = planCorruptSqliteMoves(recoveryFiles.existing);
+  const completed: typeof moves = [];
+  try {
+    // Preserve every journal before removing the main pathname. Recovery is
+    // offline; rollback restores the set after a caught rename failure.
+    for (const move of moves.toSorted((left, right) => {
+      if (left.sourcePath === sqlitePath) {
+        return 1;
+      }
+      if (right.sourcePath === sqlitePath) {
+        return -1;
+      }
+      return left.sourcePath.localeCompare(right.sourcePath);
+    })) {
+      fs.renameSync(move.sourcePath, move.destinationPath);
+      completed.push(move);
     }
-    const destination = uniqueRecoveryPath(`${candidate}${suffix}`);
-    fs.renameSync(candidate, destination);
-    movedFiles.push(destination);
+  } catch (error) {
+    const rollbackErrors: unknown[] = [];
+    for (const move of completed.toReversed()) {
+      try {
+        if (pathExists(move.sourcePath)) {
+          throw new Error(`rollback source was recreated: ${move.sourcePath}`, {
+            cause: error,
+          });
+        }
+        fs.renameSync(move.destinationPath, move.sourcePath);
+      } catch (rollbackError) {
+        rollbackErrors.push(rollbackError);
+      }
+    }
+    if (rollbackErrors.length > 0) {
+      const rollbackDetails = rollbackErrors
+        .map((rollbackError) => String(rollbackError))
+        .join("; ");
+      throw new Error(
+        `Could not move corrupt SQLite file set aside or restore it: ${sqlitePath}; rollback failures: ${rollbackDetails}`,
+        { cause: error },
+      );
+    }
+    throw error;
   }
-  return { movedFiles, skippedFiles };
+  return {
+    movedFiles: moves.map((move) => move.destinationPath),
+    skippedFiles: recoveryFiles.missing,
+  };
 }
 
-function uniqueRecoveryPath(basePath: string): string {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    const candidate = attempt === 0 ? basePath : `${basePath}.${attempt}`;
-    if (!fs.existsSync(candidate)) {
-      return candidate;
+function inspectSqliteRecoveryFiles(sqlitePath: string): {
+  existing: string[];
+  missing: string[];
+} {
+  const existing: string[] = [];
+  const missing: string[] = [];
+  for (const candidate of resolveSqliteDatabaseFilePaths(sqlitePath)) {
+    try {
+      const stat = fs.lstatSync(candidate);
+      if (!stat.isFile()) {
+        throw new Error(`SQLite recovery path is not a regular file: ${candidate}`);
+      }
+      existing.push(candidate);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        missing.push(candidate);
+        continue;
+      }
+      throw error;
     }
   }
-  throw new Error(`Could not choose recovery path for ${basePath}`);
+  return { existing, missing };
+}
+
+function planCorruptSqliteMoves(
+  sourcePaths: readonly string[],
+): Array<{ destinationPath: string; sourcePath: string }> {
+  const timestampSuffix = `.corrupt-${Date.now()}`;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const suffix = attempt === 0 ? timestampSuffix : `${timestampSuffix}.${attempt}`;
+    const moves = sourcePaths.map((sourcePath) => ({
+      destinationPath: `${sourcePath}${suffix}`,
+      sourcePath,
+    }));
+    if (moves.every((move) => !pathExists(move.destinationPath))) {
+      return moves;
+    }
+  }
+  throw new Error(`Could not choose recovery paths for ${sourcePaths[0] ?? "SQLite files"}`);
+}
+
+function pathExists(filePath: string): boolean {
+  try {
+    fs.lstatSync(filePath);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
 }
 
 function isSqliteCorruptionError(error: unknown): boolean {
@@ -173,7 +304,13 @@ function isSqliteCorruptionError(error: unknown): boolean {
     return true;
   }
   const message = String(error).toLowerCase();
-  return message.includes("database disk image is malformed") || message.includes("not a database");
+  return (
+    message.includes("database disk image is malformed") ||
+    message.includes("not a database") ||
+    message.includes("sqlite quick_check failed") ||
+    message.includes("sqlite integrity_check failed") ||
+    message.includes("sqlite foreign_key_check failed")
+  );
 }
 
 function resolveRecoverTargets(

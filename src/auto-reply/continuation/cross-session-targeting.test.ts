@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   resetContinuationTracer,
@@ -319,7 +320,7 @@ describe("continuation cross-session targeting", () => {
     );
 
     expect(enqueued).toHaveLength(1);
-    expect(enqueued[0].traceparent).toBeUndefined();
+    expect(expectDefined(enqueued.at(0), "enqueued delivery").traceparent).toBeUndefined();
     expect(systemEvents).toEqual([{ traceparent: undefined }]);
   });
 
@@ -365,9 +366,10 @@ describe("continuation cross-session targeting", () => {
 
     expect(enqueued).toHaveLength(50);
     expect(spans).toHaveLength(1);
-    expect(spans[0].name).toBe("continuation.queue.fanout");
-    expect(spans[0].options?.traceparent).toBe(validTraceparent);
-    const attrs = spans[0].options?.attributes as ContinuationSpanAttrs;
+    const span = expectDefined(spans.at(0), "fanout span");
+    expect(span.name).toBe("continuation.queue.fanout");
+    expect(span.options?.traceparent).toBe(validTraceparent);
+    const attrs = span.options?.attributes as ContinuationSpanAttrs;
     expect(attrs["fanout.mode"]).toBe("all");
     expect(attrs["fanout.recipient_count"]).toBe(50);
     expect(attrs["fanout.delivered_count"]).toBe(50);
@@ -417,7 +419,7 @@ describe("continuation cross-session targeting", () => {
       const persistedEntries = await loadPendingSessionDeliveries(stateDir);
       expect(persistedEntries).toHaveLength(1);
 
-      const persisted = persistedEntries[0];
+      const persisted = expectDefined(persistedEntries.at(0), "persisted delivery");
       expect(persisted.kind).toBe("systemEvent");
       expect(persisted.sessionKey).toBe("agent:main:other");
       expect(persisted.idempotencyKey).toBe("continuation-return:durable-test:0:agent:main:other");

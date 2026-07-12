@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import type { PluginControlUiDescriptor } from "../plugins/host-hooks.js";
 import { projectControlUiPluginTabs } from "./control-ui-plugin-tabs.js";
@@ -23,7 +24,7 @@ describe("projectControlUiPluginTabs", () => {
       ["operator.admin"],
     );
     expect(tabs.map((tab) => tab.id)).toEqual(["logbook"]);
-    expect(tabs[0].pluginId).toBe("logbook");
+    expect(expectDefined(tabs[0], "tabs[0] test invariant").pluginId).toBe("logbook");
   });
 
   it("hides tabs whose required scopes are not granted", () => {
