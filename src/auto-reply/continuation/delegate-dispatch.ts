@@ -893,35 +893,33 @@ export async function recoverPendingContinuationDelegates(
     // `loadFreshChainState` fresh so sequential hedge fires for multiple delayed
     // delegates see the advancing basis instead of the stale pre-dispatch entry.
     // When the caller provides their own chainState they own persistence; skip.
-    let persistRecoveredChainState:
-      | ((nextState: ChainState) => Promise<void>)
-      | undefined;
+    let persistRecoveredChainState: ((nextState: ChainState) => Promise<void>) | undefined;
     if (!params.chainState && recoveredEntry) {
       persistRecoveredChainState = async (nextState: ChainState): Promise<void> => {
-          await updateSessionStore(
-            storePath,
-            (store) => {
-              const sessionEntry = store[sessionKey] ?? recoveredEntry;
-              persistContinuationChainState({
-                sessionEntry,
-                count: nextState.currentChainCount,
-                startedAt: nextState.chainStartedAt,
-                tokens: nextState.accumulatedChainTokens,
-                ...(nextState.chainId ? { chainId: nextState.chainId } : {}),
-              });
-              store[sessionKey] = sessionEntry;
-            },
-            { requireWriteSuccess: true },
-          );
-          persistContinuationChainState({
-            sessionEntry: recoveredEntry,
-            count: nextState.currentChainCount,
-            startedAt: nextState.chainStartedAt,
-            tokens: nextState.accumulatedChainTokens,
-            ...(nextState.chainId ? { chainId: nextState.chainId } : {}),
-          });
-          sessionStore[sessionKey] = recoveredEntry;
-        };
+        await updateSessionStore(
+          storePath,
+          (store) => {
+            const sessionEntry = store[sessionKey] ?? recoveredEntry;
+            persistContinuationChainState({
+              sessionEntry,
+              count: nextState.currentChainCount,
+              startedAt: nextState.chainStartedAt,
+              tokens: nextState.accumulatedChainTokens,
+              ...(nextState.chainId ? { chainId: nextState.chainId } : {}),
+            });
+            store[sessionKey] = sessionEntry;
+          },
+          { requireWriteSuccess: true },
+        );
+        persistContinuationChainState({
+          sessionEntry: recoveredEntry,
+          count: nextState.currentChainCount,
+          startedAt: nextState.chainStartedAt,
+          tokens: nextState.accumulatedChainTokens,
+          ...(nextState.chainId ? { chainId: nextState.chainId } : {}),
+        });
+        sessionStore[sessionKey] = recoveredEntry;
+      };
     }
     let result: Awaited<ReturnType<typeof dispatchToolDelegates>>;
     try {
