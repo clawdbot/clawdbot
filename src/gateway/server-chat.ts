@@ -775,6 +775,8 @@ export function createAgentEventHandler({
               firstAssistantTimingEntry: finished,
               abortErrorMessage: readToolValidationErrorSummary(evt.data?.toolErrorSummary),
               yielded: yieldedWaiting ? true : undefined,
+              messageId:
+                typeof evt.data?.messageId === "string" ? evt.data.messageId : undefined,
             },
           );
         }
@@ -1065,6 +1067,7 @@ export function createAgentEventHandler({
       firstAssistantTimingEntry?: ChatRunEntry;
       abortErrorMessage?: string;
       yielded?: true;
+      messageId?: string;
     },
   ) => {
     const { text, shouldSuppressSilent } = resolveBufferedChatTextState(clientRunId, sourceRunId, {
@@ -1085,6 +1088,10 @@ export function createAgentEventHandler({
         ...(spawnedBy && { spawnedBy }),
         seq,
         state: jobState === "done" ? ("final" as const) : ("aborted" as const),
+        // Stable transcript id of the assistant message this run produced, when
+        // available. External clients dedup on `(sessionKey, messageId)` instead
+        // of guessing the last transcript entry.
+        ...(opts?.messageId ? { messageId: opts.messageId } : {}),
         ...(jobState === "aborted" && opts?.abortErrorMessage
           ? { errorMessage: opts.abortErrorMessage }
           : {}),

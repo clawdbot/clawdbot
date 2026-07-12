@@ -25,7 +25,17 @@ import type { SettingsManager } from "./settings-manager.js";
 
 export type AgentSessionEvent =
   | Exclude<AgentEvent, { type: "agent_end" }>
-  | { type: "agent_end"; messages: AgentMessage[]; willRetry: boolean }
+  | {
+      type: "agent_end";
+      messages: AgentMessage[];
+      willRetry: boolean;
+      /**
+       * Stable transcript id of the final assistant message this run persisted,
+       * when the run produced one. Lets lifecycle consumers reference the exact
+       * produced message instead of re-deriving "the last transcript entry".
+       */
+      lastAssistantMessageId?: string;
+    }
   | { type: "queue_update"; steering: readonly string[]; followUp: readonly string[] }
   | { type: "compaction_start"; reason: "manual" | "threshold" | "overflow" }
   | { type: "session_info_changed"; name: string | undefined }

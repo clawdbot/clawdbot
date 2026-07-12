@@ -596,4 +596,46 @@ describe("gateway server agent", () => {
 
     webchatWs.close();
   });
+
+  test("final chat event carries the produced assistant messageId", async () => {
+    await writeMainSessionEntry({ sessionId: "sess-main" });
+
+    const webchatWs = await connectWebchatClient({ port });
+
+    registerAgentRunContext("run-msgid-1", { sessionKey: "main" });
+
+    const finalChatP = onceMessage(
+      webchatWs,
+      (o) => {
+        if (o.type !== "event" || o.event !== "chat") {
+          return false;
+        }
+        const payload = o.payload as { state?: unknown; runId?: unknown } | undefined;
+        return payload?.state === "final" && payload.runId === "run-msgid-1";
+      },
+      8000,
+    );
+
+    emitAgentEvent({
+      runId: "run-msgid-1",
+      stream: "assistant",
+      data: { text: "hi from agent" },
+    });
+    // The lifecycle terminal carries the stable id of the assistant message the
+    // run persisted; the gateway must surface it on the final chat event so
+    // external clients can dedup on `(sessionKey, messageId)`.
+    emitAgentEvent({
+      runId: "run-msgid-1",
+      stream: "lifecycle",
+      data: { phase: "end", messageId: "msg-abc123" },
+    });
+
+    const evt = await finalChatP;
+    const payload = evt.payload && typeof evt.payload === "object" ? evt.payload : {};
+    expect(payload.state).toBe("final");
+    expect(payload.runId).toBe("run-msgid-1");
+    expect(payload.messageId).toBe("msg-abc123");
+
+    webchatWs.close();
+  });
 });
