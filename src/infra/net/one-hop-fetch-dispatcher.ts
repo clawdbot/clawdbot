@@ -1,8 +1,13 @@
+import {
+  assertLocalNetworkGuardPrepared,
+  type NetworkGuardProfileV1,
+} from "./network-guard-profile.js";
 import type { DispatcherAwareRequestInit } from "./runtime-fetch.js";
 
 export type OneHopFetchRequest = {
   url: string;
   init: DispatcherAwareRequestInit & { redirect: "manual" };
+  networkGuard: NetworkGuardProfileV1;
 };
 
 export type OneHopFetchDispatcher = {
@@ -17,6 +22,13 @@ export function createLocalOneHopFetchDispatcher(
   fetchImpl: LocalOneHopFetch,
 ): OneHopFetchDispatcher {
   return {
-    dispatch: async ({ url, init }) => await fetchImpl(url, init),
+    dispatch: async ({ url, init, networkGuard }) => {
+      assertLocalNetworkGuardPrepared({
+        profile: networkGuard,
+        requestUrl: url,
+        hasDispatcher: Boolean(init.dispatcher),
+      });
+      return await fetchImpl(url, init);
+    },
   };
 }

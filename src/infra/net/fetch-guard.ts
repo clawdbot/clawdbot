@@ -25,6 +25,7 @@ import { retainSafeHeadersForCrossOriginRedirect as retainSafeRedirectHeaders } 
 import { fetchWithRuntimeDispatcher, isMockedFetch } from "./runtime-fetch.js";
 import {
   assertHostnameAllowedWithPolicy,
+  buildNetworkGuardProfileV1,
   closeDispatcher,
   createPinnedDispatcher,
   matchesHostnameAllowlist,
@@ -581,6 +582,8 @@ async function fetchWithSsrFGuardInternal(
         !usesTrustedExplicitProxyMode &&
         params.pinDns !== false;
       const timeoutMs = resolveDispatcherTimeoutMs(params.timeoutMs);
+      let routeMode: Parameters<typeof buildNetworkGuardProfileV1>[0]["routeMode"];
+      let resolutionMode: Parameters<typeof buildNetworkGuardProfileV1>[0]["resolutionMode"];
 
       // Trusted env-proxy, managed proxy, and pinDns=false can skip local DNS
       // pinning, so keep the pre-DNS hostname/IP policy checks from the pinned path.
@@ -589,36 +592,60 @@ async function fetchWithSsrFGuardInternal(
       }
 
       if (canUseTrustedEnvProxy) {
+        routeMode = "environment-proxy";
+        resolutionMode = "proxy";
         dispatcher = createHttp1EnvHttpProxyAgent(undefined, timeoutMs);
       } else if (canUseManagedProxy) {
+        routeMode = "managed-proxy";
+        resolutionMode = "proxy";
         if (shouldCheckManagedProxyBypass) {
           const pinned = await resolvePinnedHostname();
-          dispatcher = shouldUseConfiguredLocalOriginManagedProxyBypass({
+          const useDirectBypass = shouldUseConfiguredLocalOriginManagedProxyBypass({
             url: parsedUrl,
             managedProxyBypass: params.managedProxyBypass,
             resolvedAddresses: pinned.addresses,
-          })
-            ? createPinnedDispatcher(pinned, dispatcherPolicy, policyForUrl, timeoutMs)
-            : createHttp1EnvHttpProxyAgent(undefined, timeoutMs);
+          });
+          if (useDirectBypass) {
+            routeMode = "direct";
+            resolutionMode = "pinned";
+            dispatcher = createPinnedDispatcher(pinned, dispatcherPolicy, policyForUrl, timeoutMs);
+          } else {
+            dispatcher = createHttp1EnvHttpProxyAgent(undefined, timeoutMs);
+          }
         } else {
           dispatcher = createHttp1EnvHttpProxyAgent(undefined, timeoutMs);
         }
       } else if (usesTrustedExplicitProxyMode) {
+        routeMode = "explicit-proxy";
+        resolutionMode = "proxy";
         // Explicit proxy targets are still checked against the caller's hostname
         // policy, but the proxy does the DNS resolution for the final target.
         assertHostnameAllowedWithPolicy(parsedUrl.hostname, policyForUrl);
         dispatcher = createPolicyDispatcherWithoutPinnedDns(dispatcherPolicy, timeoutMs);
       } else if (canUseMockedFetchWithoutDns) {
+        routeMode = "direct";
+        resolutionMode = "caller";
         // Test-installed fetch mocks should stay hermetic. Host/IP policy still runs;
         // real fetches continue through pinned DNS below.
         assertHostnameAllowedWithPolicy(parsedUrl.hostname, policyForUrl);
       } else if (params.pinDns === false) {
+        routeMode = "direct";
+        resolutionMode = "caller";
         await resolvePinnedHostname();
         dispatcher = createPolicyDispatcherWithoutPinnedDns(dispatcherPolicy, timeoutMs);
       } else {
+        routeMode = "direct";
+        resolutionMode = "pinned";
         const pinned = await resolvePinnedHostname();
         dispatcher = createPinnedDispatcher(pinned, dispatcherPolicy, policyForUrl, timeoutMs);
       }
+
+      const networkGuard = buildNetworkGuardProfileV1({
+        url: parsedUrl,
+        policy: policyForUrl,
+        routeMode,
+        resolutionMode,
+      });
 
       const init: OneHopFetchRequest["init"] = {
         ...(currentInit ? { ...currentInit } : {}),
@@ -645,6 +672,7 @@ async function fetchWithSsrFGuardInternal(
       const response = await oneHopDispatcher.dispatch({
         url: parsedUrl.toString(),
         init,
+        networkGuard,
       });
       const capturedByGlobalFetchPatch =
         !shouldUseRuntimeFetch &&

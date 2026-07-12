@@ -1,0 +1,69 @@
+{
+  "version": "network-guard/v1",
+  "cases": [
+    {
+      "id": "public-ipv4",
+      "url": "https://api.dispatch.test/v1",
+      "policy": {},
+      "resolutionSequence": [["93.184.216.34"]],
+      "expected": "allow"
+    },
+    {
+      "id": "private-ipv4",
+      "url": "https://api.dispatch.test/v1",
+      "policy": {},
+      "resolutionSequence": [["10.0.0.8"]],
+      "expected": "deny"
+    },
+    {
+      "id": "mixed-public-private",
+      "url": "https://api.dispatch.test/v1",
+      "policy": {},
+      "resolutionSequence": [["93.184.216.34", "10.0.0.8"]],
+      "expected": "deny"
+    },
+    {
+      "id": "dns-rebinding",
+      "url": "https://rebind.dispatch.test/v1",
+      "policy": {},
+      "resolutionSequence": [["93.184.216.34"], ["127.0.0.1"]],
+      "expected": "deny-on-second-resolution"
+    },
+    {
+      "id": "exact-origin-private",
+      "url": "https://private.dispatch.test/v1",
+      "policy": {
+        "allowedOrigins": ["https://private.dispatch.test"]
+      },
+      "resolutionSequence": [["10.0.0.8"]],
+      "expected": "allow"
+    },
+    {
+      "id": "trusted-origin-link-local",
+      "url": "https://private.dispatch.test/v1",
+      "policy": {
+        "allowedOrigins": ["https://private.dispatch.test"]
+      },
+      "resolutionSequence": [["169.254.169.254"]],
+      "expected": "deny"
+    },
+    {
+      "id": "redirect-origin-private",
+      "url": "https://redirected.dispatch.test/v1",
+      "policy": {
+        "allowedOrigins": ["https://private.dispatch.test"]
+      },
+      "resolutionSequence": [["10.0.0.8"]],
+      "expected": "deny"
+    },
+    {
+      "id": "rfc2544-fake-ip",
+      "url": "https://api.dispatch.test/v1",
+      "policy": {
+        "allowRfc2544BenchmarkRange": true
+      },
+      "resolutionSequence": [["198.18.0.153"]],
+      "expected": "allow"
+    }
+  ]
+}
