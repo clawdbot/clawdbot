@@ -179,6 +179,45 @@ describe("CDP screenshot params", () => {
     expect(methods).toContain("Page.bringToFront");
   });
 
+  it("managed headless profile activates even with a custom non-headless UA (#105357)", async () => {
+    // A managed headless Chrome can run with a custom --user-agent (extraArgs),
+    // so a UA sniff would misclassify it as headed and drop the activation that
+    // prevents the background-capture stall (#100857). The authoritative launch
+    // flag must win, and there is no need to re-derive state over CDP.
+    mockState.userAgent =
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36";
+
+    await captureScreenshot({
+      wsUrl: "ws://localhost:9222/devtools/page/X",
+      format: "png",
+      headless: true,
+    });
+
+    const methods = sentMessages.map((message) => message.method);
+    expect(methods).toContain("Page.bringToFront");
+    expect(methods.indexOf("Page.bringToFront")).toBeLessThan(
+      methods.indexOf("Page.captureScreenshot"),
+    );
+    expect(methods).not.toContain("Browser.getVersion");
+  });
+
+  it("managed headed profile skips activation even with a headless UA (#105357)", async () => {
+    // The authoritative launch flag also wins the other way: a headed managed
+    // browser never steals the visible tab, regardless of any headless UA.
+    mockState.userAgent =
+      "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/146.0.0.0 Safari/537.36";
+
+    await captureScreenshot({
+      wsUrl: "ws://localhost:9222/devtools/page/X",
+      format: "png",
+      headless: false,
+    });
+
+    const methods = sentMessages.map((message) => message.method);
+    expect(methods).not.toContain("Page.bringToFront");
+    expect(methods).not.toContain("Browser.getVersion");
+  });
+
   it("uses the requested timeout as the raw CDP command timeout", async () => {
     await captureScreenshot({
       wsUrl: "ws://localhost:9222/devtools/page/X",

@@ -27,6 +27,7 @@ import {
   buildChromeMcpRouteSnapshot,
   flattenChromeMcpRouteSnapshot,
 } from "../chrome-mcp.snapshot-result.js";
+import { isLocalManagedProfile } from "../config.js";
 import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "../constants.js";
 import {
   assertBrowserNavigationAllowed,
@@ -585,6 +586,11 @@ export function registerBrowserAgentSnapshotRoutes(
             format: type,
             quality: type === "jpeg" ? 85 : undefined,
             timeoutMs,
+            // Managed browsers know their launch mode authoritatively; attached
+            // sessions leave it undefined so cdp.ts falls back to a UA sniff.
+            headless: isLocalManagedProfile(profileCtx.profile)
+              ? profileCtx.profile.headless
+              : undefined,
           });
         }
 

@@ -221,7 +221,7 @@ function hasLinuxDisplay(env: NodeJS.ProcessEnv): boolean {
   return Boolean(env.DISPLAY?.trim() || env.WAYLAND_DISPLAY?.trim());
 }
 
-function isLocalManagedProfile(profile: ResolvedBrowserProfile): boolean {
+export function isLocalManagedProfile(profile: ResolvedBrowserProfile): boolean {
   return profile.driver === "openclaw" && profile.cdpIsLoopback && !profile.attachOnly;
 }
 
