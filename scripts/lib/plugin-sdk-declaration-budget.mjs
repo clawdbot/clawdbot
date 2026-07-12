@@ -1,7 +1,7 @@
-// Raised to 5_125_000 for plugins.uninstall/catalog actions, continuation/session contracts,
-// and the sessions.search protocol surface.
+// Raised to 5_130_000 for plugins.uninstall/catalog actions, continuation/session contracts,
+// the sessions.search protocol surface, and the merged upstream SDK additions.
 // the cap exists to force a conscious decision on published declaration growth.
-export const MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES = 5_125_000;
+export const MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES = 5_130_000;
 // Private-only entrypoints reshape chunks reachable from public roots but are never published.
 // Bound that topology overhead without counting local-only declarations as package surface.
 export const MAX_PRIVATE_QA_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES = 5_150_000;
