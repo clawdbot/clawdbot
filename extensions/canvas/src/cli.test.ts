@@ -156,6 +156,22 @@ describe("canvas CLI", () => {
     expect(writtenFiles).toHaveLength(0);
   });
 
+  it("prints an empty canvas eval result instead of a success placeholder", async () => {
+    const program = new Command();
+    program.exitOverride();
+    const nodes = program.command("nodes");
+    const { deps, runtime } = createCanvasCliDeps();
+    vi.mocked(deps.callGatewayCli).mockResolvedValueOnce({ payload: { result: "" } });
+
+    registerNodesCanvasCommands(nodes, deps);
+    await program.parseAsync(["nodes", "canvas", "eval", `""`, "--node", "ios-node"], {
+      from: "user",
+    });
+
+    expect(runtime.log).toHaveBeenCalledWith("");
+    expect(runtime.log).not.toHaveBeenCalledWith("canvas eval ok");
+  });
+
   it.each([
     ["--max-width", "640px", "--max-width must be a positive integer."],
     ["--quality", "0.8x", "--quality must be a number."],

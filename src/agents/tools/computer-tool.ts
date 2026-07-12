@@ -963,4 +963,3 @@ export const testing = {
     waitForPostActionSettle = override ?? defaultWaitForPostActionSettle;
   },
 };
-export { testing as __testing };

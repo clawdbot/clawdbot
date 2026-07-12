@@ -1,4 +1,5 @@
 // Control UI tests cover skills behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import {
   installFromClawHub,
@@ -241,14 +242,14 @@ describe("loadSkills", () => {
       ["skills.status", { agentId: "beta" }],
     ]);
 
-    pendingRequests[1].resolve({
+    expectDefined(pendingRequests[1], "beta skills request").resolve({
       workspaceDir: "/tmp/beta",
       managedSkillsDir: "/tmp/skills",
       skills: [{ name: "Beta", skillKey: "beta", source: "workspace" }],
     });
     await secondLoad;
 
-    pendingRequests[0].resolve({
+    expectDefined(pendingRequests[0], "alpha skills request").resolve({
       workspaceDir: "/tmp/alpha",
       managedSkillsDir: "/tmp/skills",
       skills: [{ name: "Alpha", skillKey: "alpha", source: "workspace" }],
@@ -486,7 +487,7 @@ describe("loadSkillCard", () => {
       ...state.skillsReport,
       skills: [
         {
-          ...state.skillsReport.skills[0],
+          ...expectDefined(state.skillsReport.skills[0], "skill card report entry"),
           clawhub: {
             status: "linked",
             valid: true,
@@ -739,18 +740,18 @@ describe("skill mutations", () => {
     setSkillsAgentId(state, "beta");
     const betaLoad = loadSkills(state);
     await Promise.resolve();
-    pendingRequests[1].resolve({
+    expectDefined(pendingRequests[1], "beta skills request before update").resolve({
       workspaceDir: "/tmp/beta-before-update",
       managedSkillsDir: "/tmp/skills",
       skills: [],
     });
     await betaLoad;
 
-    pendingRequests[0].resolve({});
+    expectDefined(pendingRequests[0], "skills update request").resolve({});
     await vi.waitFor(() => {
       expect(pendingRequests).toHaveLength(3);
     });
-    pendingRequests[2].resolve({
+    expectDefined(pendingRequests[2], "beta skills request after update").resolve({
       workspaceDir: "/tmp/beta-after-update",
       managedSkillsDir: "/tmp/skills",
       skills: [],

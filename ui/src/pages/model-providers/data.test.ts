@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import type { ModelAuthStatusResult, ModelCatalogEntry } from "../../api/types.ts";
 import { buildModelProviderCards } from "./data.ts";
@@ -13,6 +14,10 @@ function catalogEntry(overrides: Partial<ModelCatalogEntry> & { provider: string
 
 function authStatus(providers: ModelAuthStatusResult["providers"]): ModelAuthStatusResult {
   return { ts: 1, providers };
+}
+
+function firstCard(cards: ReturnType<typeof buildModelProviderCards>) {
+  return expectDefined(cards[0], "first model provider card");
 }
 
 const EMPTY_INPUT = {
@@ -58,12 +63,12 @@ describe("buildModelProviderCards", () => {
       ]),
     });
     expect(cards).toHaveLength(1);
-    expect(cards[0]).toMatchObject({
+    expect(firstCard(cards)).toMatchObject({
       id: "anthropic",
       displayName: "Claude",
       auth: { kind: "ok", profileCount: 1 },
     });
-    expect(cards[0].usage).toMatchObject({
+    expect(firstCard(cards).usage).toMatchObject({
       provider: "anthropic",
       plan: "Max",
       windows: [{ label: "5h", usedPercent: 40 }],
@@ -114,7 +119,7 @@ describe("buildModelProviderCards", () => {
       ]),
     });
     expect(cards).toHaveLength(1);
-    expect(cards[0].auth).toMatchObject({
+    expect(firstCard(cards).auth).toMatchObject({
       kind: "expired",
       profileCount: 2,
       expiryLabel: "-1m",
@@ -162,8 +167,8 @@ describe("buildModelProviderCards", () => {
       },
     });
     expect(cards).toHaveLength(1);
-    expect(cards[0].usage?.windows).toEqual([{ label: "5h", usedPercent: 55 }]);
-    expect(cards[0].usage?.costHistory?.periodDays).toBe(30);
+    expect(firstCard(cards).usage?.windows).toEqual([{ label: "5h", usedPercent: 55 }]);
+    expect(firstCard(cards).usage?.costHistory?.periodDays).toBe(30);
   });
 
   it("attaches local session spend via alias ids and includes cost-only providers", () => {
@@ -197,7 +202,7 @@ describe("buildModelProviderCards", () => {
       ],
     });
     expect(cards.map((card) => card.id)).toEqual(["anthropic", "openrouter"]);
-    expect(cards[0].localCost).toEqual({
+    expect(firstCard(cards).localCost).toEqual({
       totalCost: 0.42,
       totalTokens: 150,
       sessionCount: 3,

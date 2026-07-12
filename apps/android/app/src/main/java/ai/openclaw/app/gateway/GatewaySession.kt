@@ -89,6 +89,9 @@ data class GatewayConnectErrorDetails(
   val clientMaxProtocol: Int? = null,
   val expectedProtocol: Int? = null,
   val minimumProbeProtocol: Int? = null,
+  val clawhubTrustCode: String? = null,
+  val clawhubWarning: String? = null,
+  val clawhubVersion: String? = null,
 )
 
 private val gatewayApprovalRequestIdPattern = Regex("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
@@ -1174,6 +1177,9 @@ class GatewaySession(
                 clientMaxProtocol = it["clientMaxProtocol"].asIntOrNull(),
                 expectedProtocol = it["expectedProtocol"].asIntOrNull(),
                 minimumProbeProtocol = it["minimumProbeProtocol"].asIntOrNull(),
+                clawhubTrustCode = it["clawhubTrustCode"].asStringOrNull(),
+                clawhubWarning = it["warning"].asStringOrNull(),
+                clawhubVersion = it["version"].asStringOrNull(),
               )
             }
           ErrorShape(code, msg, details)

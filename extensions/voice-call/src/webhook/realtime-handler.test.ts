@@ -1,5 +1,6 @@
 // Voice Call tests cover realtime handler plugin behavior.
 import http from "node:http";
+import { expectDefined } from "@openclaw/normalization-core";
 import type {
   RealtimeVoiceBridge,
   RealtimeVoiceForcedConsultCoordinator,
@@ -144,7 +145,7 @@ const startRealtimeServer = async (
   }
 
   return await startUpgradeWsServer({
-    urlPath: match[1],
+    urlPath: expectDefined(match[1], "realtime stream path"),
     onUpgrade: (request, socket, head) => {
       handler.handleWebSocketUpgrade(request, socket, head);
     },
@@ -369,7 +370,7 @@ describe("RealtimeCallHandler path routing", () => {
       throw new Error("Failed to extract realtime stream path");
     }
     const server = await startUpgradeWsServer({
-      urlPath: match[1],
+      urlPath: expectDefined(match[1], "realtime stream path"),
       onUpgrade: (request, socket, head) => {
         handler.handleWebSocketUpgrade(request, socket, head);
       },

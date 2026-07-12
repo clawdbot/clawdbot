@@ -38,6 +38,7 @@ import {
 } from "../../../lib/session-goal.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import {
+  getChatAttachmentDataUrl,
   getChatAttachmentPreviewUrl,
   registerChatAttachmentPayload,
   releaseChatAttachmentPayload,
@@ -74,6 +75,12 @@ const COMPOSER_CHROME_INTERACTIVE_SELECTOR = [
 const CHAT_ATTACHMENT_ACCEPT =
   "image/*,audio/*,application/pdf,text/*,.csv,.json,.md,.txt,.zip," +
   ".doc,.docx,.xls,.xlsx,.ppt,.pptx";
+const LARGE_PASTE_TEXT_THRESHOLD = 1000;
+const LARGE_PASTE_TEXT_MIME_TYPE = "text/plain";
+const LARGE_PASTE_TEXT_FILE_PREFIX = "pasted-text-";
+const PASTED_TEXT_PREVIEW_MAX_LENGTH = 20;
+const largePastedTextAttachments = new WeakSet<ChatAttachment>();
+const pastedTextPreviews = new WeakMap<ChatAttachment, string>();
 
 type ChatComposerProps = {
   paneId: string;
@@ -96,6 +103,7 @@ type ChatComposerProps = {
   assistantName: string;
   sendShortcut?: ChatSendShortcut;
   attachments?: ChatAttachment[];
+  getAttachments?: () => ChatAttachment[];
   replyTarget?: { messageId: string; text: string; senderLabel?: string | null } | null;
   realtimeTalkActive?: boolean;
   realtimeTalkStatus?: RealtimeTalkStatus;
@@ -938,8 +946,17 @@ function renderSlashMenu(
 
 type ChatAttachmentControlsProps = {
   attachments?: ChatAttachment[];
+  getAttachments?: () => ChatAttachment[];
+  draft?: string;
+  getDraft?: () => string;
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
+  onDraftChange?: (next: string) => void;
+  onRequestUpdate?: () => void;
 };
+
+function currentAttachments(props: ChatAttachmentControlsProps): ChatAttachment[] {
+  return props.getAttachments?.() ?? props.attachments ?? [];
+}
 
 type ChatQueueProps = {
   queue: ChatQueueItem[];
@@ -1100,6 +1117,95 @@ function chatAttachmentFromFile(file: File, dataUrl: string): ChatAttachment {
   return registerChatAttachmentPayload({ attachment, dataUrl, file });
 }
 
+function isLargePastedTextAttachment(attachment: ChatAttachment): boolean {
+  return largePastedTextAttachments.has(attachment);
+}
+
+function encodeTextAsDataUrl(text: string): string {
+  const bytes = new TextEncoder().encode(text);
+  const chunks: string[] = [];
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    chunks.push(String.fromCharCode(...bytes.subarray(offset, offset + chunkSize)));
+  }
+  return `data:${LARGE_PASTE_TEXT_MIME_TYPE};base64,${btoa(chunks.join(""))}`;
+}
+
+function createLargePastedTextAttachment(text: string): ChatAttachment {
+  const file = new File([text], `${LARGE_PASTE_TEXT_FILE_PREFIX}${Date.now()}.txt`, {
+    type: LARGE_PASTE_TEXT_MIME_TYPE,
+  });
+  const attachment = chatAttachmentFromFile(file, encodeTextAsDataUrl(text));
+  largePastedTextAttachments.add(attachment);
+  const preview = compactPastedTextPreview(text);
+  if (preview) {
+    pastedTextPreviews.set(attachment, preview);
+  }
+  return attachment;
+}
+
+function readTextFromDataUrl(dataUrl: string): string | null {
+  const match = /^data:([^,]*),(.*)$/s.exec(dataUrl);
+  if (!match) {
+    return null;
+  }
+  const metadata = match[1];
+  const payload = match[2];
+  if (metadata === undefined || payload === undefined) {
+    return null;
+  }
+  if (metadata.toLowerCase().includes(";base64")) {
+    try {
+      const binary = atob(payload);
+      const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+      return new TextDecoder().decode(bytes);
+    } catch {
+      return null;
+    }
+  }
+  try {
+    return decodeURIComponent(payload.replace(/\+/g, "%20"));
+  } catch {
+    return null;
+  }
+}
+
+function compactPastedTextPreview(text: string): string | null {
+  const normalized = text.replace(/\s+/gu, " ").trim();
+  if (!normalized) {
+    return null;
+  }
+  if (normalized.length <= PASTED_TEXT_PREVIEW_MAX_LENGTH) {
+    return normalized;
+  }
+  return `${normalized.slice(0, PASTED_TEXT_PREVIEW_MAX_LENGTH).trimEnd()}...`;
+}
+
+function pastedTextPreview(attachment: ChatAttachment): string {
+  return pastedTextPreviews.get(attachment) ?? attachment.fileName ?? "Attached file";
+}
+
+function appendPastedTextToDraft(draft: string, text: string): string {
+  if (!draft.trim()) {
+    return text;
+  }
+  return `${draft.replace(/\s+$/u, "")}\n\n${text}`;
+}
+
+function handleLargeTextPaste(e: ClipboardEvent, props: ChatAttachmentControlsProps): boolean {
+  if (!props.onAttachmentsChange) {
+    return false;
+  }
+  const text = e.clipboardData?.getData("text/plain");
+  if (!text || text.length <= LARGE_PASTE_TEXT_THRESHOLD) {
+    return false;
+  }
+  e.preventDefault();
+  const attachment = createLargePastedTextAttachment(text);
+  props.onAttachmentsChange([...currentAttachments(props), attachment]);
+  return true;
+}
+
 function dataImageClipboardFile(
   dataUrl: string,
   baseName = "pasted-image",
@@ -1162,11 +1268,12 @@ function handleChatAttachmentPaste(e: ClipboardEvent, props: ChatAttachmentContr
     const text = e.clipboardData?.getData("text/plain");
     const pasted = text ? dataImageClipboardFile(text) : null;
     if (!pasted) {
+      handleLargeTextPaste(e, props);
       return;
     }
     e.preventDefault();
     props.onAttachmentsChange([
-      ...(props.attachments ?? []),
+      ...currentAttachments(props),
       chatAttachmentFromFile(pasted.file, pasted.dataUrl),
     ]);
     return;
@@ -1181,11 +1288,25 @@ function handleChatAttachmentPaste(e: ClipboardEvent, props: ChatAttachmentContr
     reader.addEventListener("load", () => {
       const dataUrl = reader.result as string;
       const newAttachment = chatAttachmentFromFile(file, dataUrl);
-      const current = props.attachments ?? [];
-      props.onAttachmentsChange?.([...current, newAttachment]);
+      props.onAttachmentsChange?.([...currentAttachments(props), newAttachment]);
     });
     reader.readAsDataURL(file);
   }
+}
+
+function showPastedTextInComposer(att: ChatAttachment, props: ChatAttachmentControlsProps): void {
+  const dataUrl = getChatAttachmentDataUrl(att);
+  const text = dataUrl ? readTextFromDataUrl(dataUrl) : null;
+  if (!text || !props.onDraftChange) {
+    return;
+  }
+  const nextAttachments = currentAttachments(props).filter(
+    (attachment) => attachment.id !== att.id,
+  );
+  releaseChatAttachmentPayload(att.id);
+  props.onAttachmentsChange?.(nextAttachments);
+  props.onDraftChange(appendPastedTextToDraft(props.getDraft?.() ?? props.draft ?? "", text));
+  props.onRequestUpdate?.();
 }
 
 function handleChatAttachmentFileSelect(e: Event, props: ChatAttachmentControlsProps) {
@@ -1193,7 +1314,6 @@ function handleChatAttachmentFileSelect(e: Event, props: ChatAttachmentControlsP
   if (!input.files || !props.onAttachmentsChange) {
     return;
   }
-  const current = props.attachments ?? [];
   const additions: ChatAttachment[] = [];
   let pending = 0;
   for (const file of input.files) {
@@ -1206,7 +1326,7 @@ function handleChatAttachmentFileSelect(e: Event, props: ChatAttachmentControlsP
       additions.push(chatAttachmentFromFile(file, reader.result as string));
       pending--;
       if (pending === 0) {
-        props.onAttachmentsChange?.([...current, ...additions]);
+        props.onAttachmentsChange?.([...currentAttachments(props), ...additions]);
       }
     });
     reader.readAsDataURL(file);
@@ -1220,7 +1340,6 @@ export function handleChatAttachmentDrop(e: DragEvent, props: ChatAttachmentCont
   if (!files || !props.onAttachmentsChange) {
     return;
   }
-  const current = props.attachments ?? [];
   const additions: ChatAttachment[] = [];
   let pending = 0;
   for (const file of files) {
@@ -1233,7 +1352,7 @@ export function handleChatAttachmentDrop(e: DragEvent, props: ChatAttachmentCont
       additions.push(chatAttachmentFromFile(file, reader.result as string));
       pending--;
       if (pending === 0) {
-        props.onAttachmentsChange?.([...current, ...additions]);
+        props.onAttachmentsChange?.([...currentAttachments(props), ...additions]);
       }
     });
     reader.readAsDataURL(file);
@@ -1253,34 +1372,53 @@ function renderAttachmentPreview(props: ChatAttachmentControlsProps) {
             class=${[
               "chat-attachment-thumb",
               isImageAttachment(att) ? "" : "chat-attachment-thumb--file",
+              isLargePastedTextAttachment(att) ? "chat-attachment-thumb--pasted-text" : "",
             ]
               .filter(Boolean)
               .join(" ")}
           >
             ${isImageAttachment(att) && getChatAttachmentPreviewUrl(att)
               ? html`<img src=${getChatAttachmentPreviewUrl(att)!} alt="Attachment preview" />`
-              : html`
-                  <openclaw-tooltip .content=${att.fileName ?? "Attached file"}>
-                    <div class="chat-attachment-file">
-                      <span class="chat-attachment-file__icon">${icons.paperclip}</span>
-                      <span class="chat-attachment-file__name"
-                        >${att.fileName ?? "Attached file"}</span
-                      >
+              : isLargePastedTextAttachment(att)
+                ? html`
+                    <div class="chat-attachment-file chat-attachment-file--pasted-text">
+                      <span class="chat-attachment-file__icon">${icons.fileText}</span>
+                      <span class="chat-attachment-file__body">
+                        <span class="chat-attachment-file__name">${pastedTextPreview(att)}</span>
+                        <button
+                          class="chat-attachment-text-action"
+                          type="button"
+                          aria-label=${t("worktrees.restore")}
+                          @click=${() => showPastedTextInComposer(att, props)}
+                        >
+                          ${t("worktrees.restore")}
+                          <span aria-hidden="true">${icons.chevronRight}</span>
+                        </button>
+                      </span>
                     </div>
-                  </openclaw-tooltip>
-                `}
+                  `
+                : html`
+                    <openclaw-tooltip .content=${att.fileName ?? "Attached file"}>
+                      <div class="chat-attachment-file">
+                        <span class="chat-attachment-file__icon">${icons.paperclip}</span>
+                        <span class="chat-attachment-file__name"
+                          >${att.fileName ?? "Attached file"}</span
+                        >
+                      </div>
+                    </openclaw-tooltip>
+                  `}
             <openclaw-tooltip .content=${t("chat.composer.removeAttachment")}>
               <button
                 class="chat-attachment-remove"
                 type="button"
                 aria-label=${t("chat.composer.removeAttachment")}
                 @click=${() => {
-                  const next = (props.attachments ?? []).filter((a) => a.id !== att.id);
+                  const next = currentAttachments(props).filter((a) => a.id !== att.id);
                   releaseChatAttachmentPayload(att.id);
                   props.onAttachmentsChange?.(next);
                 }}
               >
-                &times;
+                ${icons.x}
               </button>
             </openclaw-tooltip>
           </div>
@@ -2111,7 +2249,9 @@ export function renderChatComposer(props: ChatComposerProps) {
   const actionDraft =
     state.composingDraft?.key === draftKey ? state.composingDraft.value : visibleDraft;
   let composerTextarea: HTMLTextAreaElement | null = null;
-  const hasAttachments = (props.attachments?.length ?? 0) > 0;
+  const hasVisualAttachments = (props.attachments ?? []).some(
+    (attachment) => !isLargePastedTextAttachment(attachment),
+  );
   const tokens = tokenEstimate(visibleDraft);
   const contextNotice = renderContextNotice(
     activeSession,
@@ -2150,7 +2290,7 @@ export function renderChatComposer(props: ChatComposerProps) {
   const placeholder =
     !canCompose && props.disabledReason
       ? props.disabledReason
-      : hasAttachments
+      : hasVisualAttachments
         ? t("chat.composer.placeholderWithAttachments")
         : t("chat.composer.placeholder", { name: props.assistantName || "agent" });
 

@@ -1,4 +1,5 @@
 // Ollama tests cover provider models plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { jsonResponse, requestBodyText, requestUrl } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -45,11 +46,12 @@ describe("ollama provider models", () => {
       { name: "llama3:8b", contextWindow: 65536, capabilities: undefined },
       { name: "deepseek-r1:14b", contextWindow: undefined, capabilities: undefined },
     ]);
+    const fallbackModel = expectDefined(enriched[1], "fallback Ollama model");
     expect(
       buildOllamaModelDefinition(
-        enriched[1].name,
-        enriched[1].contextWindow,
-        enriched[1].capabilities,
+        fallbackModel.name,
+        fallbackModel.contextWindow,
+        fallbackModel.capabilities,
       ).compat?.supportsTools,
     ).toBe(true);
   });

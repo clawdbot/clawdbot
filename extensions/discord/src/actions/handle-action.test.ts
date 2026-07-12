@@ -1,4 +1,5 @@
 // Discord tests cover handle action plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -788,7 +789,10 @@ describe("handleDiscordMessageAction", () => {
     });
 
     expect(handleDiscordActionMock).toHaveBeenCalledTimes(1);
-    const payload = handleDiscordActionMock.mock.calls[0]?.[0];
+    const payload = expectDefined(
+      handleDiscordActionMock.mock.calls[0]?.[0],
+      "Discord search action payload",
+    );
     expect(payload).toMatchObject({
       action: "searchMessages",
       content: "test query",
@@ -815,7 +819,10 @@ describe("handleDiscordMessageAction", () => {
     });
 
     expect(handleDiscordActionMock).toHaveBeenCalledTimes(1);
-    const payload = handleDiscordActionMock.mock.calls[0]?.[0];
+    const payload = expectDefined(
+      handleDiscordActionMock.mock.calls[0]?.[0],
+      "Discord guild search action payload",
+    );
     expect(payload).toMatchObject({
       action: "searchMessages",
       content: "guild-wide query",

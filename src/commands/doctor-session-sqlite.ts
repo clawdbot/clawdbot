@@ -14,6 +14,7 @@ import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
 import { normalizeSessionEntryDelivery } from "../config/sessions/store-load.js";
 import {
   resolveAgentSessionStoreTargetsSync,
+  resolveAllAgentSessionStoreCandidateTargetsSync,
   resolveAllAgentSessionStoreTargetsSync,
   resolveSessionStoreTargets,
   type SessionStoreTarget,
@@ -21,8 +22,11 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveStoredSessionOwnerAgentId } from "../gateway/session-store-key.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { compactDoctorSessionSqliteTarget } from "./doctor-session-sqlite-compact.js";
 import {
+  assertSafeSessionSqliteMigrationDirectory,
+  assertSafeSessionSqliteMigrationMove,
   createSessionSqliteMigrationRun,
   recordCompletedMigrationMove,
   recordCompletedMigrationMoves,
@@ -100,8 +104,6 @@ export async function runDoctorSessionSqlite(
   if (options.mode === "restore") {
     return restoreDoctorSessionSqliteTargets({
       env,
-      restoreAllManifests:
-        targets.length === 0 && !options.agent && !options.allAgents && !options.store,
       targets,
     });
   }
@@ -171,6 +173,16 @@ function resolveDoctorSessionSqliteTargets(params: {
       resolveSessionStoreTargets(params.cfg, { store: params.store }, { env: params.env }),
       params.mode,
     );
+  }
+  if (params.mode === "restore" || params.mode === "recover") {
+    const candidates = resolveAllAgentSessionStoreCandidateTargetsSync(params.cfg, {
+      env: params.env,
+    });
+    if (!params.agent) {
+      return candidates;
+    }
+    const requestedAgentId = normalizeAgentId(params.agent);
+    return candidates.filter((target) => normalizeAgentId(target.agentId) === requestedAgentId);
   }
   if (params.agent) {
     return filterLegacySessionStoreTargets(
@@ -664,8 +676,10 @@ function archiveUnreferencedJsonlFiles(
   // restore moved files even when the completion checkpoint was never written.
   recordPlannedMigrationMoves(activeRun, createMigrationTargetInput(target), plannedMoves);
   const completedMoves: SessionSqliteMigrationMove[] = [];
+  const migrationTarget = createMigrationTargetInput(target);
   for (const move of plannedMoves) {
     try {
+      assertSafeSessionSqliteMigrationMove(move, migrationTarget);
       fs.renameSync(move.sourcePath, move.archivePath);
       report.archivedUnreferencedJsonlFiles.push(move.archivePath);
       completedMoves.push(move);
@@ -1083,9 +1097,11 @@ function moveSessionJsonlToArchive(params: {
   target: SessionStoreTarget;
 }): string {
   const move = planSessionJsonlArchiveMove(params);
-  recordPlannedMigrationMove(params.activeRun, createMigrationTargetInput(params.target), move);
+  const migrationTarget = createMigrationTargetInput(params.target);
+  recordPlannedMigrationMove(params.activeRun, migrationTarget, move);
+  assertSafeSessionSqliteMigrationMove(move, migrationTarget);
   fs.renameSync(move.sourcePath, move.archivePath);
-  recordCompletedMigrationMove(params.activeRun, createMigrationTargetInput(params.target), move);
+  recordCompletedMigrationMove(params.activeRun, migrationTarget, move);
   return move.archivePath;
 }
 
@@ -1098,13 +1114,23 @@ function planSessionJsonlArchiveMove(params: {
   sourcePathRaw: string;
   target: SessionStoreTarget;
 }): SessionSqliteMigrationMove {
-  const sourcePath = path.resolve(params.sourcePathRaw);
-  const stat = fs.statSync(sourcePath);
+  const sourcePathRaw = path.resolve(params.sourcePathRaw);
+  const stat = fs.lstatSync(sourcePathRaw);
   if (!stat.isFile()) {
     throw new Error("source is not a regular file");
   }
+  const sourcePath = path.join(
+    canonicalFilePath(path.dirname(sourcePathRaw)),
+    path.basename(sourcePathRaw),
+  );
+  const sessionsDir = canonicalFilePath(path.dirname(path.resolve(params.target.storePath)));
+  if (path.dirname(sourcePath) !== sessionsDir) {
+    throw new Error(`Migration source is outside the target sessions directory: ${sourcePath}`);
+  }
   const archiveDir = resolveImportedTranscriptArchiveDir(params.target.storePath);
+  assertSafeSessionSqliteMigrationDirectory(archiveDir);
   fs.mkdirSync(archiveDir, { recursive: true });
+  assertSafeSessionSqliteMigrationDirectory(archiveDir);
   const baseName = params.baseNameRaw.replace(/[^A-Za-z0-9_.-]+/g, "_").slice(0, 160) || "artifact";
   const keySlug = params.archiveKey.replace(/[^A-Za-z0-9_.-]+/g, "_").slice(0, 120) || "session";
   for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -1127,7 +1153,7 @@ function planSessionJsonlArchiveMove(params: {
 }
 
 function resolveImportedTranscriptArchiveDir(storePath: string): string {
-  const storeDir = path.dirname(path.resolve(storePath));
+  const storeDir = canonicalFilePath(path.dirname(path.resolve(storePath)));
   return path.join(path.dirname(storeDir), "session-sqlite-import-archive");
 }
 

@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -1944,9 +1945,9 @@ describe("google transport stream", () => {
         },
       ],
     });
-    expect(firstModelTurn.parts[0].thoughtSignature).not.toBe(
-      "bXNnXzAxWEZEVURZSmdBQUNjblNNMlRUZ1FzQQ==",
-    );
+    expect(
+      expectDefined(firstModelTurn.parts[0], "first Gemini model part").thoughtSignature,
+    ).not.toBe("bXNnXzAxWEZEVURZSmdBQUNjblNNMlRUZ1FzQQ==");
   });
 
   it("does not replay prior Gemini thought signatures onto a later foreign route", () => {
@@ -1978,7 +1979,10 @@ describe("google transport stream", () => {
         },
       ],
     });
-    expect(modelTurns[1]?.parts[0].thoughtSignature).not.toBe("Y2FsbF9zaWdfZ29vZ2xlXzE=");
+    const laterTurn = expectDefined(modelTurns[1], "later Gemini model turn");
+    expect(expectDefined(laterTurn.parts[0], "later Gemini model part").thoughtSignature).not.toBe(
+      "Y2FsbF9zaWdfZ29vZ2xlXzE=",
+    );
   });
 
   it("replaces invalid Gemini tool-call sentinel signatures with the skip fallback", () => {
@@ -2511,7 +2515,8 @@ describe("google transport stream", () => {
       ],
     } as never);
 
-    const functionResponse = (params.contents[1] as GoogleTestContentTurn).parts[0]
+    const responseTurn = params.contents[1] as GoogleTestContentTurn;
+    const functionResponse = expectDefined(responseTurn.parts[0], "JSON tool response part")
       .functionResponse as { response: { output: string } };
 
     expect(functionResponse).toMatchObject({ name: "lookup" });
@@ -2567,7 +2572,8 @@ describe("google transport stream", () => {
       ],
     } as never);
 
-    const functionResponse = (params.contents[1] as GoogleTestContentTurn).parts[0]
+    const responseTurn = params.contents[1] as GoogleTestContentTurn;
+    const functionResponse = expectDefined(responseTurn.parts[0], "resource tool response part")
       .functionResponse as { response: { output: string } };
 
     expect(functionResponse.response.output).toContain('"data":"[binary data omitted: 6 chars]"');
@@ -2612,7 +2618,8 @@ describe("google transport stream", () => {
       ],
     } as never);
 
-    const functionResponse = (params.contents[1] as GoogleTestContentTurn).parts[0]
+    const responseTurn = params.contents[1] as GoogleTestContentTurn;
+    const functionResponse = expectDefined(responseTurn.parts[0], "redacted tool response part")
       .functionResponse as { response: { output: string } };
 
     expect(functionResponse.response.output).toContain('"visible":"safe-value"');

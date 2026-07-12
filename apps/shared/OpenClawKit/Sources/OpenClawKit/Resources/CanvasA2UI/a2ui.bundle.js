@@ -12025,6 +12025,15 @@ const statusBlur = isAndroid ? "10px" : "14px";
 const postNativeMessage = (handler, payload) => {
 	Reflect.apply(handler.postMessage, handler, [payload]);
 };
+const createSecureActionId = () => {
+	const crypto = globalThis.crypto;
+	if (typeof crypto?.randomUUID === "function") return crypto.randomUUID();
+	if (typeof crypto?.getRandomValues === "function") {
+		const bytes = crypto.getRandomValues(/* @__PURE__ */ new Uint8Array(16));
+		return `a2ui_${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+	}
+	return null;
+};
 const openclawTheme = {
 	components: {
 		AudioPlayer: emptyClasses(),
@@ -12326,7 +12335,7 @@ var OpenClawA2UIHost = class extends i$7 {
 		}
 	}
 	#makeActionId() {
-		return globalThis.crypto?.randomUUID?.() ?? `a2ui_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+		return createSecureActionId();
 	}
 	#setToast(text, kind = "ok", timeoutMs = 1400) {
 		const toast = {
@@ -12405,6 +12414,10 @@ var OpenClawA2UIHost = class extends i$7 {
 			}
 		}
 		const actionId = this.#makeActionId();
+		if (!actionId) {
+			this.#setToast("Secure action identifiers unavailable", "error", 4500);
+			return;
+		}
 		this.pendingAction = {
 			id: actionId,
 			name,

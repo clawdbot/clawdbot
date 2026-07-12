@@ -197,7 +197,6 @@ describe("qa scenario catalog", () => {
     expect(scenarios.map((scenario) => scenario.id).toSorted()).toEqual([
       "kitchen-sink-live-openai",
       "matrix-post-restart-room-continue",
-      "matrix-restart-replay-dedupe",
       "matrix-restart-resume",
       "slack-restart-resume",
       "subagent-stale-child-links",
@@ -209,6 +208,15 @@ describe("qa scenario catalog", () => {
         .filter((scenario) => scenario.execution.suiteIsolation !== "isolated")
         .map((scenario) => scenario.id),
     ).toEqual([]);
+  });
+
+  it("uses only graceful gateway restart for Matrix replay dedupe", () => {
+    const scenario = requireFlowScenario(readQaScenarioById("matrix-restart-replay-dedupe"));
+
+    expect(flowContainsCall(scenario.execution.flow, "env.gateway.restart")).toBe(true);
+    expect(flowContainsCall(scenario.execution.flow, "env.gateway.restartAfterStateMutation")).toBe(
+      false,
+    );
   });
 
   it("loads scenario-declared gateway runtime options from YAML", () => {

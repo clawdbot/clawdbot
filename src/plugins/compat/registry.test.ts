@@ -175,6 +175,16 @@ const knownDeprecatedSurfaceMarkers = [
     marker: "registerMemoryEmbeddingProvider",
   },
   {
+    code: "deprecated-session-store-beta5-api",
+    file: "src/plugin-sdk/session-store-runtime.ts",
+    marker: "@deprecated Use getSessionEntry or listSessionEntries",
+  },
+  {
+    code: "deprecated-session-store-beta5-api",
+    file: "src/plugin-sdk/session-store-runtime.ts",
+    marker: "@deprecated Use patchSessionEntry, upsertSessionEntry, or deleteSessionEntry",
+  },
+  {
     code: "channel-route-key-aliases",
     file: "src/plugin-sdk/channel-route.ts",
     marker: "channelRouteIdentityKey",

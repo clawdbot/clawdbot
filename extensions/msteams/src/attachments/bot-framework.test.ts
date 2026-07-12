@@ -1,4 +1,5 @@
 // Msteams tests cover bot framework plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setMSTeamsRuntime } from "../runtime.js";
 import {
@@ -183,7 +184,9 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
     expect(media?.path).toBe(runtime.savePath);
     expect(media?.contentType).toBe(runtime.savedContentType);
     expect(runtime.saveCalls).toHaveLength(1);
-    expect(runtime.saveCalls[0].buffer.toString("utf-8")).toBe("PDFBYTES");
+    expect(expectDefined(runtime.saveCalls[0], "MSTeams save call").buffer.toString("utf-8")).toBe(
+      "PDFBYTES",
+    );
   });
 
   it("skips malformed attachment view content-length before saving media", async () => {
@@ -415,8 +418,12 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
       // Both the attachment info call and the view call should be observed,
       // confirming the guarded fetch path still preserves caller fetch hooks.
       expect(fetchCalls).toHaveLength(2);
-      expect(fetchCalls[0].url.endsWith("/v3/attachments/att-1")).toBe(true);
-      expect(fetchCalls[1].url.endsWith("/v3/attachments/att-1/views/original")).toBe(true);
+      expect(expectDefined(fetchCalls[0], "attachment info fetch").url).toMatch(
+        /\/v3\/attachments\/att-1$/,
+      );
+      expect(expectDefined(fetchCalls[1], "attachment view fetch").url).toMatch(
+        /\/v3\/attachments\/att-1\/views\/original$/,
+      );
       for (const call of fetchCalls) {
         const init = call.init as RequestInit & { dispatcher?: unknown };
         expect(init?.dispatcher).toBeDefined();

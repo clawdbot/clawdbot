@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Slack tests cover media plugin behavior.
 import type { WebClient } from "@slack/web-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -694,10 +695,12 @@ describe("resolveSlackMedia", () => {
 
     const media = expectSlackMediaResult(result);
     expect(media).toHaveLength(2);
-    expect(media[0].path).toBe("/tmp/a.jpg");
-    expect(media[0].placeholder).toBe("[Slack file: a.jpg (fileId: FA)]");
-    expect(media[1].path).toBe("/tmp/b.png");
-    expect(media[1].placeholder).toBe("[Slack file: b.png (fileId: FB)]");
+    const first = expectDefined(media[0], "first Slack media result");
+    const second = expectDefined(media[1], "second Slack media result");
+    expect(first.path).toBe("/tmp/a.jpg");
+    expect(first.placeholder).toBe("[Slack file: a.jpg (fileId: FA)]");
+    expect(second.path).toBe("/tmp/b.png");
+    expect(second.placeholder).toBe("[Slack file: b.png (fileId: FB)]");
   });
 
   it("caps downloads to 8 files for large multi-attachment messages", async () => {

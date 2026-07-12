@@ -3,6 +3,8 @@ package ai.openclaw.app.ui.chat
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatThinkingLevelOption
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
+import ai.openclaw.app.i18n.NativeText
+import ai.openclaw.app.i18n.resolveNativeText
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -10,6 +12,17 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ChatContextMeterTest {
+  @Test
+  fun starterPromptsKeepCatalogSourcesThroughTheSendBoundary() {
+    assertTrue(starterPrompts.all { it.title is NativeText.Resource })
+    assertTrue(starterPrompts.all { it.subtitle is NativeText.Resource })
+    assertTrue(starterPrompts.all { it.message is NativeText.Resource })
+    assertEquals(
+      "Catch me up on my recent OpenClaw sessions and suggest next steps.",
+      starterPrompts.first().message.resolveNativeText(),
+    )
+  }
+
   @Test
   fun contextMeterUsesActiveSessionTokenBudget() {
     val sessions =
@@ -34,7 +47,7 @@ class ChatContextMeterTest {
 
     assertEquals(ChatContextUsage(totalTokens = 1_250L, totalTokensFresh = true, contextTokens = 5_000L), usage)
     assertEquals(0.25f, contextMeterWidth(usage))
-    assertEquals("Context 25% · high", contextMeterLabel(usage, "high"))
+    assertEquals("Context 25% · High", contextMeterLabel(usage, "high"))
   }
 
   @Test
@@ -59,7 +72,7 @@ class ChatContextMeterTest {
       )
 
     assertEquals(ChatContextUsage(totalTokens = 41_000L, totalTokensFresh = true, contextTokens = 100_000L), usage)
-    assertEquals("Context 41% · off", contextMeterLabel(usage, "off"))
+    assertEquals("Context 41% · Off", contextMeterLabel(usage, "off"))
   }
 
   @Test
@@ -67,7 +80,7 @@ class ChatContextMeterTest {
     val usage = ChatContextUsage(totalTokens = 8_200L, totalTokensFresh = true, contextTokens = null)
 
     assertNull(contextMeterWidth(usage))
-    assertEquals("Context -- · medium", contextMeterLabel(usage, "medium"))
+    assertEquals("Context -- · Medium", contextMeterLabel(usage, "medium"))
   }
 
   @Test
@@ -75,7 +88,7 @@ class ChatContextMeterTest {
     val usage = ChatContextUsage(totalTokens = 150_000L, totalTokensFresh = true, contextTokens = 100_000L)
 
     assertEquals(1.0f, contextMeterWidth(usage))
-    assertEquals("Context 100% · low", contextMeterLabel(usage, "low"))
+    assertEquals("Context 100% · Low", contextMeterLabel(usage, "low"))
   }
 
   @Test
@@ -83,7 +96,7 @@ class ChatContextMeterTest {
     val usage = ChatContextUsage(totalTokens = 82_000L, totalTokensFresh = false, contextTokens = 100_000L)
 
     assertNull(contextMeterWidth(usage))
-    assertEquals("Context -- · high", contextMeterLabel(usage, "high"))
+    assertEquals("Context -- · High", contextMeterLabel(usage, "high"))
   }
 
   @Test
@@ -138,7 +151,9 @@ class ChatContextMeterTest {
     val rows = chatThinkingOptionRows(options)
 
     assertEquals(listOf(4, 4), rows.map { it.size })
+    assertEquals("Minimal", chatThinkingOptionLabel(options[1]))
     assertEquals("Xhigh", chatThinkingOptionLabel(options[5]))
+    assertEquals("Adaptive", chatThinkingOptionLabel(options[6]))
     assertEquals("Max", chatThinkingOptionLabel(options.last()))
   }
 }

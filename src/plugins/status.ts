@@ -162,10 +162,7 @@ function buildCompatibilityNoticesForInspect(
 }
 
 const removedSessionTranscriptFileApiMarkers = [
-  "loadSessionStore",
   "saveSessionStore",
-  "updateSessionStore",
-  "resolveSessionFilePath",
   "resolveSessionTranscriptPathInDir",
   "resolveAndPersistSessionFile",
   "readLatestAssistantTextFromSessionTranscript",

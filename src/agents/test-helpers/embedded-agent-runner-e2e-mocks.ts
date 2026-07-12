@@ -4,6 +4,8 @@
  * Installs targeted Vitest module mocks for tests that do not need live plugin/runtime boot.
  */
 import { vi } from "vitest";
+import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
+import type { AuthProfileStore } from "../auth-profiles/types.js";
 
 type EmbeddedRunnerFastRunMockOptions = {
   runEmbeddedAttempt: (params: unknown) => unknown;
@@ -60,22 +62,22 @@ export function installEmbeddedRunnerBaseE2eMocks(options?: {
 export function installEmbeddedRunnerFastRunE2eMocks(
   options: EmbeddedRunnerFastRunMockOptions,
 ): void {
+  const createMockAgentHarness = (params: {
+    provider?: string;
+    agentHarnessId?: string;
+    agentHarnessRuntimeOverride?: string;
+  }) => ({
+    id: resolveMockHarnessId(params),
+    label: "Mock agent harness",
+    supports: vi.fn(() => ({ supported: false })),
+    runAttempt: vi.fn(),
+  });
   vi.doMock("../harness/selection.js", () => ({
     agentHarnessBuildsOpenClawTools: vi.fn(
       (harnessId: string) => harnessId === "codex" || harnessId === "copilot",
     ),
-    selectAgentHarness: vi.fn(
-      (params: {
-        provider?: string;
-        agentHarnessId?: string;
-        agentHarnessRuntimeOverride?: string;
-      }) => ({
-        id: resolveMockHarnessId(params),
-        label: "Mock agent harness",
-        supports: vi.fn(() => ({ supported: false })),
-        runAttempt: vi.fn(),
-      }),
-    ),
+    selectAgentHarness: vi.fn(createMockAgentHarness),
+    selectAgentHarnessForPreparedModelProviders: vi.fn(createMockAgentHarness),
     resolveAgentHarnessPolicy: vi.fn(() => ({ runtime: "openclaw" })),
     runAgentHarnessAttempt: (params: unknown) => options.runEmbeddedAttempt(params),
   }));
@@ -144,6 +146,83 @@ export function installEmbeddedRunnerFastRunE2eMocks(
           ...(params.sessionAuthProfileId ? { authProfileId: params.sessionAuthProfileId } : {}),
         },
       }),
+    ),
+  }));
+  vi.doMock("../runtime-plan/prepare-auth.js", async () => {
+    const actual = await vi.importActual<typeof import("../runtime-plan/prepare-auth.js")>(
+      "../runtime-plan/prepare-auth.js",
+    );
+    return {
+      ...actual,
+      prepareAgentRuntimeAuth: vi.fn(
+        (params: {
+          provider: string;
+          modelId: string;
+          config?: Parameters<typeof resolveAuthProfileOrder>[0]["cfg"];
+          authProfileStore?: AuthProfileStore;
+          sessionAuthProfileId?: string;
+          sessionAuthProfileSource?: "auto" | "user";
+          harnessId?: string;
+          harnessRuntime?: string;
+        }) => {
+          const store: AuthProfileStore = params.authProfileStore ?? { version: 1, profiles: {} };
+          const authProvider =
+            params.harnessId === "codex" || params.harnessRuntime === "codex"
+              ? "openai"
+              : params.provider;
+          const requestedProfileId = params.sessionAuthProfileId?.trim() || undefined;
+          const requestedCredential = requestedProfileId
+            ? store.profiles[requestedProfileId]
+            : undefined;
+          const matchingRequestedProfileId =
+            requestedCredential?.provider === authProvider ? requestedProfileId : undefined;
+          const lockedProfileId =
+            params.sessionAuthProfileSource === "user" ? matchingRequestedProfileId : undefined;
+          const orderedProfileIds = lockedProfileId
+            ? [lockedProfileId]
+            : resolveAuthProfileOrder({
+                cfg: params.config,
+                store,
+                provider: authProvider,
+                preferredProfile: matchingRequestedProfileId,
+                forModel: params.modelId,
+              });
+          const profileIds = orderedProfileIds.length > 0 ? orderedProfileIds : [undefined];
+          const attempts = profileIds.map((profileId, index) => {
+            const credential = profileId ? store.profiles[profileId] : undefined;
+            const canForwardProfile = credential?.provider === authProvider;
+            const plan = {
+              providerForAuth: params.provider,
+              modelId: params.modelId,
+              authProfileProviderForAuth: credential?.provider ?? params.provider,
+              ...(canForwardProfile && profileId
+                ? {
+                    forwardedAuthProfileId: profileId,
+                    forwardedAuthProfileSource:
+                      lockedProfileId === profileId ? ("user" as const) : ("auto" as const),
+                    forwardedAuthProfileCandidateIds: profileIds
+                      .slice(index)
+                      .filter((candidate): candidate is string => Boolean(candidate)),
+                    ...(credential?.type ? { selectedAuthMode: credential.type } : {}),
+                  }
+                : {}),
+            };
+            return profileId
+              ? { kind: "profile" as const, profileId, plan }
+              : { kind: "implicit" as const, plan };
+          });
+          const firstAttempt = attempts[0];
+          if (!firstAttempt) {
+            throw new Error("fast embedded runner auth mock produced no attempts");
+          }
+          return { plan: firstAttempt.plan, attempts };
+        },
+      ),
+    };
+  });
+  vi.doMock("../runtime-plan/materialize-model.js", () => ({
+    materializePreparedRuntimeModel: vi.fn(
+      async <Model>(params: { model?: Model }): Promise<Model | undefined> => params.model,
     ),
   }));
   vi.doMock("../embedded-agent-runner/run/attempt.js", () => ({

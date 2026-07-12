@@ -1,4 +1,5 @@
 // Github Copilot tests cover models plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { createProviderUsageFetch, makeResponse } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { deriveCopilotApiBaseUrlFromToken, resolveCopilotApiToken } from "./token.js";
@@ -652,7 +653,7 @@ describe("fetchCopilotModelCatalog", () => {
     });
 
     expect(out).toHaveLength(1);
-    expect(out[0].name).toBe("GPT-5.5");
+    expect(expectDefined(out[0], "GitHub Copilot model").name).toBe("GPT-5.5");
   });
 
   it("falls back from malformed live token limits", async () => {

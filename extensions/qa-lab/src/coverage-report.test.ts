@@ -1,4 +1,5 @@
 // Qa Lab tests cover coverage report plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   buildQaCoverageInventory,
@@ -244,8 +245,12 @@ describe("qa coverage report", () => {
     expect(observabilityPack?.missingScenarioIds).toStrictEqual([]);
     expect(observabilityPack?.scenarioIds).toEqual(["otel-trace-smoke", "docker-prometheus-smoke"]);
     expect(observabilityPack?.coverageIds).toContain("telemetry.prometheus");
-    expect(inventory.byTheme.memory.map((coverage) => coverage.id)).toContain("memory.recall");
-    expect(inventory.bySurface.memory.map((coverage) => coverage.id)).toContain("memory.recall");
+    expect(
+      expectDefined(inventory.byTheme.memory, "memory QA theme").map((coverage) => coverage.id),
+    ).toContain("memory.recall");
+    expect(
+      expectDefined(inventory.bySurface.memory, "memory QA surface").map((coverage) => coverage.id),
+    ).toContain("memory.recall");
   });
 
   it("rejects duplicate ownership across YAML and non-YAML catalogs", () => {

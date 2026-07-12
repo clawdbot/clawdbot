@@ -78,6 +78,25 @@ type ChromeMcpTargetOperation = ChromeMcpOperationOptions & {
   targetId: string;
 };
 
+export class ChromeMcpDocumentUnavailableError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "ChromeMcpDocumentUnavailableError";
+  }
+}
+
+function rethrowChromeMcpDocumentError(error: unknown): never {
+  const message = error instanceof Error ? error.message : String(error);
+  if (
+    /Element (?:with )?uid .* (?:not found|no longer exists) on (?:the )?page|Execution context was destroyed|Cannot find context with specified id|Frame (?:was |is )?detached|detached Frame|Node is detached from document/i.test(
+      message,
+    )
+  ) {
+    throw new ChromeMcpDocumentUnavailableError(message, { cause: error });
+  }
+  throw error;
+}
+
 type ChromeMcpCallOptions = ChromeMcpOperationOptions & {
   ephemeral?: boolean;
 };
@@ -2209,6 +2228,52 @@ export async function takeChromeMcpSnapshot(
       params.targetId,
       extractSnapshot(result),
     );
+  });
+}
+
+/** Run document-bound evaluations without releasing the target/session lock. */
+export async function withChromeMcpDocument<T>(
+  params: ChromeMcpTargetOperation,
+  task: (document: { evaluate: (fn: string) => Promise<unknown> }) => Promise<T>,
+): Promise<T> {
+  return await withChromeMcpTarget(params, async (target) => {
+    let snapshot: ChromeMcpSnapshotNode;
+    try {
+      snapshot = extractSnapshot(
+        await callTool(
+          params.profileName,
+          target.profileOptions,
+          "take_snapshot",
+          { pageId: target.pageId, verbose: true },
+          params,
+          target.lease,
+        ),
+      );
+    } catch (error) {
+      rethrowChromeMcpDocumentError(error);
+    }
+    const uid = normalizeOptionalString(snapshot.id);
+    if (!uid || snapshot.role?.trim().toLowerCase() !== "rootwebarea") {
+      throw new Error("Chrome MCP snapshot did not contain a top-level document uid");
+    }
+    return await task({
+      evaluate: async (fn) => {
+        try {
+          return extractJsonMessage(
+            await callTool(
+              params.profileName,
+              target.profileOptions,
+              "evaluate_script",
+              { pageId: target.pageId, function: fn, args: [uid] },
+              params,
+              target.lease,
+            ),
+          );
+        } catch (error) {
+          return rethrowChromeMcpDocumentError(error);
+        }
+      },
+    });
   });
 }
 

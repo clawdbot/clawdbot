@@ -1,6 +1,7 @@
 {
   "extends": "./tsconfig.test.json",
   "compilerOptions": {
+    "noUncheckedIndexedAccess": true,
     "tsBuildInfoFile": "../../.artifacts/tsgo-cache/extensions-test.tsbuildinfo"
   },
   "include": [

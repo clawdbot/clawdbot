@@ -1,4 +1,5 @@
 // Workboard tests cover command plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { handleWorkboardCommand } from "./command.js";
 import type { WorkboardSubagentRuntime, WorkboardWorktreeRuntime } from "./dispatcher.js";
@@ -63,7 +64,7 @@ describe("handleWorkboardCommand", () => {
         senderIsOwner: true,
       }),
     ).resolves.toEqual(expect.objectContaining({ text: expect.stringContaining("Ship CLI") }));
-    const card = (await store.list())[0];
+    const card = expectDefined((await store.list())[0], "created workboard card");
     expect(card).toMatchObject({ title: "Ship CLI" });
 
     await expect(handleWorkboardCommand({ api, store, args: "list" })).resolves.toEqual(

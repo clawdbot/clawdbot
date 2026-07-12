@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { setTimeout as scheduleNativeTimeout } from "node:timers";
+import { expectDefined } from "@openclaw/normalization-core";
 import { withMockedWindowsPlatform } from "openclaw/plugin-sdk/test-node-mocks";
 import type { Mock } from "vitest";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -204,7 +205,10 @@ import {
   resolveMemoryBackendConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  formatSqliteSessionFileMarker,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { formatSessionTranscriptMemoryHitKey } from "openclaw/plugin-sdk/session-transcript-hit";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -240,13 +244,23 @@ async function seedQmdSessionTranscript(params: {
   const timestamp =
     typeof params.timestamp === "number"
       ? params.timestamp
-      : Date.parse(params.timestamp ?? "2026-04-07T15:25:04.113Z");
+      : params.timestamp
+        ? Date.parse(params.timestamp)
+        : Date.now();
   await fs.mkdir(sessionsDir, { recursive: true });
   await upsertSessionEntry({
     agentId: params.agentId,
     sessionKey,
     storePath,
-    entry: { sessionId: params.sessionId, updatedAt: timestamp },
+    entry: {
+      sessionId: params.sessionId,
+      sessionFile: formatSqliteSessionFileMarker({
+        agentId: params.agentId,
+        sessionId: params.sessionId,
+        storePath,
+      }),
+      updatedAt: timestamp,
+    },
   });
   await appendSessionTranscriptMessageByIdentity({
     agentId: params.agentId,
@@ -308,6 +322,14 @@ describe("QmdMemoryManager", () => {
       throw new Error(message);
     }
     return value;
+  }
+
+  function requireArgAfter(args: readonly string[], flag: string): string {
+    const index = args.indexOf(flag);
+    if (index < 0) {
+      throw new Error(`expected ${flag} argument`);
+    }
+    return expectDefined(args[index + 1], `${flag} argument value`);
   }
 
   function mockMessages(mock: Mock): string[] {
@@ -4040,7 +4062,7 @@ describe("QmdMemoryManager", () => {
       if (isMcporterCommand(cmd) && args[0] === "call") {
         // Verify it calls qmd.query (v2) not qmd.deep_search (v1)
         expect(args[1]).toBe("qmd.query");
-        const callArgs = JSON.parse(args[args.indexOf("--args") + 1]);
+        const callArgs = JSON.parse(requireArgAfter(args, "--args"));
         // Verify QMD 1.1+ searches array format
         expect(callArgs).toHaveProperty("searches");
         expect(Array.isArray(callArgs.searches)).toBe(true);
@@ -4086,7 +4108,7 @@ describe("QmdMemoryManager", () => {
       const child = createMockChild({ autoClose: false });
       if (isMcporterCommand(cmd) && args[0] === "call") {
         expect(args[1]).toBe("qmd.query");
-        const callArgs = JSON.parse(args[args.indexOf("--args") + 1]);
+        const callArgs = JSON.parse(requireArgAfter(args, "--args"));
         expect(callArgs).toMatchObject({
           searches: [
             { type: "lex", query: "hello" },
@@ -4128,7 +4150,7 @@ describe("QmdMemoryManager", () => {
     spawnMock.mockImplementation((cmd: string, args: string[]) => {
       const child = createMockChild({ autoClose: false });
       if (isMcporterCommand(cmd) && args[0] === "call") {
-        captured = JSON.parse(args[args.indexOf("--args") + 1]);
+        captured = JSON.parse(requireArgAfter(args, "--args"));
         emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
         return child;
       }
@@ -4168,7 +4190,7 @@ describe("QmdMemoryManager", () => {
       const child = createMockChild({ autoClose: false });
       if (isMcporterCommand(cmd) && args[0] === "call") {
         expect(args[1]).toBe("qmd.query");
-        const callArgs = JSON.parse(args[args.indexOf("--args") + 1]);
+        const callArgs = JSON.parse(requireArgAfter(args, "--args"));
         expect(callArgs.searches).toEqual([
           { type: "lex", query: "sqlite-vec-qmd backend health 2026-05-04 multi-agent" },
           { type: "vec", query: "sqlite vec qmd backend health 2026 05 04 multi agent" },
@@ -4207,7 +4229,7 @@ describe("QmdMemoryManager", () => {
       const child = createMockChild({ autoClose: false });
       if (isMcporterCommand(cmd) && args[0] === "call") {
         expect(args[1]).toBe("qmd.query");
-        const callArgs = JSON.parse(args[args.indexOf("--args") + 1]);
+        const callArgs = JSON.parse(requireArgAfter(args, "--args"));
         expect(callArgs.searches).toEqual([{ type: "vec", query: "sqlite vec backend health" }]);
         emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
         return child;
@@ -4292,7 +4314,7 @@ describe("QmdMemoryManager", () => {
         }
         if (toolSelector === "qmd.deep_search") {
           // v1 tool exists — verify v1 args format
-          const callArgs = JSON.parse(args[args.indexOf("--args") + 1]);
+          const callArgs = JSON.parse(requireArgAfter(args, "--args"));
           expect(callArgs).toHaveProperty("query");
           expect(callArgs).not.toHaveProperty("searches");
           // Return empty results (avoids needing a SQLite fixture)
@@ -4340,7 +4362,7 @@ describe("QmdMemoryManager", () => {
       const child = createMockChild({ autoClose: false });
       if (isMcporterCommand(cmd) && args[0] === "call") {
         expect(args[1]).toBe("qmd.hybrid_search");
-        const callArgs = JSON.parse(args[args.indexOf("--args") + 1]);
+        const callArgs = JSON.parse(requireArgAfter(args, "--args"));
         expect(callArgs.query).toBe("hello");
         expect(callArgs.limit).toBe(expectedLimit);
         expect(callArgs.minScore).toBe(0);
@@ -4596,7 +4618,7 @@ describe("QmdMemoryManager", () => {
       const child = createMockChild({ autoClose: false });
       if (isMcporterCommand(cmd) && args[0] === "call") {
         expect(args[1]).toBe("qmd.query");
-        const callArgs = JSON.parse(args[args.indexOf("--args") + 1]);
+        const callArgs = JSON.parse(requireArgAfter(args, "--args"));
         expect(callArgs).toHaveProperty("searches", [{ type: "lex", query: "hello" }]);
         expect(callArgs).toHaveProperty("collections", ["workspace-main"]);
         expect(callArgs).not.toHaveProperty("query");
@@ -4635,7 +4657,7 @@ describe("QmdMemoryManager", () => {
       const child = createMockChild({ autoClose: false });
       if (isMcporterCommand(cmd) && args[0] === "call") {
         expect(args[1]).toBe("qmd.query");
-        const callArgs = JSON.parse(args[args.indexOf("--args") + 1]);
+        const callArgs = JSON.parse(requireArgAfter(args, "--args"));
         expect(callArgs).toMatchObject({
           searches: [
             { type: "lex", query: "hello" },
@@ -4693,7 +4715,7 @@ describe("QmdMemoryManager", () => {
           });
           return child;
         }
-        const callArgs = JSON.parse(args[args.indexOf("--args") + 1]);
+        const callArgs = JSON.parse(requireArgAfter(args, "--args"));
         expect(selector).toBe("qmd.search");
         expect(callArgs.query).toBe("hello");
         expect(callArgs.limit).toBe(expectedLimit);
@@ -4740,7 +4762,7 @@ describe("QmdMemoryManager", () => {
       const child = createMockChild({ autoClose: false });
       if (isMcporterCommand(cmd) && args[0] === "call") {
         selectors.push(args[1] ?? "");
-        const callArgs = JSON.parse(args[args.indexOf("--args") + 1]);
+        const callArgs = JSON.parse(requireArgAfter(args, "--args"));
         collections.push(String(callArgs.collection ?? ""));
         expect(callArgs.query).toBe("hello");
         expect(callArgs.limit).toBe(expectedLimit);
@@ -6502,7 +6524,8 @@ describe("QmdMemoryManager", () => {
       },
     ]);
 
-    expect(inner.resolveReadPath(results[0].path)).toBe(exportedSessionPath);
+    const result = expectDefined(results[0], "QMD session search result");
+    expect(inner.resolveReadPath(result.path)).toBe(exportedSessionPath);
     const realLstat = fs.lstat;
     const lstatSpy = vi.spyOn(fs, "lstat").mockImplementation(async (target, options) => {
       if (typeof target === "string" && path.resolve(target) === exportedSessionPath) {
@@ -6522,7 +6545,7 @@ describe("QmdMemoryManager", () => {
     });
 
     try {
-      const readResult = await manager.readFile({ relPath: results[0].path });
+      const readResult = await manager.readFile({ relPath: result.path });
       expect(readResult).toEqual({
         path: "qmd/sessions-main/session-1.md",
         text: "# Session session-1\n\nsession canary\n",

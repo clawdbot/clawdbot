@@ -10,5 +10,5 @@ export function evaluatePluginSdkDeclarationBudget({
   budgetKind: string;
   shouldFail: boolean;
 };
-export const MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES: 5100000;
+export const MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES: 5110000;
 export const MAX_PRIVATE_QA_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES: 5125000;

@@ -1,4 +1,5 @@
 // Sms tests cover inbound plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { dispatchSmsInboundEvent, type SmsChannelRuntime } from "./inbound.js";
 import type { sendSmsViaTwilio as sendSmsViaTwilioType } from "./twilio.js";
@@ -144,7 +145,7 @@ describe("dispatchSmsInboundEvent", () => {
       },
     });
 
-    const runParams = run.mock.calls[0]?.[0];
+    const runParams = expectDefined(run.mock.calls[0]?.[0], "SMS inbound run parameters");
     const ingested = runParams.adapter.ingest({
       from: "+15551234567",
       to: "+15557654321",

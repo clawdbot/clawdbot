@@ -1,4 +1,5 @@
 // Msteams tests cover inbound media plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../attachments.js", () => ({
@@ -405,7 +406,7 @@ describe("resolveMSTeamsInboundMedia bot framework DM routing", () => {
     expect(call?.attachmentIds).toEqual(["att-0", "att-1"]);
     expect(downloadMSTeamsGraphMedia).not.toHaveBeenCalled();
     expect(mediaList).toHaveLength(1);
-    expect(mediaList[0].path).toBe("/tmp/report.pdf");
+    expect(expectDefined(mediaList[0], "MSTeams inbound media").path).toBe("/tmp/report.pdf");
   });
 
   it("skips Graph fallback for an 'a:' conversation without an exact Graph chat ID", async () => {

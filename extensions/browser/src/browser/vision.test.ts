@@ -2,6 +2,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_BROWSER_SCREENSHOT_DESCRIPTION_PROMPT,
@@ -115,7 +116,9 @@ describe("describeBrowserScreenshot", () => {
       maxSide: 800,
     });
     expect(saveMediaBuffer).toHaveBeenCalledWith(Buffer.from("small"), "image/jpeg", "browser");
-    expect(describeResult.mock.calls[0][0].filePath).toBe("/tmp/resized.jpg");
+    expect(
+      expectDefined(describeResult.mock.calls[0]?.[0], "browser vision request").filePath,
+    ).toBe("/tmp/resized.jpg");
   });
 
   it("returns null when image understanding is skipped or not configured", async () => {
@@ -148,7 +151,9 @@ describe("describeBrowserScreenshot", () => {
       makeDeps(describeLocal),
     );
 
-    expect(describeLocal.mock.calls[0][0].activeModel).toBeUndefined();
+    expect(
+      expectDefined(describeLocal.mock.calls[0]?.[0], "local browser vision request").activeModel,
+    ).toBeUndefined();
   });
 });
 

@@ -480,4 +480,3 @@ export const testing = {
   detectLegacyPluginDependencyStateIssues,
   legacyPluginDependencyStateIssueToHealthFinding,
 };
-export { testing as __testing };

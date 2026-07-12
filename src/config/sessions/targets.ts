@@ -147,6 +147,41 @@ function resolveValidatedDiscoveredStorePathSync(params: {
     : undefined;
 }
 
+function isValidatedRecoveryCandidateSessionsDir(params: {
+  allowMissingAgentDir?: boolean;
+  realAgentsRoot: string;
+  sessionsDir: string;
+}): boolean {
+  const agentDir = path.dirname(params.sessionsDir);
+  try {
+    const agentStat = fsSync.lstatSync(agentDir);
+    if (agentStat.isSymbolicLink() || !agentStat.isDirectory()) {
+      return false;
+    }
+    if (!isWithinRoot(fsSync.realpathSync.native(agentDir), params.realAgentsRoot)) {
+      return false;
+    }
+    try {
+      const sessionsStat = fsSync.lstatSync(params.sessionsDir);
+      return (
+        !sessionsStat.isSymbolicLink() &&
+        sessionsStat.isDirectory() &&
+        isWithinRoot(fsSync.realpathSync.native(params.sessionsDir), params.realAgentsRoot)
+      );
+    } catch (err) {
+      return (err as NodeJS.ErrnoException).code === "ENOENT";
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return params.allowMissingAgentDir === true;
+    }
+    if (shouldSkipDiscoveryError(err)) {
+      return false;
+    }
+    throw err;
+  }
+}
+
 function resolveSessionStoreDiscoveryState(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
@@ -260,6 +295,82 @@ export function resolveAllAgentSessionStoreTargetsSync(
         const target = validatedStorePath
           ? toDiscoveredSessionStoreTarget(sessionsDir, validatedStorePath)
           : undefined;
+        return target ? [target] : [];
+      });
+    } catch (err) {
+      if (shouldSkipDiscoveryError(err)) {
+        return [];
+      }
+      throw err;
+    }
+  });
+  return dedupeTargetsBySqliteTarget([...validatedConfiguredTargets, ...discoveredTargets]);
+}
+
+/**
+ * Resolves recovery candidates without requiring either the legacy store or SQLite file.
+ * Callers must validate the selected artifact before performing filesystem mutations.
+ */
+export function resolveAllAgentSessionStoreCandidateTargetsSync(
+  cfg: OpenClawConfig,
+  params: { env?: NodeJS.ProcessEnv } = {},
+): SessionStoreTarget[] {
+  const env = params.env ?? process.env;
+  const { configuredTargets, agentsRoots } = resolveSessionStoreDiscoveryState(cfg, env);
+  const realAgentsRoots = new Map<string, string | undefined>();
+  const getRealAgentsRoot = (agentsRoot: string): string | undefined => {
+    if (realAgentsRoots.has(agentsRoot)) {
+      return realAgentsRoots.get(agentsRoot);
+    }
+    try {
+      const realAgentsRoot = fsSync.realpathSync.native(agentsRoot);
+      realAgentsRoots.set(agentsRoot, realAgentsRoot);
+      return realAgentsRoot;
+    } catch (err) {
+      if (shouldSkipDiscoveryError(err)) {
+        realAgentsRoots.set(agentsRoot, undefined);
+        return undefined;
+      }
+      throw err;
+    }
+  };
+  const validatedConfiguredTargets = configuredTargets.flatMap((target) => {
+    const agentsRoot = resolveAgentsDirFromSessionStorePath(target.storePath);
+    if (!agentsRoot) {
+      return [target];
+    }
+    if (!fsSync.existsSync(agentsRoot)) {
+      return [target];
+    }
+    const realAgentsRoot = getRealAgentsRoot(agentsRoot);
+    return realAgentsRoot &&
+      isValidatedRecoveryCandidateSessionsDir({
+        allowMissingAgentDir: true,
+        realAgentsRoot,
+        sessionsDir: path.dirname(target.storePath),
+      })
+      ? [target]
+      : [];
+  });
+  const discoveredTargets = agentsRoots.flatMap((agentsDir) => {
+    try {
+      const realAgentsRoot = getRealAgentsRoot(agentsDir);
+      if (!realAgentsRoot) {
+        return [];
+      }
+      return resolveAgentSessionDirsFromAgentsDirSync(agentsDir).flatMap((sessionsDir) => {
+        if (
+          !isValidatedRecoveryCandidateSessionsDir({
+            realAgentsRoot,
+            sessionsDir,
+          })
+        ) {
+          return [];
+        }
+        const target = toDiscoveredSessionStoreTarget(
+          sessionsDir,
+          path.join(sessionsDir, "sessions.json"),
+        );
         return target ? [target] : [];
       });
     } catch (err) {

@@ -6,6 +6,16 @@ import org.junit.Test
 
 class SessionsScreenGroupingTest {
   @Test
+  fun relativeTimeUsesCatalogBackedCompactLabels() {
+    val now = 10_000_000L
+
+    assertEquals("now", relativeSessionTime(updatedAtMs = now, nowMs = now))
+    assertEquals("5m", relativeSessionTime(updatedAtMs = now - 5 * 60_000L, nowMs = now))
+    assertEquals("3h", relativeSessionTime(updatedAtMs = now - 3 * 60 * 60_000L, nowMs = now))
+    assertEquals("2d", relativeSessionTime(updatedAtMs = now - 2 * 24 * 60 * 60_000L, nowMs = now))
+  }
+
+  @Test
   fun groupsPinnedThenAlphabeticalCategoriesThenUngrouped() {
     val sections =
       groupSessionEntries(

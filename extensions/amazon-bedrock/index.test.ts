@@ -1,6 +1,7 @@
 // Amazon Bedrock tests cover index plugin behavior.
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import {
@@ -1244,7 +1245,7 @@ describe("amazon-bedrock provider plugin", () => {
         role: string;
         content: Array<Record<string, unknown>>;
       }>;
-      const lastUserContent = messages[0].content;
+      const lastUserContent = expectDefined(messages[0], "last user message").content;
       expect(lastUserContent).toHaveLength(2);
       expect(lastUserContent[1]).toEqual({ cachePoint: { type: "default" } });
     });
@@ -1311,7 +1312,7 @@ describe("amazon-bedrock provider plugin", () => {
         role: string;
         content: Array<Record<string, unknown>>;
       }>;
-      expect(messages[0].content).toHaveLength(2);
+      expect(expectDefined(messages[0], "cached user message").content).toHaveLength(2);
     });
 
     it("does not inject cache points for regular Anthropic model IDs handled by the shared runtime", async () => {
@@ -1415,12 +1416,13 @@ describe("amazon-bedrock provider plugin", () => {
         content: Array<Record<string, unknown>>;
       }>;
       // First user message should NOT have a cache point
-      expect(messages[0].content).toHaveLength(1);
+      expect(expectDefined(messages[0], "first user message").content).toHaveLength(1);
       // Assistant message untouched
-      expect(messages[1].content).toHaveLength(1);
+      expect(expectDefined(messages[1], "assistant message").content).toHaveLength(1);
       // Last user message should have a cache point
-      expect(messages[2].content).toHaveLength(2);
-      expect(messages[2].content[1]).toEqual({ cachePoint: { type: "default" } });
+      const lastUserContent = expectDefined(messages[2], "last user message").content;
+      expect(lastUserContent).toHaveLength(2);
+      expect(lastUserContent[1]).toEqual({ cachePoint: { type: "default" } });
     });
 
     it("injects cache points for opaque application inference profile ARNs after profile lookup", async () => {

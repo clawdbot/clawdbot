@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { __testing as externalAuthTesting } from "./auth-profiles/external-auth.js";
+import { testing as externalAuthTesting } from "./auth-profiles/external-auth.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,

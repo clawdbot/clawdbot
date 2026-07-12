@@ -1,6 +1,7 @@
 // Browser tests cover pw session plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { Frame, Page } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_DOWNLOAD_DIR } from "./paths.js";
@@ -939,7 +940,7 @@ describe("pw-session ensurePageState", () => {
       mode: "aria",
     });
     expect(state.roleRefs).toBeDefined();
-    expect(state.roleRefs!.e1.role).toBe("heading");
+    expect(expectDefined(state.roleRefs?.e1, "stored Playwright role ref").role).toBe("heading");
     expect(state.roleRefsMode).toBe("aria");
   });
 });

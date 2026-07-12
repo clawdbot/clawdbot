@@ -310,13 +310,6 @@
       "text": "NIP-05"
     },
     {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-composer.ts",
-      "text": "&times;"
-    },
-    {
       "count": 2,
       "kind": "html-text",
       "name": "text",

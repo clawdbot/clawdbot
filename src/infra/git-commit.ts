@@ -261,4 +261,3 @@ export const resolveCommitHash = (
 export const testing = {
   clearCachedGitCommits,
 };
-export { testing as __testing };

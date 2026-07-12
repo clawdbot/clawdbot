@@ -99,6 +99,28 @@ export const PLUGIN_COMPAT_RECORDS = [
       "Memory-specific embedding provider registration remains wired as a deprecated compatibility path while providers migrate to the generic embedding provider contract.",
   },
   {
+    code: "deprecated-session-store-beta5-api",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-05-21",
+    deprecated: "2026-07-12",
+    warningStarts: "2026-07-12",
+    removeAfter: "2026-10-12",
+    replacement:
+      "`getSessionEntry(...)`, `listSessionEntries(...)`, and row-level session mutations",
+    docsPath: "/plugins/sdk-migration#removed-session-and-transcript-file-apis",
+    surfaces: [
+      "openclaw/plugin-sdk/session-store-runtime loadSessionStore",
+      "openclaw/plugin-sdk/session-store-runtime updateSessionStore",
+      "openclaw/plugin-sdk/session-store-runtime resolveSessionFilePath",
+      "openclaw/plugin-sdk/session-store-runtime resolveSessionStoreEntry",
+    ],
+    diagnostics: ["plugin SDK deprecation"],
+    tests: ["src/plugin-sdk/session-store-runtime.test.ts", "src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "The beta.5 session-store import set remains available for official plugins released with v2026.7.1-beta.5 while they migrate to row-level session access.",
+  },
+  {
     code: "removed-session-transcript-file-api",
     status: "removed",
     owner: "sdk",
@@ -107,10 +129,7 @@ export const PLUGIN_COMPAT_RECORDS = [
       "session identity (`sessionKey`/`sessionId`), `SessionTranscriptUpdate.target`, and Gateway/runtime session helpers",
     docsPath: "/plugins/sdk-migration#removed-session-and-transcript-file-apis",
     surfaces: [
-      "loadSessionStore",
       "saveSessionStore",
-      "updateSessionStore",
-      "resolveSessionFilePath",
       "resolveSessionTranscriptPathInDir",
       "resolveAndPersistSessionFile",
       "readLatestAssistantTextFromSessionTranscript",

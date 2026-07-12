@@ -1,5 +1,6 @@
 // Discord tests cover gateway plugin behavior.
 import { EventEmitter } from "node:events";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   GatewayCloseCodes,
   GatewayDispatchEvents,
@@ -454,7 +455,7 @@ describe("GatewayPlugin", () => {
     });
 
     gateway.connect(false);
-    const oldSocket = gateway.sockets[0];
+    const oldSocket = expectDefined(gateway.sockets[0], "old Discord gateway socket");
     oldSocket.emit("open");
     gateway.connect(false);
     const heartbeat = setInterval(() => {}, 1_000);

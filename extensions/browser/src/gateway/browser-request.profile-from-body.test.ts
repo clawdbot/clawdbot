@@ -1,4 +1,5 @@
 // Browser tests cover browser request.profile from body plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
@@ -82,7 +83,10 @@ async function runBrowserRequest(
 ) {
   const respond = vi.fn();
   const nodeRegistry = createContext(invokeResult, connectedNodes);
-  await browserHandlers["browser.request"]({
+  await expectDefined(
+    browserHandlers["browser.request"],
+    "browser request handler",
+  )({
     params,
     respond: respond as never,
     context: { nodeRegistry } as never,

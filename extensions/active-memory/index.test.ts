@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
@@ -125,6 +126,8 @@ describe("active-memory plugin", () => {
   });
 
   const hooks: Record<string, Function> = {};
+  const requireHook = (name: string): Function =>
+    expectDefined(hooks[name], `active-memory ${name} hook registration`);
   const hookOptions: Record<string, Record<string, unknown> | undefined> = {};
   const registeredCommands: Record<string, any> = {};
   const runEmbeddedAgent = vi.fn();
@@ -403,7 +406,7 @@ describe("active-memory plugin", () => {
       return { payloads: [{ text: params.summary }] };
     });
     return requirePrependContext(
-      await hooks.before_prompt_build(
+      await requireHook("before_prompt_build")(
         { prompt: params.prompt, messages: [] },
         {
           agentId: "main",
@@ -611,7 +614,7 @@ describe("active-memory plugin", () => {
   });
 
   it("runs recall without recording shared auth-profile failures", async () => {
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       { prompt: "what wings should i order?", messages: [] },
       {
         agentId: "main",
@@ -625,7 +628,7 @@ describe("active-memory plugin", () => {
   });
 
   it("runs recall on a dedicated active-memory lane", async () => {
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       { prompt: "what wings should i order?", messages: [] },
       {
         agentId: "main",
@@ -651,7 +654,7 @@ describe("active-memory plugin", () => {
       return { payloads: [{ text: "- lemon pepper wings" }] };
     });
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what wings should i order?", messages: [] },
       {
         agentId: "main",
@@ -715,13 +718,13 @@ describe("active-memory plugin", () => {
     };
     const event = { prompt: "what wings should i order?", messages: [] };
 
-    await hooks.before_prompt_build(event, hookParams);
+    await requireHook("before_prompt_build")(event, hookParams);
     const firstSessionKey = requireNonEmptyString(
       lastRuntimeEmbeddedRunParams().sessionKey,
       "expected first runtime session key",
     );
     testing.resetActiveRecallCacheForTests();
-    await hooks.before_prompt_build(event, hookParams);
+    await requireHook("before_prompt_build")(event, hookParams);
     const secondSessionKey = requireNonEmptyString(
       lastRuntimeEmbeddedRunParams().sessionKey,
       "expected second runtime session key",
@@ -735,7 +738,7 @@ describe("active-memory plugin", () => {
       new Error("session store is busy"),
     );
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what wings should i order? retry cleanup", messages: [] },
       {
         agentId: "main",
@@ -758,7 +761,7 @@ describe("active-memory plugin", () => {
       new Error("session store remains busy"),
     );
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what wings should i order? cleanup failure", messages: [] },
       {
         agentId: "main",
@@ -818,7 +821,7 @@ describe("active-memory plugin", () => {
 
     expect(statusResult.text).toBe("Active Memory: off for this session.");
 
-    const disabledResult = await hooks.before_prompt_build(
+    const disabledResult = await requireHook("before_prompt_build")(
       { prompt: "what wings should i order? active memory toggle", messages: [] },
       {
         agentId: "main",
@@ -845,7 +848,7 @@ describe("active-memory plugin", () => {
 
     expect(onResult.text).toContain("on for this session");
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       { prompt: "what wings should i order? active memory toggle", messages: [] },
       {
         agentId: "main",
@@ -921,7 +924,7 @@ describe("active-memory plugin", () => {
 
     expect(statusOffResult.text).toBe("Active Memory: off globally.");
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       { prompt: "what wings should i order while global active memory is off?", messages: [] },
       {
         agentId: "main",
@@ -957,7 +960,7 @@ describe("active-memory plugin", () => {
     expect(currentActiveMemoryConfig().enabled).toBe(true);
     expect(currentActiveMemoryConfig().agents).toEqual(["main"]);
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       { prompt: "what wings should i order after global active memory is back on?", messages: [] },
       {
         agentId: "main",
@@ -1110,7 +1113,7 @@ describe("active-memory plugin", () => {
       },
     };
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what wings should i order after a live config disable?", messages: [] },
       {
         agentId: "main",
@@ -1131,7 +1134,7 @@ describe("active-memory plugin", () => {
       },
     };
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what wings should i order after active memory is removed?", messages: [] },
       {
         agentId: "main",
@@ -1146,7 +1149,7 @@ describe("active-memory plugin", () => {
   });
 
   it("does not run for agents that are not explicitly targeted", async () => {
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what wings should i order?", messages: [] },
       {
         agentId: "support",
@@ -1184,7 +1187,7 @@ describe("active-memory plugin", () => {
       }
       const openKeyedStore = vi.spyOn(api.runtime.state, "openKeyedStore");
 
-      const result = await hooks.before_prompt_build(
+      const result = await requireHook("before_prompt_build")(
         { prompt: "continue this native Codex task", messages: [] },
         {
           agentId: "main",
@@ -1202,7 +1205,7 @@ describe("active-memory plugin", () => {
   );
 
   it("does not rewrite session state for skipped turns with no active-memory entry to clear", async () => {
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what wings should i order?", messages: [] },
       {
         agentId: "support",
@@ -1217,7 +1220,7 @@ describe("active-memory plugin", () => {
   });
 
   it("does not run for non-interactive contexts", async () => {
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what wings should i order?", messages: [] },
       {
         agentId: "main",
@@ -1232,7 +1235,7 @@ describe("active-memory plugin", () => {
   });
 
   it("does not run for dreaming-narrative cron session keys", async () => {
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what wings should i order?", messages: [] },
       {
         agentId: "main",
@@ -1252,7 +1255,7 @@ describe("active-memory plugin", () => {
       updatedAt: 1,
     };
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what wings should i order?", messages: [] },
       {
         agentId: "main",
@@ -1267,7 +1270,7 @@ describe("active-memory plugin", () => {
   });
 
   it("allows non-canonical session keys that merely contain the dreaming-narrative substring", async () => {
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what wings should i order?", messages: [] },
       {
         agentId: "main",
@@ -1286,7 +1289,7 @@ describe("active-memory plugin", () => {
   });
 
   it("allows real webchat session keys whose peer id starts with a phased dreaming-narrative prefix", async () => {
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what wings should i order?", messages: [] },
       {
         agentId: "main",
@@ -1305,7 +1308,7 @@ describe("active-memory plugin", () => {
   });
 
   it("defaults to direct-style sessions only", async () => {
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what wings should we order?", messages: [] },
       {
         agentId: "main",
@@ -1321,7 +1324,7 @@ describe("active-memory plugin", () => {
   });
 
   it("treats non-webchat main sessions as direct chats under the default dmScope", async () => {
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what wings should i order?", messages: [] },
       {
         agentId: "main",
@@ -1351,7 +1354,7 @@ describe("active-memory plugin", () => {
       session: { mainKey: "home" },
     };
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what wings should i order?", messages: [] },
       {
         agentId: "main",
@@ -1370,7 +1373,7 @@ describe("active-memory plugin", () => {
   });
 
   it("treats topic-threaded Telegram main session keys as direct chats", async () => {
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what wings should i order?", messages: [] },
       {
         agentId: "main",
@@ -1389,7 +1392,7 @@ describe("active-memory plugin", () => {
   });
 
   it("does not treat unknown topic-threaded session keys as direct chats", async () => {
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what wings should i order?", messages: [] },
       {
         agentId: "main",
@@ -1411,7 +1414,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what wings should we order?", messages: [] },
       {
         agentId: "main",
@@ -1436,7 +1439,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what wings should we order?", messages: [] },
       {
         agentId: "main",
@@ -1459,7 +1462,7 @@ describe("active-memory plugin", () => {
   });
 
   it("uses messageProvider not raw Telegram direct channelId for embedded recall (#82177)", async () => {
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what wings should i order?", messages: [] },
       {
         agentId: "main",
@@ -1486,7 +1489,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what did we decide?", messages: [] },
       {
         agentId: "main",
@@ -1512,7 +1515,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what should i work on next?", messages: [] },
       {
         agentId: "main",
@@ -1534,7 +1537,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what should i work on next?", messages: [] },
       {
         agentId: "main",
@@ -1557,7 +1560,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "hi", messages: [] },
       {
         agentId: "main",
@@ -1580,7 +1583,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "hi", messages: [] },
       {
         agentId: "main",
@@ -1606,7 +1609,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "hi", messages: [] },
       {
         agentId: "main",
@@ -1629,7 +1632,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "hi", messages: [] },
       {
         agentId: "main",
@@ -1654,7 +1657,7 @@ describe("active-memory plugin", () => {
 
     // The default main session key (agent:main:main) exposes no chat id; the
     // allowlist must not accidentally match it.
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "hi", messages: [] },
       {
         agentId: "main",
@@ -1681,7 +1684,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "hi", messages: [] },
       {
         agentId: "main",
@@ -1708,7 +1711,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "hi", messages: [] },
       {
         agentId: "main",
@@ -1732,7 +1735,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "hi", messages: [] },
       {
         agentId: "main",
@@ -1757,7 +1760,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "hi", messages: [] },
       {
         agentId: "main",
@@ -1784,7 +1787,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "hi", messages: [] },
       {
         agentId: "main",
@@ -1809,7 +1812,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "hi", messages: [] },
       {
         agentId: "main",
@@ -1825,7 +1828,7 @@ describe("active-memory plugin", () => {
   });
 
   it("injects system context on a successful recall hit", async () => {
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       {
         prompt: "what wings should i order?",
         messages: [
@@ -1880,7 +1883,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       {
         prompt: "what wings should i order? inherit-qmd-mode-check",
         messages: [],
@@ -1904,7 +1907,7 @@ describe("active-memory plugin", () => {
   });
 
   it("frames the blocking memory subagent as a memory search agent for another model", async () => {
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       {
         prompt: "What is my favorite food? strict-style-check",
         messages: [],
@@ -1969,7 +1972,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       {
         prompt: "What did we decide about active memory?",
         messages: [],
@@ -1994,7 +1997,7 @@ describe("active-memory plugin", () => {
   it("uses memory_recall by default when the memory slot selects LanceDB", async () => {
     setMemorySlot("memory-lancedb");
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       {
         prompt: "What did we decide about active memory?",
         messages: [],
@@ -2019,7 +2022,7 @@ describe("active-memory plugin", () => {
       toolsAllow: ["lcm_grep"],
     };
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       {
         prompt: "What did we decide about active memory?",
         messages: [],
@@ -2075,7 +2078,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       {
         prompt: "What did we decide about active memory?",
         messages: [],
@@ -2100,7 +2103,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       {
         prompt: "What did we decide about active memory?",
         messages: [],
@@ -2125,7 +2128,7 @@ describe("active-memory plugin", () => {
       toolsAllow: ["*", "group:plugins", "read", "exec", "message", "web_search"],
     };
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       {
         prompt: "What did we decide about active memory?",
         messages: [],
@@ -2150,7 +2153,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       {
         prompt: "What is my favorite food? preference-style-check",
         messages: [],
@@ -2178,7 +2181,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       {
         prompt: "What is my favorite food?",
         messages: [],
@@ -2199,7 +2202,7 @@ describe("active-memory plugin", () => {
   });
 
   it("keeps thinking off by default but allows an explicit thinking override", async () => {
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       {
         prompt: "What is my favorite food? default-thinking-check",
         messages: [],
@@ -2221,7 +2224,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       {
         prompt: "What is my favorite food? thinking-override-check",
         messages: [],
@@ -2245,7 +2248,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       {
         prompt: "What is my favorite food? prompt-append-check",
         messages: [],
@@ -2274,7 +2277,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       {
         prompt: "What is my favorite food? prompt-override-check",
         messages: [],
@@ -2304,7 +2307,7 @@ describe("active-memory plugin", () => {
       };
     });
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       {
         prompt: "what should i remember from my 2024 trip and should i buy 2% milk?",
         messages: [],
@@ -2326,7 +2329,7 @@ describe("active-memory plugin", () => {
   });
 
   it("preserves canonical parent session scope in the blocking memory subagent session key", async () => {
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       { prompt: "what should i grab on the way?", messages: [] },
       {
         agentId: "main",
@@ -2348,7 +2351,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       { prompt: "what wings should i order? temp transcript", messages: [] },
       {
         agentId: "main",
@@ -2395,7 +2398,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       { prompt: "what wings should i order? bare model default", messages: [] },
       {
         agentId: "main",
@@ -2417,7 +2420,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what wings should i order? no fallback", messages: [] },
       {
         agentId: "main",
@@ -2440,7 +2443,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       { prompt: "what wings should i order? custom fallback", messages: [] },
       {
         agentId: "main",
@@ -2479,7 +2482,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what wings should i order? built-in fallback", messages: [] },
       {
         agentId: "main",
@@ -2516,7 +2519,7 @@ describe("active-memory plugin", () => {
       };
     });
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       {
         prompt: "what wings should i order? debug telemetry",
         messages: [],
@@ -2572,7 +2575,7 @@ describe("active-memory plugin", () => {
       },
     );
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       { prompt: "debug transcript bug", messages: [] },
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
@@ -2977,7 +2980,7 @@ describe("active-memory plugin", () => {
       payloads: [{ text: "NONE" }],
     });
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       { prompt: "what's up with you?", messages: [] },
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
@@ -3019,7 +3022,7 @@ describe("active-memory plugin", () => {
       payloads: [{ text: "NONE" }],
     });
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "fair, okay gonna do them by throwing them in the garbage", messages: [] },
       {
         agentId: "main",
@@ -3042,7 +3045,7 @@ describe("active-memory plugin", () => {
     expect(testing.isMissingRegisteredMemoryToolsError(error)).toBe(true);
     runEmbeddedAgent.mockRejectedValueOnce(error);
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what wings should i order? missing memory tools", messages: [] },
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
@@ -3068,7 +3071,7 @@ describe("active-memory plugin", () => {
     expect(testing.isMissingRegisteredMemoryToolsError(error)).toBe(true);
     runEmbeddedAgent.mockRejectedValueOnce(error);
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what wings should i order? missing memory tools with policy", messages: [] },
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
@@ -3101,7 +3104,7 @@ describe("active-memory plugin", () => {
     expect(testing.isMissingRegisteredMemoryToolsError(error, toolsAllow)).toBe(true);
     runEmbeddedAgent.mockRejectedValueOnce(error);
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what did we decide? missing custom memory tools", messages: [] },
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
@@ -3126,7 +3129,7 @@ describe("active-memory plugin", () => {
     expect(testing.isMissingRegisteredMemoryToolsError(error)).toBe(true);
     runEmbeddedAgent.mockRejectedValueOnce(error);
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what wings should i order? memory tools filtered by policy", messages: [] },
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
@@ -3154,7 +3157,7 @@ describe("active-memory plugin", () => {
       expect(testing.isMissingRegisteredMemoryToolsError(error)).toBe(false);
       runEmbeddedAgent.mockRejectedValueOnce(error);
 
-      const result = await hooks.before_prompt_build(
+      const result = await requireHook("before_prompt_build")(
         { prompt: `what wings should i order? ${reason}`, messages: [] },
         { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
       );
@@ -3182,7 +3185,7 @@ describe("active-memory plugin", () => {
       throw makeMemoryToolAllowlistError("no registered tools matched");
     });
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what wings should i order? missing memory tools after abort", messages: [] },
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
@@ -3235,7 +3238,7 @@ describe("active-memory plugin", () => {
       },
     );
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what wings should i order? timeout partial", messages: [] },
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
@@ -3285,7 +3288,7 @@ describe("active-memory plugin", () => {
       },
     );
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what wings should i order? timeout partial temp", messages: [] },
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
@@ -3346,7 +3349,7 @@ describe("active-memory plugin", () => {
       },
     );
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what wings should i order? timeout partial sqlite", messages: [] },
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
@@ -3390,7 +3393,7 @@ describe("active-memory plugin", () => {
       },
     );
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what wings should i order? empty timeout transcript", messages: [] },
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
@@ -3421,7 +3424,7 @@ describe("active-memory plugin", () => {
       async (params: { abortSignal?: AbortSignal }) => await waitForAbort(params.abortSignal),
     );
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what wings should i order? missing timeout transcript", messages: [] },
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
@@ -3462,7 +3465,7 @@ describe("active-memory plugin", () => {
       },
     );
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what wings should i order? timeout boilerplate", messages: [] },
       {
         agentId: "main",
@@ -3512,7 +3515,7 @@ describe("active-memory plugin", () => {
       },
     );
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what wings should i order? abort partial", messages: [] },
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
@@ -3549,7 +3552,7 @@ describe("active-memory plugin", () => {
       throw new Error("synthetic failure");
     });
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what wings should i order? generic error", messages: [] },
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
@@ -3754,7 +3757,7 @@ describe("active-memory plugin", () => {
       payloads: [{ text: "NONE" }],
     });
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       { prompt: "what wings should i order? empty cache", messages: [] },
       {
         agentId: "main",
@@ -3763,7 +3766,7 @@ describe("active-memory plugin", () => {
         messageProvider: "webchat",
       },
     );
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       { prompt: "what wings should i order? empty cache", messages: [] },
       {
         agentId: "main",
@@ -3826,7 +3829,7 @@ describe("active-memory plugin", () => {
       });
     });
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       { prompt: "what wings should i order? timeout test", messages: [] },
       {
         agentId: "main",
@@ -3835,7 +3838,7 @@ describe("active-memory plugin", () => {
         messageProvider: "webchat",
       },
     );
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       { prompt: "what wings should i order? timeout test", messages: [] },
       {
         agentId: "main",
@@ -3864,7 +3867,7 @@ describe("active-memory plugin", () => {
     plugin.register(api as unknown as OpenClawPluginApi);
     runEmbeddedAgent.mockImplementationOnce(() => new Promise<never>(() => {}));
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what wings should i order? cleanup timeout", messages: [] },
       {
         agentId: "main",
@@ -3902,7 +3905,7 @@ describe("active-memory plugin", () => {
         }),
     );
 
-    const resultPromise = hooks.before_prompt_build(
+    const resultPromise = requireHook("before_prompt_build")(
       { prompt: "what wings should i order? slow timeout persistence", messages: [] },
       {
         agentId: "main",
@@ -3938,7 +3941,7 @@ describe("active-memory plugin", () => {
       });
     });
 
-    const resultPromise = hooks.before_prompt_build(
+    const resultPromise = requireHook("before_prompt_build")(
       { prompt: "what wings should i order? slow successful persistence", messages: [] },
       {
         agentId: "main",
@@ -3961,7 +3964,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       { prompt: "what wings should i order? session id cache", messages: [] },
       {
         agentId: "main",
@@ -3970,7 +3973,7 @@ describe("active-memory plugin", () => {
         messageProvider: "webchat",
       },
     );
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       { prompt: "what wings should i order? session id cache", messages: [] },
       {
         agentId: "main",
@@ -4010,7 +4013,7 @@ describe("active-memory plugin", () => {
       };
     });
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what wings should i order? late payload timeout", messages: [] },
       {
         agentId: "main",
@@ -4053,7 +4056,7 @@ describe("active-memory plugin", () => {
       return { payloads: [{ text: "remember the ramen place" }] };
     });
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what wings should i order? setup grace", messages: [] },
       {
         agentId: "main",
@@ -4086,7 +4089,7 @@ describe("active-memory plugin", () => {
     runEmbeddedAgent.mockImplementationOnce(() => new Promise<never>(() => {}));
 
     const startedAt = Date.now();
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what wings should i order? hard deadline test", messages: [] },
       {
         agentId: "main",
@@ -4135,7 +4138,7 @@ describe("active-memory plugin", () => {
       },
     );
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what food do i usually order? zero hit", messages: [] },
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
@@ -4185,7 +4188,7 @@ describe("active-memory plugin", () => {
       return { payloads: [{ text: "User usually orders ramen." }] };
     });
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what food do i usually order? zero hit with results", messages: [] },
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
@@ -4278,7 +4281,7 @@ describe("active-memory plugin", () => {
       };
     });
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what food do i usually order? unavailable then summary", messages: [] },
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
@@ -4344,7 +4347,7 @@ describe("active-memory plugin", () => {
       },
     );
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what food do i usually order? grounded timeout", messages: [] },
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
@@ -4401,7 +4404,7 @@ describe("active-memory plugin", () => {
       },
     );
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what food do i usually order? late unavailable", messages: [] },
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
@@ -4471,7 +4474,7 @@ describe("active-memory plugin", () => {
       },
     );
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what food do i usually order? unsettled timeout", messages: [] },
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
@@ -4536,7 +4539,7 @@ describe("active-memory plugin", () => {
       },
     );
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what food do i usually order? custom timeout failure", messages: [] },
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
@@ -4604,7 +4607,7 @@ describe("active-memory plugin", () => {
       return { payloads: [{ text: "User usually orders ramen." }] };
     });
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what food do i usually order? custom evidence", messages: [] },
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
@@ -4633,7 +4636,7 @@ describe("active-memory plugin", () => {
       return { payloads: [{ text: "User usually orders ramen." }] };
     });
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what food do i usually order? case insensitive", messages: [] },
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
@@ -4683,7 +4686,7 @@ describe("active-memory plugin", () => {
       return { payloads: [{ text: "User usually orders ramen." }] };
     });
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what food do i usually order? custom retry", messages: [] },
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
@@ -4732,7 +4735,7 @@ describe("active-memory plugin", () => {
       },
     );
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what food do i usually order? harness evidence", messages: [] },
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
@@ -4779,7 +4782,7 @@ describe("active-memory plugin", () => {
       return { payloads: [{ text: "This ungrounded summary must not become recalled context." }] };
     });
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what food do i usually order? custom content failure", messages: [] },
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
@@ -4806,7 +4809,7 @@ describe("active-memory plugin", () => {
     });
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    const resultPromise = hooks.before_prompt_build(
+    const resultPromise = requireHook("before_prompt_build")(
       { prompt: "what food do i usually order? stalled toggle lookup", messages: [] },
       {
         agentId: "main",
@@ -4847,7 +4850,7 @@ describe("active-memory plugin", () => {
     plugin.register(api as unknown as OpenClawPluginApi);
     runEmbeddedAgent.mockImplementationOnce(() => new Promise<never>(() => {}));
 
-    const resultPromise = hooks.before_prompt_build(
+    const resultPromise = requireHook("before_prompt_build")(
       { prompt: "what food do i usually order? delayed recall start", messages: [] },
       {
         agentId: "main",
@@ -4910,7 +4913,7 @@ describe("active-memory plugin", () => {
       return { payloads: [{ text: "This ungrounded summary must not become recalled context." }] };
     });
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what food do i usually order? empty search", messages: [] },
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
@@ -4955,7 +4958,7 @@ describe("active-memory plugin", () => {
       return { payloads: [{ text: "User usually orders tonkotsu ramen." }] };
     });
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what food do i usually order? unavailable diagnostic", messages: [] },
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
@@ -5016,7 +5019,7 @@ describe("active-memory plugin", () => {
       };
     });
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what food do i usually order? rotated transcript", messages: [] },
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
@@ -5059,7 +5062,7 @@ describe("active-memory plugin", () => {
       };
     });
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what food do i usually order? rotated unavailable", messages: [] },
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
@@ -5124,7 +5127,7 @@ describe("active-memory plugin", () => {
       },
     );
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what food do i usually order? rotated sqlite unavailable", messages: [] },
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
@@ -5166,7 +5169,7 @@ describe("active-memory plugin", () => {
       },
     );
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what food do i usually order? unavailable", messages: [] },
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
@@ -5214,7 +5217,7 @@ describe("active-memory plugin", () => {
       return { payloads: [{ text: "User usually orders ramen after late flights." }] };
     });
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what food do i usually order? memory get miss", messages: [] },
       {
         agentId: "main",
@@ -5229,7 +5232,7 @@ describe("active-memory plugin", () => {
   });
 
   it("returns undefined instead of throwing when an unexpected error escapes prompt building", async () => {
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what should i eat? escape test", messages: undefined as never },
       {
         agentId: "main",
@@ -5254,7 +5257,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       { prompt: "what wings should i order? high timeout", messages: [] },
       {
         agentId: "main",
@@ -5276,7 +5279,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       { prompt: "what wings should i order? capped timeout", messages: [] },
       {
         agentId: "main",
@@ -5297,7 +5300,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       { prompt: "what wings should i order? log sanitization", messages: [] },
       {
         agentId: "main",
@@ -5333,7 +5336,7 @@ describe("active-memory plugin", () => {
     const sessionPrefix = `agent:main:${"x".repeat(288)}`;
     const hugeSession = `${sessionPrefix}😀tail`;
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       { prompt: "what wings should i order? long log value", messages: [] },
       {
         agentId: "main",
@@ -5360,7 +5363,7 @@ describe("active-memory plugin", () => {
       channel: "telegram",
     };
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       { prompt: "what wings should i order? session id only", messages: [] },
       {
         agentId: "main",
@@ -5388,7 +5391,7 @@ describe("active-memory plugin", () => {
       updatedAt: 25,
     };
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what wings should i order? session id only telegram", messages: [] },
       {
         agentId: "main",
@@ -5429,7 +5432,7 @@ describe("active-memory plugin", () => {
       };
     });
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       { prompt: "what should i eat tonight?", messages: [] },
       {
         agentId: "main",
@@ -5460,7 +5463,7 @@ describe("active-memory plugin", () => {
       channel: "telegram",
     };
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       { prompt: "what wings should i order? wrapper channel hint", messages: [] },
       {
         agentId: "main",
@@ -5484,7 +5487,7 @@ describe("active-memory plugin", () => {
       },
     };
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       { prompt: "what wings should i order? scoped stored channel", messages: [] },
       {
         agentId: "main",
@@ -5507,7 +5510,7 @@ describe("active-memory plugin", () => {
       },
     };
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       { prompt: "what wings should i order? explicit channel hint", messages: [] },
       {
         agentId: "main",
@@ -5530,7 +5533,7 @@ describe("active-memory plugin", () => {
       },
     };
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       { prompt: "what wings should i order? direct explicit channel", messages: [] },
       {
         agentId: "main",
@@ -5557,7 +5560,7 @@ describe("active-memory plugin", () => {
       ],
     };
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "what wings should i order?", messages: [] },
       { trigger: "heartbeat", sessionKey, messageProvider: "webchat" },
     );
@@ -5587,7 +5590,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       {
         prompt: "what should i grab on the way?",
         messages: [
@@ -5620,7 +5623,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       {
         prompt: "what now?",
         messages: [
@@ -5659,7 +5662,7 @@ describe("active-memory plugin", () => {
     plugin.register(api as unknown as OpenClawPluginApi);
     const prefix = "a".repeat(479);
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       {
         prompt: `${prefix}😀tail`,
         messages: [],
@@ -5683,7 +5686,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       {
         prompt: [
           "Conversation info:",
@@ -5726,7 +5729,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       {
         prompt: "what should i grab on the way?",
         messages: [
@@ -5757,7 +5760,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       {
         prompt: "what should i grab on the way?",
         messages: [
@@ -5811,7 +5814,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       {
         prompt: "what should i grab on the way?",
         messages: [
@@ -5853,7 +5856,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       {
         prompt: "what should i grab on the way?",
         messages: [
@@ -5886,7 +5889,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       {
         prompt: "what should i remember?",
         messages: [
@@ -5926,7 +5929,7 @@ describe("active-memory plugin", () => {
       };
     });
 
-    const result = await hooks.before_prompt_build(
+    const result = await requireHook("before_prompt_build")(
       { prompt: "u remember my flight preferences", messages: [] },
       {
         agentId: "main",
@@ -5987,7 +5990,7 @@ describe("active-memory plugin", () => {
   });
 
   it("asks recall subagents to mark mutable operational facts stale unless source status is current", async () => {
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       { prompt: "is autonomous pickup running?", messages: [] },
       {
         agentId: "main",
@@ -6010,7 +6013,7 @@ describe("active-memory plugin", () => {
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       { prompt: "what wings should i order? prompt-count-check", messages: [] },
       {
         agentId: "main",
@@ -6029,7 +6032,7 @@ describe("active-memory plugin", () => {
     const mkdtempSpy = vi.spyOn(fs, "mkdtemp");
     const rmSpy = vi.spyOn(fs, "rm");
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       { prompt: "what wings should i order? temp transcript path", messages: [] },
       {
         agentId: "main",
@@ -6059,7 +6062,7 @@ describe("active-memory plugin", () => {
     const rmSpy = vi.spyOn(fs, "rm").mockResolvedValue(undefined);
 
     const sessionKey = "agent:main:persist-transcript";
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       { prompt: "what wings should i order? persist transcript", messages: [] },
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
@@ -6096,7 +6099,7 @@ describe("active-memory plugin", () => {
     plugin.register(api as unknown as OpenClawPluginApi);
     const mkdirSpy = vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       { prompt: "what wings should i order? unsafe transcript dir", messages: [] },
       {
         agentId: "main",
@@ -6135,7 +6138,7 @@ describe("active-memory plugin", () => {
     plugin.register(api as unknown as OpenClawPluginApi);
     const mkdirSpy = vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       { prompt: "what wings should i order? support agent transcript", messages: [] },
       {
         agentId: "support/agent",
@@ -6174,7 +6177,7 @@ describe("active-memory plugin", () => {
       payloads: [{ text: "- spicy ramen\u001b[31m\n- fries\r\n- blue cheese\t" }],
     });
 
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       { prompt: "what should i order?", messages: [] },
       { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
     );
@@ -6294,7 +6297,7 @@ describe("active-memory plugin", () => {
     );
 
     // First two calls should actually attempt the subagent (and timeout).
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       { prompt: "circuit breaker test 1", messages: [] },
       {
         agentId: "main",
@@ -6303,7 +6306,7 @@ describe("active-memory plugin", () => {
         messageProvider: "webchat",
       },
     );
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       { prompt: "circuit breaker test 2", messages: [] },
       {
         agentId: "main",
@@ -6315,7 +6318,7 @@ describe("active-memory plugin", () => {
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
 
     // Third call should be skipped by the circuit breaker.
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       { prompt: "circuit breaker test 3", messages: [] },
       {
         agentId: "main",
@@ -6350,7 +6353,7 @@ describe("active-memory plugin", () => {
     runEmbeddedAgent.mockImplementationOnce(
       async (params: { abortSignal?: AbortSignal }) => await waitForAbort(params.abortSignal),
     );
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       { prompt: "cb reset test timeout", messages: [] },
       {
         agentId: "main",
@@ -6362,7 +6365,7 @@ describe("active-memory plugin", () => {
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
 
     // Second call should be skipped by circuit breaker.
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       { prompt: "cb reset test skipped", messages: [] },
       {
         agentId: "main",
@@ -6384,7 +6387,7 @@ describe("active-memory plugin", () => {
     runEmbeddedAgent.mockImplementationOnce(async () => ({
       payloads: [{ text: "- lemon pepper wings" }],
     }));
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       { prompt: "cb reset test success", messages: [] },
       {
         agentId: "main",
@@ -6399,7 +6402,7 @@ describe("active-memory plugin", () => {
     runEmbeddedAgent.mockImplementationOnce(async () => ({
       payloads: [{ text: "- buffalo wings" }],
     }));
-    await hooks.before_prompt_build(
+    await requireHook("before_prompt_build")(
       { prompt: "cb reset test still ok", messages: [] },
       {
         agentId: "main",

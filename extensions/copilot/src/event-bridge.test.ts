@@ -1,5 +1,6 @@
-// Copilot tests cover event bridge plugin behavior.
 import type { SessionEvent } from "@github/copilot-sdk";
+// Copilot tests cover event bridge plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { attachEventBridge, type SessionLike } from "./event-bridge.js";
 
@@ -1133,7 +1134,10 @@ describe("attachEventBridge", () => {
 
     const first = bridge.snapshot();
     (first.assistantTexts as string[]).push("mutated");
-    (first.toolMetas as Array<{ meta?: string; toolName: string }>)[0].toolName = "mutated";
+    expectDefined(
+      (first.toolMetas as Array<{ meta?: string; toolName: string }>)[0],
+      "Copilot tool metadata",
+    ).toolName = "mutated";
     (first.usage as { input?: number }).input = 999;
 
     const second = bridge.snapshot();

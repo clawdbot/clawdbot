@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import {
@@ -216,13 +217,15 @@ function installPollingStallWatchdogHarness(dateNowSequence: readonly number[] =
       watchdogs.push(watchdog);
       resolveWatchdog?.(watchdog);
       for (let index = watchdogWaiters.length - 1; index >= 0; index -= 1) {
-        const waiter = watchdogWaiters[index];
+        const waiter = expectDefined(watchdogWaiters[index], `watchdog waiter ${index}`);
         if (watchdogs.length < waiter.count) {
           continue;
         }
         realClearTimeout(waiter.timeout);
         watchdogWaiters.splice(index, 1);
-        waiter.resolve(watchdogs[waiter.count - 1]);
+        waiter.resolve(
+          expectDefined(watchdogs[waiter.count - 1], `watchdog callback ${waiter.count}`),
+        );
       }
     }
     return 1 as unknown as ReturnType<typeof setInterval>;

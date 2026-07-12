@@ -1,5 +1,6 @@
 // Mattermost tests cover monitor websocket plugin behavior.
 import { once } from "node:events";
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import type { RuntimeEnv } from "../../runtime-api.js";
@@ -186,9 +187,11 @@ describe("mattermost websocket monitor", () => {
     await connectOnce();
 
     expect(sockets).toHaveLength(2);
-    expect(sockets[0].closeCalls).toBe(1);
-    expect(sockets[1].sent).toHaveLength(1);
-    expect(JSON.parse(sockets[1].sent[0] ?? "")).toEqual({
+    const firstSocket = expectDefined(sockets[0], "first Mattermost socket");
+    const secondSocket = expectDefined(sockets[1], "second Mattermost socket");
+    expect(firstSocket.closeCalls).toBe(1);
+    expect(secondSocket.sent).toHaveLength(1);
+    expect(JSON.parse(expectDefined(secondSocket.sent[0], "Mattermost auth payload"))).toEqual({
       action: "authentication_challenge",
       data: { token: "token" },
       seq: 1,

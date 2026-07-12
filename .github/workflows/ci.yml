@@ -438,6 +438,8 @@ jobs:
           const targetWorkflow = existsSync(".github/workflows/ci.yml")
             ? readFileSync(".github/workflows/ci.yml", "utf8")
             : "";
+          const supportsCurrentAndroidCi = targetWorkflow.includes("android-ci-contract-v2");
+          const useCompatibleAndroidCi = compatibilityTarget && !supportsCurrentAndroidCi;
           const supportsFormatCheck =
             targetWorkflow.split("pnpm format:check").length - 1 >= 2;
           const runFormatCheck = !frozenTarget || supportsFormatCheck;
@@ -548,10 +550,16 @@ jobs:
             android_matrix: createMatrix(
               runAndroid
                 ? [
+                    // android-ci-contract-v2: both app variants, Android lint, benchmark, and ktlint.
                     { check_name: "android-test-play", task: "test-play" },
                     { check_name: "android-test-third-party", task: "test-third-party" },
-                    { check_name: "android-build-play", task: "build-play" },
-                    { check_name: "android-ktlint", task: "ktlint" },
+                    {
+                      check_name: "android-build-play",
+                      task: useCompatibleAndroidCi ? "build-play-compat" : "build-play",
+                    },
+                    ...(!useCompatibleAndroidCi
+                      ? [{ check_name: "android-ktlint", task: "ktlint" }]
+                      : []),
                   ]
                 : [],
             ),
@@ -1200,7 +1208,7 @@ jobs:
           } else if (typeof smokePlan.createQaSmokeCiMatrix === "function") {
             // Legacy planners select the entire profile and can mix long-lived
             // execution kinds. Reuse the current bounded smoke contract and
-            // isolate each kind so frozen targets cannot pin a profile part.
+            // isolate each scenario so one invocation cannot pin a profile part.
             const compatibilityScenarioIds = new Set([
               "control-ui-chat-flow-playwright",
               "crestodian-ring-zero-setup",
@@ -1228,28 +1236,24 @@ jobs:
             const legacyRuns = smokePlan
               .createQaSmokeCiMatrix()
               .include.filter((_, index) => index % 2 === partIndex);
-            runs = legacyRuns.flatMap((run) => {
-              const scenarioIdsByKind = new Map();
-              for (const scenarioId of run.scenario_ids) {
+            runs = legacyRuns.flatMap((run) =>
+              run.scenario_ids.flatMap((scenarioId) => {
                 if (!compatibilityScenarioIds.has(scenarioId)) {
-                  continue;
+                  return [];
                 }
                 const kind = scenarioKindById.get(scenarioId);
                 if (!kind) {
                   throw new Error(`legacy QA smoke scenario not found: ${scenarioId}`);
                 }
-                const scenarioIds = scenarioIdsByKind.get(kind) ?? [];
-                scenarioIds.push(scenarioId);
-                scenarioIdsByKind.set(kind, scenarioIds);
-              }
-              return [...scenarioIdsByKind.entries()]
-                .toSorted(([left], [right]) => left.localeCompare(right))
-                .map(([kind, scenarioIds]) => ({
-                  ...run,
-                  slug: `${run.slug}-${kind}`,
-                  scenario_ids: scenarioIds,
-                }));
-            });
+                return [
+                  {
+                    ...run,
+                    slug: `${run.slug}-${kind}-${scenarioId}`,
+                    scenario_ids: [scenarioId],
+                  },
+                ];
+              }),
+            );
           } else {
             throw new Error("QA smoke plan does not expose a supported CI planner.");
           }
@@ -2544,6 +2548,11 @@ jobs:
                 :app:lintPlayDebug \
                 :app:lintThirdPartyDebug \
                 :benchmark:assembleDebug
+              ;;
+            build-play-compat)
+              # Frozen targets keep their target-owned Android build contract. New lint rules
+              # must not retroactively reject a previously validated release branch.
+              ./gradlew --no-daemon --build-cache :app:assemblePlayDebug
               ;;
             ktlint)
               # Mirrors `pnpm android:lint`; keeps formatting drift out of main (see PR #100304 sweep).

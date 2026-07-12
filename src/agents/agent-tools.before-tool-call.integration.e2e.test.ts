@@ -7,7 +7,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { updateSessionStore, type SessionEntry } from "../config/sessions.js";
+import type { SessionEntry } from "../config/sessions.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
 import {
   initializeGlobalHookRunner,
@@ -1341,12 +1342,10 @@ describe("before_tool_call hook integration for client tools", () => {
     ];
     setActivePluginRegistry(registry);
     try {
-      await updateSessionStore(storePath, (store) => {
-        store["agent:main:client"] = {
-          sessionId: "session-client",
-          updatedAt: Date.now(),
-        } as SessionEntry;
-      });
+      await replaceSessionEntry({ sessionKey: "agent:main:client", storePath }, {
+        sessionId: "session-client",
+        updatedAt: Date.now(),
+      } as SessionEntry);
       await expect(
         patchPluginSessionExtension({
           cfg: config as never,

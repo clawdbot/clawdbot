@@ -1,4 +1,5 @@
 // Memory Core tests cover mmr plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, it, expect } from "vitest";
 import {
   tokenize,
@@ -10,6 +11,10 @@ import {
   DEFAULT_MMR_CONFIG,
   type MMRItem,
 } from "./mmr.js";
+
+function requireEntry<T>(entries: readonly T[], index: number, context: string): T {
+  return expectDefined(entries[index], context);
+}
 
 describe("tokenize", () => {
   it("normalizes, filters, and deduplicates token sets", () => {
@@ -253,9 +258,9 @@ describe("mmrRerank", () => {
     it("lambda=0 maximizes diversity", () => {
       const result = mmrRerank(diverseItems, { enabled: true, lambda: 0 });
       // First item is still highest score (no penalty yet)
-      expect(result[0].id).toBe("1");
+      expect(requireEntry(result, 0, "first MMR result").id).toBe("1");
       // Second should be most different from first
-      expect(result[1].id).toBe("3"); // elderberry... is most different
+      expect(requireEntry(result, 1, "second MMR result").id).toBe("3"); // elderberry... is most different
     });
 
     it("clamps lambda > 1 to 1", () => {
@@ -265,8 +270,8 @@ describe("mmrRerank", () => {
 
     it("clamps lambda < 0 to 0", () => {
       const result = mmrRerank(diverseItems, { enabled: true, lambda: -0.5 });
-      expect(result[0].id).toBe("1");
-      expect(result[1].id).toBe("3");
+      expect(requireEntry(result, 0, "first MMR result").id).toBe("1");
+      expect(requireEntry(result, 1, "second MMR result").id).toBe("3");
     });
   });
 
@@ -282,9 +287,9 @@ describe("mmrRerank", () => {
       const result = mmrRerank(items, { enabled: true, lambda: 0.5 });
 
       // First is always highest score
-      expect(result[0].id).toBe("1");
+      expect(requireEntry(result, 0, "first MMR result").id).toBe("1");
       // Second should be the diverse database item, not another ML item
-      expect(result[1].id).toBe("3");
+      expect(requireEntry(result, 1, "second MMR result").id).toBe("3");
     });
 
     it("handles items with identical content", () => {
@@ -295,9 +300,9 @@ describe("mmrRerank", () => {
       ];
 
       const result = mmrRerank(items, { enabled: true, lambda: 0.5 });
-      expect(result[0].id).toBe("1");
+      expect(requireEntry(result, 0, "first MMR result").id).toBe("1");
       // Second should be different, not identical duplicate
-      expect(result[1].id).toBe("3");
+      expect(requireEntry(result, 1, "second MMR result").id).toBe("3");
     });
 
     it("handles all identical content gracefully", () => {
@@ -359,7 +364,7 @@ describe("mmrRerank", () => {
       const result = mmrRerank(items, { lambda: 0.7 });
       expect(result).toHaveLength(2);
       // Higher score (less negative) should come first
-      expect(result[0].id).toBe("1");
+      expect(requireEntry(result, 0, "first MMR result").id).toBe("1");
     });
   });
 });
@@ -446,9 +451,9 @@ describe("applyMMRToHybridResults", () => {
     const reranked = applyMMRToHybridResults(results, { enabled: true, lambda: 0.5 });
 
     // First stays the same (highest score)
-    expect(reranked[0].path).toBe("/a.ts");
+    expect(requireEntry(reranked, 0, "first reranked result").path).toBe("/a.ts");
     // Second should be the diverse one
-    expect(reranked[1].path).toBe("/c.ts");
+    expect(requireEntry(reranked, 1, "second reranked result").path).toBe("/c.ts");
   });
 
   it("respects disabled config", () => {

@@ -1,6 +1,7 @@
 // Browser tests cover profiles service plugin behavior.
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test-support.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -198,10 +199,11 @@ describe("BrowserProfilesService", () => {
       expect(Object.hasOwn(createdProfiles, profileName)).toBe(true);
 
       writeConfigFile.mockClear();
+      const createdProfile = expectDefined(createdProfiles[profileName], "created browser profile");
       vi.mocked(getRuntimeConfig).mockReturnValue({
         browser: {
           defaultProfile: "openclaw",
-          profiles: { [profileName]: createdProfiles[profileName] },
+          profiles: { [profileName]: createdProfile },
         },
       });
       await service.deleteProfile(profileName);

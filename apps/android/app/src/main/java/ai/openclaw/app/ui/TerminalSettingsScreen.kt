@@ -2,6 +2,7 @@ package ai.openclaw.app.ui
 
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NodeRuntime
+import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawPlainIconButton
 import ai.openclaw.app.ui.design.ClawScaffold
 import ai.openclaw.app.ui.design.ClawTheme
@@ -61,10 +62,10 @@ internal fun TerminalSettingsScreen(
       Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
         ClawPlainIconButton(
           icon = Icons.AutoMirrored.Filled.ArrowBack,
-          contentDescription = "Back",
+          contentDescription = nativeString("Back"),
           onClick = onBack,
         )
-        Text(text = "Terminal", style = ClawTheme.type.title, color = ClawTheme.colors.text, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(text = nativeString("Terminal"), style = ClawTheme.type.title, color = ClawTheme.colors.text, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
         Icon(imageVector = Icons.Outlined.Terminal, contentDescription = null, tint = ClawTheme.colors.textMuted)
       }
       Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
@@ -77,8 +78,8 @@ internal fun TerminalSettingsScreen(
           }
         } else {
           Column(modifier = Modifier.fillMaxWidth().padding(top = 48.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(text = "Terminal needs a connected gateway", style = ClawTheme.type.section, color = ClawTheme.colors.text)
-            Text(text = "Connect to your gateway to open a shell in the agent workspace.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+            Text(text = nativeString("Terminal needs a connected gateway"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+            Text(text = nativeString("Connect to your gateway to open a shell in the agent workspace."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
           }
         }
       }

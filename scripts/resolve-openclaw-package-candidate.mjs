@@ -1476,6 +1476,7 @@ async function resolveCandidate(options) {
       await installPackageSourceDeps(packageSource.sourceDir);
       await run("node", [
         "scripts/package-openclaw-for-docker.mjs",
+        "--allow-unreleased-changelog",
         "--source-dir",
         packageSource.sourceDir,
         "--output-dir",

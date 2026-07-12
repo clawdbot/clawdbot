@@ -22,6 +22,7 @@ import {
   loadSessionEntry,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { registerGroupIntroPromptCases } from "./reply.triggers.group-intro-prompts.cases.js";
 import { registerTriggerHandlingUsageSummaryCases } from "./reply.triggers.trigger-handling.filters-usage-summary-current-model-provider.cases.js";
 import { enqueueFollowupRun, getFollowupQueueDepth, type FollowupRun } from "./reply/queue.js";
@@ -590,10 +591,17 @@ describe("trigger handling", () => {
       const text = maybeReplyText(res);
       expect(text?.startsWith("⚙️ Compacted")).toBe(true);
       expect(getCompactEmbeddedAgentSessionMock()).toHaveBeenCalledOnce();
-      expect(
-        firstMockCallArg(getCompactEmbeddedAgentSessionMock(), "embedded OpenClaw compaction")
-          .sessionFile,
-      ).toContain(join("agents", "worker1", "sessions"));
+      const sessionFile = firstMockCallArg(
+        getCompactEmbeddedAgentSessionMock(),
+        "embedded OpenClaw compaction",
+      ).sessionFile;
+      if (typeof sessionFile !== "string") {
+        throw new Error("expected embedded OpenClaw compaction sessionFile");
+      }
+      expect(parseSqliteSessionFileMarker(sessionFile)).toMatchObject({
+        agentId: "worker1",
+        storePath: cfg.session.store,
+      });
     });
   });
 

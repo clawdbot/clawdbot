@@ -1,4 +1,5 @@
 // Browser tests cover server context.remote profile tab ops.fallback plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { withBrowserFetchPreconnect } from "../../test-fetch.js";
 import {
@@ -412,9 +413,11 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
 
     expect(Date.now() - startedAt).toBeLessThan(700);
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [fetchUrl, fetchInit] =
-      (fetchMock.mock.calls as Array<[string | URL, RequestInit & { dispatcher?: unknown }]>)[0] ??
-      [];
+    const call = expectDefined(
+      (fetchMock.mock.calls as Array<[string | URL, RequestInit & { dispatcher?: unknown }]>)[0],
+      "remote profile fetch call",
+    );
+    const [fetchUrl, fetchInit] = call;
     expect(String(fetchUrl)).toBe(
       "https://1.1.1.1:9222/chrome/json/new?token=abc&url=https%3A%2F%2Fexample.com",
     );

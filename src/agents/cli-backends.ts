@@ -522,4 +522,3 @@ export const testing = {
     };
   },
 } as const;
-export { testing as __testing };

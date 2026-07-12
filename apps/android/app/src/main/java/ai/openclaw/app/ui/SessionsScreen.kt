@@ -2,6 +2,7 @@ package ai.openclaw.app.ui
 
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawEmptyState
 import ai.openclaw.app.ui.design.ClawLoadingState
 import ai.openclaw.app.ui.design.ClawPlainIconButton
@@ -171,10 +172,10 @@ internal fun SessionsScreen(
           verticalAlignment = Alignment.CenterVertically,
           horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-          Text(text = "Sessions", style = ClawTheme.type.display.copy(fontSize = 24.sp, lineHeight = 28.sp), color = ClawTheme.colors.text, modifier = Modifier.weight(1f))
+          Text(text = nativeString("Sessions"), style = ClawTheme.type.display.copy(fontSize = 24.sp, lineHeight = 28.sp), color = ClawTheme.colors.text, modifier = Modifier.weight(1f))
           ClawPlainIconButton(
             icon = Icons.Default.Search,
-            contentDescription = "Focus session search",
+            contentDescription = nativeString("Focus session search"),
             onClick = {
               searchFocusRequester.requestFocus()
               keyboardController?.show()
@@ -185,9 +186,9 @@ internal fun SessionsScreen(
 
       item {
         Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-          FilterPill(text = "Recent", icon = Icons.Outlined.AccessTime, active = filter == SessionFilter.Recent, onClick = { filter = SessionFilter.Recent })
-          FilterPill(text = "Current", icon = Icons.Outlined.MicNone, active = filter == SessionFilter.Current, showDot = sessions.any { it.key == chatSessionKey }, onClick = { filter = SessionFilter.Current })
-          FilterPill(text = "Archived", icon = Icons.Outlined.Archive, active = filter == SessionFilter.Archived, onClick = { filter = SessionFilter.Archived })
+          FilterPill(text = nativeString("Recent"), icon = Icons.Outlined.AccessTime, active = filter == SessionFilter.Recent, onClick = { filter = SessionFilter.Recent })
+          FilterPill(text = nativeString("Current"), icon = Icons.Outlined.MicNone, active = filter == SessionFilter.Current, showDot = sessions.any { it.key == chatSessionKey }, onClick = { filter = SessionFilter.Current })
+          FilterPill(text = nativeString("Archived"), icon = Icons.Outlined.Archive, active = filter == SessionFilter.Archived, onClick = { filter = SessionFilter.Archived })
         }
       }
 
@@ -196,12 +197,12 @@ internal fun SessionsScreen(
           value = searchText,
           onValueChange = { searchText = it },
           modifier = Modifier.fillMaxWidth().focusRequester(searchFocusRequester),
-          placeholder = { Text(text = "Search sessions", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted) },
+          placeholder = { Text(text = nativeString("Search sessions"), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted) },
           singleLine = true,
           trailingIcon = {
             if (searchText.isNotEmpty()) {
               IconButton(onClick = { searchText = "" }) {
-                Icon(imageVector = Icons.Default.Close, contentDescription = "Clear session search")
+                Icon(imageVector = Icons.Default.Close, contentDescription = nativeString("Clear session search"))
               }
             }
           },
@@ -228,7 +229,17 @@ internal fun SessionsScreen(
                   verticalAlignment = Alignment.CenterVertically,
                   horizontalArrangement = Arrangement.spacedBy(5.dp),
                 ) {
-                  Text(text = "Sort: ${if (recentFirst) "Newest first" else "Oldest first"}", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+                  val sortOrder =
+                    if (recentFirst) {
+                      nativeString("Newest first")
+                    } else {
+                      nativeString("Oldest first")
+                    }
+                  Text(
+                    text = nativeString("Sort: \$sortOrder", sortOrder),
+                    style = ClawTheme.type.body,
+                    color = ClawTheme.colors.textMuted,
+                  )
                   Icon(
                     imageVector = if (sortMenuExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
                     contentDescription = null,
@@ -239,7 +250,7 @@ internal fun SessionsScreen(
               }
               if (sortMenuExpanded) {
                 HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
-                listOf(true to "Newest first", false to "Oldest first").forEach { (value, label) ->
+                listOf(true to nativeString("Newest first"), false to nativeString("Oldest first")).forEach { (value, label) ->
                   Surface(
                     onClick = {
                       recentFirst = value
@@ -260,12 +271,12 @@ internal fun SessionsScreen(
               }
             }
           }
-          SessionOutlineIconButton(icon = Icons.Default.Storage, contentDescription = "Toggle session layout", onClick = { compactLayout = !compactLayout })
+          SessionOutlineIconButton(icon = Icons.Default.Storage, contentDescription = nativeString("Toggle session layout"), onClick = { compactLayout = !compactLayout })
         }
       }
 
       item {
-        Text(text = if (compactLayout) "Layout: Compact" else "Layout: Detailed", style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle)
+        Text(text = if (compactLayout) nativeString("Layout: Compact") else nativeString("Layout: Detailed"), style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle)
       }
 
       if (visibleSessions.isEmpty()) {
@@ -275,18 +286,18 @@ internal fun SessionsScreen(
             contentAlignment = Alignment.Center,
           ) {
             when (sessionEmptyMode(searchQuery, searchLoading)) {
-              SessionEmptyMode.SearchLoading -> ClawLoadingState(title = "Searching sessions")
+              SessionEmptyMode.SearchLoading -> ClawLoadingState(title = nativeString("Searching sessions"))
               SessionEmptyMode.SearchNoMatches ->
                 ClawEmptyState(
-                  title = "No matching sessions",
-                  body = "Try a different search or clear the current query.",
-                  action = { ClawPrimaryButton(text = "Clear Search", onClick = { searchText = "" }) },
+                  title = nativeString("No matching sessions"),
+                  body = nativeString("Try a different search or clear the current query."),
+                  action = { ClawPrimaryButton(text = nativeString("Clear Search"), onClick = { searchText = "" }) },
                 )
               SessionEmptyMode.Filter ->
                 ClawEmptyState(
                   title = emptySessionTitle(filter),
                   body = emptySessionBody(filter),
-                  action = { ClawPrimaryButton(text = "Start Chat", onClick = onOpenChat) },
+                  action = { ClawPrimaryButton(text = nativeString("Start Chat"), onClick = onOpenChat) },
                 )
             }
           }
@@ -317,8 +328,8 @@ internal fun SessionsScreen(
             SessionRow(
               session = session,
               title = displaySessionTitle(session),
-              subtitle = if (active) "Current session" else "OpenClaw session",
-              metadata = (session.lastActivityAt ?: session.updatedAtMs)?.let(::relativeSessionTime) ?: "now",
+              subtitle = if (active) nativeString("Current session") else nativeString("OpenClaw session"),
+              metadata = (session.lastActivityAt ?: session.updatedAtMs)?.let(::relativeSessionTime) ?: nativeString("now"),
               active = active,
               compact = compactLayout,
               archived = session.archived == true,
@@ -362,10 +373,10 @@ internal fun SessionsScreen(
 
   sessions.firstOrNull { it.key == renameSessionKey }?.let { session ->
     SessionTextDialog(
-      title = "Rename session",
+      title = nativeString("Rename session"),
       stateKey = session.key,
       initialValue = session.label ?: session.displayName.orEmpty(),
-      confirmLabel = "Rename",
+      confirmLabel = nativeString("Rename"),
       allowEmpty = true,
       onDismiss = { renameSessionKey = null },
       onConfirm = { value ->
@@ -384,10 +395,10 @@ internal fun SessionsScreen(
 
   sessions.firstOrNull { it.key == groupSessionKey }?.let { session ->
     SessionTextDialog(
-      title = "New group",
+      title = nativeString("New group"),
       stateKey = session.key,
       initialValue = "",
-      confirmLabel = "Create",
+      confirmLabel = nativeString("Create"),
       allowEmpty = false,
       onDismiss = { groupSessionKey = null },
       onConfirm = { value ->
@@ -401,10 +412,10 @@ internal fun SessionsScreen(
 
   renameGroupName?.let { group ->
     SessionTextDialog(
-      title = "Rename group",
+      title = nativeString("Rename group"),
       stateKey = "group-rename:$group",
       initialValue = group,
-      confirmLabel = "Rename",
+      confirmLabel = nativeString("Rename"),
       allowEmpty = false,
       onDismiss = { renameGroupName = null },
       onConfirm = { value ->
@@ -419,10 +430,10 @@ internal fun SessionsScreen(
 
   if (newGroupDialogVisible) {
     SessionTextDialog(
-      title = "New group",
+      title = nativeString("New group"),
       stateKey = "group-new",
       initialValue = "",
-      confirmLabel = "Create",
+      confirmLabel = nativeString("Create"),
       allowEmpty = false,
       onDismiss = { newGroupDialogVisible = false },
       onConfirm = { value ->
@@ -436,8 +447,8 @@ internal fun SessionsScreen(
     AlertDialog(
       onDismissRequest = { deleteGroupName = null },
       containerColor = ClawTheme.colors.surfaceRaised,
-      title = { Text("Delete group?", style = ClawTheme.type.section, color = ClawTheme.colors.text) },
-      text = { Text("Sessions in \"$group\" are kept and move back to Ungrouped.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted) },
+      title = { Text(nativeString("Delete group?"), style = ClawTheme.type.section, color = ClawTheme.colors.text) },
+      text = { Text(nativeString("Sessions in \"\$group\" are kept and move back to Ungrouped.", group), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted) },
       confirmButton = {
         TextButton(
           onClick = {
@@ -445,12 +456,12 @@ internal fun SessionsScreen(
             coroutineScope.launch { viewModel.deleteChatSessionGroup(group) }
           },
         ) {
-          Text("Delete", color = ClawTheme.colors.danger)
+          Text(nativeString("Delete"), color = ClawTheme.colors.danger)
         }
       },
       dismissButton = {
         TextButton(onClick = { deleteGroupName = null }) {
-          Text("Cancel")
+          Text(nativeString("Cancel"))
         }
       },
     )
@@ -460,8 +471,8 @@ internal fun SessionsScreen(
     AlertDialog(
       onDismissRequest = { deleteSessionKey = null },
       containerColor = ClawTheme.colors.surfaceRaised,
-      title = { Text("Delete session?", style = ClawTheme.type.section, color = ClawTheme.colors.text) },
-      text = { Text("This permanently deletes the session and its transcript.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted) },
+      title = { Text(nativeString("Delete session?"), style = ClawTheme.type.section, color = ClawTheme.colors.text) },
+      text = { Text(nativeString("This permanently deletes the session and its transcript."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted) },
       confirmButton = {
         TextButton(
           onClick = {
@@ -469,12 +480,12 @@ internal fun SessionsScreen(
             coroutineScope.launch { viewModel.deleteChatSession(session.key) }
           },
         ) {
-          Text("Delete", color = ClawTheme.colors.danger)
+          Text(nativeString("Delete"), color = ClawTheme.colors.danger)
         }
       },
       dismissButton = {
         TextButton(onClick = { deleteSessionKey = null }) {
-          Text("Cancel")
+          Text(nativeString("Cancel"))
         }
       },
     )
@@ -596,7 +607,7 @@ private fun SessionRow(
                     Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(ClawTheme.colors.primary))
                   }
                   if (session.pinned == true) {
-                    Icon(imageVector = Icons.Default.PushPin, contentDescription = "Pinned", modifier = Modifier.size(13.dp), tint = ClawTheme.colors.textMuted)
+                    Icon(imageVector = Icons.Default.PushPin, contentDescription = nativeString("Pinned"), modifier = Modifier.size(13.dp), tint = ClawTheme.colors.textMuted)
                   }
                 }
               }
@@ -604,8 +615,8 @@ private fun SessionRow(
             if (!compact) {
               Text(text = subtitle, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
               Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                SessionMiniTag(text = "Workspace")
-                SessionMiniTag(text = if (active) "Current" else "OpenClaw")
+                SessionMiniTag(text = nativeString("Workspace"))
+                SessionMiniTag(text = if (active) nativeString("Current") else nativeString("OpenClaw"))
               }
             }
           }
@@ -625,16 +636,16 @@ private fun SessionRow(
         },
       ) {
         if (archived) {
-          SessionMenuItem("Unarchive") {
+          SessionMenuItem(nativeString("Unarchive")) {
             menuExpanded = false
             onSetArchived(false)
           }
-          SessionMenuItem("Delete…") {
+          SessionMenuItem(nativeString("Delete…")) {
             menuExpanded = false
             onDelete()
           }
         } else if (groupMenuVisible) {
-          SessionMenuItem("← Back") { groupMenuVisible = false }
+          SessionMenuItem(nativeString("← Back")) { groupMenuVisible = false }
           categories.forEach { category ->
             SessionMenuItem(category) {
               menuExpanded = false
@@ -642,37 +653,37 @@ private fun SessionRow(
               onMoveToGroup(category)
             }
           }
-          SessionMenuItem("New group…") {
+          SessionMenuItem(nativeString("New group…")) {
             menuExpanded = false
             groupMenuVisible = false
             onNewGroup()
           }
           if (!session.category.isNullOrBlank()) {
-            SessionMenuItem("Remove from group") {
+            SessionMenuItem(nativeString("Remove from group")) {
               menuExpanded = false
               groupMenuVisible = false
               onRemoveFromGroup()
             }
           }
         } else {
-          SessionMenuItem(if (session.pinned == true) "Unpin" else "Pin") {
+          SessionMenuItem(if (session.pinned == true) nativeString("Unpin") else nativeString("Pin")) {
             menuExpanded = false
             onSetPinned(session.pinned != true)
           }
-          SessionMenuItem(if (session.unread == true) "Mark as read" else "Mark as unread") {
+          SessionMenuItem(if (session.unread == true) nativeString("Mark as read") else nativeString("Mark as unread")) {
             menuExpanded = false
             onSetUnread(session.unread != true)
           }
-          SessionMenuItem("Rename…") {
+          SessionMenuItem(nativeString("Rename…")) {
             menuExpanded = false
             onRename()
           }
-          SessionMenuItem("Fork") {
+          SessionMenuItem(nativeString("Fork")) {
             menuExpanded = false
             onFork()
           }
-          SessionMenuItem("Move to group") { groupMenuVisible = true }
-          SessionMenuItem("Archive") {
+          SessionMenuItem(nativeString("Move to group")) { groupMenuVisible = true }
+          SessionMenuItem(nativeString("Archive")) {
             menuExpanded = false
             onSetArchived(true)
           }
@@ -706,15 +717,15 @@ private fun SessionGroupHeader(
         ),
     )
     DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
-      SessionMenuItem("Rename group…") {
+      SessionMenuItem(nativeString("Rename group…")) {
         menuExpanded = false
         onRename()
       }
-      SessionMenuItem("New group…") {
+      SessionMenuItem(nativeString("New group…")) {
         menuExpanded = false
         onNewGroup()
       }
-      SessionMenuItem("Delete group…") {
+      SessionMenuItem(nativeString("Delete group…")) {
         menuExpanded = false
         onDelete()
       }
@@ -754,7 +765,7 @@ private fun SessionTextDialog(
         value = value,
         onValueChange = { value = it },
         singleLine = true,
-        label = { Text(if (allowEmpty) "Name" else "Group name") },
+        label = { Text(if (allowEmpty) nativeString("Name") else nativeString("Group name")) },
       )
     },
     confirmButton = {
@@ -764,7 +775,7 @@ private fun SessionTextDialog(
     },
     dismissButton = {
       TextButton(onClick = onDismiss) {
-        Text("Cancel")
+        Text(nativeString("Cancel"))
       }
     },
   )
@@ -835,10 +846,10 @@ internal fun groupSessionEntries(
       .sortedBy { it.first.lowercase() }
   val ungrouped = remaining.filter { it.category.isNullOrBlank() }
   return buildList {
-    if (pinned.isNotEmpty()) add(SessionSection(title = "Pinned", entries = pinned))
+    if (pinned.isNotEmpty()) add(SessionSection(title = nativeString("Pinned"), entries = pinned))
     categories.forEach { (category, sessions) -> add(SessionSection(title = category, entries = sessions, isCategory = true)) }
     if (ungrouped.isNotEmpty()) {
-      add(SessionSection(title = "Ungrouped".takeIf { categories.isNotEmpty() }, entries = ungrouped))
+      add(SessionSection(title = nativeString("Ungrouped").takeIf { categories.isNotEmpty() }, entries = ungrouped))
     }
   }
 }
@@ -863,32 +874,36 @@ internal fun sessionEmptyMode(
 /** Empty-state title selected by the active session browser filter. */
 private fun emptySessionTitle(filter: SessionFilter): String =
   when (filter) {
-    SessionFilter.Recent -> "No sessions yet"
-    SessionFilter.Current -> "No current session"
-    SessionFilter.Archived -> "No archived sessions"
+    SessionFilter.Recent -> nativeString("No sessions yet")
+    SessionFilter.Current -> nativeString("No current session")
+    SessionFilter.Archived -> nativeString("No archived sessions")
   }
 
 /** Empty-state body selected by the active session browser filter. */
 private fun emptySessionBody(filter: SessionFilter): String =
   when (filter) {
-    SessionFilter.Recent -> "Start a new conversation and it will show up here."
-    SessionFilter.Current -> "Open Chat to start or resume the current session."
-    SessionFilter.Archived -> "Archived sessions will show up here."
+    SessionFilter.Recent -> nativeString("Start a new conversation and it will show up here.")
+    SessionFilter.Current -> nativeString("Open Chat to start or resume the current session.")
+    SessionFilter.Archived -> nativeString("Archived sessions will show up here.")
   }
 
 /** Formats session timestamps for compact mobile metadata. */
-private fun relativeSessionTime(updatedAtMs: Long): String {
-  val deltaMs = (System.currentTimeMillis() - updatedAtMs).coerceAtLeast(0L)
+internal fun relativeSessionTime(
+  updatedAtMs: Long,
+  nowMs: Long = System.currentTimeMillis(),
+): String {
+  val deltaMs = (nowMs - updatedAtMs).coerceAtLeast(0L)
   val minutes = deltaMs / 60_000L
-  if (minutes < 1) return "now"
-  if (minutes < 60) return "${minutes}m"
+  if (minutes < 1) return nativeString("now")
+  if (minutes < 60) return nativeString("\${minutes}m", minutes)
   val hours = minutes / 60
-  if (hours < 24) return "${hours}h"
-  return "${hours / 24}d"
+  if (hours < 24) return nativeString("\${hours}h", hours)
+  val days = hours / 24
+  return nativeString("\${days}d", days)
 }
 
 /** Prefers the editable label, then falls back to the gateway display name. */
 private fun displaySessionTitle(session: ChatSessionEntry): String =
   session.label?.takeIf { it.isNotBlank() }
     ?: session.displayName?.takeIf { it.isNotBlank() }
-    ?: "Main session"
+    ?: nativeString("Main session")

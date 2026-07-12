@@ -1,6 +1,7 @@
-// Control UI tests cover workboard status persistence behavior.
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
+// Control UI tests cover workboard status persistence behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { chromium, type Browser, type Locator, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { WorkboardCard } from "../../lib/workboard/index.ts";
@@ -322,7 +323,9 @@ describeControlUiE2e("Control UI Workboard status persistence E2E", () => {
       await page.getByRole("button", { name: "Save" }).click();
 
       const updateRequests = await waitForRequestCount(gateway, "workboard.cards.update", 1);
-      expect(requestParams(updateRequests[0])).toMatchObject({
+      expect(
+        requestParams(expectDefined(updateRequests[0], "workboard update request")),
+      ).toMatchObject({
         id: "card-1",
         patch: {
           notes: "Edited notes survive reopening.",

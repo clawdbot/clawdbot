@@ -1,6 +1,7 @@
 // File Transfer tests cover policy plugin behavior.
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock the plugin-sdk runtime-config surface so we can drive the policy
@@ -428,9 +429,11 @@ describe("persistAllowAlways", () => {
         };
       };
     };
-    expect(root.plugins.entries["file-transfer"].config.nodes.n1.allowReadPaths).toContain(
-      "/srv/added.png",
+    const node = expectDefined(
+      root.plugins.entries["file-transfer"].config.nodes.n1,
+      "n1 file-transfer node",
     );
+    expect(node.allowReadPaths).toContain("/srv/added.png");
   });
 
   it("creates a new node entry keyed by displayName when no entry exists", async () => {
@@ -459,9 +462,11 @@ describe("persistAllowAlways", () => {
         };
       };
     };
-    expect(root.plugins.entries["file-transfer"].config.nodes["Lobster"].allowWritePaths).toContain(
-      "/srv/out.txt",
+    const node = expectDefined(
+      root.plugins.entries["file-transfer"].config.nodes.Lobster,
+      "Lobster file-transfer node",
     );
+    expect(node.allowWritePaths).toContain("/srv/out.txt");
   });
 
   it("never persists under the '*' wildcard even when '*' is the matching key", async () => {
@@ -499,11 +504,12 @@ describe("persistAllowAlways", () => {
       };
     };
     // The "*" entry must not have been mutated.
-    expect(root.plugins.entries["file-transfer"].config.nodes["*"].allowReadPaths).toEqual([
+    const nodes = root.plugins.entries["file-transfer"].config.nodes;
+    expect(expectDefined(nodes["*"], "wildcard file-transfer node").allowReadPaths).toEqual([
       "/var/log/**",
     ]);
     // A new entry keyed by displayName (not "*") must hold the new path.
-    expect(root.plugins.entries["file-transfer"].config.nodes["Lobster"].allowReadPaths).toEqual([
+    expect(expectDefined(nodes.Lobster, "Lobster file-transfer node").allowReadPaths).toEqual([
       "/srv/added.png",
     ]);
   });
@@ -562,7 +568,10 @@ describe("persistAllowAlways", () => {
         };
       };
     };
-    const list = root.plugins.entries["file-transfer"].config.nodes.n1.allowReadPaths;
+    const list = expectDefined(
+      root.plugins.entries["file-transfer"].config.nodes.n1,
+      "n1 file-transfer node",
+    ).allowReadPaths;
     expect(list.reduce((count, p) => count + (p === "/tmp/x" ? 1 : 0), 0)).toBe(1);
   });
 });

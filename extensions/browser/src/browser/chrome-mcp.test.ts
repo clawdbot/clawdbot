@@ -6,6 +6,7 @@ import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  ChromeMcpDocumentUnavailableError,
   clickChromeMcpCoords,
   clickChromeMcpElement,
   closeChromeMcpTab,
@@ -29,6 +30,7 @@ import {
   takeChromeMcpScreenshot,
   takeChromeMcpSnapshot,
   uploadChromeMcpFile,
+  withChromeMcpDocument,
 } from "./chrome-mcp.js";
 
 type ToolCall = {
@@ -233,6 +235,106 @@ describe("chrome MCP page parsing", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllEnvs();
+  });
+
+  it("keeps document-bound evaluations on one pinned target and raw snapshot uid", async () => {
+    const session = createPageSession({
+      pid: 139,
+      pages: [{ id: 1, url: "https://example.com" }],
+      onTool: (call) => {
+        if (call.name === "take_snapshot") {
+          return {
+            structuredContent: {
+              snapshot: { id: "7_0", role: "RootWebArea", name: "Example" },
+            },
+          };
+        }
+        if (call.name === "evaluate_script") {
+          return { content: [{ type: "text", text: '```json\n"ok"\n```' }] };
+        }
+        return undefined;
+      },
+    });
+    setChromeMcpSessionFactoryForTest(async () => session);
+    const targetId = (await listChromeMcpTabs("chrome-live"))[0]?.targetId ?? "";
+
+    await expect(
+      withChromeMcpDocument({ profileName: "chrome-live", targetId }, async (document) => [
+        await document.evaluate("(root) => root.ownerDocument.location.href"),
+        await document.evaluate("(root) => root.textContent"),
+      ]),
+    ).resolves.toEqual(["ok", "ok"]);
+
+    const calls = (session.client.callTool as unknown as ToolCallMock).mock.calls.map(
+      ([call]) => call,
+    );
+    expect(calls.map((call) => call.name)).toEqual([
+      "list_pages",
+      "take_snapshot",
+      "evaluate_script",
+      "evaluate_script",
+    ]);
+    expect(calls.at(-1)?.arguments).toMatchObject({ pageId: 1, args: ["7_0"] });
+  });
+
+  it("brands a stale document uid so waits can recapture after navigation", async () => {
+    const session = createPageSession({
+      pid: 139,
+      pages: [{ id: 1, url: "https://example.com" }],
+      onTool: (call) => {
+        if (call.name === "take_snapshot") {
+          return {
+            structuredContent: { snapshot: { id: "8_0", role: "RootWebArea" } },
+          };
+        }
+        if (call.name === "evaluate_script") {
+          return {
+            isError: true,
+            content: [
+              { type: "text", text: 'Element with uid "8_0" no longer exists on the page.' },
+            ],
+          };
+        }
+        return undefined;
+      },
+    });
+    setChromeMcpSessionFactoryForTest(async () => session);
+    const targetId = (await listChromeMcpTabs("chrome-live"))[0]?.targetId ?? "";
+
+    await expect(
+      withChromeMcpDocument({ profileName: "chrome-live", targetId }, (document) =>
+        document.evaluate("(root) => root.ownerDocument.location.href"),
+      ),
+    ).rejects.toBeInstanceOf(ChromeMcpDocumentUnavailableError);
+  });
+
+  it.each([
+    ["take_snapshot", "Execution context was destroyed, most likely because of a navigation."],
+    ["evaluate_script", "Protocol error: Frame was detached."],
+  ])("brands navigation failure from %s for document recapture", async (failedTool, message) => {
+    const session = createPageSession({
+      pid: 139,
+      pages: [{ id: 1, url: "https://example.com" }],
+      onTool: (call) => {
+        if (call.name === failedTool) {
+          return { isError: true, content: [{ type: "text", text: message }] };
+        }
+        if (call.name === "take_snapshot") {
+          return {
+            structuredContent: { snapshot: { id: "9_0", role: "RootWebArea" } },
+          };
+        }
+        return undefined;
+      },
+    });
+    setChromeMcpSessionFactoryForTest(async () => session);
+    const targetId = (await listChromeMcpTabs("chrome-live"))[0]?.targetId ?? "";
+
+    await expect(
+      withChromeMcpDocument({ profileName: "chrome-live", targetId }, (document) =>
+        document.evaluate("(root) => root.ownerDocument.location.href"),
+      ),
+    ).rejects.toBeInstanceOf(ChromeMcpDocumentUnavailableError);
   });
 
   it("binds macOS ancestry, start time, and executable command in one snapshot row", () => {

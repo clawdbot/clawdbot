@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
@@ -2456,6 +2457,49 @@ describe("handleSendChat", () => {
     expect(getChatAttachmentDataUrl(attachment)).toBeNull();
   });
 
+  it("sends pasted plain text attachments as file payloads", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { status: "started" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const text = "large paste\n" + "x".repeat(1100);
+    const file = new File([text], "pasted-text-123.txt", { type: "text/plain" });
+    const attachment = registerChatAttachmentPayload({
+      attachment: {
+        id: "pasted-text-att",
+        mimeType: "text/plain",
+        fileName: "pasted-text-123.txt",
+        sizeBytes: file.size,
+      },
+      dataUrl: `data:text/plain;base64,${btoa(text)}`,
+      file,
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatAttachments: [attachment],
+      chatMessage: "summarize this",
+    });
+
+    await handleSendChat(host);
+
+    const payload = findRequestPayload(
+      request as unknown as MockCallSource,
+      "chat.send",
+      "chat send payload",
+    );
+    expect(payload.message).toBe("summarize this");
+    expect(payload.attachments).toStrictEqual([
+      {
+        type: "file",
+        mimeType: "text/plain",
+        fileName: "pasted-text-123.txt",
+        content: btoa(text),
+      },
+    ]);
+  });
+
   it("does not cross-gate case-distinct opaque Matrix sessions", async () => {
     const otherSessionSwitch = createDeferred<boolean>();
     const request = vi.fn(async (method: string) => {
@@ -2592,9 +2636,9 @@ describe("handleSendChat", () => {
 
     const send = handleSendChat(host);
     await Promise.resolve();
-    const queuedId = host.chatQueue[0]?.id;
-    expect(queuedId).toEqual(expect.any(String));
-    removeQueuedMessage(host, queuedId);
+    const queued = expectDefined(host.chatQueue[0], "queued pending send");
+    expect(queued.id).toEqual(expect.any(String));
+    removeQueuedMessage(host, queued.id);
 
     switchUpdate.resolve(false);
     await send;

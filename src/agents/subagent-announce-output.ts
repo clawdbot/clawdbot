@@ -590,4 +590,3 @@ export const testing = {
       : defaultSubagentAnnounceOutputDeps;
   },
 };
-export { testing as __testing };

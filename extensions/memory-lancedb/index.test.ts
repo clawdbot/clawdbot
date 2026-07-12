@@ -11,6 +11,7 @@
 import { Buffer } from "node:buffer";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import {
   clearMemoryPluginState,
@@ -2518,8 +2519,13 @@ describe("memory plugin e2e", () => {
 
       expect(loadLanceDbModule).toHaveBeenCalledTimes(1);
       expect(ensureGlobalUndiciEnvProxyDispatcher).toHaveBeenCalledOnce();
-      expect(ensureGlobalUndiciEnvProxyDispatcher.mock.invocationCallOrder[0]).toBeLessThan(
-        embeddingsCreate.mock.invocationCallOrder[0],
+      expect(
+        expectDefined(
+          ensureGlobalUndiciEnvProxyDispatcher.mock.invocationCallOrder[0],
+          "LanceDB proxy dispatcher invocation",
+        ),
+      ).toBeLessThan(
+        expectDefined(embeddingsCreate.mock.invocationCallOrder[0], "LanceDB embedding invocation"),
       );
       expect(embeddingsCreate).toHaveBeenCalledWith({
         model: "text-embedding-3-small",

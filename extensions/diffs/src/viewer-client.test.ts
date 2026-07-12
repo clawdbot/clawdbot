@@ -2,6 +2,7 @@
 
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const disableAutoStartKey = Symbol.for("openclaw.diffs.disableAutoStart");
@@ -318,7 +319,7 @@ describe("toolbar button toggles", () => {
     const toolbar = renderHeaderMetadata();
     const buttons = toolbar.querySelectorAll("button");
 
-    buttons[0].click();
+    expectDefined(buttons[0], "diff-style toggle").click();
 
     expect(fileDiffRerenderMock).toHaveBeenCalled();
 
@@ -340,7 +341,7 @@ describe("toolbar button toggles", () => {
     const toolbar = renderHeaderMetadata();
     const buttons = toolbar.querySelectorAll("button");
 
-    buttons[3].click();
+    expectDefined(buttons[3], "theme toggle").click();
 
     const lastOpts = fileDiffSetOptionsMock.mock.calls[
       fileDiffSetOptionsMock.mock.calls.length - 1
@@ -361,7 +362,7 @@ describe("toolbar button toggles", () => {
     const toolbar = renderHeaderMetadata();
     const buttons = toolbar.querySelectorAll("button");
 
-    buttons[1].click();
+    expectDefined(buttons[1], "wrap toggle").click();
 
     const lastOpts = fileDiffSetOptionsMock.mock.calls[
       fileDiffSetOptionsMock.mock.calls.length - 1
@@ -381,7 +382,7 @@ describe("toolbar button toggles", () => {
     const toolbar = renderHeaderMetadata();
     const buttons = toolbar.querySelectorAll("button");
 
-    buttons[2].click();
+    expectDefined(buttons[2], "background toggle").click();
 
     const lastOpts = fileDiffSetOptionsMock.mock.calls[
       fileDiffSetOptionsMock.mock.calls.length - 1

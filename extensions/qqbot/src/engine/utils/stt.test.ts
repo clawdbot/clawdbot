@@ -1,6 +1,7 @@
 // Qqbot tests cover stt plugin behavior.
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -159,7 +160,9 @@ describe("engine/utils/stt", () => {
       timeoutMs: 90_000,
     });
 
-    Object.assign(cfg.tools.media.audio.models[0], { timeoutSeconds: 75 });
+    Object.assign(expectDefined(cfg.tools.media.audio.models[0], "QQBot STT model"), {
+      timeoutSeconds: 75,
+    });
     expect(resolveSTTConfig(cfg)?.timeoutMs).toBe(75_000);
   });
 

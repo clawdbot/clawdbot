@@ -7,7 +7,10 @@ import type { DatabaseSync } from "node:sqlite";
 import { clearMemoryEmbeddingProviders as clearRegistry } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { hashText } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  formatSqliteSessionFileMarker,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
@@ -431,18 +434,23 @@ describe("memory index", () => {
     const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
     const storePath = path.join(sessionsDir, "sessions.json");
     const sessionKey = params.sessionKey ?? `agent:main:memory:${params.sessionId}`;
-    const timestamps = params.messages
-      .map((message) =>
-        typeof message.timestamp === "number" ? message.timestamp : Date.parse(message.timestamp),
-      )
-      .filter((timestamp) => Number.isFinite(timestamp));
-    const updatedAt = timestamps.length > 0 ? Math.max(...timestamps) : Date.now();
+    // Message timestamps are behavioral inputs; entry freshness only keeps the
+    // fixture out of real session-retention maintenance as wall time advances.
+    const updatedAt = Date.now();
     await fs.mkdir(sessionsDir, { recursive: true });
     await upsertSessionEntry({
       agentId: "main",
       sessionKey,
       storePath,
-      entry: { sessionId: params.sessionId, updatedAt },
+      entry: {
+        sessionId: params.sessionId,
+        sessionFile: formatSqliteSessionFileMarker({
+          agentId: "main",
+          sessionId: params.sessionId,
+          storePath,
+        }),
+        updatedAt,
+      },
     });
     for (const message of params.messages) {
       await appendSessionTranscriptMessageByIdentity({
@@ -2989,10 +2997,16 @@ describe("memory index", () => {
     const stateDirName = ".state-status-dirty-test";
     setMemoryIndexStateDir(path.join(workspaceDir, stateDirName));
     try {
-      const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-      await fs.mkdir(sessionsDir, { recursive: true });
-      const transcriptPath = path.join(sessionsDir, "status-dirty-test.jsonl");
-      await fs.writeFile(transcriptPath, JSON.stringify({ type: "test", ts: 1 }) + "\n");
+      await seedMemoryIndexSessionTranscript({
+        sessionId: "status-dirty-test",
+        messages: [
+          {
+            role: "user",
+            timestamp: 1,
+            content: "Unindexed session transcript.",
+          },
+        ],
+      });
 
       const manager = await getFreshManager(cfg, "status");
       managersForCleanup.add(manager);

@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   clockToMs,
@@ -71,8 +72,8 @@ describe("parseObservationSegments", () => {
     });
     const segments = parseObservationSegments({ raw, day: DAY, startMs, endMs });
     expect(segments).toHaveLength(2);
-    expect(segments[0].startMs).toBe(startMs);
-    expect(segments[1].endMs).toBe(endMs);
+    expect(expectDefined(segments[0], "first observation segment").startMs).toBe(startMs);
+    expect(expectDefined(segments[1], "second observation segment").endMs).toBe(endMs);
   });
 
   it("returns empty on unparseable output", () => {
@@ -107,8 +108,9 @@ describe("parseCardsJson", () => {
     });
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.drafts[0].category).toBe("coding");
-      expect(result.drafts[0].appPrimary).toBe("github.com");
+      const draft = expectDefined(result.drafts[0], "normalized logbook draft");
+      expect(draft.category).toBe("coding");
+      expect(draft.appPrimary).toBe("github.com");
     }
   });
 
@@ -119,7 +121,9 @@ describe("parseCardsJson", () => {
       windowStartMs,
       windowEndMs,
     });
-    expect(result.ok && result.drafts[0].category).toBe("other");
+    expect(result.ok && expectDefined(result.drafts[0], "unknown-category draft").category).toBe(
+      "other",
+    );
   });
 
   it("trims sub-minute overlaps and rejects large ones", () => {
@@ -134,7 +138,9 @@ describe("parseCardsJson", () => {
     });
     expect(trimmed.ok).toBe(true);
     if (trimmed.ok) {
-      expect(trimmed.drafts[1].startMs).toBe(trimmed.drafts[0].endMs);
+      const first = expectDefined(trimmed.drafts[0], "first overlap-trimmed draft");
+      const second = expectDefined(trimmed.drafts[1], "second overlap-trimmed draft");
+      expect(second.startMs).toBe(first.endMs);
     }
 
     const rejected = parseCardsJson({

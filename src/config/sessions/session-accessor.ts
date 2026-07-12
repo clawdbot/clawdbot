@@ -35,6 +35,7 @@ import {
   appendSqliteTranscriptMessage,
   applySqliteSessionEntryLifecycleMutation,
   applySqliteSessionEntryReplacements,
+  applySqliteSessionStoreProjection,
   appendSqliteExpectedSessionTranscriptTurn,
   cleanupSqliteSessionLifecycleArtifacts,
   deleteSqliteSessionEntryLifecycle,
@@ -1869,6 +1870,26 @@ export async function applySessionEntryReplacements<T>(params: {
   skipMaintenance?: boolean;
 }): Promise<T> {
   return await applySqliteSessionEntryReplacements(params);
+}
+
+/**
+ * Applies a detached whole-store projection under the storage writer lane.
+ * Compatibility adapters use this to preserve callback serialization while
+ * steady-state runtime callers stay on row-level accessors.
+ */
+export async function applySessionStoreProjection<T>(params: {
+  activeSessionKey?: string;
+  agentId?: string;
+  skipMaintenance?: boolean;
+  storePath: string;
+  update: (store: Record<string, SessionEntry>) =>
+    | Promise<{ persist: boolean; result: T }>
+    | {
+        persist: boolean;
+        result: T;
+      };
+}): Promise<T> {
+  return await applySqliteSessionStoreProjection(params);
 }
 
 /**

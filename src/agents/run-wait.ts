@@ -478,4 +478,3 @@ export const testing = {
       : defaultRunWaitDeps;
   },
 };
-export { testing as __testing };

@@ -13,6 +13,8 @@ import ai.openclaw.app.GatewayPendingDeviceSummary
 import ai.openclaw.app.GatewaySkillWorkshopProposal
 import ai.openclaw.app.GatewaySkillWorkshopSummary
 import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.i18n.resolveNativeText
+import ai.openclaw.app.i18n.verbatimText
 import ai.openclaw.app.normalizeOperatorScopes
 import ai.openclaw.app.ui.design.ClawStatus
 import androidx.compose.material.icons.Icons
@@ -22,6 +24,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.Locale
 
 class ShellScreenLogicTest {
   @Test
@@ -29,6 +32,17 @@ class ShellScreenLogicTest {
     assertTrue(shellBottomNavVisible(keyboardVisible = false, commandOpen = false))
     assertFalse(shellBottomNavVisible(keyboardVisible = true, commandOpen = false))
     assertFalse(shellBottomNavVisible(keyboardVisible = false, commandOpen = true))
+  }
+
+  @Test
+  fun localizedUppercaseUsesTheSelectedAppLocale() {
+    assertEquals("İLETİŞİM", localizedUppercase("iletişim", languageTag = "tr", fallbackLocale = Locale.US))
+  }
+
+  @Test
+  fun settingsDisclosureUsesTheLocalizedTitle() {
+    assertEquals("Open Nœuds et appareils", settingsRowDisclosureDescription("Nœuds et appareils", opensRoute = true))
+    assertEquals("Nœuds et appareils", settingsRowDisclosureDescription("Nœuds et appareils", opensRoute = false))
   }
 
   @Test
@@ -277,6 +291,17 @@ class ShellScreenLogicTest {
     assertEquals(listOf("pending"), skillWorkshopFilteredProposals(proposals, "all", "browser").map { it.id })
     assertTrue(skillWorkshopStatusMatchesFilter("stale", "held"))
     assertFalse(skillWorkshopStatusMatchesFilter("applied", "held"))
+  }
+
+  @Test
+  fun skillWorkshopStatusLabelsMapKnownCodesAndPreserveUnknownValues() {
+    assertEquals("Pending", skillWorkshopStatusLabel("pending"))
+    assertEquals("Held", skillWorkshopStatusLabel("quarantined"))
+    assertEquals("Held", skillWorkshopStatusLabel("stale"))
+    assertEquals("Applied", skillWorkshopStatusLabel("applied"))
+    assertEquals("Rejected", skillWorkshopStatusLabel("rejected"))
+    assertEquals("Loading", skillWorkshopStatusLabel("loading"))
+    assertEquals("future_status", skillWorkshopStatusLabel("future_status"))
   }
 
   @Test
@@ -661,6 +686,37 @@ class ShellScreenLogicTest {
   }
 
   @Test
+  fun channelsSummaryTextUsesDistinctIssuePluralization() {
+    fun channel(
+      id: String,
+      error: String?,
+    ) = GatewayChannelSummary(
+      id = id,
+      label = id,
+      accountCount = 1,
+      enabled = true,
+      configured = true,
+      linked = true,
+      running = error == null,
+      connected = error == null,
+      error = error,
+    )
+
+    assertEquals(
+      "1 issue",
+      channelsSummaryText(GatewayChannelsSummary(channels = listOf(channel("one", "offline")))),
+    )
+    assertEquals(
+      "2 issues",
+      channelsSummaryText(
+        GatewayChannelsSummary(
+          channels = listOf(channel("one", "offline"), channel("two", "unauthorized")),
+        ),
+      ),
+    )
+  }
+
+  @Test
   fun sessionSourceLabelDerivesCompactSourceFromRealSessionKey() {
     assertEquals("Telegram", sessionSourceLabel("telegram:8227096397"))
     assertEquals("Discord", sessionSourceLabel("discord:1465779285020381361#daily-inf"))
@@ -698,15 +754,15 @@ class ShellScreenLogicTest {
 
   @Test
   fun settingsSectionTitlesGroupPowerSettingsByMeaning() {
-    assertEquals("Connection", settingsSectionTitleForRoute(SettingsRoute.Gateway))
-    assertEquals("Connection", settingsSectionTitleForRoute(SettingsRoute.NodesDevices))
-    assertEquals("Agents & automation", settingsSectionTitleForRoute(SettingsRoute.ProvidersModels))
-    assertEquals("Agents & automation", settingsSectionTitleForRoute(SettingsRoute.Approvals))
-    assertEquals("Agents & automation", settingsSectionTitleForRoute(SettingsRoute.CronJobs))
-    assertEquals("Phone context & privacy", settingsSectionTitleForRoute(SettingsRoute.PhoneCapabilities))
-    assertEquals("Phone context & privacy", settingsSectionTitleForRoute(SettingsRoute.Notifications))
-    assertEquals("Profile & device", settingsSectionTitleForRoute(SettingsRoute.Appearance))
-    assertEquals("Diagnostics", settingsSectionTitleForRoute(SettingsRoute.Health))
+    assertEquals("Connection", settingsSectionTitleForRoute(SettingsRoute.Gateway).resolveNativeText())
+    assertEquals("Connection", settingsSectionTitleForRoute(SettingsRoute.NodesDevices).resolveNativeText())
+    assertEquals("Agents & automation", settingsSectionTitleForRoute(SettingsRoute.ProvidersModels).resolveNativeText())
+    assertEquals("Agents & automation", settingsSectionTitleForRoute(SettingsRoute.Approvals).resolveNativeText())
+    assertEquals("Agents & automation", settingsSectionTitleForRoute(SettingsRoute.CronJobs).resolveNativeText())
+    assertEquals("Phone context & privacy", settingsSectionTitleForRoute(SettingsRoute.PhoneCapabilities).resolveNativeText())
+    assertEquals("Phone context & privacy", settingsSectionTitleForRoute(SettingsRoute.Notifications).resolveNativeText())
+    assertEquals("Profile & device", settingsSectionTitleForRoute(SettingsRoute.Appearance).resolveNativeText())
+    assertEquals("Diagnostics", settingsSectionTitleForRoute(SettingsRoute.Health).resolveNativeText())
   }
 
   @Test
@@ -730,7 +786,7 @@ class ShellScreenLogicTest {
         "Profile & device",
         "Diagnostics",
       ),
-      sections.map { it.title },
+      sections.map { it.title.resolveNativeText() },
     )
   }
 
@@ -785,7 +841,7 @@ class ShellScreenLogicTest {
 
   private fun emptyNodesDevices(): GatewayNodesDevicesSummary = GatewayNodesDevicesSummary(nodes = emptyList(), pendingDevices = emptyList(), pairedDevices = emptyList())
 
-  private fun settingsRow(route: SettingsRoute): SettingsRow = SettingsRow(route.name, "Value", Icons.Default.Settings, route = route)
+  private fun settingsRow(route: SettingsRoute): SettingsRow = SettingsRow(verbatimText(route.name), verbatimText("Value"), Icons.Default.Settings, route = route)
 
   private fun authProblem(code: String): GatewayConnectionProblem =
     GatewayConnectionProblem(

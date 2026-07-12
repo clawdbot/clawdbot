@@ -1,4 +1,5 @@
 // Line tests cover message cards plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { datetimePickerAction, postbackAction, uriAction } from "./actions.js";
 import { registerLineCardCommand } from "./card-command.js";
@@ -240,7 +241,8 @@ describe("createProductCarousel", () => {
     const template = createProductCarousel([item]);
     const columns = (template.template as { columns: Array<{ actions: Array<{ type: string }> }> })
       .columns;
-    expect(columns[0].actions[0].type).toBe(expectedType);
+    const column = expectDefined(columns[0], "product carousel column");
+    expect(expectDefined(column.actions[0], "product carousel action").type).toBe(expectedType);
   });
 
   it("preserves the complete price when truncating a long description", () => {
@@ -253,8 +255,9 @@ describe("createProductCarousel", () => {
     ]);
     const columns = (template.template as { columns: Array<{ text: string }> }).columns;
 
-    expect(columns[0].text).toBe(`${"x".repeat(53)}\n$12.99`);
-    expect(columns[0].text.length).toBe(60);
+    const column = expectDefined(columns[0], "priced product carousel column");
+    expect(column.text).toBe(`${"x".repeat(53)}\n$12.99`);
+    expect(column.text.length).toBe(60);
   });
 });
 
@@ -263,7 +266,7 @@ describe("flex cards", () => {
     const card = createInfoCard("Title", "Body", "Footer text");
 
     const footer = card.footer as { contents: Array<{ text: string }> };
-    expect(footer.contents[0].text).toBe("Footer text");
+    expect(expectDefined(footer.contents[0], "info-card footer content").text).toBe("Footer text");
   });
 
   it("limits list items to 8", () => {
@@ -280,7 +283,7 @@ describe("flex cards", () => {
 
     const body = card.body as { contents: Array<{ text: string }> };
     expect(body.contents.length).toBe(2);
-    expect(body.contents[1].text).toBe("Body text");
+    expect(expectDefined(body.contents[1], "image-card body content").text).toBe("Body text");
   });
 
   it("limits action-card actions to 4", () => {
@@ -412,7 +415,10 @@ describe("action label/data surrogate-safe truncation", () => {
         };
       };
     };
-    const action = result.channelData.line.flexMessage.contents.footer.contents[0].action;
+    const action = expectDefined(
+      result.channelData.line.flexMessage.contents.footer.contents[0],
+      "LINE flex-message footer action",
+    ).action;
 
     expect(action.label).toBe("1234567890123456789");
     expect(loneHighSurrogate.test(action.label)).toBe(false);

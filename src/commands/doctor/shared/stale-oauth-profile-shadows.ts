@@ -330,6 +330,4 @@ export async function repairStaleOAuthProfileShadows(params: {
 export const testing = {
   removeStaleProfilesFromStore,
   repairStaleOAuthProfilesForAgent,
-  shouldRemoveLocalOAuthShadow,
 };
-export { testing as __testing };

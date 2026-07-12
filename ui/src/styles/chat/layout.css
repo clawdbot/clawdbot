@@ -28,6 +28,36 @@ openclaw-chat-page {
   box-shadow: none !important;
 }
 
+.chat::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 90;
+  pointer-events: none;
+  background: var(--accent);
+  opacity: 0;
+  transition: opacity 140ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.chat[data-attachment-drop-active]::after {
+  opacity: 0.1;
+}
+
+.chat > * {
+  transition: opacity 140ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.chat[data-attachment-drop-active] > * {
+  opacity: 0.5;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat::after,
+  .chat > * {
+    transition-duration: 0ms;
+  }
+}
+
 .chat-workbench__main {
   /* Positioning context for the floating rail openers so they pin to the
      thread column instead of overlapping an open right-docked rail. */
@@ -3066,7 +3096,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   gap: 8px;
   flex-wrap: wrap;
   flex-shrink: 0;
-  margin-top: 7px;
+  margin-top: 4px;
   padding-block-start: 10px;
   padding-inline-start: 10px;
   margin-bottom: 8px;
@@ -3085,6 +3115,13 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   width: 180px;
 }
 
+.chat-attachment-thumb--pasted-text {
+  width: min(220px, calc(100vw - 64px));
+  height: 60px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--panel) 72%, transparent);
+}
+
 .chat-attachment-thumb img {
   width: 100%;
   height: 100%;
@@ -3093,19 +3130,31 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 
 .chat-attachment-remove {
   position: absolute;
-  top: 2px;
-  right: 2px;
-  width: 24px;
-  height: 24px;
+  top: 4px;
+  right: 4px;
+  z-index: 1;
+  width: 20px;
+  height: 20px;
+  padding: 0;
   border-radius: 50%;
   border: none;
-  background: rgba(0, 0, 0, 0.6);
-  color: #fff;
+  background: var(--text);
+  color: var(--bg);
   font-size: 12px;
   line-height: 1;
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.chat-attachment-remove svg {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .chat-attachment-file {
@@ -3121,6 +3170,12 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   background: var(--panel);
 }
 
+.chat-attachment-file--pasted-text {
+  gap: 8px;
+  padding: 10px 42px 10px 10px;
+  background: color-mix(in srgb, var(--panel) 62%, transparent);
+}
+
 .chat-attachment-file__icon {
   display: inline-flex;
   flex: 0 0 auto;
@@ -3130,6 +3185,23 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 .chat-attachment-file__icon svg {
   width: 16px;
   height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chat-attachment-file--pasted-text .chat-attachment-file__icon {
+  width: 28px;
+  height: 40px;
+  align-items: center;
+  justify-content: center;
+}
+
+.chat-attachment-file--pasted-text .chat-attachment-file__icon svg {
+  width: 18px;
+  height: 18px;
 }
 
 .chat-attachment-file__name {
@@ -3137,6 +3209,55 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.chat-attachment-file--pasted-text .chat-attachment-file__name {
+  font-size: 0.86rem;
+  line-height: 1.2;
+}
+
+.chat-attachment-file__body {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.chat-attachment-file__meta {
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.chat-attachment-text-action {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  align-items: center;
+  gap: 3px;
+  padding: 0;
+  border: none;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  line-height: 1.15;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.chat-attachment-text-action:hover {
+  color: var(--text);
+}
+
+.chat-attachment-text-action svg {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .agent-chat__file-input,

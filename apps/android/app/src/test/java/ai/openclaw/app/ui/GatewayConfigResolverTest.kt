@@ -10,6 +10,21 @@ import java.util.Base64
 @RunWith(RobolectricTestRunner::class)
 class GatewayConfigResolverTest {
   @Test
+  fun insecureRemoteGuidanceRetainsTheCompleteSecurityRuleAndFix() {
+    val message =
+      gatewayEndpointValidationMessage(
+        GatewayEndpointValidationError.INSECURE_REMOTE_URL,
+        GatewayEndpointInputSource.MANUAL,
+      )
+
+    assertEquals(
+      "Public gateways require wss:// or Tailscale Serve. ws:// is allowed for localhost, .local hosts, the Android emulator, and private LAN IPs. " +
+        "Use a private LAN IP for local setup, or enable Tailscale Serve / expose a wss:// gateway URL for remote access.",
+      message,
+    )
+  }
+
+  @Test
   fun manualTransportForcesSecureConnectionForRemoteHosts() {
     val presentation =
       gatewayManualTransportPresentation(

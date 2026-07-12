@@ -2484,4 +2484,3 @@ export const testing = {
     nativeHookRelayDeferredToolApprovalRequester = requester;
   },
 } as const;
-export { testing as __testing };

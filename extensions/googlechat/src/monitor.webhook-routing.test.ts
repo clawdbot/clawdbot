@@ -1,6 +1,7 @@
 // Googlechat tests cover monitor.webhook routing plugin behavior.
 import { EventEmitter } from "node:events";
 import type { IncomingMessage } from "node:http";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   createEmptyPluginRegistry,
   setActivePluginRegistry,
@@ -145,8 +146,8 @@ async function expectVerifiedRoute(params: {
   expect(res.statusCode).toBe(params.expectedStatus);
   const expectedCounts =
     params.expectedSink === "A" ? [1, 0] : params.expectedSink === "B" ? [0, 1] : [0, 0];
-  expect(params.sinkA).toHaveBeenCalledTimes(expectedCounts[0]);
-  expect(params.sinkB).toHaveBeenCalledTimes(expectedCounts[1]);
+  expect(params.sinkA).toHaveBeenCalledTimes(expectDefined(expectedCounts[0], "sink A count"));
+  expect(params.sinkB).toHaveBeenCalledTimes(expectDefined(expectedCounts[1], "sink B count"));
 }
 
 function mockSecondVerifierSuccess() {

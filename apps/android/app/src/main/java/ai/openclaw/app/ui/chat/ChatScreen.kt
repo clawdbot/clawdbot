@@ -15,6 +15,11 @@ import ai.openclaw.app.chat.ChatThinkingLevelSelection
 import ai.openclaw.app.chat.MessageSpeechPhase
 import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.VoiceNoteRecorderState
+import ai.openclaw.app.currentAppLanguage
+import ai.openclaw.app.i18n.NativeText
+import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.i18n.nativeText
+import ai.openclaw.app.i18n.resolveNativeTextResource
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
 import ai.openclaw.app.ui.copyGatewayDiagnosticsReport
 import ai.openclaw.app.ui.design.AgentAvatarSource
@@ -32,6 +37,7 @@ import ai.openclaw.app.ui.design.OpenClawMascot
 import ai.openclaw.app.ui.design.agentAvatarSource
 import ai.openclaw.app.ui.gatewayDiagnosticsEndpoint
 import ai.openclaw.app.ui.gatewayStatusForDisplay
+import ai.openclaw.app.ui.localizedUppercase
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -217,7 +223,7 @@ fun ChatScreen(
     selectedModelRef?.let { selected ->
       modelCatalog.firstOrNull { it.providerQualifiedRef() == selected }?.name?.takeIf { it.isNotBlank() }
         ?: selected.substringAfterLast('/')
-    } ?: "Model"
+    } ?: nativeString("Model")
   val micCaptureActive = micEnabled || micIsListening || micCooldown || talkModeEnabled || talkModeListening
   val voiceNoteRecorder =
     rememberVoiceNoteRecorderController(
@@ -269,7 +275,13 @@ fun ChatScreen(
   }
 
   var input by rememberSaveable { mutableStateOf("") }
-  var shareImportNotice by rememberSaveable { mutableStateOf<String?>(null) }
+  var shareImportNoticeVisible by rememberSaveable { mutableStateOf(false) }
+  val shareImportNotice =
+    if (shareImportNoticeVisible) {
+      nativeText("Some shared images were omitted or could not be added.")
+    } else {
+      null
+    }
 
   LaunchedEffect(chatDraft) {
     input = mergeChatDraft(chatDraft, input) ?: return@LaunchedEffect
@@ -306,12 +318,7 @@ fun ChatScreen(
       input = merged.input
       attachments.clear()
       attachments.addAll(merged.attachments)
-      shareImportNotice =
-        if (merged.failedImageCount + merged.droppedImageCount > 0) {
-          "Some shared images were omitted or could not be added."
-        } else {
-          null
-        }
+      shareImportNoticeVisible = merged.failedImageCount + merged.droppedImageCount > 0
       viewModel.acknowledgeChatShareDraft(share.id)
     }
   }
@@ -379,7 +386,7 @@ fun ChatScreen(
 
     errorText?.takeIf { it.isNotBlank() }?.let { error ->
       ChatNotice(
-        title = "Chat needs attention",
+        title = nativeString("Chat needs attention"),
         body = userFacingChatError(error = error, gatewayConnected = gatewayConnectionDisplay.isConnected),
       )
     }
@@ -425,7 +432,7 @@ fun ChatScreen(
       pendingRunCount = pendingRunCount,
       shareStaging = chatShareDraft != null,
       shareImportNotice = shareImportNotice,
-      onDismissShareImportNotice = { shareImportNotice = null },
+      onDismissShareImportNotice = { shareImportNoticeVisible = false },
       commands = chatCommands,
       onThinkingLevelChange = viewModel::setChatThinkingLevel,
       onOpenModelPicker = { showModelPicker = true },
@@ -454,7 +461,7 @@ fun ChatScreen(
         if (viewModel.chatShareDraft.value != null) return@ChatComposer
         val message = input.trim()
         if (message.isEmpty() && attachments.isEmpty()) return@ChatComposer
-        shareImportNotice = null
+        shareImportNoticeVisible = false
         val outgoing = attachments.map(PendingAttachment::toOutgoingAttachment)
         val pendingAttachments = attachments.toList()
         input = ""
@@ -571,7 +578,7 @@ private fun ChatSessionSwitcher(
           horizontalArrangement = Arrangement.spacedBy(5.dp),
         ) {
           Icon(imageVector = Icons.Default.MoreHoriz, contentDescription = null, modifier = Modifier.size(16.dp))
-          Text(text = "All", style = ClawTheme.type.caption, maxLines = 1)
+          Text(text = nativeString("All"), style = ClawTheme.type.caption, maxLines = 1)
         }
       }
     }
@@ -642,7 +649,7 @@ private fun ChatHeader(
     ) {
       OpenClawMascot(modifier = Modifier.size(25.dp), tint = ClawTheme.colors.text)
       Text(
-        text = "OpenClaw",
+        text = nativeString("OpenClaw"),
         style = ClawTheme.type.title.copy(fontSize = 17.sp, lineHeight = 21.sp),
         color = ClawTheme.colors.text,
         modifier = Modifier.weight(1f),
@@ -652,9 +659,9 @@ private fun ChatHeader(
       ModelPill(
         text =
           when {
-            pendingRunCount > 0 -> "Working"
-            healthOk -> "Ready"
-            else -> "Offline"
+            pendingRunCount > 0 -> nativeString("Working")
+            healthOk -> nativeString("Ready")
+            else -> nativeString("Offline")
           },
         status =
           when {
@@ -663,12 +670,12 @@ private fun ChatHeader(
             else -> ClawStatus.Danger
           },
       )
-      HeaderIcon(icon = Icons.Default.Add, contentDescription = "New chat", enabled = newChatEnabled, onClick = onNewChat)
+      HeaderIcon(icon = Icons.Default.Add, contentDescription = nativeString("New chat"), enabled = newChatEnabled, onClick = onNewChat)
       if (workspaceGit) {
         Box {
           HeaderIcon(
             icon = Icons.Default.MoreHoriz,
-            contentDescription = "More new chat options",
+            contentDescription = nativeString("More new chat options"),
             enabled = newChatEnabled,
             onClick = { newChatMenuExpanded = true },
           )
@@ -683,10 +690,10 @@ private fun ChatHeader(
           }
         }
       }
-      HeaderIcon(icon = Icons.Default.Refresh, contentDescription = "Refresh chat", onClick = onMore)
+      HeaderIcon(icon = Icons.Default.Refresh, contentDescription = nativeString("Refresh chat"), onClick = onMore)
     }
     Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-      Text(text = "Chat", style = ClawTheme.type.display.copy(fontSize = 24.sp, lineHeight = 28.sp), color = ClawTheme.colors.text, maxLines = 1)
+      Text(text = nativeString("Chat"), style = ClawTheme.type.display.copy(fontSize = 24.sp, lineHeight = 28.sp), color = ClawTheme.colors.text, maxLines = 1)
       Text(
         text = sessionTitle,
         style = ClawTheme.type.caption.copy(fontSize = 13.sp, lineHeight = 17.sp),
@@ -834,7 +841,7 @@ private fun ChatMessageList(
 
     if (timeline.items.isEmpty()) {
       if (showChatLoadingPlaceholder(historyLoading = historyLoading, healthOk = healthOk, gatewayOffline = gatewayOffline)) {
-        ClawLoadingState(title = "Loading session", modifier = Modifier.align(Alignment.Center))
+        ClawLoadingState(title = nativeString("Loading session"), modifier = Modifier.align(Alignment.Center))
       } else {
         EmptyChatHint(
           healthOk = healthOk,
@@ -861,7 +868,7 @@ private fun ChatMessageList(
           verticalAlignment = Alignment.CenterVertically,
         ) {
           Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(16.dp))
-          Text(text = "Jump to latest", style = ClawTheme.type.caption.copy(fontWeight = FontWeight.SemiBold))
+          Text(text = nativeString("Jump to latest"), style = ClawTheme.type.caption.copy(fontWeight = FontWeight.SemiBold))
         }
       }
     }
@@ -887,15 +894,15 @@ private fun EmptyChatHint(
     verticalArrangement = Arrangement.spacedBy(12.dp),
   ) {
     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(5.dp)) {
-      Text(text = if (healthOk) "Ready when you are" else "Gateway offline", style = ClawTheme.type.title.copy(fontSize = 18.sp, lineHeight = 23.sp), color = ClawTheme.colors.text)
+      Text(text = if (healthOk) nativeString("Ready when you are") else nativeString("Gateway offline"), style = ClawTheme.type.title.copy(fontSize = 18.sp, lineHeight = 23.sp), color = ClawTheme.colors.text)
       Text(
         text =
           if (healthOk) {
-            "Start with a prompt, or use voice."
+            nativeString("Start with a prompt, or use voice.")
           } else if (gatewayOffline) {
-            "Use the recovery options below to reconnect."
+            nativeString("Use the recovery options below to reconnect.")
           } else {
-            "Chat is checking Gateway health."
+            nativeString("Chat is checking Gateway health.")
           },
         style = ClawTheme.type.body,
         color = ClawTheme.colors.textMuted,
@@ -918,8 +925,8 @@ private fun ChatOfflineActions(
     modifier = modifier.fillMaxWidth(),
     horizontalArrangement = Arrangement.spacedBy(8.dp),
   ) {
-    ClawPrimaryButton(text = "Fix connection", icon = Icons.Default.Cloud, onClick = onFixConnection, modifier = Modifier.weight(1f))
-    ClawSecondaryButton(text = "Copy diagnostics", icon = Icons.Default.ContentCopy, onClick = onCopyDiagnostics, modifier = Modifier.weight(1f))
+    ClawPrimaryButton(text = nativeString("Fix connection"), icon = Icons.Default.Cloud, onClick = onFixConnection, modifier = Modifier.weight(1f))
+    ClawSecondaryButton(text = nativeString("Copy diagnostics"), icon = Icons.Default.ContentCopy, onClick = onCopyDiagnostics, modifier = Modifier.weight(1f))
   }
 }
 
@@ -928,7 +935,8 @@ private fun StarterPromptList(onStarterPrompt: (String) -> Unit) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
     Column {
       starterPrompts.forEachIndexed { index, prompt ->
-        StarterPromptRow(prompt = prompt, onClick = { onStarterPrompt(prompt.message) })
+        val message = prompt.message.resolveNativeTextResource()
+        StarterPromptRow(prompt = prompt, onClick = { onStarterPrompt(message) })
         if (index != starterPrompts.lastIndex) {
           HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
         }
@@ -958,26 +966,41 @@ private fun StarterPromptRow(
         Text(text = prompt.mark, style = ClawTheme.type.label, color = ClawTheme.colors.text)
       }
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-        Text(text = prompt.title, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1)
-        Text(text = prompt.subtitle, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(text = prompt.title.resolveNativeTextResource(), style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1)
+        Text(text = prompt.subtitle.resolveNativeTextResource(), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
       }
     }
   }
 }
 
-private data class StarterPrompt(
+internal data class StarterPrompt(
   val mark: String,
-  val title: String,
-  val subtitle: String,
-  val message: String,
+  val title: NativeText,
+  val subtitle: NativeText,
+  val message: NativeText,
 )
 
 /** Default prompts shown only for an empty, connected session. */
-private val starterPrompts =
+internal val starterPrompts =
   listOf(
-    StarterPrompt(mark = "1", title = "Catch me up", subtitle = "Summarize recent sessions and next steps.", message = "Catch me up on my recent OpenClaw sessions and suggest next steps."),
-    StarterPrompt(mark = "2", title = "Plan the work", subtitle = "Turn a goal into an actionable checklist.", message = "Help me turn this goal into a practical checklist: "),
-    StarterPrompt(mark = "3", title = "Use this phone", subtitle = "Ask OpenClaw to use Android capabilities.", message = "What can you help me do from this phone right now?"),
+    StarterPrompt(
+      mark = "1",
+      title = nativeText("Catch me up"),
+      subtitle = nativeText("Summarize recent sessions and next steps."),
+      message = nativeText("Catch me up on my recent OpenClaw sessions and suggest next steps."),
+    ),
+    StarterPrompt(
+      mark = "2",
+      title = nativeText("Plan the work"),
+      subtitle = nativeText("Turn a goal into an actionable checklist."),
+      message = nativeText("Help me turn this goal into a practical checklist: "),
+    ),
+    StarterPrompt(
+      mark = "3",
+      title = nativeText("Use this phone"),
+      subtitle = nativeText("Ask OpenClaw to use Android capabilities."),
+      message = nativeText("What can you help me do from this phone right now?"),
+    ),
   )
 
 @Composable
@@ -1038,10 +1061,10 @@ private fun ChatBubble(
           Text(
             text =
               when {
-                live -> "OpenClaw · Live"
-                isUser -> "You"
-                normalizedRole == "system" -> "System"
-                else -> "OpenClaw"
+                live -> nativeString("OpenClaw · Live")
+                isUser -> nativeString("You")
+                normalizedRole == "system" -> nativeString("System")
+                else -> nativeString("OpenClaw")
               },
             style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp, fontWeight = FontWeight.SemiBold),
             color = ClawTheme.colors.text,
@@ -1055,7 +1078,7 @@ private fun ChatBubble(
                   base64 = checkNotNull(part.base64),
                   mimeType = part.mimeType,
                 )
-              else -> Text(text = part.fileName ?: "Attachment", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+              else -> Text(text = part.fileName ?: nativeString("Attachment"), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
             }
           }
           if (messageId != null) {
@@ -1108,7 +1131,7 @@ private fun FullChatSpeechIndicator(
         tint = ClawTheme.colors.textMuted,
       )
       Text(
-        text = if (phase == MessageSpeechPhase.Preparing) "Preparing audio…" else "Speaking…",
+        text = if (phase == MessageSpeechPhase.Preparing) nativeString("Preparing audio…") else nativeString("Speaking…"),
         style = ClawTheme.type.caption,
         color = ClawTheme.colors.textMuted,
       )
@@ -1129,12 +1152,12 @@ private fun ChatText(
 private fun ToolBubble(toolCalls: List<ChatPendingToolCall>) {
   ClawPanel {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-      ClawStatusPill(text = "Tools running", status = ClawStatus.Warning)
+      ClawStatusPill(text = nativeString("Tools running"), status = ClawStatus.Warning)
       toolCalls.take(4).forEach { tool ->
-        ClawListItem(title = tool.name, subtitle = "OpenClaw is working")
+        ClawListItem(title = tool.name, subtitle = nativeString("OpenClaw is working"))
       }
       if (toolCalls.size > 4) {
-        Text(text = "+${toolCalls.size - 4} more", style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle)
+        Text(text = nativeString("+\${toolCalls.size - 4} more", toolCalls.size - 4), style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle)
       }
     }
   }
@@ -1144,8 +1167,8 @@ private fun ToolBubble(toolCalls: List<ChatPendingToolCall>) {
 private fun ChatThinkingBubble() {
   ClawPanel {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-      ClawStatusPill(text = "Thinking", status = ClawStatus.Warning)
-      Text(text = "OpenClaw is preparing a response.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+      ClawStatusPill(text = nativeString("Thinking"), status = ClawStatus.Warning)
+      Text(text = nativeString("OpenClaw is preparing a response."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
     }
   }
 }
@@ -1192,7 +1215,7 @@ private fun ChatComposer(
   offlineStatus: String,
   pendingRunCount: Int,
   shareStaging: Boolean,
-  shareImportNotice: String?,
+  shareImportNotice: NativeText?,
   onDismissShareImportNotice: () -> Unit,
   commands: List<ChatCommandEntry>,
   onThinkingLevelChange: (String) -> Unit,
@@ -1239,13 +1262,13 @@ private fun ChatComposer(
         horizontalArrangement = Arrangement.spacedBy(4.dp),
       ) {
         Text(
-          text = shareImportNotice,
+          text = shareImportNotice.resolveNativeTextResource(),
           style = ClawTheme.type.caption,
           color = ClawTheme.colors.warning,
           modifier = Modifier.weight(1f),
         )
         IconButton(onClick = onDismissShareImportNotice, modifier = Modifier.size(32.dp)) {
-          Icon(Icons.Default.Close, contentDescription = "Dismiss shared-image warning")
+          Icon(Icons.Default.Close, contentDescription = nativeString("Dismiss shared-image warning"))
         }
       }
     }
@@ -1346,7 +1369,7 @@ private fun ChatComposer(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
           ) {
             Box(modifier = Modifier.size(8.dp).background(ClawTheme.colors.danger, RoundedCornerShape(2.dp)))
-            Text(text = "Stop", style = ClawTheme.type.label)
+            Text(text = nativeString("Stop"), style = ClawTheme.type.label)
           }
         }
       }
@@ -1362,22 +1385,23 @@ private fun ChatThinkingLevelSelector(
 ) {
   val rows = remember(options) { chatThinkingOptionRows(options) }
   val normalizedSelected = selectedId.trim().lowercase(Locale.US)
+  val languageTag = currentAppLanguage().languageTag
   val selectedLabel =
     options
       .firstOrNull { it.id.trim().lowercase(Locale.US) == normalizedSelected }
-      ?.let(::chatThinkingOptionLabel)
+      ?.let { option -> chatThinkingOptionLabel(option, languageTag) }
       .orEmpty()
   Column(
     modifier = Modifier.fillMaxWidth(),
     verticalArrangement = Arrangement.spacedBy(4.dp),
   ) {
     rows.forEach { row ->
-      val labels = row.map(::chatThinkingOptionLabel)
+      val labels = row.map { option -> chatThinkingOptionLabel(option, languageTag) }
       ClawSegmentedControl(
         options = labels,
         selected = selectedLabel,
         onSelect = { selected ->
-          row.firstOrNull { chatThinkingOptionLabel(it) == selected }?.let { onSelect(it.id) }
+          row.firstOrNull { option -> chatThinkingOptionLabel(option, languageTag) == selected }?.let { onSelect(it.id) }
         },
         modifier = Modifier.fillMaxWidth(),
       )
@@ -1443,7 +1467,7 @@ private fun ChatModelPickerSheet(
           contentColor = ClawTheme.colors.text,
         ) {
           Text(
-            text = "Default",
+            text = nativeString("Default"),
             modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp),
             style = ClawTheme.type.body,
           )
@@ -1509,7 +1533,7 @@ private fun ChatModelPickerRow(
       IconButton(onClick = onToggleFavorite) {
         Icon(
           imageVector = if (pinned) Icons.Default.Star else Icons.Default.StarBorder,
-          contentDescription = if (pinned) "Unpin model" else "Pin model",
+          contentDescription = if (pinned) nativeString("Unpin model") else nativeString("Pin model"),
           tint = if (pinned) ClawTheme.colors.primary else ClawTheme.colors.textMuted,
         )
       }
@@ -1526,7 +1550,7 @@ private fun SlashCommandPanel(
     Column {
       if (commands.isEmpty()) {
         Text(
-          text = "No commands found",
+          text = nativeString("No commands found"),
           style = ClawTheme.type.caption,
           color = ClawTheme.colors.textMuted,
           modifier = Modifier.padding(horizontal = 11.dp, vertical = 9.dp),
@@ -1568,7 +1592,7 @@ private fun SlashCommandRow(
       )
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
         Text(
-          text = command.description.ifBlank { command.category ?: "Command" },
+          text = command.description.ifBlank { command.category ?: nativeString("Command") },
           style = ClawTheme.type.caption,
           color = ClawTheme.colors.textMuted,
           maxLines = 1,
@@ -1588,7 +1612,7 @@ private fun ChatOfflineNotice(
   ClawPanel(contentPadding = PaddingValues(horizontal = 10.dp, vertical = 9.dp)) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
       Text(
-        text = "Gateway offline",
+        text = nativeString("Gateway offline"),
         style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp),
         color = ClawTheme.colors.warning,
       )
@@ -1634,7 +1658,7 @@ private fun ChatContextMeter(
         if (thinkingSupported) {
           Icon(
             imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-            contentDescription = if (expanded) "Close thinking level selector" else "Open thinking level selector",
+            contentDescription = if (expanded) nativeString("Close thinking level selector") else nativeString("Open thinking level selector"),
             modifier = Modifier.size(13.dp),
             tint = ClawTheme.colors.textSubtle,
           )
@@ -1694,7 +1718,7 @@ private fun ChatInputPill(
     ) {
       Surface(onClick = onPickImages, modifier = Modifier.size(ClawTheme.spacing.touchTarget), shape = CircleShape, color = ClawTheme.colors.surfaceRaised, contentColor = ClawTheme.colors.text) {
         Box(contentAlignment = Alignment.Center) {
-          Icon(imageVector = Icons.Default.AttachFile, contentDescription = "Attach image", modifier = Modifier.size(16.dp))
+          Icon(imageVector = Icons.Default.AttachFile, contentDescription = nativeString("Attach image"), modifier = Modifier.size(16.dp))
         }
       }
       VoiceNoteRecordButton(
@@ -1729,7 +1753,7 @@ private fun ChatInputPill(
             decorationBox = { innerTextField ->
               Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
                 if (value.isEmpty()) {
-                  Text(text = "Message OpenClaw", style = ClawTheme.type.body, color = ClawTheme.colors.textSubtle)
+                  Text(text = nativeString("Message OpenClaw"), style = ClawTheme.type.body, color = ClawTheme.colors.textSubtle)
                 }
                 innerTextField()
               }
@@ -1745,7 +1769,7 @@ private fun ChatInputPill(
         contentColor = ClawTheme.colors.text,
       ) {
         Box(contentAlignment = Alignment.Center) {
-          Icon(imageVector = Icons.Default.GraphicEq, contentDescription = "Open voice", modifier = Modifier.size(18.dp))
+          Icon(imageVector = Icons.Default.GraphicEq, contentDescription = nativeString("Open voice"), modifier = Modifier.size(18.dp))
         }
       }
     }
@@ -1785,7 +1809,7 @@ private fun AttachmentChip(
       }
       Text(
         text =
-          attachment.durationMs?.let { duration -> "Voice note · ${formatVoiceNoteDuration(duration)}" }
+          attachment.durationMs?.let { duration -> nativeString("Voice note · \${formatVoiceNoteDuration(duration)}", formatVoiceNoteDuration(duration)) }
             ?: attachment.fileName,
         style = ClawTheme.type.caption,
         color = ClawTheme.colors.textMuted,
@@ -1794,7 +1818,7 @@ private fun AttachmentChip(
       )
       Surface(onClick = onRemove, modifier = Modifier.size(22.dp), shape = CircleShape, color = ClawTheme.colors.canvas, contentColor = ClawTheme.colors.text) {
         Box(contentAlignment = Alignment.Center) {
-          Icon(imageVector = Icons.Default.Close, contentDescription = "Remove attachment", modifier = Modifier.size(13.dp))
+          Icon(imageVector = Icons.Default.Close, contentDescription = nativeString("Remove attachment"), modifier = Modifier.size(13.dp))
         }
       }
     }
@@ -1806,7 +1830,7 @@ private fun currentSessionTitle(
   sessions: List<ChatSessionEntry>,
 ): String {
   val entry = sessions.firstOrNull { it.key == sessionKey }
-  val name = entry?.displayName?.takeIf { it.isNotBlank() } ?: return "New chat"
+  val name = entry?.displayName?.takeIf { it.isNotBlank() } ?: return nativeString("New chat")
   return friendlySessionName(name)
 }
 
@@ -1815,15 +1839,15 @@ private fun chatSessionChipText(
   mainSessionKey: String,
 ): String {
   val mainKey = mainSessionKey.trim().ifEmpty { "main" }
-  if (entry.key == mainKey || (entry.key == "main" && mainKey == "main")) return "Main"
-  val name = entry.displayName?.takeIf { it.isNotBlank() } ?: entry.key.takeIf { entry.updatedAtMs != null } ?: "Current"
+  if (entry.key == mainKey || (entry.key == "main" && mainKey == "main")) return nativeString("Main")
+  val name = entry.displayName?.takeIf { it.isNotBlank() } ?: entry.key.takeIf { entry.updatedAtMs != null } ?: nativeString("Current")
   return friendlySessionName(name)
 }
 
 internal fun chatAgentChipText(agent: GatewayAgentSummary): String {
   val name = agent.name?.trim()?.takeIf { it.isNotEmpty() } ?: agent.id
   val emoji = agent.emoji?.trim()?.takeIf { it.isNotEmpty() } ?: return name
-  return "$emoji $name"
+  return nativeString("\$emoji \$name", emoji, name)
 }
 
 internal fun selectedChatAgentId(
@@ -1882,7 +1906,7 @@ private fun SendButton(
     border = BorderStroke(1.dp, if (enabled) ClawTheme.colors.primary else ClawTheme.colors.border),
   ) {
     Box(contentAlignment = Alignment.Center) {
-      Icon(imageVector = Icons.AutoMirrored.Filled.Send, contentDescription = "Send", modifier = Modifier.size(18.dp))
+      Icon(imageVector = Icons.AutoMirrored.Filled.Send, contentDescription = nativeString("Send"), modifier = Modifier.size(18.dp))
     }
   }
 }
@@ -1893,9 +1917,9 @@ internal fun userFacingChatError(
 ): String {
   val lower = error.lowercase(Locale.US)
   return when {
-    lower.contains("not connected") && gatewayConnected -> "Chat is still checking Gateway health."
-    lower.contains("not connected") -> "Gateway is offline. Fix the connection below or copy diagnostics."
-    lower.contains("unauthorized") || lower.contains("auth") -> "Gateway authentication needs attention."
+    lower.contains("not connected") && gatewayConnected -> nativeString("Chat is still checking Gateway health.")
+    lower.contains("not connected") -> nativeString("Gateway is offline. Fix the connection below or copy diagnostics.")
+    lower.contains("unauthorized") || lower.contains("auth") -> nativeString("Gateway authentication needs attention.")
     else -> error
   }
 }
@@ -1912,11 +1936,23 @@ internal fun contextMeterLabel(
   thinkingLevel: String,
   thinkingSupported: Boolean = true,
 ): String {
-  val contextLabel = contextMeterWidth(usage)?.let { "Context ${(it * 100).roundToInt()}%" } ?: "Context --"
-  return if (thinkingSupported) "$contextLabel · ${contextMeterThinkingLabel(thinkingLevel)}" else contextLabel
+  val contextLabel =
+    contextMeterWidth(usage)?.let {
+      nativeString("Context \${(it * 100).roundToInt()}%", (it * 100).roundToInt())
+    } ?: nativeString("Context --")
+  return if (thinkingSupported) nativeString("\$contextLabel · \${contextMeterThinkingLabel(thinkingLevel)}", contextLabel, contextMeterThinkingLabel(thinkingLevel)) else contextLabel
 }
 
-internal fun contextMeterThinkingLabel(value: String): String = value.trim().lowercase(Locale.US).ifEmpty { "off" }
+internal fun contextMeterThinkingLabel(value: String): String {
+  val normalized = value.trim().lowercase(Locale.US).ifEmpty { "off" }
+  return when (normalized) {
+    "off" -> nativeString("Off")
+    "low" -> nativeString("Low")
+    "medium" -> nativeString("Medium")
+    "high" -> nativeString("High")
+    else -> normalized
+  }
+}
 
 internal fun chatThinkingSupported(
   selection: ChatThinkingLevelSelection,
@@ -1934,10 +1970,29 @@ internal fun chatThinkingOptionRows(options: List<ChatThinkingLevelOption>): Lis
   return options.chunked((options.size + 1) / 2)
 }
 
-internal fun chatThinkingOptionLabel(option: ChatThinkingLevelOption): String =
-  option.label
-    .trim()
-    .ifEmpty { option.id.trim() }
-    .replaceFirstChar { it.uppercase() }
+internal fun chatThinkingOptionLabel(
+  option: ChatThinkingLevelOption,
+  languageTag: String? = null,
+): String {
+  val id = option.id.trim()
+  val rawLabel = option.label.trim().ifEmpty { id }
+  val localizedLabel =
+    if (rawLabel.equals(id, ignoreCase = true)) {
+      when (id.lowercase(Locale.US)) {
+        "off" -> nativeString("Off")
+        "minimal" -> nativeString("Minimal")
+        "low" -> nativeString("Low")
+        "medium" -> nativeString("Medium")
+        "high" -> nativeString("High")
+        "xhigh" -> nativeString("Xhigh")
+        "adaptive" -> nativeString("Adaptive")
+        "max" -> nativeString("Max")
+        else -> rawLabel
+      }
+    } else {
+      rawLabel
+    }
+  return localizedUppercase(localizedLabel.take(1), languageTag) + localizedLabel.drop(1)
+}
 
 private fun formatChatTimestamp(timestampMs: Long): String = DateFormat.getTimeInstance(DateFormat.SHORT, Locale.getDefault()).format(Date(timestampMs))

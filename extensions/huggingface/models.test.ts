@@ -1,4 +1,5 @@
 // Huggingface tests cover models plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -43,7 +44,7 @@ afterEach(() => {
 
 describe("huggingface models", () => {
   it("buildHuggingfaceModelDefinition returns config with required fields", () => {
-    const entry = HUGGINGFACE_MODEL_CATALOG[0];
+    const entry = expectDefined(HUGGINGFACE_MODEL_CATALOG[0], "first Hugging Face catalog model");
     const def = buildHuggingfaceModelDefinition(entry);
     expect(def.id).toBe(entry.id);
     expect(def.name).toBe(entry.name);
@@ -63,7 +64,7 @@ describe("huggingface models", () => {
   it("discoverHuggingfaceModels returns static catalog in test env (VITEST)", async () => {
     const models = await discoverHuggingfaceModels("hf_test_token");
     expect(models).toHaveLength(HUGGINGFACE_MODEL_CATALOG.length);
-    expect(models[0].id).toBe("deepseek-ai/DeepSeek-R1");
+    expect(expectDefined(models[0], "first Hugging Face model").id).toBe("deepseek-ai/DeepSeek-R1");
   });
 
   it("uses the default discovery timeout for live Hugging Face fetches", async () => {

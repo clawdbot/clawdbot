@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { LogbookStore, dayKeyFor } from "./store.js";
 import type { LogbookCardDraft } from "./types.js";
@@ -107,14 +108,14 @@ describe("LogbookStore", () => {
       }),
     ]);
     const cards = store.cardsForDay(DAY);
-    expect(cards[0].distractions).toEqual([
+    expect(expectDefined(cards[0], "stored logbook card").distractions).toEqual([
       { startMs: base + 5 * 60_000, endMs: base + 10 * 60_000, title: "Twitter" },
     ]);
     const stats = store.dayStats(DAY);
     expect(stats.trackedMs).toBe(30 * 60_000);
     expect(stats.distractionMs).toBe(5 * 60_000);
     expect(stats.categories[0]).toEqual({ category: "coding", ms: 30 * 60_000 });
-    expect(stats.apps[0].domain).toBe("github.com");
+    expect(expectDefined(stats.apps[0], "logbook app statistic").domain).toBe("github.com");
   });
 
   it("prunes old frame rows and files but keeps recent ones", () => {
@@ -149,7 +150,7 @@ describe("LogbookStore", () => {
     store.replaceObservations(batchId, DAY, [{ startMs: t0, endMs: t0 + 500, text: "retry run" }]);
     const observations = store.observationsInRange(DAY, 0, Number.MAX_SAFE_INTEGER);
     expect(observations).toHaveLength(1);
-    expect(observations[0].text).toBe("retry run");
+    expect(expectDefined(observations[0], "retried observation").text).toBe("retry run");
   });
 
   it("requeues errored batches for explicit retry", () => {

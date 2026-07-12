@@ -14,7 +14,7 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../../process/gateway-work-admission.js";
-import { __testing as controlPlaneRateLimitTesting } from "../control-plane-rate-limit.js";
+import { testing as controlPlaneRateLimitTesting } from "../control-plane-rate-limit.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
 import { makeMockHttpResponse } from "../test-http-response.js";
 import { createTestRegistry } from "./__tests__/test-utils.js";

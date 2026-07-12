@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
 
@@ -476,7 +477,7 @@ describe("parallel web search provider", () => {
     });
 
     expect(endpointMockState.calls).toHaveLength(1);
-    const [call] = endpointMockState.calls;
+    const call = expectDefined(endpointMockState.calls[0], "Parallel search endpoint call");
     expect(call.url).toBe("https://api.parallel.ai/v1/search");
     expect(call.timeoutSeconds).toBe(5);
     expect(readMockedBody(call)).toEqual({

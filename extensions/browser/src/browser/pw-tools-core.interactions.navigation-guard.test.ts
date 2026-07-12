@@ -1,4 +1,5 @@
 // Browser tests cover pw tools core.interactions.navigation guard plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import {
   getPwToolsCoreNavigationGuardMocks,
@@ -10,6 +11,10 @@ import {
 
 installPwToolsCoreTestHooks();
 const mod = await import("./pw-tools-core.js");
+
+function requireInvocationOrder(mock: { invocationCallOrder: number[] }, context: string): number {
+  return expectDefined(mock.invocationCallOrder[0], context);
+}
 
 function createMutableFrame(initialUrl: string) {
   let currentUrl = initialUrl;
@@ -575,8 +580,11 @@ describe("pw-tools-core interaction navigation guard", () => {
         },
       );
       expect(
-        getPwToolsCoreSessionMocks().withPageNavigationRequestGuard.mock.invocationCallOrder[0],
-      ).toBeLessThan(page.evaluate.mock.invocationCallOrder[0]);
+        requireInvocationOrder(
+          getPwToolsCoreSessionMocks().withPageNavigationRequestGuard.mock,
+          "navigation request guard invocation",
+        ),
+      ).toBeLessThan(requireInvocationOrder(page.evaluate.mock, "page evaluation invocation"));
     } finally {
       vi.useRealTimers();
     }
@@ -1227,8 +1235,11 @@ describe("pw-tools-core interaction navigation guard", () => {
       targetId: "T1",
     });
     expect(
-      getPwToolsCoreSessionMocks().withPageNavigationRequestGuard.mock.invocationCallOrder[0],
-    ).toBeLessThan(page.evaluate.mock.invocationCallOrder[0]);
+      requireInvocationOrder(
+        getPwToolsCoreSessionMocks().withPageNavigationRequestGuard.mock,
+        "navigation request guard invocation",
+      ),
+    ).toBeLessThan(requireInvocationOrder(page.evaluate.mock, "page evaluation invocation"));
   });
 
   it("propagates the SSRF policy through batch interaction actions", async () => {
@@ -1464,6 +1475,40 @@ describe("pw-tools-core interaction navigation guard", () => {
     });
     expect(dispose).toHaveBeenCalledOnce();
     releaseHover();
+  });
+
+  it("retains the download grace when an executable wait aborts", async () => {
+    const ctrl = new AbortController();
+    ctrl.abort(new Error("aborted by test"));
+    const page = {
+      url: vi.fn(() => "https://example.com"),
+      waitForFunction: vi.fn(async () => {}),
+    };
+    const drain = vi.fn(async () => undefined);
+    const dispose = vi.fn();
+    getPwToolsCoreSessionMocks().beginActionDownloadCaptureOnPage.mockReturnValueOnce({
+      drain,
+      dispose,
+    });
+    setPwToolsCoreCurrentPage(page);
+
+    const task = mod.executeActViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      action: { kind: "wait", fn: "() => false" },
+      evaluateEnabled: true,
+      ssrfPolicy: { allowPrivateNetwork: false },
+      signal: ctrl.signal,
+    });
+
+    await expect(task).rejects.toThrow("aborted by test");
+    expect(drain).toHaveBeenCalledWith({
+      firstEventGraceMs: 250,
+      maxWaitMs: 1_000,
+      quietMs: 250,
+    });
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(page.waitForFunction).not.toHaveBeenCalled();
   });
 
   it("does not add a second download grace after a settled guarded failure", async () => {

@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Diagnostics Prometheus tests cover service plugin behavior.
 import type { DiagnosticEventPrivateData } from "openclaw/plugin-sdk/diagnostic-runtime";
 // Diagnostics Prometheus tests cover service plugin behavior.
@@ -697,7 +698,7 @@ describe("diagnostics-prometheus service", () => {
     });
 
     expect(listeners).toHaveLength(1);
-    listeners[0](
+    expectDefined(listeners[0], "Prometheus diagnostics listener")(
       {
         ...baseEvent(),
         type: "model.usage",
@@ -729,7 +730,7 @@ describe("diagnostics-prometheus service", () => {
         throw new Error(`${prefix}😀`);
       },
     });
-    listeners[0](
+    expectDefined(listeners[0], "Prometheus diagnostics listener")(
       {
         ...baseEvent(),
         type: "model.usage",

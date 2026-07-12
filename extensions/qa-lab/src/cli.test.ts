@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Qa Lab tests cover cli plugin behavior.
 import { Command } from "commander";
 import type { QaRunnerCliContribution } from "openclaw/plugin-sdk/qa-runner-runtime";
@@ -736,7 +737,12 @@ describe("qa cli registration", () => {
   });
 
   it("delegates discovered qa runner registration through the generic host seam", () => {
-    const [{ registration }] = listQaRunnerCliContributions.mock.results[0].value;
+    const mockResult = expectDefined(
+      listQaRunnerCliContributions.mock.results[0],
+      "QA runner contribution result",
+    );
+    const contribution = expectDefined(mockResult.value[0], "QA runner contribution");
+    const { registration } = contribution;
     expect(registration.register).toHaveBeenCalledTimes(1);
   });
 

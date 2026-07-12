@@ -1,4 +1,5 @@
 // Signal tests cover format.chunking plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { markdownToSignalTextChunks } from "./format.js";
 
@@ -14,6 +15,10 @@ function expectChunkStyleRangesInBounds(chunks: ReturnType<typeof markdownToSign
 
 type SignalTextChunk = ReturnType<typeof markdownToSignalTextChunks>[number];
 type SignalTextStyle = SignalTextChunk["styles"][number];
+
+function requireFirstChunk(chunks: ReturnType<typeof markdownToSignalTextChunks>): SignalTextChunk {
+  return expectDefined(chunks[0], "first Signal text chunk");
+}
 
 function requireChunkWithStyle(
   chunks: ReturnType<typeof markdownToSignalTextChunks>,
@@ -71,7 +76,7 @@ describe("splitSignalFormattedText", () => {
       const chunks = markdownToSignalTextChunks(markdown, 100);
 
       expect(chunks).toHaveLength(1);
-      expect(chunks[0].text).toBe("short text");
+      expect(requireFirstChunk(chunks).text).toBe("short text");
     });
   });
 
@@ -84,7 +89,7 @@ describe("splitSignalFormattedText", () => {
 
       expect(chunks.length).toBeGreaterThan(1);
       // First chunk should contain the bold style
-      const firstChunk = chunks[0];
+      const firstChunk = requireFirstChunk(chunks);
       expect(firstChunk.text).toContain("bold");
       expect(firstChunk.styles.map((style) => style.style)).toContain("BOLD");
       // The bold style should start at position 0 in the first chunk
@@ -161,7 +166,7 @@ describe("splitSignalFormattedText", () => {
       const chunks = markdownToSignalTextChunks(markdown, limit);
 
       // First chunk should have the complete bold style
-      const firstChunk = chunks[0];
+      const firstChunk = requireFirstChunk(chunks);
       if (firstChunk.text.includes("bold")) {
         const boldStyle = requireStyle(firstChunk, "BOLD");
         expect(boldStyle.start + boldStyle.length).toBeLessThanOrEqual(firstChunk.text.length);
@@ -201,7 +206,7 @@ describe("splitSignalFormattedText", () => {
       const chunks = markdownToSignalTextChunks(markdown, limit);
 
       expect(chunks).toHaveLength(1);
-      expect(chunks[0].text).toBe("1234567890");
+      expect(requireFirstChunk(chunks).text).toBe("1234567890");
     });
 
     it("preserves style through whitespace trimming", () => {
@@ -210,7 +215,7 @@ describe("splitSignalFormattedText", () => {
       const chunks = markdownToSignalTextChunks(markdown, limit);
 
       // Bold should be preserved in first chunk
-      const firstChunk = chunks[0];
+      const firstChunk = requireFirstChunk(chunks);
       if (firstChunk.text.includes("bold")) {
         expect(firstChunk.styles.map((style) => style.style)).toContain("BOLD");
       }
@@ -302,8 +307,8 @@ describe("markdownToSignalTextChunks", () => {
     const chunks = markdownToSignalTextChunks(markdown, Number.POSITIVE_INFINITY);
 
     expect(chunks).toHaveLength(1);
-    expect(chunks[0]?.text).toBe("Here's another photo from today's walk.");
-    expect(chunks[0]?.styles.map((style) => style.style)).toContain("BOLD");
+    expect(requireFirstChunk(chunks)?.text).toBe("Here's another photo from today's walk.");
+    expect(requireFirstChunk(chunks)?.styles.map((style) => style.style)).toContain("BOLD");
   });
 
   describe("link expansion chunk limit", () => {

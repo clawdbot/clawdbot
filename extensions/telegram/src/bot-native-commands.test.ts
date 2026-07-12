@@ -1,4 +1,5 @@
 // Telegram tests cover bot native commands plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -291,9 +292,10 @@ describe("registerTelegramNativeCommands", () => {
 
     const registeredCommands = await waitForRegisteredCommands(setMyCommands);
     expect(registeredCommands).toHaveLength(92);
+    const firstCustomCommand = expectDefined(customCommands[0], "first custom Telegram command");
     expect(
       registeredCommands.some(
-        (entry) => entry.description.length < customCommands[0].description.length,
+        (entry) => entry.description.length < firstCustomCommand.description.length,
       ),
     ).toBe(true);
     expect(runtimeLog).toHaveBeenCalledWith(

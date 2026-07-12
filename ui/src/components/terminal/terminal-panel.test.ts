@@ -200,18 +200,7 @@ describe("OpenClawTerminalPanel", () => {
   });
 
   it("opens a fresh terminal after the last tab is closed", async () => {
-    const controllers = Array.from({ length: 2 }, () => ({
-      terminal: {
-        cols: 100,
-        rows: 30,
-        viewportY: 0,
-        write: vi.fn(),
-        focus: vi.fn(),
-      },
-      write: vi.fn(),
-      fit: vi.fn(),
-      dispose: vi.fn(),
-    }));
+    const controllers = [createTerminalController(), createTerminalController()] as const;
     createGhosttyTerminalMock
       .mockResolvedValueOnce(controllers[0])
       .mockResolvedValueOnce(controllers[1]);
@@ -281,7 +270,7 @@ describe("OpenClawTerminalPanel", () => {
   });
 
   it("rebinds to a replacement client while availability stays true", async () => {
-    const controllers = [createTerminalController(), createTerminalController()];
+    const controllers = [createTerminalController(), createTerminalController()] as const;
     createGhosttyTerminalMock
       .mockResolvedValueOnce(controllers[0])
       .mockResolvedValueOnce(controllers[1]);

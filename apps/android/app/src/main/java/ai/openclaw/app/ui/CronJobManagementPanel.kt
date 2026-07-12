@@ -9,6 +9,8 @@ import ai.openclaw.app.GatewayCronPayloadEdit
 import ai.openclaw.app.GatewayCronRunHistoryState
 import ai.openclaw.app.GatewayCronRunSummary
 import ai.openclaw.app.GatewayCronScheduleEdit
+import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.i18n.resolveNativeText
 import ai.openclaw.app.ui.design.ClawDetailRow
 import ai.openclaw.app.ui.design.ClawIconBadge
 import ai.openclaw.app.ui.design.ClawListPanel
@@ -84,23 +86,23 @@ internal fun CronJobManagementPanel(
             onDelete()
           },
         ) {
-          Text("Delete")
+          Text(nativeString("Delete"))
         }
       },
       dismissButton = {
         TextButton(onClick = { showDeleteConfirmation = false }) {
-          Text("Cancel")
+          Text(nativeString("Cancel"))
         }
       },
-      title = { Text("Delete cron job?") },
-      text = { Text("This permanently removes the scheduled job from the gateway.") },
+      title = { Text(nativeString("Delete cron job?")) },
+      text = { Text(nativeString("This permanently removes the scheduled job from the gateway.")) },
     )
   }
 
   notice?.let { value ->
     ClawPanel {
       Text(
-        text = value.message,
+        text = value.message.resolveNativeText(),
         style = ClawTheme.type.body,
         color =
           when (value.kind) {
@@ -118,9 +120,9 @@ internal fun CronJobManagementPanel(
       Text(
         text =
           if (editorDraft.hasIncomingConflict) {
-            "This job changed while you were editing. Revert to the latest gateway version before saving."
+            nativeString("This job changed while you were editing. Revert to the latest gateway version before saving.")
           } else {
-            "Save or revert your edits before running, enabling, disabling, deleting, or refreshing this job."
+            nativeString("Save or revert your edits before running, enabling, disabling, deleting, or refreshing this job.")
           },
         style = ClawTheme.type.body,
         color = ClawTheme.colors.warning,
@@ -171,13 +173,13 @@ private fun CronAdminAccessPanel() {
           modifier = Modifier.size(17.dp),
           tint = ClawTheme.colors.text,
         )
-        Text(text = "Admin access required", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+        Text(text = nativeString("Admin access required"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
       }
       Text(
         text =
-          "Cron changes require operator.admin. Setup codes intentionally do not grant it. " +
-            "Reconnect with the gateway's shared token or password to request admin access. " +
-            "If this device still lacks it, approve the pending scope upgrade from an existing admin client.",
+          nativeString(
+            "Cron changes require operator.admin. Setup codes intentionally do not grant it. Reconnect with the gateway's shared token or password to request admin access. If this device still lacks it, approve the pending scope upgrade from an existing admin client.",
+          ),
         style = ClawTheme.type.body,
         color = ClawTheme.colors.textMuted,
       )
@@ -204,9 +206,9 @@ private fun CronActionPanel(
         ClawPrimaryButton(
           text =
             when {
-              busy -> "Working"
-              runPending -> "Run Pending"
-              else -> "Run Now"
+              busy -> nativeString("Working")
+              runPending -> nativeString("Run Pending")
+              else -> nativeString("Run Now")
             },
           onClick = onRun,
           modifier = Modifier.weight(1f),
@@ -214,7 +216,7 @@ private fun CronActionPanel(
           icon = Icons.Default.PlayArrow,
         )
         ClawSecondaryButton(
-          text = if (job.enabled) "Disable" else "Enable",
+          text = if (job.enabled) nativeString("Disable") else nativeString("Enable"),
           onClick = onToggleEnabled,
           modifier = Modifier.weight(1f),
           enabled = enabled,
@@ -222,7 +224,7 @@ private fun CronActionPanel(
         )
       }
       ClawSecondaryButton(
-        text = "Delete Job",
+        text = nativeString("Delete Job"),
         onClick = onDelete,
         modifier = Modifier.fillMaxWidth(),
         enabled = enabled,
@@ -255,19 +257,19 @@ private fun CronEditorPanel(
           modifier = Modifier.size(17.dp),
           tint = ClawTheme.colors.text,
         )
-        Text(text = "Edit Job", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+        Text(text = nativeString("Edit Job"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
       }
       CronSwitchRow(
-        title = "Enabled",
-        subtitle = "Allow the scheduler to run this job.",
+        title = nativeString("Enabled"),
+        subtitle = nativeString("Allow the scheduler to run this job."),
         checked = edit.enabled,
         onCheckedChange = { onDraftChange(draft.withEdit(edit.copy(enabled = it))) },
         enabled = enabled,
       )
       if (edit.schedule is GatewayCronScheduleEdit.At) {
         CronSwitchRow(
-          title = "Delete after run",
-          subtitle = "Remove this job after a successful one-shot run.",
+          title = nativeString("Delete after run"),
+          subtitle = nativeString("Remove this job after a successful one-shot run."),
           checked = edit.deleteAfterRun,
           onCheckedChange = { onDraftChange(draft.withEdit(edit.copy(deleteAfterRun = it))) },
           enabled = enabled,
@@ -276,15 +278,15 @@ private fun CronEditorPanel(
       ClawTextField(
         value = edit.name,
         onValueChange = { onDraftChange(draft.withEdit(edit.copy(name = it))) },
-        placeholder = "Job name",
-        label = "Name",
+        placeholder = nativeString("Job name"),
+        label = nativeString("Name"),
         enabled = enabled,
       )
       ClawTextField(
         value = edit.description,
         onValueChange = { onDraftChange(draft.withEdit(edit.copy(description = it))) },
-        placeholder = "Optional description",
-        label = "Description",
+        placeholder = nativeString("Optional description"),
+        label = nativeString("Description"),
         enabled = enabled,
         minLines = 2,
       )
@@ -296,16 +298,26 @@ private fun CronEditorPanel(
       ClawTextField(
         value = edit.sessionTarget,
         onValueChange = { onDraftChange(draft.withEdit(edit.copy(sessionTarget = it))) },
-        placeholder = "main, isolated, current, or session:<id>",
-        label = "Session target",
+        placeholder = nativeString("main, isolated, current, or session:<id>"),
+        label = nativeString("Session target"),
         enabled = enabled,
       )
+      val wakeModeOptions = cronWakeModeOptions()
       ClawSegmentedControl(
-        options = listOf("next-heartbeat", "now"),
-        selected = edit.wakeMode,
-        onSelect = { onDraftChange(draft.withEdit(edit.copy(wakeMode = it))) },
+        options = wakeModeOptions.map(CronWakeModeOption::label),
+        selected = cronWakeModeLabel(edit.wakeMode),
+        onSelect = { selectedLabel ->
+          wakeModeOptions
+            .firstOrNull { it.label == selectedLabel }
+            ?.let { onDraftChange(draft.withEdit(edit.copy(wakeMode = it.code))) }
+        },
         modifier = Modifier.fillMaxWidth(),
-        enabledOptions = if (enabled) setOf("next-heartbeat", "now") else emptySet(),
+        enabledOptions =
+          if (enabled) {
+            wakeModeOptions.mapTo(mutableSetOf(), CronWakeModeOption::label)
+          } else {
+            emptySet()
+          },
       )
       CronPayloadEditor(
         payload = edit.payload,
@@ -314,7 +326,7 @@ private fun CronEditorPanel(
         onChange = { onDraftChange(draft.withEdit(edit.copy(payload = it))) },
       )
       ClawPrimaryButton(
-        text = if (busy) "Working" else "Save Changes",
+        text = if (busy) nativeString("Working") else nativeString("Save Changes"),
         onClick = {
           onDraftChange(draft.saveStarted())
           onSave(edit)
@@ -330,7 +342,7 @@ private fun CronEditorPanel(
       )
       if (draft.requiresResolution) {
         ClawSecondaryButton(
-          text = "Revert Changes",
+          text = nativeString("Revert Changes"),
           onClick = { onDraftChange(CronEditorDraftState.from(job)) },
           modifier = Modifier.fillMaxWidth(),
           enabled = canRevert,
@@ -379,7 +391,7 @@ private fun CronScheduleEditor(
   onChange: (GatewayCronScheduleEdit) -> Unit,
 ) {
   Text(
-    text = "Schedule · ${cronScheduleKindLabel(schedule)}",
+    text = nativeString("Schedule · \${cronScheduleKindLabel(schedule)}", cronScheduleKindLabel(schedule)),
     style = ClawTheme.type.caption,
     color = ClawTheme.colors.textMuted,
   )
@@ -388,23 +400,23 @@ private fun CronScheduleEditor(
       ClawTextField(
         value = schedule.at,
         onValueChange = { onChange(schedule.copy(at = it)) },
-        placeholder = "ISO time, e.g. 2026-07-09T09:30:00Z",
-        label = "Run at",
+        placeholder = nativeString("ISO time, e.g. 2026-07-09T09:30:00Z"),
+        label = nativeString("Run at"),
         enabled = enabled,
       )
     is GatewayCronScheduleEdit.Every -> {
       ClawTextField(
         value = schedule.everyMs,
         onValueChange = { onChange(schedule.copy(everyMs = it.filter(Char::isDigit))) },
-        placeholder = "Milliseconds",
-        label = "Interval",
+        placeholder = nativeString("Milliseconds"),
+        label = nativeString("Interval"),
         enabled = enabled,
       )
       ClawTextField(
         value = schedule.anchorMs,
         onValueChange = { onChange(schedule.copy(anchorMs = it.filter(Char::isDigit))) },
-        placeholder = "Epoch milliseconds (optional)",
-        label = "Anchor",
+        placeholder = nativeString("Epoch milliseconds (optional)"),
+        label = nativeString("Anchor"),
         enabled = enabled,
       )
     }
@@ -412,24 +424,24 @@ private fun CronScheduleEditor(
       ClawTextField(
         value = schedule.expression,
         onValueChange = { onChange(schedule.copy(expression = it)) },
-        placeholder = "Cron expression, e.g. 0 9 * * *",
-        label = "Expression",
+        placeholder = nativeString("Cron expression, e.g. 0 9 * * *"),
+        label = nativeString("Expression"),
         enabled = enabled,
       )
       Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         ClawTextField(
           value = schedule.timezone,
           onValueChange = { onChange(schedule.copy(timezone = it)) },
-          placeholder = "e.g. America/New_York",
-          label = "Timezone",
+          placeholder = nativeString("e.g. America/New_York"),
+          label = nativeString("Timezone"),
           enabled = enabled,
           modifier = Modifier.weight(1f),
         )
         ClawTextField(
           value = schedule.staggerMs,
           onValueChange = { onChange(schedule.copy(staggerMs = it.filter(Char::isDigit))) },
-          placeholder = "0 = exact",
-          label = "Stagger ms",
+          placeholder = nativeString("0 = exact"),
+          label = nativeString("Stagger ms"),
           enabled = enabled,
           modifier = Modifier.weight(1f),
         )
@@ -439,15 +451,15 @@ private fun CronScheduleEditor(
       ClawTextField(
         value = schedule.command,
         onValueChange = { onChange(schedule.copy(command = it)) },
-        placeholder = "Command to watch",
-        label = "Command",
+        placeholder = nativeString("Command to watch"),
+        label = nativeString("Command"),
         enabled = enabled,
       )
       ClawTextField(
         value = schedule.cwd,
         onValueChange = { onChange(schedule.copy(cwd = it)) },
-        placeholder = "Optional path",
-        label = "Working directory",
+        placeholder = nativeString("Optional path"),
+        label = nativeString("Working directory"),
         enabled = enabled,
       )
     }
@@ -462,7 +474,7 @@ private fun CronPayloadEditor(
   onChange: (GatewayCronPayloadEdit) -> Unit,
 ) {
   Text(
-    text = "Payload · ${cronPayloadKindLabel(payload)}",
+    text = nativeString("Payload · \${cronPayloadKindLabel(payload)}", cronPayloadKindLabel(payload)),
     style = ClawTheme.type.caption,
     color = ClawTheme.colors.textMuted,
   )
@@ -471,8 +483,8 @@ private fun CronPayloadEditor(
       ClawTextField(
         value = payload.text,
         onValueChange = { onChange(payload.copy(text = it)) },
-        placeholder = "System event text",
-        label = "Event text",
+        placeholder = nativeString("System event text"),
+        label = nativeString("Event text"),
         enabled = enabled,
         minLines = 3,
       )
@@ -480,8 +492,8 @@ private fun CronPayloadEditor(
       ClawTextField(
         value = payload.message,
         onValueChange = { onChange(payload.copy(message = it)) },
-        placeholder = "Agent message",
-        label = "Message",
+        placeholder = nativeString("Agent message"),
+        label = nativeString("Message"),
         enabled = enabled,
         minLines = 3,
       )
@@ -489,16 +501,16 @@ private fun CronPayloadEditor(
         ClawTextField(
           value = payload.model,
           onValueChange = { onChange(payload.copy(model = it)) },
-          placeholder = "Optional override",
-          label = "Model",
+          placeholder = nativeString("Optional override"),
+          label = nativeString("Model"),
           enabled = enabled,
           modifier = Modifier.weight(1f),
         )
         ClawTextField(
           value = payload.thinking,
           onValueChange = { onChange(payload.copy(thinking = it)) },
-          placeholder = "Optional override",
-          label = "Thinking",
+          placeholder = nativeString("Optional override"),
+          label = nativeString("Thinking"),
           enabled = enabled,
           modifier = Modifier.weight(1f),
         )
@@ -509,8 +521,8 @@ private fun CronPayloadEditor(
       ClawTextField(
         value = payload.argvJson,
         onValueChange = { onChange(payload.copy(argvJson = it)) },
-        placeholder = "Command argv JSON array",
-        label = "Arguments",
+        placeholder = nativeString("Command argv JSON array"),
+        label = nativeString("Arguments"),
         enabled = enabled,
         minLines = 2,
       )
@@ -521,18 +533,18 @@ private fun CronPayloadEditor(
             onChange(payload.copy(cwd = value))
           }
         },
-        placeholder = "Optional path",
+        placeholder = nativeString("Optional path"),
         label =
           if (commandCwdCanBeCleared) {
-            "Command working directory"
+            nativeString("Command working directory")
           } else {
-            "Command working directory · cannot clear"
+            nativeString("Command working directory · cannot clear")
           },
         enabled = enabled,
       )
       if (!commandCwdCanBeCleared) {
         Text(
-          text = "The gateway can change this path but cannot clear an existing path.",
+          text = nativeString("The gateway can change this path but cannot clear an existing path."),
           style = ClawTheme.type.caption,
           color = ClawTheme.colors.textMuted,
         )
@@ -562,13 +574,13 @@ private fun CronRunHistoryPanel(
       tint = ClawTheme.colors.text,
     )
     Text(
-      text = "Recent Runs",
+      text = nativeString("Recent Runs"),
       style = ClawTheme.type.section,
       color = ClawTheme.colors.text,
       modifier = Modifier.weight(1f),
     )
     ClawSecondaryButton(
-      text = if (loading) "Loading" else "Reload",
+      text = if (loading) nativeString("Loading") else nativeString("Reload"),
       onClick = onRefresh,
       enabled = !loading,
       icon = Icons.Default.Refresh,
@@ -582,7 +594,7 @@ private fun CronRunHistoryPanel(
     runs.isEmpty() ->
       ClawPanel {
         Text(
-          text = if (loading) "Loading recent runs…" else "No recent runs yet.",
+          text = if (loading) nativeString("Loading recent runs…") else nativeString("No recent runs yet."),
           style = ClawTheme.type.body,
           color = ClawTheme.colors.textMuted,
         )
@@ -604,33 +616,55 @@ private fun CronRunHistoryRow(run: GatewayCronRunSummary) {
 
 private fun cronScheduleKindLabel(schedule: GatewayCronScheduleEdit): String =
   when (schedule) {
-    is GatewayCronScheduleEdit.At -> "One time"
-    is GatewayCronScheduleEdit.Every -> "Interval"
-    is GatewayCronScheduleEdit.Cron -> "Cron"
-    is GatewayCronScheduleEdit.OnExit -> "On command exit"
+    is GatewayCronScheduleEdit.At -> nativeString("One time")
+    is GatewayCronScheduleEdit.Every -> nativeString("Interval")
+    is GatewayCronScheduleEdit.Cron -> nativeString("Cron")
+    is GatewayCronScheduleEdit.OnExit -> nativeString("On command exit")
   }
 
 private fun cronPayloadKindLabel(payload: GatewayCronPayloadEdit): String =
   when (payload) {
-    is GatewayCronPayloadEdit.SystemEvent -> "System event"
-    is GatewayCronPayloadEdit.AgentTurn -> "Agent turn"
-    is GatewayCronPayloadEdit.Command -> "Command"
+    is GatewayCronPayloadEdit.SystemEvent -> nativeString("System event")
+    is GatewayCronPayloadEdit.AgentTurn -> nativeString("Agent turn")
+    is GatewayCronPayloadEdit.Command -> nativeString("Command")
   }
 
-private fun cronRunSubtitle(run: GatewayCronRunSummary): String =
+internal data class CronWakeModeOption(
+  val code: String,
+  val label: String,
+)
+
+internal fun cronWakeModeOptions(): List<CronWakeModeOption> =
+  listOf(
+    CronWakeModeOption(code = "next-heartbeat", label = nativeString("Next heartbeat")),
+    CronWakeModeOption(code = "now", label = nativeString("Now")),
+  )
+
+internal fun cronWakeModeLabel(code: String): String = cronWakeModeOptions().firstOrNull { it.code == code }?.label ?: code
+
+internal fun cronRunSubtitle(run: GatewayCronRunSummary): String =
   listOfNotNull(
-    run.durationMs?.let { "${it}ms" },
-    run.deliveryStatus,
+    run.durationMs?.let { durationMs -> nativeString("\${durationMs}ms", durationMs) },
+    run.deliveryStatus?.let(::cronDeliveryStatusLabel),
     run.model,
     run.error ?: run.summary,
-  ).joinToString(" · ").ifBlank { "No details" }
+  ).joinToString(" · ").ifBlank { nativeString("No details") }
+
+internal fun cronDeliveryStatusLabel(status: String): String =
+  when (status.lowercase()) {
+    "delivered" -> nativeString("Delivered")
+    "not-delivered" -> nativeString("Not delivered")
+    "unknown" -> nativeString("Unknown")
+    "not-requested" -> nativeString("Not requested")
+    else -> status
+  }
 
 private fun cronRunStatusText(status: String?): String =
   when (status?.lowercase()) {
     "ok" -> "OK"
-    "error" -> "Issue"
-    "skipped" -> "Skipped"
-    else -> "Unknown"
+    "error" -> nativeString("Issue")
+    "skipped" -> nativeString("Skipped")
+    else -> nativeString("Unknown")
   }
 
 private fun cronRunStatus(status: String?): ClawStatus =

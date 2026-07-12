@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
@@ -30,6 +31,10 @@ const mocks = vi.hoisted(() => ({
   })),
   resolveCopilotApiToken: vi.fn(),
 }));
+
+function requireAuthMethod<T>(methods: readonly T[], index: number): T {
+  return expectDefined(methods[index], `GitHub Copilot auth method ${index}`);
+}
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
@@ -382,7 +387,7 @@ describe("github-copilot plugin", () => {
 
   it("offers to reuse an existing token profile during interactive onboarding", async () => {
     const provider = registerProviderWithPluginConfig({});
-    const method = provider.auth[0];
+    const method = requireAuthMethod(provider.auth, 0);
     const agentDir = await createAgentDir();
     writeExistingCopilotTokenProfile(agentDir);
     const prompter = {
@@ -427,7 +432,7 @@ describe("github-copilot plugin", () => {
 
   it("can refresh an existing token profile during interactive onboarding", async () => {
     const provider = registerProviderWithPluginConfig({});
-    const method = provider.auth[0];
+    const method = requireAuthMethod(provider.auth, 0);
     const agentDir = await createAgentDir();
     writeExistingCopilotTokenProfile(agentDir);
     const fetchMock = vi.fn(async (input: unknown, _init?: RequestInit) => {
@@ -563,7 +568,7 @@ describe("github-copilot plugin", () => {
 
   it("forces re-login and clears the domain when switching from a tenant back to github.com", async () => {
     const provider = registerProviderWithPluginConfig({});
-    const method = provider.auth[0];
+    const method = requireAuthMethod(provider.auth, 0);
     const agentDir = await createAgentDir();
     writeExistingCopilotTokenProfile(agentDir);
     const fetchMock = buildDeviceFlowFetchMock("github.com", "public-fresh-token");
@@ -623,7 +628,7 @@ describe("github-copilot plugin", () => {
 
   it("forces re-login when switching from github.com to a tenant domain", async () => {
     const provider = registerProviderWithPluginConfig({});
-    const method = provider.auth[1];
+    const method = requireAuthMethod(provider.auth, 1);
     const agentDir = await createAgentDir();
     writeExistingCopilotTokenProfile(agentDir);
     const fetchMock = buildDeviceFlowFetchMock("acme.ghe.com", "tenant-fresh-token");
@@ -677,7 +682,7 @@ describe("github-copilot plugin", () => {
 
   it("forces re-login when an existing public profile meets an env-only tenant domain", async () => {
     const provider = registerProviderWithPluginConfig({});
-    const method = provider.auth[1];
+    const method = requireAuthMethod(provider.auth, 1);
     const agentDir = await createAgentDir();
     // Stored profile was minted for public github.com; config has no tenant.
     writeExistingCopilotTokenProfile(agentDir);
@@ -737,7 +742,7 @@ describe("github-copilot plugin", () => {
 
   it("still offers to reuse the token when re-running enterprise login for the same tenant", async () => {
     const provider = registerProviderWithPluginConfig({});
-    const method = provider.auth[1];
+    const method = requireAuthMethod(provider.auth, 1);
     const agentDir = await createAgentDir();
     writeExistingCopilotTokenProfile(agentDir);
     const prompter = {
@@ -786,7 +791,7 @@ describe("github-copilot plugin", () => {
 
   it("honors COPILOT_GITHUB_DOMAIN over a divergent prompt value during enterprise login", async () => {
     const provider = registerProviderWithPluginConfig({});
-    const method = provider.auth[1];
+    const method = requireAuthMethod(provider.auth, 1);
     const agentDir = await createAgentDir();
     // Device flow is mocked for the env tenant only; if login used the typed
     // prompt value instead, the fetch mock would throw on an unexpected host.
@@ -934,7 +939,7 @@ describe("github-copilot plugin", () => {
 
   it("stores GitHub Copilot token from non-interactive onboarding", async () => {
     const provider = registerProviderWithPluginConfig({});
-    const method = provider.auth[0];
+    const method = requireAuthMethod(provider.auth, 0);
     const agentDir = await createAgentDir();
     const runtime = { error: vi.fn(), exit: vi.fn() };
 
@@ -973,7 +978,7 @@ describe("github-copilot plugin", () => {
   it("persists COPILOT_GITHUB_DOMAIN during non-interactive onboarding", async () => {
     vi.stubEnv("COPILOT_GITHUB_DOMAIN", "acme.ghe.com");
     const provider = registerProviderWithPluginConfig({});
-    const method = provider.auth[0];
+    const method = requireAuthMethod(provider.auth, 0);
     const agentDir = await createAgentDir();
     const runtime = { error: vi.fn(), exit: vi.fn() };
 
@@ -1011,7 +1016,7 @@ describe("github-copilot plugin", () => {
   it("clears a persisted enterprise domain during public non-interactive onboarding", async () => {
     vi.stubEnv("COPILOT_GITHUB_DOMAIN", "github.com");
     const provider = registerProviderWithPluginConfig({});
-    const method = provider.auth[0];
+    const method = requireAuthMethod(provider.auth, 0);
     const agentDir = await createAgentDir();
     const runtime = { error: vi.fn(), exit: vi.fn() };
 
@@ -1037,7 +1042,7 @@ describe("github-copilot plugin", () => {
 
   it("stores env-backed token refs for non-interactive onboarding ref mode", async () => {
     const provider = registerProviderWithPluginConfig({});
-    const method = provider.auth[0];
+    const method = requireAuthMethod(provider.auth, 0);
     const agentDir = await createAgentDir();
     const runtime = { error: vi.fn(), exit: vi.fn() };
 
@@ -1076,7 +1081,7 @@ describe("github-copilot plugin", () => {
 
   it("falls back to GH_TOKEN during non-interactive onboarding", async () => {
     const provider = registerProviderWithPluginConfig({});
-    const method = provider.auth[0];
+    const method = requireAuthMethod(provider.auth, 0);
     const agentDir = await createAgentDir();
     const runtime = { error: vi.fn(), exit: vi.fn() };
     const resolveApiKey = vi.fn(async ({ envVar }: { envVar?: string }) =>
@@ -1135,7 +1140,7 @@ describe("github-copilot plugin", () => {
 
   it("preserves an existing primary model during non-interactive onboarding", async () => {
     const provider = registerProviderWithPluginConfig({});
-    const method = provider.auth[0];
+    const method = requireAuthMethod(provider.auth, 0);
     const agentDir = await createAgentDir();
     const runtime = { error: vi.fn(), exit: vi.fn() };
 
@@ -1177,7 +1182,7 @@ describe("github-copilot plugin", () => {
 
   it("reuses an existing token profile during non-interactive onboarding", async () => {
     const provider = registerProviderWithPluginConfig({});
-    const method = provider.auth[0];
+    const method = requireAuthMethod(provider.auth, 0);
     const agentDir = await createAgentDir();
     const runtime = { error: vi.fn(), exit: vi.fn() };
     writeExistingCopilotTokenProfile(agentDir);
@@ -1202,7 +1207,7 @@ describe("github-copilot plugin", () => {
 
   it("does not emit a second missing-token error after ref-mode flag validation fails", async () => {
     const provider = registerProviderWithPluginConfig({});
-    const method = provider.auth[0];
+    const method = requireAuthMethod(provider.auth, 0);
     const agentDir = await createAgentDir();
     const runtime = { error: vi.fn(), exit: vi.fn() };
 

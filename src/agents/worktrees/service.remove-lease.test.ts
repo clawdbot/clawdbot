@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { getRegistryWorktree } from "./registry.js";
-import { __testing, acquireWorktreeRunLease } from "./run-lease.js";
+import { acquireWorktreeRunLease, testing as runLeaseTesting } from "./run-lease.js";
 import { IDLE_GC_MS, ManagedWorktreeService } from "./service.js";
 
 const execFileAsync = promisify(execFile);
@@ -45,7 +45,7 @@ describe("ManagedWorktreeService removal against a live run lease", () => {
   });
 
   afterEach(async () => {
-    __testing.resetForTest();
+    runLeaseTesting.resetForTest();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });

@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import { describe, expect, it } from "vitest";
 import { resolveNextcloudTalkAccount } from "./accounts.js";
@@ -328,7 +329,10 @@ describe("nextcloud talk setup", () => {
   });
 
   it("clears stored bot secret fields when the wizard switches to env", async () => {
-    const credential = nextcloudTalkSetupWizard.credentials[0];
+    const credential = expectDefined(
+      nextcloudTalkSetupWizard.credentials[0],
+      "Nextcloud Talk credential",
+    );
     const next = await credential.applyUseEnv?.({
       cfg: {
         channels: {

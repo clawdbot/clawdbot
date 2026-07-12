@@ -152,4 +152,3 @@ export const testing = {
       : defaultAgentStepDeps;
   },
 };
-export { testing as __testing };

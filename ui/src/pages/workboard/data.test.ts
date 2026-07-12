@@ -1,4 +1,5 @@
 // Control UI tests cover workboard behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
@@ -481,7 +482,12 @@ describe("workboard controller", () => {
       taskId: card.taskId,
       runId: `run-${index}`,
     }));
-    state.tasksByCardId = new Map(cards.map((card, index) => [card.id, tasks[index]]));
+    state.tasksByCardId = new Map(
+      cards.map((card, index) => [
+        card.id,
+        expectDefined(tasks[index], `workboard task fixture ${index}`),
+      ]),
+    );
     let failedTaskRequests = 0;
     const client = createClient((method, params) => {
       if (method === "workboard.cards.list") {
@@ -4916,9 +4922,9 @@ describe("workboard controller", () => {
       cardId: parent.id,
     });
 
-    const remaining = getWorkboardState(host).cards[0];
+    const remaining = expectDefined(getWorkboardState(host).cards[0], "remaining child card");
     expect(remaining).toMatchObject({ id: child.id });
-    expect(remaining?.metadata?.links).toBeUndefined();
+    expect(remaining.metadata?.links).toBeUndefined();
 
     client.request.mockClear();
     await startWorkboardCard({

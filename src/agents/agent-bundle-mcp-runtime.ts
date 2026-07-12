@@ -1302,4 +1302,3 @@ export const testing = {
   setBundleMcpDisposeTimeoutMsForTest,
   resolveSessionMcpRuntimeIdleTtlMs,
 };
-export { testing as __testing };

@@ -168,6 +168,21 @@ describe("Canvas tool", () => {
     );
   });
 
+  it("preserves an empty canvas eval result", async () => {
+    mocks.callGatewayTool.mockResolvedValue({ payload: { result: "" } });
+    const tool = createCanvasTool();
+
+    const result = await tool.execute("tool-call-1", {
+      action: "eval",
+      javaScript: `""`,
+    });
+
+    expect(result).toEqual({
+      content: [{ type: "text", text: "" }],
+      details: { result: "" },
+    });
+  });
+
   it("dispatches valid A2UI v0.8 JSONL unchanged", async () => {
     const tool = createCanvasTool();
 

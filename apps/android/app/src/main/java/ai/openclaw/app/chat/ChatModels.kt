@@ -1,5 +1,4 @@
 package ai.openclaw.app.chat
-
 import java.util.Locale
 
 private val visibleChatMessageRoles = setOf("user", "assistant", "system", "custom")
@@ -62,10 +61,10 @@ internal val defaultChatThinkingLevelSelection =
   ChatThinkingLevelSelection(
     options =
       listOf(
-        ChatThinkingLevelOption(id = "off", label = "off"),
-        ChatThinkingLevelOption(id = "low", label = "low"),
-        ChatThinkingLevelOption(id = "medium", label = "medium"),
-        ChatThinkingLevelOption(id = "high", label = "high"),
+        ChatThinkingLevelOption(id = "off", label = "Off"),
+        ChatThinkingLevelOption(id = "low", label = "Low"),
+        ChatThinkingLevelOption(id = "medium", label = "Medium"),
+        ChatThinkingLevelOption(id = "high", label = "High"),
       ),
     isGatewayProvided = false,
   )

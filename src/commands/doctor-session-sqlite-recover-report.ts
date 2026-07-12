@@ -6,8 +6,8 @@ import {
   findLatestFailedSessionSqliteMigrationManifest,
   resolveSessionSqliteMigrationRunsDir,
   restoreSessionSqliteMigrationRun,
-  sessionSqliteMigrationTargetKey,
   writeSessionSqliteMigrationFailureReports,
+  type SessionSqliteMigrationTargetInput,
 } from "./doctor-session-sqlite-migration-run.js";
 import { readOnlySqliteDbStats, resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
 import type {
@@ -27,8 +27,8 @@ export async function recoverDoctorSessionSqliteTargets(params: {
   targets: readonly SessionStoreTarget[];
   validateTarget: SessionSqliteRecoverTargetValidator;
 }): Promise<DoctorSessionSqliteReport> {
-  const selectedTargetKeys = resolveRecoverTargetKeys(params.options, params.targets);
-  const failedRun = findLatestFailedSessionSqliteMigrationManifest(params.env, selectedTargetKeys);
+  const trustedTargets = resolveRecoverTargets(params.targets);
+  const failedRun = findLatestFailedSessionSqliteMigrationManifest(params.env, trustedTargets);
   if (!failedRun) {
     const recoveredCorruptTargets = recoverCorruptSqliteTargets(params.targets);
     if (recoveredCorruptTargets.length > 0) {
@@ -43,14 +43,10 @@ export async function recoverDoctorSessionSqliteTargets(params: {
   }
   const restore = restoreSessionSqliteMigrationRun({
     manifestPath: failedRun.manifestPath,
-    targetKeys: selectedTargetKeys,
+    trustedTargets,
   });
   const targetReports: DoctorSessionSqliteTargetReport[] = [];
-  const manifestTargets = filterRecoveryManifestTargets(
-    failedRun.manifest.targets,
-    selectedTargetKeys,
-  );
-  for (const manifestTarget of manifestTargets) {
+  for (const manifestTarget of failedRun.targets) {
     targetReports.push(
       await params.validateTarget({
         agentId: manifestTarget.agentId,
@@ -79,7 +75,7 @@ export async function recoverDoctorSessionSqliteTargets(params: {
   };
   report.supportIssue = createSessionSqliteMigrationFailureIssue(
     failedRun.manifestPath,
-    selectedTargetKeys,
+    trustedTargets,
   );
   return report;
 }
@@ -180,26 +176,13 @@ function isSqliteCorruptionError(error: unknown): boolean {
   return message.includes("database disk image is malformed") || message.includes("not a database");
 }
 
-function resolveRecoverTargetKeys(
-  options: DoctorSessionSqliteOptions,
+function resolveRecoverTargets(
   targets: readonly SessionStoreTarget[],
-): ReadonlySet<string> | undefined {
-  const hasSelector = Boolean(options.agent || options.allAgents || options.store);
-  return hasSelector
-    ? new Set(targets.map((target) => sessionSqliteMigrationTargetKey(target)))
-    : undefined;
-}
-
-function filterRecoveryManifestTargets<T extends { agentId: string; storePath: string }>(
-  targets: readonly T[],
-  selectedTargetKeys: ReadonlySet<string> | undefined,
-): T[] {
-  if (!selectedTargetKeys) {
-    return [...targets];
-  }
-  return targets.filter((target) =>
-    selectedTargetKeys.has(sessionSqliteMigrationTargetKey(target)),
-  );
+): SessionSqliteMigrationTargetInput[] {
+  return targets.map((target) => ({
+    ...target,
+    sqlitePath: resolveTargetSqlitePath(target),
+  }));
 }
 
 function createSyntheticRecoverTargetReport(

@@ -304,12 +304,10 @@ export function buildMcpAppCanvasPayload(view: { viewId: string; title: string }
   };
 }
 
-const testing = {
+export const testing = {
   clearViewStore() {
     for (const [viewId, view] of getViewStore()) {
       deleteView(viewId, view);
     }
   },
 };
-
-export { testing as __testing };

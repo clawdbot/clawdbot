@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   embeddedAgentLog,
   isToolWrappedWithBeforeToolCallHook,
@@ -1282,8 +1283,9 @@ describe("Codex app-server dynamic tool build", () => {
     const tools = await buildDynamicToolsForTest(params, workspaceDir, { sandbox: null as never });
 
     expect(tools).toHaveLength(1);
-    expect(tools[0]).not.toBe(wrappedTool);
-    expect(isToolWrappedWithBeforeToolCallHook(tools[0])).toBe(true);
+    const tool = expectDefined(tools[0], "Codex dynamic tool");
+    expect(tool).not.toBe(wrappedTool);
+    expect(isToolWrappedWithBeforeToolCallHook(tool)).toBe(true);
   });
 
   it("passes runtime config into Codex exec dynamic tool construction", async () => {

@@ -473,6 +473,11 @@ function resolvePinnedClientMetadata(params: {
     claimedPlatform !== "" &&
     normalizeLegacyNodeHostPlatformPin(claimedPlatform) ===
       normalizeLegacyNodeHostPlatformPin(pairedPlatform);
+  const isNodeHostUsingMacAppPlatformPin =
+    params.clientId === GATEWAY_CLIENT_IDS.NODE_HOST &&
+    params.clientMode === GATEWAY_CLIENT_MODES.NODE &&
+    (claimedPlatform === "darwin" || claimedPlatform === "macos") &&
+    /^macos \d+(?:\.\d+){0,2}$/.test(pairedPlatform);
   const claimedNativeAppPlatformFamily = resolveNativeAppPlatformFamily(
     params.clientId,
     claimedPlatform,
@@ -485,12 +490,16 @@ function resolvePinnedClientMetadata(params: {
     hasPinnedPlatform &&
     claimedPlatform !== "" &&
     claimedPlatform !== pairedPlatform &&
-    claimedNativeAppPlatformFamily !== undefined &&
-    claimedNativeAppPlatformFamily === pairedNativeAppPlatformFamily;
+    ((claimedNativeAppPlatformFamily !== undefined &&
+      claimedNativeAppPlatformFamily === pairedNativeAppPlatformFamily) ||
+      (params.clientId === GATEWAY_CLIENT_IDS.MACOS_APP &&
+        claimedNativeAppPlatformFamily === "macos" &&
+        (pairedPlatform === "darwin" || pairedPlatform === "macos")));
   const platformMismatch =
     hasPinnedPlatform &&
     claimedPlatform !== pairedPlatform &&
     !isLegacyNodeHostPlatformPin &&
+    !isNodeHostUsingMacAppPlatformPin &&
     !isNativeAppPlatformVersionRefresh;
   const deviceFamilyMismatch = hasPinnedDeviceFamily && claimedDeviceFamily !== pairedDeviceFamily;
   const pinnedPlatform =
@@ -498,9 +507,11 @@ function resolvePinnedClientMetadata(params: {
       ? params.pairedPlatform
       : isLegacyNodeHostPlatformPin
         ? normalizeLegacyNodeHostPlatformPin(pairedPlatform)
-        : isNativeAppPlatformVersionRefresh
-          ? params.claimedPlatform
-          : undefined;
+        : isNodeHostUsingMacAppPlatformPin
+          ? params.pairedPlatform
+          : isNativeAppPlatformVersionRefresh
+            ? params.claimedPlatform
+            : undefined;
   return {
     platformMismatch,
     deviceFamilyMismatch,

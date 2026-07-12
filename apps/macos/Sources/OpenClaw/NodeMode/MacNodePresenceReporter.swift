@@ -30,8 +30,7 @@ final class MacNodePresenceReporter {
 
     func start(sender: @escaping Sender) {
         self.stop()
-        self.task = Task { [weak self] in
-            guard let self else { return }
+        self.task = Task {
             var delivery: DeliveryState?
             while !Task.isCancelled {
                 if let sample = Self.currentIdleSample(),

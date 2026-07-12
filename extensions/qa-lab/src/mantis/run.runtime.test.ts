@@ -2,9 +2,18 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QA_EVIDENCE_FILENAME, buildLiveTransportEvidenceSummary } from "../evidence-summary.js";
 import { runMantisBeforeAfter } from "./run.runtime.js";
+
+function requireArgAfter(args: readonly string[], flag: string): string {
+  const index = args.indexOf(flag);
+  if (index < 0) {
+    throw new Error(`expected ${flag} argument`);
+  }
+  return expectDefined(args[index + 1], `${flag} argument value`);
+}
 
 describe("mantis before/after runtime", () => {
   let repoRoot: string;
@@ -24,8 +33,8 @@ describe("mantis before/after runtime", () => {
       if (command !== "pnpm" || !args.includes("openclaw")) {
         return;
       }
-      const repoRootArg = args[args.indexOf("--repo-root") + 1];
-      const outputDirArg = args[args.indexOf("--output-dir") + 1];
+      const repoRootArg = requireArgAfter(args, "--repo-root");
+      const outputDirArg = requireArgAfter(args, "--output-dir");
       const lane = outputDirArg.endsWith("baseline") ? "baseline" : "candidate";
       const outputDir = path.join(repoRootArg, outputDirArg);
       await fs.mkdir(outputDir, { recursive: true });
@@ -126,8 +135,8 @@ describe("mantis before/after runtime", () => {
       if (command !== "pnpm" || !args.includes("openclaw")) {
         return;
       }
-      const repoRootArg = args[args.indexOf("--repo-root") + 1];
-      const outputDirArg = args[args.indexOf("--output-dir") + 1];
+      const repoRootArg = requireArgAfter(args, "--repo-root");
+      const outputDirArg = requireArgAfter(args, "--output-dir");
       const lane = outputDirArg.endsWith("baseline") ? "baseline" : "candidate";
       const outputDir = path.join(repoRootArg, outputDirArg);
       await fs.mkdir(outputDir, { recursive: true });

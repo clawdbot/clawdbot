@@ -1,4 +1,5 @@
 // Venice tests cover models plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -118,7 +119,7 @@ describe("venice-models", () => {
   });
 
   it("buildVeniceModelDefinition returns config with required fields", () => {
-    const entry = VENICE_MODEL_CATALOG[0];
+    const entry = expectDefined(VENICE_MODEL_CATALOG[0], "first Venice catalog model");
     const def = buildVeniceModelDefinition(entry);
     expect(def.id).toBe(entry.id);
     expect(def.name).toBe(entry.name);

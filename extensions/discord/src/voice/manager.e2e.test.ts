@@ -1,5 +1,6 @@
 // Discord tests cover manager plugin behavior.
 import { PassThrough, type Readable } from "node:stream";
+import { expectDefined } from "@openclaw/normalization-core";
 import type {
   RealtimeVoiceAgentControlResult,
   RealtimeVoiceForcedConsultCoordinator,
@@ -1792,7 +1793,9 @@ describe("DiscordVoiceManager", () => {
     expect(realtimeSessionMock.handleBargeIn).toHaveBeenCalled();
     const lastTimestampCall = realtimeSessionMock.setMediaTimestamp.mock.invocationCallOrder.at(-1);
     const firstBargeInCall = realtimeSessionMock.handleBargeIn.mock.invocationCallOrder[0];
-    expect(lastTimestampCall).toBeLessThan(firstBargeInCall);
+    expect(expectDefined(lastTimestampCall, "last media timestamp invocation")).toBeLessThan(
+      expectDefined(firstBargeInCall, "first barge-in invocation"),
+    );
     expect(player.stop).not.toHaveBeenCalled();
     expect(realtimeSessionMock.sendAudio).toHaveBeenCalled();
     bridgeParams?.onEvent?.({ direction: "server", type: "response.done" });

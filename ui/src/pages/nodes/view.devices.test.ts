@@ -1,4 +1,5 @@
 /* @vitest-environment jsdom */
+import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { describe, expect, it } from "vitest";
 import type { InventoryRemovalRequest } from "../../lib/nodes/index.ts";
@@ -230,12 +231,13 @@ describe("nodes inventory rendering", () => {
       },
     });
     const entries = getInventoryCard(container).querySelectorAll(".nodes-entry");
+    const gatewayEntry = expectDefined(entries[0], "gateway inventory entry");
 
-    expect(entries[0].classList.contains("nodes-entry--gateway")).toBe(true);
-    expect(entries[0].textContent).toContain("gateway-host");
-    expect(entries[0].textContent).toContain("Linux · 2026.7.11 · input 5s ago");
-    expect(entries[0].querySelector("button")).toBeNull();
-    expect(entries[0].querySelector("details")).toBeNull();
+    expect(gatewayEntry.classList.contains("nodes-entry--gateway")).toBe(true);
+    expect(gatewayEntry.textContent).toContain("gateway-host");
+    expect(gatewayEntry.textContent).toContain("Linux · 2026.7.11 · input 5s ago");
+    expect(gatewayEntry.querySelector("button")).toBeNull();
+    expect(gatewayEntry.querySelector("details")).toBeNull();
   });
 
   it("renders one row per machine with duplicates collapsed", () => {

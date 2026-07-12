@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Discord tests cover runtime plugin behavior.
 import { ChannelType, PermissionFlagsBits } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -1255,8 +1256,9 @@ describe("handleDiscordMessagingAction", () => {
     };
 
     const expectedMs = Date.parse("2026-01-15T10:00:00.000Z");
-    expect(payload.messages[0].timestampMs).toBe(expectedMs);
-    expect(payload.messages[0].timestampUtc).toBe(new Date(expectedMs).toISOString());
+    const message = expectDefined(payload.messages[0], "Discord message result");
+    expect(message.timestampMs).toBe(expectedMs);
+    expect(message.timestampUtc).toBe(new Date(expectedMs).toISOString());
   });
 
   it("rejects unexpected readMessages payloads with a boundary error", async () => {
@@ -1808,8 +1810,9 @@ describe("handleDiscordMessagingAction", () => {
     };
 
     const expectedMs = Date.parse("2026-01-15T12:00:00.000Z");
-    expect(payload.pins[0].timestampMs).toBe(expectedMs);
-    expect(payload.pins[0].timestampUtc).toBe(new Date(expectedMs).toISOString());
+    const pin = expectDefined(payload.pins[0], "Discord pin result");
+    expect(pin.timestampMs).toBe(expectedMs);
+    expect(pin.timestampUtc).toBe(new Date(expectedMs).toISOString());
   });
 
   it("rejects Discord pin reads for non-allowlisted target channels", async () => {

@@ -1,5 +1,6 @@
 package ai.openclaw.app.tools
 
+import ai.openclaw.app.i18n.nativeString
 import android.content.Context
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -72,13 +73,13 @@ object ToolDisplayRegistry {
     val fallback = config.fallback
 
     val emoji = spec?.emoji ?: fallback?.emoji ?: "🧩"
-    val title = spec?.title ?: titleFromName(trimmedName)
-    val label = spec?.label ?: trimmedName
+    val title = spec?.title?.let(::nativeString) ?: titleFromName(trimmedName)
+    val label = spec?.label?.let(::nativeString) ?: trimmedName
 
     val actionRaw = args?.get("action")?.asStringOrNull()?.trim()
     val action = actionRaw?.takeIf { it.isNotEmpty() }
     val actionSpec = action?.let { spec?.actions?.get(it) }
-    val verb = normalizeVerb(actionSpec?.label ?: action)
+    val verb = normalizeVerb(actionSpec?.label?.let(::nativeString) ?: action)
 
     var detail: String? = null
     if (key == "read") {

@@ -22,6 +22,8 @@ export type DeployCommandOptions = {
 
 type SerializedCommand = ReturnType<BaseCommand["serialize"]>;
 
+const DISCORD_APPLICATION_COMMAND_LIMIT_REACHED = 30032;
+
 /**
  * Per-`command-deploy-cache.json` path async mutex. `server-channels.ts` can
  * start several Discord deployers concurrently in the same Node.js process;
@@ -133,17 +135,31 @@ export class DiscordCommandDeployer {
   private async reconcileGlobalCommands(desired: SerializedCommand[]) {
     const existing = await this.getCommands();
     const existingByKey = new Map(existing.map((command) => [stableCommandKey(command), command]));
-    const desiredKeys = new Set<string>();
-    for (const command of desired) {
-      const key = stableCommandKey(command as APIApplicationCommand);
-      desiredKeys.add(key);
+    const desiredCommands = desired.map((command) => ({
+      command,
+      key: stableCommandKey(command as APIApplicationCommand),
+    }));
+    const desiredKeys = new Set(desiredCommands.map(({ key }) => key));
+    for (const { command, key } of desiredCommands) {
       const current = existingByKey.get(key);
-      if (!current) {
-        await createApplicationCommand(this.rest, this.params.clientId, command);
+      if (current && !commandsEqual(current, command)) {
+        await editApplicationCommand(this.rest, this.params.clientId, current.id, command);
+      }
+    }
+    for (const { command, key } of desiredCommands) {
+      if (existingByKey.has(key)) {
         continue;
       }
-      if (!commandsEqual(current, command)) {
-        await editApplicationCommand(this.rest, this.params.clientId, current.id, command);
+      try {
+        await createApplicationCommand(this.rest, this.params.clientId, command);
+      } catch (error) {
+        if (!isApplicationCommandLimitError(error)) {
+          throw error;
+        }
+        // Reconcile cannot create before deleting at Discord's hard cap. Bulk
+        // overwrite replaces the complete set without an unsafe delete gap.
+        await overwriteApplicationCommands(this.rest, this.params.clientId, desired);
+        return;
       }
     }
     for (const command of existing) {
@@ -281,6 +297,15 @@ function groupGuildCommands(commands: BaseCommand[]): Map<string, SerializedComm
 
 function stableCommandKey(command: Pick<APIApplicationCommand, "name" | "type">) {
   return `${command.type ?? ApplicationCommandType.ChatInput}:${command.name}`;
+}
+
+function isApplicationCommandLimitError(error: unknown): boolean {
+  return (
+    error !== null &&
+    typeof error === "object" &&
+    "discordCode" in error &&
+    error.discordCode === DISCORD_APPLICATION_COMMAND_LIMIT_REACHED
+  );
 }
 
 function comparableCommand(value: unknown): unknown {

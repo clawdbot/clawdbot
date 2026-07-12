@@ -50,7 +50,7 @@ on:
       kova_ref:
         description: openclaw/Kova Git ref to install
         required: false
-        default: 4dde6b6022d94058abced883343de7ee8ce69917
+        default: 2b02b7d33418db0c6952c4cf8fe8a608e7964859
         type: string
       dispatch_id:
         description: Optional parent workflow dispatch identifier
@@ -153,7 +153,7 @@ jobs:
             include_filters: "scenario:agent-cold-warm-message"
             expected_release_entries: "agent-cold-warm-message:mock-openai-provider"
     env:
-      KOVA_REF: ${{ inputs.kova_ref || '4dde6b6022d94058abced883343de7ee8ce69917' }}
+      KOVA_REF: ${{ inputs.kova_ref || '2b02b7d33418db0c6952c4cf8fe8a608e7964859' }}
       KOVA_HOME: ${{ github.workspace }}/.artifacts/kova/home/${{ matrix.lane }}
       PERFORMANCE_HELPER_DIR: ${{ github.workspace }}/.artifacts/performance-workflow
       REPORT_DIR: ${{ github.workspace }}/.artifacts/kova/reports/${{ matrix.lane }}

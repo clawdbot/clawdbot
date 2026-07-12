@@ -969,6 +969,43 @@ describe("resolvePinnedClientMetadata", () => {
     });
   });
 
+  it("accepts a node-host macOS alias against the shared Mac app platform pin", () => {
+    expect(
+      testing.resolvePinnedClientMetadata({
+        clientId: "node-host",
+        clientMode: "node",
+        claimedPlatform: "macos",
+        claimedDeviceFamily: "Mac",
+        pairedPlatform: "macOS 26.5.2",
+        pairedDeviceFamily: "Mac",
+      }),
+    ).toEqual({
+      platformMismatch: false,
+      deviceFamilyMismatch: false,
+      pinnedPlatform: "macOS 26.5.2",
+      pinnedDeviceFamily: "Mac",
+    });
+  });
+
+  it("refreshes a shared node-host macOS pin from the native Mac app", () => {
+    expect(
+      testing.resolvePinnedClientMetadata({
+        clientId: "openclaw-macos",
+        clientMode: "ui",
+        claimedPlatform: "macOS 26.5.2",
+        claimedDeviceFamily: "Mac",
+        pairedPlatform: "macos",
+        pairedDeviceFamily: "Mac",
+      }),
+    ).toEqual({
+      platformMismatch: false,
+      deviceFamilyMismatch: false,
+      pinnedPlatform: "macOS 26.5.2",
+      pinnedDeviceFamily: "Mac",
+      refreshPairedPlatform: "macOS 26.5.2",
+    });
+  });
+
   it("still requires approval when an iOS device family changes", () => {
     expect(
       testing.resolvePinnedClientMetadata({

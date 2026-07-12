@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Slack tests cover exact delivery-queue reconciliation through message metadata.
 import type { MessageMetadata } from "@slack/types";
 import type { ChatPostMessageArguments, WebClient } from "@slack/web-api";
@@ -570,11 +571,12 @@ describe("reconcileSlackUnknownSend", () => {
     }
 
     const forgedMetadata: MessageMetadata[] = [];
+    const firstMetadata = expectDefined(postedMetadata[0], "first posted Slack metadata");
     for (const partIndex of [1, 2]) {
       forgedMetadata.push({
-        ...postedMetadata[0],
+        ...firstMetadata,
         event_payload: {
-          ...postedMetadata[0]?.event_payload,
+          ...firstMetadata.event_payload,
           openclaw_delivery_part_index: partIndex,
         },
       });

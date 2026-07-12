@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { ContextProvider } from "@lit/context";
+import { expectDefined } from "@openclaw/normalization-core";
 import { LitElement } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -753,7 +754,10 @@ describe("PluginsPage", () => {
     form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
 
     await vi.waitFor(() => expect(configHarness.runtimeConfig.patch).toHaveBeenCalledOnce());
-    const patchArgs = configHarness.runtimeConfig.patch.mock.calls[0][0] as {
+    const patchArgs = expectDefined(
+      expectDefined(configHarness.runtimeConfig.patch.mock.calls[0], "MCP add patch call")[0],
+      "MCP add patch payload",
+    ) as {
       raw: Record<string, unknown>;
       note: string;
     };
@@ -813,7 +817,10 @@ describe("PluginsPage", () => {
     await clickMenuItem(page, '[data-mcp-name="github"]', "Remove");
 
     await vi.waitFor(() => expect(configHarness.runtimeConfig.patch).toHaveBeenCalledOnce());
-    const patchArgs = configHarness.runtimeConfig.patch.mock.calls[0][0] as {
+    const patchArgs = expectDefined(
+      expectDefined(configHarness.runtimeConfig.patch.mock.calls[0], "MCP remove patch call")[0],
+      "MCP remove patch payload",
+    ) as {
       raw: Record<string, unknown>;
     };
     // RFC 7396 merge semantics: deletion must be an explicit null, not omission.

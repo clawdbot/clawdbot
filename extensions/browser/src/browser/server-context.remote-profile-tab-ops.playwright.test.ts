@@ -1,4 +1,5 @@
 // Browser tests cover server context.remote profile tab ops.playwright plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import {
   installRemoteProfileTestLifecycle,
@@ -371,8 +372,9 @@ describe("browser remote profile tab ops via Playwright", () => {
       dangerouslyAllowPrivateNetwork: false,
       hostnameAllowlist: ["browserless.example.com"],
     };
+    const remoteProfile = expectDefined(state.resolved.profiles.remote, "remote browser profile");
     state.resolved.profiles.remote = {
-      ...state.resolved.profiles.remote,
+      ...remoteProfile,
       cdpUrl: "http://10.0.0.42:9222",
       cdpPort: 9222,
     };

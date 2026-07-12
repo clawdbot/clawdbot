@@ -1,5 +1,6 @@
 // Qa Lab tests cover QA evidence summary behavior.
 import { execFileSync } from "node:child_process";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   QA_EVIDENCE_SUMMARY_KIND,
@@ -495,7 +496,9 @@ describe("evidence summary", () => {
 
       expect(validateQaEvidenceSummaryJson(evidence)).toEqual(evidence);
       expect(evidence.evidenceMode).toBe(expectedMode);
-      expect("execution" in evidence.entries[0]).toBe(hasExecution);
+      expect("execution" in expectDefined(evidence.entries[0], "QA evidence entry")).toBe(
+        hasExecution,
+      );
     },
   );
 

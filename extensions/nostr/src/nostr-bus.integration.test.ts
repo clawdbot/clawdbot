@@ -1,4 +1,5 @@
 // Nostr tests cover nostr bus.integration plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMetrics, createNoopMetrics, type MetricEvent } from "./metrics.js";
 import { createSeenTracker } from "./seen-tracker.js";
@@ -32,6 +33,10 @@ function createCollectingMetrics() {
 
 function createPlainMetrics() {
   return createMetrics();
+}
+
+function requireRecordEntry<T>(entries: Record<string, T>, key: string, context: string): T {
+  return expectDefined(entries[key], context);
 }
 
 // ============================================================================
@@ -298,9 +303,9 @@ describe("Metrics", () => {
       metrics.emit("event.duplicate");
 
       expect(events).toHaveLength(3);
-      expect(events[0].name).toBe("event.received");
-      expect(events[1].name).toBe("event.processed");
-      expect(events[2].name).toBe("event.duplicate");
+      expect(expectDefined(events[0], "first Nostr metric event").name).toBe("event.received");
+      expect(expectDefined(events[1], "second Nostr metric event").name).toBe("event.processed");
+      expect(expectDefined(events[2], "third Nostr metric event").name).toBe("event.duplicate");
     });
 
     it("includes labels in metric events", () => {
@@ -308,7 +313,9 @@ describe("Metrics", () => {
 
       metrics.emit("relay.connect", 1, { relay: TEST_RELAY_URL });
 
-      expect(events[0].labels).toEqual({ relay: TEST_RELAY_URL });
+      expect(expectDefined(events[0], "first Nostr metric event").labels).toEqual({
+        relay: TEST_RELAY_URL,
+      });
     });
 
     it("accumulates counters in snapshot", () => {
@@ -336,14 +343,18 @@ describe("Metrics", () => {
       metrics.emit("relay.error", 1, { relay: TEST_RELAY_URL_1 });
 
       const snapshot = metrics.getSnapshot();
-      const relayOne = snapshot.relays[TEST_RELAY_URL_1];
+      const relayOne = requireRecordEntry(snapshot.relays, TEST_RELAY_URL_1, "Nostr relay metrics");
       if (!relayOne) {
         throw new Error("expected first relay metrics");
       }
       expect(relayOne.connects).toBe(1);
       expect(relayOne.errors).toBe(2);
-      expect(snapshot.relays[TEST_RELAY_URL_2].connects).toBe(1);
-      expect(snapshot.relays[TEST_RELAY_URL_2].errors).toBe(0);
+      expect(
+        requireRecordEntry(snapshot.relays, TEST_RELAY_URL_2, "Nostr relay metrics").connects,
+      ).toBe(1);
+      expect(
+        requireRecordEntry(snapshot.relays, TEST_RELAY_URL_2, "Nostr relay metrics").errors,
+      ).toBe(0);
     });
 
     it("tracks circuit breaker state changes", () => {
@@ -352,14 +363,26 @@ describe("Metrics", () => {
       metrics.emit("relay.circuit_breaker.open", 1, { relay: TEST_RELAY_URL_PRIMARY });
 
       let snapshot = metrics.getSnapshot();
-      expect(snapshot.relays[TEST_RELAY_URL_PRIMARY].circuitBreakerState).toBe("open");
-      expect(snapshot.relays[TEST_RELAY_URL_PRIMARY].circuitBreakerOpens).toBe(1);
+      expect(
+        requireRecordEntry(snapshot.relays, TEST_RELAY_URL_PRIMARY, "Nostr relay metrics")
+          .circuitBreakerState,
+      ).toBe("open");
+      expect(
+        requireRecordEntry(snapshot.relays, TEST_RELAY_URL_PRIMARY, "Nostr relay metrics")
+          .circuitBreakerOpens,
+      ).toBe(1);
 
       metrics.emit("relay.circuit_breaker.close", 1, { relay: TEST_RELAY_URL_PRIMARY });
 
       snapshot = metrics.getSnapshot();
-      expect(snapshot.relays[TEST_RELAY_URL_PRIMARY].circuitBreakerState).toBe("closed");
-      expect(snapshot.relays[TEST_RELAY_URL_PRIMARY].circuitBreakerCloses).toBe(1);
+      expect(
+        requireRecordEntry(snapshot.relays, TEST_RELAY_URL_PRIMARY, "Nostr relay metrics")
+          .circuitBreakerState,
+      ).toBe("closed");
+      expect(
+        requireRecordEntry(snapshot.relays, TEST_RELAY_URL_PRIMARY, "Nostr relay metrics")
+          .circuitBreakerCloses,
+      ).toBe(1);
     });
 
     it("tracks all rejection reasons", () => {
@@ -400,7 +423,11 @@ describe("Metrics", () => {
       metrics.emit("relay.message.auth", 1, { relay: TEST_RELAY_URL_PRIMARY });
 
       const snapshot = metrics.getSnapshot();
-      const relay = snapshot.relays[TEST_RELAY_URL_PRIMARY];
+      const relay = requireRecordEntry(
+        snapshot.relays,
+        TEST_RELAY_URL_PRIMARY,
+        "Nostr relay metrics",
+      );
       expect(relay.messagesReceived.event).toBe(1);
       expect(relay.messagesReceived.eose).toBe(1);
       expect(relay.messagesReceived.closed).toBe(1);
@@ -487,9 +514,15 @@ describe("Circuit Breaker Behavior", () => {
 
     const cbEvents = events.filter((e) => e.name.startsWith("relay.circuit_breaker"));
     expect(cbEvents).toHaveLength(3);
-    expect(cbEvents[0].name).toBe("relay.circuit_breaker.open");
-    expect(cbEvents[1].name).toBe("relay.circuit_breaker.half_open");
-    expect(cbEvents[2].name).toBe("relay.circuit_breaker.close");
+    expect(expectDefined(cbEvents[0], "circuit breaker open event").name).toBe(
+      "relay.circuit_breaker.open",
+    );
+    expect(expectDefined(cbEvents[1], "circuit breaker half-open event").name).toBe(
+      "relay.circuit_breaker.half_open",
+    );
+    expect(expectDefined(cbEvents[2], "circuit breaker close event").name).toBe(
+      "relay.circuit_breaker.close",
+    );
   });
 });
 
@@ -510,8 +543,12 @@ describe("Health Scoring", () => {
     metrics.emit("relay.error", 1, { relay: TEST_RELAY_URL_BAD });
 
     const snapshot = metrics.getSnapshot();
-    expect(snapshot.relays[TEST_RELAY_URL_GOOD].errors).toBe(0);
-    expect(snapshot.relays[TEST_RELAY_URL_BAD].errors).toBe(3);
+    expect(
+      requireRecordEntry(snapshot.relays, TEST_RELAY_URL_GOOD, "Nostr relay metrics").errors,
+    ).toBe(0);
+    expect(
+      requireRecordEntry(snapshot.relays, TEST_RELAY_URL_BAD, "Nostr relay metrics").errors,
+    ).toBe(3);
   });
 });
 

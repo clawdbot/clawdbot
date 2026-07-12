@@ -1,5 +1,6 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.i18n.nativeString
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -195,10 +196,10 @@ class PermissionRequester internal constructor(
         dialog =
           AlertDialog
             .Builder(activity)
-            .setTitle("Permission required")
+            .setTitle(nativeString("Permission required"))
             .setMessage(buildRationaleMessage(permissions))
-            .setPositiveButton("Continue") { _, _ -> finish(true) }
-            .setNegativeButton("Not now") { _, _ -> finish(false) }
+            .setPositiveButton(nativeString("Continue")) { _, _ -> finish(true) }
+            .setNegativeButton(nativeString("Not now")) { _, _ -> finish(false) }
             .setOnCancelListener { finish(false) }
             .show()
       }
@@ -225,9 +226,9 @@ class PermissionRequester internal constructor(
       dialog =
         AlertDialog
           .Builder(activity)
-          .setTitle("Enable permission in Settings")
+          .setTitle(nativeString("Enable permission in Settings"))
           .setMessage(buildSettingsMessage(permissions))
-          .setPositiveButton("Open Settings") { _, _ ->
+          .setPositiveButton(nativeString("Open Settings")) { _, _ ->
             if (activity.isFinishing || activity.isDestroyed) return@setPositiveButton
             val intent =
               Intent(
@@ -235,36 +236,42 @@ class PermissionRequester internal constructor(
                 Uri.fromParts("package", activity.packageName, null),
               )
             activity.startActivity(intent)
-          }.setNegativeButton("Cancel", null)
+          }.setNegativeButton(nativeString("Cancel"), null)
           .setOnDismissListener { removeObserver() }
           .show()
     }
 
   private fun buildRationaleMessage(permissions: List<String>): String {
     val labels = permissions.map { permissionLabel(it) }
-    return "OpenClaw needs ${labels.joinToString(", ")} permissions to continue."
+    return nativeString(
+      "OpenClaw needs \${labels.joinToString(\", \")} permissions to continue.",
+      labels.joinToString(", "),
+    )
   }
 
   private fun buildSettingsMessage(permissions: List<String>): String {
     val labels = permissions.map { permissionLabel(it) }
-    return "Please enable ${labels.joinToString(", ")} in Android Settings to continue."
+    return nativeString(
+      "Please enable \${labels.joinToString(\", \")} in Android Settings to continue.",
+      labels.joinToString(", "),
+    )
   }
 
   private fun permissionLabel(permission: String): String =
     when (permission) {
-      Manifest.permission.CAMERA -> "Camera"
-      Manifest.permission.RECORD_AUDIO -> "Microphone"
-      Manifest.permission.SEND_SMS -> "Send SMS"
-      Manifest.permission.READ_SMS -> "Read SMS"
-      Manifest.permission.READ_CONTACTS -> "Read Contacts"
-      Manifest.permission.WRITE_CONTACTS -> "Write Contacts"
-      Manifest.permission.READ_CALENDAR -> "Read Calendar"
-      Manifest.permission.WRITE_CALENDAR -> "Write Calendar"
-      Manifest.permission.READ_CALL_LOG -> "Read Call Log"
-      Manifest.permission.ACTIVITY_RECOGNITION -> "Motion Activity"
-      Manifest.permission.READ_MEDIA_IMAGES -> "Photos"
-      Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED -> "Photos"
-      Manifest.permission.READ_EXTERNAL_STORAGE -> "Photos"
+      Manifest.permission.CAMERA -> nativeString("Camera")
+      Manifest.permission.RECORD_AUDIO -> nativeString("Microphone")
+      Manifest.permission.SEND_SMS -> nativeString("Send SMS")
+      Manifest.permission.READ_SMS -> nativeString("Read SMS")
+      Manifest.permission.READ_CONTACTS -> nativeString("Read Contacts")
+      Manifest.permission.WRITE_CONTACTS -> nativeString("Write Contacts")
+      Manifest.permission.READ_CALENDAR -> nativeString("Read Calendar")
+      Manifest.permission.WRITE_CALENDAR -> nativeString("Write Calendar")
+      Manifest.permission.READ_CALL_LOG -> nativeString("Read Call Log")
+      Manifest.permission.ACTIVITY_RECOGNITION -> nativeString("Motion Activity")
+      Manifest.permission.READ_MEDIA_IMAGES -> nativeString("Photos")
+      Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED -> nativeString("Photos")
+      Manifest.permission.READ_EXTERNAL_STORAGE -> nativeString("Photos")
       else -> permission
     }
 }

@@ -59,6 +59,7 @@ function runCiManifestFixture(options: {
   historicalCompatibility?: boolean;
   iosCapabilities?: boolean;
   iosBuildCapability?: boolean;
+  androidCiCapabilities?: boolean;
   nativeI18nCapabilities?: boolean;
   protocolCoverage?: boolean;
   qaSmokePlan?: boolean;
@@ -145,9 +146,14 @@ function runCiManifestFixture(options: {
     mkdirSync(path.dirname(targetWorkflow), { recursive: true });
     writeFileSync(
       targetWorkflow,
-      (options.formatCheck ?? options.bundledPlanner)
-        ? "pnpm format:check\npnpm format:check\n"
-        : "",
+      [
+        ...((options.formatCheck ?? options.bundledPlanner)
+          ? ["pnpm format:check", "pnpm format:check"]
+          : []),
+        ...((options.androidCiCapabilities ?? options.bundledPlanner)
+          ? ["android-ci-contract-v2"]
+          : []),
+      ].join("\n"),
     );
     const outputPath = path.join(root, "manifest.out");
     writeFileSync(outputPath, "", "utf8");
@@ -1263,7 +1269,8 @@ describe("ci workflow guards", () => {
     expect(source).toContain(
       '{ check_name: "android-test-third-party", task: "test-third-party" }',
     );
-    expect(source).toContain('{ check_name: "android-build-play", task: "build-play" }');
+    expect(source).toContain('check_name: "android-build-play"');
+    expect(source).toContain('task: useCompatibleAndroidCi ? "build-play-compat" : "build-play"');
     expect(runStep.run).toContain(":app:testPlayDebugUnitTest");
     expect(runStep.run).toContain(":app:testThirdPartyDebugUnitTest");
     expect(runStep.run).toContain(":app:assemblePlayDebug");
@@ -1705,6 +1712,12 @@ describe("ci workflow guards", () => {
   });
 
   it("uses target-owned CI plans and capabilities for older release checkouts", () => {
+    const androidRun = readCiWorkflow().jobs.android.steps.find(
+      (step: WorkflowStep) => step.name === "Run Android ${{ matrix.task }}",
+    ).run;
+    expect(androidRun).toContain("build-play-compat)");
+    expect(androidRun).toContain(":app:assemblePlayDebug");
+
     const legacy = runCiManifestFixture({ bundledPlanner: false });
     expect(legacy.status, legacy.output).toBe(0);
     expect(legacy.outputs.historical_target).toBe("true");
@@ -1713,6 +1726,14 @@ describe("ci workflow guards", () => {
     expect(legacy.outputs.run_qa_smoke_ci).toBe("false");
     expect(legacy.outputs.run_channel_contracts_shards).toBe("false");
     expect(legacy.outputs.run_protocol_event_coverage).toBe("false");
+    expect(
+      JSON.parse(expectDefined(legacy.outputs.android_matrix, "legacy Android matrix output"))
+        .include,
+    ).toEqual([
+      { check_name: "android-test-play", task: "test-play" },
+      { check_name: "android-test-third-party", task: "test-third-party" },
+      { check_name: "android-build-play", task: "build-play-compat" },
+    ]);
     expect(
       JSON.parse(
         expectDefined(
@@ -1735,6 +1756,37 @@ describe("ci workflow guards", () => {
     expect(current.outputs.run_channel_contracts_shards).toBe("true");
     expect(current.outputs.run_protocol_event_coverage).toBe("true");
     expect(current.outputs.run_format_check).toBe("true");
+    expect(
+      JSON.parse(expectDefined(current.outputs.android_matrix, "current Android matrix output"))
+        .include,
+    ).toEqual([
+      { check_name: "android-test-play", task: "test-play" },
+      { check_name: "android-test-third-party", task: "test-third-party" },
+      { check_name: "android-build-play", task: "build-play" },
+      { check_name: "android-ktlint", task: "ktlint" },
+    ]);
+
+    const currentMissingAndroidCapabilities = runCiManifestFixture({
+      androidCiCapabilities: false,
+      bundledPlanner: true,
+      eventName: "pull_request",
+    });
+    expect(currentMissingAndroidCapabilities.status, currentMissingAndroidCapabilities.output).toBe(
+      0,
+    );
+    expect(
+      JSON.parse(
+        expectDefined(
+          currentMissingAndroidCapabilities.outputs.android_matrix,
+          "current fallback-resistant Android matrix output",
+        ),
+      ).include,
+    ).toEqual([
+      { check_name: "android-test-play", task: "test-play" },
+      { check_name: "android-test-third-party", task: "test-third-party" },
+      { check_name: "android-build-play", task: "build-play" },
+      { check_name: "android-ktlint", task: "ktlint" },
+    ]);
     expect(
       JSON.parse(
         expectDefined(
@@ -2723,7 +2775,9 @@ describe("ci workflow guards", () => {
     expect(smokeRunStep.run).toContain("createQaSmokeCiPart");
     expect(smokeRunStep.run).toContain("createQaSmokeCiMatrix");
     expect(smokeRunStep.run).toContain("readQaScenarioPack");
-    expect(smokeRunStep.run).toContain("scenarioIdsByKind");
+    expect(smokeRunStep.run).toContain("isolate each scenario");
+    expect(smokeRunStep.run).toContain("scenario_ids: [scenarioId]");
+    expect(smokeRunStep.run).not.toContain("scenarioIdsByKind");
     const compatibilityScenarioBlock = smokeRunStep.run.match(
       /const compatibilityScenarioIds = new Set\(\[([\s\S]*?)\]\);/u,
     )?.[1];

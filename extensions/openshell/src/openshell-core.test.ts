@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { CreateSandboxBackendParams } from "openclaw/plugin-sdk/sandbox";
 import {
   createSandboxBrowserConfig,
@@ -385,7 +386,7 @@ describe("openshell backend manager", () => {
     });
     cliMocks.runOpenShellCli.mockImplementation(async ({ args }: { args: string[] }) => {
       if (args[0] === "sandbox" && args[1] === "download") {
-        const tmpDir = args[4];
+        const tmpDir = expectDefined(args[4], "OpenShell download destination");
         await fs.writeFile(path.join(tmpDir, "from-remote.txt"), "remote", "utf8");
         await fs.mkdir(path.join(tmpDir, ".openclaw", "sandbox-skills", "skills"), {
           recursive: true,
@@ -438,7 +439,7 @@ describe("openshell backend manager", () => {
     const workspaceDir = await makeTempDir("openclaw-openshell-workspace-");
     cliMocks.runOpenShellCli.mockImplementation(async ({ args }: { args: string[] }) => {
       if (args[0] === "sandbox" && args[1] === "download") {
-        const tmpDir = args[4];
+        const tmpDir = expectDefined(args[4], "OpenShell download destination");
         await fs.writeFile(path.join(tmpDir, "from-remote.txt"), "remote", "utf8");
         await fs.mkdir(path.join(tmpDir, ".openclaw"), { recursive: true });
         await fs.writeFile(path.join(tmpDir, ".openclaw", "sandbox-skills"), "poison", "utf8");
@@ -480,7 +481,7 @@ describe("openshell backend manager", () => {
     await fs.writeFile(shadowFile, "local shadow", "utf8");
     cliMocks.runOpenShellCli.mockImplementation(async ({ args }: { args: string[] }) => {
       if (args[0] === "sandbox" && args[1] === "download") {
-        const tmpDir = args[4];
+        const tmpDir = expectDefined(args[4], "OpenShell download destination");
         await fs.writeFile(path.join(tmpDir, "from-remote.txt"), "remote", "utf8");
         await fs.writeFile(path.join(tmpDir, ".openclaw"), "poison", "utf8");
       }

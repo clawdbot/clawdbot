@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import type { PairedDevice } from "./index.ts";
 import {
@@ -14,6 +15,10 @@ function device(overrides: Partial<PairedDevice> & { deviceId: string }): Paired
     roles: ["operator"],
     ...overrides,
   };
+}
+
+function firstGroup(groups: ReturnType<typeof buildNodesInventory>) {
+  return expectDefined(groups[0], "first node inventory group");
 }
 
 describe("buildNodesInventory", () => {
@@ -43,7 +48,7 @@ describe("buildNodesInventory", () => {
     });
 
     expect(groups).toHaveLength(1);
-    const entry = groups[0].primary;
+    const entry = firstGroup(groups).primary;
     expect(entry.id).toBe("node-1");
     expect(entry.connected).toBe(true);
     expect(entry.roles).toEqual(["operator", "node"]);
@@ -77,13 +82,13 @@ describe("buildNodesInventory", () => {
       ],
     });
 
-    expect(groups[0].primary).toMatchObject({
+    expect(firstGroup(groups).primary).toMatchObject({
       platform: "macos",
       version: "2026.7.11",
       modelIdentifier: "Mac16,6",
       lastSeenAtMs: 4_000,
     });
-    expect(groups[0].primary.presence?.deviceId).toBe("node-1");
+    expect(firstGroup(groups).primary.presence?.deviceId).toBe("node-1");
   });
 
   it("does not let one disconnect beacon override server-computed connectivity", () => {
@@ -99,7 +104,7 @@ describe("buildNodesInventory", () => {
       presence: [{ instanceId: "BROWSER-1", reason: "disconnect" }],
     });
 
-    expect(groups[0].primary.connected).toBe(true);
+    expect(firstGroup(groups).primary.connected).toBe(true);
   });
 
   it("prefers operatorLabel over displayName clientId and deviceId for display name", () => {
@@ -147,8 +152,8 @@ describe("buildNodesInventory", () => {
     });
 
     expect(groups).toHaveLength(1);
-    expect(groups[0].primary.id).toBe("new-1");
-    expect(groups[0].duplicates.map((entry) => entry.id)).toEqual(["mid-1", "old-1"]);
+    expect(firstGroup(groups).primary.id).toBe("new-1");
+    expect(firstGroup(groups).duplicates.map((entry) => entry.id)).toEqual(["mid-1", "old-1"]);
   });
 
   it("prefers connected entries as group primary over fresher offline ones", () => {
@@ -165,8 +170,8 @@ describe("buildNodesInventory", () => {
       nodes: [{ nodeId: "live-1", connected: true, paired: true }],
     });
 
-    expect(groups[0].primary.id).toBe("live-1");
-    expect(groups[0].duplicates.map((entry) => entry.id)).toEqual(["offline-1"]);
+    expect(firstGroup(groups).primary.id).toBe("live-1");
+    expect(firstGroup(groups).duplicates.map((entry) => entry.id)).toEqual(["offline-1"]);
   });
 
   it("groups anonymous records by client identity and keeps unknown ids separate", () => {
@@ -197,8 +202,8 @@ describe("buildNodesInventory", () => {
     });
 
     expect(groups).toHaveLength(1);
-    expect(groups[0].primary.roles).toEqual(["node"]);
-    expect(groups[0].primary.device).toBeUndefined();
+    expect(firstGroup(groups).primary.roles).toEqual(["node"]);
+    expect(firstGroup(groups).primary.device).toBeUndefined();
   });
 
   it("flags silent trusted-cidr and ssh-verified pairings as auto-approved", () => {
@@ -246,7 +251,7 @@ describe("listStaleInventoryEntries", () => {
       nodes: [],
     });
 
-    expect(groups[0].primary.id).toBe("cli-live");
+    expect(firstGroup(groups).primary.id).toBe("cli-live");
     expect(listStaleInventoryEntries(groups).map((entry) => entry.id)).toEqual([
       "cli-new",
       "cli-stale",
@@ -327,7 +332,7 @@ describe("resolveInventoryRemoval", () => {
       paired: [device({ deviceId: "node-1", roles: ["node"], displayName: "megaclaw" })],
       nodes: [],
     });
-    expect(resolveInventoryRemoval(groups[0].primary)).toEqual({
+    expect(resolveInventoryRemoval(firstGroup(groups).primary)).toEqual({
       removeNode: true,
       removeDevice: false,
     });
@@ -340,7 +345,7 @@ describe("resolveInventoryRemoval", () => {
       ],
       nodes: [],
     });
-    expect(resolveInventoryRemoval(groups[0].primary)).toEqual({
+    expect(resolveInventoryRemoval(firstGroup(groups).primary)).toEqual({
       removeNode: true,
       removeDevice: true,
     });
@@ -351,7 +356,7 @@ describe("resolveInventoryRemoval", () => {
       paired: [device({ deviceId: "op-1", roles: ["operator"] })],
       nodes: [],
     });
-    expect(resolveInventoryRemoval(groups[0].primary)).toEqual({
+    expect(resolveInventoryRemoval(firstGroup(groups).primary)).toEqual({
       removeNode: false,
       removeDevice: true,
     });
@@ -362,7 +367,7 @@ describe("resolveInventoryRemoval", () => {
       paired: [],
       nodes: [{ nodeId: "legacy-1", paired: true }],
     });
-    expect(resolveInventoryRemoval(groups[0].primary)).toEqual({
+    expect(resolveInventoryRemoval(firstGroup(groups).primary)).toEqual({
       removeNode: true,
       removeDevice: false,
     });

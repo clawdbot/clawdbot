@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -356,7 +357,7 @@ describe("short-term promotion", () => {
 
       const entries = Object.entries(await readRecallStoreEntries(workspaceDir));
       expect(entries).toHaveLength(1);
-      const [key, entry] = entries[0];
+      const [key, entry] = expectDefined(entries[0], "stable claim recall entry");
       expect(key.endsWith(`:${claimHash}`)).toBe(true);
       expect(entry.claimHash).toBe(claimHash);
       expect(entry.recallCount).toBe(1);
@@ -1069,7 +1070,9 @@ describe("short-term promotion", () => {
       expect(fasterDecay).toHaveLength(1);
       expect(slowerDecay[0]?.components.recency).toBeCloseTo(0.5, 3);
       expect(fasterDecay[0]?.components.recency).toBeCloseTo(0.25, 3);
-      expect(slowerDecay[0].score).toBeGreaterThan(fasterDecay[0].score);
+      const slowerResult = expectDefined(slowerDecay[0], "slower decay result");
+      const fasterResult = expectDefined(fasterDecay[0], "faster decay result");
+      expect(slowerResult.score).toBeGreaterThan(fasterResult.score);
     });
   });
 
@@ -1158,7 +1161,9 @@ describe("short-term promotion", () => {
         nowMs,
       });
       expect(ranked[0]?.path).toBe("memory/2026-04-02.md");
-      expect(ranked[0].score).toBeGreaterThan(ranked[1].score);
+      const boostedResult = expectDefined(ranked[0], "boosted phase-signal result");
+      const baselineResult = expectDefined(ranked[1], "baseline phase-signal result");
+      expect(boostedResult.score).toBeGreaterThan(baselineResult.score);
 
       const phaseStore = await testing.readPhaseSignalStore(
         workspaceDir,
@@ -1240,7 +1245,9 @@ describe("short-term promotion", () => {
 
       expect(staleSignalRank).toHaveLength(1);
       expect(freshSignalRank).toHaveLength(1);
-      expect(freshSignalRank[0].score).toBeGreaterThan(staleSignalRank[0].score);
+      const freshResult = expectDefined(freshSignalRank[0], "fresh phase-signal result");
+      const staleResult = expectDefined(staleSignalRank[0], "stale phase-signal result");
+      expect(freshResult.score).toBeGreaterThan(staleResult.score);
     });
   });
 
@@ -3629,10 +3636,11 @@ describe("short-term promotion", () => {
       });
 
       const store = await testing.readRecallStore(workspaceDir, new Date(nowMs).toISOString());
-      const entryKey = Object.keys(store.entries)[0];
-      store.entries[entryKey].dailyCount = 6;
-      store.entries[entryKey].recallCount = 0;
-      store.entries[entryKey].groundedCount = 1;
+      const entryKey = expectDefined(Object.keys(store.entries)[0], "signal-count recall key");
+      const entry = expectDefined(store.entries[entryKey], "signal-count recall entry");
+      entry.dailyCount = 6;
+      entry.recallCount = 0;
+      entry.groundedCount = 1;
       await testing.writeRawRecallStore(workspaceDir, store);
 
       const ranked = await rankShortTermPromotionCandidates({
@@ -3644,10 +3652,11 @@ describe("short-term promotion", () => {
       });
 
       expect(ranked.length).toBe(1);
-      expect(ranked[0].recallCount).toBe(0);
-      expect(ranked[0].dailyCount).toBe(6);
-      expect(ranked[0].groundedCount).toBe(1);
-      expect(ranked[0].signalCount).toBe(7);
+      const rankedResult = expectDefined(ranked[0], "signal-count ranking result");
+      expect(rankedResult.recallCount).toBe(0);
+      expect(rankedResult.dailyCount).toBe(6);
+      expect(rankedResult.groundedCount).toBe(1);
+      expect(rankedResult.signalCount).toBe(7);
 
       const applied = await applyShortTermPromotions({
         workspaceDir,
@@ -3688,7 +3697,8 @@ describe("short-term promotion", () => {
 
         const entries = Object.values(await readRecallStoreEntries(workspaceDir));
         expect(entries).toHaveLength(1);
-        expect(readEntrySnippet(entries[0])).toBe(prefix);
+        const entry = expectDefined(entries[0], "UTF-16 recall entry");
+        expect(readEntrySnippet(entry)).toBe(prefix);
       });
     });
 

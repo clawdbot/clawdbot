@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentsListResult, SkillStatusEntry, SkillStatusReport } from "../../api/types.ts";
@@ -178,13 +179,15 @@ describe("renderSkills", () => {
 
     const toggles = container.querySelectorAll<HTMLInputElement>(".skill-toggle");
     expect(toggles).toHaveLength(2);
-    expect(toggles[0].checked).toBe(false);
-    expect(toggles[1].checked).toBe(false);
+    const passwordToggle = expectDefined(toggles[0], "password skill toggle");
+    const appleNotesToggle = expectDefined(toggles[1], "apple notes skill toggle");
+    expect(passwordToggle.checked).toBe(false);
+    expect(appleNotesToggle.checked).toBe(false);
 
     // Simulate the user clicking the 1password toggle before the re-render propagates.
     // Without repeat(), Lit's dirty-check skips re-setting `.checked = false` on the reused
     // DOM node, so apple-notes inherits this stale user-driven state.
-    toggles[0].checked = true;
+    passwordToggle.checked = true;
 
     const updatedReport: SkillStatusReport = {
       workspaceDir: "/tmp/workspace",
@@ -200,7 +203,9 @@ describe("renderSkills", () => {
 
     const updatedToggles = container.querySelectorAll<HTMLInputElement>(".skill-toggle");
     expect(updatedToggles).toHaveLength(1);
-    expect(updatedToggles[0].checked).toBe(false);
+    expect(expectDefined(updatedToggles[0], "updated apple notes skill toggle").checked).toBe(
+      false,
+    );
   });
 
   it("treats skills blocked by the selected agent filter as needing setup", async () => {

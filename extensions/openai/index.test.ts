@@ -1,4 +1,5 @@
 // Openai tests cover index plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { requireRegisteredProvider } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -307,8 +308,16 @@ describe("openai plugin", () => {
     expect(runtimeMocks.ensureGlobalUndiciEnvProxyDispatcher).toHaveBeenCalledOnce();
     expect(runtimeMocks.refreshOpenAICodexToken).toHaveBeenCalledOnce();
     expect(
-      runtimeMocks.ensureGlobalUndiciEnvProxyDispatcher.mock.invocationCallOrder[0],
-    ).toBeLessThan(runtimeMocks.refreshOpenAICodexToken.mock.invocationCallOrder[0]);
+      expectDefined(
+        runtimeMocks.ensureGlobalUndiciEnvProxyDispatcher.mock.invocationCallOrder[0],
+        "OpenAI proxy dispatcher invocation",
+      ),
+    ).toBeLessThan(
+      expectDefined(
+        runtimeMocks.refreshOpenAICodexToken.mock.invocationCallOrder[0],
+        "OpenAI token refresh invocation",
+      ),
+    );
   });
 
   it("registers provider-owned OpenAI tool compat hooks for API and Codex transports", async () => {

@@ -1924,6 +1924,7 @@ class ChatPane extends OpenClawLightDomElement {
       showNewMessages: state.chatNewMessagesBelow && !state.chatManualRefreshInFlight,
       onScrollToBottom: state.scrollToBottom,
       attachments: state.chatAttachments,
+      getAttachments: () => state.chatAttachments,
       onAttachmentsChange: (next) => {
         state.chatAttachments = next;
         state.requestUpdate?.();

@@ -1,4 +1,5 @@
 // Discord tests cover thread session close plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => {
@@ -155,7 +156,9 @@ describe("closeDiscordThreadSessions", () => {
     });
 
     expect(count).toBe(1);
-    expect(store[uppercaseKey].updatedAt).toBe(0);
+    expect(expectDefined(store[uppercaseKey], "uppercase Discord thread session").updatedAt).toBe(
+      0,
+    );
   });
 
   it("returns 0 immediately when threadId is empty without touching the store", async () => {

@@ -3,6 +3,8 @@ package ai.openclaw.app.ui
 import ai.openclaw.app.GatewayModelProviderSummary
 import ai.openclaw.app.GatewayModelSummary
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.currentAppLanguage
+import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.providerDisplayName
 import ai.openclaw.app.ui.design.ClawEmptyState
 import ai.openclaw.app.ui.design.ClawPanel
@@ -83,12 +85,12 @@ internal fun ProvidersModelsScreen(
               verticalAlignment = Alignment.CenterVertically,
               horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-              ProviderHeaderIconButton(icon = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", onClick = onBack)
+              ProviderHeaderIconButton(icon = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = nativeString("Back"), onClick = onBack)
             }
             Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-              Text(text = "Providers & Models", style = ClawTheme.type.display.copy(fontSize = 14.8.sp, lineHeight = 18.sp), color = ClawTheme.colors.text, maxLines = 1)
+              Text(text = nativeString("Providers & Models"), style = ClawTheme.type.display.copy(fontSize = 14.8.sp, lineHeight = 18.sp), color = ClawTheme.colors.text, maxLines = 1)
               Text(
-                text = "Review provider readiness\nand configured models.",
+                text = nativeString("Review provider readiness\nand configured models."),
                 style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp),
                 color = ClawTheme.colors.textMuted,
               )
@@ -107,12 +109,12 @@ internal fun ProvidersModelsScreen(
         }
 
         item {
-          ProviderSectionLabel(title = "Providers and configured models")
+          ProviderSectionLabel(title = nativeString("Providers and configured models"))
         }
 
         if (!isConnected && providerRows.isEmpty()) {
           item {
-            ClawEmptyState(title = "Gateway offline", body = "Connect your Gateway to load provider readiness.")
+            ClawEmptyState(title = nativeString("Gateway offline"), body = nativeString("Connect your Gateway to load provider readiness."))
           }
         } else {
           providerListItems(rows = providerRows, refreshing = refreshing)
@@ -179,9 +181,9 @@ internal fun providerRows(
 private val ProviderAvailability.label: String
   get() =
     when (this) {
-      ProviderAvailability.Available -> "Ready"
-      ProviderAvailability.Unavailable -> "Needs attention"
-      ProviderAvailability.Unknown -> "Unknown"
+      ProviderAvailability.Available -> nativeString("Ready")
+      ProviderAvailability.Unavailable -> nativeString("Needs attention")
+      ProviderAvailability.Unknown -> nativeString("Unknown")
     }
 
 private fun providerAvailability(
@@ -236,8 +238,8 @@ private fun LazyListScope.providerListItems(
         row =
           ProviderRow(
             id = "loading",
-            name = "Provider catalog",
-            status = if (refreshing) "Loading" else "No providers",
+            name = nativeString("Provider catalog"),
+            status = if (refreshing) nativeString("Loading") else nativeString("No providers"),
             availability = ProviderAvailability.Unknown,
             modelCount = 0,
           ),
@@ -274,16 +276,16 @@ private fun ProviderOverviewPanel(
   ClawPanel(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp)) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
       Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        ProviderMetricTile(label = "Ready", value = readyCount.toString(), modifier = Modifier.weight(1f))
-        ProviderMetricTile(label = "Needs", value = needsSetupCount.toString(), modifier = Modifier.weight(1f))
-        ProviderMetricTile(label = "Unknown", value = unknownCount.toString(), modifier = Modifier.weight(1f))
+        ProviderMetricTile(label = nativeString("Ready"), value = readyCount.toString(), modifier = Modifier.weight(1f))
+        ProviderMetricTile(label = nativeString("Needs"), value = needsSetupCount.toString(), modifier = Modifier.weight(1f))
+        ProviderMetricTile(label = nativeString("Unknown"), value = unknownCount.toString(), modifier = Modifier.weight(1f))
       }
       Text(
-        text = if (isConnected) "$modelCount configured models. Refresh to recheck availability." else "Connect your Gateway to view provider readiness.",
+        text = if (isConnected) configuredModelsOverviewText(modelCount) else nativeString("Connect your Gateway to view provider readiness."),
         style = ClawTheme.type.body,
         color = ClawTheme.colors.textMuted,
       )
-      ClawSecondaryButton(text = if (refreshing) "Refreshing" else "Refresh", onClick = onRefresh, enabled = isConnected && !refreshing, modifier = Modifier.fillMaxWidth())
+      ClawSecondaryButton(text = if (refreshing) nativeString("Refreshing") else nativeString("Refresh"), onClick = onRefresh, enabled = isConnected && !refreshing, modifier = Modifier.fillMaxWidth())
     }
   }
 }
@@ -315,12 +317,26 @@ private fun ProviderListRow(row: ProviderRow) {
       ProviderBadge(text = row.name)
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
         Text(text = row.name, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(text = if (row.modelCount > 0) "${row.modelCount} configured models" else "No configured models", style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
+        Text(text = configuredModelsCountText(row.modelCount), style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
       }
       AvailabilityPill(availability = row.availability, label = row.status)
     }
   }
 }
+
+internal fun configuredModelsOverviewText(count: Int): String =
+  when (count) {
+    0 -> nativeString("No configured models. Refresh to recheck availability.")
+    1 -> nativeString("1 configured model. Refresh to recheck availability.")
+    else -> nativeString("\$count configured models. Refresh to recheck availability.", count)
+  }
+
+internal fun configuredModelsCountText(count: Int): String =
+  when (count) {
+    0 -> nativeString("No configured models")
+    1 -> nativeString("1 configured model")
+    else -> nativeString("\$count configured models", count)
+  }
 
 @Composable
 private fun ProviderModelRow(model: GatewayModelSummary) {
@@ -363,9 +379,9 @@ private fun ProviderAvailability.color(): Color =
 private val ProviderAvailability.modelLabel: String
   get() =
     when (this) {
-      ProviderAvailability.Available -> "Available"
-      ProviderAvailability.Unavailable -> "Unavailable"
-      ProviderAvailability.Unknown -> "Unknown"
+      ProviderAvailability.Available -> nativeString("Available")
+      ProviderAvailability.Unavailable -> nativeString("Unavailable")
+      ProviderAvailability.Unknown -> nativeString("Unknown")
     }
 
 private fun Boolean?.toProviderAvailability(): ProviderAvailability =
@@ -377,12 +393,12 @@ private fun Boolean?.toProviderAvailability(): ProviderAvailability =
 
 internal fun modelCapabilities(model: GatewayModelSummary): String =
   buildList {
-    if (model.supportsReasoning) add("reasoning")
-    if (model.supportsVision) add("image")
-    if (model.supportsAudio) add("audio")
-    if (model.supportsVideo) add("video")
-    if (model.supportsDocuments) add("document")
-    model.contextTokens?.let { add("${formatContextTokens(it)} context") }
+    if (model.supportsReasoning) add(nativeString("reasoning"))
+    if (model.supportsVision) add(nativeString("image"))
+    if (model.supportsAudio) add(nativeString("audio"))
+    if (model.supportsVideo) add(nativeString("video"))
+    if (model.supportsDocuments) add(nativeString("document"))
+    model.contextTokens?.let { add(nativeString("\$context context", formatContextTokens(it))) }
   }.joinToString(" / ")
 
 private fun formatContextTokens(tokens: Long): String = if (tokens >= 1_000) "${tokens / 1_000}k" else tokens.toString()
@@ -408,7 +424,11 @@ private fun providerInitials(value: String): String =
 @Composable
 private fun ProviderSectionLabel(title: String) {
   Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-    Text(text = title.uppercase(), style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted)
+    Text(
+      text = localizedUppercase(title, currentAppLanguage().languageTag),
+      style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp),
+      color = ClawTheme.colors.textMuted,
+    )
   }
 }
 

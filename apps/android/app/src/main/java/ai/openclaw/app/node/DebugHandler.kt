@@ -3,6 +3,7 @@ package ai.openclaw.app.node
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.i18n.nativeString
 import android.content.Context
 import kotlinx.serialization.json.JsonPrimitive
 
@@ -33,11 +34,11 @@ class DebugHandler(
 
       // Public-key URL encoding must match the gateway device-auth payload contract.
       val pubKeyUrl = identityStore.publicKeyBase64Url(identity)
-      results.add("publicKeyBase64Url: ${pubKeyUrl ?: "NULL (FAILED)"}")
+      results.add("publicKeyBase64Url: ${pubKeyUrl ?: nativeString("NULL (FAILED)")}")
 
       // Sign/verify through DeviceIdentityStore to catch provider and key-format failures together.
       val signature = identityStore.signPayload(testPayload, identity)
-      results.add("signPayload: ${if (signature != null) "${signature.take(20)}... (OK)" else "NULL (FAILED)"}")
+      results.add("signPayload: ${if (signature != null) nativeString("\${signature.take(20)}... (OK)", signature.take(20)) else nativeString("NULL (FAILED)")}")
 
       if (signature != null) {
         val verifyOk = identityStore.verifySelfSignature(testPayload, signature, identity)

@@ -7,14 +7,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { detectMime } from "openclaw/plugin-sdk/media-mime";
 import { lowercasePreservingWhitespace } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { A2UI_PATH, injectCanvasLiveReload, isA2uiPath } from "./a2ui-shared.js";
+import { A2UI_PATH, injectCanvasRuntime, isA2uiPath } from "./a2ui-shared.js";
 import { resolveFileWithinRoot } from "./file-resolver.js";
 
 export {
   A2UI_PATH,
   CANVAS_HOST_PATH,
   CANVAS_WS_PATH,
-  injectCanvasLiveReload,
+  injectCanvasRuntime,
   isA2uiPath,
 } from "./a2ui-shared.js";
 
@@ -86,6 +86,7 @@ async function handleA2uiHttpRequestWithRootResolver(
   req: IncomingMessage,
   res: ServerResponse,
   resolveRootReal: A2uiRootResolver,
+  options: { liveReload?: boolean },
 ): Promise<boolean> {
   const urlRaw = req.url;
   if (!urlRaw) {
@@ -139,7 +140,7 @@ async function handleA2uiHttpRequestWithRootResolver(
     if (mime === "text/html") {
       const buf = await result.handle.readFile({ encoding: "utf8" });
       res.setHeader("Content-Type", "text/html; charset=utf-8");
-      res.end(injectCanvasLiveReload(buf));
+      res.end(injectCanvasRuntime(buf, options));
       return true;
     }
 
@@ -154,11 +155,17 @@ async function handleA2uiHttpRequestWithRootResolver(
 /** Creates an HTTP handler for a specific hosted A2UI asset root. */
 export function createA2uiHttpRequestHandler(params: {
   rootDir: string;
+  liveReload?: boolean;
 }): (req: IncomingMessage, res: ServerResponse) => Promise<boolean> {
   let rootRealPromise: Promise<string> | null = null;
   return async (req, res) => {
     rootRealPromise ??= fs.realpath(params.rootDir);
-    return await handleA2uiHttpRequestWithRootResolver(req, res, async () => await rootRealPromise);
+    return await handleA2uiHttpRequestWithRootResolver(
+      req,
+      res,
+      async () => await rootRealPromise,
+      { liveReload: params.liveReload },
+    );
   };
 }
 
@@ -166,6 +173,7 @@ export function createA2uiHttpRequestHandler(params: {
 export async function handleA2uiHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
+  options: { liveReload?: boolean } = {},
 ): Promise<boolean> {
-  return await handleA2uiHttpRequestWithRootResolver(req, res, resolveA2uiRootReal);
+  return await handleA2uiHttpRequestWithRootResolver(req, res, resolveA2uiRootReal, options);
 }

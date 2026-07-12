@@ -338,6 +338,13 @@ describe("runStartupSessionMigration", () => {
 
     expect(restoreSessionSqliteMigrationRun).toHaveBeenCalledWith({
       manifestPath: "/tmp/run.json",
+      trustedTargets: [
+        {
+          agentId: "main",
+          sqlitePath: "/tmp/openclaw-agent.sqlite",
+          storePath: "/tmp/sessions.json",
+        },
+      ],
     });
     expect(writeSessionSqliteMigrationFailureReports).toHaveBeenCalledWith("/tmp/run.json", {
       reason: "startup blocked on 1 session SQLite issue(s)",

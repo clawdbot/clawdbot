@@ -907,7 +907,7 @@ describe("plugin status reports", () => {
         createPluginRecord({
           id: "file-backed-session-plugin",
           name: "File-backed Session Plugin",
-          error: "The requested module does not provide an export named 'loadSessionStore'",
+          error: "The requested module does not provide an export named 'saveSessionStore'",
           status: "error",
         }),
       ],

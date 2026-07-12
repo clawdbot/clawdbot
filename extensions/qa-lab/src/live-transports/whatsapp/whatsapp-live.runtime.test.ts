@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { expectDefined } from "@openclaw/normalization-core";
 import type {
   WhatsAppQaDriverObservedMessage,
   WhatsAppQaDriverSession,
@@ -135,6 +136,21 @@ function buildWhatsAppQaConfigFixture(
 }
 
 type WhatsAppScenarioIdFilter = NonNullable<Parameters<typeof testing.findScenarios>[0]>[number];
+
+function findWhatsAppScenario(id: WhatsAppScenarioIdFilter) {
+  return expectDefined(testing.findScenarios([id])[0], `WhatsApp QA scenario ${id}`);
+}
+
+function updateObservedMessage(
+  messages: WhatsAppQaDriverObservedMessage[],
+  index: number,
+  patch: Partial<WhatsAppQaDriverObservedMessage>,
+): void {
+  messages[index] = {
+    ...expectDefined(messages[index], `WhatsApp observed message ${index}`),
+    ...patch,
+  };
+}
 const DIRECT_GATEWAY_SCENARIO_IDS = [
   "whatsapp-outbound-media-matrix",
   "whatsapp-outbound-document-preserves-filename",
@@ -671,7 +687,7 @@ describe("WhatsApp QA live runtime", () => {
   });
 
   it("defines the user-path WhatsApp agent reaction scenario as mock-backed", () => {
-    const [scenario] = testing.findScenarios(["whatsapp-agent-message-action-react"]);
+    const scenario = findWhatsAppScenario("whatsapp-agent-message-action-react");
     const run = scenario.buildRun();
     if (run.kind === "approval") {
       throw new Error("whatsapp-agent-message-action-react unexpectedly built approval run");
@@ -692,7 +708,7 @@ describe("WhatsApp QA live runtime", () => {
   });
 
   it("observes the native WhatsApp reaction for the user-path agent action scenario", async () => {
-    const [scenario] = testing.findScenarios(["whatsapp-agent-message-action-react"]);
+    const scenario = findWhatsAppScenario("whatsapp-agent-message-action-react");
     const run = scenario.buildRun();
     if (run.kind === "approval" || !run.afterSend) {
       throw new Error("whatsapp-agent-message-action-react unexpectedly omitted afterSend");
@@ -794,7 +810,7 @@ describe("WhatsApp QA live runtime", () => {
   });
 
   it("observes native WhatsApp group reactions for the user-path action scenario", async () => {
-    const [scenario] = testing.findScenarios(["whatsapp-group-agent-message-action-react"]);
+    const scenario = findWhatsAppScenario("whatsapp-group-agent-message-action-react");
     const run = scenario.buildRun();
     if (run.kind === "approval" || !run.afterSend) {
       throw new Error("whatsapp-group-agent-message-action-react unexpectedly omitted afterSend");
@@ -946,40 +962,35 @@ describe("WhatsApp QA live runtime", () => {
               ? (payload as { question: string }).question
               : undefined;
           if (question) {
-            observedMessages[4] = {
-              ...observedMessages[4],
+            updateObservedMessage(observedMessages, 4, {
               observedAt: new Date().toISOString(),
               poll: { options: ["alpha", "beta"], question },
-            };
+            });
           }
           const message =
             typeof (payload as { message?: unknown }).message === "string"
               ? (payload as { message: string }).message
               : undefined;
           if (message?.endsWith("_IMAGE")) {
-            observedMessages[0] = {
-              ...observedMessages[0],
+            updateObservedMessage(observedMessages, 0, {
               observedAt: new Date().toISOString(),
               text: message,
-            };
+            });
           }
           if (message?.endsWith("_DOCUMENT")) {
-            observedMessages[1] = {
-              ...observedMessages[1],
+            updateObservedMessage(observedMessages, 1, {
               observedAt: new Date().toISOString(),
               text: message,
-            };
+            });
           }
           if (message?.endsWith("_AUDIO")) {
-            observedMessages[2] = {
-              ...observedMessages[2],
+            updateObservedMessage(observedMessages, 2, {
               observedAt: new Date().toISOString(),
-            };
-            observedMessages[3] = {
-              ...observedMessages[3],
+            });
+            updateObservedMessage(observedMessages, 3, {
               observedAt: new Date().toISOString(),
               text: message,
-            };
+            });
           }
           return {};
         },
@@ -2031,7 +2042,7 @@ describe("WhatsApp QA live runtime", () => {
   });
 
   it("seeds the structured-message location check through text context", () => {
-    const [scenario] = testing.findScenarios(["whatsapp-inbound-structured-messages"]);
+    const scenario = findWhatsAppScenario("whatsapp-inbound-structured-messages");
     if (!scenario) {
       throw new Error("missing structured WhatsApp scenario");
     }
@@ -2211,7 +2222,7 @@ describe("WhatsApp QA live runtime", () => {
   });
 
   it("formats per-scenario progress lines for live lane visibility", () => {
-    const [scenario] = testing.findScenarios(["whatsapp-inbound-structured-messages"]);
+    const scenario = findWhatsAppScenario("whatsapp-inbound-structured-messages");
     if (!scenario) {
       throw new Error("missing structured WhatsApp scenario");
     }
@@ -2266,7 +2277,7 @@ describe("WhatsApp QA live runtime", () => {
   });
 
   it("defines WhatsApp final-message accounting as a settled two-chunk assertion", () => {
-    const [scenario] = testing.findScenarios(["whatsapp-stream-final-message-accounting"]);
+    const scenario = findWhatsAppScenario("whatsapp-stream-final-message-accounting");
     const run = scenario.buildRun();
     if (run.kind === "approval") {
       throw new Error("whatsapp-stream-final-message-accounting unexpectedly built approval run");
@@ -2284,7 +2295,7 @@ describe("WhatsApp QA live runtime", () => {
   });
 
   it("requires the long-reply delivery-shape tail marker in the second chunk", async () => {
-    const [scenario] = testing.findScenarios(["whatsapp-reply-delivery-shape"]);
+    const scenario = findWhatsAppScenario("whatsapp-reply-delivery-shape");
     const run = scenario.buildRun();
     if (run.kind === "approval" || !run.afterReply) {
       throw new Error("whatsapp-reply-delivery-shape unexpectedly omitted afterReply");
@@ -2397,7 +2408,7 @@ describe("WhatsApp QA live runtime", () => {
   });
 
   it("targets group approval reactions at the approval prompt participant", async () => {
-    const [scenario] = testing.findScenarios(["whatsapp-approval-exec-group-reaction-native"]);
+    const scenario = findWhatsAppScenario("whatsapp-approval-exec-group-reaction-native");
     const run = scenario.buildRun();
     if (run.kind !== "approval") {
       throw new Error("expected approval scenario run");
@@ -2469,7 +2480,7 @@ describe("WhatsApp QA live runtime", () => {
   });
 
   it("targets DM approval reactions at the approval prompt message", async () => {
-    const [scenario] = testing.findScenarios(["whatsapp-approval-exec-reaction-native"]);
+    const scenario = findWhatsAppScenario("whatsapp-approval-exec-reaction-native");
     const run = scenario.buildRun();
     if (run.kind !== "approval") {
       throw new Error("expected approval scenario run");
@@ -2586,7 +2597,7 @@ describe("WhatsApp QA live runtime", () => {
   });
 
   it("enables WhatsApp action discovery for the user-path agent reaction scenario", () => {
-    const [scenario] = testing.findScenarios(["whatsapp-agent-message-action-react"]);
+    const scenario = findWhatsAppScenario("whatsapp-agent-message-action-react");
     const cfg = buildWhatsAppQaConfigFixture({
       overrides: scenario.configOverrides,
     });
@@ -2597,7 +2608,7 @@ describe("WhatsApp QA live runtime", () => {
   });
 
   it("defines the WhatsApp audio preflight scenario as mock-backed audio media", () => {
-    const [scenario] = testing.findScenarios(["whatsapp-audio-preflight"]);
+    const scenario = findWhatsAppScenario("whatsapp-audio-preflight");
     const scenarioRun = scenario.buildRun();
     if (scenarioRun.kind === "approval") {
       throw new Error("whatsapp-audio-preflight unexpectedly built an approval scenario run");
@@ -2618,7 +2629,7 @@ describe("WhatsApp QA live runtime", () => {
   });
 
   it("defines group audio gating as captionless audio driven by mock transcription sentinel", () => {
-    const [scenario] = testing.findScenarios(["whatsapp-group-audio-gating"]);
+    const scenario = findWhatsAppScenario("whatsapp-group-audio-gating");
     const scenarioRun = scenario.buildRun();
     if (scenarioRun.kind === "approval") {
       throw new Error("whatsapp-group-audio-gating unexpectedly built an approval scenario run");
@@ -2851,7 +2862,7 @@ describe("WhatsApp QA live runtime", () => {
   });
 
   it("uses automatic visible replies for WhatsApp group mention gating", () => {
-    const [scenario] = testing.findScenarios(["whatsapp-mention-gating"]);
+    const scenario = findWhatsAppScenario("whatsapp-mention-gating");
     const scenarioRun = scenario.buildRun();
     if (scenarioRun.kind === "approval") {
       throw new Error("whatsapp-mention-gating unexpectedly built an approval scenario run");
@@ -2867,7 +2878,7 @@ describe("WhatsApp QA live runtime", () => {
   });
 
   it("fails explicitly requested group scenarios when group credentials are missing", () => {
-    const [scenario] = testing.findScenarios(["whatsapp-mention-gating"]);
+    const scenario = findWhatsAppScenario("whatsapp-mention-gating");
 
     const implicitResult = testing.createMissingGroupJidScenarioResult({
       explicitScenarioSelection: false,

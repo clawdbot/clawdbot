@@ -1101,4 +1101,3 @@ export function resetSessionWriteLockStateForTest(): void {
   unregisterCleanupHandlers();
   resolveProcessStartTimeForLock = getProcessStartTime;
 }
-export { testing as __testing };

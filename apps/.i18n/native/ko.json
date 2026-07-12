@@ -6,22 +6,157 @@
     {
       "id": "native.android.85cc8de945e3929c",
       "source": "OpenClaw translations · $languageTag",
-      "translated": "OpenClaw translations · $languageTag"
+      "translated": "OpenClaw 번역 · $languageTag"
     },
     {
       "id": "native.android.914725056e04bd7a",
       "source": "Follow Android · $systemLanguageTag",
-      "translated": "Follow Android · $systemLanguageTag"
+      "translated": "Android 설정 따르기 · $systemLanguageTag"
     },
     {
-      "id": "native.android.d55616e142c8be0f",
+      "id": "native.android.2932b1c5134668df",
+      "source": "Every ${days}d",
+      "translated": "${days}일마다"
+    },
+    {
+      "id": "native.android.f91f4d5fc72ec899",
+      "source": "Every ${hours}h",
+      "translated": "${hours}시간마다"
+    },
+    {
+      "id": "native.android.dd20bf10c54bfd4c",
+      "source": "Every ${minutes}m",
+      "translated": "${minutes}분마다"
+    },
+    {
+      "id": "native.android.06961f1935a54406",
+      "source": "One time",
+      "translated": "한 번"
+    },
+    {
+      "id": "native.android.ba07a219029a296d",
+      "source": "Repeating",
+      "translated": "반복"
+    },
+    {
+      "id": "native.android.c126f6432f03d0f6",
+      "source": "Anchor $it",
+      "translated": "기준 $it"
+    },
+    {
+      "id": "native.android.712fc97e1d1374e0",
+      "source": "Cron",
+      "translated": "Cron"
+    },
+    {
+      "id": "native.android.c6c668a3c52e6a87",
+      "source": "Stagger ${formatCronInterval(it)}",
+      "translated": "분산 ${formatCronInterval(it)}"
+    },
+    {
+      "id": "native.android.2599e546b1137492",
+      "source": "Scheduled",
+      "translated": "예약됨"
+    },
+    {
+      "id": "native.android.5191b9134f6cf887",
+      "source": "System event",
+      "translated": "시스템 이벤트"
+    },
+    {
+      "id": "native.android.04a0a08556452c5d",
+      "source": "Thinking $it",
+      "translated": "사고 과정 $it"
+    },
+    {
+      "id": "native.android.126bab8b09bff1eb",
+      "source": "Agent turn",
+      "translated": "에이전트 차례"
+    },
+    {
+      "id": "native.android.2cd9aa29e06cf1cc",
+      "source": "Command",
+      "translated": "명령"
+    },
+    {
+      "id": "native.android.09e08fc62e2902fc",
+      "source": "Payload",
+      "translated": "페이로드"
+    },
+    {
+      "id": "native.android.558293f80e9044cb",
+      "source": "Account $it",
+      "translated": "계정 $it"
+    },
+    {
+      "id": "native.android.67f2f22fa99358b1",
       "source": "Off",
-      "translated": "끄기"
+      "translated": "꺼짐"
     },
     {
-      "id": "native.android.f59b83f58086eb89",
+      "id": "native.android.f5fa3a841ce8c234",
       "source": "Default",
       "translated": "기본값"
+    },
+    {
+      "id": "native.android.4753f0283bee4655",
+      "source": "After $it",
+      "translated": "$it 후"
+    },
+    {
+      "id": "native.android.3c23e33215b71824",
+      "source": "Cooldown ${formatCronInterval(it)}",
+      "translated": "대기 시간 ${formatCronInterval(it)}"
+    },
+    {
+      "id": "native.android.5f7cb508dae57216",
+      "source": "On",
+      "translated": "켜짐"
+    },
+    {
+      "id": "native.android.9f31cc0fcf527ed2",
+      "source": "Cron job is not due yet.",
+      "translated": "Cron 작업은 아직 실행 시간이 되지 않았습니다."
+    },
+    {
+      "id": "native.android.fc2c0e26482b32cd",
+      "source": "Cron job is already running.",
+      "translated": "Cron 작업이 이미 실행 중입니다."
+    },
+    {
+      "id": "native.android.e1bb423a2260ee6d",
+      "source": "Gateway restart recovery is still in progress.",
+      "translated": "Gateway 재시작 복구가 아직 진행 중입니다."
+    },
+    {
+      "id": "native.android.341ad86c38a5d3d5",
+      "source": "Cron job has an invalid configuration.",
+      "translated": "Cron 작업의 구성이 잘못되었습니다."
+    },
+    {
+      "id": "native.android.83640045de441512",
+      "source": "Cron scheduler is stopped.",
+      "translated": "Cron 스케줄러가 중지되었습니다."
+    },
+    {
+      "id": "native.android.df0b9434fa41904f",
+      "source": "Cron run finished.",
+      "translated": "Cron 실행이 완료되었습니다."
+    },
+    {
+      "id": "native.android.c709d0617063c061",
+      "source": "Cron run skipped.",
+      "translated": "Cron 실행을 건너뛰었습니다."
+    },
+    {
+      "id": "native.android.b9f5c536c5a42514",
+      "source": "Cron run failed.",
+      "translated": "Cron 실행에 실패했습니다."
+    },
+    {
+      "id": "native.android.a42d3ae97bf79bbe",
+      "source": "Cron run finished with an unknown status.",
+      "translated": "Cron 실행이 알 수 없는 상태로 완료되었습니다."
     },
     {
       "id": "native.android.d00110fa302427ec",
@@ -89,6 +224,41 @@
       "translated": "명령 요청"
     },
     {
+      "id": "native.android.0043d9af693fa11c",
+      "source": "Resolution outcome unknown. Actions stay disabled until the Gateway record is verified.",
+      "translated": "처리 결과를 알 수 없습니다. Gateway 기록이 확인될 때까지 작업이 비활성화됩니다."
+    },
+    {
+      "id": "native.android.5b1b9deb7e932704",
+      "source": "The Gateway still shows this approval as pending. Review it before trying again.",
+      "translated": "Gateway에서 이 승인이 아직 대기 중으로 표시됩니다. 다시 시도하기 전에 검토하세요."
+    },
+    {
+      "id": "native.android.1efe42d7eecb0dd5",
+      "source": "Could not load approval details. Refresh and try again.",
+      "translated": "승인 세부 정보를 불러올 수 없습니다. 새로 고침한 후 다시 시도하세요."
+    },
+    {
+      "id": "native.android.db883a37b47e8abb",
+      "source": "Could not load approvals.",
+      "translated": "승인 목록을 불러올 수 없습니다."
+    },
+    {
+      "id": "native.android.0256fa446cf81272",
+      "source": "Could not resolve approval. Refresh and try again.",
+      "translated": "승인을 처리할 수 없습니다. 새로 고침한 후 다시 시도하세요."
+    },
+    {
+      "id": "native.android.504c6e47f6933bb1",
+      "source": "Realtime Talk",
+      "translated": "실시간 대화"
+    },
+    {
+      "id": "native.android.0f9069e182247fba",
+      "source": "Dictation",
+      "translated": "받아쓰기"
+    },
+    {
       "id": "native.android.805d35da3b3c9d18",
       "source": "Ready",
       "translated": "준비됨"
@@ -104,57 +274,57 @@
       "translated": "확인되지 않음"
     },
     {
-      "id": "native.android.66f091d1fc047eff",
+      "id": "native.android.90241f592c7c1cce",
       "source": "${state.provider.label} via Gateway relay",
       "translated": "Gateway 릴레이를 통한 ${state.provider.label}"
     },
     {
-      "id": "native.android.859f7fec2019b314",
+      "id": "native.android.a24ef3a97a2c8c07",
       "source": "Gateway talk catalog not loaded",
       "translated": "Gateway 토크 카탈로그가 로드되지 않음"
     },
     {
-      "id": "native.android.ecb051798c98537f",
+      "id": "native.android.9c86ef6aed5b3720",
       "source": "Could not load Gateway talk catalog",
       "translated": "Gateway 토크 카탈로그를 로드할 수 없음"
     },
     {
-      "id": "native.android.95b5551fcb519c1f",
+      "id": "native.android.7ac71cb673d6399e",
       "source": "Gateway did not return ${issue.target.title} setup",
       "translated": "Gateway에서 ${issue.target.title} 설정을 반환하지 않았습니다"
     },
     {
-      "id": "native.android.328d435e93e9a2b2",
+      "id": "native.android.1349ccf44bb43398",
       "source": "No ${issue.target.title} provider is configured on the Gateway",
       "translated": "Gateway에 ${issue.target.title} 제공자가 구성되어 있지 않습니다"
     },
     {
-      "id": "native.android.b3ee0bd7fd90a9e7",
+      "id": "native.android.384d856d68320eb2",
       "source": "Gateway selected unknown provider ${issue.providerId}",
       "translated": "Gateway에서 알 수 없는 제공자 ${issue.providerId}을(를) 선택했습니다"
     },
     {
-      "id": "native.android.04086b6aed3c2ce5",
+      "id": "native.android.1409da872534c08c",
       "source": "Gateway did not return ${issue.target.title} readiness",
       "translated": "Gateway에서 ${issue.target.title} 준비 상태를 반환하지 않았습니다"
     },
     {
-      "id": "native.android.27f61e5f9b33b6f9",
+      "id": "native.android.3ea36b85bb5ae44c",
       "source": "Configure a ${issue.target.title} provider on the Gateway",
       "translated": "Gateway에서 ${issue.target.title} 제공자를 구성하세요"
     },
     {
-      "id": "native.android.e4fe3a325a6d6299",
+      "id": "native.android.f6cec337d1e0980e",
       "source": "Gateway did not identify the active ${issue.target.title} provider",
       "translated": "Gateway에서 활성 ${issue.target.title} 제공자를 식별하지 않았습니다"
     },
     {
-      "id": "native.android.7e6b01f6e7c9bc92",
+      "id": "native.android.8fadd97a13ca7651",
       "source": "Choose a supported ${issue.target.title} provider on the Gateway",
       "translated": "Gateway에서 지원되는 ${issue.target.title} 제공자를 선택하세요"
     },
     {
-      "id": "native.android.39bdbc9a546c7f1d",
+      "id": "native.android.394044d0402d59e5",
       "source": "Configure ${issue.providerLabel} on the Gateway",
       "translated": "Gateway에서 ${issue.providerLabel} 구성"
     },
@@ -184,9 +354,29 @@
       "translated": "꺼짐"
     },
     {
-      "id": "native.android.012c8499137972ad",
-      "source": "Connected",
-      "translated": "연결됨"
+      "id": "native.android.2e6d4e33167ebcbc",
+      "source": "Starting…",
+      "translated": "시작 중…"
+    },
+    {
+      "id": "native.android.25ce6f89dd2fda90",
+      "source": "OpenClaw Node · Talk",
+      "translated": "OpenClaw Node · 대화"
+    },
+    {
+      "id": "native.android.b48f7aeb7a884942",
+      "source": "OpenClaw Node · Connected",
+      "translated": "OpenClaw Node · 연결됨"
+    },
+    {
+      "id": "native.android.b781a577d8da896d",
+      "source": "$status · $server",
+      "translated": "$status · $server"
+    },
+    {
+      "id": "native.android.97365bea9725ae80",
+      "source": "OpenClaw Node",
+      "translated": "OpenClaw 노드"
     },
     {
       "id": "native.android.3e0889d921c92cab",
@@ -194,9 +384,44 @@
       "translated": "대화 모드 활성화됨"
     },
     {
+      "id": "native.android.012c8499137972ad",
+      "source": "Connected",
+      "translated": "연결됨"
+    },
+    {
+      "id": "native.android.b40d5d146f672208",
+      "source": "Connection",
+      "translated": "연결"
+    },
+    {
+      "id": "native.android.f4886ad80e8149cf",
+      "source": "OpenClaw node connection status",
+      "translated": "OpenClaw 노드 연결 상태"
+    },
+    {
+      "id": "native.android.20fb810920ccb98c",
+      "source": "Disconnect",
+      "translated": "연결 해제"
+    },
+    {
       "id": "native.android.de9c39aaec621319",
       "source": " · Location: Always",
-      "translated": " · Location: Always"
+      "translated": " · 위치: 항상"
+    },
+    {
+      "id": "native.android.0c609f8079c3f85e",
+      "source": " · Talk: Speaking",
+      "translated": " · 대화: 말하는 중"
+    },
+    {
+      "id": "native.android.f5caa5566c5ce529",
+      "source": " · Talk: Listening",
+      "translated": " · 대화: 듣는 중"
+    },
+    {
+      "id": "native.android.397f68fd388f588f",
+      "source": " · Talk: On",
+      "translated": " · 대화: 켜짐"
     },
     {
       "id": "native.android.ae88801e6a1b3343",
@@ -234,29 +459,134 @@
       "translated": "승인을 처리하지 못했습니다. 새로 고침 후 다시 시도하세요."
     },
     {
-      "id": "native.android.c65b61de70a063e7",
-      "source": "Offline",
-      "translated": "오프라인"
+      "id": "native.android.5cf2b6b55ea97b67",
+      "source": "Proposal applied.",
+      "translated": "제안이 적용되었습니다."
     },
     {
-      "id": "native.android.fef5049bc20826c7",
+      "id": "native.android.d4c0498763bdeaa4",
+      "source": "apply",
+      "translated": "적용"
+    },
+    {
+      "id": "native.android.97f75ca79fa0a192",
+      "source": "Proposal rejected.",
+      "translated": "제안이 거부되었습니다."
+    },
+    {
+      "id": "native.android.f0da63d1e31367da",
+      "source": "reject",
+      "translated": "거부"
+    },
+    {
+      "id": "native.android.0b51849198bb287d",
+      "source": "Proposal quarantined.",
+      "translated": "제안이 격리되었습니다."
+    },
+    {
+      "id": "native.android.8f367b0b3c46bff7",
+      "source": "quarantine",
+      "translated": "격리"
+    },
+    {
+      "id": "native.android.ff3a8ac599ddcd68",
+      "source": "unknown",
+      "translated": "알 수 없음"
+    },
+    {
+      "id": "native.android.25ee20a790392299",
+      "source": "Gateway returned status '$statusLabel' after ${action.verb}.",
+      "translated": "${action.verb} 후 Gateway가 상태 '$statusLabel'을(를) 반환했습니다."
+    },
+    {
+      "id": "native.android.6f13a46dc12081ec",
+      "source": "Could not ${action.verb} Skill Workshop proposal.",
+      "translated": "Skill Workshop 제안을 ${action.verb}하지 못했습니다."
+    },
+    {
+      "id": "native.android.c11feae0f5f935a2",
+      "source": "Connected (node offline)",
+      "translated": "연결됨(노드 오프라인)"
+    },
+    {
+      "id": "native.android.957eecc8ecab1013",
+      "source": "Connected (operator offline)",
+      "translated": "연결됨(운영자 오프라인)"
+    },
+    {
+      "id": "native.android.8ffa78a7f6e941c3",
+      "source": "Reconnecting…",
+      "translated": "다시 연결하는 중…"
+    },
+    {
+      "id": "native.android.2199b920f25ba55b",
+      "source": "Connected (operator: $operator)",
+      "translated": "연결됨(운영자: $operator)"
+    },
+    {
+      "id": "native.android.5fe7f7afb77851ff",
+      "source": "This cron job already has a queued run.",
+      "translated": "이 cron 작업에는 이미 대기 중인 실행이 있습니다."
+    },
+    {
+      "id": "native.android.1ebef3822941cdb6",
       "source": "Cron job started.",
       "translated": "Cron 작업이 시작되었습니다."
     },
     {
-      "id": "native.android.c39fb6f80dbf6820",
+      "id": "native.android.d8ba5136a17f7618",
       "source": "Cron run queued.",
       "translated": "Cron 실행이 대기열에 추가되었습니다."
     },
     {
-      "id": "native.android.b878b2913410055a",
+      "id": "native.android.9bc7e4ad0b917a5f",
+      "source": "Gateway rejected the cron run.",
+      "translated": "Gateway가 cron 실행을 거부했습니다."
+    },
+    {
+      "id": "native.android.8a758d2851f3db17",
       "source": "Cron job disabled.",
       "translated": "Cron 작업이 비활성화되었습니다."
     },
     {
-      "id": "native.android.a45ec59239fbfff0",
+      "id": "native.android.fda9390dc0d4bdea",
       "source": "Cron job enabled.",
       "translated": "Cron 작업이 활성화되었습니다."
+    },
+    {
+      "id": "native.android.a9aa7171558f8412",
+      "source": "This cron job changed on the gateway. Review the latest version before saving again.",
+      "translated": "Gateway에서 이 cron 작업이 변경되었습니다. 다시 저장하기 전에 최신 버전을 검토하세요."
+    },
+    {
+      "id": "native.android.4562b415164529af",
+      "source": "Cron job updated.",
+      "translated": "Cron 작업이 업데이트되었습니다."
+    },
+    {
+      "id": "native.android.937a9a77deeef115",
+      "source": "Cron job deleted.",
+      "translated": "Cron 작업이 삭제되었습니다."
+    },
+    {
+      "id": "native.android.9c4af565f4ffe18c",
+      "source": "Node offline. Reconnect and retry.",
+      "translated": "노드가 오프라인입니다. 다시 연결한 후 재시도하세요."
+    },
+    {
+      "id": "native.android.735f87cf8bac47c3",
+      "source": "Restore canvas now for session=$sessionKey source=$source. If existing A2UI state exists, replay it immediately. If not, create and render a compact mobile-friendly dashboard in Canvas.",
+      "translated": "session=$sessionKey source=$source에 대해 지금 Canvas를 복원하세요. 기존 A2UI 상태가 있으면 즉시 재생하세요. 없으면 Canvas에서 간결하고 모바일 친화적인 대시보드를 만들어 렌더링하세요."
+    },
+    {
+      "id": "native.android.10e2f98677293433",
+      "source": "Failed to request restore. Tap to retry.",
+      "translated": "복원을 요청하지 못했습니다. 탭하여 재시도하세요."
+    },
+    {
+      "id": "native.android.4de14726a5ec0b73",
+      "source": "No canvas update yet. Tap to retry.",
+      "translated": "아직 캔버스 업데이트가 없습니다. 탭하여 다시 시도하세요."
     },
     {
       "id": "native.android.4b07456682e725d9",
@@ -274,14 +604,359 @@
       "translated": "실패: 이 호스트의 보안 gateway 엔드포인트에 도달할 수 없습니다."
     },
     {
+      "id": "native.android.4dbc3513ab72309d",
+      "source": "Connecting…",
+      "translated": "연결 중…"
+    },
+    {
+      "id": "native.android.c65b61de70a063e7",
+      "source": "Offline",
+      "translated": "오프라인"
+    },
+    {
+      "id": "native.android.7cd603c40e57e819",
+      "source": "Could not load provider catalog.",
+      "translated": "제공자 카탈로그를 불러올 수 없습니다."
+    },
+    {
       "id": "native.android.b76bb2741d8344d0",
       "source": "Update your Gateway to view provider model config.",
-      "translated": "Update your Gateway to view provider model config."
+      "translated": "제공자 모델 구성을 보려면 Gateway를 업데이트하세요."
     },
     {
       "id": "native.android.711a08905cf3719e",
       "source": "Could not load provider model config.",
-      "translated": "Could not load provider model config."
+      "translated": "제공자 모델 구성을 불러올 수 없습니다."
+    },
+    {
+      "id": "native.android.c8cc73a3406f868a",
+      "source": "Provider models loaded, but readiness is unavailable.",
+      "translated": "제공자 모델을 불러왔지만 준비 상태를 확인할 수 없습니다."
+    },
+    {
+      "id": "native.android.0e1e5786e4cfc894",
+      "source": "Could not load cron jobs.",
+      "translated": "cron 작업을 불러올 수 없습니다."
+    },
+    {
+      "id": "native.android.5288d0e2cd5ab8e6",
+      "source": "Connect the gateway to inspect cron jobs.",
+      "translated": "cron 작업을 확인하려면 Gateway를 연결하세요."
+    },
+    {
+      "id": "native.android.09ac6b21e791abb2",
+      "source": "Gateway returned an invalid cron job.",
+      "translated": "Gateway에서 잘못된 cron 작업을 반환했습니다."
+    },
+    {
+      "id": "native.android.db2fbde400d1e692",
+      "source": "Could not load cron job.",
+      "translated": "cron 작업을 불러올 수 없습니다."
+    },
+    {
+      "id": "native.android.1c986c7849e0094a",
+      "source": "Connect the gateway to inspect cron run history.",
+      "translated": "cron 실행 기록을 확인하려면 Gateway를 연결하세요."
+    },
+    {
+      "id": "native.android.5de73d7e34c4dfda",
+      "source": "Could not load cron run history.",
+      "translated": "cron 실행 기록을 불러올 수 없습니다."
+    },
+    {
+      "id": "native.android.153ffc5ce4132479",
+      "source": "Cron changes require operator.admin access.",
+      "translated": "cron을 변경하려면 operator.admin 액세스 권한이 필요합니다."
+    },
+    {
+      "id": "native.android.31b0570face9a32e",
+      "source": "Connect the gateway to manage cron jobs.",
+      "translated": "cron 작업을 관리하려면 Gateway를 연결하세요."
+    },
+    {
+      "id": "native.android.c050b799c39b1fd9",
+      "source": "Another cron action is still finishing.",
+      "translated": "다른 cron 작업이 아직 완료 중입니다."
+    },
+    {
+      "id": "native.android.d299a3ba1dcca005",
+      "source": "Cron action failed.",
+      "translated": "cron 작업에 실패했습니다."
+    },
+    {
+      "id": "native.android.555f025022ffd31e",
+      "source": "Could not load usage.",
+      "translated": "사용량을 불러올 수 없습니다."
+    },
+    {
+      "id": "native.android.6be07eadef5dc338",
+      "source": "Could not load skills.",
+      "translated": "Skills를 불러올 수 없습니다."
+    },
+    {
+      "id": "native.android.2306ae67e02f03e2",
+      "source": "Connect the gateway to update skills.",
+      "translated": "Connect the gateway to update skills."
+    },
+    {
+      "id": "native.android.346d801b434ed54e",
+      "source": "This gateway connection needs operator.admin to update skills.",
+      "translated": "This gateway connection needs operator.admin to update skills."
+    },
+    {
+      "id": "native.android.5c217169593f9ec4",
+      "source": "Could not disable skill.",
+      "translated": "Skill을 비활성화할 수 없습니다."
+    },
+    {
+      "id": "native.android.7cb940fd556fa850",
+      "source": "Could not enable skill.",
+      "translated": "Skill을 활성화할 수 없습니다."
+    },
+    {
+      "id": "native.android.bf2cff15c08664b1",
+      "source": "Connect the gateway to search ClawHub skills.",
+      "translated": "ClawHub Skills를 검색하려면 Gateway를 연결하세요."
+    },
+    {
+      "id": "native.android.55c752347d7bfe7b",
+      "source": "Could not search ClawHub skills.",
+      "translated": "ClawHub Skills를 검색할 수 없습니다."
+    },
+    {
+      "id": "native.android.06bb559130390ab4",
+      "source": "Connect the gateway to inspect ClawHub skills.",
+      "translated": "ClawHub Skills를 살펴보려면 Gateway를 연결하세요."
+    },
+    {
+      "id": "native.android.57c31cd4bd7c5146",
+      "source": "ClawHub did not return an installable version for ${skill.slug}.",
+      "translated": "ClawHub에서 ${skill.slug}에 대해 설치 가능한 버전을 반환하지 않았습니다."
+    },
+    {
+      "id": "native.android.ecf82b1ac9d18307",
+      "source": "Could not load ClawHub details for ${skill.slug}.",
+      "translated": "${skill.slug}의 ClawHub 세부 정보를 불러올 수 없습니다."
+    },
+    {
+      "id": "native.android.4154579c8cb1c995",
+      "source": "Connect the gateway to install ClawHub skills.",
+      "translated": "ClawHub Skills를 설치하려면 Gateway를 연결하세요."
+    },
+    {
+      "id": "native.android.7855f19374e6e747",
+      "source": "This gateway connection needs operator.admin to install ClawHub skills.",
+      "translated": "ClawHub Skills를 설치하려면 이 Gateway 연결에 operator.admin 권한이 필요합니다."
+    },
+    {
+      "id": "native.android.468b886c0b50dd1c",
+      "source": "Installed $slug.",
+      "translated": "$slug을(를) 설치했습니다."
+    },
+    {
+      "id": "native.android.dd89b658efc5d083",
+      "source": "Could not install ${slug} from ClawHub.",
+      "translated": "ClawHub에서 ${slug}을(를) 설치할 수 없습니다."
+    },
+    {
+      "id": "native.android.0786911a50b87f4a",
+      "source": "Connect the gateway to load Skill Workshop proposals.",
+      "translated": "Skill Workshop 제안을 불러오려면 Gateway를 연결하세요."
+    },
+    {
+      "id": "native.android.f21bf3ba9393138c",
+      "source": "Could not load Skill Workshop proposals.",
+      "translated": "Skill Workshop 제안을 불러올 수 없습니다."
+    },
+    {
+      "id": "native.android.4258d95ac4c71358",
+      "source": "Connect the gateway to inspect Skill Workshop proposals.",
+      "translated": "Skill Workshop 제안을 확인하려면 Gateway를 연결하세요."
+    },
+    {
+      "id": "native.android.4000cb644d8d7fc6",
+      "source": "Could not inspect Skill Workshop proposal.",
+      "translated": "Skill Workshop 제안을 확인할 수 없습니다."
+    },
+    {
+      "id": "native.android.2f960bbf8caa98ed",
+      "source": "Skill Workshop proposal actions require operator.admin scope.",
+      "translated": "Skill Workshop 제안 작업에는 operator.admin 범위가 필요합니다."
+    },
+    {
+      "id": "native.android.df0d071809dfbbb3",
+      "source": "Connect the gateway to update Skill Workshop proposals.",
+      "translated": "Skill Workshop 제안을 업데이트하려면 Gateway에 연결하세요."
+    },
+    {
+      "id": "native.android.21445608d791c302",
+      "source": "Connected",
+      "translated": "연결됨"
+    },
+    {
+      "id": "native.android.91700626af4159fc",
+      "source": "Could not load nodes and devices.",
+      "translated": "노드와 기기를 불러올 수 없습니다."
+    },
+    {
+      "id": "native.android.00ebd0836caddadc",
+      "source": "Could not load channels.",
+      "translated": "채널을 불러올 수 없습니다."
+    },
+    {
+      "id": "native.android.253220419443162a",
+      "source": "Could not load dreaming.",
+      "translated": "드리밍을 불러올 수 없습니다."
+    },
+    {
+      "id": "native.android.dc6373af3f242566",
+      "source": "Could not load gateway logs.",
+      "translated": "Gateway 로그를 불러올 수 없습니다."
+    },
+    {
+      "id": "native.android.bb4b5b4138e57b09",
+      "source": "One time",
+      "translated": "한 번"
+    },
+    {
+      "id": "native.android.1cb8da1d249b824e",
+      "source": "Cron",
+      "translated": "Cron"
+    },
+    {
+      "id": "native.android.93ec522ffce0e8de",
+      "source": "Scheduled",
+      "translated": "예약됨"
+    },
+    {
+      "id": "native.android.979995d6166103ef",
+      "source": "Every ${days}d",
+      "translated": "${days}일마다"
+    },
+    {
+      "id": "native.android.da237e757e92bb29",
+      "source": "Every ${hours}h",
+      "translated": "${hours}시간마다"
+    },
+    {
+      "id": "native.android.bc16aa3fa49654f7",
+      "source": "Every ${minutes}m",
+      "translated": "${minutes}분마다"
+    },
+    {
+      "id": "native.android.ff6dc1c45b5435e5",
+      "source": "Repeating",
+      "translated": "반복"
+    },
+    {
+      "id": "native.android.4febe6ca10c330e6",
+      "source": "No prompt",
+      "translated": "프롬프트 없음"
+    },
+    {
+      "id": "native.android.8013a7c99610daca",
+      "source": "Gateway",
+      "translated": "Gateway"
+    },
+    {
+      "id": "native.android.737e77573e6585da",
+      "source": "Connected to $gatewayLabel",
+      "translated": "$gatewayLabel에 연결됨"
+    },
+    {
+      "id": "native.android.9a70dd6cc0c3a330",
+      "source": "Your agents are ready",
+      "translated": "에이전트가 준비되었습니다"
+    },
+    {
+      "id": "native.android.60de3b33ff352892",
+      "source": "This phone stays dormant until the gateway needs it, then wakes, syncs, and goes back to sleep.",
+      "translated": "이 휴대전화는 Gateway가 필요로 할 때까지 대기 상태를 유지하다가, 깨어나 동기화한 후 다시 절전 상태로 돌아갑니다."
+    },
+    {
+      "id": "native.android.2084754b53cb36c5",
+      "source": "Selected on this phone",
+      "translated": "이 휴대전화에서 선택됨"
+    },
+    {
+      "id": "native.android.7b78014fd1841683",
+      "source": "The overview refreshes on reconnect and when this screen opens.",
+      "translated": "개요는 다시 연결되거나 이 화면이 열릴 때 새로고침됩니다."
+    },
+    {
+      "id": "native.android.61a2204a50b9ecbc",
+      "source": "Reconnecting",
+      "translated": "다시 연결 중"
+    },
+    {
+      "id": "native.android.3b076d12026fd953",
+      "source": "OpenClaw is syncing back up",
+      "translated": "OpenClaw가 다시 동기화 중입니다"
+    },
+    {
+      "id": "native.android.8dd8abf489f1fe50",
+      "source": "The gateway session is coming back online. Agent shortcuts should settle automatically in a moment.",
+      "translated": "Gateway 세션이 다시 온라인 상태로 전환되고 있습니다. 잠시 후 에이전트 바로가기가 자동으로 정상화됩니다."
+    },
+    {
+      "id": "native.android.3d11af35277bf8bc",
+      "source": "Gateway session in progress",
+      "translated": "Gateway 세션 진행 중"
+    },
+    {
+      "id": "native.android.f6a2d6e675802c25",
+      "source": "If the gateway is reachable, reconnect should complete without intervention.",
+      "translated": "Gateway에 연결할 수 있으면 별도의 조작 없이 재연결이 완료됩니다."
+    },
+    {
+      "id": "native.android.8e22550e0205b237",
+      "source": "Welcome to OpenClaw",
+      "translated": "OpenClaw에 오신 것을 환영합니다"
+    },
+    {
+      "id": "native.android.fee881b8134958ab",
+      "source": "Your phone stays quiet until it is needed",
+      "translated": "필요할 때까지 휴대전화는 조용히 대기합니다"
+    },
+    {
+      "id": "native.android.ff59f3b8e9470472",
+      "source": "Pair this device to your gateway to wake it only for real work, keep a live agent overview handy, and avoid battery-draining background loops.",
+      "translated": "이 기기를 Gateway와 페어링하여 실제 작업에 필요할 때만 깨우고, 실시간 에이전트 개요를 간편하게 확인하며, 배터리를 소모하는 백그라운드 루프를 방지하세요."
+    },
+    {
+      "id": "native.android.0f97532c2bdf25f2",
+      "source": "Connect to load your agents",
+      "translated": "에이전트를 불러오려면 연결하세요"
+    },
+    {
+      "id": "native.android.c21d18414b901e01",
+      "source": "When connected, the gateway can wake the phone with a silent push instead of holding an always-on session.",
+      "translated": "연결되면 Gateway는 상시 연결 세션을 유지하는 대신 무음 푸시로 휴대전화를 깨울 수 있습니다."
+    },
+    {
+      "id": "native.android.11eddc6b576073f4",
+      "source": "Main",
+      "translated": "메인"
+    },
+    {
+      "id": "native.android.d49fceb54749fa66",
+      "source": "Active on this phone",
+      "translated": "이 휴대전화에서 활성화됨"
+    },
+    {
+      "id": "native.android.a563551bba424fd0",
+      "source": "Default agent",
+      "translated": "기본 에이전트"
+    },
+    {
+      "id": "native.android.a2588b88d914fa03",
+      "source": "Ready",
+      "translated": "준비됨"
+    },
+    {
+      "id": "native.android.8c0077a343849f7b",
+      "source": "Dream",
+      "translated": "꿈"
     },
     {
       "id": "native.android.c28c08aed378b051",
@@ -379,6 +1054,81 @@
       "translated": "사진"
     },
     {
+      "id": "native.android.600d42f662b49f09",
+      "source": "The Gateway evaluated a different ClawHub release. Review the skill again before installing.",
+      "translated": "Gateway에서 다른 ClawHub 릴리스를 평가했습니다. 설치하기 전에 Skill을 다시 검토하세요."
+    },
+    {
+      "id": "native.android.64871eb6744363db",
+      "source": "The result for $slug is unknown. Reconnect, refresh Skills, then retry; the Gateway safely joins a matching install that is still running.",
+      "translated": "$slug에 대한 결과를 알 수 없습니다. 다시 연결하고 Skills를 새로 고친 다음 다시 시도하세요. Gateway는 아직 실행 중인 일치하는 설치에 안전하게 참여합니다."
+    },
+    {
+      "id": "native.android.875e63350d705dec",
+      "source": "Wait for the current response to finish before starting a new chat.",
+      "translated": "새 채팅을 시작하기 전에 현재 응답이 완료될 때까지 기다리세요."
+    },
+    {
+      "id": "native.android.2c46e20193e2ae90",
+      "source": "Could not update model.",
+      "translated": "모델을 업데이트할 수 없습니다."
+    },
+    {
+      "id": "native.android.956a394937480f8a",
+      "source": "Chat failed before the run started; try again.",
+      "translated": "실행이 시작되기 전에 채팅에 실패했습니다. 다시 시도하세요."
+    },
+    {
+      "id": "native.android.2db6d419791ce6a7",
+      "source": "Could not stage an attachment for sending.",
+      "translated": "전송할 첨부 파일을 준비할 수 없습니다."
+    },
+    {
+      "id": "native.android.0b29275eefad9863",
+      "source": "Could not queue message for later delivery.",
+      "translated": "나중에 전송하도록 메시지를 대기열에 추가할 수 없습니다."
+    },
+    {
+      "id": "native.android.c3899241029d152c",
+      "source": "Offline queue is full ($OUTBOX_MAX_QUEUED messages); delete queued items first.",
+      "translated": "오프라인 대기열이 가득 찼습니다($OUTBOX_MAX_QUEUED개 메시지). 먼저 대기 중인 항목을 삭제하세요."
+    },
+    {
+      "id": "native.android.4cf5774e212e307d",
+      "source": "Attachments are too large to queue for one message; remove some and try again.",
+      "translated": "첨부 파일이 너무 커서 하나의 메시지로 대기열에 추가할 수 없습니다. 일부를 제거한 후 다시 시도하세요."
+    },
+    {
+      "id": "native.android.d8724124bd4a3719",
+      "source": "Offline attachment storage is full; delete queued items first.",
+      "translated": "오프라인 첨부 파일 저장 공간이 가득 찼습니다. 먼저 대기 중인 항목을 삭제하세요."
+    },
+    {
+      "id": "native.android.84af66e78ec02fa3",
+      "source": "Gateway health not OK; cannot send",
+      "translated": "Gateway 상태가 정상이 아니므로 전송할 수 없습니다."
+    },
+    {
+      "id": "native.android.8c2ff49af3e78aee",
+      "source": "Chat failed",
+      "translated": "채팅 실패"
+    },
+    {
+      "id": "native.android.e2f245e1995de5e8",
+      "source": "Event stream interrupted; try refreshing.",
+      "translated": "이벤트 스트림이 중단되었습니다. 새로고침해 보세요."
+    },
+    {
+      "id": "native.android.2274c6848b1c098b",
+      "source": "Timed out waiting for a reply; try again or refresh.",
+      "translated": "응답 대기 시간이 초과되었습니다. 다시 시도하거나 새로고침하세요."
+    },
+    {
+      "id": "native.android.96b52209f15b622c",
+      "source": "Timed out confirming the sent message; refresh to check delivery.",
+      "translated": "보낸 메시지를 확인하는 동안 시간이 초과되었습니다. 새로고침하여 전송 여부를 확인하세요."
+    },
+    {
       "id": "native.android.93ecb3b3e1f02b63",
       "source": "Searching…",
       "translated": "검색 중…"
@@ -396,17 +1146,27 @@
     {
       "id": "native.android.0a51e1306357556c",
       "source": "${signature.take(20)}... (OK)",
-      "translated": "${signature.take(20)}... (OK)"
+      "translated": "${signature.take(20)}... (정상)"
     },
     {
       "id": "native.android.6aa748e98888623e",
       "source": "NULL (FAILED)",
-      "translated": "NULL (FAILED)"
+      "translated": "NULL (실패)"
     },
     {
-      "id": "native.android.5b17d331b254e403",
-      "source": "Android $release (SDK ${Build.VERSION.SDK_INT})",
-      "translated": "Android $release (SDK ${Build.VERSION.SDK_INT})"
+      "id": "native.android.c9b3801fdf5499a9",
+      "source": "OpenClaw Passive",
+      "translated": "OpenClaw 수동"
+    },
+    {
+      "id": "native.android.e2a79a2c3ddba922",
+      "source": "OpenClaw Time Sensitive",
+      "translated": "OpenClaw 시간 민감"
+    },
+    {
+      "id": "native.android.a79d6ccab877c9ca",
+      "source": "OpenClaw Active",
+      "translated": "OpenClaw 활성"
     },
     {
       "id": "native.android.f7a4f3bbcb0b2090",
@@ -439,6 +1199,11 @@
       "translated": "현재 화면 출력 및 대화형 앱 표면."
     },
     {
+      "id": "native.android.5544c4d24a8b3483",
+      "source": "Connection",
+      "translated": "연결"
+    },
+    {
       "id": "native.android.c4abd4ecd607865f",
       "source": "Offline",
       "translated": "오프라인"
@@ -447,6 +1212,16 @@
       "id": "native.android.27c3e59e49776d1a",
       "source": "Online",
       "translated": "온라인"
+    },
+    {
+      "id": "native.android.ff3944e9dcb605e1",
+      "source": "Surface",
+      "translated": "표면"
+    },
+    {
+      "id": "native.android.4df06826ccc4fe0d",
+      "source": "Bridge",
+      "translated": "브리지"
     },
     {
       "id": "native.android.697dc7666c2cd6a3",
@@ -499,14 +1274,19 @@
       "translated": "현재 Canvas 화면을 열어 확인하거나 상호작용합니다."
     },
     {
+      "id": "native.android.269dcd676377df1a",
+      "source": "Messaging surfaces connected to this gateway.",
+      "translated": "이 Gateway에 연결된 메시징 표면."
+    },
+    {
       "id": "native.android.624fec3507aca6ed",
       "source": "Channels",
       "translated": "채널"
     },
     {
-      "id": "native.android.269dcd676377df1a",
-      "source": "Messaging surfaces connected to this gateway.",
-      "translated": "이 Gateway에 연결된 메시징 표면."
+      "id": "native.android.4638c6ee0798273f",
+      "source": "Issues",
+      "translated": "문제"
     },
     {
       "id": "native.android.3ae4829888a376e6",
@@ -534,9 +1314,109 @@
       "translated": "설정 후 Telegram, WhatsApp, 이메일 및 기타 채널이 여기에 표시됩니다."
     },
     {
+      "id": "native.android.0031c1ea65aad6ae",
+      "source": "1 account",
+      "translated": "계정 1개"
+    },
+    {
+      "id": "native.android.30f46f99bbf2ec8e",
+      "source": "${channel.accountCount} accounts",
+      "translated": "계정 ${channel.accountCount}개"
+    },
+    {
+      "id": "native.android.6f85ccd59e8fa79f",
+      "source": "Linked",
+      "translated": "연동됨"
+    },
+    {
+      "id": "native.android.1f4b67a9bd2364f2",
+      "source": "Configured",
+      "translated": "구성됨"
+    },
+    {
+      "id": "native.android.87f87c8abff6ee46",
+      "source": "Enabled",
+      "translated": "활성화됨"
+    },
+    {
+      "id": "native.android.155ef23cf9921685",
+      "source": "Issue",
+      "translated": "문제"
+    },
+    {
+      "id": "native.android.57bca1797e58ef47",
+      "source": "Connected",
+      "translated": "연결됨"
+    },
+    {
+      "id": "native.android.9b5a43c29d541249",
+      "source": "Running",
+      "translated": "실행 중"
+    },
+    {
+      "id": "native.android.98ba1d9a8dd3e0ff",
+      "source": "Ready",
+      "translated": "준비됨"
+    },
+    {
+      "id": "native.android.2b037474bc9c053e",
+      "source": "Setup",
+      "translated": "설정"
+    },
+    {
+      "id": "native.android.eb763aa2417e4a48",
+      "source": "Off",
+      "translated": "꺼짐"
+    },
+    {
       "id": "native.android.0015adc34e74003b",
       "source": "Some channel status checks did not complete.",
       "translated": "일부 채널 상태 확인이 완료되지 않았습니다."
+    },
+    {
+      "id": "native.android.8998bb0327fda993",
+      "source": "Open Chat",
+      "translated": "채팅 열기"
+    },
+    {
+      "id": "native.android.7269c7d79d79a8ca",
+      "source": "Start or continue a conversation",
+      "translated": "대화 시작 또는 계속하기"
+    },
+    {
+      "id": "native.android.8f0d519ac549ce0e",
+      "source": "Start Voice",
+      "translated": "음성 시작"
+    },
+    {
+      "id": "native.android.5ce94621017855b6",
+      "source": "Talk or dictate with OpenClaw",
+      "translated": "OpenClaw로 대화하거나 받아쓰기"
+    },
+    {
+      "id": "native.android.5876e15e5e92fd45",
+      "source": "Browse Sessions",
+      "translated": "세션 둘러보기"
+    },
+    {
+      "id": "native.android.9052827e69dafbdc",
+      "source": "Find previous conversations",
+      "translated": "이전 대화 찾기"
+    },
+    {
+      "id": "native.android.3843ddc61e57ad7f",
+      "source": "Providers & Models",
+      "translated": "제공업체 및 모델"
+    },
+    {
+      "id": "native.android.0e9b12f74d72c2fd",
+      "source": "Gateway, voice, notifications, privacy",
+      "translated": "Gateway, 음성, 알림, 개인정보 보호"
+    },
+    {
+      "id": "native.android.79a7fad0432fd687",
+      "source": "Settings",
+      "translated": "설정"
     },
     {
       "id": "native.android.3fc6f9784b0d9334",
@@ -599,11 +1479,6 @@
       "translated": "OpenClaw 세션"
     },
     {
-      "id": "native.android.23321276a6c8e11e",
-      "source": "Open ${row.title}",
-      "translated": "${row.title} 열기"
-    },
-    {
       "id": "native.android.15799e57704b20c6",
       "source": "Open session",
       "translated": "세션 열기"
@@ -634,6 +1509,26 @@
       "translated": "기본 세션"
     },
     {
+      "id": "native.android.5f06e4d6a59f7a59",
+      "source": "now",
+      "translated": "지금"
+    },
+    {
+      "id": "native.android.7e5d256de226152e",
+      "source": "${minutes}m",
+      "translated": "${minutes}분"
+    },
+    {
+      "id": "native.android.c584c22ed959206f",
+      "source": "${hours}h",
+      "translated": "${hours}시간"
+    },
+    {
+      "id": "native.android.28416620013afa41",
+      "source": "${days}d",
+      "translated": "${days}일"
+    },
+    {
       "id": "native.android.c4a902430c22030c",
       "source": "Delete",
       "translated": "삭제"
@@ -656,12 +1551,12 @@
     {
       "id": "native.android.a3fcfa20dc395b87",
       "source": "This job changed while you were editing. Revert to the latest gateway version before saving.",
-      "translated": "This job changed while you were editing. Revert to the latest gateway version before saving."
+      "translated": "편집하는 동안 이 작업이 변경되었습니다. 저장하기 전에 최신 Gateway 버전으로 되돌리세요."
     },
     {
       "id": "native.android.db9f08d611b4c508",
       "source": "Save or revert your edits before running, enabling, disabling, deleting, or refreshing this job.",
-      "translated": "Save or revert your edits before running, enabling, disabling, deleting, or refreshing this job."
+      "translated": "이 작업을 실행, 활성화, 비활성화, 삭제 또는 새로 고치기 전에 편집 내용을 저장하거나 되돌리세요."
     },
     {
       "id": "native.android.212889821e40127e",
@@ -671,7 +1566,17 @@
     {
       "id": "native.android.9f359445f7fb935e",
       "source": "Cron changes require operator.admin. Setup codes intentionally do not grant it. Reconnect with the gateway's shared token or password to request admin access. If this device still lacks it, approve the pending scope upgrade from an existing admin client.",
-      "translated": "Cron changes require operator.admin. Setup codes intentionally do not grant it. Reconnect with the gateway's shared token or password to request admin access. If this device still lacks it, approve the pending scope upgrade from an existing admin client."
+      "translated": "Cron을 변경하려면 operator.admin이 필요합니다. 설정 코드는 의도적으로 이 권한을 부여하지 않습니다. 관리자 액세스를 요청하려면 Gateway의 공유 토큰 또는 비밀번호로 다시 연결하세요. 이 기기에 여전히 권한이 없다면 기존 관리자 클라이언트에서 대기 중인 범위 업그레이드를 승인하세요."
+    },
+    {
+      "id": "native.android.011fc7ce7722de6e",
+      "source": "Run Pending",
+      "translated": "실행 대기 중"
+    },
+    {
+      "id": "native.android.55424aba605ce8e6",
+      "source": "Run Now",
+      "translated": "지금 실행"
     },
     {
       "id": "native.android.f5ed7396dc317625",
@@ -779,11 +1684,6 @@
       "translated": "밀리초"
     },
     {
-      "id": "native.android.4a97c2ca6b3a2ea6",
-      "source": "Interval",
-      "translated": "간격"
-    },
-    {
       "id": "native.android.af67797053368f7a",
       "source": "Epoch milliseconds (optional)",
       "translated": "에포크 밀리초 (선택 사항)"
@@ -827,11 +1727,6 @@
       "id": "native.android.36ef6b38d936f70f",
       "source": "Command to watch",
       "translated": "감시할 명령"
-    },
-    {
-      "id": "native.android.09bb59bcf0c7e009",
-      "source": "Command",
-      "translated": "명령"
     },
     {
       "id": "native.android.cad18710a0fdaa21",
@@ -896,12 +1791,12 @@
     {
       "id": "native.android.da748b7868da4ea7",
       "source": "Command working directory",
-      "translated": "Command working directory"
+      "translated": "명령 작업 디렉터리"
     },
     {
       "id": "native.android.99955291fac0d844",
       "source": "Command working directory · cannot clear",
-      "translated": "Command working directory · cannot clear"
+      "translated": "명령 작업 디렉터리 · 지울 수 없음"
     },
     {
       "id": "native.android.00a27842963455a7",
@@ -939,6 +1834,11 @@
       "translated": "일회성"
     },
     {
+      "id": "native.android.4a97c2ca6b3a2ea6",
+      "source": "Interval",
+      "translated": "간격"
+    },
+    {
       "id": "native.android.d8dfc026668cdc81",
       "source": "Cron",
       "translated": "Cron"
@@ -959,9 +1859,64 @@
       "translated": "에이전트 턴"
     },
     {
+      "id": "native.android.09bb59bcf0c7e009",
+      "source": "Command",
+      "translated": "명령"
+    },
+    {
+      "id": "native.android.54465889774765e9",
+      "source": "Next heartbeat",
+      "translated": "다음 하트비트"
+    },
+    {
+      "id": "native.android.7f389415587135b8",
+      "source": "Now",
+      "translated": "지금"
+    },
+    {
+      "id": "native.android.d3bcf29a4964cee7",
+      "source": "${durationMs}ms",
+      "translated": "${durationMs}ms"
+    },
+    {
+      "id": "native.android.0ce41ada06508a71",
+      "source": "No details",
+      "translated": "세부 정보 없음"
+    },
+    {
+      "id": "native.android.33cc83b0e765f38b",
+      "source": "Delivered",
+      "translated": "전달됨"
+    },
+    {
+      "id": "native.android.e0fb486f32fdb607",
+      "source": "Not delivered",
+      "translated": "전달되지 않음"
+    },
+    {
+      "id": "native.android.d8fee9cb6d6451eb",
+      "source": "Not requested",
+      "translated": "요청되지 않음"
+    },
+    {
+      "id": "native.android.6e382a00a2840b95",
+      "source": "Issue",
+      "translated": "문제"
+    },
+    {
+      "id": "native.android.7f526048ce1505f9",
+      "source": "Skipped",
+      "translated": "건너뜀"
+    },
+    {
+      "id": "native.android.2d809753c1f15194",
+      "source": "Unknown",
+      "translated": "알 수 없음"
+    },
+    {
       "id": "native.android.b735fb6c7d284ecf",
       "source": "Dreaming",
-      "translated": "Dreaming"
+      "translated": "꿈꾸는 중"
     },
     {
       "id": "native.android.4f96e0e1568d3220",
@@ -977,6 +1932,26 @@
       "id": "native.android.4f1e1ae70b8be673",
       "source": "On",
       "translated": "켜짐"
+    },
+    {
+      "id": "native.android.37683949bcb96f5a",
+      "source": "Status",
+      "translated": "상태"
+    },
+    {
+      "id": "native.android.f207cfb67b757b61",
+      "source": "Waiting",
+      "translated": "대기 중"
+    },
+    {
+      "id": "native.android.ef4a58b09d289bfe",
+      "source": "Signals",
+      "translated": "신호"
+    },
+    {
+      "id": "native.android.51aeac3061def720",
+      "source": "Next Cycle",
+      "translated": "다음 주기"
     },
     {
       "id": "native.android.a0f6d433844d6129",
@@ -1019,6 +1994,11 @@
       "translated": "승격됨"
     },
     {
+      "id": "native.android.05291e5e646088dd",
+      "source": "${summary.promotedToday} today · ${summary.promotedTotal} total",
+      "translated": "오늘 ${summary.promotedToday}개 · 총 ${summary.promotedTotal}개"
+    },
+    {
       "id": "native.android.76726c57be04cd2a",
       "source": "DIARY",
       "translated": "일기"
@@ -1044,6 +2024,41 @@
       "translated": "D"
     },
     {
+      "id": "native.android.3a71763caaad2836",
+      "source": "Not scheduled",
+      "translated": "예약되지 않음"
+    },
+    {
+      "id": "native.android.7235a31f619366d7",
+      "source": "In ${hours / 24L}d",
+      "translated": "${hours / 24L}일 후"
+    },
+    {
+      "id": "native.android.6d537b71bdab7d31",
+      "source": "In ${hours}h",
+      "translated": "${hours}시간 후"
+    },
+    {
+      "id": "native.android.495254fc942f0972",
+      "source": "In ${deltaMinutes}m",
+      "translated": "${deltaMinutes}분 후"
+    },
+    {
+      "id": "native.android.343d769a3d426a14",
+      "source": "Soon",
+      "translated": "곧"
+    },
+    {
+      "id": "native.android.4d4896cbfb0a80fa",
+      "source": "Public gateways require wss:// or Tailscale Serve. ws:// is allowed for localhost, .local hosts, the Android emulator, and private LAN IPs.",
+      "translated": "공개 Gateway에는 wss:// 또는 Tailscale Serve가 필요합니다. ws://는 localhost, .local 호스트, Android 에뮬레이터 및 사설 LAN IP에서 허용됩니다."
+    },
+    {
+      "id": "native.android.1046710b7984a7f2",
+      "source": "Use a private LAN IP for local setup, or enable Tailscale Serve / expose a wss:// gateway URL for remote access.",
+      "translated": "로컬 설정에는 사설 LAN IP를 사용하거나, 원격 액세스를 위해 Tailscale Serve를 활성화하거나 wss:// Gateway URL을 노출하세요."
+    },
+    {
       "id": "native.android.ff5abe2418979715",
       "source": "${if (tls) \"https\" else \"http\"}://$displayHost",
       "translated": "${if (tls) \"https\" else \"http\"}://$displayHost"
@@ -1054,49 +2069,59 @@
       "translated": "${if (tls) \"https\" else \"http\"}://$displayHost:$port"
     },
     {
-      "id": "native.android.458f8fd9ad7485a7",
+      "id": "native.android.180483eb1b7a4ff1",
       "source": "Setup code points to an insecure remote gateway. $remoteGatewaySecurityRule $remoteGatewaySecurityFix",
       "translated": "설정 코드가 안전하지 않은 원격 gateway를 가리킵니다. $remoteGatewaySecurityRule $remoteGatewaySecurityFix"
     },
     {
-      "id": "native.android.1a15475cf8d92de8",
+      "id": "native.android.9504a95ceefca5e8",
       "source": "QR code points to an insecure remote gateway. $remoteGatewaySecurityRule $remoteGatewaySecurityFix",
       "translated": "QR 코드가 안전하지 않은 원격 gateway를 가리킵니다. $remoteGatewaySecurityRule $remoteGatewaySecurityFix"
     },
     {
-      "id": "native.android.a77d1e3d811ad9d8",
+      "id": "native.android.9373db8f4269091a",
       "source": "$remoteGatewaySecurityRule $remoteGatewaySecurityFix",
       "translated": "$remoteGatewaySecurityRule $remoteGatewaySecurityFix"
     },
     {
-      "id": "native.android.d5230e4551045851",
+      "id": "native.android.84ea70ae0976dca7",
       "source": "Setup code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname.",
       "translated": "설정 코드가 IPv6 영역 ID를 사용합니다. 범위가 지정되지 않은 IPv6 주소 또는 LAN 호스트 이름을 사용하세요."
     },
     {
-      "id": "native.android.ca9fc2ce10f4028a",
+      "id": "native.android.1c32685b70f0585d",
       "source": "QR code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname.",
       "translated": "QR 코드가 IPv6 영역 ID를 사용합니다. 범위가 지정되지 않은 IPv6 주소 또는 LAN 호스트 이름을 사용하세요."
     },
     {
-      "id": "native.android.141236601fece71e",
+      "id": "native.android.b1ab0f426dacc83f",
       "source": "IPv6 zone IDs are not supported. Use an unscoped IPv6 address or a LAN hostname.",
       "translated": "IPv6 영역 ID는 지원되지 않습니다. 범위가 지정되지 않은 IPv6 주소 또는 LAN 호스트 이름을 사용하세요."
     },
     {
-      "id": "native.android.47e3c19d55f0150b",
+      "id": "native.android.b35f854c0bf08eda",
       "source": "Setup code has invalid gateway URL.",
       "translated": "설정 코드에 유효하지 않은 gateway URL이 있습니다."
     },
     {
-      "id": "native.android.b0cc3253031d22c2",
+      "id": "native.android.9598911ada12ef86",
       "source": "QR code did not contain a valid setup code.",
       "translated": "QR 코드에 유효한 설정 코드가 포함되어 있지 않습니다."
     },
     {
-      "id": "native.android.732f5b59ba7e1513",
+      "id": "native.android.864a4b7e75710d7c",
       "source": "Enter a valid manual endpoint to connect.",
       "translated": "연결할 유효한 수동 엔드포인트를 입력하세요."
+    },
+    {
+      "id": "native.android.4dcbdbcb459963a7",
+      "source": "Secure connection is required for this host.",
+      "translated": "이 호스트에는 보안 연결이 필요합니다."
+    },
+    {
+      "id": "native.android.7208ffa9589c35cd",
+      "source": "Use only on a trusted private network.",
+      "translated": "신뢰할 수 있는 비공개 네트워크에서만 사용하세요."
     },
     {
       "id": "native.android.b331b5b54e147e41",
@@ -1164,6 +2189,16 @@
       "translated": "오프라인"
     },
     {
+      "id": "native.android.81dd1b93e212709e",
+      "source": "Node",
+      "translated": "노드"
+    },
+    {
+      "id": "native.android.851109d24434028b",
+      "source": "Logs",
+      "translated": "로그"
+    },
+    {
       "id": "native.android.59602ad037679006",
       "source": "Online",
       "translated": "온라인"
@@ -1182,6 +2217,11 @@
       "id": "native.android.2a50ec20cdf08301",
       "source": "Ready",
       "translated": "준비됨"
+    },
+    {
+      "id": "native.android.472dfa13ca86a53e",
+      "source": "${modelCount.size} available",
+      "translated": "${modelCount.size}개 사용 가능"
     },
     {
       "id": "native.android.327e2c1665be1925",
@@ -1212,6 +2252,26 @@
       "id": "native.android.dd65a0b8f32f1441",
       "source": "Readable gateway log detail.",
       "translated": "읽기 쉬운 Gateway 로그 세부 정보."
+    },
+    {
+      "id": "native.android.91d7b283e21c0754",
+      "source": "Time",
+      "translated": "시간"
+    },
+    {
+      "id": "native.android.7948e8e9449f612e",
+      "source": "Level",
+      "translated": "수준"
+    },
+    {
+      "id": "native.android.90f8232c6cf45df6",
+      "source": "Subsystem",
+      "translated": "하위 시스템"
+    },
+    {
+      "id": "native.android.be186f89b936f098",
+      "source": "Unknown",
+      "translated": "알 수 없음"
     },
     {
       "id": "native.android.27493dc9da0b1868",
@@ -1274,6 +2334,11 @@
       "translated": "최신 로그 청크를 표시하고 있습니다."
     },
     {
+      "id": "native.android.d452c013df653b2c",
+      "source": "Open log entry",
+      "translated": "로그 항목 열기"
+    },
+    {
       "id": "native.android.7eda627dad7e16cf",
       "source": "Nodes & Devices",
       "translated": "노드 및 기기"
@@ -1282,6 +2347,21 @@
       "id": "native.android.006a92f5811c5406",
       "source": "Live nodes, paired phones, and pending device requests.",
       "translated": "라이브 노드, 페어링된 전화 및 대기 중인 기기 요청."
+    },
+    {
+      "id": "native.android.471fe1fa702558d9",
+      "source": "Admin",
+      "translated": "관리자"
+    },
+    {
+      "id": "native.android.59fc27ac46fc2b0d",
+      "source": "Devices",
+      "translated": "기기"
+    },
+    {
+      "id": "native.android.78b319a1d3509a69",
+      "source": "Pending",
+      "translated": "대기 중"
     },
     {
       "id": "native.android.a14d051ca26b222a",
@@ -1334,6 +2414,11 @@
       "translated": "페어링된 기기"
     },
     {
+      "id": "native.android.f87fa5da40b7f94f",
+      "source": "New device",
+      "translated": "새 기기"
+    },
+    {
       "id": "native.android.77935d2df6e42230",
       "source": "Repair",
       "translated": "복구"
@@ -1344,9 +2429,14 @@
       "translated": "검토"
     },
     {
-      "id": "native.android.840e5f49154642c7",
-      "source": "Paired",
-      "translated": "페어링됨"
+      "id": "native.android.36735662df3e8ab2",
+      "source": "Paired device",
+      "translated": "페어링된 기기"
+    },
+    {
+      "id": "native.android.e274308654ddc04b",
+      "source": "Node host",
+      "translated": "노드 호스트"
     },
     {
       "id": "native.android.1a2836f275433165",
@@ -1379,9 +2469,124 @@
       "translated": "온라인"
     },
     {
+      "id": "native.android.68032afddfa2d73c",
+      "source": "Approved",
+      "translated": "승인됨"
+    },
+    {
+      "id": "native.android.ceaf359f62be546b",
+      "source": "Capability approval pending",
+      "translated": "기능 승인 대기 중"
+    },
+    {
+      "id": "native.android.1b35b74545abb942",
+      "source": "Capability reapproval pending",
+      "translated": "기능 재승인 대기 중"
+    },
+    {
+      "id": "native.android.c64bd62deb02b65d",
+      "source": "Capability unapproved",
+      "translated": "기능이 승인되지 않음"
+    },
+    {
       "id": "native.android.13024ff403917bfe",
       "source": "This gateway sign-in can list connected nodes, but it cannot approve new phone pairing. Pair new phones from a gateway admin session. Node capability approval is separate and still uses nodes approve <request id>.",
-      "translated": "This gateway sign-in can list connected nodes, but it cannot approve new phone pairing. Pair new phones from a gateway admin session. Node capability approval is separate and still uses nodes approve <request id>."
+      "translated": "이 Gateway 로그인으로 연결된 노드를 나열할 수 있지만 새 휴대폰 페어링을 승인할 수는 없습니다. Gateway 관리자 세션에서 새 휴대폰을 페어링하세요. 노드 기능 승인은 별도이며 계속해서 nodes approve <request id>를 사용합니다."
+    },
+    {
+      "id": "native.android.0d8e9ede9c229b8e",
+      "source": "requested ${relativeDeviceTime(it)}",
+      "translated": "${relativeDeviceTime(it)}에 요청됨"
+    },
+    {
+      "id": "native.android.e573c2962d13c829",
+      "source": "${device.tokens.count { !it.revoked }}/${device.tokens.size} active tokens",
+      "translated": "활성 토큰 ${device.tokens.count { !it.revoked }}/${device.tokens.size}개"
+    },
+    {
+      "id": "native.android.840e5f49154642c7",
+      "source": "Paired",
+      "translated": "페어링됨"
+    },
+    {
+      "id": "native.android.6e40406705689721",
+      "source": "Active",
+      "translated": "활성"
+    },
+    {
+      "id": "native.android.ee0afd7e4a8074ec",
+      "source": "Needs Token",
+      "translated": "토큰 필요"
+    },
+    {
+      "id": "native.android.0ffa8e1cf574e81e",
+      "source": "${values.size} roles",
+      "translated": "역할 ${values.size}개"
+    },
+    {
+      "id": "native.android.24380efebf90a9ca",
+      "source": "${values.size} scopes",
+      "translated": "범위 ${values.size}개"
+    },
+    {
+      "id": "native.android.6120a22f0f1e479d",
+      "source": "now",
+      "translated": "지금"
+    },
+    {
+      "id": "native.android.bc1fb9bd72268a5e",
+      "source": "${minutes}m ago",
+      "translated": "${minutes}분 전"
+    },
+    {
+      "id": "native.android.6c9f6e007844d102",
+      "source": "${hours}h ago",
+      "translated": "${hours}시간 전"
+    },
+    {
+      "id": "native.android.efa6d8a87571fe84",
+      "source": "${days}d ago",
+      "translated": "${days}일 전"
+    },
+    {
+      "id": "native.android.1556c7b90c4a24ff",
+      "source": "Enter the setup code from openclaw qr.",
+      "translated": "openclaw qr의 설정 코드를 입력하세요."
+    },
+    {
+      "id": "native.android.c6d2aa9f033cecc8",
+      "source": "Setup code was not accepted. Generate a fresh code with openclaw qr.",
+      "translated": "설정 코드가 승인되지 않았습니다. openclaw qr로 새 코드를 생성하세요."
+    },
+    {
+      "id": "native.android.3c50060d3efc154d",
+      "source": "That QR code is not an OpenClaw setup QR. Generate a fresh code with openclaw qr, then try again.",
+      "translated": "해당 QR 코드는 OpenClaw 설정 QR이 아닙니다. openclaw qr로 새 코드를 생성한 후 다시 시도하세요."
+    },
+    {
+      "id": "native.android.f8cd1cbe29c4c582",
+      "source": "That looks like a setup code. Go back and choose Setup Gateway, then Use setup code.",
+      "translated": "설정 코드인 것 같습니다. 뒤로 돌아가 Gateway 설정을 선택한 다음 설정 코드 사용을 선택하세요."
+    },
+    {
+      "id": "native.android.63ed21b4888ba5d3",
+      "source": "Could not read that image. Choose a clear screenshot or image of the QR from openclaw qr.",
+      "translated": "해당 이미지를 읽을 수 없습니다. openclaw qr의 QR이 선명하게 보이는 스크린샷이나 이미지를 선택하세요."
+    },
+    {
+      "id": "native.android.61beaad5c5279eb9",
+      "source": "No setup QR code was found in that image. Choose the QR generated by openclaw qr, or enter the setup code manually.",
+      "translated": "해당 이미지에서 설정 QR 코드를 찾을 수 없습니다. openclaw qr로 생성한 QR을 선택하거나 설정 코드를 직접 입력하세요."
+    },
+    {
+      "id": "native.android.4c4912a456b4213a",
+      "source": "Could not read a QR code from that image. Choose a clearer image or enter the setup code manually.",
+      "translated": "해당 이미지에서 QR 코드를 읽을 수 없습니다. 더 선명한 이미지를 선택하거나 설정 코드를 직접 입력하세요."
+    },
+    {
+      "id": "native.android.41eff8a7be20d8d9",
+      "source": "Could not start the camera. Choose a QR image from gallery or enter the setup code manually.",
+      "translated": "카메라를 시작할 수 없습니다. 갤러리에서 QR 이미지를 선택하거나 설정 코드를 직접 입력하세요."
     },
     {
       "id": "native.android.9ac2d4498b17d478",
@@ -1489,9 +2694,14 @@
       "translated": "Android 설정 가이드"
     },
     {
-      "id": "native.android.d514a981f80779e9",
+      "id": "native.android.87e734a42506c768",
       "source": "Setup Gateway",
       "translated": "Gateway 설정"
+    },
+    {
+      "id": "native.android.d5c49de281aead61",
+      "source": "Step 1",
+      "translated": "1단계"
     },
     {
       "id": "native.android.6a45e2dae35ab5a7",
@@ -1502,6 +2712,11 @@
       "id": "native.android.d4b295b5146af4b8",
       "source": "openclaw gateway",
       "translated": "openclaw gateway"
+    },
+    {
+      "id": "native.android.250b7dda7cff6b5d",
+      "source": "Step 2",
+      "translated": "2단계"
     },
     {
       "id": "native.android.c6f9da7008df05a6",
@@ -1574,17 +2789,12 @@
       "translated": "설정 코드 붙여넣기"
     },
     {
-      "id": "native.android.35aec8a97ac12e1c",
-      "source": "Setup code was not accepted",
-      "translated": "설정 코드가 승인되지 않았습니다"
-    },
-    {
       "id": "native.android.9aaee5a05de93dbe",
       "source": "Use setup code",
       "translated": "설정 코드 사용"
     },
     {
-      "id": "native.android.073c93545602b198",
+      "id": "native.android.1f58a38c5434782d",
       "source": "Manual setup",
       "translated": "수동 설정"
     },
@@ -1659,6 +2869,26 @@
       "translated": "연결 테스트"
     },
     {
+      "id": "native.android.35aec8a97ac12e1c",
+      "source": "Setup code was not accepted",
+      "translated": "설정 코드가 승인되지 않았습니다"
+    },
+    {
+      "id": "native.android.bff183554a6f7cef",
+      "source": "Your phone is paired with ${recoveryGatewayName(serverName = serverName, attemptedGatewayName = attemptedGatewayName)}. Continue to finish node access.",
+      "translated": "휴대전화가 ${recoveryGatewayName(serverName = serverName, attemptedGatewayName = attemptedGatewayName)}에 페어링되었습니다. 계속하여 노드 액세스 설정을 완료하세요."
+    },
+    {
+      "id": "native.android.c56e30ec301e49ab",
+      "source": "Gateway paired",
+      "translated": "Gateway 페어링 완료"
+    },
+    {
+      "id": "native.android.bda6c6a9b4b78376",
+      "source": "Pair Gateway",
+      "translated": "Gateway 페어링"
+    },
+    {
       "id": "native.android.a1c6ad798cdb4e32",
       "source": "View details",
       "translated": "세부 정보 보기"
@@ -1704,12 +2934,12 @@
       "translated": "approve 명령에서 대기 중인 명령의 requestId를 사용하세요."
     },
     {
-      "id": "native.android.53bcd45eeb574d74",
+      "id": "native.android.0c2d81ab522c7d65",
       "source": "I have approved",
       "translated": "승인했습니다"
     },
     {
-      "id": "native.android.0d4dd8ed358a6fb2",
+      "id": "native.android.ec205ff9768fd7e6",
       "source": "Checking approval…",
       "translated": "승인 확인 중…"
     },
@@ -1739,29 +2969,174 @@
       "translated": "이 휴대폰이 연결되어 있는 동안 OpenClaw가 사용해도 괜찮은 액세스만 활성화하세요. 나중에 Android 설정에서 변경할 수 있습니다."
     },
     {
-      "id": "native.android.d7ea800cc2475013",
-      "source": "Continue",
-      "translated": "계속"
-    },
-    {
       "id": "native.android.44549cfd7e6a1ab8",
       "source": "Back",
       "translated": "뒤로"
     },
     {
-      "id": "native.android.f3f0527db434d756",
+      "id": "native.android.4f47ce320ad8c52c",
       "source": "Permissions",
       "translated": "권한"
     },
     {
-      "id": "native.android.bdd063b9f766050b",
-      "source": "Gateway approval is in progress. OpenClaw will retry automatically.",
-      "translated": "Gateway approval is in progress. OpenClaw will retry automatically."
+      "id": "native.android.369d78091d927576",
+      "source": "Connected",
+      "translated": "연결됨"
+    },
+    {
+      "id": "native.android.33b2037eff0c14e3",
+      "source": "Your Gateway is ready.",
+      "translated": "Gateway가 준비되었습니다."
+    },
+    {
+      "id": "native.android.8657187927ecd7f0",
+      "source": "Approve this phone on the gateway.\nThen retry the connection.",
+      "translated": "Gateway에서 이 휴대폰을 승인하세요.\n그런 다음 연결을 다시 시도하세요."
+    },
+    {
+      "id": "native.android.0c093704042a7156",
+      "source": "Node Approval Pending",
+      "translated": "노드 승인 대기 중"
+    },
+    {
+      "id": "native.android.0ce7b49149ccc32c",
+      "source": "Gateway pairing worked.\nApprove this phone's node capabilities from an operator UI.",
+      "translated": "Gateway 페어링이 완료되었습니다.\n운영자 UI에서 이 휴대폰의 노드 기능을 승인하세요."
+    },
+    {
+      "id": "native.android.8bc6322fa0f20d3e",
+      "source": "Pairing Gateway",
+      "translated": "Gateway 페어링 중"
+    },
+    {
+      "id": "native.android.176b4f5d1c9f8ce2",
+      "source": "Approval is in progress.\nOpenClaw will reconnect automatically.",
+      "translated": "승인이 진행 중입니다.\nOpenClaw가 자동으로 다시 연결됩니다."
+    },
+    {
+      "id": "native.android.466e3fb210732587",
+      "source": "Connecting Gateway",
+      "translated": "Gateway 연결 중"
+    },
+    {
+      "id": "native.android.7b95b9e103bbbb92",
+      "source": "OpenClaw is checking gateway and node access.",
+      "translated": "OpenClaw가 Gateway 및 노드 액세스를 확인하고 있습니다."
+    },
+    {
+      "id": "native.android.a75fc5ca269cbb15",
+      "source": "Still connecting",
+      "translated": "아직 연결 중"
+    },
+    {
+      "id": "native.android.c8848e9b1c6646af",
+      "source": "This is taking longer than expected.\nCheck that the Gateway is running and reachable.",
+      "translated": "예상보다 오래 걸리고 있습니다.\nGateway가 실행 중이며 연결 가능한지 확인하세요."
+    },
+    {
+      "id": "native.android.2bf6b4511554cb5d",
+      "source": "Connection issue",
+      "translated": "연결 문제"
+    },
+    {
+      "id": "native.android.9c72252fb0e59c20",
+      "source": "We could not reach your Gateway.\nLet's fix this.",
+      "translated": "Gateway에 연결할 수 없습니다.\n문제를 해결해 보겠습니다."
+    },
+    {
+      "id": "native.android.d7ea800cc2475013",
+      "source": "Continue",
+      "translated": "계속"
+    },
+    {
+      "id": "native.android.32496d7911cc1606",
+      "source": "Retry connection",
+      "translated": "연결 다시 시도"
+    },
+    {
+      "id": "native.android.f46c0db16c9637fb",
+      "source": "Go back",
+      "translated": "뒤로 가기"
+    },
+    {
+      "id": "native.android.c455993f72893524",
+      "source": "Gateway received this phone",
+      "translated": "Gateway가 이 휴대전화를 인식했습니다"
+    },
+    {
+      "id": "native.android.9301116065e416b6",
+      "source": "Waiting for device approval",
+      "translated": "기기 승인 대기 중"
+    },
+    {
+      "id": "native.android.ce5cc36fe075c9da",
+      "source": "Retrying automatically",
+      "translated": "자동으로 다시 시도 중"
+    },
+    {
+      "id": "native.android.69c0447c82eb5eef",
+      "source": "Gateway needs device approval",
+      "translated": "Gateway에 기기 승인이 필요합니다"
+    },
+    {
+      "id": "native.android.b9e2a7a85b7dd6f5",
+      "source": "Run the approval command on the Gateway",
+      "translated": "Gateway에서 승인 명령을 실행하세요"
+    },
+    {
+      "id": "native.android.48d712bed799126b",
+      "source": "Opening Gateway connection",
+      "translated": "Gateway 연결 여는 중"
+    },
+    {
+      "id": "native.android.2177191b54243c32",
+      "source": "Checking pairing access",
+      "translated": "페어링 액세스 확인 중"
+    },
+    {
+      "id": "native.android.d79702e9a32f7cf0",
+      "source": "Checking node access",
+      "translated": "노드 액세스 확인 중"
+    },
+    {
+      "id": "native.android.797e496ed2f4a91c",
+      "source": "Ready for chat and voice",
+      "translated": "채팅 및 음성 사용 준비 완료"
+    },
+    {
+      "id": "native.android.24c714ef282f6f2b",
+      "source": "Gateway paired. Waiting for node capability approval.",
+      "translated": "Gateway가 페어링되었습니다. 노드 기능 승인을 기다리는 중입니다."
+    },
+    {
+      "id": "native.android.78c136124ca7ec03",
+      "source": "Gateway approval is pending. Run this on the gateway host:",
+      "translated": "Gateway 승인이 대기 중입니다. Gateway 호스트에서 다음을 실행하세요:"
+    },
+    {
+      "id": "native.android.1c93d0cbb8e05a7a",
+      "source": "Gateway approval is pending. Run openclaw devices list on the gateway host, approve this phone, then retry.",
+      "translated": "Gateway 승인이 대기 중입니다. Gateway 호스트에서 openclaw devices list를 실행하고 이 휴대전화를 승인한 후 다시 시도하세요."
     },
     {
       "id": "native.android.d0c1dcc8236a1ab9",
       "source": "Gateway paired. Checking node capability approval.",
-      "translated": "Gateway paired. Checking node capability approval."
+      "translated": "Gateway가 페어링되었습니다. 노드 기능 승인을 확인하는 중입니다."
+    },
+    {
+      "id": "native.android.14a92ed5901d9416",
+      "source": "Gateway paired. Waiting for operator access.",
+      "translated": "Gateway가 페어링되었습니다. 운영자 액세스를 기다리는 중입니다."
+    },
+    {
+      "id": "native.android.bdd063b9f766050b",
+      "source": "Gateway approval is in progress. OpenClaw will retry automatically.",
+      "translated": "Gateway 승인이 진행 중입니다. OpenClaw가 자동으로 다시 시도합니다."
+    },
+    {
+      "id": "native.android.45cfb86623fa2251",
+      "source": "Gateway unreachable",
+      "translated": "Gateway에 연결할 수 없음"
     },
     {
       "id": "native.android.29732759e050c874",
@@ -1804,6 +3179,31 @@
       "translated": "Gateway 인증을 검토해야 합니다. gateway 설정을 확인한 다음 다시 시도하세요."
     },
     {
+      "id": "native.android.5f1542ccffc8c698",
+      "source": "Gateway authentication needs attention.",
+      "translated": "Gateway 인증을 확인해야 합니다."
+    },
+    {
+      "id": "native.android.c94c164d474cb0db",
+      "source": "This app is older than the Gateway. Update OpenClaw on this device, then retry.",
+      "translated": "이 앱이 Gateway보다 오래된 버전입니다. 이 기기의 OpenClaw를 업데이트한 후 다시 시도하세요."
+    },
+    {
+      "id": "native.android.48ba24436b643607",
+      "source": "The Gateway is older than this app. Update OpenClaw on the Gateway host, then retry.",
+      "translated": "Gateway가 이 앱보다 오래된 버전입니다. Gateway 호스트의 OpenClaw를 업데이트한 후 다시 시도하세요."
+    },
+    {
+      "id": "native.android.1473077d05ac1739",
+      "source": "The app and Gateway use incompatible protocol versions. Update OpenClaw on both, then retry.",
+      "translated": "앱과 Gateway가 호환되지 않는 프로토콜 버전을 사용합니다. 양쪽의 OpenClaw를 업데이트한 후 다시 시도하세요."
+    },
+    {
+      "id": "native.android.6379bfb6b09ef8cd",
+      "source": "$summary $details",
+      "translated": "$summary $details"
+    },
+    {
       "id": "native.android.ee7dad03cd78babe",
       "source": "openclaw devices approve $requestId",
       "translated": "openclaw devices approve $requestId"
@@ -1834,14 +3234,139 @@
       "translated": "명령이 복사됨"
     },
     {
-      "id": "native.android.437599c024df158e",
+      "id": "native.android.cb74355b796f9e00",
+      "source": "Enabled",
+      "translated": "사용"
+    },
+    {
+      "id": "native.android.21f04aa7593a8c4e",
+      "source": "Off",
+      "translated": "끔"
+    },
+    {
+      "id": "native.android.61ce15426e85e615",
+      "source": "Not allowed",
+      "translated": "허용되지 않음"
+    },
+    {
+      "id": "native.android.794d39baacf4ce44",
       "source": "Granted",
       "translated": "허용됨"
     },
     {
-      "id": "native.android.cf8344d3562e28e3",
+      "id": "native.android.5fc5b5bd849534e0",
       "source": "Not granted",
       "translated": "허용되지 않음"
+    },
+    {
+      "id": "native.android.38d2b7bd03335fee",
+      "source": "Transcribe voice prompts",
+      "translated": "음성 프롬프트 받아쓰기"
+    },
+    {
+      "id": "native.android.fda0e1b90d3da673",
+      "source": "Voice",
+      "translated": "음성"
+    },
+    {
+      "id": "native.android.4be6f3432907954f",
+      "source": "Camera",
+      "translated": "카메라"
+    },
+    {
+      "id": "native.android.804747599fbfb54f",
+      "source": "Capture photos and clips from this phone",
+      "translated": "이 휴대전화에서 사진 및 클립 촬영"
+    },
+    {
+      "id": "native.android.bff84ec386a1e4b6",
+      "source": "Location",
+      "translated": "위치"
+    },
+    {
+      "id": "native.android.84fc265214b31d6a",
+      "source": "Read this phone's location",
+      "translated": "이 휴대전화의 위치 확인"
+    },
+    {
+      "id": "native.android.2458aa04d541f578",
+      "source": "Photos",
+      "translated": "사진"
+    },
+    {
+      "id": "native.android.a0b4cfc39e06cd8c",
+      "source": "Read recent photos and media",
+      "translated": "최근 사진 및 미디어 읽기"
+    },
+    {
+      "id": "native.android.fcbdfe0556ea2745",
+      "source": "Contacts",
+      "translated": "연락처"
+    },
+    {
+      "id": "native.android.247028b711fa6af5",
+      "source": "Find people and contact details",
+      "translated": "사람 및 연락처 정보 찾기"
+    },
+    {
+      "id": "native.android.379a97dc36c48736",
+      "source": "Calendar",
+      "translated": "캘린더"
+    },
+    {
+      "id": "native.android.95066ee4ea91b83f",
+      "source": "Read and update events",
+      "translated": "이벤트 읽기 및 업데이트"
+    },
+    {
+      "id": "native.android.13462414b1234f51",
+      "source": "Notifications",
+      "translated": "알림"
+    },
+    {
+      "id": "native.android.d096df67bff5e611",
+      "source": "Show OpenClaw alerts",
+      "translated": "OpenClaw 알림 표시"
+    },
+    {
+      "id": "native.android.93cbec65dbc5de69",
+      "source": "Notification listener",
+      "translated": "알림 리스너"
+    },
+    {
+      "id": "native.android.4a1b1d60a064314d",
+      "source": "Read selected app notifications",
+      "translated": "선택한 앱의 알림 읽기"
+    },
+    {
+      "id": "native.android.0407ebf1bd28848e",
+      "source": "Motion",
+      "translated": "동작"
+    },
+    {
+      "id": "native.android.a7d027a495860c1e",
+      "source": "Share steps and activity",
+      "translated": "걸음 수 및 활동 공유"
+    },
+    {
+      "id": "native.android.ae5388962bbd6a91",
+      "source": "Device access; Gateway opt-in still required",
+      "translated": "기기 액세스. Gateway에서 별도로 허용해야 합니다"
+    },
+    {
+      "id": "native.android.7ab9a01c349bf67d",
+      "source": "SMS",
+      "translated": "SMS"
+    },
+    {
+      "id": "native.android.c09cec3a724615e0",
+      "source": "Call Log",
+      "translated": "통화 기록"
+    },
+    {
+      "id": "native.android.c4b9e363024a8db0",
+      "source": "Show recent call history",
+      "translated": "최근 통화 기록 표시"
     },
     {
       "id": "native.android.3b7e036da1b10671",
@@ -1874,6 +3399,16 @@
       "translated": "Gateway 오프라인"
     },
     {
+      "id": "native.android.0d44d2bfd3bb7b01",
+      "source": "Needs attention",
+      "translated": "확인 필요"
+    },
+    {
+      "id": "native.android.a707d90b7b90dc72",
+      "source": "Provider catalog",
+      "translated": "제공업체 카탈로그"
+    },
+    {
       "id": "native.android.cc7752fdd9d78d63",
       "source": "Loading",
       "translated": "로드 중"
@@ -1894,16 +3429,6 @@
       "translated": "필요"
     },
     {
-      "id": "native.android.35fbba1d22e775ac",
-      "source": "Unknown",
-      "translated": "알 수 없음"
-    },
-    {
-      "id": "native.android.62fdb673c946ccf0",
-      "source": "$modelCount configured models. Refresh to recheck availability.",
-      "translated": "구성된 모델 $modelCount개. 새로 고침하여 사용 가능 여부를 다시 확인하세요."
-    },
-    {
       "id": "native.android.24fe64a90afae34e",
       "source": "Connect your Gateway to view provider readiness.",
       "translated": "제공자 준비 상태를 보려면 Gateway를 연결하세요."
@@ -1919,14 +3444,79 @@
       "translated": "새로 고치는 중"
     },
     {
-      "id": "native.android.c11f2727dd9a93f7",
-      "source": "${row.modelCount} configured models",
-      "translated": "구성된 모델 ${row.modelCount}개"
+      "id": "native.android.c2f9e9c7f9eb969e",
+      "source": "No configured models. Refresh to recheck availability.",
+      "translated": "구성된 모델이 없습니다. 새로 고쳐 사용 가능 여부를 다시 확인하세요."
+    },
+    {
+      "id": "native.android.2780087b426e85b8",
+      "source": "1 configured model. Refresh to recheck availability.",
+      "translated": "구성된 모델이 1개 있습니다. 새로 고쳐 사용 가능 여부를 다시 확인하세요."
+    },
+    {
+      "id": "native.android.888c14f93d5d8f40",
+      "source": "$count configured models. Refresh to recheck availability.",
+      "translated": "구성된 모델이 $count개 있습니다. 새로 고쳐 사용 가능 여부를 다시 확인하세요."
     },
     {
       "id": "native.android.51228649f9d8627a",
       "source": "No configured models",
       "translated": "구성된 모델 없음"
+    },
+    {
+      "id": "native.android.8ebf1dd7da6d8275",
+      "source": "1 configured model",
+      "translated": "구성된 모델 1개"
+    },
+    {
+      "id": "native.android.df9a2fe6b9efb6fe",
+      "source": "$count configured models",
+      "translated": "구성된 모델 $count개"
+    },
+    {
+      "id": "native.android.f2e9f3aa4c2c13d1",
+      "source": "Available",
+      "translated": "사용 가능"
+    },
+    {
+      "id": "native.android.be8ad850010b0afc",
+      "source": "Unavailable",
+      "translated": "사용 불가"
+    },
+    {
+      "id": "native.android.35fbba1d22e775ac",
+      "source": "Unknown",
+      "translated": "알 수 없음"
+    },
+    {
+      "id": "native.android.aa9cf902ccdc6c16",
+      "source": "reasoning",
+      "translated": "추론"
+    },
+    {
+      "id": "native.android.7d496fd4b8cf51b9",
+      "source": "image",
+      "translated": "이미지"
+    },
+    {
+      "id": "native.android.0e9f3bdd4b69c696",
+      "source": "audio",
+      "translated": "오디오"
+    },
+    {
+      "id": "native.android.0da23af3d0da05b7",
+      "source": "video",
+      "translated": "동영상"
+    },
+    {
+      "id": "native.android.f0da8075ccccb572",
+      "source": "document",
+      "translated": "문서"
+    },
+    {
+      "id": "native.android.02344d2f77f3cd3a",
+      "source": "$context context",
+      "translated": "$context 컨텍스트"
     },
     {
       "id": "native.android.4832c0d0e9774283",
@@ -1941,17 +3531,12 @@
     {
       "id": "native.android.70f5d0507d34b5c8",
       "source": "Focus session search",
-      "translated": "Focus session search"
+      "translated": "세션 검색에 포커스"
     },
     {
       "id": "native.android.e0f10db479f627eb",
       "source": "Recent",
       "translated": "최근"
-    },
-    {
-      "id": "native.android.9bc0d0b631dca571",
-      "source": "Current",
-      "translated": "현재"
     },
     {
       "id": "native.android.78654c0f198c6df2",
@@ -1966,7 +3551,12 @@
     {
       "id": "native.android.10cb26723e9990fc",
       "source": "Clear session search",
-      "translated": "Clear session search"
+      "translated": "세션 검색 지우기"
+    },
+    {
+      "id": "native.android.784ecdd6ea2ec5f0",
+      "source": "Sort: $sortOrder",
+      "translated": "정렬: $sortOrder"
     },
     {
       "id": "native.android.dc52c5f9d7b85ec8",
@@ -1977,11 +3567,6 @@
       "id": "native.android.78b9d0ab41446a1b",
       "source": "Oldest first",
       "translated": "오래된순"
-    },
-    {
-      "id": "native.android.d7e09574a17f9ccd",
-      "source": "Sort: ${if (recentFirst) \"Newest first\" else \"Oldest first\"}",
-      "translated": "Sort: ${if (recentFirst) \"Newest first\" else \"Oldest first\"}"
     },
     {
       "id": "native.android.c6bf8751e2a7f5c7",
@@ -2001,22 +3586,22 @@
     {
       "id": "native.android.69b79a3c2c987cd4",
       "source": "Searching sessions",
-      "translated": "Searching sessions"
+      "translated": "세션 검색 중"
     },
     {
       "id": "native.android.dd587d341af44212",
       "source": "No matching sessions",
-      "translated": "No matching sessions"
+      "translated": "일치하는 세션 없음"
     },
     {
       "id": "native.android.11c1a8c944bea0ae",
       "source": "Try a different search or clear the current query.",
-      "translated": "Try a different search or clear the current query."
+      "translated": "다른 검색어를 사용하거나 현재 검색어를 지워 보세요."
     },
     {
       "id": "native.android.63dab4ce8d8ef26a",
       "source": "Clear Search",
-      "translated": "Clear Search"
+      "translated": "검색 지우기"
     },
     {
       "id": "native.android.75bff03b36200e7b",
@@ -2084,14 +3669,14 @@
       "translated": "삭제"
     },
     {
-      "id": "native.android.03fd4e5e90f1afe7",
-      "source": "Pinned",
-      "translated": "고정됨"
-    },
-    {
       "id": "native.android.94a95bad91565148",
       "source": "Workspace",
       "translated": "워크스페이스"
+    },
+    {
+      "id": "native.android.9bc0d0b631dca571",
+      "source": "Current",
+      "translated": "현재"
     },
     {
       "id": "native.android.b5e4ae7f8c9eca2d",
@@ -2101,22 +3686,22 @@
     {
       "id": "native.android.f46b06f8550516e4",
       "source": "Unarchive",
-      "translated": "Unarchive"
+      "translated": "보관 해제"
     },
     {
       "id": "native.android.a157cb1bddfc3b79",
       "source": "Delete…",
-      "translated": "Delete…"
+      "translated": "삭제…"
     },
     {
       "id": "native.android.283c9264772e2024",
       "source": "← Back",
-      "translated": "← Back"
+      "translated": "← 뒤로"
     },
     {
       "id": "native.android.fff8fad5db365fa6",
       "source": "Remove from group",
-      "translated": "Remove from group"
+      "translated": "그룹에서 제거"
     },
     {
       "id": "native.android.6637da0312da85f9",
@@ -2141,37 +3726,37 @@
     {
       "id": "native.android.c2dcfd6ce61bb9a7",
       "source": "Rename…",
-      "translated": "Rename…"
+      "translated": "이름 변경…"
     },
     {
       "id": "native.android.7e4fef64a05f84f4",
       "source": "Fork",
-      "translated": "Fork"
+      "translated": "포크"
     },
     {
       "id": "native.android.442655ac5b85b24d",
       "source": "Move to group",
-      "translated": "Move to group"
+      "translated": "그룹으로 이동"
     },
     {
       "id": "native.android.e78c3cf125b5a40c",
       "source": "Archive",
-      "translated": "Archive"
+      "translated": "보관"
     },
     {
       "id": "native.android.11e20947d40764fb",
       "source": "Rename group…",
-      "translated": "Rename group…"
+      "translated": "그룹 이름 변경…"
     },
     {
       "id": "native.android.f9b342d9485114cf",
       "source": "New group…",
-      "translated": "New group…"
+      "translated": "새 그룹…"
     },
     {
       "id": "native.android.ecfbc9a95c3ca671",
       "source": "Delete group…",
-      "translated": "Delete group…"
+      "translated": "그룹 삭제…"
     },
     {
       "id": "native.android.54c10a1eec2fa17c",
@@ -2187,6 +3772,16 @@
       "id": "native.android.4e1ffc65a44efec5",
       "source": "Cancel",
       "translated": "취소"
+    },
+    {
+      "id": "native.android.03fd4e5e90f1afe7",
+      "source": "Pinned",
+      "translated": "고정됨"
+    },
+    {
+      "id": "native.android.1539a9f53c18e47f",
+      "source": "Ungrouped",
+      "translated": "그룹 없음"
     },
     {
       "id": "native.android.db243d71d056afa4",
@@ -2219,6 +3814,31 @@
       "translated": "보관된 세션이 여기에 표시됩니다."
     },
     {
+      "id": "native.android.2261a31153cec409",
+      "source": "now",
+      "translated": "지금"
+    },
+    {
+      "id": "native.android.9f222c1cd2767777",
+      "source": "${minutes}m",
+      "translated": "${minutes}분"
+    },
+    {
+      "id": "native.android.58c1439bb3513859",
+      "source": "${hours}h",
+      "translated": "${hours}시간"
+    },
+    {
+      "id": "native.android.a171f733decef671",
+      "source": "${days}d",
+      "translated": "${days}일"
+    },
+    {
+      "id": "native.android.3d4fa07acbc015c5",
+      "source": "Main session",
+      "translated": "기본 세션"
+    },
+    {
       "id": "native.android.dcb7d5956029bbc4",
       "source": "Provider limits and quota health.",
       "translated": "공급자 제한 및 할당량 상태."
@@ -2227,6 +3847,11 @@
       "id": "native.android.aa3fb483f7e264fe",
       "source": "Usage",
       "translated": "사용량"
+    },
+    {
+      "id": "native.android.576711a05d1bc098",
+      "source": "Providers",
+      "translated": "제공업체"
     },
     {
       "id": "native.android.e3bdc31bd2f499d7",
@@ -2246,12 +3871,17 @@
     {
       "id": "native.android.962a15bdb26cb6e1",
       "source": "Cron Jobs",
-      "translated": "Cron Jobs"
+      "translated": "Cron 작업"
     },
     {
       "id": "native.android.5e3e4cd42004cb28",
       "source": "Scheduled OpenClaw work from your gateway.",
       "translated": "Gateway에서 예약된 OpenClaw 작업."
+    },
+    {
+      "id": "native.android.f9a5f09bd7436aa6",
+      "source": "Jobs",
+      "translated": "작업"
     },
     {
       "id": "native.android.3cd22006987fde12",
@@ -2272,6 +3902,11 @@
       "id": "native.android.bc88f537cd309fcb",
       "source": "Scheduled work created on the gateway will appear here.",
       "translated": "Gateway에서 생성된 예약 작업이 여기에 표시됩니다."
+    },
+    {
+      "id": "native.android.2fbb66cd888e9543",
+      "source": "Cron Job",
+      "translated": "Cron 작업"
     },
     {
       "id": "native.android.f6dd71419863574c",
@@ -2304,6 +3939,11 @@
       "translated": "이 Gateway에서 사용할 수 있는 어시스턴트를 선택하고 검사합니다."
     },
     {
+      "id": "native.android.dce9fd0d3572a6c5",
+      "source": "Available",
+      "translated": "사용 가능"
+    },
+    {
       "id": "native.android.8db68417b1226437",
       "source": "Connect the gateway to load agents.",
       "translated": "에이전트를 불러오려면 Gateway를 연결하세요."
@@ -2322,6 +3962,26 @@
       "id": "native.android.b53cdcaacd0eb0f2",
       "source": "Review actions that need your attention.",
       "translated": "주의가 필요한 작업을 검토하세요."
+    },
+    {
+      "id": "native.android.7ffd527dd116cd48",
+      "source": "Gateway Pending",
+      "translated": "Gateway 대기 중"
+    },
+    {
+      "id": "native.android.2d8d049afe99f751",
+      "source": "Session Activity",
+      "translated": "세션 활동"
+    },
+    {
+      "id": "native.android.5d53e328e4deb444",
+      "source": "Issues",
+      "translated": "문제"
+    },
+    {
+      "id": "native.android.253c353a10bfe69b",
+      "source": "Active Runs",
+      "translated": "활성 실행"
     },
     {
       "id": "native.android.2f7b688eb1fe6797",
@@ -2449,16 +4109,6 @@
       "translated": "받아쓰기"
     },
     {
-      "id": "native.android.94527c3346897c00",
-      "source": "Allowlist",
-      "translated": "허용 목록"
-    },
-    {
-      "id": "native.android.333ae4741b8f80fe",
-      "source": "Blocklist",
-      "translated": "차단 목록"
-    },
-    {
       "id": "native.android.9feed8722db5d2cc",
       "source": "Choose what reaches OpenClaw.",
       "translated": "OpenClaw에 도달할 항목을 선택하세요."
@@ -2474,19 +4124,44 @@
       "translated": "알림은 이 휴대폰에 유지됩니다."
     },
     {
+      "id": "native.android.f0397533c269b90c",
+      "source": "Forward Notifications",
+      "translated": "알림 전달"
+    },
+    {
       "id": "native.android.5a077bf9cf4f47c8",
       "source": "OpenClaw can receive selected alerts.",
       "translated": "OpenClaw에서 선택한 알림을 받을 수 있습니다."
     },
     {
-      "id": "native.android.f0397533c269b90c",
-      "source": "Forward Notifications",
-      "translated": "Forward Notifications"
+      "id": "native.android.fef97bfb2cd5d228",
+      "source": "$quietStart to $quietEnd",
+      "translated": "$quietStart~$quietEnd"
     },
     {
       "id": "native.android.a04ee29c0a3b68f5",
       "source": "Quiet Hours",
-      "translated": "Quiet Hours"
+      "translated": "방해 금지 시간"
+    },
+    {
+      "id": "native.android.db3ed951c0462727",
+      "source": "Policy",
+      "translated": "정책"
+    },
+    {
+      "id": "native.android.a0a8c3cdf2a95054",
+      "source": "Selected Apps",
+      "translated": "선택한 앱"
+    },
+    {
+      "id": "native.android.609413bd24d4dfe6",
+      "source": "Rate Limit",
+      "translated": "사용량 제한"
+    },
+    {
+      "id": "native.android.62fe76eb7c0dbddc",
+      "source": "Access",
+      "translated": "접근 권한"
     },
     {
       "id": "native.android.ebeec52e498bc128",
@@ -2512,6 +4187,16 @@
       "id": "native.android.c21fbdec8c4b390d",
       "source": "Forwarding Mode",
       "translated": "전달 모드"
+    },
+    {
+      "id": "native.android.333ae4741b8f80fe",
+      "source": "Blocklist",
+      "translated": "차단 목록"
+    },
+    {
+      "id": "native.android.94527c3346897c00",
+      "source": "Allowlist",
+      "translated": "허용 목록"
     },
     {
       "id": "native.android.67b1229c396cc573",
@@ -2564,19 +4249,29 @@
       "translated": "휴대폰 기능"
     },
     {
+      "id": "native.android.2a34701182e76575",
+      "source": "Allow camera tools when requested.",
+      "translated": "요청 시 카메라 도구를 허용합니다."
+    },
+    {
       "id": "native.android.2d1dd1a2e9dae8e9",
       "source": "Camera",
-      "translated": "Camera"
+      "translated": "카메라"
     },
     {
       "id": "native.android.3104a266665b9e19",
       "source": "Precise Location",
-      "translated": "Precise Location"
+      "translated": "정확한 위치"
+    },
+    {
+      "id": "native.android.b8bc7b435f16f86a",
+      "source": "Share precise location while location is enabled.",
+      "translated": "위치가 활성화되어 있는 동안 정확한 위치를 공유합니다."
     },
     {
       "id": "native.android.c38c2616e6b13dd4",
       "source": "Photos",
-      "translated": "Photos"
+      "translated": "사진"
     },
     {
       "id": "native.android.7d943661c4341ef0",
@@ -2591,7 +4286,7 @@
     {
       "id": "native.android.74fb102d11305307",
       "source": "Installed Apps",
-      "translated": "Installed Apps"
+      "translated": "설치된 앱"
     },
     {
       "id": "native.android.8ed8ecbbd6112e81",
@@ -2606,12 +4301,22 @@
     {
       "id": "native.android.be89d5601904322a",
       "source": "Keep Awake",
-      "translated": "Keep Awake"
+      "translated": "절전 모드 방지"
+    },
+    {
+      "id": "native.android.5b2623cb72a4af97",
+      "source": "Keep the node available during active work.",
+      "translated": "작업 중에는 노드를 사용 가능한 상태로 유지합니다."
     },
     {
       "id": "native.android.66e7775ab738ed4f",
       "source": "Canvas Status",
-      "translated": "Canvas Status"
+      "translated": "Canvas 상태"
+    },
+    {
+      "id": "native.android.5e21b4715dc82e14",
+      "source": "Show screen-sharing debug state.",
+      "translated": "화면 공유 디버그 상태를 표시합니다."
     },
     {
       "id": "native.android.4ea310efb1f0e7ff",
@@ -2631,7 +4336,7 @@
     {
       "id": "native.android.031d3ed6fb8a6559",
       "source": "OpenClaw only checks location when your paired Gateway requests it. On the next Android screen, choose $backgroundPermissionLabel to allow checks while the app is in the background.",
-      "translated": "OpenClaw only checks location when your paired Gateway requests it. On the next Android screen, choose $backgroundPermissionLabel to allow checks while the app is in the background."
+      "translated": "OpenClaw는 페어링된 Gateway가 요청할 때만 위치를 확인합니다. 앱이 백그라운드에 있는 동안에도 위치를 확인할 수 있도록 다음 Android 화면에서 $backgroundPermissionLabel을 선택하세요."
     },
     {
       "id": "native.android.c48805f3de1d72ca",
@@ -2674,14 +4379,19 @@
       "translated": "설정 교체"
     },
     {
+      "id": "native.android.2de0778d16e25c0b",
+      "source": "this gateway",
+      "translated": "이 Gateway"
+    },
+    {
       "id": "native.android.66aad1078731e6a3",
       "source": "Forget gateway?",
       "translated": "Gateway를 잊어버리시겠습니까?"
     },
     {
-      "id": "native.android.fc2b37bf96ebd49d",
-      "source": "Remove ${entry?.name ?: \"this gateway\"} and its saved credentials from this phone?",
-      "translated": "Remove ${entry?.name ?: \"this gateway\"} and its saved credentials from this phone?"
+      "id": "native.android.7746de24dac08f1d",
+      "source": "Remove $gatewayName and its saved credentials from this phone?",
+      "translated": "이 휴대전화에서 $gatewayName 및 저장된 자격 증명을 삭제하시겠습니까?"
     },
     {
       "id": "native.android.c6c8e0c4b8a9a7cf",
@@ -2699,6 +4409,11 @@
       "translated": "연결됨"
     },
     {
+      "id": "native.android.bab59dcaa8a4608a",
+      "source": "Connection",
+      "translated": "연결"
+    },
+    {
       "id": "native.android.326c79e18db465ce",
       "source": "Offline",
       "translated": "오프라인"
@@ -2714,6 +4429,16 @@
       "translated": "온라인"
     },
     {
+      "id": "native.android.a8958b5432344ded",
+      "source": "Address",
+      "translated": "주소"
+    },
+    {
+      "id": "native.android.573f216f8bc83d12",
+      "source": "Not available",
+      "translated": "사용할 수 없음"
+    },
+    {
       "id": "native.android.7b12195e02ebcc34",
       "source": "Reconnect",
       "translated": "다시 연결"
@@ -2726,7 +4451,7 @@
     {
       "id": "native.android.87eee1e2bafbf13b",
       "source": "Gateways",
-      "translated": "Gateways"
+      "translated": "Gateway"
     },
     {
       "id": "native.android.c3974020a08e239e",
@@ -2789,14 +4514,14 @@
       "translated": "연결 보안"
     },
     {
-      "id": "native.android.6701e8520a27c448",
-      "source": "Secure (TLS)",
-      "translated": "보안 (TLS)"
-    },
-    {
       "id": "native.android.86aeb5011ef180cb",
       "source": "Unencrypted",
       "translated": "암호화되지 않음"
+    },
+    {
+      "id": "native.android.6701e8520a27c448",
+      "source": "Secure (TLS)",
+      "translated": "보안 (TLS)"
     },
     {
       "id": "native.android.ce47022dd4d431fe",
@@ -2834,6 +4559,31 @@
       "translated": "테마 및 번역된 Android 텍스트."
     },
     {
+      "id": "native.android.4005197394b83ef3",
+      "source": "Language",
+      "translated": "언어"
+    },
+    {
+      "id": "native.android.f09c2fe663022869",
+      "source": "Contrast",
+      "translated": "대비"
+    },
+    {
+      "id": "native.android.196b8776413f9774",
+      "source": "High",
+      "translated": "높음"
+    },
+    {
+      "id": "native.android.f5b3259efe0a59ba",
+      "source": "Readable",
+      "translated": "읽기 쉬움"
+    },
+    {
+      "id": "native.android.91844c6b953d9be9",
+      "source": "Typography",
+      "translated": "서체"
+    },
+    {
       "id": "native.android.0e5de6796bc8d8f9",
       "source": "Theme",
       "translated": "테마"
@@ -2844,19 +4594,59 @@
       "translated": "앱 언어"
     },
     {
-      "id": "native.android.1fc742aceae3f137",
-      "source": "Changes Android text that OpenClaw has translated. Screens with English-only copy stay unchanged.",
-      "translated": "OpenClaw가 번역한 Android 텍스트를 변경합니다. 영어 전용 문구가 있는 화면은 변경되지 않습니다."
-    },
-    {
       "id": "native.android.3d640706b2b6b93a",
       "source": "Selected",
       "translated": "선택됨"
     },
     {
-      "id": "native.android.664db1aad9792c18",
-      "source": "Ready",
-      "translated": "준비됨"
+      "id": "native.android.053040678e1491d5",
+      "source": "System",
+      "translated": "시스템"
+    },
+    {
+      "id": "native.android.ce04cda706ff246a",
+      "source": "While Using",
+      "translated": "사용 중"
+    },
+    {
+      "id": "native.android.41c5e395cda32d82",
+      "source": "Always",
+      "translated": "항상"
+    },
+    {
+      "id": "native.android.448831898efda6c2",
+      "source": "Connecting...",
+      "translated": "연결 중..."
+    },
+    {
+      "id": "native.android.a4f0ff7a2cc989d2",
+      "source": "Pairing needed",
+      "translated": "페어링 필요"
+    },
+    {
+      "id": "native.android.ed5aa7f6cceb466c",
+      "source": "Authentication needed",
+      "translated": "인증 필요"
+    },
+    {
+      "id": "native.android.3c96aa987f267692",
+      "source": "TLS timed out",
+      "translated": "TLS 시간 초과"
+    },
+    {
+      "id": "native.android.0eef5fbe3a7c83b3",
+      "source": "No TLS endpoint",
+      "translated": "TLS 엔드포인트 없음"
+    },
+    {
+      "id": "native.android.0273578a6d9e3a48",
+      "source": "Certificate review needed",
+      "translated": "인증서 검토 필요"
+    },
+    {
+      "id": "native.android.9256c686d6616406",
+      "source": "Cannot reach gateway",
+      "translated": "Gateway에 연결할 수 없음"
     },
     {
       "id": "native.android.2df2dec704f91977",
@@ -2869,9 +4659,19 @@
       "translated": "Android용 OpenClaw."
     },
     {
-      "id": "native.android.d744d434533ea8ed",
-      "source": "Gateway",
-      "translated": "Gateway"
+      "id": "native.android.38889ec3f682dcf8",
+      "source": "Channel",
+      "translated": "채널"
+    },
+    {
+      "id": "native.android.5f8c1afc83f8d257",
+      "source": "Not connected",
+      "translated": "연결되지 않음"
+    },
+    {
+      "id": "native.android.d4a8fc40010bba61",
+      "source": "Home Gateway",
+      "translated": "홈 Gateway"
     },
     {
       "id": "native.android.ff6f3e4026089be2",
@@ -2879,9 +4679,24 @@
       "translated": "런타임"
     },
     {
+      "id": "native.android.1b1dafe32e0d82d5",
+      "source": "Waiting",
+      "translated": "대기 중"
+    },
+    {
       "id": "native.android.b84ae70dbae95380",
       "source": "Update",
       "translated": "업데이트"
+    },
+    {
+      "id": "native.android.09fd6eeb7a512bda",
+      "source": "Up to date",
+      "translated": "최신 상태"
+    },
+    {
+      "id": "native.android.d673c2de9ea0f22f",
+      "source": "v$it available",
+      "translated": "v$it 사용 가능"
     },
     {
       "id": "native.android.aac3310699b496c8",
@@ -2924,9 +4739,34 @@
       "translated": "${license.title} 열기"
     },
     {
+      "id": "native.android.fca1b9cbf5c56142",
+      "source": "Third-party",
+      "translated": "서드 파티"
+    },
+    {
+      "id": "native.android.ef9b342a4aab8816",
+      "source": "Unknown",
+      "translated": "알 수 없음"
+    },
+    {
+      "id": "native.android.439e402d19bf9327",
+      "source": "Website",
+      "translated": "웹사이트"
+    },
+    {
+      "id": "native.android.4469d5dc439888e0",
+      "source": "Docs",
+      "translated": "문서"
+    },
+    {
+      "id": "native.android.48f872e0c2f668b5",
+      "source": "Allow all the time",
+      "translated": "항상 허용"
+    },
+    {
       "id": "native.android.d66786c625242bbf",
       "source": "Replacing the setup code clears this phone's saved setup credentials and device tokens before reconnecting. This phone may need node capability approval again; continue only when you mean to pair with a fresh gateway setup code.",
-      "translated": "Replacing the setup code clears this phone's saved setup credentials and device tokens before reconnecting. This phone may need node capability approval again; continue only when you mean to pair with a fresh gateway setup code."
+      "translated": "설정 코드를 교체하면 다시 연결하기 전에 이 휴대전화에 저장된 설정 자격 증명과 기기 토큰이 삭제됩니다. 이 휴대전화는 노드 기능 승인이 다시 필요할 수 있습니다. 새로운 Gateway 설정 코드와 페어링하려는 경우에만 계속하세요."
     },
     {
       "id": "native.android.cfffa5b838a65ca4",
@@ -2936,12 +4776,12 @@
     {
       "id": "native.android.5a540761383fa474",
       "source": "OpenClaw turns this phone into a clean mobile command surface for sessions, voice, providers, and Gateway.",
-      "translated": "OpenClaw turns this phone into a clean mobile command surface for sessions, voice, providers, and Gateway."
+      "translated": "OpenClaw는 이 휴대전화를 세션, 음성, 제공업체 및 Gateway를 위한 깔끔한 모바일 명령 인터페이스로 전환합니다."
     },
     {
       "id": "native.android.3a3bea53e6a6ada7",
       "source": "A Gateway update is available. Run the update from the Web UI or CLI when you are ready.",
-      "translated": "A Gateway update is available. Run the update from the Web UI or CLI when you are ready."
+      "translated": "Gateway 업데이트를 사용할 수 있습니다. 준비가 되면 Web UI 또는 CLI에서 업데이트를 실행하세요."
     },
     {
       "id": "native.android.877490cc2551c8b2",
@@ -2959,6 +4799,21 @@
       "translated": "전송 중"
     },
     {
+      "id": "native.android.103b5876b2360e9a",
+      "source": "Allow Once",
+      "translated": "한 번만 허용"
+    },
+    {
+      "id": "native.android.18cf7592a6bcdad1",
+      "source": "Allow Always",
+      "translated": "항상 허용"
+    },
+    {
+      "id": "native.android.d9bab6cdecb78270",
+      "source": "Deny",
+      "translated": "거부"
+    },
+    {
       "id": "native.android.eaa50bee1f61e423",
       "source": "Approval ${notice.approvalId}",
       "translated": "승인 ${notice.approvalId}"
@@ -2974,14 +4829,59 @@
       "translated": "검토"
     },
     {
-      "id": "native.android.1f03bb42f27b48ea",
-      "source": "Issue",
-      "translated": "문제"
+      "id": "native.android.9664ff3f205c25d6",
+      "source": "Open cron job detail",
+      "translated": "cron 작업 세부 정보 열기"
     },
     {
       "id": "native.android.4a583b7a36684ed7",
       "source": "Enabled",
       "translated": "활성화됨"
+    },
+    {
+      "id": "native.android.82bcd86522b51b32",
+      "source": "Status",
+      "translated": "상태"
+    },
+    {
+      "id": "native.android.ce0b19c3f2ef5820",
+      "source": "Schedule",
+      "translated": "일정"
+    },
+    {
+      "id": "native.android.224c5bcaf2e35066",
+      "source": "Next Wake",
+      "translated": "다음 실행"
+    },
+    {
+      "id": "native.android.4c85eb52ed4f4d63",
+      "source": "Last Run",
+      "translated": "마지막 실행"
+    },
+    {
+      "id": "native.android.43eb66401cac4268",
+      "source": "Description",
+      "translated": "설명"
+    },
+    {
+      "id": "native.android.62707c110d1b0a4b",
+      "source": "Schedule Detail",
+      "translated": "일정 상세 정보"
+    },
+    {
+      "id": "native.android.30b935f814ca2ee3",
+      "source": "Session Target",
+      "translated": "세션 대상"
+    },
+    {
+      "id": "native.android.da612de6980c84a9",
+      "source": "Wake Mode",
+      "translated": "깨우기 모드"
+    },
+    {
+      "id": "native.android.8eea75f65e07b1c0",
+      "source": "Delete After Run",
+      "translated": "실행 후 삭제"
     },
     {
       "id": "native.android.1a3b13c02f53120f",
@@ -2994,6 +4894,66 @@
       "translated": "예"
     },
     {
+      "id": "native.android.1b766c420c546466",
+      "source": "Payload",
+      "translated": "페이로드"
+    },
+    {
+      "id": "native.android.58282aefb6124579",
+      "source": "Delivery",
+      "translated": "전달"
+    },
+    {
+      "id": "native.android.c2e2579e8b80384a",
+      "source": "Failure Alert",
+      "translated": "실패 알림"
+    },
+    {
+      "id": "native.android.df7babe2e541f25a",
+      "source": "Created",
+      "translated": "생성됨"
+    },
+    {
+      "id": "native.android.ae016ed0bc2271ce",
+      "source": "Updated",
+      "translated": "업데이트됨"
+    },
+    {
+      "id": "native.android.c60601353771b6e4",
+      "source": "Running Since",
+      "translated": "실행 시작 시각"
+    },
+    {
+      "id": "native.android.8274c54bd5e1dde9",
+      "source": "Last Status",
+      "translated": "최근 상태"
+    },
+    {
+      "id": "native.android.6c5e6f268e5b0e93",
+      "source": "Last Duration",
+      "translated": "최근 실행 시간"
+    },
+    {
+      "id": "native.android.3eab9690ca253a77",
+      "source": "${durationMs}ms",
+      "translated": "${durationMs}ms"
+    },
+    {
+      "id": "native.android.f46a99f8986a2828",
+      "source": "Consecutive Errors",
+      "translated": "연속 오류"
+    },
+    {
+      "id": "native.android.8813791e4f660850",
+      "source": "Consecutive Skips",
+      "translated": "연속 건너뛰기"
+    },
+    {
+      "id": "native.android.a3f239679c5898b2",
+      "source": "Delivery Status",
+      "translated": "전달 상태"
+    },
+    {
       "id": "native.android.4fcad8b85203f5a8",
       "source": "Last Error",
       "translated": "마지막 오류"
@@ -3002,6 +4962,11 @@
       "id": "native.android.369f2775636e8fd4",
       "source": "Delivery Error",
       "translated": "전달 오류"
+    },
+    {
+      "id": "native.android.7c14c084d54623e0",
+      "source": "Copy ${row.title}",
+      "translated": "${row.title} 복사"
     },
     {
       "id": "native.android.d02323bcac09c67f",
@@ -3024,6 +4989,11 @@
       "translated": "기본값"
     },
     {
+      "id": "native.android.f154617fd2233082",
+      "source": "Action Request",
+      "translated": "작업 요청"
+    },
+    {
       "id": "native.android.ca48afdb0328a6f5",
       "source": "Needs attention",
       "translated": "주의 필요"
@@ -3039,14 +5009,99 @@
       "translated": "검토 대기 중"
     },
     {
+      "id": "native.android.e06036f99fb7aa5d",
+      "source": "Node ${nodeId}",
+      "translated": "노드 ${nodeId}"
+    },
+    {
+      "id": "native.android.e79f173a190fca95",
+      "source": "Node",
+      "translated": "노드"
+    },
+    {
+      "id": "native.android.d744d434533ea8ed",
+      "source": "Gateway",
+      "translated": "Gateway"
+    },
+    {
+      "id": "native.android.8f7cb7b5709988af",
+      "source": "Agent ${agentId}",
+      "translated": "에이전트 ${agentId}"
+    },
+    {
+      "id": "native.android.ad8db6bba8b05ee2",
+      "source": "Waiting ${duration}",
+      "translated": "${duration} 대기 중"
+    },
+    {
+      "id": "native.android.7d591006b6884597",
+      "source": "Expires ${duration}",
+      "translated": "${duration} 후 만료"
+    },
+    {
+      "id": "native.android.d47aea365fe8edc5",
+      "source": "soon",
+      "translated": "곧"
+    },
+    {
+      "id": "native.android.af1a7c8d9114beca",
+      "source": "Main",
+      "translated": "메인"
+    },
+    {
+      "id": "native.android.7dc2b8245fe0f92c",
+      "source": "Isolated",
+      "translated": "격리됨"
+    },
+    {
+      "id": "native.android.8a78b5264b380055",
+      "source": "Current",
+      "translated": "현재"
+    },
+    {
       "id": "native.android.98b1e19bdbc1e640",
       "source": "${job.scheduleLabel} · ${formatCronWake(job.nextRunAtMs)} · ${job.promptPreview}",
       "translated": "${job.scheduleLabel} · ${formatCronWake(job.nextRunAtMs)} · ${job.promptPreview}"
     },
     {
+      "id": "native.android.c45aa61a985005d9",
+      "source": "${remaining}% left ${label}",
+      "translated": "${remaining}% 남음 ${label}"
+    },
+    {
+      "id": "native.android.e77cc45a3ce1408e",
+      "source": "No limits reported",
+      "translated": "보고된 제한 없음"
+    },
+    {
+      "id": "native.android.462eb32176ff13ce",
+      "source": "Never",
+      "translated": "안 함"
+    },
+    {
+      "id": "native.android.5d432f00264ca5d7",
+      "source": "Now",
+      "translated": "지금"
+    },
+    {
       "id": "native.android.35d4bc86e9ba395d",
       "source": "Off",
       "translated": "꺼짐"
+    },
+    {
+      "id": "native.android.1f03bb42f27b48ea",
+      "source": "Issue",
+      "translated": "문제"
+    },
+    {
+      "id": "native.android.90b6884eca374677",
+      "source": "Skipped",
+      "translated": "건너뜀"
+    },
+    {
+      "id": "native.android.664db1aad9792c18",
+      "source": "Ready",
+      "translated": "준비됨"
     },
     {
       "id": "native.android.22f3549d0fab271d",
@@ -3071,22 +5126,67 @@
     {
       "id": "native.android.d89f6d465e3e4725",
       "source": "No apps selected. Nothing forwards until you add apps.",
-      "translated": "No apps selected. Nothing forwards until you add apps."
+      "translated": "선택된 앱이 없습니다. 앱을 추가하기 전까지 아무것도 전달되지 않습니다."
     },
     {
-      "id": "native.android.f38672bd0713cb8b",
-      "source": "$selectedCount ${if (selectedCount == 1) \"app\" else \"apps\"} allowed to forward.",
-      "translated": "$selectedCount ${if (selectedCount == 1) \"app\" else \"apps\"} allowed to forward."
+      "id": "native.android.f54c8c9806dd4dd8",
+      "source": "$selectedCount app allowed to forward.",
+      "translated": "$selectedCount개 앱의 전달이 허용되었습니다."
+    },
+    {
+      "id": "native.android.8e14608a3c1402f6",
+      "source": "$selectedCount apps allowed to forward.",
+      "translated": "$selectedCount개 앱의 전달이 허용되었습니다."
     },
     {
       "id": "native.android.eeabea3c662af708",
       "source": "No apps blocked. Apps can forward unless you add blocks.",
-      "translated": "No apps blocked. Apps can forward unless you add blocks."
+      "translated": "차단된 앱이 없습니다. 차단 항목을 추가하지 않으면 앱에서 전달할 수 있습니다."
     },
     {
-      "id": "native.android.8db7e536cf5ffaf4",
-      "source": "$selectedCount ${if (selectedCount == 1) \"app\" else \"apps\"} blocked from forwarding.",
-      "translated": "$selectedCount ${if (selectedCount == 1) \"app\" else \"apps\"} blocked from forwarding."
+      "id": "native.android.1a85928d28ef9cb5",
+      "source": "$selectedCount app blocked from forwarding.",
+      "translated": "$selectedCount개 앱의 전달이 차단되었습니다."
+    },
+    {
+      "id": "native.android.885ff68ccceb5951",
+      "source": "$selectedCount apps blocked from forwarding.",
+      "translated": "$selectedCount개 앱의 전달이 차단되었습니다."
+    },
+    {
+      "id": "native.android.0df1b7be4afd30ae",
+      "source": "Due",
+      "translated": "기한"
+    },
+    {
+      "id": "native.android.2aba2d9099a7012b",
+      "source": "${days}d",
+      "translated": "${days}일"
+    },
+    {
+      "id": "native.android.f735bbd08c3387ad",
+      "source": "${hours}h",
+      "translated": "${hours}시간"
+    },
+    {
+      "id": "native.android.1a1e1ed534d745e7",
+      "source": "${minutes}m",
+      "translated": "${minutes}분"
+    },
+    {
+      "id": "native.android.a1530e72e0309a1f",
+      "source": "Soon",
+      "translated": "곧"
+    },
+    {
+      "id": "native.android.501ccee3476e35ce",
+      "source": "None",
+      "translated": "없음"
+    },
+    {
+      "id": "native.android.bafe2765892cc6fa",
+      "source": "Home",
+      "translated": "홈"
     },
     {
       "id": "native.android.30d8b822fa68d6c4",
@@ -3099,11 +5199,6 @@
       "translated": "개요"
     },
     {
-      "id": "native.android.a5c0f8b3112aa58c",
-      "source": "No recent sessions",
-      "translated": "최근 세션 없음"
-    },
-    {
       "id": "native.android.2e33a4fd5f60b550",
       "source": "Start a chat and your active OpenClaw conversations will appear here.",
       "translated": "채팅을 시작하면 활성 OpenClaw 대화가 여기에 표시됩니다."
@@ -3112,11 +5207,6 @@
       "id": "native.android.85726cfd4207d48a",
       "source": "Start Chat",
       "translated": "채팅 시작"
-    },
-    {
-      "id": "native.android.4f369a09c8731092",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
     },
     {
       "id": "native.android.097cf19d48e09476",
@@ -3131,7 +5221,7 @@
     {
       "id": "native.android.5fb62fa35b740ba6",
       "source": "$agentName is working",
-      "translated": "$agentName is working"
+      "translated": "$agentName 작업 중"
     },
     {
       "id": "native.android.c9a9b5795b73925d",
@@ -3159,11 +5249,6 @@
       "translated": "최근 $sessionCount개"
     },
     {
-      "id": "native.android.16c3425d3a594481",
-      "source": "Sessions",
-      "translated": "세션"
-    },
-    {
       "id": "native.android.9453625738319f06",
       "source": "Cron",
       "translated": "Cron"
@@ -3186,7 +5271,7 @@
     {
       "id": "native.android.b61560e884d5b805",
       "source": "Talk",
-      "translated": "Talk"
+      "translated": "대화"
     },
     {
       "id": "native.android.08e318000994609e",
@@ -3209,6 +5294,36 @@
       "translated": "모두 보기"
     },
     {
+      "id": "native.android.29a2565d51411afe",
+      "source": "Online",
+      "translated": "온라인"
+    },
+    {
+      "id": "native.android.2cfb87c0137347c5",
+      "source": "Healthy",
+      "translated": "정상"
+    },
+    {
+      "id": "native.android.7d20664cef69f900",
+      "source": "Reconnect to continue",
+      "translated": "계속하려면 다시 연결하세요"
+    },
+    {
+      "id": "native.android.175b10f40886ffdc",
+      "source": "Review highlighted items",
+      "translated": "강조 표시된 항목을 검토하세요"
+    },
+    {
+      "id": "native.android.6fbe8c6b61098a1c",
+      "source": "All systems nominal",
+      "translated": "모든 시스템이 정상입니다"
+    },
+    {
+      "id": "native.android.84393969369585aa",
+      "source": "Nodes",
+      "translated": "노드"
+    },
+    {
       "id": "native.android.c6943c0abb7897a6",
       "source": "$onlineNodes/$nodeCount",
       "translated": "$onlineNodes/$nodeCount"
@@ -3219,14 +5334,34 @@
       "translated": "없음"
     },
     {
+      "id": "native.android.f92afe2dd7fd51a6",
+      "source": "Review node access",
+      "translated": "노드 액세스를 검토하세요"
+    },
+    {
       "id": "native.android.70c2bdc593d2259b",
       "source": "${nodeOnlinePercent(onlineNodes = onlineNodes, nodeCount = nodeCount)}% online",
-      "translated": "${nodeOnlinePercent(onlineNodes = onlineNodes, nodeCount = nodeCount)}% online"
+      "translated": "${nodeOnlinePercent(onlineNodes = onlineNodes, nodeCount = nodeCount)}% 온라인"
+    },
+    {
+      "id": "native.android.16c3425d3a594481",
+      "source": "Sessions",
+      "translated": "세션"
+    },
+    {
+      "id": "native.android.a5c0f8b3112aa58c",
+      "source": "No recent sessions",
+      "translated": "최근 세션 없음"
     },
     {
       "id": "native.android.7178756ffe9e4c72",
       "source": "Recent conversations",
       "translated": "최근 대화"
+    },
+    {
+      "id": "native.android.4d83e15de7fa25bf",
+      "source": "Files",
+      "translated": "파일"
     },
     {
       "id": "native.android.cbdaff5e476b7dad",
@@ -3239,19 +5374,59 @@
       "translated": "오프라인"
     },
     {
-      "id": "native.android.1196e848f04a3dc1",
-      "source": "Working · $pendingRunCount active ${pluralize(\"run\", pendingRunCount)}",
-      "translated": "작업 중 · $pendingRunCount개 활성 ${pluralize(\"run\", pendingRunCount)}"
+      "id": "native.android.6b13be9783f8dfd3",
+      "source": "Agent workspace files",
+      "translated": "에이전트 작업 공간 파일"
     },
     {
-      "id": "native.android.f23eab3d31c5e25c",
-      "source": "Needs attention",
-      "translated": "주의 필요"
+      "id": "native.android.c7c3a0d93e5ef438",
+      "source": "Working · 1 active run",
+      "translated": "작업 중 · 활성 실행 1개"
     },
     {
-      "id": "native.android.8452bcda8a619361",
-      "source": "Open ${row.title}",
-      "translated": "${row.title} 열기"
+      "id": "native.android.1ef6db85de3e6fee",
+      "source": "Working · $pendingRunCount active runs",
+      "translated": "작업 중 · 활성 실행 $pendingRunCount개"
+    },
+    {
+      "id": "native.android.2c89da708b12a522",
+      "source": "Monitoring · 1 session",
+      "translated": "모니터링 중 · 세션 1개"
+    },
+    {
+      "id": "native.android.8b6ee382dcb64e1f",
+      "source": "Monitoring · $sessionCount sessions",
+      "translated": "모니터링 중 · 세션 $sessionCount개"
+    },
+    {
+      "id": "native.android.50f3b7af0428311c",
+      "source": "Monitoring · 1 scheduled job",
+      "translated": "모니터링 중 · 예약된 작업 1개"
+    },
+    {
+      "id": "native.android.2e35dbe0b1999368",
+      "source": "Monitoring · $cronJobCount scheduled jobs",
+      "translated": "모니터링 중 · 예약된 작업 $cronJobCount개"
+    },
+    {
+      "id": "native.android.4f369a09c8731092",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.android.b5ee8fce135f41e6",
+      "source": "Connect before chat, voice, and live status.",
+      "translated": "채팅, 음성 및 실시간 상태를 사용하기 전에 연결하세요."
+    },
+    {
+      "id": "native.android.0d57408d7056b08f",
+      "source": "No ready providers",
+      "translated": "준비된 제공자 없음"
+    },
+    {
+      "id": "native.android.d314a926bb159350",
+      "source": "Providers",
+      "translated": "제공자"
     },
     {
       "id": "native.android.a65477861c7203aa",
@@ -3274,44 +5449,184 @@
       "translated": "설정 검색"
     },
     {
-      "id": "native.android.68c6f975e8448995",
+      "id": "native.android.25d9f0e58461a74c",
+      "source": "Gateway",
+      "translated": "Gateway"
+    },
+    {
+      "id": "native.android.d92b623c3bac4963",
+      "source": "Nodes & Devices",
+      "translated": "노드 및 기기"
+    },
+    {
+      "id": "native.android.f8406bfe0922c8dd",
+      "source": "Channels",
+      "translated": "채널"
+    },
+    {
+      "id": "native.android.bd0501eebb4eb59d",
+      "source": "${agents.size} available",
+      "translated": "${agents.size}개 사용 가능"
+    },
+    {
+      "id": "native.android.9967a8ab22348475",
+      "source": "Agents",
+      "translated": "에이전트"
+    },
+    {
+      "id": "native.android.7b1f86aeacad732c",
+      "source": "Load from gateway",
+      "translated": "Gateway에서 불러오기"
+    },
+    {
+      "id": "native.android.c6997ee4400492f6",
+      "source": "Providers & Models",
+      "translated": "제공업체 및 모델"
+    },
+    {
+      "id": "native.android.83425d1d1d4eceaf",
+      "source": "$readyProviderCount ready",
+      "translated": "$readyProviderCount개 준비됨"
+    },
+    {
+      "id": "native.android.7f4a0c978b73faa4",
+      "source": "Availability unknown",
+      "translated": "사용 가능 여부 알 수 없음"
+    },
+    {
+      "id": "native.android.15e967ff698e17ea",
+      "source": "Review readiness",
+      "translated": "준비 상태 검토"
+    },
+    {
+      "id": "native.android.1cc3e1841d66f511",
+      "source": "Approvals",
+      "translated": "승인"
+    },
+    {
+      "id": "native.android.dd2def654c56b026",
+      "source": "Cron Jobs",
+      "translated": "Cron 작업"
+    },
+    {
+      "id": "native.android.20833251ed61ca65",
+      "source": "Usage",
+      "translated": "사용량"
+    },
+    {
+      "id": "native.android.fdbaf04018a5ea5f",
+      "source": "Skills",
+      "translated": "Skills"
+    },
+    {
+      "id": "native.android.18b1a6fcf3884187",
+      "source": "Skill Workshop",
+      "translated": "Skill 워크숍"
+    },
+    {
+      "id": "native.android.8e1e08d9de09b359",
+      "source": "Dreaming",
+      "translated": "꿈꾸는 중"
+    },
+    {
+      "id": "native.android.b2a231c1e0ee0086",
+      "source": "Shell in the agent workspace",
+      "translated": "에이전트 작업 공간의 셸"
+    },
+    {
+      "id": "native.android.b72dfd8536f00045",
+      "source": "Terminal",
+      "translated": "터미널"
+    },
+    {
+      "id": "native.android.345d2424511d2d53",
       "source": "Speaker muted",
       "translated": "스피커 음소거됨"
     },
     {
-      "id": "native.android.2ee6a4bee2bffe2a",
+      "id": "native.android.8a1bf1154936cef1",
       "source": "Speaker on",
       "translated": "스피커 켜짐"
     },
     {
-      "id": "native.android.cd87288a95aa2bf3",
-      "source": "Off",
-      "translated": "꺼짐"
+      "id": "native.android.a68759e4eeaf4b19",
+      "source": "Voice",
+      "translated": "음성"
     },
     {
-      "id": "native.android.e471a3620a50dd42",
+      "id": "native.android.bfebe7c26b84d327",
+      "source": "Canvas",
+      "translated": "캔버스"
+    },
+    {
+      "id": "native.android.4ae991f66d10d78c",
+      "source": "Screen surface",
+      "translated": "화면 영역"
+    },
+    {
+      "id": "native.android.e19ca2940c710960",
+      "source": "Notifications",
+      "translated": "알림"
+    },
+    {
+      "id": "native.android.69b33c2492973ac3",
       "source": "Smart delivery",
       "translated": "스마트 전송"
     },
     {
-      "id": "native.android.e51cc066a8b41880",
+      "id": "native.android.b93e11ff55b87203",
       "source": "Camera enabled",
       "translated": "카메라 활성화됨"
     },
     {
-      "id": "native.android.a6179e3618d40108",
+      "id": "native.android.c373c56a0e1486b9",
       "source": "Locked",
       "translated": "잠김"
     },
     {
+      "id": "native.android.e7499ca59295e3c3",
+      "source": "Phone Capabilities",
+      "translated": "휴대전화 기능"
+    },
+    {
+      "id": "native.android.38ee43bb82b8af81",
+      "source": "Appearance",
+      "translated": "화면 표시"
+    },
+    {
+      "id": "native.android.356003f6a15e6eb1",
+      "source": "About",
+      "translated": "정보"
+    },
+    {
+      "id": "native.android.5d2bf7e56d2f017f",
+      "source": "Version and update",
+      "translated": "버전 및 업데이트"
+    },
+    {
+      "id": "native.android.fd1cba14e18d1191",
+      "source": "Health",
+      "translated": "상태"
+    },
+    {
       "id": "native.android.bbf9d9dc946efe85",
       "source": "Account",
-      "translated": "Account"
+      "translated": "계정"
+    },
+    {
+      "id": "native.android.4dac300b74242a30",
+      "source": "Return to setup",
+      "translated": "설정으로 돌아가기"
+    },
+    {
+      "id": "native.android.9c538b59f20bde8d",
+      "source": "Sign Out",
+      "translated": "로그아웃"
     },
     {
       "id": "native.android.13edbcfbe3598233",
       "source": "Licenses",
-      "translated": "Licenses"
+      "translated": "라이선스"
     },
     {
       "id": "native.android.ca1451df912ed5cf",
@@ -3329,6 +5644,31 @@
       "translated": "Gateway가 연결되지 않음"
     },
     {
+      "id": "native.android.7a28b9e23df446df",
+      "source": "No pending approvals",
+      "translated": "대기 중인 승인이 없습니다"
+    },
+    {
+      "id": "native.android.58692985549506cf",
+      "source": "$count pending",
+      "translated": "$count개 대기 중"
+    },
+    {
+      "id": "native.android.7790ce85e3a0f729",
+      "source": "No scheduled jobs",
+      "translated": "예약된 작업이 없습니다"
+    },
+    {
+      "id": "native.android.768223c29397ac90",
+      "source": "1 scheduled",
+      "translated": "1개 예약됨"
+    },
+    {
+      "id": "native.android.8df56e0a24527c65",
+      "source": "$count scheduled",
+      "translated": "$count개 예약됨"
+    },
+    {
       "id": "native.android.b790e7b89f4b44cc",
       "source": "No provider usage",
       "translated": "공급자 사용량 없음"
@@ -3344,6 +5684,16 @@
       "translated": "공급자 $count개"
     },
     {
+      "id": "native.android.6c241c955cb2d16f",
+      "source": "No skills",
+      "translated": "Skills가 없습니다"
+    },
+    {
+      "id": "native.android.a869a32e5f9a3058",
+      "source": "$ready/${skills.size} ready",
+      "translated": "$ready/${skills.size}개 준비됨"
+    },
+    {
       "id": "native.android.560fea9426127f28",
       "source": "$pending pending",
       "translated": "$pending개 대기 중"
@@ -3352,6 +5702,11 @@
       "id": "native.android.5d6077f3ff6528f8",
       "source": "1 pending",
       "translated": "1개 대기 중"
+    },
+    {
+      "id": "native.android.6e7ff52823c3ff89",
+      "source": "No proposals",
+      "translated": "제안이 없습니다"
     },
     {
       "id": "native.android.c233607d1c8f2b91",
@@ -3374,6 +5729,96 @@
       "translated": "1개 적용됨"
     },
     {
+      "id": "native.android.3f55e7f39f6084e4",
+      "source": "${summary.proposals.size} proposals",
+      "translated": "제안 ${summary.proposals.size}개"
+    },
+    {
+      "id": "native.android.d038f42bfb676950",
+      "source": "${summary.pendingDevices.size} pending",
+      "translated": "${summary.pendingDevices.size}개 대기 중"
+    },
+    {
+      "id": "native.android.890314ede0dd9848",
+      "source": "Node approval pending",
+      "translated": "노드 승인 대기 중"
+    },
+    {
+      "id": "native.android.9b283b01b7ac6470",
+      "source": "$online/${summary.nodes.size} online",
+      "translated": "$online/${summary.nodes.size}개 온라인"
+    },
+    {
+      "id": "native.android.97b973ade2e7b96f",
+      "source": "$devices paired",
+      "translated": "$devices개 페어링됨"
+    },
+    {
+      "id": "native.android.96f9b8b43f567edd",
+      "source": "No devices",
+      "translated": "기기가 없습니다"
+    },
+    {
+      "id": "native.android.b35635829d78f834",
+      "source": "1 issue",
+      "translated": "문제 1개"
+    },
+    {
+      "id": "native.android.4b45109e2ef53141",
+      "source": "$issueCount issues",
+      "translated": "문제 $issueCount개"
+    },
+    {
+      "id": "native.android.7c976c127f498a67",
+      "source": "$connected/${summary.channels.size} connected",
+      "translated": "$connected/${summary.channels.size}개 연결됨"
+    },
+    {
+      "id": "native.android.20c59591880c67a6",
+      "source": "No channels",
+      "translated": "채널이 없습니다"
+    },
+    {
+      "id": "native.android.f23eab3d31c5e25c",
+      "source": "Needs attention",
+      "translated": "주의 필요"
+    },
+    {
+      "id": "native.android.58a7d8145aad5563",
+      "source": "${summary.shortTermCount} waiting",
+      "translated": "${summary.shortTermCount}개 대기 중"
+    },
+    {
+      "id": "native.android.cd87288a95aa2bf3",
+      "source": "Off",
+      "translated": "꺼짐"
+    },
+    {
+      "id": "native.android.ba361ddd6a717896",
+      "source": "Connection",
+      "translated": "연결"
+    },
+    {
+      "id": "native.android.6d7b0a128501c806",
+      "source": "Agents & automation",
+      "translated": "에이전트 및 자동화"
+    },
+    {
+      "id": "native.android.089081d83500e803",
+      "source": "Phone context & privacy",
+      "translated": "휴대전화 컨텍스트 및 개인정보 보호"
+    },
+    {
+      "id": "native.android.2f9065a33f14e7d2",
+      "source": "Profile & device",
+      "translated": "프로필 및 기기"
+    },
+    {
+      "id": "native.android.d02e4bd31a7e1448",
+      "source": "Diagnostics",
+      "translated": "진단"
+    },
+    {
       "id": "native.android.e197964b10ba02ce",
       "source": "OpenClaw mobile",
       "translated": "OpenClaw 모바일"
@@ -3384,14 +5829,79 @@
       "translated": "프로필 열기"
     },
     {
+      "id": "native.android.8452bcda8a619361",
+      "source": "Open ${row.title}",
+      "translated": "${row.title} 열기"
+    },
+    {
+      "id": "native.android.56bd0ad4eb7d0f2e",
+      "source": "now",
+      "translated": "지금"
+    },
+    {
+      "id": "native.android.46363d9a775b4f46",
+      "source": "${minutes}m",
+      "translated": "${minutes}분"
+    },
+    {
+      "id": "native.android.4d91d1f25b481ad7",
+      "source": "${hours}h",
+      "translated": "${hours}시간"
+    },
+    {
+      "id": "native.android.0c07416f9575a1e1",
+      "source": "${days}d",
+      "translated": "${days}일"
+    },
+    {
       "id": "native.android.22d755834386db07",
       "source": "Main session",
       "translated": "기본 세션"
     },
     {
+      "id": "native.android.b1f9c790e2dbac1b",
+      "source": "Online and ready",
+      "translated": "온라인 및 준비됨"
+    },
+    {
+      "id": "native.android.9b74d044976c7bac",
+      "source": "Connecting...",
+      "translated": "연결 중..."
+    },
+    {
+      "id": "native.android.2b6a48a875b5185b",
+      "source": "Waiting for pairing",
+      "translated": "페어링 대기 중"
+    },
+    {
+      "id": "native.android.98c321a94e8955f3",
+      "source": "Authentication needed",
+      "translated": "인증 필요"
+    },
+    {
+      "id": "native.android.db1575c8d12c98cd",
+      "source": "TLS timed out",
+      "translated": "TLS 시간 초과"
+    },
+    {
+      "id": "native.android.28eb55f89255cfb7",
+      "source": "No TLS endpoint",
+      "translated": "TLS 엔드포인트 없음"
+    },
+    {
+      "id": "native.android.aaca9c678a681311",
+      "source": "Certificate review needed",
+      "translated": "인증서 검토 필요"
+    },
+    {
+      "id": "native.android.ca180f1e4dd6f138",
+      "source": "Not connected",
+      "translated": "연결되지 않음"
+    },
+    {
       "id": "native.android.7c6f9feb2c16785f",
       "source": "Skill Workshop",
-      "translated": "Skill Workshop"
+      "translated": "Skill 워크숍"
     },
     {
       "id": "native.android.21c19709950c3f39",
@@ -3419,14 +5929,34 @@
       "translated": "에이전트가 재사용 가능한 스킬 초안을 만들면 일치하는 제안이 여기에 표시됩니다."
     },
     {
-      "id": "native.android.445ab883554e0249",
-      "source": "${action.action.label} proposal?",
-      "translated": "제안을 ${action.action.label}하시겠습니까?"
+      "id": "native.android.5d74393d0de6451f",
+      "source": "Apply proposal?",
+      "translated": "제안을 적용할까요?"
     },
     {
-      "id": "native.android.3b3a3f231ac05371",
-      "source": "This will ${action.action.label.lowercase()} \"${action.title}\" and refresh Skill Workshop state from the gateway.",
-      "translated": "이 작업은 \"${action.title}\"을(를) ${action.action.label.lowercase()}하고 Gateway에서 Skill Workshop 상태를 새로 고칩니다."
+      "id": "native.android.41eb9432f11ea617",
+      "source": "Reject proposal?",
+      "translated": "제안을 거부할까요?"
+    },
+    {
+      "id": "native.android.d25bbd5c31ec4e29",
+      "source": "Quarantine proposal?",
+      "translated": "제안을 격리할까요?"
+    },
+    {
+      "id": "native.android.e4d259cb19615fec",
+      "source": "This will apply \"$proposalTitle\" and refresh Skill Workshop state from the gateway.",
+      "translated": "이 작업은 \"$proposalTitle\"을(를) 적용하고 Gateway에서 Skill Workshop 상태를 새로 고칩니다."
+    },
+    {
+      "id": "native.android.d307cb32b9a0cf3f",
+      "source": "This will reject \"$proposalTitle\" and refresh Skill Workshop state from the gateway.",
+      "translated": "이 작업은 \"$proposalTitle\"을(를) 거부하고 Gateway에서 Skill Workshop 상태를 새로 고칩니다."
+    },
+    {
+      "id": "native.android.2089750e835e174e",
+      "source": "This will quarantine \"$proposalTitle\" and refresh Skill Workshop state from the gateway.",
+      "translated": "이 작업은 \"$proposalTitle\"을(를) 격리하고 Gateway에서 Skill Workshop 상태를 새로 고칩니다."
     },
     {
       "id": "native.android.de53fb795cb7dbea",
@@ -3457,6 +5987,26 @@
       "id": "native.android.f032646f923b66b3",
       "source": "Selected",
       "translated": "선택됨"
+    },
+    {
+      "id": "native.android.8da9062a94c41c45",
+      "source": "Kind",
+      "translated": "종류"
+    },
+    {
+      "id": "native.android.299b7a38a8d5f1a9",
+      "source": "Updated",
+      "translated": "업데이트됨"
+    },
+    {
+      "id": "native.android.8b3b14c6dfb639b8",
+      "source": "Support Files",
+      "translated": "지원 파일"
+    },
+    {
+      "id": "native.android.47c0dca3085f38bf",
+      "source": "Inspect this proposal to load its markdown.",
+      "translated": "이 제안을 검토하여 Markdown을 불러오세요."
     },
     {
       "id": "native.android.cc4d05c30c0dcaa7",
@@ -3504,6 +6054,16 @@
       "translated": "격리"
     },
     {
+      "id": "native.android.61f447004be2510f",
+      "source": "Loading",
+      "translated": "로딩 중"
+    },
+    {
+      "id": "native.android.10bf039a2781c9b3",
+      "source": "All",
+      "translated": "전체"
+    },
+    {
       "id": "native.android.cabcb1f61fa3cd6f",
       "source": "Pending",
       "translated": "대기 중"
@@ -3524,14 +6084,14 @@
       "translated": "거부됨"
     },
     {
-      "id": "native.android.10bf039a2781c9b3",
-      "source": "All",
-      "translated": "전체"
-    },
-    {
       "id": "native.android.6ce9b4b919803618",
       "source": "Default agent",
       "translated": "기본 에이전트"
+    },
+    {
+      "id": "native.android.e04090da68a3251f",
+      "source": "Unknown",
+      "translated": "알 수 없음"
     },
     {
       "id": "native.android.4590ee99228ab55f",
@@ -3539,9 +6099,14 @@
       "translated": "Skills"
     },
     {
-      "id": "native.android.73a666b0a4a0e617",
-      "source": "Installed capabilities available to OpenClaw.",
-      "translated": "OpenClaw에서 사용할 수 있는 설치된 기능입니다."
+      "id": "native.android.d8a2361917591397",
+      "source": "Manage installed skills and add trusted releases from ClawHub.",
+      "translated": "설치된 Skill을 관리하고 ClawHub에서 신뢰할 수 있는 릴리스를 추가하세요."
+    },
+    {
+      "id": "native.android.8d8bafb716f856dd",
+      "source": "Needs Setup",
+      "translated": "설정 필요"
     },
     {
       "id": "native.android.9507bc022dc2e3ed",
@@ -3552,6 +6117,11 @@
       "id": "native.android.7d03a8b47442f3c4",
       "source": "Refreshing",
       "translated": "새로 고치는 중"
+    },
+    {
+      "id": "native.android.c6d0b8c171da5e69",
+      "source": "Skill changes require operator.admin. Reconnect with an admin-capable gateway token.",
+      "translated": "Skill을 변경하려면 operator.admin이 필요합니다. 관리자 권한이 있는 gateway 토큰으로 다시 연결하세요."
     },
     {
       "id": "native.android.73f15da5b2ffdf3c",
@@ -3569,14 +6139,54 @@
       "translated": "Gateway에 설치된 Skills가 여기에 표시됩니다."
     },
     {
-      "id": "native.android.81d900273232ce39",
-      "source": "Inspect installed skill capability and setup state.",
-      "translated": "설치된 Skill 기능 및 설정 상태를 검사하세요."
+      "id": "native.android.193fa2086c682510",
+      "source": "No installed skills match this search.",
+      "translated": "이 검색과 일치하는 설치된 Skill이 없습니다."
     },
     {
-      "id": "native.android.f8ddbaf7e1288598",
-      "source": "Setup",
-      "translated": "설정"
+      "id": "native.android.cf0bc487b537dd04",
+      "source": "Inspect and manage installed skill state.",
+      "translated": "설치된 Skill의 상태를 확인하고 관리하세요."
+    },
+    {
+      "id": "native.android.92e94c3027f3e5ce",
+      "source": "Status",
+      "translated": "상태"
+    },
+    {
+      "id": "native.android.3866fe91a977b21a",
+      "source": "Missing",
+      "translated": "누락됨"
+    },
+    {
+      "id": "native.android.944e0db270dbef5c",
+      "source": "Installed skills",
+      "translated": "설치된 Skill"
+    },
+    {
+      "id": "native.android.47ee8c52e754f17d",
+      "source": "${visibleCount}/${totalCount}",
+      "translated": "${visibleCount}/${totalCount}"
+    },
+    {
+      "id": "native.android.8748f97cadea1632",
+      "source": "Search installed skills",
+      "translated": "설치된 Skill 검색"
+    },
+    {
+      "id": "native.android.e7aa097ca1a41857",
+      "source": "Gateway switch",
+      "translated": "Gateway 스위치"
+    },
+    {
+      "id": "native.android.b37f4ed946baddb5",
+      "source": "Disabled for all agents.",
+      "translated": "모든 에이전트에 대해 비활성화되었습니다."
+    },
+    {
+      "id": "native.android.fd25021f8a754b8b",
+      "source": "Enabled for eligible agents.",
+      "translated": "적격 에이전트에 대해 활성화되었습니다."
     },
     {
       "id": "native.android.28e324e5ddfa47b8",
@@ -3589,9 +6199,204 @@
       "translated": "현재 Skills 상태에서 스킬 세부 정보를 사용할 수 없습니다."
     },
     {
+      "id": "native.android.e99b53e8ac2c5146",
+      "source": "Skill Key",
+      "translated": "Skill 키"
+    },
+    {
+      "id": "native.android.351ea510f68769af",
+      "source": "Display",
+      "translated": "표시"
+    },
+    {
+      "id": "native.android.7ffacd569302fb7d",
+      "source": "Source",
+      "translated": "소스"
+    },
+    {
+      "id": "native.android.72bbf31bf75169eb",
+      "source": "Install Options",
+      "translated": "설치 옵션"
+    },
+    {
       "id": "native.android.3b697df990c29cb3",
       "source": "Description",
       "translated": "설명"
+    },
+    {
+      "id": "native.android.8434f9db55d723b1",
+      "source": "Open skill detail",
+      "translated": "Skill 세부 정보 열기"
+    },
+    {
+      "id": "native.android.b8f2fcd78ea247d5",
+      "source": "Find on ClawHub",
+      "translated": "ClawHub에서 찾기"
+    },
+    {
+      "id": "native.android.51728d0754b4e72b",
+      "source": "Search registry metadata. The Gateway verifies trust again before any download.",
+      "translated": "레지스트리 메타데이터를 검색합니다. Gateway는 다운로드 전에 신뢰성을 다시 확인합니다."
+    },
+    {
+      "id": "native.android.c0ae6db636e9b766",
+      "source": "Search ClawHub",
+      "translated": "ClawHub 검색"
+    },
+    {
+      "id": "native.android.0f030fcf6f4626f2",
+      "source": "Search",
+      "translated": "검색"
+    },
+    {
+      "id": "native.android.d7ce0165b8af0803",
+      "source": "Searching",
+      "translated": "검색 중"
+    },
+    {
+      "id": "native.android.559e047666ce63f8",
+      "source": "Dismiss",
+      "translated": "닫기"
+    },
+    {
+      "id": "native.android.0c00aa53506c3cd3",
+      "source": "Acknowledge Gateway warning and install",
+      "translated": "Gateway 경고를 확인하고 설치"
+    },
+    {
+      "id": "native.android.cc0b71a70901e723",
+      "source": "Version $it",
+      "translated": "Version $it"
+    },
+    {
+      "id": "native.android.4c85b5d888652e61",
+      "source": "Installing",
+      "translated": "Installing"
+    },
+    {
+      "id": "native.android.58e92f6f7ee9a870",
+      "source": "Loading",
+      "translated": "Loading"
+    },
+    {
+      "id": "native.android.e63592576acd892e",
+      "source": "Review",
+      "translated": "Review"
+    },
+    {
+      "id": "native.android.9be29ded6a7097bf",
+      "source": "Review ClawHub skill",
+      "translated": "ClawHub 스킬 검토"
+    },
+    {
+      "id": "native.android.43d6a41fe9988e8b",
+      "source": "Version",
+      "translated": "버전"
+    },
+    {
+      "id": "native.android.71b746307f24c526",
+      "source": "Publisher",
+      "translated": "게시자"
+    },
+    {
+      "id": "native.android.d3da485c52921b9b",
+      "source": "The Gateway will verify this exact release with ClawHub before download. If the release needs explicit risk acknowledgement, Android will show the Gateway warning before retrying.",
+      "translated": "Gateway는 다운로드 전에 ClawHub에서 이 정확한 릴리스를 확인합니다. 릴리스에 명시적인 위험 확인이 필요한 경우, Android는 재시도하기 전에 Gateway 경고를 표시합니다."
+    },
+    {
+      "id": "native.android.e9a00012aa173335",
+      "source": "Verify and install",
+      "translated": "확인 및 설치"
+    },
+    {
+      "id": "native.android.268a3461947b22d3",
+      "source": "Cancel",
+      "translated": "취소"
+    },
+    {
+      "id": "native.android.815c8dab8db8a6c1",
+      "source": "Off",
+      "translated": "꺼짐"
+    },
+    {
+      "id": "native.android.f8ddbaf7e1288598",
+      "source": "Setup",
+      "translated": "설정"
+    },
+    {
+      "id": "native.android.1b1f80fd2e01be65",
+      "source": "Ready",
+      "translated": "준비됨"
+    },
+    {
+      "id": "native.android.54af2bdbbbeb2a73",
+      "source": "Disabled",
+      "translated": "비활성화됨"
+    },
+    {
+      "id": "native.android.4d14c2a9e3eaf321",
+      "source": "Blocked",
+      "translated": "차단됨"
+    },
+    {
+      "id": "native.android.a30361b1cecbd677",
+      "source": "Not available to this agent",
+      "translated": "Not available to this agent"
+    },
+    {
+      "id": "native.android.76249053ea991da2",
+      "source": "Needs setup",
+      "translated": "설정 필요"
+    },
+    {
+      "id": "native.android.897cd727907f3bab",
+      "source": "This skill is disabled on the gateway. Enable it here when the current connection has operator.admin.",
+      "translated": "This skill is disabled on the gateway. Enable it here when the current connection has operator.admin."
+    },
+    {
+      "id": "native.android.9c942aba65c09b84",
+      "source": "This skill is blocked by the gateway allowlist. Allowlist changes stay on desktop or CLI.",
+      "translated": "This skill is blocked by the gateway allowlist. Allowlist changes stay on desktop or CLI."
+    },
+    {
+      "id": "native.android.a30dea20e935158a",
+      "source": "This skill is installed but not available to the current agent. Agent filters stay on desktop or CLI.",
+      "translated": "This skill is installed but not available to the current agent. Agent filters stay on desktop or CLI."
+    },
+    {
+      "id": "native.android.95aa7173d663453f",
+      "source": "This skill is installed but not currently eligible to run. Use desktop or CLI for configuration changes.",
+      "translated": "이 Skills는 설치되어 있지만 현재 실행할 수 없습니다. 구성 변경은 데스크톱 또는 CLI를 사용하세요."
+    },
+    {
+      "id": "native.android.5d931c33b02138fe",
+      "source": "Ready on this gateway. Android can enable or disable it globally; setup and configuration stay on desktop or CLI.",
+      "translated": "Ready on this gateway. Android can enable or disable it globally; setup and configuration stay on desktop or CLI."
+    },
+    {
+      "id": "native.android.ab1f2758d6297a24",
+      "source": "No missing items",
+      "translated": "누락된 항목 없음"
+    },
+    {
+      "id": "native.android.66c55ac8566a9c11",
+      "source": "1 missing item",
+      "translated": "누락된 항목 1개"
+    },
+    {
+      "id": "native.android.56415957f1cf75cf",
+      "source": "$count missing items",
+      "translated": "누락된 항목 $count개"
+    },
+    {
+      "id": "native.android.dd4d03a0a63dfe95",
+      "source": "This skill needs 1 setup item. Android shows what is installed; setup/config changes stay on desktop or CLI.",
+      "translated": "이 Skills에는 설정 항목 1개가 필요합니다. Android에서는 설치된 항목을 확인할 수 있습니다. 설정/구성 변경은 데스크톱 또는 CLI에서만 가능합니다."
+    },
+    {
+      "id": "native.android.bc82778b69fef18f",
+      "source": "This skill needs $count setup items. Android shows what is installed; setup/config changes stay on desktop or CLI.",
+      "translated": "이 Skills에는 설정 항목 $count개가 필요합니다. Android에서는 설치된 항목을 확인할 수 있습니다. 설정/구성 변경은 데스크톱 또는 CLI에서만 가능합니다."
     },
     {
       "id": "native.android.d4839a05fe9c87f6",
@@ -3644,9 +6449,9 @@
       "translated": "에이전트 워크스페이스에서 셸을 열려면 gateway에 연결하세요."
     },
     {
-      "id": "native.android.5e0524a5d86e673a",
-      "source": "Dictation",
-      "translated": "받아쓰기"
+      "id": "native.android.0dc79cebfa3efb37",
+      "source": "Your voice command center.",
+      "translated": "음성 명령 센터입니다."
     },
     {
       "id": "native.android.afda4b6690e194bb",
@@ -3694,24 +6499,19 @@
       "translated": "음성으로 돌아가기"
     },
     {
-      "id": "native.android.3d5d539d6adde13c",
-      "source": "Realtime Talk",
-      "translated": "실시간 대화"
-    },
-    {
       "id": "native.android.9d977253fdcda216",
       "source": "OpenClaw speaking",
-      "translated": "OpenClaw speaking"
+      "translated": "OpenClaw가 말하는 중"
     },
     {
       "id": "native.android.1babfd757bbcfeb4",
       "source": "Realtime voice",
-      "translated": "Realtime voice"
+      "translated": "실시간 음성"
     },
     {
       "id": "native.android.4a273a765eedc369",
       "source": "Connected",
-      "translated": "Connected"
+      "translated": "연결됨"
     },
     {
       "id": "native.android.33ec06cb156adf64",
@@ -3744,9 +6544,9 @@
       "translated": "다음 발화를 듣는 중입니다."
     },
     {
-      "id": "native.android.253debc9d0714dda",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "id": "native.android.fc4b1e885e522179",
+      "source": "Listening response...",
+      "translated": "응답을 듣는 중..."
     },
     {
       "id": "native.android.ece74bf084239d34",
@@ -3769,9 +6569,29 @@
       "translated": "스피커 음소거 해제"
     },
     {
-      "id": "native.android.1493d618a615552d",
-      "source": "End Talk",
-      "translated": "대화 종료"
+      "id": "native.android.2e2b5efe4ca2380a",
+      "source": "OpenClaw is replying",
+      "translated": "OpenClaw가 응답 중입니다"
+    },
+    {
+      "id": "native.android.64731fc46a862f86",
+      "source": "Dictation is listening",
+      "translated": "받아쓰기를 듣는 중입니다"
+    },
+    {
+      "id": "native.android.3d5d539d6adde13c",
+      "source": "Realtime Talk",
+      "translated": "실시간 대화"
+    },
+    {
+      "id": "native.android.13de69e3a8f3e940",
+      "source": "Conversation is live",
+      "translated": "대화가 진행 중입니다"
+    },
+    {
+      "id": "native.android.5e0524a5d86e673a",
+      "source": "Dictation",
+      "translated": "받아쓰기"
     },
     {
       "id": "native.android.13e71be7bb52391b",
@@ -3779,14 +6599,89 @@
       "translated": "받아쓰기 중지"
     },
     {
+      "id": "native.android.55155dac245a912e",
+      "source": "Listening for one turn",
+      "translated": "한 차례의 발화를 듣는 중입니다"
+    },
+    {
+      "id": "native.android.1633edb1aeea869a",
+      "source": "Connect gateway to start",
+      "translated": "시작하려면 Gateway를 연결하세요"
+    },
+    {
+      "id": "native.android.1493d618a615552d",
+      "source": "End Talk",
+      "translated": "대화 종료"
+    },
+    {
+      "id": "native.android.36483c3f44fa57bb",
+      "source": "Set Up Talk",
+      "translated": "대화 설정"
+    },
+    {
+      "id": "native.android.89de503368d75337",
+      "source": "Start Talk",
+      "translated": "대화 시작"
+    },
+    {
+      "id": "native.android.f7c0257bdcd86e1a",
+      "source": "Connect Gateway",
+      "translated": "Gateway 연결"
+    },
+    {
       "id": "native.android.71fa9c845cdb89bd",
       "source": "Voice setup",
       "translated": "음성 설정"
     },
     {
+      "id": "native.android.8c28f5ea041bc63d",
+      "source": "Ready",
+      "translated": "준비됨"
+    },
+    {
+      "id": "native.android.4294ae0897891492",
+      "source": "Setup",
+      "translated": "설정"
+    },
+    {
+      "id": "native.android.141feb0f6f50849e",
+      "source": "Attention",
+      "translated": "주의"
+    },
+    {
+      "id": "native.android.21045fcc25e263c1",
+      "source": "Unverified",
+      "translated": "확인되지 않음"
+    },
+    {
+      "id": "native.android.3ff5c1971783c590",
+      "source": "Offline",
+      "translated": "오프라인"
+    },
+    {
+      "id": "native.android.d95742f0d232e1bf",
+      "source": "Talk: ${gatewayTalkSetupDescription(readiness.realtimeTalk)}",
+      "translated": "대화: ${gatewayTalkSetupDescription(readiness.realtimeTalk)}"
+    },
+    {
+      "id": "native.android.00d858440326e55b",
+      "source": "Dictation: ${gatewayTalkSetupDescription(readiness.dictation)}",
+      "translated": "받아쓰기: ${gatewayTalkSetupDescription(readiness.dictation)}"
+    },
+    {
+      "id": "native.android.253debc9d0714dda",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
       "id": "native.android.24057bba4bbfa27a",
       "source": "You",
       "translated": "나"
+    },
+    {
+      "id": "native.android.6d8a4557442e4f2f",
+      "source": "Listening...",
+      "translated": "듣는 중..."
     },
     {
       "id": "native.android.c4423034d764ee3f",
@@ -3817,6 +6712,76 @@
       "id": "native.android.b10a51fe9d4b8d2d",
       "source": "Enable Microphone",
       "translated": "마이크 활성화"
+    },
+    {
+      "id": "native.android.c8bff891c9a442d9",
+      "source": "OpenClaw is speaking",
+      "translated": "OpenClaw가 말하는 중"
+    },
+    {
+      "id": "native.android.248e1292eff12b84",
+      "source": "Talk is live",
+      "translated": "대화가 진행 중"
+    },
+    {
+      "id": "native.android.32d24d76c0a8e8c5",
+      "source": "Sending dictation",
+      "translated": "받아쓰기 전송 중"
+    },
+    {
+      "id": "native.android.2901dc14aa25420c",
+      "source": "Listening",
+      "translated": "듣는 중"
+    },
+    {
+      "id": "native.android.d0dd93e3eb7a6078",
+      "source": "$micQueuedMessages queued",
+      "translated": "$micQueuedMessages개 대기 중"
+    },
+    {
+      "id": "native.android.889631f464ea1184",
+      "source": "Gateway offline",
+      "translated": "Gateway 오프라인"
+    },
+    {
+      "id": "native.android.a29cbd6e0f2ff2f0",
+      "source": "Ready to talk",
+      "translated": "대화 준비 완료"
+    },
+    {
+      "id": "native.android.2201dae0e31a4a37",
+      "source": "Realtime voice provider is not configured.",
+      "translated": "실시간 음성 제공업체가 구성되지 않았습니다."
+    },
+    {
+      "id": "native.android.49a459ce3c7c9328",
+      "source": "Realtime transcription provider is not configured.",
+      "translated": "실시간 음성 인식 제공업체가 구성되지 않았습니다."
+    },
+    {
+      "id": "native.android.df3c36245226e1b7",
+      "source": "Microphone permission is required.",
+      "translated": "마이크 권한이 필요합니다."
+    },
+    {
+      "id": "native.android.d50cb0d8fab6d37d",
+      "source": "Connected and ready",
+      "translated": "연결되었으며 준비됨"
+    },
+    {
+      "id": "native.android.4ba9bb5ab2049a03",
+      "source": "Gateway not connected",
+      "translated": "Gateway가 연결되지 않음"
+    },
+    {
+      "id": "native.android.d50494a6e80589f7",
+      "source": "Connect the gateway to browse workspace files.",
+      "translated": "작업 공간 파일을 탐색하려면 Gateway에 연결하세요."
+    },
+    {
+      "id": "native.android.5ce3b539fb5ded51",
+      "source": "Files",
+      "translated": "파일"
     },
     {
       "id": "native.android.066337249b9d9d30",
@@ -3854,6 +6819,11 @@
       "translated": "${entries.size} / $totalEntries"
     },
     {
+      "id": "native.android.5cd2fdaf5e144d95",
+      "source": "This file cannot be previewed. It may be binary or too large.",
+      "translated": "이 파일은 미리 볼 수 없습니다. 바이너리 파일이거나 너무 클 수 있습니다."
+    },
+    {
       "id": "native.android.b2a525ca00a799df",
       "source": "Back",
       "translated": "뒤로"
@@ -3882,6 +6852,11 @@
       "id": "native.android.cd2033b0a82a72dd",
       "source": "$index.",
       "translated": "$index."
+    },
+    {
+      "id": "native.android.85e10901e14bd3eb",
+      "source": "Image",
+      "translated": "이미지"
     },
     {
       "id": "native.android.bef360f847488651",
@@ -3914,11 +6889,6 @@
       "translated": "복사"
     },
     {
-      "id": "native.android.319b4a29df279bb3",
-      "source": "Select text",
-      "translated": "텍스트 선택"
-    },
-    {
       "id": "native.android.fc50d4d9ec3b5a0b",
       "source": "Share",
       "translated": "공유"
@@ -3927,6 +6897,11 @@
       "id": "native.android.7b896902a024d85f",
       "source": "Reply",
       "translated": "답장"
+    },
+    {
+      "id": "native.android.319b4a29df279bb3",
+      "source": "Select text",
+      "translated": "텍스트 선택"
     },
     {
       "id": "native.android.3f40011c9f02a65a",
@@ -4004,14 +6979,34 @@
       "translated": "... +${toolCalls.size - 6}개 더"
     },
     {
-      "id": "native.android.552a4d6f5110e6a3",
-      "source": "user",
-      "translated": "user"
+      "id": "native.android.4367fbf22b9ac649",
+      "source": "Queued — sends when reconnected",
+      "translated": "대기 중 — 다시 연결되면 전송"
     },
     {
-      "id": "native.android.b3ff30d4e0b3ce58",
-      "source": "You",
-      "translated": "나"
+      "id": "native.android.1cd961d3d9ab8305",
+      "source": "Sending…",
+      "translated": "전송 중…"
+    },
+    {
+      "id": "native.android.074e6050d6e72e66",
+      "source": "Sent — confirming delivery…",
+      "translated": "전송됨 — 전달 확인 중…"
+    },
+    {
+      "id": "native.android.15d71d54c0ce946b",
+      "source": "Failed",
+      "translated": "실패"
+    },
+    {
+      "id": "native.android.6f734a7527ae9c5a",
+      "source": "Failed — $it",
+      "translated": "실패 — $it"
+    },
+    {
+      "id": "native.android.552a4d6f5110e6a3",
+      "source": "user",
+      "translated": "사용자"
     },
     {
       "id": "native.android.10d8391dea9f334b",
@@ -4031,12 +7026,17 @@
     {
       "id": "native.android.5d4f893886312f82",
       "source": "assistant",
-      "translated": "assistant"
+      "translated": "어시스턴트"
     },
     {
       "id": "native.android.dfbd755eb43b4d26",
       "source": "OpenClaw · Live",
       "translated": "OpenClaw · 라이브"
+    },
+    {
+      "id": "native.android.b3ff30d4e0b3ce58",
+      "source": "You",
+      "translated": "나"
     },
     {
       "id": "native.android.d29098025118ce4b",
@@ -4049,9 +7049,19 @@
       "translated": "OpenClaw"
     },
     {
+      "id": "native.android.02b4598277aca860",
+      "source": "Attachment",
+      "translated": "첨부 파일"
+    },
+    {
       "id": "native.android.316927b46135a7ab",
       "source": "Open image preview",
       "translated": "이미지 미리 보기 열기"
+    },
+    {
+      "id": "native.android.4c1408ddaffe7404",
+      "source": "Image preview",
+      "translated": "이미지 미리보기"
     },
     {
       "id": "native.android.7f8cf7bee5cc491f",
@@ -4064,9 +7074,14 @@
       "translated": "지원되지 않는 첨부 파일"
     },
     {
+      "id": "native.android.118e8d239b18895e",
+      "source": "Model",
+      "translated": "모델"
+    },
+    {
       "id": "native.android.794796c2c771a75b",
       "source": "Some shared images were omitted or could not be added.",
-      "translated": "Some shared images were omitted or could not be added."
+      "translated": "일부 공유 이미지가 생략되었거나 추가되지 않았습니다."
     },
     {
       "id": "native.android.22a4efbe2bab8b80",
@@ -4079,14 +7094,19 @@
       "translated": "전체"
     },
     {
-      "id": "native.android.25d8575c0063aee5",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "id": "native.android.4a198e67719b8e83",
+      "source": "Working",
+      "translated": "작업 중"
     },
     {
-      "id": "native.android.4437f3cbdb3c8cbe",
-      "source": "New chat",
-      "translated": "새 채팅"
+      "id": "native.android.74f0531c572d1a9c",
+      "source": "Ready",
+      "translated": "준비됨"
+    },
+    {
+      "id": "native.android.278e466dce078f58",
+      "source": "Offline",
+      "translated": "오프라인"
     },
     {
       "id": "native.android.6b0f8ea129bca167",
@@ -4121,17 +7141,17 @@
     {
       "id": "native.android.569efec44d3ac9f8",
       "source": "Start with a prompt, or use voice.",
-      "translated": "Start with a prompt, or use voice."
+      "translated": "프롬프트로 시작하거나 음성을 사용하세요."
     },
     {
       "id": "native.android.28238225371cf3c3",
       "source": "Use the recovery options below to reconnect.",
-      "translated": "Use the recovery options below to reconnect."
+      "translated": "아래 복구 옵션을 사용하여 다시 연결하세요."
     },
     {
       "id": "native.android.55bd10b5ca2368db",
       "source": "Chat is checking Gateway health.",
-      "translated": "Chat is checking Gateway health."
+      "translated": "채팅에서 Gateway 상태를 확인하고 있습니다."
     },
     {
       "id": "native.android.6bbe3c5b5193d985",
@@ -4142,6 +7162,76 @@
       "id": "native.android.579c05816c7dfa79",
       "source": "Copy diagnostics",
       "translated": "진단 정보 복사"
+    },
+    {
+      "id": "native.android.4396f9672e0878f7",
+      "source": "Catch me up",
+      "translated": "최근 내용 확인"
+    },
+    {
+      "id": "native.android.1e5add56e48c99f9",
+      "source": "Summarize recent sessions and next steps.",
+      "translated": "최근 세션과 다음 단계를 요약합니다."
+    },
+    {
+      "id": "native.android.06d515351bb79576",
+      "source": "Catch me up on my recent OpenClaw sessions and suggest next steps.",
+      "translated": "최근 OpenClaw 세션의 내용을 요약하고 다음 단계를 제안해 주세요."
+    },
+    {
+      "id": "native.android.79f64f0b5ecaa07c",
+      "source": "Plan the work",
+      "translated": "작업 계획 세우기"
+    },
+    {
+      "id": "native.android.370bb9d4a3b9d181",
+      "source": "Turn a goal into an actionable checklist.",
+      "translated": "목표를 실행 가능한 체크리스트로 만듭니다."
+    },
+    {
+      "id": "native.android.99f8a61c8045a41a",
+      "source": "Help me turn this goal into a practical checklist: ",
+      "translated": "이 목표를 실용적인 체크리스트로 만드는 것을 도와주세요: "
+    },
+    {
+      "id": "native.android.9d29c1cf7227e020",
+      "source": "Use this phone",
+      "translated": "이 휴대전화 사용"
+    },
+    {
+      "id": "native.android.1656b8b922a5e3f2",
+      "source": "Ask OpenClaw to use Android capabilities.",
+      "translated": "OpenClaw에 Android 기능 사용을 요청하세요."
+    },
+    {
+      "id": "native.android.04c826e3507eb47e",
+      "source": "What can you help me do from this phone right now?",
+      "translated": "지금 이 휴대전화에서 무엇을 도와줄 수 있어?"
+    },
+    {
+      "id": "native.android.67075c8d2ccc0bb5",
+      "source": "OpenClaw · Live",
+      "translated": "OpenClaw · 라이브"
+    },
+    {
+      "id": "native.android.869f1130ca16bab5",
+      "source": "You",
+      "translated": "나"
+    },
+    {
+      "id": "native.android.345ac1150ada02f3",
+      "source": "System",
+      "translated": "시스템"
+    },
+    {
+      "id": "native.android.25d8575c0063aee5",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.android.e695e7b72d13e9e5",
+      "source": "Attachment",
+      "translated": "첨부 파일"
     },
     {
       "id": "native.android.5aafbef3744d86f3",
@@ -4209,6 +7299,11 @@
       "translated": "명령을 찾을 수 없습니다"
     },
     {
+      "id": "native.android.b1a0dca9f421aaaa",
+      "source": "Command",
+      "translated": "명령"
+    },
+    {
       "id": "native.android.8e3e367df24cae4b",
       "source": "Gateway offline",
       "translated": "Gateway 오프라인"
@@ -4239,14 +7334,29 @@
       "translated": "음성 열기"
     },
     {
+      "id": "native.android.6f4dc5330b262dea",
+      "source": "Voice note · ${formatVoiceNoteDuration(duration)}",
+      "translated": "음성 메시지 · ${formatVoiceNoteDuration(duration)}"
+    },
+    {
       "id": "native.android.5054269049758d6a",
       "source": "Remove attachment",
       "translated": "첨부 파일 제거"
     },
     {
+      "id": "native.android.4437f3cbdb3c8cbe",
+      "source": "New chat",
+      "translated": "새 채팅"
+    },
+    {
       "id": "native.android.5fa853a957713a56",
       "source": "Main",
       "translated": "메인"
+    },
+    {
+      "id": "native.android.73ac058f6d3329a7",
+      "source": "Current",
+      "translated": "현재"
     },
     {
       "id": "native.android.6ef0b7ad012c32da",
@@ -4259,9 +7369,74 @@
       "translated": "보내기"
     },
     {
+      "id": "native.android.fd6f7bd833bc4018",
+      "source": "Chat is still checking Gateway health.",
+      "translated": "채팅에서 아직 Gateway 상태를 확인하고 있습니다."
+    },
+    {
+      "id": "native.android.9c8f89ab0a5cadaf",
+      "source": "Gateway is offline. Fix the connection below or copy diagnostics.",
+      "translated": "Gateway가 오프라인입니다. 아래에서 연결 문제를 해결하거나 진단 정보를 복사하세요."
+    },
+    {
+      "id": "native.android.4e03ec248c0d5428",
+      "source": "Gateway authentication needs attention.",
+      "translated": "Gateway 인증을 확인해야 합니다."
+    },
+    {
+      "id": "native.android.4d756c15804130ff",
+      "source": "Context ${(it * 100).roundToInt()}%",
+      "translated": "컨텍스트 ${(it * 100).roundToInt()}%"
+    },
+    {
+      "id": "native.android.5d9cafb38a925db9",
+      "source": "Context --",
+      "translated": "컨텍스트 --"
+    },
+    {
       "id": "native.android.4e6c67df44d588d3",
       "source": "$contextLabel · ${contextMeterThinkingLabel(thinkingLevel)}",
       "translated": "$contextLabel · ${contextMeterThinkingLabel(thinkingLevel)}"
+    },
+    {
+      "id": "native.android.c83c512c569b1b14",
+      "source": "Off",
+      "translated": "끔"
+    },
+    {
+      "id": "native.android.64d265ba8368ef14",
+      "source": "Minimal",
+      "translated": "최소"
+    },
+    {
+      "id": "native.android.a5417a4ff18559cb",
+      "source": "Low",
+      "translated": "낮음"
+    },
+    {
+      "id": "native.android.ea2fa8cf338c8156",
+      "source": "Medium",
+      "translated": "중간"
+    },
+    {
+      "id": "native.android.78aa878ce86276e7",
+      "source": "High",
+      "translated": "높음"
+    },
+    {
+      "id": "native.android.d55aec3659fa34e5",
+      "source": "Xhigh",
+      "translated": "Xhigh"
+    },
+    {
+      "id": "native.android.fa48678391f78bed",
+      "source": "Adaptive",
+      "translated": "적응형"
+    },
+    {
+      "id": "native.android.3200f8564c25a1fa",
+      "source": "Max",
+      "translated": "최대"
     },
     {
       "id": "native.android.3df4e24a0fc8810b",
@@ -4386,87 +7561,232 @@
     {
       "id": "native.android.7a6a37643fcfb2d9",
       "source": "Accept",
-      "translated": "Accept"
+      "translated": "수락"
     },
     {
       "id": "native.android.969f267b28a69e16",
       "source": "Location",
-      "translated": "Location"
+      "translated": "위치"
     },
     {
-      "id": "native.android.c5e56f0e8af094fb",
+      "id": "native.android.1b90d84b8fbff362",
       "source": "Speaking · waiting for reply",
       "translated": "말하는 중 · 응답 대기 중"
     },
     {
-      "id": "native.android.7228c229ce9f97c6",
+      "id": "native.android.63722e202a33bd02",
       "source": "Speaking…",
       "translated": "말하는 중…"
     },
     {
-      "id": "native.android.6fbf0916309dbaba",
+      "id": "native.android.6105f54c40fb5d38",
+      "source": "Voice request failed",
+      "translated": "음성 요청 실패"
+    },
+    {
+      "id": "native.android.8642938c232cbdb3",
+      "source": "Response aborted",
+      "translated": "응답이 중단되었습니다"
+    },
+    {
+      "id": "native.android.78d7a2ef9ff6d11f",
+      "source": "Microphone permission required",
+      "translated": "마이크 권한이 필요합니다"
+    },
+    {
+      "id": "native.android.1369ecf9bc8adc90",
       "source": "Mic on · waiting for gateway",
       "translated": "마이크 켜짐 · Gateway 대기 중"
     },
     {
-      "id": "native.android.d84c6c14e42763ff",
-      "source": "Mic off",
-      "translated": "마이크 꺼짐"
+      "id": "native.android.43c514df2d2012e5",
+      "source": "Transcription unavailable: $message",
+      "translated": "텍스트 변환을 사용할 수 없습니다: $message"
     },
     {
-      "id": "native.android.9dda2b87d9668a4b",
+      "id": "native.android.ca2190761f679d29",
       "source": "Mic off · sending…",
       "translated": "마이크 꺼짐 · 보내는 중…"
     },
     {
-      "id": "native.android.c802b757f76226d9",
-      "source": "Listening · sending queued voice",
-      "translated": "듣는 중 · 대기 중인 음성 보내는 중"
+      "id": "native.android.fd6e35016b990650",
+      "source": "Mic off",
+      "translated": "마이크 꺼짐"
     },
     {
-      "id": "native.android.01ac388cd8ae0732",
+      "id": "native.android.8dd66e315d86e834",
       "source": "Sending queued voice",
       "translated": "대기 중인 음성 보내는 중"
     },
     {
-      "id": "native.android.a4cd123d7ec88d53",
-      "source": "Voice reply timed out; retrying queued turn",
-      "translated": "Voice reply timed out; retrying queued turn"
+      "id": "native.android.c317e1d35f8cb9ad",
+      "source": "Send failed: Chat failed before the run started; try again.",
+      "translated": "전송 실패: 실행이 시작되기 전에 채팅에 실패했습니다. 다시 시도하세요."
     },
     {
-      "id": "native.android.b4f67e96603515bd",
+      "id": "native.android.16182e30b210812a",
+      "source": "Send failed: $message",
+      "translated": "전송 실패: $message"
+    },
+    {
+      "id": "native.android.a4cd123d7ec88d53",
+      "source": "Voice reply timed out; retrying queued turn",
+      "translated": "음성 응답 시간이 초과되어 대기 중인 요청을 다시 시도합니다."
+    },
+    {
+      "id": "native.android.b5554710cb6f4810",
+      "source": "${queuedMessageCount()} queued · waiting for gateway",
+      "translated": "${queuedMessageCount()}개 대기 중 · Gateway를 기다리는 중"
+    },
+    {
+      "id": "native.android.5397239aae94440e",
+      "source": "Transcription failed: $message",
+      "translated": "텍스트 변환 실패: $message"
+    },
+    {
+      "id": "native.android.04465040125a492a",
+      "source": "Listening · sending queued voice",
+      "translated": "듣는 중 · 대기 중인 음성 보내는 중"
+    },
+    {
+      "id": "native.android.851d1cfc5fa18c66",
+      "source": "Listening · ${queuedMessageCount()} queued",
+      "translated": "듣는 중 · ${queuedMessageCount()}개 대기 중"
+    },
+    {
+      "id": "native.android.f7b1155c15b4ad2a",
       "source": "Listening",
       "translated": "듣는 중"
     },
     {
-      "id": "native.android.b88e4278ead724ba",
+      "id": "native.android.1f198e7aceb8411f",
+      "source": "Speech recognizer unavailable",
+      "translated": "음성 인식기를 사용할 수 없습니다"
+    },
+    {
+      "id": "native.android.0faf9df3e5f708df",
+      "source": "Listening (PTT)",
+      "translated": "듣는 중(PTT)"
+    },
+    {
+      "id": "native.android.47a59f8798682ea0",
       "source": "Ready",
       "translated": "준비됨"
     },
     {
-      "id": "native.android.8d8230088f3baa2a",
+      "id": "native.android.8532cc9537b69224",
+      "source": "Start failed: $message",
+      "translated": "시작 실패: $message"
+    },
+    {
+      "id": "native.android.a9216e087452b75b",
+      "source": "Connecting…",
+      "translated": "연결 중…"
+    },
+    {
+      "id": "native.android.24bc808758b925ca",
       "source": "Off",
       "translated": "꺼짐"
     },
     {
-      "id": "native.android.d6b7f86564ac3147",
+      "id": "native.android.fcd38b57e71b0a44",
       "source": "Talk failed: Realtime provider closed unexpectedly.",
       "translated": "토크 실패: 실시간 제공자가 예기치 않게 닫혔습니다."
     },
     {
-      "id": "native.android.eb6ac739ad55e63a",
+      "id": "native.android.508073ba8ce8dbab",
       "source": "Talk failed: Realtime provider closed: $reason",
       "translated": "토크 실패: 실시간 제공자가 닫혔습니다: $reason"
     },
     {
-      "id": "native.android.13531fe081a45711",
+      "id": "native.android.9f0677f24e9dcd77",
+      "source": "Thinking…",
+      "translated": "생각 중…"
+    },
+    {
+      "id": "native.android.e4d0911aa66a7d0a",
+      "source": "Gateway not connected",
+      "translated": "Gateway가 연결되지 않았습니다"
+    },
+    {
+      "id": "native.android.a052faac05102427",
       "source": "Aborted",
       "translated": "중단됨"
     },
     {
-      "id": "native.android.42af8acef7e61a34",
+      "id": "native.android.d74e945c050d1270",
       "source": "Chat error",
       "translated": "채팅 오류"
+    },
+    {
+      "id": "native.android.0e48d3c2b82ca21f",
+      "source": "No reply",
+      "translated": "응답 없음"
+    },
+    {
+      "id": "native.android.13a84ef8eb52312d",
+      "source": "Talk failed: $message",
+      "translated": "대화 실패: $message"
+    },
+    {
+      "id": "native.android.bd863d5e8979cd79",
+      "source": "Generating voice…",
+      "translated": "음성 생성 중…"
+    },
+    {
+      "id": "native.android.8ad4e794e6404e53",
+      "source": "Speak failed: $message",
+      "translated": "음성 출력 실패: $message"
+    },
+    {
+      "id": "native.android.92409eac33327a8d",
+      "source": "Speaking…",
+      "translated": "말하는 중…"
+    },
+    {
+      "id": "native.android.d1a7db2c16fd6d09",
+      "source": "Microphone permission required",
+      "translated": "마이크 권한이 필요합니다"
+    },
+    {
+      "id": "native.android.e1941bdf45e3b6b5",
+      "source": "Audio error",
+      "translated": "오디오 오류"
+    },
+    {
+      "id": "native.android.d7655b5fb45ee61e",
+      "source": "Client error",
+      "translated": "클라이언트 오류"
+    },
+    {
+      "id": "native.android.82da5b44f8cb2021",
+      "source": "Network error",
+      "translated": "네트워크 오류"
+    },
+    {
+      "id": "native.android.76887f0c344ae1b7",
+      "source": "Network timeout",
+      "translated": "네트워크 시간 초과"
+    },
+    {
+      "id": "native.android.a445b7696f9b431c",
+      "source": "Recognizer busy",
+      "translated": "음성 인식기가 사용 중입니다"
+    },
+    {
+      "id": "native.android.297438db6f5fe8d7",
+      "source": "Server error",
+      "translated": "서버 오류"
+    },
+    {
+      "id": "native.android.7b4dacae0686d138",
+      "source": "Listening",
+      "translated": "듣는 중"
+    },
+    {
+      "id": "native.android.ea5d9621ef0f0482",
+      "source": "Speech error ($error)",
+      "translated": "음성 오류 ($error)"
     },
     {
       "id": "native.android.f392ee2d50d6b7ce",

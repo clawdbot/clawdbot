@@ -1,5 +1,6 @@
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   createPluginRegistryFixture,
   registerVirtualTestPlugin,
@@ -129,8 +130,11 @@ describe("llama.cpp provider plugin", () => {
         nodeLlamaCppImportUrl: expect.stringContaining("node-llama-cpp"),
       },
     );
-    const createdWorkerProvider =
-      await memoryHostEmbeddingMocks.createLocalEmbeddingProvider.mock.results[0].value;
+    const mockResult = expectDefined(
+      memoryHostEmbeddingMocks.createLocalEmbeddingProvider.mock.results[0],
+      "llama.cpp embedding provider result",
+    );
+    const createdWorkerProvider = await mockResult.value;
     expect(createdWorkerProvider.embedBatchInputs).toHaveBeenCalledWith([{ text: "doc" }], {
       signal: abortController.signal,
     });

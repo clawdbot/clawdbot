@@ -1,5 +1,6 @@
 // Browser tests cover server context.existing session plugin behavior.
 import fs from "node:fs";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../test-support/browser-security.mock.js";
 import type { BrowserServerState } from "./server-context.js";
@@ -163,8 +164,12 @@ describe("browser server-context existing-session profile", () => {
   it("reports endpoint cdpUrl for existing-session profiles", async () => {
     fs.mkdirSync("/tmp/brave-profile", { recursive: true });
     const state = makeState();
+    const chromeLiveProfile = expectDefined(
+      state.resolved.profiles["chrome-live"],
+      "chrome-live browser profile",
+    );
     state.resolved.profiles["chrome-live"] = {
-      ...state.resolved.profiles["chrome-live"],
+      ...chromeLiveProfile,
       cdpUrl: "http://openclaw:relay-token@127.0.0.1:9222",
     };
     const ctx = createBrowserRouteContext({ getState: () => state });

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   ensureMemoryIndexSchema,
@@ -26,6 +27,10 @@ import {
 import { bm25RankToScore, buildFtsQuery } from "./src/memory/hybrid.js";
 import { searchKeyword, searchVector } from "./src/memory/manager-search.js";
 import { testing as shortTermTesting } from "./src/short-term-promotion.js";
+
+function requireStateMigration(index: number) {
+  return expectDefined(stateMigrations[index], `Memory Core state migration ${index}`);
+}
 
 function createDoctorContext(env: NodeJS.ProcessEnv): PluginDoctorStateMigrationContext {
   return {
@@ -506,7 +511,7 @@ describe("memory-core doctor dreaming migration", () => {
     );
     await fs.writeFile(lockPath, `${process.pid}:${Date.now()}\n`, "utf8");
 
-    const migration = stateMigrations[0];
+    const migration = requireStateMigration(0);
     const preview = await migration.detectLegacyState(migrationParams());
     expect(preview?.preview).toEqual([
       expect.stringContaining("Memory Core daily ingestion"),
@@ -554,7 +559,7 @@ describe("memory-core doctor dreaming migration", () => {
     const recallPath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
     await fs.writeFile(recallPath, "{", "utf8");
 
-    const result = await stateMigrations[0].migrateLegacyState(migrationParams());
+    const result = await requireStateMigration(0).migrateLegacyState(migrationParams());
 
     expect(result.changes).toEqual([]);
     expect(result.warnings).toEqual([
@@ -596,10 +601,10 @@ describe("memory-core doctor dreaming migration", () => {
     );
     const config = { agents: { list: [{ id: "main", default: true }] } };
 
-    const preview = await stateMigrations[0].detectLegacyState(migrationParams(config));
+    const preview = await requireStateMigration(0).detectLegacyState(migrationParams(config));
     expect(preview?.preview).toEqual([expect.stringContaining("Memory Core short-term recall")]);
 
-    const result = await stateMigrations[0].migrateLegacyState(migrationParams(config));
+    const result = await requireStateMigration(0).migrateLegacyState(migrationParams(config));
 
     expect(result.warnings).toEqual([]);
     expect(result.changes).toEqual([

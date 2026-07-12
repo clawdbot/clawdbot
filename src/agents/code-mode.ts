@@ -1751,4 +1751,3 @@ export const testing = {
     typescriptRuntimeForTest = runtime;
   },
 };
-export { testing as __testing };

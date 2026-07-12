@@ -14,14 +14,149 @@
       "translated": "Śledź Android · $systemLanguageTag"
     },
     {
-      "id": "native.android.d55616e142c8be0f",
+      "id": "native.android.2932b1c5134668df",
+      "source": "Every ${days}d",
+      "translated": "Co ${days} d"
+    },
+    {
+      "id": "native.android.f91f4d5fc72ec899",
+      "source": "Every ${hours}h",
+      "translated": "Co ${hours} godz."
+    },
+    {
+      "id": "native.android.dd20bf10c54bfd4c",
+      "source": "Every ${minutes}m",
+      "translated": "Co ${minutes} min"
+    },
+    {
+      "id": "native.android.06961f1935a54406",
+      "source": "One time",
+      "translated": "Jednorazowo"
+    },
+    {
+      "id": "native.android.ba07a219029a296d",
+      "source": "Repeating",
+      "translated": "Cyklicznie"
+    },
+    {
+      "id": "native.android.c126f6432f03d0f6",
+      "source": "Anchor $it",
+      "translated": "Punkt odniesienia $it"
+    },
+    {
+      "id": "native.android.712fc97e1d1374e0",
+      "source": "Cron",
+      "translated": "Cron"
+    },
+    {
+      "id": "native.android.c6c668a3c52e6a87",
+      "source": "Stagger ${formatCronInterval(it)}",
+      "translated": "Rozłożenie ${formatCronInterval(it)}"
+    },
+    {
+      "id": "native.android.2599e546b1137492",
+      "source": "Scheduled",
+      "translated": "Zaplanowane"
+    },
+    {
+      "id": "native.android.5191b9134f6cf887",
+      "source": "System event",
+      "translated": "Zdarzenie systemowe"
+    },
+    {
+      "id": "native.android.04a0a08556452c5d",
+      "source": "Thinking $it",
+      "translated": "Rozumowanie $it"
+    },
+    {
+      "id": "native.android.126bab8b09bff1eb",
+      "source": "Agent turn",
+      "translated": "Tura agenta"
+    },
+    {
+      "id": "native.android.2cd9aa29e06cf1cc",
+      "source": "Command",
+      "translated": "Polecenie"
+    },
+    {
+      "id": "native.android.09e08fc62e2902fc",
+      "source": "Payload",
+      "translated": "Dane"
+    },
+    {
+      "id": "native.android.558293f80e9044cb",
+      "source": "Account $it",
+      "translated": "Konto $it"
+    },
+    {
+      "id": "native.android.67f2f22fa99358b1",
       "source": "Off",
       "translated": "Wyłączone"
     },
     {
-      "id": "native.android.f59b83f58086eb89",
+      "id": "native.android.f5fa3a841ce8c234",
       "source": "Default",
       "translated": "Domyślne"
+    },
+    {
+      "id": "native.android.4753f0283bee4655",
+      "source": "After $it",
+      "translated": "Po $it"
+    },
+    {
+      "id": "native.android.3c23e33215b71824",
+      "source": "Cooldown ${formatCronInterval(it)}",
+      "translated": "Czas odnowienia ${formatCronInterval(it)}"
+    },
+    {
+      "id": "native.android.5f7cb508dae57216",
+      "source": "On",
+      "translated": "Włączone"
+    },
+    {
+      "id": "native.android.9f31cc0fcf527ed2",
+      "source": "Cron job is not due yet.",
+      "translated": "Termin zadania Cron jeszcze nie nadszedł."
+    },
+    {
+      "id": "native.android.fc2c0e26482b32cd",
+      "source": "Cron job is already running.",
+      "translated": "Zadanie Cron jest już uruchomione."
+    },
+    {
+      "id": "native.android.e1bb423a2260ee6d",
+      "source": "Gateway restart recovery is still in progress.",
+      "translated": "Przywracanie po ponownym uruchomieniu Gateway nadal trwa."
+    },
+    {
+      "id": "native.android.341ad86c38a5d3d5",
+      "source": "Cron job has an invalid configuration.",
+      "translated": "Zadanie Cron ma nieprawidłową konfigurację."
+    },
+    {
+      "id": "native.android.83640045de441512",
+      "source": "Cron scheduler is stopped.",
+      "translated": "Harmonogram Cron jest zatrzymany."
+    },
+    {
+      "id": "native.android.df0b9434fa41904f",
+      "source": "Cron run finished.",
+      "translated": "Uruchomienie Cron zakończone."
+    },
+    {
+      "id": "native.android.c709d0617063c061",
+      "source": "Cron run skipped.",
+      "translated": "Uruchomienie Cron pominięte."
+    },
+    {
+      "id": "native.android.b9f5c536c5a42514",
+      "source": "Cron run failed.",
+      "translated": "Uruchomienie Cron nie powiodło się."
+    },
+    {
+      "id": "native.android.a42d3ae97bf79bbe",
+      "source": "Cron run finished with an unknown status.",
+      "translated": "Uruchomienie Cron zakończone z nieznanym stanem."
     },
     {
       "id": "native.android.d00110fa302427ec",
@@ -89,6 +224,41 @@
       "translated": "Żądanie polecenia"
     },
     {
+      "id": "native.android.0043d9af693fa11c",
+      "source": "Resolution outcome unknown. Actions stay disabled until the Gateway record is verified.",
+      "translated": "Wynik rozstrzygnięcia jest nieznany. Działania pozostaną wyłączone do czasu zweryfikowania rekordu Gateway."
+    },
+    {
+      "id": "native.android.5b1b9deb7e932704",
+      "source": "The Gateway still shows this approval as pending. Review it before trying again.",
+      "translated": "Gateway nadal wyświetla tę prośbę o zatwierdzenie jako oczekującą. Sprawdź ją przed ponowną próbą."
+    },
+    {
+      "id": "native.android.1efe42d7eecb0dd5",
+      "source": "Could not load approval details. Refresh and try again.",
+      "translated": "Nie udało się wczytać szczegółów zatwierdzenia. Odśwież i spróbuj ponownie."
+    },
+    {
+      "id": "native.android.db883a37b47e8abb",
+      "source": "Could not load approvals.",
+      "translated": "Nie udało się wczytać próśb o zatwierdzenie."
+    },
+    {
+      "id": "native.android.0256fa446cf81272",
+      "source": "Could not resolve approval. Refresh and try again.",
+      "translated": "Nie udało się rozstrzygnąć prośby o zatwierdzenie. Odśwież i spróbuj ponownie."
+    },
+    {
+      "id": "native.android.504c6e47f6933bb1",
+      "source": "Realtime Talk",
+      "translated": "Rozmowa w czasie rzeczywistym"
+    },
+    {
+      "id": "native.android.0f9069e182247fba",
+      "source": "Dictation",
+      "translated": "Dyktowanie"
+    },
+    {
       "id": "native.android.805d35da3b3c9d18",
       "source": "Ready",
       "translated": "Gotowe"
@@ -104,57 +274,57 @@
       "translated": "Niezweryfikowane"
     },
     {
-      "id": "native.android.66f091d1fc047eff",
+      "id": "native.android.90241f592c7c1cce",
       "source": "${state.provider.label} via Gateway relay",
       "translated": "${state.provider.label} przez przekaźnik Gateway"
     },
     {
-      "id": "native.android.859f7fec2019b314",
+      "id": "native.android.a24ef3a97a2c8c07",
       "source": "Gateway talk catalog not loaded",
       "translated": "Katalog rozmów Gateway nie został załadowany"
     },
     {
-      "id": "native.android.ecb051798c98537f",
+      "id": "native.android.9c86ef6aed5b3720",
       "source": "Could not load Gateway talk catalog",
       "translated": "Nie udało się załadować katalogu rozmów Gateway"
     },
     {
-      "id": "native.android.95b5551fcb519c1f",
+      "id": "native.android.7ac71cb673d6399e",
       "source": "Gateway did not return ${issue.target.title} setup",
       "translated": "Gateway nie zwrócił konfiguracji ${issue.target.title}"
     },
     {
-      "id": "native.android.328d435e93e9a2b2",
+      "id": "native.android.1349ccf44bb43398",
       "source": "No ${issue.target.title} provider is configured on the Gateway",
       "translated": "Na Gateway nie skonfigurowano dostawcy ${issue.target.title}"
     },
     {
-      "id": "native.android.b3ee0bd7fd90a9e7",
+      "id": "native.android.384d856d68320eb2",
       "source": "Gateway selected unknown provider ${issue.providerId}",
       "translated": "Gateway wybrał nieznanego dostawcę ${issue.providerId}"
     },
     {
-      "id": "native.android.04086b6aed3c2ce5",
+      "id": "native.android.1409da872534c08c",
       "source": "Gateway did not return ${issue.target.title} readiness",
       "translated": "Gateway nie zwrócił gotowości ${issue.target.title}"
     },
     {
-      "id": "native.android.27f61e5f9b33b6f9",
+      "id": "native.android.3ea36b85bb5ae44c",
       "source": "Configure a ${issue.target.title} provider on the Gateway",
       "translated": "Skonfiguruj dostawcę ${issue.target.title} na Gateway"
     },
     {
-      "id": "native.android.e4fe3a325a6d6299",
+      "id": "native.android.f6cec337d1e0980e",
       "source": "Gateway did not identify the active ${issue.target.title} provider",
       "translated": "Gateway nie zidentyfikował aktywnego dostawcy ${issue.target.title}"
     },
     {
-      "id": "native.android.7e6b01f6e7c9bc92",
+      "id": "native.android.8fadd97a13ca7651",
       "source": "Choose a supported ${issue.target.title} provider on the Gateway",
       "translated": "Wybierz obsługiwanego dostawcę ${issue.target.title} na Gateway"
     },
     {
-      "id": "native.android.39bdbc9a546c7f1d",
+      "id": "native.android.394044d0402d59e5",
       "source": "Configure ${issue.providerLabel} on the Gateway",
       "translated": "Skonfiguruj ${issue.providerLabel} na Gateway"
     },
@@ -184,9 +354,29 @@
       "translated": "Wyłączone"
     },
     {
-      "id": "native.android.012c8499137972ad",
-      "source": "Connected",
-      "translated": "Połączono"
+      "id": "native.android.2e6d4e33167ebcbc",
+      "source": "Starting…",
+      "translated": "Uruchamianie…"
+    },
+    {
+      "id": "native.android.25ce6f89dd2fda90",
+      "source": "OpenClaw Node · Talk",
+      "translated": "Węzeł OpenClaw · Rozmowa"
+    },
+    {
+      "id": "native.android.b48f7aeb7a884942",
+      "source": "OpenClaw Node · Connected",
+      "translated": "Węzeł OpenClaw · Połączono"
+    },
+    {
+      "id": "native.android.b781a577d8da896d",
+      "source": "$status · $server",
+      "translated": "$status · $server"
+    },
+    {
+      "id": "native.android.97365bea9725ae80",
+      "source": "OpenClaw Node",
+      "translated": "Węzeł OpenClaw"
     },
     {
       "id": "native.android.3e0889d921c92cab",
@@ -194,9 +384,44 @@
       "translated": "Tryb rozmowy aktywny"
     },
     {
+      "id": "native.android.012c8499137972ad",
+      "source": "Connected",
+      "translated": "Połączono"
+    },
+    {
+      "id": "native.android.b40d5d146f672208",
+      "source": "Connection",
+      "translated": "Połączenie"
+    },
+    {
+      "id": "native.android.f4886ad80e8149cf",
+      "source": "OpenClaw node connection status",
+      "translated": "Stan połączenia węzła OpenClaw"
+    },
+    {
+      "id": "native.android.20fb810920ccb98c",
+      "source": "Disconnect",
+      "translated": "Rozłącz"
+    },
+    {
       "id": "native.android.de9c39aaec621319",
       "source": " · Location: Always",
-      "translated": " · Location: Always"
+      "translated": " · Lokalizacja: Zawsze"
+    },
+    {
+      "id": "native.android.0c609f8079c3f85e",
+      "source": " · Talk: Speaking",
+      "translated": " · Rozmowa: Mówienie"
+    },
+    {
+      "id": "native.android.f5caa5566c5ce529",
+      "source": " · Talk: Listening",
+      "translated": " · Rozmowa: Słuchanie"
+    },
+    {
+      "id": "native.android.397f68fd388f588f",
+      "source": " · Talk: On",
+      "translated": " · Rozmowa: Włączona"
     },
     {
       "id": "native.android.ae88801e6a1b3343",
@@ -234,29 +459,134 @@
       "translated": "Nie udało się rozstrzygnąć zatwierdzenia. Odśwież i spróbuj ponownie."
     },
     {
-      "id": "native.android.c65b61de70a063e7",
-      "source": "Offline",
-      "translated": "Offline"
+      "id": "native.android.5cf2b6b55ea97b67",
+      "source": "Proposal applied.",
+      "translated": "Propozycja została zastosowana."
     },
     {
-      "id": "native.android.fef5049bc20826c7",
+      "id": "native.android.d4c0498763bdeaa4",
+      "source": "apply",
+      "translated": "zastosuj"
+    },
+    {
+      "id": "native.android.97f75ca79fa0a192",
+      "source": "Proposal rejected.",
+      "translated": "Propozycja została odrzucona."
+    },
+    {
+      "id": "native.android.f0da63d1e31367da",
+      "source": "reject",
+      "translated": "odrzuć"
+    },
+    {
+      "id": "native.android.0b51849198bb287d",
+      "source": "Proposal quarantined.",
+      "translated": "Propozycja została poddana kwarantannie."
+    },
+    {
+      "id": "native.android.8f367b0b3c46bff7",
+      "source": "quarantine",
+      "translated": "poddaj kwarantannie"
+    },
+    {
+      "id": "native.android.ff3a8ac599ddcd68",
+      "source": "unknown",
+      "translated": "nieznany"
+    },
+    {
+      "id": "native.android.25ee20a790392299",
+      "source": "Gateway returned status '$statusLabel' after ${action.verb}.",
+      "translated": "Gateway zwrócił status „$statusLabel” po wykonaniu działania ${action.verb}."
+    },
+    {
+      "id": "native.android.6f13a46dc12081ec",
+      "source": "Could not ${action.verb} Skill Workshop proposal.",
+      "translated": "Nie udało się wykonać działania ${action.verb} dla propozycji Skill Workshop."
+    },
+    {
+      "id": "native.android.c11feae0f5f935a2",
+      "source": "Connected (node offline)",
+      "translated": "Połączono (węzeł offline)"
+    },
+    {
+      "id": "native.android.957eecc8ecab1013",
+      "source": "Connected (operator offline)",
+      "translated": "Połączono (operator offline)"
+    },
+    {
+      "id": "native.android.8ffa78a7f6e941c3",
+      "source": "Reconnecting…",
+      "translated": "Ponowne łączenie…"
+    },
+    {
+      "id": "native.android.2199b920f25ba55b",
+      "source": "Connected (operator: $operator)",
+      "translated": "Połączono (operator: $operator)"
+    },
+    {
+      "id": "native.android.5fe7f7afb77851ff",
+      "source": "This cron job already has a queued run.",
+      "translated": "To zadanie cron ma już uruchomienie w kolejce."
+    },
+    {
+      "id": "native.android.1ebef3822941cdb6",
       "source": "Cron job started.",
       "translated": "Zadanie cron uruchomione."
     },
     {
-      "id": "native.android.c39fb6f80dbf6820",
+      "id": "native.android.d8ba5136a17f7618",
       "source": "Cron run queued.",
       "translated": "Uruchomienie cron w kolejce."
     },
     {
-      "id": "native.android.b878b2913410055a",
+      "id": "native.android.9bc7e4ad0b917a5f",
+      "source": "Gateway rejected the cron run.",
+      "translated": "Gateway odrzucił uruchomienie zadania cron."
+    },
+    {
+      "id": "native.android.8a758d2851f3db17",
       "source": "Cron job disabled.",
       "translated": "Zadanie cron wyłączone."
     },
     {
-      "id": "native.android.a45ec59239fbfff0",
+      "id": "native.android.fda9390dc0d4bdea",
       "source": "Cron job enabled.",
       "translated": "Zadanie cron włączone."
+    },
+    {
+      "id": "native.android.a9aa7171558f8412",
+      "source": "This cron job changed on the gateway. Review the latest version before saving again.",
+      "translated": "To zadanie cron zostało zmienione w Gateway. Przed ponownym zapisaniem sprawdź najnowszą wersję."
+    },
+    {
+      "id": "native.android.4562b415164529af",
+      "source": "Cron job updated.",
+      "translated": "Zadanie cron zostało zaktualizowane."
+    },
+    {
+      "id": "native.android.937a9a77deeef115",
+      "source": "Cron job deleted.",
+      "translated": "Zadanie cron zostało usunięte."
+    },
+    {
+      "id": "native.android.9c4af565f4ffe18c",
+      "source": "Node offline. Reconnect and retry.",
+      "translated": "Węzeł offline. Połącz się ponownie i spróbuj jeszcze raz."
+    },
+    {
+      "id": "native.android.735f87cf8bac47c3",
+      "source": "Restore canvas now for session=$sessionKey source=$source. If existing A2UI state exists, replay it immediately. If not, create and render a compact mobile-friendly dashboard in Canvas.",
+      "translated": "Przywróć teraz obszar roboczy dla session=$sessionKey source=$source. Jeśli istnieje stan A2UI, natychmiast go odtwórz. Jeśli nie, utwórz i wyświetl w Canvas kompaktowy pulpit dostosowany do urządzeń mobilnych."
+    },
+    {
+      "id": "native.android.10e2f98677293433",
+      "source": "Failed to request restore. Tap to retry.",
+      "translated": "Nie udało się wysłać żądania przywrócenia. Dotknij, aby spróbować ponownie."
+    },
+    {
+      "id": "native.android.4de14726a5ec0b73",
+      "source": "No canvas update yet. Tap to retry.",
+      "translated": "Brak aktualizacji obszaru roboczego. Dotknij, aby spróbować ponownie."
     },
     {
       "id": "native.android.4b07456682e725d9",
@@ -274,14 +604,359 @@
       "translated": "Niepowodzenie: nie udało się połączyć z bezpiecznym punktem końcowym bramy dla tego hosta."
     },
     {
+      "id": "native.android.4dbc3513ab72309d",
+      "source": "Connecting…",
+      "translated": "Łączenie…"
+    },
+    {
+      "id": "native.android.c65b61de70a063e7",
+      "source": "Offline",
+      "translated": "Offline"
+    },
+    {
+      "id": "native.android.7cd603c40e57e819",
+      "source": "Could not load provider catalog.",
+      "translated": "Nie udało się wczytać katalogu dostawców."
+    },
+    {
       "id": "native.android.b76bb2741d8344d0",
       "source": "Update your Gateway to view provider model config.",
-      "translated": "Update your Gateway to view provider model config."
+      "translated": "Zaktualizuj Gateway, aby wyświetlić konfigurację modelu dostawcy."
     },
     {
       "id": "native.android.711a08905cf3719e",
       "source": "Could not load provider model config.",
-      "translated": "Could not load provider model config."
+      "translated": "Nie udało się wczytać konfiguracji modelu dostawcy."
+    },
+    {
+      "id": "native.android.c8cc73a3406f868a",
+      "source": "Provider models loaded, but readiness is unavailable.",
+      "translated": "Modele dostawców zostały wczytane, ale informacje o gotowości są niedostępne."
+    },
+    {
+      "id": "native.android.0e1e5786e4cfc894",
+      "source": "Could not load cron jobs.",
+      "translated": "Nie udało się wczytać zadań cron."
+    },
+    {
+      "id": "native.android.5288d0e2cd5ab8e6",
+      "source": "Connect the gateway to inspect cron jobs.",
+      "translated": "Połącz Gateway, aby sprawdzić zadania cron."
+    },
+    {
+      "id": "native.android.09ac6b21e791abb2",
+      "source": "Gateway returned an invalid cron job.",
+      "translated": "Gateway zwrócił nieprawidłowe zadanie cron."
+    },
+    {
+      "id": "native.android.db2fbde400d1e692",
+      "source": "Could not load cron job.",
+      "translated": "Nie udało się wczytać zadania cron."
+    },
+    {
+      "id": "native.android.1c986c7849e0094a",
+      "source": "Connect the gateway to inspect cron run history.",
+      "translated": "Połącz Gateway, aby sprawdzić historię uruchomień cron."
+    },
+    {
+      "id": "native.android.5de73d7e34c4dfda",
+      "source": "Could not load cron run history.",
+      "translated": "Nie udało się wczytać historii uruchomień cron."
+    },
+    {
+      "id": "native.android.153ffc5ce4132479",
+      "source": "Cron changes require operator.admin access.",
+      "translated": "Zmiany w cron wymagają dostępu operator.admin."
+    },
+    {
+      "id": "native.android.31b0570face9a32e",
+      "source": "Connect the gateway to manage cron jobs.",
+      "translated": "Połącz Gateway, aby zarządzać zadaniami cron."
+    },
+    {
+      "id": "native.android.c050b799c39b1fd9",
+      "source": "Another cron action is still finishing.",
+      "translated": "Inna operacja cron jest nadal finalizowana."
+    },
+    {
+      "id": "native.android.d299a3ba1dcca005",
+      "source": "Cron action failed.",
+      "translated": "Operacja cron nie powiodła się."
+    },
+    {
+      "id": "native.android.555f025022ffd31e",
+      "source": "Could not load usage.",
+      "translated": "Nie udało się wczytać danych o użyciu."
+    },
+    {
+      "id": "native.android.6be07eadef5dc338",
+      "source": "Could not load skills.",
+      "translated": "Nie udało się wczytać Skills."
+    },
+    {
+      "id": "native.android.2306ae67e02f03e2",
+      "source": "Connect the gateway to update skills.",
+      "translated": "Connect the gateway to update skills."
+    },
+    {
+      "id": "native.android.346d801b434ed54e",
+      "source": "This gateway connection needs operator.admin to update skills.",
+      "translated": "This gateway connection needs operator.admin to update skills."
+    },
+    {
+      "id": "native.android.5c217169593f9ec4",
+      "source": "Could not disable skill.",
+      "translated": "Nie udało się wyłączyć umiejętności."
+    },
+    {
+      "id": "native.android.7cb940fd556fa850",
+      "source": "Could not enable skill.",
+      "translated": "Nie udało się włączyć umiejętności."
+    },
+    {
+      "id": "native.android.bf2cff15c08664b1",
+      "source": "Connect the gateway to search ClawHub skills.",
+      "translated": "Połącz Gateway, aby wyszukiwać Skills w ClawHub."
+    },
+    {
+      "id": "native.android.55c752347d7bfe7b",
+      "source": "Could not search ClawHub skills.",
+      "translated": "Nie udało się wyszukać Skills w ClawHub."
+    },
+    {
+      "id": "native.android.06bb559130390ab4",
+      "source": "Connect the gateway to inspect ClawHub skills.",
+      "translated": "Połącz Gateway, aby przeglądać Skills w ClawHub."
+    },
+    {
+      "id": "native.android.57c31cd4bd7c5146",
+      "source": "ClawHub did not return an installable version for ${skill.slug}.",
+      "translated": "ClawHub nie zwrócił wersji możliwej do zainstalowania dla ${skill.slug}."
+    },
+    {
+      "id": "native.android.ecf82b1ac9d18307",
+      "source": "Could not load ClawHub details for ${skill.slug}.",
+      "translated": "Nie udało się wczytać szczegółów z ClawHub dla ${skill.slug}."
+    },
+    {
+      "id": "native.android.4154579c8cb1c995",
+      "source": "Connect the gateway to install ClawHub skills.",
+      "translated": "Połącz Gateway, aby instalować Skills z ClawHub."
+    },
+    {
+      "id": "native.android.7855f19374e6e747",
+      "source": "This gateway connection needs operator.admin to install ClawHub skills.",
+      "translated": "To połączenie z Gateway wymaga operator.admin, aby instalować Skills z ClawHub."
+    },
+    {
+      "id": "native.android.468b886c0b50dd1c",
+      "source": "Installed $slug.",
+      "translated": "Zainstalowano $slug."
+    },
+    {
+      "id": "native.android.dd89b658efc5d083",
+      "source": "Could not install ${slug} from ClawHub.",
+      "translated": "Nie udało się zainstalować ${slug} z ClawHub."
+    },
+    {
+      "id": "native.android.0786911a50b87f4a",
+      "source": "Connect the gateway to load Skill Workshop proposals.",
+      "translated": "Połącz Gateway, aby wczytać propozycje Skill Workshop."
+    },
+    {
+      "id": "native.android.f21bf3ba9393138c",
+      "source": "Could not load Skill Workshop proposals.",
+      "translated": "Nie udało się wczytać propozycji Skill Workshop."
+    },
+    {
+      "id": "native.android.4258d95ac4c71358",
+      "source": "Connect the gateway to inspect Skill Workshop proposals.",
+      "translated": "Połącz Gateway, aby sprawdzić propozycje Skill Workshop."
+    },
+    {
+      "id": "native.android.4000cb644d8d7fc6",
+      "source": "Could not inspect Skill Workshop proposal.",
+      "translated": "Nie udało się sprawdzić propozycji Skill Workshop."
+    },
+    {
+      "id": "native.android.2f960bbf8caa98ed",
+      "source": "Skill Workshop proposal actions require operator.admin scope.",
+      "translated": "Działania dotyczące propozycji Skill Workshop wymagają zakresu operator.admin."
+    },
+    {
+      "id": "native.android.df0d071809dfbbb3",
+      "source": "Connect the gateway to update Skill Workshop proposals.",
+      "translated": "Połącz Gateway, aby zaktualizować propozycje Skill Workshop."
+    },
+    {
+      "id": "native.android.21445608d791c302",
+      "source": "Connected",
+      "translated": "Połączono"
+    },
+    {
+      "id": "native.android.91700626af4159fc",
+      "source": "Could not load nodes and devices.",
+      "translated": "Nie udało się wczytać węzłów i urządzeń."
+    },
+    {
+      "id": "native.android.00ebd0836caddadc",
+      "source": "Could not load channels.",
+      "translated": "Nie udało się wczytać kanałów."
+    },
+    {
+      "id": "native.android.253220419443162a",
+      "source": "Could not load dreaming.",
+      "translated": "Nie udało się wczytać snów."
+    },
+    {
+      "id": "native.android.dc6373af3f242566",
+      "source": "Could not load gateway logs.",
+      "translated": "Nie udało się wczytać dzienników Gateway."
+    },
+    {
+      "id": "native.android.bb4b5b4138e57b09",
+      "source": "One time",
+      "translated": "Jednorazowo"
+    },
+    {
+      "id": "native.android.1cb8da1d249b824e",
+      "source": "Cron",
+      "translated": "Cron"
+    },
+    {
+      "id": "native.android.93ec522ffce0e8de",
+      "source": "Scheduled",
+      "translated": "Zaplanowane"
+    },
+    {
+      "id": "native.android.979995d6166103ef",
+      "source": "Every ${days}d",
+      "translated": "Co ${days} d"
+    },
+    {
+      "id": "native.android.da237e757e92bb29",
+      "source": "Every ${hours}h",
+      "translated": "Co ${hours} godz."
+    },
+    {
+      "id": "native.android.bc16aa3fa49654f7",
+      "source": "Every ${minutes}m",
+      "translated": "Co ${minutes} min"
+    },
+    {
+      "id": "native.android.ff6dc1c45b5435e5",
+      "source": "Repeating",
+      "translated": "Cykliczne"
+    },
+    {
+      "id": "native.android.4febe6ca10c330e6",
+      "source": "No prompt",
+      "translated": "Brak monitu"
+    },
+    {
+      "id": "native.android.8013a7c99610daca",
+      "source": "Gateway",
+      "translated": "Gateway"
+    },
+    {
+      "id": "native.android.737e77573e6585da",
+      "source": "Connected to $gatewayLabel",
+      "translated": "Połączono z $gatewayLabel"
+    },
+    {
+      "id": "native.android.9a70dd6cc0c3a330",
+      "source": "Your agents are ready",
+      "translated": "Twoi agenci są gotowi"
+    },
+    {
+      "id": "native.android.60de3b33ff352892",
+      "source": "This phone stays dormant until the gateway needs it, then wakes, syncs, and goes back to sleep.",
+      "translated": "Ten telefon pozostaje uśpiony, dopóki Gateway go nie potrzebuje. Następnie wybudza się, synchronizuje i ponownie przechodzi w stan uśpienia."
+    },
+    {
+      "id": "native.android.2084754b53cb36c5",
+      "source": "Selected on this phone",
+      "translated": "Wybrano na tym telefonie"
+    },
+    {
+      "id": "native.android.7b78014fd1841683",
+      "source": "The overview refreshes on reconnect and when this screen opens.",
+      "translated": "Przegląd jest odświeżany po ponownym połączeniu i po otwarciu tego ekranu."
+    },
+    {
+      "id": "native.android.61a2204a50b9ecbc",
+      "source": "Reconnecting",
+      "translated": "Ponowne łączenie"
+    },
+    {
+      "id": "native.android.3b076d12026fd953",
+      "source": "OpenClaw is syncing back up",
+      "translated": "OpenClaw ponownie się synchronizuje"
+    },
+    {
+      "id": "native.android.8dd8abf489f1fe50",
+      "source": "The gateway session is coming back online. Agent shortcuts should settle automatically in a moment.",
+      "translated": "Sesja Gateway wraca do trybu online. Skróty agentów powinny za chwilę automatycznie zacząć działać."
+    },
+    {
+      "id": "native.android.3d11af35277bf8bc",
+      "source": "Gateway session in progress",
+      "translated": "Trwa sesja Gateway"
+    },
+    {
+      "id": "native.android.f6a2d6e675802c25",
+      "source": "If the gateway is reachable, reconnect should complete without intervention.",
+      "translated": "Jeśli Gateway jest osiągalny, ponowne połączenie powinno zakończyć się bez interwencji."
+    },
+    {
+      "id": "native.android.8e22550e0205b237",
+      "source": "Welcome to OpenClaw",
+      "translated": "Witamy w OpenClaw"
+    },
+    {
+      "id": "native.android.fee881b8134958ab",
+      "source": "Your phone stays quiet until it is needed",
+      "translated": "Telefon pozostaje bezczynny, dopóki nie jest potrzebny"
+    },
+    {
+      "id": "native.android.ff59f3b8e9470472",
+      "source": "Pair this device to your gateway to wake it only for real work, keep a live agent overview handy, and avoid battery-draining background loops.",
+      "translated": "Sparuj to urządzenie ze swoim Gateway, aby wybudzać je tylko do rzeczywistych zadań, mieć pod ręką bieżący przegląd agentów i unikać wyczerpujących baterię pętli w tle."
+    },
+    {
+      "id": "native.android.0f97532c2bdf25f2",
+      "source": "Connect to load your agents",
+      "translated": "Połącz, aby wczytać swoich agentów"
+    },
+    {
+      "id": "native.android.c21d18414b901e01",
+      "source": "When connected, the gateway can wake the phone with a silent push instead of holding an always-on session.",
+      "translated": "Po połączeniu Gateway może wybudzać telefon za pomocą cichego powiadomienia push zamiast utrzymywać stale aktywną sesję."
+    },
+    {
+      "id": "native.android.11eddc6b576073f4",
+      "source": "Main",
+      "translated": "Główny"
+    },
+    {
+      "id": "native.android.d49fceb54749fa66",
+      "source": "Active on this phone",
+      "translated": "Aktywny na tym telefonie"
+    },
+    {
+      "id": "native.android.a563551bba424fd0",
+      "source": "Default agent",
+      "translated": "Domyślny agent"
+    },
+    {
+      "id": "native.android.a2588b88d914fa03",
+      "source": "Ready",
+      "translated": "Gotowy"
+    },
+    {
+      "id": "native.android.8c0077a343849f7b",
+      "source": "Dream",
+      "translated": "Sen"
     },
     {
       "id": "native.android.c28c08aed378b051",
@@ -379,6 +1054,81 @@
       "translated": "Zdjęcia"
     },
     {
+      "id": "native.android.600d42f662b49f09",
+      "source": "The Gateway evaluated a different ClawHub release. Review the skill again before installing.",
+      "translated": "Gateway zweryfikował inne wydanie ClawHub. Przed instalacją ponownie sprawdź umiejętność."
+    },
+    {
+      "id": "native.android.64871eb6744363db",
+      "source": "The result for $slug is unknown. Reconnect, refresh Skills, then retry; the Gateway safely joins a matching install that is still running.",
+      "translated": "Wynik dla $slug jest nieznany. Połącz się ponownie, odśwież Skills, a następnie spróbuj ponownie; Gateway bezpiecznie dołączy do zgodnej instalacji, która nadal trwa."
+    },
+    {
+      "id": "native.android.875e63350d705dec",
+      "source": "Wait for the current response to finish before starting a new chat.",
+      "translated": "Przed rozpoczęciem nowego czatu poczekaj na zakończenie bieżącej odpowiedzi."
+    },
+    {
+      "id": "native.android.2c46e20193e2ae90",
+      "source": "Could not update model.",
+      "translated": "Nie udało się zaktualizować modelu."
+    },
+    {
+      "id": "native.android.956a394937480f8a",
+      "source": "Chat failed before the run started; try again.",
+      "translated": "Czat nie powiódł się przed rozpoczęciem działania; spróbuj ponownie."
+    },
+    {
+      "id": "native.android.2db6d419791ce6a7",
+      "source": "Could not stage an attachment for sending.",
+      "translated": "Nie udało się przygotować załącznika do wysłania."
+    },
+    {
+      "id": "native.android.0b29275eefad9863",
+      "source": "Could not queue message for later delivery.",
+      "translated": "Nie udało się dodać wiadomości do kolejki w celu późniejszego dostarczenia."
+    },
+    {
+      "id": "native.android.c3899241029d152c",
+      "source": "Offline queue is full ($OUTBOX_MAX_QUEUED messages); delete queued items first.",
+      "translated": "Kolejka offline jest pełna ($OUTBOX_MAX_QUEUED wiadomości); najpierw usuń elementy z kolejki."
+    },
+    {
+      "id": "native.android.4cf5774e212e307d",
+      "source": "Attachments are too large to queue for one message; remove some and try again.",
+      "translated": "Załączniki są zbyt duże, aby dodać je do kolejki w jednej wiadomości; usuń część z nich i spróbuj ponownie."
+    },
+    {
+      "id": "native.android.d8724124bd4a3719",
+      "source": "Offline attachment storage is full; delete queued items first.",
+      "translated": "Pamięć załączników offline jest pełna; najpierw usuń elementy z kolejki."
+    },
+    {
+      "id": "native.android.84af66e78ec02fa3",
+      "source": "Gateway health not OK; cannot send",
+      "translated": "Stan Gateway nie jest prawidłowy; nie można wysłać"
+    },
+    {
+      "id": "native.android.8c2ff49af3e78aee",
+      "source": "Chat failed",
+      "translated": "Czat nie powiódł się"
+    },
+    {
+      "id": "native.android.e2f245e1995de5e8",
+      "source": "Event stream interrupted; try refreshing.",
+      "translated": "Strumień zdarzeń został przerwany; spróbuj odświeżyć."
+    },
+    {
+      "id": "native.android.2274c6848b1c098b",
+      "source": "Timed out waiting for a reply; try again or refresh.",
+      "translated": "Upłynął limit czasu oczekiwania na odpowiedź; spróbuj ponownie lub odśwież."
+    },
+    {
+      "id": "native.android.96b52209f15b622c",
+      "source": "Timed out confirming the sent message; refresh to check delivery.",
+      "translated": "Upłynął limit czasu potwierdzania wysłanej wiadomości; odśwież, aby sprawdzić dostarczenie."
+    },
+    {
       "id": "native.android.93ecb3b3e1f02b63",
       "source": "Searching…",
       "translated": "Wyszukiwanie…"
@@ -401,12 +1151,22 @@
     {
       "id": "native.android.6aa748e98888623e",
       "source": "NULL (FAILED)",
-      "translated": "NULL (FAILED)"
+      "translated": "NULL (NIEPOWODZENIE)"
     },
     {
-      "id": "native.android.5b17d331b254e403",
-      "source": "Android $release (SDK ${Build.VERSION.SDK_INT})",
-      "translated": "Android $release (SDK ${Build.VERSION.SDK_INT})"
+      "id": "native.android.c9b3801fdf5499a9",
+      "source": "OpenClaw Passive",
+      "translated": "OpenClaw — pasywne"
+    },
+    {
+      "id": "native.android.e2a79a2c3ddba922",
+      "source": "OpenClaw Time Sensitive",
+      "translated": "OpenClaw — pilne"
+    },
+    {
+      "id": "native.android.a79d6ccab877c9ca",
+      "source": "OpenClaw Active",
+      "translated": "OpenClaw — aktywne"
     },
     {
       "id": "native.android.f7a4f3bbcb0b2090",
@@ -439,6 +1199,11 @@
       "translated": "Bieżące wyjście ekranu i interaktywna powierzchnia aplikacji."
     },
     {
+      "id": "native.android.5544c4d24a8b3483",
+      "source": "Connection",
+      "translated": "Połączenie"
+    },
+    {
       "id": "native.android.c4abd4ecd607865f",
       "source": "Offline",
       "translated": "Offline"
@@ -447,6 +1212,16 @@
       "id": "native.android.27c3e59e49776d1a",
       "source": "Online",
       "translated": "Online"
+    },
+    {
+      "id": "native.android.ff3944e9dcb605e1",
+      "source": "Surface",
+      "translated": "Powierzchnia"
+    },
+    {
+      "id": "native.android.4df06826ccc4fe0d",
+      "source": "Bridge",
+      "translated": "Most"
     },
     {
       "id": "native.android.697dc7666c2cd6a3",
@@ -499,14 +1274,19 @@
       "translated": "Otwórz bieżącą powierzchnię Canvas, aby ją sprawdzić lub z nią pracować."
     },
     {
+      "id": "native.android.269dcd676377df1a",
+      "source": "Messaging surfaces connected to this gateway.",
+      "translated": "Powierzchnie komunikacji połączone z tym Gateway."
+    },
+    {
       "id": "native.android.624fec3507aca6ed",
       "source": "Channels",
       "translated": "Kanały"
     },
     {
-      "id": "native.android.269dcd676377df1a",
-      "source": "Messaging surfaces connected to this gateway.",
-      "translated": "Powierzchnie komunikacji połączone z tym Gateway."
+      "id": "native.android.4638c6ee0798273f",
+      "source": "Issues",
+      "translated": "Problemy"
     },
     {
       "id": "native.android.3ae4829888a376e6",
@@ -534,9 +1314,109 @@
       "translated": "Telegram, WhatsApp, e-mail i inne kanały pojawią się tutaj po konfiguracji."
     },
     {
+      "id": "native.android.0031c1ea65aad6ae",
+      "source": "1 account",
+      "translated": "1 konto"
+    },
+    {
+      "id": "native.android.30f46f99bbf2ec8e",
+      "source": "${channel.accountCount} accounts",
+      "translated": "${channel.accountCount} kont"
+    },
+    {
+      "id": "native.android.6f85ccd59e8fa79f",
+      "source": "Linked",
+      "translated": "Połączono"
+    },
+    {
+      "id": "native.android.1f4b67a9bd2364f2",
+      "source": "Configured",
+      "translated": "Skonfigurowano"
+    },
+    {
+      "id": "native.android.87f87c8abff6ee46",
+      "source": "Enabled",
+      "translated": "Włączono"
+    },
+    {
+      "id": "native.android.155ef23cf9921685",
+      "source": "Issue",
+      "translated": "Problem"
+    },
+    {
+      "id": "native.android.57bca1797e58ef47",
+      "source": "Connected",
+      "translated": "Połączono"
+    },
+    {
+      "id": "native.android.9b5a43c29d541249",
+      "source": "Running",
+      "translated": "Uruchomione"
+    },
+    {
+      "id": "native.android.98ba1d9a8dd3e0ff",
+      "source": "Ready",
+      "translated": "Gotowe"
+    },
+    {
+      "id": "native.android.2b037474bc9c053e",
+      "source": "Setup",
+      "translated": "Konfiguracja"
+    },
+    {
+      "id": "native.android.eb763aa2417e4a48",
+      "source": "Off",
+      "translated": "Wyłączone"
+    },
+    {
       "id": "native.android.0015adc34e74003b",
       "source": "Some channel status checks did not complete.",
       "translated": "Niektóre kontrole stanu kanałów nie zostały ukończone."
+    },
+    {
+      "id": "native.android.8998bb0327fda993",
+      "source": "Open Chat",
+      "translated": "Otwórz czat"
+    },
+    {
+      "id": "native.android.7269c7d79d79a8ca",
+      "source": "Start or continue a conversation",
+      "translated": "Rozpocznij lub kontynuuj rozmowę"
+    },
+    {
+      "id": "native.android.8f0d519ac549ce0e",
+      "source": "Start Voice",
+      "translated": "Uruchom tryb głosowy"
+    },
+    {
+      "id": "native.android.5ce94621017855b6",
+      "source": "Talk or dictate with OpenClaw",
+      "translated": "Rozmawiaj lub dyktuj z OpenClaw"
+    },
+    {
+      "id": "native.android.5876e15e5e92fd45",
+      "source": "Browse Sessions",
+      "translated": "Przeglądaj sesje"
+    },
+    {
+      "id": "native.android.9052827e69dafbdc",
+      "source": "Find previous conversations",
+      "translated": "Znajdź poprzednie rozmowy"
+    },
+    {
+      "id": "native.android.3843ddc61e57ad7f",
+      "source": "Providers & Models",
+      "translated": "Dostawcy i modele"
+    },
+    {
+      "id": "native.android.0e9b12f74d72c2fd",
+      "source": "Gateway, voice, notifications, privacy",
+      "translated": "Gateway, głos, powiadomienia, prywatność"
+    },
+    {
+      "id": "native.android.79a7fad0432fd687",
+      "source": "Settings",
+      "translated": "Ustawienia"
     },
     {
       "id": "native.android.3fc6f9784b0d9334",
@@ -599,11 +1479,6 @@
       "translated": "Sesja OpenClaw"
     },
     {
-      "id": "native.android.23321276a6c8e11e",
-      "source": "Open ${row.title}",
-      "translated": "Otwórz ${row.title}"
-    },
-    {
       "id": "native.android.15799e57704b20c6",
       "source": "Open session",
       "translated": "Otwórz sesję"
@@ -634,6 +1509,26 @@
       "translated": "Sesja główna"
     },
     {
+      "id": "native.android.5f06e4d6a59f7a59",
+      "source": "now",
+      "translated": "teraz"
+    },
+    {
+      "id": "native.android.7e5d256de226152e",
+      "source": "${minutes}m",
+      "translated": "${minutes} min"
+    },
+    {
+      "id": "native.android.c584c22ed959206f",
+      "source": "${hours}h",
+      "translated": "${hours} godz."
+    },
+    {
+      "id": "native.android.28416620013afa41",
+      "source": "${days}d",
+      "translated": "${days} d"
+    },
+    {
       "id": "native.android.c4a902430c22030c",
       "source": "Delete",
       "translated": "Usuń"
@@ -656,12 +1551,12 @@
     {
       "id": "native.android.a3fcfa20dc395b87",
       "source": "This job changed while you were editing. Revert to the latest gateway version before saving.",
-      "translated": "This job changed while you were editing. Revert to the latest gateway version before saving."
+      "translated": "To zadanie zmieniło się podczas edycji. Przed zapisaniem przywróć najnowszą wersję z gatewaya."
     },
     {
       "id": "native.android.db9f08d611b4c508",
       "source": "Save or revert your edits before running, enabling, disabling, deleting, or refreshing this job.",
-      "translated": "Save or revert your edits before running, enabling, disabling, deleting, or refreshing this job."
+      "translated": "Przed uruchomieniem, włączeniem, wyłączeniem, usunięciem lub odświeżeniem tego zadania zapisz albo wycofaj zmiany."
     },
     {
       "id": "native.android.212889821e40127e",
@@ -671,7 +1566,17 @@
     {
       "id": "native.android.9f359445f7fb935e",
       "source": "Cron changes require operator.admin. Setup codes intentionally do not grant it. Reconnect with the gateway's shared token or password to request admin access. If this device still lacks it, approve the pending scope upgrade from an existing admin client.",
-      "translated": "Cron changes require operator.admin. Setup codes intentionally do not grant it. Reconnect with the gateway's shared token or password to request admin access. If this device still lacks it, approve the pending scope upgrade from an existing admin client."
+      "translated": "Zmiany Cron wymagają uprawnienia operator.admin. Kody konfiguracji celowo go nie przyznają. Połącz się ponownie przy użyciu współdzielonego tokenu lub hasła gatewaya, aby poprosić o dostęp administratora. Jeśli to urządzenie nadal go nie ma, zatwierdź oczekujące rozszerzenie zakresu z poziomu istniejącego klienta administratora."
+    },
+    {
+      "id": "native.android.011fc7ce7722de6e",
+      "source": "Run Pending",
+      "translated": "Oczekujące uruchomienie"
+    },
+    {
+      "id": "native.android.55424aba605ce8e6",
+      "source": "Run Now",
+      "translated": "Uruchom teraz"
     },
     {
       "id": "native.android.f5ed7396dc317625",
@@ -779,11 +1684,6 @@
       "translated": "Milisekundy"
     },
     {
-      "id": "native.android.4a97c2ca6b3a2ea6",
-      "source": "Interval",
-      "translated": "Interwał"
-    },
-    {
       "id": "native.android.af67797053368f7a",
       "source": "Epoch milliseconds (optional)",
       "translated": "Milisekundy epoki (opcjonalnie)"
@@ -827,11 +1727,6 @@
       "id": "native.android.36ef6b38d936f70f",
       "source": "Command to watch",
       "translated": "Polecenie do monitorowania"
-    },
-    {
-      "id": "native.android.09bb59bcf0c7e009",
-      "source": "Command",
-      "translated": "Polecenie"
     },
     {
       "id": "native.android.cad18710a0fdaa21",
@@ -896,12 +1791,12 @@
     {
       "id": "native.android.da748b7868da4ea7",
       "source": "Command working directory",
-      "translated": "Command working directory"
+      "translated": "Katalog roboczy polecenia"
     },
     {
       "id": "native.android.99955291fac0d844",
       "source": "Command working directory · cannot clear",
-      "translated": "Command working directory · cannot clear"
+      "translated": "Katalog roboczy polecenia · nie można wyczyścić"
     },
     {
       "id": "native.android.00a27842963455a7",
@@ -939,6 +1834,11 @@
       "translated": "Jednorazowo"
     },
     {
+      "id": "native.android.4a97c2ca6b3a2ea6",
+      "source": "Interval",
+      "translated": "Interwał"
+    },
+    {
       "id": "native.android.d8dfc026668cdc81",
       "source": "Cron",
       "translated": "Cron"
@@ -959,6 +1859,61 @@
       "translated": "Tura agenta"
     },
     {
+      "id": "native.android.09bb59bcf0c7e009",
+      "source": "Command",
+      "translated": "Polecenie"
+    },
+    {
+      "id": "native.android.54465889774765e9",
+      "source": "Next heartbeat",
+      "translated": "Następne bicie serca"
+    },
+    {
+      "id": "native.android.7f389415587135b8",
+      "source": "Now",
+      "translated": "Teraz"
+    },
+    {
+      "id": "native.android.d3bcf29a4964cee7",
+      "source": "${durationMs}ms",
+      "translated": "${durationMs} ms"
+    },
+    {
+      "id": "native.android.0ce41ada06508a71",
+      "source": "No details",
+      "translated": "Brak szczegółów"
+    },
+    {
+      "id": "native.android.33cc83b0e765f38b",
+      "source": "Delivered",
+      "translated": "Dostarczono"
+    },
+    {
+      "id": "native.android.e0fb486f32fdb607",
+      "source": "Not delivered",
+      "translated": "Nie dostarczono"
+    },
+    {
+      "id": "native.android.d8fee9cb6d6451eb",
+      "source": "Not requested",
+      "translated": "Nie zażądano"
+    },
+    {
+      "id": "native.android.6e382a00a2840b95",
+      "source": "Issue",
+      "translated": "Problem"
+    },
+    {
+      "id": "native.android.7f526048ce1505f9",
+      "source": "Skipped",
+      "translated": "Pominięto"
+    },
+    {
+      "id": "native.android.2d809753c1f15194",
+      "source": "Unknown",
+      "translated": "Nieznane"
+    },
+    {
       "id": "native.android.b735fb6c7d284ecf",
       "source": "Dreaming",
       "translated": "Śnienie"
@@ -977,6 +1932,26 @@
       "id": "native.android.4f1e1ae70b8be673",
       "source": "On",
       "translated": "Wł."
+    },
+    {
+      "id": "native.android.37683949bcb96f5a",
+      "source": "Status",
+      "translated": "Stan"
+    },
+    {
+      "id": "native.android.f207cfb67b757b61",
+      "source": "Waiting",
+      "translated": "Oczekiwanie"
+    },
+    {
+      "id": "native.android.ef4a58b09d289bfe",
+      "source": "Signals",
+      "translated": "Sygnały"
+    },
+    {
+      "id": "native.android.51aeac3061def720",
+      "source": "Next Cycle",
+      "translated": "Następny cykl"
     },
     {
       "id": "native.android.a0f6d433844d6129",
@@ -1019,6 +1994,11 @@
       "translated": "Wypromowano"
     },
     {
+      "id": "native.android.05291e5e646088dd",
+      "source": "${summary.promotedToday} today · ${summary.promotedTotal} total",
+      "translated": "${summary.promotedToday} dzisiaj · ${summary.promotedTotal} łącznie"
+    },
+    {
       "id": "native.android.76726c57be04cd2a",
       "source": "DIARY",
       "translated": "DZIENNIK"
@@ -1044,6 +2024,41 @@
       "translated": "D"
     },
     {
+      "id": "native.android.3a71763caaad2836",
+      "source": "Not scheduled",
+      "translated": "Nie zaplanowano"
+    },
+    {
+      "id": "native.android.7235a31f619366d7",
+      "source": "In ${hours / 24L}d",
+      "translated": "Za ${hours / 24L} d"
+    },
+    {
+      "id": "native.android.6d537b71bdab7d31",
+      "source": "In ${hours}h",
+      "translated": "Za ${hours} godz."
+    },
+    {
+      "id": "native.android.495254fc942f0972",
+      "source": "In ${deltaMinutes}m",
+      "translated": "Za ${deltaMinutes} min"
+    },
+    {
+      "id": "native.android.343d769a3d426a14",
+      "source": "Soon",
+      "translated": "Wkrótce"
+    },
+    {
+      "id": "native.android.4d4896cbfb0a80fa",
+      "source": "Public gateways require wss:// or Tailscale Serve. ws:// is allowed for localhost, .local hosts, the Android emulator, and private LAN IPs.",
+      "translated": "Publiczne bramy Gateway wymagają wss:// lub Tailscale Serve. Protokół ws:// jest dozwolony dla localhost, hostów .local, emulatora Androida i prywatnych adresów IP w sieci LAN."
+    },
+    {
+      "id": "native.android.1046710b7984a7f2",
+      "source": "Use a private LAN IP for local setup, or enable Tailscale Serve / expose a wss:// gateway URL for remote access.",
+      "translated": "Do konfiguracji lokalnej użyj prywatnego adresu IP w sieci LAN albo włącz Tailscale Serve / udostępnij adres URL bramy Gateway z protokołem wss://, aby umożliwić dostęp zdalny."
+    },
+    {
       "id": "native.android.ff5abe2418979715",
       "source": "${if (tls) \"https\" else \"http\"}://$displayHost",
       "translated": "${if (tls) \"https\" else \"http\"}://$displayHost"
@@ -1054,49 +2069,59 @@
       "translated": "${if (tls) \"https\" else \"http\"}://$displayHost:$port"
     },
     {
-      "id": "native.android.458f8fd9ad7485a7",
+      "id": "native.android.180483eb1b7a4ff1",
       "source": "Setup code points to an insecure remote gateway. $remoteGatewaySecurityRule $remoteGatewaySecurityFix",
       "translated": "Kod konfiguracji wskazuje na niezabezpieczony zdalny Gateway. $remoteGatewaySecurityRule $remoteGatewaySecurityFix"
     },
     {
-      "id": "native.android.1a15475cf8d92de8",
+      "id": "native.android.9504a95ceefca5e8",
       "source": "QR code points to an insecure remote gateway. $remoteGatewaySecurityRule $remoteGatewaySecurityFix",
       "translated": "Kod QR wskazuje na niezabezpieczony zdalny Gateway. $remoteGatewaySecurityRule $remoteGatewaySecurityFix"
     },
     {
-      "id": "native.android.a77d1e3d811ad9d8",
+      "id": "native.android.9373db8f4269091a",
       "source": "$remoteGatewaySecurityRule $remoteGatewaySecurityFix",
       "translated": "$remoteGatewaySecurityRule $remoteGatewaySecurityFix"
     },
     {
-      "id": "native.android.d5230e4551045851",
+      "id": "native.android.84ea70ae0976dca7",
       "source": "Setup code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname.",
       "translated": "Kod konfiguracji używa identyfikatora strefy IPv6. Użyj adresu IPv6 bez zakresu lub nazwy hosta w sieci LAN."
     },
     {
-      "id": "native.android.ca9fc2ce10f4028a",
+      "id": "native.android.1c32685b70f0585d",
       "source": "QR code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname.",
       "translated": "Kod QR używa identyfikatora strefy IPv6. Użyj adresu IPv6 bez zakresu lub nazwy hosta w sieci LAN."
     },
     {
-      "id": "native.android.141236601fece71e",
+      "id": "native.android.b1ab0f426dacc83f",
       "source": "IPv6 zone IDs are not supported. Use an unscoped IPv6 address or a LAN hostname.",
       "translated": "Identyfikatory stref IPv6 nie są obsługiwane. Użyj adresu IPv6 bez zakresu lub nazwy hosta w sieci LAN."
     },
     {
-      "id": "native.android.47e3c19d55f0150b",
+      "id": "native.android.b35f854c0bf08eda",
       "source": "Setup code has invalid gateway URL.",
       "translated": "Kod konfiguracji zawiera nieprawidłowy URL Gateway."
     },
     {
-      "id": "native.android.b0cc3253031d22c2",
+      "id": "native.android.9598911ada12ef86",
       "source": "QR code did not contain a valid setup code.",
       "translated": "Kod QR nie zawierał prawidłowego kodu konfiguracji."
     },
     {
-      "id": "native.android.732f5b59ba7e1513",
+      "id": "native.android.864a4b7e75710d7c",
       "source": "Enter a valid manual endpoint to connect.",
       "translated": "Wprowadź prawidłowy ręczny punkt końcowy, aby się połączyć."
+    },
+    {
+      "id": "native.android.4dcbdbcb459963a7",
+      "source": "Secure connection is required for this host.",
+      "translated": "Ten host wymaga bezpiecznego połączenia."
+    },
+    {
+      "id": "native.android.7208ffa9589c35cd",
+      "source": "Use only on a trusted private network.",
+      "translated": "Używaj tylko w zaufanej sieci prywatnej."
     },
     {
       "id": "native.android.b331b5b54e147e41",
@@ -1164,6 +2189,16 @@
       "translated": "Offline"
     },
     {
+      "id": "native.android.81dd1b93e212709e",
+      "source": "Node",
+      "translated": "Węzeł"
+    },
+    {
+      "id": "native.android.851109d24434028b",
+      "source": "Logs",
+      "translated": "Dzienniki"
+    },
+    {
       "id": "native.android.59602ad037679006",
       "source": "Online",
       "translated": "Online"
@@ -1182,6 +2217,11 @@
       "id": "native.android.2a50ec20cdf08301",
       "source": "Ready",
       "translated": "Gotowe"
+    },
+    {
+      "id": "native.android.472dfa13ca86a53e",
+      "source": "${modelCount.size} available",
+      "translated": "Dostępne: ${modelCount.size}"
     },
     {
       "id": "native.android.327e2c1665be1925",
@@ -1212,6 +2252,26 @@
       "id": "native.android.dd65a0b8f32f1441",
       "source": "Readable gateway log detail.",
       "translated": "Czytelne szczegóły dziennika Gateway."
+    },
+    {
+      "id": "native.android.91d7b283e21c0754",
+      "source": "Time",
+      "translated": "Czas"
+    },
+    {
+      "id": "native.android.7948e8e9449f612e",
+      "source": "Level",
+      "translated": "Poziom"
+    },
+    {
+      "id": "native.android.90f8232c6cf45df6",
+      "source": "Subsystem",
+      "translated": "Podsystem"
+    },
+    {
+      "id": "native.android.be186f89b936f098",
+      "source": "Unknown",
+      "translated": "Nieznany"
     },
     {
       "id": "native.android.27493dc9da0b1868",
@@ -1274,6 +2334,11 @@
       "translated": "Wyświetlany jest najnowszy fragment logu."
     },
     {
+      "id": "native.android.d452c013df653b2c",
+      "source": "Open log entry",
+      "translated": "Otwórz wpis dziennika"
+    },
+    {
       "id": "native.android.7eda627dad7e16cf",
       "source": "Nodes & Devices",
       "translated": "Węzły i urządzenia"
@@ -1282,6 +2347,21 @@
       "id": "native.android.006a92f5811c5406",
       "source": "Live nodes, paired phones, and pending device requests.",
       "translated": "Aktywne węzły, sparowane telefony i oczekujące prośby o urządzenia."
+    },
+    {
+      "id": "native.android.471fe1fa702558d9",
+      "source": "Admin",
+      "translated": "Administrator"
+    },
+    {
+      "id": "native.android.59fc27ac46fc2b0d",
+      "source": "Devices",
+      "translated": "Urządzenia"
+    },
+    {
+      "id": "native.android.78b319a1d3509a69",
+      "source": "Pending",
+      "translated": "Oczekujące"
     },
     {
       "id": "native.android.a14d051ca26b222a",
@@ -1334,6 +2414,11 @@
       "translated": "Sparowane urządzenia"
     },
     {
+      "id": "native.android.f87fa5da40b7f94f",
+      "source": "New device",
+      "translated": "Nowe urządzenie"
+    },
+    {
       "id": "native.android.77935d2df6e42230",
       "source": "Repair",
       "translated": "Napraw"
@@ -1344,9 +2429,14 @@
       "translated": "Sprawdź"
     },
     {
-      "id": "native.android.840e5f49154642c7",
-      "source": "Paired",
-      "translated": "Sparowano"
+      "id": "native.android.36735662df3e8ab2",
+      "source": "Paired device",
+      "translated": "Sparowane urządzenie"
+    },
+    {
+      "id": "native.android.e274308654ddc04b",
+      "source": "Node host",
+      "translated": "Host węzła"
     },
     {
       "id": "native.android.1a2836f275433165",
@@ -1379,9 +2469,124 @@
       "translated": "Online"
     },
     {
+      "id": "native.android.68032afddfa2d73c",
+      "source": "Approved",
+      "translated": "Zatwierdzono"
+    },
+    {
+      "id": "native.android.ceaf359f62be546b",
+      "source": "Capability approval pending",
+      "translated": "Oczekiwanie na zatwierdzenie uprawnienia"
+    },
+    {
+      "id": "native.android.1b35b74545abb942",
+      "source": "Capability reapproval pending",
+      "translated": "Oczekiwanie na ponowne zatwierdzenie uprawnienia"
+    },
+    {
+      "id": "native.android.c64bd62deb02b65d",
+      "source": "Capability unapproved",
+      "translated": "Uprawnienie niezatwierdzone"
+    },
+    {
       "id": "native.android.13024ff403917bfe",
       "source": "This gateway sign-in can list connected nodes, but it cannot approve new phone pairing. Pair new phones from a gateway admin session. Node capability approval is separate and still uses nodes approve <request id>.",
-      "translated": "This gateway sign-in can list connected nodes, but it cannot approve new phone pairing. Pair new phones from a gateway admin session. Node capability approval is separate and still uses nodes approve <request id>."
+      "translated": "To logowanie do Gateway umożliwia wyświetlanie połączonych węzłów, ale nie pozwala zatwierdzać parowania nowych telefonów. Sparuj nowe telefony w sesji administratora Gateway. Zatwierdzanie uprawnień węzła odbywa się osobno i nadal używa polecenia nodes approve <request id>."
+    },
+    {
+      "id": "native.android.0d8e9ede9c229b8e",
+      "source": "requested ${relativeDeviceTime(it)}",
+      "translated": "zażądano ${relativeDeviceTime(it)}"
+    },
+    {
+      "id": "native.android.e573c2962d13c829",
+      "source": "${device.tokens.count { !it.revoked }}/${device.tokens.size} active tokens",
+      "translated": "${device.tokens.count { !it.revoked }}/${device.tokens.size} aktywnych tokenów"
+    },
+    {
+      "id": "native.android.840e5f49154642c7",
+      "source": "Paired",
+      "translated": "Sparowano"
+    },
+    {
+      "id": "native.android.6e40406705689721",
+      "source": "Active",
+      "translated": "Aktywne"
+    },
+    {
+      "id": "native.android.ee0afd7e4a8074ec",
+      "source": "Needs Token",
+      "translated": "Wymaga tokena"
+    },
+    {
+      "id": "native.android.0ffa8e1cf574e81e",
+      "source": "${values.size} roles",
+      "translated": "${values.size} ról"
+    },
+    {
+      "id": "native.android.24380efebf90a9ca",
+      "source": "${values.size} scopes",
+      "translated": "${values.size} zakresów"
+    },
+    {
+      "id": "native.android.6120a22f0f1e479d",
+      "source": "now",
+      "translated": "teraz"
+    },
+    {
+      "id": "native.android.bc1fb9bd72268a5e",
+      "source": "${minutes}m ago",
+      "translated": "${minutes} min temu"
+    },
+    {
+      "id": "native.android.6c9f6e007844d102",
+      "source": "${hours}h ago",
+      "translated": "${hours} godz. temu"
+    },
+    {
+      "id": "native.android.efa6d8a87571fe84",
+      "source": "${days}d ago",
+      "translated": "${days} dni temu"
+    },
+    {
+      "id": "native.android.1556c7b90c4a24ff",
+      "source": "Enter the setup code from openclaw qr.",
+      "translated": "Wprowadź kod konfiguracji z openclaw qr."
+    },
+    {
+      "id": "native.android.c6d2aa9f033cecc8",
+      "source": "Setup code was not accepted. Generate a fresh code with openclaw qr.",
+      "translated": "Kod konfiguracji nie został zaakceptowany. Wygeneruj nowy kod za pomocą openclaw qr."
+    },
+    {
+      "id": "native.android.3c50060d3efc154d",
+      "source": "That QR code is not an OpenClaw setup QR. Generate a fresh code with openclaw qr, then try again.",
+      "translated": "Ten kod QR nie jest kodem konfiguracji OpenClaw. Wygeneruj nowy kod za pomocą openclaw qr, a następnie spróbuj ponownie."
+    },
+    {
+      "id": "native.android.f8cd1cbe29c4c582",
+      "source": "That looks like a setup code. Go back and choose Setup Gateway, then Use setup code.",
+      "translated": "To wygląda jak kod konfiguracji. Wróć i wybierz Skonfiguruj Gateway, a następnie Użyj kodu konfiguracji."
+    },
+    {
+      "id": "native.android.63ed21b4888ba5d3",
+      "source": "Could not read that image. Choose a clear screenshot or image of the QR from openclaw qr.",
+      "translated": "Nie udało się odczytać tego obrazu. Wybierz wyraźny zrzut ekranu lub obraz kodu QR z openclaw qr."
+    },
+    {
+      "id": "native.android.61beaad5c5279eb9",
+      "source": "No setup QR code was found in that image. Choose the QR generated by openclaw qr, or enter the setup code manually.",
+      "translated": "Na tym obrazie nie znaleziono kodu QR konfiguracji. Wybierz kod QR wygenerowany przez openclaw qr lub wprowadź kod konfiguracji ręcznie."
+    },
+    {
+      "id": "native.android.4c4912a456b4213a",
+      "source": "Could not read a QR code from that image. Choose a clearer image or enter the setup code manually.",
+      "translated": "Nie udało się odczytać kodu QR z tego obrazu. Wybierz wyraźniejszy obraz lub wprowadź kod konfiguracji ręcznie."
+    },
+    {
+      "id": "native.android.41eff8a7be20d8d9",
+      "source": "Could not start the camera. Choose a QR image from gallery or enter the setup code manually.",
+      "translated": "Nie udało się uruchomić aparatu. Wybierz obraz kodu QR z galerii lub wprowadź kod konfiguracji ręcznie."
     },
     {
       "id": "native.android.9ac2d4498b17d478",
@@ -1489,9 +2694,14 @@
       "translated": "Przewodnik konfiguracji Androida"
     },
     {
-      "id": "native.android.d514a981f80779e9",
+      "id": "native.android.87e734a42506c768",
       "source": "Setup Gateway",
       "translated": "Skonfiguruj Gateway"
+    },
+    {
+      "id": "native.android.d5c49de281aead61",
+      "source": "Step 1",
+      "translated": "Krok 1"
     },
     {
       "id": "native.android.6a45e2dae35ab5a7",
@@ -1502,6 +2712,11 @@
       "id": "native.android.d4b295b5146af4b8",
       "source": "openclaw gateway",
       "translated": "openclaw gateway"
+    },
+    {
+      "id": "native.android.250b7dda7cff6b5d",
+      "source": "Step 2",
+      "translated": "Krok 2"
     },
     {
       "id": "native.android.c6f9da7008df05a6",
@@ -1574,17 +2789,12 @@
       "translated": "Wklej kod konfiguracji"
     },
     {
-      "id": "native.android.35aec8a97ac12e1c",
-      "source": "Setup code was not accepted",
-      "translated": "Kod konfiguracji nie został zaakceptowany"
-    },
-    {
       "id": "native.android.9aaee5a05de93dbe",
       "source": "Use setup code",
       "translated": "Użyj kodu konfiguracji"
     },
     {
-      "id": "native.android.073c93545602b198",
+      "id": "native.android.1f58a38c5434782d",
       "source": "Manual setup",
       "translated": "Konfiguracja ręczna"
     },
@@ -1659,6 +2869,26 @@
       "translated": "Testuj połączenie"
     },
     {
+      "id": "native.android.35aec8a97ac12e1c",
+      "source": "Setup code was not accepted",
+      "translated": "Kod konfiguracji nie został zaakceptowany"
+    },
+    {
+      "id": "native.android.bff183554a6f7cef",
+      "source": "Your phone is paired with ${recoveryGatewayName(serverName = serverName, attemptedGatewayName = attemptedGatewayName)}. Continue to finish node access.",
+      "translated": "Twój telefon jest sparowany z ${recoveryGatewayName(serverName = serverName, attemptedGatewayName = attemptedGatewayName)}. Kontynuuj, aby dokończyć konfigurowanie dostępu do węzła."
+    },
+    {
+      "id": "native.android.c56e30ec301e49ab",
+      "source": "Gateway paired",
+      "translated": "Gateway sparowany"
+    },
+    {
+      "id": "native.android.bda6c6a9b4b78376",
+      "source": "Pair Gateway",
+      "translated": "Sparuj Gateway"
+    },
+    {
       "id": "native.android.a1c6ad798cdb4e32",
       "source": "View details",
       "translated": "Wyświetl szczegóły"
@@ -1704,12 +2934,12 @@
       "translated": "Użyj requestId z oczekującego polecenia w poleceniu zatwierdzania."
     },
     {
-      "id": "native.android.53bcd45eeb574d74",
+      "id": "native.android.0c2d81ab522c7d65",
       "source": "I have approved",
       "translated": "Zatwierdzono"
     },
     {
-      "id": "native.android.0d4dd8ed358a6fb2",
+      "id": "native.android.ec205ff9768fd7e6",
       "source": "Checking approval…",
       "translated": "Sprawdzanie zatwierdzenia…"
     },
@@ -1739,29 +2969,174 @@
       "translated": "Włączaj tylko taki dostęp, na którego używanie przez OpenClaw podczas połączenia tego telefonu się zgadzasz. Możesz to później zmienić w Ustawieniach Androida."
     },
     {
-      "id": "native.android.d7ea800cc2475013",
-      "source": "Continue",
-      "translated": "Kontynuuj"
-    },
-    {
       "id": "native.android.44549cfd7e6a1ab8",
       "source": "Back",
       "translated": "Wstecz"
     },
     {
-      "id": "native.android.f3f0527db434d756",
+      "id": "native.android.4f47ce320ad8c52c",
       "source": "Permissions",
       "translated": "Uprawnienia"
     },
     {
-      "id": "native.android.bdd063b9f766050b",
-      "source": "Gateway approval is in progress. OpenClaw will retry automatically.",
-      "translated": "Gateway approval is in progress. OpenClaw will retry automatically."
+      "id": "native.android.369d78091d927576",
+      "source": "Connected",
+      "translated": "Połączono"
+    },
+    {
+      "id": "native.android.33b2037eff0c14e3",
+      "source": "Your Gateway is ready.",
+      "translated": "Gateway jest gotowy."
+    },
+    {
+      "id": "native.android.8657187927ecd7f0",
+      "source": "Approve this phone on the gateway.\nThen retry the connection.",
+      "translated": "Zatwierdź ten telefon w Gateway.\nNastępnie ponów próbę połączenia."
+    },
+    {
+      "id": "native.android.0c093704042a7156",
+      "source": "Node Approval Pending",
+      "translated": "Oczekiwanie na zatwierdzenie węzła"
+    },
+    {
+      "id": "native.android.0ce7b49149ccc32c",
+      "source": "Gateway pairing worked.\nApprove this phone's node capabilities from an operator UI.",
+      "translated": "Parowanie z Gateway powiodło się.\nZatwierdź uprawnienia węzła tego telefonu w interfejsie operatora."
+    },
+    {
+      "id": "native.android.8bc6322fa0f20d3e",
+      "source": "Pairing Gateway",
+      "translated": "Parowanie z Gateway"
+    },
+    {
+      "id": "native.android.176b4f5d1c9f8ce2",
+      "source": "Approval is in progress.\nOpenClaw will reconnect automatically.",
+      "translated": "Trwa zatwierdzanie.\nOpenClaw automatycznie połączy się ponownie."
+    },
+    {
+      "id": "native.android.466e3fb210732587",
+      "source": "Connecting Gateway",
+      "translated": "Łączenie z Gateway"
+    },
+    {
+      "id": "native.android.7b95b9e103bbbb92",
+      "source": "OpenClaw is checking gateway and node access.",
+      "translated": "OpenClaw sprawdza dostęp do Gateway i węzła."
+    },
+    {
+      "id": "native.android.a75fc5ca269cbb15",
+      "source": "Still connecting",
+      "translated": "Nadal trwa łączenie"
+    },
+    {
+      "id": "native.android.c8848e9b1c6646af",
+      "source": "This is taking longer than expected.\nCheck that the Gateway is running and reachable.",
+      "translated": "Trwa to dłużej niż oczekiwano.\nSprawdź, czy Gateway jest uruchomiony i osiągalny."
+    },
+    {
+      "id": "native.android.2bf6b4511554cb5d",
+      "source": "Connection issue",
+      "translated": "Problem z połączeniem"
+    },
+    {
+      "id": "native.android.9c72252fb0e59c20",
+      "source": "We could not reach your Gateway.\nLet's fix this.",
+      "translated": "Nie udało się połączyć z Gateway.\nSpróbujmy to naprawić."
+    },
+    {
+      "id": "native.android.d7ea800cc2475013",
+      "source": "Continue",
+      "translated": "Kontynuuj"
+    },
+    {
+      "id": "native.android.32496d7911cc1606",
+      "source": "Retry connection",
+      "translated": "Ponów próbę połączenia"
+    },
+    {
+      "id": "native.android.f46c0db16c9637fb",
+      "source": "Go back",
+      "translated": "Wróć"
+    },
+    {
+      "id": "native.android.c455993f72893524",
+      "source": "Gateway received this phone",
+      "translated": "Gateway odebrał dane tego telefonu"
+    },
+    {
+      "id": "native.android.9301116065e416b6",
+      "source": "Waiting for device approval",
+      "translated": "Oczekiwanie na zatwierdzenie urządzenia"
+    },
+    {
+      "id": "native.android.ce5cc36fe075c9da",
+      "source": "Retrying automatically",
+      "translated": "Automatyczne ponawianie próby"
+    },
+    {
+      "id": "native.android.69c0447c82eb5eef",
+      "source": "Gateway needs device approval",
+      "translated": "Gateway wymaga zatwierdzenia urządzenia"
+    },
+    {
+      "id": "native.android.b9e2a7a85b7dd6f5",
+      "source": "Run the approval command on the Gateway",
+      "translated": "Uruchom polecenie zatwierdzania w Gateway"
+    },
+    {
+      "id": "native.android.48d712bed799126b",
+      "source": "Opening Gateway connection",
+      "translated": "Nawiązywanie połączenia z Gateway"
+    },
+    {
+      "id": "native.android.2177191b54243c32",
+      "source": "Checking pairing access",
+      "translated": "Sprawdzanie dostępu do parowania"
+    },
+    {
+      "id": "native.android.d79702e9a32f7cf0",
+      "source": "Checking node access",
+      "translated": "Sprawdzanie dostępu do węzła"
+    },
+    {
+      "id": "native.android.797e496ed2f4a91c",
+      "source": "Ready for chat and voice",
+      "translated": "Gotowe do czatu i obsługi głosowej"
+    },
+    {
+      "id": "native.android.24c714ef282f6f2b",
+      "source": "Gateway paired. Waiting for node capability approval.",
+      "translated": "Gateway sparowany. Oczekiwanie na zatwierdzenie uprawnień węzła."
+    },
+    {
+      "id": "native.android.78c136124ca7ec03",
+      "source": "Gateway approval is pending. Run this on the gateway host:",
+      "translated": "Oczekiwanie na zatwierdzenie Gateway. Uruchom to polecenie na hoście Gateway:"
+    },
+    {
+      "id": "native.android.1c93d0cbb8e05a7a",
+      "source": "Gateway approval is pending. Run openclaw devices list on the gateway host, approve this phone, then retry.",
+      "translated": "Oczekiwanie na zatwierdzenie Gateway. Uruchom openclaw devices list na hoście Gateway, zatwierdź ten telefon, a następnie spróbuj ponownie."
     },
     {
       "id": "native.android.d0c1dcc8236a1ab9",
       "source": "Gateway paired. Checking node capability approval.",
-      "translated": "Gateway paired. Checking node capability approval."
+      "translated": "Gateway sparowany. Sprawdzanie zatwierdzenia uprawnień węzła."
+    },
+    {
+      "id": "native.android.14a92ed5901d9416",
+      "source": "Gateway paired. Waiting for operator access.",
+      "translated": "Gateway sparowany. Oczekiwanie na dostęp operatora."
+    },
+    {
+      "id": "native.android.bdd063b9f766050b",
+      "source": "Gateway approval is in progress. OpenClaw will retry automatically.",
+      "translated": "Trwa zatwierdzanie Gateway. OpenClaw ponowi próbę automatycznie."
+    },
+    {
+      "id": "native.android.45cfb86623fa2251",
+      "source": "Gateway unreachable",
+      "translated": "Gateway jest nieosiągalny"
     },
     {
       "id": "native.android.29732759e050c874",
@@ -1804,6 +3179,31 @@
       "translated": "Uwierzytelnianie Gateway wymaga sprawdzenia. Sprawdź ustawienia Gateway, a następnie spróbuj ponownie."
     },
     {
+      "id": "native.android.5f1542ccffc8c698",
+      "source": "Gateway authentication needs attention.",
+      "translated": "Uwierzytelnianie Gateway wymaga uwagi."
+    },
+    {
+      "id": "native.android.c94c164d474cb0db",
+      "source": "This app is older than the Gateway. Update OpenClaw on this device, then retry.",
+      "translated": "Ta aplikacja jest starsza niż Gateway. Zaktualizuj OpenClaw na tym urządzeniu, a następnie spróbuj ponownie."
+    },
+    {
+      "id": "native.android.48ba24436b643607",
+      "source": "The Gateway is older than this app. Update OpenClaw on the Gateway host, then retry.",
+      "translated": "Gateway jest starszy niż ta aplikacja. Zaktualizuj OpenClaw na hoście Gateway, a następnie spróbuj ponownie."
+    },
+    {
+      "id": "native.android.1473077d05ac1739",
+      "source": "The app and Gateway use incompatible protocol versions. Update OpenClaw on both, then retry.",
+      "translated": "Aplikacja i Gateway używają niezgodnych wersji protokołu. Zaktualizuj OpenClaw w obu miejscach, a następnie spróbuj ponownie."
+    },
+    {
+      "id": "native.android.6379bfb6b09ef8cd",
+      "source": "$summary $details",
+      "translated": "$summary $details"
+    },
+    {
       "id": "native.android.ee7dad03cd78babe",
       "source": "openclaw devices approve $requestId",
       "translated": "openclaw devices approve $requestId"
@@ -1834,14 +3234,139 @@
       "translated": "Polecenie skopiowane"
     },
     {
-      "id": "native.android.437599c024df158e",
+      "id": "native.android.cb74355b796f9e00",
+      "source": "Enabled",
+      "translated": "Włączone"
+    },
+    {
+      "id": "native.android.21f04aa7593a8c4e",
+      "source": "Off",
+      "translated": "Wyłączone"
+    },
+    {
+      "id": "native.android.61ce15426e85e615",
+      "source": "Not allowed",
+      "translated": "Niedozwolone"
+    },
+    {
+      "id": "native.android.794d39baacf4ce44",
       "source": "Granted",
       "translated": "Przyznano"
     },
     {
-      "id": "native.android.cf8344d3562e28e3",
+      "id": "native.android.5fc5b5bd849534e0",
       "source": "Not granted",
       "translated": "Nie przyznano"
+    },
+    {
+      "id": "native.android.38d2b7bd03335fee",
+      "source": "Transcribe voice prompts",
+      "translated": "Transkrybuj polecenia głosowe"
+    },
+    {
+      "id": "native.android.fda0e1b90d3da673",
+      "source": "Voice",
+      "translated": "Głos"
+    },
+    {
+      "id": "native.android.4be6f3432907954f",
+      "source": "Camera",
+      "translated": "Aparat"
+    },
+    {
+      "id": "native.android.804747599fbfb54f",
+      "source": "Capture photos and clips from this phone",
+      "translated": "Rób zdjęcia i nagrywaj klipy tym telefonem"
+    },
+    {
+      "id": "native.android.bff84ec386a1e4b6",
+      "source": "Location",
+      "translated": "Lokalizacja"
+    },
+    {
+      "id": "native.android.84fc265214b31d6a",
+      "source": "Read this phone's location",
+      "translated": "Odczytuj lokalizację tego telefonu"
+    },
+    {
+      "id": "native.android.2458aa04d541f578",
+      "source": "Photos",
+      "translated": "Zdjęcia"
+    },
+    {
+      "id": "native.android.a0b4cfc39e06cd8c",
+      "source": "Read recent photos and media",
+      "translated": "Odczytywanie ostatnich zdjęć i multimediów"
+    },
+    {
+      "id": "native.android.fcbdfe0556ea2745",
+      "source": "Contacts",
+      "translated": "Kontakty"
+    },
+    {
+      "id": "native.android.247028b711fa6af5",
+      "source": "Find people and contact details",
+      "translated": "Wyszukiwanie osób i danych kontaktowych"
+    },
+    {
+      "id": "native.android.379a97dc36c48736",
+      "source": "Calendar",
+      "translated": "Kalendarz"
+    },
+    {
+      "id": "native.android.95066ee4ea91b83f",
+      "source": "Read and update events",
+      "translated": "Odczytywanie i aktualizowanie wydarzeń"
+    },
+    {
+      "id": "native.android.13462414b1234f51",
+      "source": "Notifications",
+      "translated": "Powiadomienia"
+    },
+    {
+      "id": "native.android.d096df67bff5e611",
+      "source": "Show OpenClaw alerts",
+      "translated": "Wyświetlanie alertów OpenClaw"
+    },
+    {
+      "id": "native.android.93cbec65dbc5de69",
+      "source": "Notification listener",
+      "translated": "Dostęp do powiadomień"
+    },
+    {
+      "id": "native.android.4a1b1d60a064314d",
+      "source": "Read selected app notifications",
+      "translated": "Odczytywanie powiadomień z wybranych aplikacji"
+    },
+    {
+      "id": "native.android.0407ebf1bd28848e",
+      "source": "Motion",
+      "translated": "Ruch"
+    },
+    {
+      "id": "native.android.a7d027a495860c1e",
+      "source": "Share steps and activity",
+      "translated": "Udostępnianie liczby kroków i aktywności"
+    },
+    {
+      "id": "native.android.ae5388962bbd6a91",
+      "source": "Device access; Gateway opt-in still required",
+      "translated": "Dostęp do urządzenia; nadal wymagana zgoda w Gateway"
+    },
+    {
+      "id": "native.android.7ab9a01c349bf67d",
+      "source": "SMS",
+      "translated": "SMS"
+    },
+    {
+      "id": "native.android.c09cec3a724615e0",
+      "source": "Call Log",
+      "translated": "Rejestr połączeń"
+    },
+    {
+      "id": "native.android.c4b9e363024a8db0",
+      "source": "Show recent call history",
+      "translated": "Wyświetlanie historii ostatnich połączeń"
     },
     {
       "id": "native.android.3b7e036da1b10671",
@@ -1871,7 +3396,17 @@
     {
       "id": "native.android.bffaa0de604a6248",
       "source": "Gateway offline",
-      "translated": "Gateway offline"
+      "translated": "Gateway jest offline"
+    },
+    {
+      "id": "native.android.0d44d2bfd3bb7b01",
+      "source": "Needs attention",
+      "translated": "Wymaga uwagi"
+    },
+    {
+      "id": "native.android.a707d90b7b90dc72",
+      "source": "Provider catalog",
+      "translated": "Katalog dostawców"
     },
     {
       "id": "native.android.cc7752fdd9d78d63",
@@ -1894,16 +3429,6 @@
       "translated": "Wymaga"
     },
     {
-      "id": "native.android.35fbba1d22e775ac",
-      "source": "Unknown",
-      "translated": "Nieznane"
-    },
-    {
-      "id": "native.android.62fdb673c946ccf0",
-      "source": "$modelCount configured models. Refresh to recheck availability.",
-      "translated": "Skonfigurowanych modeli: $modelCount. Odśwież, aby ponownie sprawdzić dostępność."
-    },
-    {
       "id": "native.android.24fe64a90afae34e",
       "source": "Connect your Gateway to view provider readiness.",
       "translated": "Połącz Gateway, aby zobaczyć gotowość dostawców."
@@ -1919,14 +3444,79 @@
       "translated": "Odświeżanie"
     },
     {
-      "id": "native.android.c11f2727dd9a93f7",
-      "source": "${row.modelCount} configured models",
-      "translated": "${row.modelCount} skonfigurowanych modeli"
+      "id": "native.android.c2f9e9c7f9eb969e",
+      "source": "No configured models. Refresh to recheck availability.",
+      "translated": "Brak skonfigurowanych modeli. Odśwież, aby ponownie sprawdzić dostępność."
+    },
+    {
+      "id": "native.android.2780087b426e85b8",
+      "source": "1 configured model. Refresh to recheck availability.",
+      "translated": "Skonfigurowano 1 model. Odśwież, aby ponownie sprawdzić dostępność."
+    },
+    {
+      "id": "native.android.888c14f93d5d8f40",
+      "source": "$count configured models. Refresh to recheck availability.",
+      "translated": "Skonfigurowano $count modeli. Odśwież, aby ponownie sprawdzić dostępność."
     },
     {
       "id": "native.android.51228649f9d8627a",
       "source": "No configured models",
       "translated": "Brak skonfigurowanych modeli"
+    },
+    {
+      "id": "native.android.8ebf1dd7da6d8275",
+      "source": "1 configured model",
+      "translated": "1 skonfigurowany model"
+    },
+    {
+      "id": "native.android.df9a2fe6b9efb6fe",
+      "source": "$count configured models",
+      "translated": "$count skonfigurowanych modeli"
+    },
+    {
+      "id": "native.android.f2e9f3aa4c2c13d1",
+      "source": "Available",
+      "translated": "Dostępne"
+    },
+    {
+      "id": "native.android.be8ad850010b0afc",
+      "source": "Unavailable",
+      "translated": "Niedostępne"
+    },
+    {
+      "id": "native.android.35fbba1d22e775ac",
+      "source": "Unknown",
+      "translated": "Nieznane"
+    },
+    {
+      "id": "native.android.aa9cf902ccdc6c16",
+      "source": "reasoning",
+      "translated": "rozumowanie"
+    },
+    {
+      "id": "native.android.7d496fd4b8cf51b9",
+      "source": "image",
+      "translated": "obraz"
+    },
+    {
+      "id": "native.android.0e9f3bdd4b69c696",
+      "source": "audio",
+      "translated": "dźwięk"
+    },
+    {
+      "id": "native.android.0da23af3d0da05b7",
+      "source": "video",
+      "translated": "wideo"
+    },
+    {
+      "id": "native.android.f0da8075ccccb572",
+      "source": "document",
+      "translated": "dokument"
+    },
+    {
+      "id": "native.android.02344d2f77f3cd3a",
+      "source": "$context context",
+      "translated": "kontekst $context"
     },
     {
       "id": "native.android.4832c0d0e9774283",
@@ -1941,17 +3531,12 @@
     {
       "id": "native.android.70f5d0507d34b5c8",
       "source": "Focus session search",
-      "translated": "Focus session search"
+      "translated": "Wyszukaj sesję"
     },
     {
       "id": "native.android.e0f10db479f627eb",
       "source": "Recent",
       "translated": "Ostatnie"
-    },
-    {
-      "id": "native.android.9bc0d0b631dca571",
-      "source": "Current",
-      "translated": "Bieżąca"
     },
     {
       "id": "native.android.78654c0f198c6df2",
@@ -1966,7 +3551,12 @@
     {
       "id": "native.android.10cb26723e9990fc",
       "source": "Clear session search",
-      "translated": "Clear session search"
+      "translated": "Wyczyść wyszukiwanie sesji"
+    },
+    {
+      "id": "native.android.784ecdd6ea2ec5f0",
+      "source": "Sort: $sortOrder",
+      "translated": "Sortowanie: $sortOrder"
     },
     {
       "id": "native.android.dc52c5f9d7b85ec8",
@@ -1977,11 +3567,6 @@
       "id": "native.android.78b9d0ab41446a1b",
       "source": "Oldest first",
       "translated": "Najpierw najstarsze"
-    },
-    {
-      "id": "native.android.d7e09574a17f9ccd",
-      "source": "Sort: ${if (recentFirst) \"Newest first\" else \"Oldest first\"}",
-      "translated": "Sort: ${if (recentFirst) \"Newest first\" else \"Oldest first\"}"
     },
     {
       "id": "native.android.c6bf8751e2a7f5c7",
@@ -2001,22 +3586,22 @@
     {
       "id": "native.android.69b79a3c2c987cd4",
       "source": "Searching sessions",
-      "translated": "Searching sessions"
+      "translated": "Wyszukiwanie sesji"
     },
     {
       "id": "native.android.dd587d341af44212",
       "source": "No matching sessions",
-      "translated": "No matching sessions"
+      "translated": "Brak pasujących sesji"
     },
     {
       "id": "native.android.11c1a8c944bea0ae",
       "source": "Try a different search or clear the current query.",
-      "translated": "Try a different search or clear the current query."
+      "translated": "Spróbuj wyszukać inaczej lub wyczyść bieżące zapytanie."
     },
     {
       "id": "native.android.63dab4ce8d8ef26a",
       "source": "Clear Search",
-      "translated": "Clear Search"
+      "translated": "Wyczyść wyszukiwanie"
     },
     {
       "id": "native.android.75bff03b36200e7b",
@@ -2084,14 +3669,14 @@
       "translated": "Usuń"
     },
     {
-      "id": "native.android.03fd4e5e90f1afe7",
-      "source": "Pinned",
-      "translated": "Przypięte"
-    },
-    {
       "id": "native.android.94a95bad91565148",
       "source": "Workspace",
       "translated": "Obszar roboczy"
+    },
+    {
+      "id": "native.android.9bc0d0b631dca571",
+      "source": "Current",
+      "translated": "Bieżąca"
     },
     {
       "id": "native.android.b5e4ae7f8c9eca2d",
@@ -2101,22 +3686,22 @@
     {
       "id": "native.android.f46b06f8550516e4",
       "source": "Unarchive",
-      "translated": "Unarchive"
+      "translated": "Przywróć z archiwum"
     },
     {
       "id": "native.android.a157cb1bddfc3b79",
       "source": "Delete…",
-      "translated": "Delete…"
+      "translated": "Usuń…"
     },
     {
       "id": "native.android.283c9264772e2024",
       "source": "← Back",
-      "translated": "← Back"
+      "translated": "← Wstecz"
     },
     {
       "id": "native.android.fff8fad5db365fa6",
       "source": "Remove from group",
-      "translated": "Remove from group"
+      "translated": "Usuń z grupy"
     },
     {
       "id": "native.android.6637da0312da85f9",
@@ -2141,37 +3726,37 @@
     {
       "id": "native.android.c2dcfd6ce61bb9a7",
       "source": "Rename…",
-      "translated": "Rename…"
+      "translated": "Zmień nazwę…"
     },
     {
       "id": "native.android.7e4fef64a05f84f4",
       "source": "Fork",
-      "translated": "Fork"
+      "translated": "Utwórz odgałęzienie"
     },
     {
       "id": "native.android.442655ac5b85b24d",
       "source": "Move to group",
-      "translated": "Move to group"
+      "translated": "Przenieś do grupy"
     },
     {
       "id": "native.android.e78c3cf125b5a40c",
       "source": "Archive",
-      "translated": "Archive"
+      "translated": "Archiwizuj"
     },
     {
       "id": "native.android.11e20947d40764fb",
       "source": "Rename group…",
-      "translated": "Rename group…"
+      "translated": "Zmień nazwę grupy…"
     },
     {
       "id": "native.android.f9b342d9485114cf",
       "source": "New group…",
-      "translated": "New group…"
+      "translated": "Nowa grupa…"
     },
     {
       "id": "native.android.ecfbc9a95c3ca671",
       "source": "Delete group…",
-      "translated": "Delete group…"
+      "translated": "Usuń grupę…"
     },
     {
       "id": "native.android.54c10a1eec2fa17c",
@@ -2187,6 +3772,16 @@
       "id": "native.android.4e1ffc65a44efec5",
       "source": "Cancel",
       "translated": "Anuluj"
+    },
+    {
+      "id": "native.android.03fd4e5e90f1afe7",
+      "source": "Pinned",
+      "translated": "Przypięte"
+    },
+    {
+      "id": "native.android.1539a9f53c18e47f",
+      "source": "Ungrouped",
+      "translated": "Bez grupy"
     },
     {
       "id": "native.android.db243d71d056afa4",
@@ -2219,6 +3814,31 @@
       "translated": "Zarchiwizowane sesje pojawią się tutaj."
     },
     {
+      "id": "native.android.2261a31153cec409",
+      "source": "now",
+      "translated": "teraz"
+    },
+    {
+      "id": "native.android.9f222c1cd2767777",
+      "source": "${minutes}m",
+      "translated": "${minutes} min"
+    },
+    {
+      "id": "native.android.58c1439bb3513859",
+      "source": "${hours}h",
+      "translated": "${hours} godz."
+    },
+    {
+      "id": "native.android.a171f733decef671",
+      "source": "${days}d",
+      "translated": "${days} d"
+    },
+    {
+      "id": "native.android.3d4fa07acbc015c5",
+      "source": "Main session",
+      "translated": "Sesja główna"
+    },
+    {
       "id": "native.android.dcb7d5956029bbc4",
       "source": "Provider limits and quota health.",
       "translated": "Limity dostawcy i stan limitów użycia."
@@ -2227,6 +3847,11 @@
       "id": "native.android.aa3fb483f7e264fe",
       "source": "Usage",
       "translated": "Użycie"
+    },
+    {
+      "id": "native.android.576711a05d1bc098",
+      "source": "Providers",
+      "translated": "Dostawcy"
     },
     {
       "id": "native.android.e3bdc31bd2f499d7",
@@ -2254,6 +3879,11 @@
       "translated": "Zaplanowane zadania OpenClaw z Twojego gateway."
     },
     {
+      "id": "native.android.f9a5f09bd7436aa6",
+      "source": "Jobs",
+      "translated": "Zadania"
+    },
+    {
       "id": "native.android.3cd22006987fde12",
       "source": "Open a job to inspect its configuration and run history. Admin-scoped connections can also run, edit, enable, disable, or delete it.",
       "translated": "Otwórz zadanie, aby sprawdzić jego konfigurację i historię uruchomień. Połączenia z uprawnieniami administratora mogą je również uruchamiać, edytować, włączać, wyłączać lub usuwać."
@@ -2272,6 +3902,11 @@
       "id": "native.android.bc88f537cd309fcb",
       "source": "Scheduled work created on the gateway will appear here.",
       "translated": "Zaplanowane zadania utworzone na Gateway pojawią się tutaj."
+    },
+    {
+      "id": "native.android.2fbb66cd888e9543",
+      "source": "Cron Job",
+      "translated": "Zadanie Cron"
     },
     {
       "id": "native.android.f6dd71419863574c",
@@ -2304,6 +3939,11 @@
       "translated": "Wybierz i sprawdź asystentów dostępnych na tym gateway."
     },
     {
+      "id": "native.android.dce9fd0d3572a6c5",
+      "source": "Available",
+      "translated": "Dostępne"
+    },
+    {
       "id": "native.android.8db68417b1226437",
       "source": "Connect the gateway to load agents.",
       "translated": "Połącz Gateway, aby wczytać agentów."
@@ -2322,6 +3962,26 @@
       "id": "native.android.b53cdcaacd0eb0f2",
       "source": "Review actions that need your attention.",
       "translated": "Przejrzyj działania wymagające Twojej uwagi."
+    },
+    {
+      "id": "native.android.7ffd527dd116cd48",
+      "source": "Gateway Pending",
+      "translated": "Gateway oczekuje"
+    },
+    {
+      "id": "native.android.2d8d049afe99f751",
+      "source": "Session Activity",
+      "translated": "Aktywność sesji"
+    },
+    {
+      "id": "native.android.5d53e328e4deb444",
+      "source": "Issues",
+      "translated": "Problemy"
+    },
+    {
+      "id": "native.android.253c353a10bfe69b",
+      "source": "Active Runs",
+      "translated": "Aktywne uruchomienia"
     },
     {
       "id": "native.android.2f7b688eb1fe6797",
@@ -2449,16 +4109,6 @@
       "translated": "Dyktowanie"
     },
     {
-      "id": "native.android.94527c3346897c00",
-      "source": "Allowlist",
-      "translated": "Lista dozwolonych"
-    },
-    {
-      "id": "native.android.333ae4741b8f80fe",
-      "source": "Blocklist",
-      "translated": "Lista blokowanych"
-    },
-    {
       "id": "native.android.9feed8722db5d2cc",
       "source": "Choose what reaches OpenClaw.",
       "translated": "Wybierz, co trafia do OpenClaw."
@@ -2474,19 +4124,44 @@
       "translated": "Alerty pozostają na tym telefonie."
     },
     {
+      "id": "native.android.f0397533c269b90c",
+      "source": "Forward Notifications",
+      "translated": "Przekazuj powiadomienia"
+    },
+    {
       "id": "native.android.5a077bf9cf4f47c8",
       "source": "OpenClaw can receive selected alerts.",
       "translated": "OpenClaw może odbierać wybrane alerty."
     },
     {
-      "id": "native.android.f0397533c269b90c",
-      "source": "Forward Notifications",
-      "translated": "Forward Notifications"
+      "id": "native.android.fef97bfb2cd5d228",
+      "source": "$quietStart to $quietEnd",
+      "translated": "$quietStart–$quietEnd"
     },
     {
       "id": "native.android.a04ee29c0a3b68f5",
       "source": "Quiet Hours",
-      "translated": "Quiet Hours"
+      "translated": "Godziny ciszy"
+    },
+    {
+      "id": "native.android.db3ed951c0462727",
+      "source": "Policy",
+      "translated": "Zasady"
+    },
+    {
+      "id": "native.android.a0a8c3cdf2a95054",
+      "source": "Selected Apps",
+      "translated": "Wybrane aplikacje"
+    },
+    {
+      "id": "native.android.609413bd24d4dfe6",
+      "source": "Rate Limit",
+      "translated": "Limit częstotliwości"
+    },
+    {
+      "id": "native.android.62fe76eb7c0dbddc",
+      "source": "Access",
+      "translated": "Dostęp"
     },
     {
       "id": "native.android.ebeec52e498bc128",
@@ -2512,6 +4187,16 @@
       "id": "native.android.c21fbdec8c4b390d",
       "source": "Forwarding Mode",
       "translated": "Tryb przekazywania"
+    },
+    {
+      "id": "native.android.333ae4741b8f80fe",
+      "source": "Blocklist",
+      "translated": "Lista blokowanych"
+    },
+    {
+      "id": "native.android.94527c3346897c00",
+      "source": "Allowlist",
+      "translated": "Lista dozwolonych"
     },
     {
       "id": "native.android.67b1229c396cc573",
@@ -2564,19 +4249,29 @@
       "translated": "Możliwości telefonu"
     },
     {
+      "id": "native.android.2a34701182e76575",
+      "source": "Allow camera tools when requested.",
+      "translated": "Zezwalaj na używanie narzędzi aparatu na żądanie."
+    },
+    {
       "id": "native.android.2d1dd1a2e9dae8e9",
       "source": "Camera",
-      "translated": "Camera"
+      "translated": "Aparat"
     },
     {
       "id": "native.android.3104a266665b9e19",
       "source": "Precise Location",
-      "translated": "Precise Location"
+      "translated": "Dokładna lokalizacja"
+    },
+    {
+      "id": "native.android.b8bc7b435f16f86a",
+      "source": "Share precise location while location is enabled.",
+      "translated": "Udostępniaj dokładną lokalizację, gdy lokalizacja jest włączona."
     },
     {
       "id": "native.android.c38c2616e6b13dd4",
       "source": "Photos",
-      "translated": "Photos"
+      "translated": "Zdjęcia"
     },
     {
       "id": "native.android.7d943661c4341ef0",
@@ -2591,7 +4286,7 @@
     {
       "id": "native.android.74fb102d11305307",
       "source": "Installed Apps",
-      "translated": "Installed Apps"
+      "translated": "Zainstalowane aplikacje"
     },
     {
       "id": "native.android.8ed8ecbbd6112e81",
@@ -2606,12 +4301,22 @@
     {
       "id": "native.android.be89d5601904322a",
       "source": "Keep Awake",
-      "translated": "Keep Awake"
+      "translated": "Nie usypiaj"
+    },
+    {
+      "id": "native.android.5b2623cb72a4af97",
+      "source": "Keep the node available during active work.",
+      "translated": "Utrzymuj dostępność węzła podczas aktywnej pracy."
     },
     {
       "id": "native.android.66e7775ab738ed4f",
       "source": "Canvas Status",
-      "translated": "Canvas Status"
+      "translated": "Stan obszaru roboczego"
+    },
+    {
+      "id": "native.android.5e21b4715dc82e14",
+      "source": "Show screen-sharing debug state.",
+      "translated": "Pokazuj stan debugowania udostępniania ekranu."
     },
     {
       "id": "native.android.4ea310efb1f0e7ff",
@@ -2631,7 +4336,7 @@
     {
       "id": "native.android.031d3ed6fb8a6559",
       "source": "OpenClaw only checks location when your paired Gateway requests it. On the next Android screen, choose $backgroundPermissionLabel to allow checks while the app is in the background.",
-      "translated": "OpenClaw only checks location when your paired Gateway requests it. On the next Android screen, choose $backgroundPermissionLabel to allow checks while the app is in the background."
+      "translated": "OpenClaw sprawdza lokalizację tylko wtedy, gdy zażąda tego sparowany Gateway. Na następnym ekranie systemu Android wybierz $backgroundPermissionLabel, aby zezwolić na sprawdzanie, gdy aplikacja działa w tle."
     },
     {
       "id": "native.android.c48805f3de1d72ca",
@@ -2674,14 +4379,19 @@
       "translated": "Zastąp konfigurację"
     },
     {
+      "id": "native.android.2de0778d16e25c0b",
+      "source": "this gateway",
+      "translated": "ten Gateway"
+    },
+    {
       "id": "native.android.66aad1078731e6a3",
       "source": "Forget gateway?",
       "translated": "Zapomnieć Gateway?"
     },
     {
-      "id": "native.android.fc2b37bf96ebd49d",
-      "source": "Remove ${entry?.name ?: \"this gateway\"} and its saved credentials from this phone?",
-      "translated": "Remove ${entry?.name ?: \"this gateway\"} and its saved credentials from this phone?"
+      "id": "native.android.7746de24dac08f1d",
+      "source": "Remove $gatewayName and its saved credentials from this phone?",
+      "translated": "Usunąć $gatewayName i zapisane dane logowania z tego telefonu?"
     },
     {
       "id": "native.android.c6c8e0c4b8a9a7cf",
@@ -2699,6 +4409,11 @@
       "translated": "Połączono"
     },
     {
+      "id": "native.android.bab59dcaa8a4608a",
+      "source": "Connection",
+      "translated": "Połączenie"
+    },
+    {
       "id": "native.android.326c79e18db465ce",
       "source": "Offline",
       "translated": "Offline"
@@ -2712,6 +4427,16 @@
       "id": "native.android.dd5b083db9470281",
       "source": "Online",
       "translated": "Online"
+    },
+    {
+      "id": "native.android.a8958b5432344ded",
+      "source": "Address",
+      "translated": "Adres"
+    },
+    {
+      "id": "native.android.573f216f8bc83d12",
+      "source": "Not available",
+      "translated": "Niedostępne"
     },
     {
       "id": "native.android.7b12195e02ebcc34",
@@ -2789,14 +4514,14 @@
       "translated": "Bezpieczeństwo połączenia"
     },
     {
-      "id": "native.android.6701e8520a27c448",
-      "source": "Secure (TLS)",
-      "translated": "Bezpieczne (TLS)"
-    },
-    {
       "id": "native.android.86aeb5011ef180cb",
       "source": "Unencrypted",
       "translated": "Nieszyfrowane"
+    },
+    {
+      "id": "native.android.6701e8520a27c448",
+      "source": "Secure (TLS)",
+      "translated": "Bezpieczne (TLS)"
     },
     {
       "id": "native.android.ce47022dd4d431fe",
@@ -2806,7 +4531,7 @@
     {
       "id": "native.android.1ac555d95edfac77",
       "source": "Bootstrap",
-      "translated": "Bootstrap"
+      "translated": "Inicjalizacja"
     },
     {
       "id": "native.android.348365a5b167510d",
@@ -2834,6 +4559,31 @@
       "translated": "Motyw i przetłumaczony tekst Androida."
     },
     {
+      "id": "native.android.4005197394b83ef3",
+      "source": "Language",
+      "translated": "Język"
+    },
+    {
+      "id": "native.android.f09c2fe663022869",
+      "source": "Contrast",
+      "translated": "Kontrast"
+    },
+    {
+      "id": "native.android.196b8776413f9774",
+      "source": "High",
+      "translated": "Wysoki"
+    },
+    {
+      "id": "native.android.f5b3259efe0a59ba",
+      "source": "Readable",
+      "translated": "Czytelna"
+    },
+    {
+      "id": "native.android.91844c6b953d9be9",
+      "source": "Typography",
+      "translated": "Typografia"
+    },
+    {
       "id": "native.android.0e5de6796bc8d8f9",
       "source": "Theme",
       "translated": "Motyw"
@@ -2844,19 +4594,59 @@
       "translated": "Język aplikacji"
     },
     {
-      "id": "native.android.1fc742aceae3f137",
-      "source": "Changes Android text that OpenClaw has translated. Screens with English-only copy stay unchanged.",
-      "translated": "Zmienia tekst Androida przetłumaczony przez OpenClaw. Ekrany z tekstem tylko po angielsku pozostają bez zmian."
-    },
-    {
       "id": "native.android.3d640706b2b6b93a",
       "source": "Selected",
       "translated": "Wybrano"
     },
     {
-      "id": "native.android.664db1aad9792c18",
-      "source": "Ready",
-      "translated": "Gotowe"
+      "id": "native.android.053040678e1491d5",
+      "source": "System",
+      "translated": "System"
+    },
+    {
+      "id": "native.android.ce04cda706ff246a",
+      "source": "While Using",
+      "translated": "Podczas używania"
+    },
+    {
+      "id": "native.android.41c5e395cda32d82",
+      "source": "Always",
+      "translated": "Zawsze"
+    },
+    {
+      "id": "native.android.448831898efda6c2",
+      "source": "Connecting...",
+      "translated": "Łączenie..."
+    },
+    {
+      "id": "native.android.a4f0ff7a2cc989d2",
+      "source": "Pairing needed",
+      "translated": "Wymagane parowanie"
+    },
+    {
+      "id": "native.android.ed5aa7f6cceb466c",
+      "source": "Authentication needed",
+      "translated": "Wymagane uwierzytelnienie"
+    },
+    {
+      "id": "native.android.3c96aa987f267692",
+      "source": "TLS timed out",
+      "translated": "Upłynął limit czasu TLS"
+    },
+    {
+      "id": "native.android.0eef5fbe3a7c83b3",
+      "source": "No TLS endpoint",
+      "translated": "Brak punktu końcowego TLS"
+    },
+    {
+      "id": "native.android.0273578a6d9e3a48",
+      "source": "Certificate review needed",
+      "translated": "Wymagana weryfikacja certyfikatu"
+    },
+    {
+      "id": "native.android.9256c686d6616406",
+      "source": "Cannot reach gateway",
+      "translated": "Nie można połączyć się z Gateway"
     },
     {
       "id": "native.android.2df2dec704f91977",
@@ -2869,9 +4659,19 @@
       "translated": "OpenClaw dla Androida."
     },
     {
-      "id": "native.android.d744d434533ea8ed",
-      "source": "Gateway",
-      "translated": "Gateway"
+      "id": "native.android.38889ec3f682dcf8",
+      "source": "Channel",
+      "translated": "Kanał"
+    },
+    {
+      "id": "native.android.5f8c1afc83f8d257",
+      "source": "Not connected",
+      "translated": "Brak połączenia"
+    },
+    {
+      "id": "native.android.d4a8fc40010bba61",
+      "source": "Home Gateway",
+      "translated": "Domowy Gateway"
     },
     {
       "id": "native.android.ff6f3e4026089be2",
@@ -2879,9 +4679,24 @@
       "translated": "Środowisko wykonawcze"
     },
     {
+      "id": "native.android.1b1dafe32e0d82d5",
+      "source": "Waiting",
+      "translated": "Oczekiwanie"
+    },
+    {
       "id": "native.android.b84ae70dbae95380",
       "source": "Update",
       "translated": "Aktualizuj"
+    },
+    {
+      "id": "native.android.09fd6eeb7a512bda",
+      "source": "Up to date",
+      "translated": "Aktualne"
+    },
+    {
+      "id": "native.android.d673c2de9ea0f22f",
+      "source": "v$it available",
+      "translated": "Dostępna wersja v$it"
     },
     {
       "id": "native.android.aac3310699b496c8",
@@ -2924,9 +4739,34 @@
       "translated": "Otwórz ${license.title}"
     },
     {
+      "id": "native.android.fca1b9cbf5c56142",
+      "source": "Third-party",
+      "translated": "Innej firmy"
+    },
+    {
+      "id": "native.android.ef9b342a4aab8816",
+      "source": "Unknown",
+      "translated": "Nieznane"
+    },
+    {
+      "id": "native.android.439e402d19bf9327",
+      "source": "Website",
+      "translated": "Witryna"
+    },
+    {
+      "id": "native.android.4469d5dc439888e0",
+      "source": "Docs",
+      "translated": "Dokumentacja"
+    },
+    {
+      "id": "native.android.48f872e0c2f668b5",
+      "source": "Allow all the time",
+      "translated": "Zezwalaj przez cały czas"
+    },
+    {
       "id": "native.android.d66786c625242bbf",
       "source": "Replacing the setup code clears this phone's saved setup credentials and device tokens before reconnecting. This phone may need node capability approval again; continue only when you mean to pair with a fresh gateway setup code.",
-      "translated": "Replacing the setup code clears this phone's saved setup credentials and device tokens before reconnecting. This phone may need node capability approval again; continue only when you mean to pair with a fresh gateway setup code."
+      "translated": "Zastąpienie kodu konfiguracji spowoduje usunięcie zapisanych na tym telefonie danych uwierzytelniających konfiguracji i tokenów urządzenia przed ponownym połączeniem. Może być konieczne ponowne zatwierdzenie uprawnień węzła dla tego telefonu; kontynuuj tylko wtedy, gdy chcesz sparować go przy użyciu nowego kodu konfiguracji Gateway."
     },
     {
       "id": "native.android.cfffa5b838a65ca4",
@@ -2936,12 +4776,12 @@
     {
       "id": "native.android.5a540761383fa474",
       "source": "OpenClaw turns this phone into a clean mobile command surface for sessions, voice, providers, and Gateway.",
-      "translated": "OpenClaw turns this phone into a clean mobile command surface for sessions, voice, providers, and Gateway."
+      "translated": "OpenClaw zmienia ten telefon w przejrzysty mobilny interfejs do obsługi sesji, głosu, dostawców i Gateway."
     },
     {
       "id": "native.android.3a3bea53e6a6ada7",
       "source": "A Gateway update is available. Run the update from the Web UI or CLI when you are ready.",
-      "translated": "A Gateway update is available. Run the update from the Web UI or CLI when you are ready."
+      "translated": "Dostępna jest aktualizacja Gateway. Gdy będziesz gotowy, uruchom aktualizację z poziomu Web UI lub CLI."
     },
     {
       "id": "native.android.877490cc2551c8b2",
@@ -2959,6 +4799,21 @@
       "translated": "Wysyłanie"
     },
     {
+      "id": "native.android.103b5876b2360e9a",
+      "source": "Allow Once",
+      "translated": "Zezwól raz"
+    },
+    {
+      "id": "native.android.18cf7592a6bcdad1",
+      "source": "Allow Always",
+      "translated": "Zawsze zezwalaj"
+    },
+    {
+      "id": "native.android.d9bab6cdecb78270",
+      "source": "Deny",
+      "translated": "Odmów"
+    },
+    {
       "id": "native.android.eaa50bee1f61e423",
       "source": "Approval ${notice.approvalId}",
       "translated": "Zatwierdzenie ${notice.approvalId}"
@@ -2974,14 +4829,59 @@
       "translated": "Przejrzyj"
     },
     {
-      "id": "native.android.1f03bb42f27b48ea",
-      "source": "Issue",
-      "translated": "Problem"
+      "id": "native.android.9664ff3f205c25d6",
+      "source": "Open cron job detail",
+      "translated": "Otwórz szczegóły zadania cron"
     },
     {
       "id": "native.android.4a583b7a36684ed7",
       "source": "Enabled",
       "translated": "Włączone"
+    },
+    {
+      "id": "native.android.82bcd86522b51b32",
+      "source": "Status",
+      "translated": "Stan"
+    },
+    {
+      "id": "native.android.ce0b19c3f2ef5820",
+      "source": "Schedule",
+      "translated": "Harmonogram"
+    },
+    {
+      "id": "native.android.224c5bcaf2e35066",
+      "source": "Next Wake",
+      "translated": "Następne wybudzenie"
+    },
+    {
+      "id": "native.android.4c85eb52ed4f4d63",
+      "source": "Last Run",
+      "translated": "Ostatnie uruchomienie"
+    },
+    {
+      "id": "native.android.43eb66401cac4268",
+      "source": "Description",
+      "translated": "Opis"
+    },
+    {
+      "id": "native.android.62707c110d1b0a4b",
+      "source": "Schedule Detail",
+      "translated": "Szczegóły harmonogramu"
+    },
+    {
+      "id": "native.android.30b935f814ca2ee3",
+      "source": "Session Target",
+      "translated": "Cel sesji"
+    },
+    {
+      "id": "native.android.da612de6980c84a9",
+      "source": "Wake Mode",
+      "translated": "Tryb wybudzania"
+    },
+    {
+      "id": "native.android.8eea75f65e07b1c0",
+      "source": "Delete After Run",
+      "translated": "Usuń po uruchomieniu"
     },
     {
       "id": "native.android.1a3b13c02f53120f",
@@ -2994,6 +4894,66 @@
       "translated": "Tak"
     },
     {
+      "id": "native.android.1b766c420c546466",
+      "source": "Payload",
+      "translated": "Ładunek"
+    },
+    {
+      "id": "native.android.58282aefb6124579",
+      "source": "Delivery",
+      "translated": "Dostarczenie"
+    },
+    {
+      "id": "native.android.c2e2579e8b80384a",
+      "source": "Failure Alert",
+      "translated": "Alert o niepowodzeniu"
+    },
+    {
+      "id": "native.android.df7babe2e541f25a",
+      "source": "Created",
+      "translated": "Utworzono"
+    },
+    {
+      "id": "native.android.ae016ed0bc2271ce",
+      "source": "Updated",
+      "translated": "Zaktualizowano"
+    },
+    {
+      "id": "native.android.c60601353771b6e4",
+      "source": "Running Since",
+      "translated": "Działa od"
+    },
+    {
+      "id": "native.android.8274c54bd5e1dde9",
+      "source": "Last Status",
+      "translated": "Ostatni status"
+    },
+    {
+      "id": "native.android.6c5e6f268e5b0e93",
+      "source": "Last Duration",
+      "translated": "Czas ostatniego uruchomienia"
+    },
+    {
+      "id": "native.android.3eab9690ca253a77",
+      "source": "${durationMs}ms",
+      "translated": "${durationMs} ms"
+    },
+    {
+      "id": "native.android.f46a99f8986a2828",
+      "source": "Consecutive Errors",
+      "translated": "Kolejne błędy"
+    },
+    {
+      "id": "native.android.8813791e4f660850",
+      "source": "Consecutive Skips",
+      "translated": "Kolejne pominięcia"
+    },
+    {
+      "id": "native.android.a3f239679c5898b2",
+      "source": "Delivery Status",
+      "translated": "Status dostarczenia"
+    },
+    {
       "id": "native.android.4fcad8b85203f5a8",
       "source": "Last Error",
       "translated": "Ostatni błąd"
@@ -3002,6 +4962,11 @@
       "id": "native.android.369f2775636e8fd4",
       "source": "Delivery Error",
       "translated": "Błąd dostarczenia"
+    },
+    {
+      "id": "native.android.7c14c084d54623e0",
+      "source": "Copy ${row.title}",
+      "translated": "Kopiuj ${row.title}"
     },
     {
       "id": "native.android.d02323bcac09c67f",
@@ -3024,6 +4989,11 @@
       "translated": "Domyślne"
     },
     {
+      "id": "native.android.f154617fd2233082",
+      "source": "Action Request",
+      "translated": "Żądanie działania"
+    },
+    {
       "id": "native.android.ca48afdb0328a6f5",
       "source": "Needs attention",
       "translated": "Wymaga uwagi"
@@ -3039,14 +5009,99 @@
       "translated": "Oczekuje na sprawdzenie"
     },
     {
+      "id": "native.android.e06036f99fb7aa5d",
+      "source": "Node ${nodeId}",
+      "translated": "Węzeł ${nodeId}"
+    },
+    {
+      "id": "native.android.e79f173a190fca95",
+      "source": "Node",
+      "translated": "Węzeł"
+    },
+    {
+      "id": "native.android.d744d434533ea8ed",
+      "source": "Gateway",
+      "translated": "Gateway"
+    },
+    {
+      "id": "native.android.8f7cb7b5709988af",
+      "source": "Agent ${agentId}",
+      "translated": "Agent ${agentId}"
+    },
+    {
+      "id": "native.android.ad8db6bba8b05ee2",
+      "source": "Waiting ${duration}",
+      "translated": "Oczekiwanie ${duration}"
+    },
+    {
+      "id": "native.android.7d591006b6884597",
+      "source": "Expires ${duration}",
+      "translated": "Wygasa ${duration}"
+    },
+    {
+      "id": "native.android.d47aea365fe8edc5",
+      "source": "soon",
+      "translated": "wkrótce"
+    },
+    {
+      "id": "native.android.af1a7c8d9114beca",
+      "source": "Main",
+      "translated": "Główny"
+    },
+    {
+      "id": "native.android.7dc2b8245fe0f92c",
+      "source": "Isolated",
+      "translated": "Izolowany"
+    },
+    {
+      "id": "native.android.8a78b5264b380055",
+      "source": "Current",
+      "translated": "Bieżąca"
+    },
+    {
       "id": "native.android.98b1e19bdbc1e640",
       "source": "${job.scheduleLabel} · ${formatCronWake(job.nextRunAtMs)} · ${job.promptPreview}",
       "translated": "${job.scheduleLabel} · ${formatCronWake(job.nextRunAtMs)} · ${job.promptPreview}"
     },
     {
+      "id": "native.android.c45aa61a985005d9",
+      "source": "${remaining}% left ${label}",
+      "translated": "Pozostało ${remaining}% ${label}"
+    },
+    {
+      "id": "native.android.e77cc45a3ce1408e",
+      "source": "No limits reported",
+      "translated": "Brak zgłoszonych limitów"
+    },
+    {
+      "id": "native.android.462eb32176ff13ce",
+      "source": "Never",
+      "translated": "Nigdy"
+    },
+    {
+      "id": "native.android.5d432f00264ca5d7",
+      "source": "Now",
+      "translated": "Teraz"
+    },
+    {
       "id": "native.android.35d4bc86e9ba395d",
       "source": "Off",
       "translated": "Wyłączone"
+    },
+    {
+      "id": "native.android.1f03bb42f27b48ea",
+      "source": "Issue",
+      "translated": "Problem"
+    },
+    {
+      "id": "native.android.90b6884eca374677",
+      "source": "Skipped",
+      "translated": "Pominięto"
+    },
+    {
+      "id": "native.android.664db1aad9792c18",
+      "source": "Ready",
+      "translated": "Gotowe"
     },
     {
       "id": "native.android.22f3549d0fab271d",
@@ -3071,22 +5126,67 @@
     {
       "id": "native.android.d89f6d465e3e4725",
       "source": "No apps selected. Nothing forwards until you add apps.",
-      "translated": "No apps selected. Nothing forwards until you add apps."
+      "translated": "Nie wybrano żadnych aplikacji. Nic nie będzie przekazywane, dopóki nie dodasz aplikacji."
     },
     {
-      "id": "native.android.f38672bd0713cb8b",
-      "source": "$selectedCount ${if (selectedCount == 1) \"app\" else \"apps\"} allowed to forward.",
-      "translated": "$selectedCount ${if (selectedCount == 1) \"app\" else \"apps\"} allowed to forward."
+      "id": "native.android.f54c8c9806dd4dd8",
+      "source": "$selectedCount app allowed to forward.",
+      "translated": "Zezwolono $selectedCount aplikacji na przekazywanie."
+    },
+    {
+      "id": "native.android.8e14608a3c1402f6",
+      "source": "$selectedCount apps allowed to forward.",
+      "translated": "Zezwolono $selectedCount aplikacjom na przekazywanie."
     },
     {
       "id": "native.android.eeabea3c662af708",
       "source": "No apps blocked. Apps can forward unless you add blocks.",
-      "translated": "No apps blocked. Apps can forward unless you add blocks."
+      "translated": "Nie zablokowano żadnych aplikacji. Aplikacje mogą przekazywać dane, dopóki nie dodasz blokad."
     },
     {
-      "id": "native.android.8db7e536cf5ffaf4",
-      "source": "$selectedCount ${if (selectedCount == 1) \"app\" else \"apps\"} blocked from forwarding.",
-      "translated": "$selectedCount ${if (selectedCount == 1) \"app\" else \"apps\"} blocked from forwarding."
+      "id": "native.android.1a85928d28ef9cb5",
+      "source": "$selectedCount app blocked from forwarding.",
+      "translated": "Zablokowano przekazywanie dla $selectedCount aplikacji."
+    },
+    {
+      "id": "native.android.885ff68ccceb5951",
+      "source": "$selectedCount apps blocked from forwarding.",
+      "translated": "Zablokowano przekazywanie dla $selectedCount aplikacji."
+    },
+    {
+      "id": "native.android.0df1b7be4afd30ae",
+      "source": "Due",
+      "translated": "Termin"
+    },
+    {
+      "id": "native.android.2aba2d9099a7012b",
+      "source": "${days}d",
+      "translated": "${days} d"
+    },
+    {
+      "id": "native.android.f735bbd08c3387ad",
+      "source": "${hours}h",
+      "translated": "${hours} godz."
+    },
+    {
+      "id": "native.android.1a1e1ed534d745e7",
+      "source": "${minutes}m",
+      "translated": "${minutes} min"
+    },
+    {
+      "id": "native.android.a1530e72e0309a1f",
+      "source": "Soon",
+      "translated": "Wkrótce"
+    },
+    {
+      "id": "native.android.501ccee3476e35ce",
+      "source": "None",
+      "translated": "Brak"
+    },
+    {
+      "id": "native.android.bafe2765892cc6fa",
+      "source": "Home",
+      "translated": "Strona główna"
     },
     {
       "id": "native.android.30d8b822fa68d6c4",
@@ -3099,11 +5199,6 @@
       "translated": "Przegląd"
     },
     {
-      "id": "native.android.a5c0f8b3112aa58c",
-      "source": "No recent sessions",
-      "translated": "Brak ostatnich sesji"
-    },
-    {
       "id": "native.android.2e33a4fd5f60b550",
       "source": "Start a chat and your active OpenClaw conversations will appear here.",
       "translated": "Rozpocznij czat, a Twoje aktywne rozmowy OpenClaw pojawią się tutaj."
@@ -3112,11 +5207,6 @@
       "id": "native.android.85726cfd4207d48a",
       "source": "Start Chat",
       "translated": "Rozpocznij czat"
-    },
-    {
-      "id": "native.android.4f369a09c8731092",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
     },
     {
       "id": "native.android.097cf19d48e09476",
@@ -3131,7 +5221,7 @@
     {
       "id": "native.android.5fb62fa35b740ba6",
       "source": "$agentName is working",
-      "translated": "$agentName is working"
+      "translated": "$agentName pracuje"
     },
     {
       "id": "native.android.c9a9b5795b73925d",
@@ -3157,11 +5247,6 @@
       "id": "native.android.cda6c35cacd55529",
       "source": "$sessionCount recent",
       "translated": "$sessionCount ostatnie"
-    },
-    {
-      "id": "native.android.16c3425d3a594481",
-      "source": "Sessions",
-      "translated": "Sesje"
     },
     {
       "id": "native.android.9453625738319f06",
@@ -3209,6 +5294,36 @@
       "translated": "Wyświetl wszystko"
     },
     {
+      "id": "native.android.29a2565d51411afe",
+      "source": "Online",
+      "translated": "Online"
+    },
+    {
+      "id": "native.android.2cfb87c0137347c5",
+      "source": "Healthy",
+      "translated": "Sprawny"
+    },
+    {
+      "id": "native.android.7d20664cef69f900",
+      "source": "Reconnect to continue",
+      "translated": "Połącz ponownie, aby kontynuować"
+    },
+    {
+      "id": "native.android.175b10f40886ffdc",
+      "source": "Review highlighted items",
+      "translated": "Sprawdź wyróżnione elementy"
+    },
+    {
+      "id": "native.android.6fbe8c6b61098a1c",
+      "source": "All systems nominal",
+      "translated": "Wszystkie systemy działają prawidłowo"
+    },
+    {
+      "id": "native.android.84393969369585aa",
+      "source": "Nodes",
+      "translated": "Węzły"
+    },
+    {
       "id": "native.android.c6943c0abb7897a6",
       "source": "$onlineNodes/$nodeCount",
       "translated": "$onlineNodes/$nodeCount"
@@ -3219,14 +5334,34 @@
       "translated": "Brak"
     },
     {
+      "id": "native.android.f92afe2dd7fd51a6",
+      "source": "Review node access",
+      "translated": "Sprawdź dostęp do węzła"
+    },
+    {
       "id": "native.android.70c2bdc593d2259b",
       "source": "${nodeOnlinePercent(onlineNodes = onlineNodes, nodeCount = nodeCount)}% online",
       "translated": "${nodeOnlinePercent(onlineNodes = onlineNodes, nodeCount = nodeCount)}% online"
     },
     {
+      "id": "native.android.16c3425d3a594481",
+      "source": "Sessions",
+      "translated": "Sesje"
+    },
+    {
+      "id": "native.android.a5c0f8b3112aa58c",
+      "source": "No recent sessions",
+      "translated": "Brak ostatnich sesji"
+    },
+    {
       "id": "native.android.7178756ffe9e4c72",
       "source": "Recent conversations",
       "translated": "Ostatnie rozmowy"
+    },
+    {
+      "id": "native.android.4d83e15de7fa25bf",
+      "source": "Files",
+      "translated": "Pliki"
     },
     {
       "id": "native.android.cbdaff5e476b7dad",
@@ -3239,19 +5374,59 @@
       "translated": "Offline"
     },
     {
-      "id": "native.android.1196e848f04a3dc1",
-      "source": "Working · $pendingRunCount active ${pluralize(\"run\", pendingRunCount)}",
-      "translated": "Pracuje · $pendingRunCount aktywne ${pluralize(\"run\", pendingRunCount)}"
+      "id": "native.android.6b13be9783f8dfd3",
+      "source": "Agent workspace files",
+      "translated": "Pliki obszaru roboczego agenta"
     },
     {
-      "id": "native.android.f23eab3d31c5e25c",
-      "source": "Needs attention",
-      "translated": "Wymaga uwagi"
+      "id": "native.android.c7c3a0d93e5ef438",
+      "source": "Working · 1 active run",
+      "translated": "Praca · 1 aktywne uruchomienie"
     },
     {
-      "id": "native.android.8452bcda8a619361",
-      "source": "Open ${row.title}",
-      "translated": "Otwórz ${row.title}"
+      "id": "native.android.1ef6db85de3e6fee",
+      "source": "Working · $pendingRunCount active runs",
+      "translated": "Praca · $pendingRunCount aktywnych uruchomień"
+    },
+    {
+      "id": "native.android.2c89da708b12a522",
+      "source": "Monitoring · 1 session",
+      "translated": "Monitorowanie · 1 sesja"
+    },
+    {
+      "id": "native.android.8b6ee382dcb64e1f",
+      "source": "Monitoring · $sessionCount sessions",
+      "translated": "Monitorowanie · $sessionCount sesji"
+    },
+    {
+      "id": "native.android.50f3b7af0428311c",
+      "source": "Monitoring · 1 scheduled job",
+      "translated": "Monitorowanie · 1 zaplanowane zadanie"
+    },
+    {
+      "id": "native.android.2e35dbe0b1999368",
+      "source": "Monitoring · $cronJobCount scheduled jobs",
+      "translated": "Monitorowanie · $cronJobCount zaplanowanych zadań"
+    },
+    {
+      "id": "native.android.4f369a09c8731092",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.android.b5ee8fce135f41e6",
+      "source": "Connect before chat, voice, and live status.",
+      "translated": "Połącz się przed rozpoczęciem czatu, rozmowy głosowej i wyświetlaniem statusu na żywo."
+    },
+    {
+      "id": "native.android.0d57408d7056b08f",
+      "source": "No ready providers",
+      "translated": "Brak gotowych dostawców"
+    },
+    {
+      "id": "native.android.d314a926bb159350",
+      "source": "Providers",
+      "translated": "Dostawcy"
     },
     {
       "id": "native.android.a65477861c7203aa",
@@ -3274,44 +5449,184 @@
       "translated": "Szukaj w ustawieniach"
     },
     {
-      "id": "native.android.68c6f975e8448995",
+      "id": "native.android.25d9f0e58461a74c",
+      "source": "Gateway",
+      "translated": "Gateway"
+    },
+    {
+      "id": "native.android.d92b623c3bac4963",
+      "source": "Nodes & Devices",
+      "translated": "Węzły i urządzenia"
+    },
+    {
+      "id": "native.android.f8406bfe0922c8dd",
+      "source": "Channels",
+      "translated": "Kanały"
+    },
+    {
+      "id": "native.android.bd0501eebb4eb59d",
+      "source": "${agents.size} available",
+      "translated": "${agents.size} dostępnych"
+    },
+    {
+      "id": "native.android.9967a8ab22348475",
+      "source": "Agents",
+      "translated": "Agenci"
+    },
+    {
+      "id": "native.android.7b1f86aeacad732c",
+      "source": "Load from gateway",
+      "translated": "Wczytaj z Gateway"
+    },
+    {
+      "id": "native.android.c6997ee4400492f6",
+      "source": "Providers & Models",
+      "translated": "Dostawcy i modele"
+    },
+    {
+      "id": "native.android.83425d1d1d4eceaf",
+      "source": "$readyProviderCount ready",
+      "translated": "$readyProviderCount gotowych"
+    },
+    {
+      "id": "native.android.7f4a0c978b73faa4",
+      "source": "Availability unknown",
+      "translated": "Dostępność nieznana"
+    },
+    {
+      "id": "native.android.15e967ff698e17ea",
+      "source": "Review readiness",
+      "translated": "Sprawdź gotowość"
+    },
+    {
+      "id": "native.android.1cc3e1841d66f511",
+      "source": "Approvals",
+      "translated": "Zatwierdzenia"
+    },
+    {
+      "id": "native.android.dd2def654c56b026",
+      "source": "Cron Jobs",
+      "translated": "Zadania Cron"
+    },
+    {
+      "id": "native.android.20833251ed61ca65",
+      "source": "Usage",
+      "translated": "Użycie"
+    },
+    {
+      "id": "native.android.fdbaf04018a5ea5f",
+      "source": "Skills",
+      "translated": "Skills"
+    },
+    {
+      "id": "native.android.18b1a6fcf3884187",
+      "source": "Skill Workshop",
+      "translated": "Warsztat Skills"
+    },
+    {
+      "id": "native.android.8e1e08d9de09b359",
+      "source": "Dreaming",
+      "translated": "Śnienie"
+    },
+    {
+      "id": "native.android.b2a231c1e0ee0086",
+      "source": "Shell in the agent workspace",
+      "translated": "Powłoka w przestrzeni roboczej agenta"
+    },
+    {
+      "id": "native.android.b72dfd8536f00045",
+      "source": "Terminal",
+      "translated": "Terminal"
+    },
+    {
+      "id": "native.android.345d2424511d2d53",
       "source": "Speaker muted",
       "translated": "Głośnik wyciszony"
     },
     {
-      "id": "native.android.2ee6a4bee2bffe2a",
+      "id": "native.android.8a1bf1154936cef1",
       "source": "Speaker on",
       "translated": "Głośnik włączony"
     },
     {
-      "id": "native.android.cd87288a95aa2bf3",
-      "source": "Off",
-      "translated": "Wyłączone"
+      "id": "native.android.a68759e4eeaf4b19",
+      "source": "Voice",
+      "translated": "Głos"
     },
     {
-      "id": "native.android.e471a3620a50dd42",
+      "id": "native.android.bfebe7c26b84d327",
+      "source": "Canvas",
+      "translated": "Obszar roboczy"
+    },
+    {
+      "id": "native.android.4ae991f66d10d78c",
+      "source": "Screen surface",
+      "translated": "Powierzchnia ekranu"
+    },
+    {
+      "id": "native.android.e19ca2940c710960",
+      "source": "Notifications",
+      "translated": "Powiadomienia"
+    },
+    {
+      "id": "native.android.69b33c2492973ac3",
       "source": "Smart delivery",
       "translated": "Inteligentne dostarczanie"
     },
     {
-      "id": "native.android.e51cc066a8b41880",
+      "id": "native.android.b93e11ff55b87203",
       "source": "Camera enabled",
       "translated": "Kamera włączona"
     },
     {
-      "id": "native.android.a6179e3618d40108",
+      "id": "native.android.c373c56a0e1486b9",
       "source": "Locked",
       "translated": "Zablokowane"
     },
     {
+      "id": "native.android.e7499ca59295e3c3",
+      "source": "Phone Capabilities",
+      "translated": "Funkcje telefonu"
+    },
+    {
+      "id": "native.android.38ee43bb82b8af81",
+      "source": "Appearance",
+      "translated": "Wygląd"
+    },
+    {
+      "id": "native.android.356003f6a15e6eb1",
+      "source": "About",
+      "translated": "Informacje"
+    },
+    {
+      "id": "native.android.5d2bf7e56d2f017f",
+      "source": "Version and update",
+      "translated": "Wersja i aktualizacja"
+    },
+    {
+      "id": "native.android.fd1cba14e18d1191",
+      "source": "Health",
+      "translated": "Stan"
+    },
+    {
       "id": "native.android.bbf9d9dc946efe85",
       "source": "Account",
-      "translated": "Account"
+      "translated": "Konto"
+    },
+    {
+      "id": "native.android.4dac300b74242a30",
+      "source": "Return to setup",
+      "translated": "Wróć do konfiguracji"
+    },
+    {
+      "id": "native.android.9c538b59f20bde8d",
+      "source": "Sign Out",
+      "translated": "Wyloguj się"
     },
     {
       "id": "native.android.13edbcfbe3598233",
       "source": "Licenses",
-      "translated": "Licenses"
+      "translated": "Licencje"
     },
     {
       "id": "native.android.ca1451df912ed5cf",
@@ -3329,6 +5644,31 @@
       "translated": "Gateway niepołączony"
     },
     {
+      "id": "native.android.7a28b9e23df446df",
+      "source": "No pending approvals",
+      "translated": "Brak oczekujących zatwierdzeń"
+    },
+    {
+      "id": "native.android.58692985549506cf",
+      "source": "$count pending",
+      "translated": "$count oczekujących"
+    },
+    {
+      "id": "native.android.7790ce85e3a0f729",
+      "source": "No scheduled jobs",
+      "translated": "Brak zaplanowanych zadań"
+    },
+    {
+      "id": "native.android.768223c29397ac90",
+      "source": "1 scheduled",
+      "translated": "1 zaplanowane"
+    },
+    {
+      "id": "native.android.8df56e0a24527c65",
+      "source": "$count scheduled",
+      "translated": "$count zaplanowanych"
+    },
+    {
       "id": "native.android.b790e7b89f4b44cc",
       "source": "No provider usage",
       "translated": "Brak użycia dostawcy"
@@ -3344,6 +5684,16 @@
       "translated": "$count dostawców"
     },
     {
+      "id": "native.android.6c241c955cb2d16f",
+      "source": "No skills",
+      "translated": "Brak umiejętności"
+    },
+    {
+      "id": "native.android.a869a32e5f9a3058",
+      "source": "$ready/${skills.size} ready",
+      "translated": "$ready/${skills.size} gotowych"
+    },
+    {
       "id": "native.android.560fea9426127f28",
       "source": "$pending pending",
       "translated": "$pending oczekujących"
@@ -3352,6 +5702,11 @@
       "id": "native.android.5d6077f3ff6528f8",
       "source": "1 pending",
       "translated": "1 oczekujący"
+    },
+    {
+      "id": "native.android.6e7ff52823c3ff89",
+      "source": "No proposals",
+      "translated": "Brak propozycji"
     },
     {
       "id": "native.android.c233607d1c8f2b91",
@@ -3374,6 +5729,96 @@
       "translated": "1 zastosowany"
     },
     {
+      "id": "native.android.3f55e7f39f6084e4",
+      "source": "${summary.proposals.size} proposals",
+      "translated": "${summary.proposals.size} propozycji"
+    },
+    {
+      "id": "native.android.d038f42bfb676950",
+      "source": "${summary.pendingDevices.size} pending",
+      "translated": "${summary.pendingDevices.size} oczekujących"
+    },
+    {
+      "id": "native.android.890314ede0dd9848",
+      "source": "Node approval pending",
+      "translated": "Oczekujące zatwierdzenie węzła"
+    },
+    {
+      "id": "native.android.9b283b01b7ac6470",
+      "source": "$online/${summary.nodes.size} online",
+      "translated": "$online/${summary.nodes.size} online"
+    },
+    {
+      "id": "native.android.97b973ade2e7b96f",
+      "source": "$devices paired",
+      "translated": "$devices sparowanych"
+    },
+    {
+      "id": "native.android.96f9b8b43f567edd",
+      "source": "No devices",
+      "translated": "Brak urządzeń"
+    },
+    {
+      "id": "native.android.b35635829d78f834",
+      "source": "1 issue",
+      "translated": "1 problem"
+    },
+    {
+      "id": "native.android.4b45109e2ef53141",
+      "source": "$issueCount issues",
+      "translated": "$issueCount problemów"
+    },
+    {
+      "id": "native.android.7c976c127f498a67",
+      "source": "$connected/${summary.channels.size} connected",
+      "translated": "$connected/${summary.channels.size} połączonych"
+    },
+    {
+      "id": "native.android.20c59591880c67a6",
+      "source": "No channels",
+      "translated": "Brak kanałów"
+    },
+    {
+      "id": "native.android.f23eab3d31c5e25c",
+      "source": "Needs attention",
+      "translated": "Wymaga uwagi"
+    },
+    {
+      "id": "native.android.58a7d8145aad5563",
+      "source": "${summary.shortTermCount} waiting",
+      "translated": "${summary.shortTermCount} oczekujących"
+    },
+    {
+      "id": "native.android.cd87288a95aa2bf3",
+      "source": "Off",
+      "translated": "Wyłączone"
+    },
+    {
+      "id": "native.android.ba361ddd6a717896",
+      "source": "Connection",
+      "translated": "Połączenie"
+    },
+    {
+      "id": "native.android.6d7b0a128501c806",
+      "source": "Agents & automation",
+      "translated": "Agenci i automatyzacja"
+    },
+    {
+      "id": "native.android.089081d83500e803",
+      "source": "Phone context & privacy",
+      "translated": "Kontekst telefonu i prywatność"
+    },
+    {
+      "id": "native.android.2f9065a33f14e7d2",
+      "source": "Profile & device",
+      "translated": "Profil i urządzenie"
+    },
+    {
+      "id": "native.android.d02e4bd31a7e1448",
+      "source": "Diagnostics",
+      "translated": "Diagnostyka"
+    },
+    {
       "id": "native.android.e197964b10ba02ce",
       "source": "OpenClaw mobile",
       "translated": "OpenClaw mobile"
@@ -3384,9 +5829,74 @@
       "translated": "Otwórz profil"
     },
     {
+      "id": "native.android.8452bcda8a619361",
+      "source": "Open ${row.title}",
+      "translated": "Otwórz ${row.title}"
+    },
+    {
+      "id": "native.android.56bd0ad4eb7d0f2e",
+      "source": "now",
+      "translated": "teraz"
+    },
+    {
+      "id": "native.android.46363d9a775b4f46",
+      "source": "${minutes}m",
+      "translated": "${minutes} min"
+    },
+    {
+      "id": "native.android.4d91d1f25b481ad7",
+      "source": "${hours}h",
+      "translated": "${hours} godz."
+    },
+    {
+      "id": "native.android.0c07416f9575a1e1",
+      "source": "${days}d",
+      "translated": "${days} d"
+    },
+    {
       "id": "native.android.22d755834386db07",
       "source": "Main session",
       "translated": "Sesja główna"
+    },
+    {
+      "id": "native.android.b1f9c790e2dbac1b",
+      "source": "Online and ready",
+      "translated": "Online i gotowy"
+    },
+    {
+      "id": "native.android.9b74d044976c7bac",
+      "source": "Connecting...",
+      "translated": "Łączenie..."
+    },
+    {
+      "id": "native.android.2b6a48a875b5185b",
+      "source": "Waiting for pairing",
+      "translated": "Oczekiwanie na sparowanie"
+    },
+    {
+      "id": "native.android.98c321a94e8955f3",
+      "source": "Authentication needed",
+      "translated": "Wymagane uwierzytelnienie"
+    },
+    {
+      "id": "native.android.db1575c8d12c98cd",
+      "source": "TLS timed out",
+      "translated": "Upłynął limit czasu TLS"
+    },
+    {
+      "id": "native.android.28eb55f89255cfb7",
+      "source": "No TLS endpoint",
+      "translated": "Brak punktu końcowego TLS"
+    },
+    {
+      "id": "native.android.aaca9c678a681311",
+      "source": "Certificate review needed",
+      "translated": "Wymagana weryfikacja certyfikatu"
+    },
+    {
+      "id": "native.android.ca180f1e4dd6f138",
+      "source": "Not connected",
+      "translated": "Brak połączenia"
     },
     {
       "id": "native.android.7c6f9feb2c16785f",
@@ -3419,14 +5929,34 @@
       "translated": "Pasujące propozycje pojawią się tutaj po utworzeniu przez agentów wersji roboczych umiejętności wielokrotnego użytku."
     },
     {
-      "id": "native.android.445ab883554e0249",
-      "source": "${action.action.label} proposal?",
-      "translated": "${action.action.label} propozycję?"
+      "id": "native.android.5d74393d0de6451f",
+      "source": "Apply proposal?",
+      "translated": "Zastosować propozycję?"
     },
     {
-      "id": "native.android.3b3a3f231ac05371",
-      "source": "This will ${action.action.label.lowercase()} \"${action.title}\" and refresh Skill Workshop state from the gateway.",
-      "translated": "Spowoduje to ${action.action.label.lowercase()} \"${action.title}\" oraz odświeżenie stanu Skill Workshop z gatewaya."
+      "id": "native.android.41eb9432f11ea617",
+      "source": "Reject proposal?",
+      "translated": "Odrzucić propozycję?"
+    },
+    {
+      "id": "native.android.d25bbd5c31ec4e29",
+      "source": "Quarantine proposal?",
+      "translated": "Poddaj propozycję kwarantannie?"
+    },
+    {
+      "id": "native.android.e4d259cb19615fec",
+      "source": "This will apply \"$proposalTitle\" and refresh Skill Workshop state from the gateway.",
+      "translated": "Spowoduje to zastosowanie propozycji „$proposalTitle” i odświeżenie stanu Skill Workshop z gateway."
+    },
+    {
+      "id": "native.android.d307cb32b9a0cf3f",
+      "source": "This will reject \"$proposalTitle\" and refresh Skill Workshop state from the gateway.",
+      "translated": "Spowoduje to odrzucenie propozycji „$proposalTitle” i odświeżenie stanu Skill Workshop z gateway."
+    },
+    {
+      "id": "native.android.2089750e835e174e",
+      "source": "This will quarantine \"$proposalTitle\" and refresh Skill Workshop state from the gateway.",
+      "translated": "Spowoduje to poddanie propozycji „$proposalTitle” kwarantannie i odświeżenie stanu Skill Workshop z gateway."
     },
     {
       "id": "native.android.de53fb795cb7dbea",
@@ -3457,6 +5987,26 @@
       "id": "native.android.f032646f923b66b3",
       "source": "Selected",
       "translated": "Wybrane"
+    },
+    {
+      "id": "native.android.8da9062a94c41c45",
+      "source": "Kind",
+      "translated": "Rodzaj"
+    },
+    {
+      "id": "native.android.299b7a38a8d5f1a9",
+      "source": "Updated",
+      "translated": "Zaktualizowano"
+    },
+    {
+      "id": "native.android.8b3b14c6dfb639b8",
+      "source": "Support Files",
+      "translated": "Pliki pomocnicze"
+    },
+    {
+      "id": "native.android.47c0dca3085f38bf",
+      "source": "Inspect this proposal to load its markdown.",
+      "translated": "Sprawdź tę propozycję, aby wczytać jej treść w formacie Markdown."
     },
     {
       "id": "native.android.cc4d05c30c0dcaa7",
@@ -3504,6 +6054,16 @@
       "translated": "Kwarantanna"
     },
     {
+      "id": "native.android.61f447004be2510f",
+      "source": "Loading",
+      "translated": "Ładowanie"
+    },
+    {
+      "id": "native.android.10bf039a2781c9b3",
+      "source": "All",
+      "translated": "Wszystkie"
+    },
+    {
       "id": "native.android.cabcb1f61fa3cd6f",
       "source": "Pending",
       "translated": "Oczekujące"
@@ -3524,14 +6084,14 @@
       "translated": "Odrzucone"
     },
     {
-      "id": "native.android.10bf039a2781c9b3",
-      "source": "All",
-      "translated": "Wszystkie"
-    },
-    {
       "id": "native.android.6ce9b4b919803618",
       "source": "Default agent",
       "translated": "Domyślny agent"
+    },
+    {
+      "id": "native.android.e04090da68a3251f",
+      "source": "Unknown",
+      "translated": "Nieznany"
     },
     {
       "id": "native.android.4590ee99228ab55f",
@@ -3539,9 +6099,14 @@
       "translated": "Skills"
     },
     {
-      "id": "native.android.73a666b0a4a0e617",
-      "source": "Installed capabilities available to OpenClaw.",
-      "translated": "Zainstalowane możliwości dostępne dla OpenClaw."
+      "id": "native.android.d8a2361917591397",
+      "source": "Manage installed skills and add trusted releases from ClawHub.",
+      "translated": "Zarządzaj zainstalowanymi umiejętnościami i dodawaj zaufane wydania z ClawHub."
+    },
+    {
+      "id": "native.android.8d8bafb716f856dd",
+      "source": "Needs Setup",
+      "translated": "Wymaga konfiguracji"
     },
     {
       "id": "native.android.9507bc022dc2e3ed",
@@ -3552,6 +6117,11 @@
       "id": "native.android.7d03a8b47442f3c4",
       "source": "Refreshing",
       "translated": "Odświeżanie"
+    },
+    {
+      "id": "native.android.c6d0b8c171da5e69",
+      "source": "Skill changes require operator.admin. Reconnect with an admin-capable gateway token.",
+      "translated": "Zmiany umiejętności wymagają uprawnienia operator.admin. Połącz się ponownie, używając tokenu Gateway z uprawnieniami administratora."
     },
     {
       "id": "native.android.73f15da5b2ffdf3c",
@@ -3569,14 +6139,54 @@
       "translated": "Skills zainstalowane na Gateway pojawią się tutaj."
     },
     {
-      "id": "native.android.81d900273232ce39",
-      "source": "Inspect installed skill capability and setup state.",
-      "translated": "Sprawdź zainstalowaną możliwość skill i stan konfiguracji."
+      "id": "native.android.193fa2086c682510",
+      "source": "No installed skills match this search.",
+      "translated": "Żadne zainstalowane umiejętności nie pasują do tego wyszukiwania."
     },
     {
-      "id": "native.android.f8ddbaf7e1288598",
-      "source": "Setup",
-      "translated": "Konfiguracja"
+      "id": "native.android.cf0bc487b537dd04",
+      "source": "Inspect and manage installed skill state.",
+      "translated": "Sprawdzaj stan zainstalowanych umiejętności i zarządzaj nim."
+    },
+    {
+      "id": "native.android.92e94c3027f3e5ce",
+      "source": "Status",
+      "translated": "Status"
+    },
+    {
+      "id": "native.android.3866fe91a977b21a",
+      "source": "Missing",
+      "translated": "Brak"
+    },
+    {
+      "id": "native.android.944e0db270dbef5c",
+      "source": "Installed skills",
+      "translated": "Zainstalowane umiejętności"
+    },
+    {
+      "id": "native.android.47ee8c52e754f17d",
+      "source": "${visibleCount}/${totalCount}",
+      "translated": "${visibleCount}/${totalCount}"
+    },
+    {
+      "id": "native.android.8748f97cadea1632",
+      "source": "Search installed skills",
+      "translated": "Szukaj zainstalowanych umiejętności"
+    },
+    {
+      "id": "native.android.e7aa097ca1a41857",
+      "source": "Gateway switch",
+      "translated": "Przełącznik Gateway"
+    },
+    {
+      "id": "native.android.b37f4ed946baddb5",
+      "source": "Disabled for all agents.",
+      "translated": "Wyłączono dla wszystkich agentów."
+    },
+    {
+      "id": "native.android.fd25021f8a754b8b",
+      "source": "Enabled for eligible agents.",
+      "translated": "Włączono dla kwalifikujących się agentów."
     },
     {
       "id": "native.android.28e324e5ddfa47b8",
@@ -3589,9 +6199,204 @@
       "translated": "Szczegóły skill nie są dostępne w bieżącym statusie skills."
     },
     {
+      "id": "native.android.e99b53e8ac2c5146",
+      "source": "Skill Key",
+      "translated": "Klucz Skill"
+    },
+    {
+      "id": "native.android.351ea510f68769af",
+      "source": "Display",
+      "translated": "Wyświetlanie"
+    },
+    {
+      "id": "native.android.7ffacd569302fb7d",
+      "source": "Source",
+      "translated": "Źródło"
+    },
+    {
+      "id": "native.android.72bbf31bf75169eb",
+      "source": "Install Options",
+      "translated": "Opcje instalacji"
+    },
+    {
       "id": "native.android.3b697df990c29cb3",
       "source": "Description",
       "translated": "Opis"
+    },
+    {
+      "id": "native.android.8434f9db55d723b1",
+      "source": "Open skill detail",
+      "translated": "Otwórz szczegóły Skill"
+    },
+    {
+      "id": "native.android.b8f2fcd78ea247d5",
+      "source": "Find on ClawHub",
+      "translated": "Znajdź w ClawHub"
+    },
+    {
+      "id": "native.android.51728d0754b4e72b",
+      "source": "Search registry metadata. The Gateway verifies trust again before any download.",
+      "translated": "Przeszukuj metadane rejestru. Gateway ponownie weryfikuje zaufanie przed każdym pobraniem."
+    },
+    {
+      "id": "native.android.c0ae6db636e9b766",
+      "source": "Search ClawHub",
+      "translated": "Przeszukaj ClawHub"
+    },
+    {
+      "id": "native.android.0f030fcf6f4626f2",
+      "source": "Search",
+      "translated": "Szukaj"
+    },
+    {
+      "id": "native.android.d7ce0165b8af0803",
+      "source": "Searching",
+      "translated": "Wyszukiwanie"
+    },
+    {
+      "id": "native.android.559e047666ce63f8",
+      "source": "Dismiss",
+      "translated": "Odrzuć"
+    },
+    {
+      "id": "native.android.0c00aa53506c3cd3",
+      "source": "Acknowledge Gateway warning and install",
+      "translated": "Potwierdź ostrzeżenie Gateway i zainstaluj"
+    },
+    {
+      "id": "native.android.cc0b71a70901e723",
+      "source": "Version $it",
+      "translated": "Version $it"
+    },
+    {
+      "id": "native.android.4c85b5d888652e61",
+      "source": "Installing",
+      "translated": "Installing"
+    },
+    {
+      "id": "native.android.58e92f6f7ee9a870",
+      "source": "Loading",
+      "translated": "Loading"
+    },
+    {
+      "id": "native.android.e63592576acd892e",
+      "source": "Review",
+      "translated": "Review"
+    },
+    {
+      "id": "native.android.9be29ded6a7097bf",
+      "source": "Review ClawHub skill",
+      "translated": "Sprawdź umiejętność ClawHub"
+    },
+    {
+      "id": "native.android.43d6a41fe9988e8b",
+      "source": "Version",
+      "translated": "Wersja"
+    },
+    {
+      "id": "native.android.71b746307f24c526",
+      "source": "Publisher",
+      "translated": "Wydawca"
+    },
+    {
+      "id": "native.android.d3da485c52921b9b",
+      "source": "The Gateway will verify this exact release with ClawHub before download. If the release needs explicit risk acknowledgement, Android will show the Gateway warning before retrying.",
+      "translated": "Przed pobraniem Gateway zweryfikuje dokładnie tę wersję w ClawHub. Jeśli wersja wymaga wyraźnego potwierdzenia ryzyka, Android wyświetli ostrzeżenie Gateway przed ponowną próbą."
+    },
+    {
+      "id": "native.android.e9a00012aa173335",
+      "source": "Verify and install",
+      "translated": "Zweryfikuj i zainstaluj"
+    },
+    {
+      "id": "native.android.268a3461947b22d3",
+      "source": "Cancel",
+      "translated": "Anuluj"
+    },
+    {
+      "id": "native.android.815c8dab8db8a6c1",
+      "source": "Off",
+      "translated": "Wyłączone"
+    },
+    {
+      "id": "native.android.f8ddbaf7e1288598",
+      "source": "Setup",
+      "translated": "Konfiguracja"
+    },
+    {
+      "id": "native.android.1b1f80fd2e01be65",
+      "source": "Ready",
+      "translated": "Gotowe"
+    },
+    {
+      "id": "native.android.54af2bdbbbeb2a73",
+      "source": "Disabled",
+      "translated": "Wyłączona"
+    },
+    {
+      "id": "native.android.4d14c2a9e3eaf321",
+      "source": "Blocked",
+      "translated": "Zablokowana"
+    },
+    {
+      "id": "native.android.a30361b1cecbd677",
+      "source": "Not available to this agent",
+      "translated": "Not available to this agent"
+    },
+    {
+      "id": "native.android.76249053ea991da2",
+      "source": "Needs setup",
+      "translated": "Wymaga konfiguracji"
+    },
+    {
+      "id": "native.android.897cd727907f3bab",
+      "source": "This skill is disabled on the gateway. Enable it here when the current connection has operator.admin.",
+      "translated": "This skill is disabled on the gateway. Enable it here when the current connection has operator.admin."
+    },
+    {
+      "id": "native.android.9c942aba65c09b84",
+      "source": "This skill is blocked by the gateway allowlist. Allowlist changes stay on desktop or CLI.",
+      "translated": "This skill is blocked by the gateway allowlist. Allowlist changes stay on desktop or CLI."
+    },
+    {
+      "id": "native.android.a30dea20e935158a",
+      "source": "This skill is installed but not available to the current agent. Agent filters stay on desktop or CLI.",
+      "translated": "This skill is installed but not available to the current agent. Agent filters stay on desktop or CLI."
+    },
+    {
+      "id": "native.android.95aa7173d663453f",
+      "source": "This skill is installed but not currently eligible to run. Use desktop or CLI for configuration changes.",
+      "translated": "Ta umiejętność jest zainstalowana, ale obecnie nie może zostać uruchomiona. Aby zmienić konfigurację, użyj komputera lub CLI."
+    },
+    {
+      "id": "native.android.5d931c33b02138fe",
+      "source": "Ready on this gateway. Android can enable or disable it globally; setup and configuration stay on desktop or CLI.",
+      "translated": "Ready on this gateway. Android can enable or disable it globally; setup and configuration stay on desktop or CLI."
+    },
+    {
+      "id": "native.android.ab1f2758d6297a24",
+      "source": "No missing items",
+      "translated": "Brak brakujących elementów"
+    },
+    {
+      "id": "native.android.66c55ac8566a9c11",
+      "source": "1 missing item",
+      "translated": "Brakuje 1 elementu"
+    },
+    {
+      "id": "native.android.56415957f1cf75cf",
+      "source": "$count missing items",
+      "translated": "Brakuje elementów: $count"
+    },
+    {
+      "id": "native.android.dd4d03a0a63dfe95",
+      "source": "This skill needs 1 setup item. Android shows what is installed; setup/config changes stay on desktop or CLI.",
+      "translated": "Ta umiejętność wymaga skonfigurowania 1 elementu. W systemie Android można sprawdzić, co jest zainstalowane; ustawienia i konfigurację można zmienić tylko na komputerze lub za pomocą CLI."
+    },
+    {
+      "id": "native.android.bc82778b69fef18f",
+      "source": "This skill needs $count setup items. Android shows what is installed; setup/config changes stay on desktop or CLI.",
+      "translated": "Ta umiejętność wymaga skonfigurowania $count elementów. W systemie Android można sprawdzić, co jest zainstalowane; ustawienia i konfigurację można zmienić tylko na komputerze lub za pomocą CLI."
     },
     {
       "id": "native.android.d4839a05fe9c87f6",
@@ -3644,9 +6449,9 @@
       "translated": "Połącz się ze swoim Gateway, aby otworzyć powłokę w obszarze roboczym agenta."
     },
     {
-      "id": "native.android.5e0524a5d86e673a",
-      "source": "Dictation",
-      "translated": "Dyktowanie"
+      "id": "native.android.0dc79cebfa3efb37",
+      "source": "Your voice command center.",
+      "translated": "Twoje centrum poleceń głosowych."
     },
     {
       "id": "native.android.afda4b6690e194bb",
@@ -3694,24 +6499,19 @@
       "translated": "Powrót do głosu"
     },
     {
-      "id": "native.android.3d5d539d6adde13c",
-      "source": "Realtime Talk",
-      "translated": "Rozmowa w czasie rzeczywistym"
-    },
-    {
       "id": "native.android.9d977253fdcda216",
       "source": "OpenClaw speaking",
-      "translated": "OpenClaw speaking"
+      "translated": "OpenClaw mówi"
     },
     {
       "id": "native.android.1babfd757bbcfeb4",
       "source": "Realtime voice",
-      "translated": "Realtime voice"
+      "translated": "Głos w czasie rzeczywistym"
     },
     {
       "id": "native.android.4a273a765eedc369",
       "source": "Connected",
-      "translated": "Connected"
+      "translated": "Połączono"
     },
     {
       "id": "native.android.33ec06cb156adf64",
@@ -3744,9 +6544,9 @@
       "translated": "Nasłuchiwanie Twojej następnej wypowiedzi."
     },
     {
-      "id": "native.android.253debc9d0714dda",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "id": "native.android.fc4b1e885e522179",
+      "source": "Listening response...",
+      "translated": "Nasłuchiwanie odpowiedzi..."
     },
     {
       "id": "native.android.ece74bf084239d34",
@@ -3769,9 +6569,29 @@
       "translated": "Włącz dźwięk głośnika"
     },
     {
-      "id": "native.android.1493d618a615552d",
-      "source": "End Talk",
-      "translated": "Zakończ rozmowę"
+      "id": "native.android.2e2b5efe4ca2380a",
+      "source": "OpenClaw is replying",
+      "translated": "OpenClaw odpowiada"
+    },
+    {
+      "id": "native.android.64731fc46a862f86",
+      "source": "Dictation is listening",
+      "translated": "Dyktowanie nasłuchuje"
+    },
+    {
+      "id": "native.android.3d5d539d6adde13c",
+      "source": "Realtime Talk",
+      "translated": "Rozmowa w czasie rzeczywistym"
+    },
+    {
+      "id": "native.android.13de69e3a8f3e940",
+      "source": "Conversation is live",
+      "translated": "Rozmowa jest aktywna"
+    },
+    {
+      "id": "native.android.5e0524a5d86e673a",
+      "source": "Dictation",
+      "translated": "Dyktowanie"
     },
     {
       "id": "native.android.13e71be7bb52391b",
@@ -3779,14 +6599,89 @@
       "translated": "Zatrzymaj dyktowanie"
     },
     {
+      "id": "native.android.55155dac245a912e",
+      "source": "Listening for one turn",
+      "translated": "Nasłuchiwanie jednej wypowiedzi"
+    },
+    {
+      "id": "native.android.1633edb1aeea869a",
+      "source": "Connect gateway to start",
+      "translated": "Połącz Gateway, aby rozpocząć"
+    },
+    {
+      "id": "native.android.1493d618a615552d",
+      "source": "End Talk",
+      "translated": "Zakończ rozmowę"
+    },
+    {
+      "id": "native.android.36483c3f44fa57bb",
+      "source": "Set Up Talk",
+      "translated": "Skonfiguruj rozmowę"
+    },
+    {
+      "id": "native.android.89de503368d75337",
+      "source": "Start Talk",
+      "translated": "Rozpocznij rozmowę"
+    },
+    {
+      "id": "native.android.f7c0257bdcd86e1a",
+      "source": "Connect Gateway",
+      "translated": "Połącz z Gateway"
+    },
+    {
       "id": "native.android.71fa9c845cdb89bd",
       "source": "Voice setup",
       "translated": "Konfiguracja głosu"
     },
     {
+      "id": "native.android.8c28f5ea041bc63d",
+      "source": "Ready",
+      "translated": "Gotowe"
+    },
+    {
+      "id": "native.android.4294ae0897891492",
+      "source": "Setup",
+      "translated": "Konfiguracja"
+    },
+    {
+      "id": "native.android.141feb0f6f50849e",
+      "source": "Attention",
+      "translated": "Uwaga"
+    },
+    {
+      "id": "native.android.21045fcc25e263c1",
+      "source": "Unverified",
+      "translated": "Niezweryfikowane"
+    },
+    {
+      "id": "native.android.3ff5c1971783c590",
+      "source": "Offline",
+      "translated": "Offline"
+    },
+    {
+      "id": "native.android.d95742f0d232e1bf",
+      "source": "Talk: ${gatewayTalkSetupDescription(readiness.realtimeTalk)}",
+      "translated": "Rozmowa: ${gatewayTalkSetupDescription(readiness.realtimeTalk)}"
+    },
+    {
+      "id": "native.android.00d858440326e55b",
+      "source": "Dictation: ${gatewayTalkSetupDescription(readiness.dictation)}",
+      "translated": "Dyktowanie: ${gatewayTalkSetupDescription(readiness.dictation)}"
+    },
+    {
+      "id": "native.android.253debc9d0714dda",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
       "id": "native.android.24057bba4bbfa27a",
       "source": "You",
       "translated": "Ty"
+    },
+    {
+      "id": "native.android.6d8a4557442e4f2f",
+      "source": "Listening...",
+      "translated": "Słuchanie..."
     },
     {
       "id": "native.android.c4423034d764ee3f",
@@ -3817,6 +6712,76 @@
       "id": "native.android.b10a51fe9d4b8d2d",
       "source": "Enable Microphone",
       "translated": "Włącz mikrofon"
+    },
+    {
+      "id": "native.android.c8bff891c9a442d9",
+      "source": "OpenClaw is speaking",
+      "translated": "OpenClaw mówi"
+    },
+    {
+      "id": "native.android.248e1292eff12b84",
+      "source": "Talk is live",
+      "translated": "Rozmowa trwa"
+    },
+    {
+      "id": "native.android.32d24d76c0a8e8c5",
+      "source": "Sending dictation",
+      "translated": "Wysyłanie dyktowanego tekstu"
+    },
+    {
+      "id": "native.android.2901dc14aa25420c",
+      "source": "Listening",
+      "translated": "Słuchanie"
+    },
+    {
+      "id": "native.android.d0dd93e3eb7a6078",
+      "source": "$micQueuedMessages queued",
+      "translated": "W kolejce: $micQueuedMessages"
+    },
+    {
+      "id": "native.android.889631f464ea1184",
+      "source": "Gateway offline",
+      "translated": "Gateway jest offline"
+    },
+    {
+      "id": "native.android.a29cbd6e0f2ff2f0",
+      "source": "Ready to talk",
+      "translated": "Gotowe do rozmowy"
+    },
+    {
+      "id": "native.android.2201dae0e31a4a37",
+      "source": "Realtime voice provider is not configured.",
+      "translated": "Dostawca głosu w czasie rzeczywistym nie jest skonfigurowany."
+    },
+    {
+      "id": "native.android.49a459ce3c7c9328",
+      "source": "Realtime transcription provider is not configured.",
+      "translated": "Dostawca transkrypcji w czasie rzeczywistym nie jest skonfigurowany."
+    },
+    {
+      "id": "native.android.df3c36245226e1b7",
+      "source": "Microphone permission is required.",
+      "translated": "Wymagane jest uprawnienie do korzystania z mikrofonu."
+    },
+    {
+      "id": "native.android.d50cb0d8fab6d37d",
+      "source": "Connected and ready",
+      "translated": "Połączono i gotowe"
+    },
+    {
+      "id": "native.android.4ba9bb5ab2049a03",
+      "source": "Gateway not connected",
+      "translated": "Gateway nie jest połączony"
+    },
+    {
+      "id": "native.android.d50494a6e80589f7",
+      "source": "Connect the gateway to browse workspace files.",
+      "translated": "Połącz Gateway, aby przeglądać pliki obszaru roboczego."
+    },
+    {
+      "id": "native.android.5ce3b539fb5ded51",
+      "source": "Files",
+      "translated": "Pliki"
     },
     {
       "id": "native.android.066337249b9d9d30",
@@ -3854,6 +6819,11 @@
       "translated": "${entries.size} z $totalEntries"
     },
     {
+      "id": "native.android.5cd2fdaf5e144d95",
+      "source": "This file cannot be previewed. It may be binary or too large.",
+      "translated": "Nie można wyświetlić podglądu tego pliku. Może to być plik binarny lub zbyt duży."
+    },
+    {
       "id": "native.android.b2a525ca00a799df",
       "source": "Back",
       "translated": "Wstecz"
@@ -3882,6 +6852,11 @@
       "id": "native.android.cd2033b0a82a72dd",
       "source": "$index.",
       "translated": "$index."
+    },
+    {
+      "id": "native.android.85e10901e14bd3eb",
+      "source": "Image",
+      "translated": "Obraz"
     },
     {
       "id": "native.android.bef360f847488651",
@@ -3914,11 +6889,6 @@
       "translated": "Kopiuj"
     },
     {
-      "id": "native.android.319b4a29df279bb3",
-      "source": "Select text",
-      "translated": "Zaznacz tekst"
-    },
-    {
       "id": "native.android.fc50d4d9ec3b5a0b",
       "source": "Share",
       "translated": "Udostępnij"
@@ -3927,6 +6897,11 @@
       "id": "native.android.7b896902a024d85f",
       "source": "Reply",
       "translated": "Odpowiedz"
+    },
+    {
+      "id": "native.android.319b4a29df279bb3",
+      "source": "Select text",
+      "translated": "Zaznacz tekst"
     },
     {
       "id": "native.android.3f40011c9f02a65a",
@@ -4004,14 +6979,34 @@
       "translated": "... +${toolCalls.size - 6} więcej"
     },
     {
-      "id": "native.android.552a4d6f5110e6a3",
-      "source": "user",
-      "translated": "user"
+      "id": "native.android.4367fbf22b9ac649",
+      "source": "Queued — sends when reconnected",
+      "translated": "W kolejce — zostanie wysłane po ponownym połączeniu"
     },
     {
-      "id": "native.android.b3ff30d4e0b3ce58",
-      "source": "You",
-      "translated": "Ty"
+      "id": "native.android.1cd961d3d9ab8305",
+      "source": "Sending…",
+      "translated": "Wysyłanie…"
+    },
+    {
+      "id": "native.android.074e6050d6e72e66",
+      "source": "Sent — confirming delivery…",
+      "translated": "Wysłano — potwierdzanie dostarczenia…"
+    },
+    {
+      "id": "native.android.15d71d54c0ce946b",
+      "source": "Failed",
+      "translated": "Niepowodzenie"
+    },
+    {
+      "id": "native.android.6f734a7527ae9c5a",
+      "source": "Failed — $it",
+      "translated": "Niepowodzenie — $it"
+    },
+    {
+      "id": "native.android.552a4d6f5110e6a3",
+      "source": "user",
+      "translated": "użytkownik"
     },
     {
       "id": "native.android.10d8391dea9f334b",
@@ -4031,12 +7026,17 @@
     {
       "id": "native.android.5d4f893886312f82",
       "source": "assistant",
-      "translated": "assistant"
+      "translated": "asystent"
     },
     {
       "id": "native.android.dfbd755eb43b4d26",
       "source": "OpenClaw · Live",
       "translated": "OpenClaw · Na żywo"
+    },
+    {
+      "id": "native.android.b3ff30d4e0b3ce58",
+      "source": "You",
+      "translated": "Ty"
     },
     {
       "id": "native.android.d29098025118ce4b",
@@ -4049,9 +7049,19 @@
       "translated": "OpenClaw"
     },
     {
+      "id": "native.android.02b4598277aca860",
+      "source": "Attachment",
+      "translated": "Załącznik"
+    },
+    {
       "id": "native.android.316927b46135a7ab",
       "source": "Open image preview",
       "translated": "Otwórz podgląd obrazu"
+    },
+    {
+      "id": "native.android.4c1408ddaffe7404",
+      "source": "Image preview",
+      "translated": "Podgląd obrazu"
     },
     {
       "id": "native.android.7f8cf7bee5cc491f",
@@ -4064,9 +7074,14 @@
       "translated": "Nieobsługiwany załącznik"
     },
     {
+      "id": "native.android.118e8d239b18895e",
+      "source": "Model",
+      "translated": "Model"
+    },
+    {
       "id": "native.android.794796c2c771a75b",
       "source": "Some shared images were omitted or could not be added.",
-      "translated": "Some shared images were omitted or could not be added."
+      "translated": "Niektóre udostępnione obrazy zostały pominięte lub nie można było ich dodać."
     },
     {
       "id": "native.android.22a4efbe2bab8b80",
@@ -4079,14 +7094,19 @@
       "translated": "Wszystkie"
     },
     {
-      "id": "native.android.25d8575c0063aee5",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
+      "id": "native.android.4a198e67719b8e83",
+      "source": "Working",
+      "translated": "Przetwarzanie"
     },
     {
-      "id": "native.android.4437f3cbdb3c8cbe",
-      "source": "New chat",
-      "translated": "Nowy czat"
+      "id": "native.android.74f0531c572d1a9c",
+      "source": "Ready",
+      "translated": "Gotowe"
+    },
+    {
+      "id": "native.android.278e466dce078f58",
+      "source": "Offline",
+      "translated": "Offline"
     },
     {
       "id": "native.android.6b0f8ea129bca167",
@@ -4121,17 +7141,17 @@
     {
       "id": "native.android.569efec44d3ac9f8",
       "source": "Start with a prompt, or use voice.",
-      "translated": "Start with a prompt, or use voice."
+      "translated": "Zacznij od wpisania polecenia lub użyj głosu."
     },
     {
       "id": "native.android.28238225371cf3c3",
       "source": "Use the recovery options below to reconnect.",
-      "translated": "Use the recovery options below to reconnect."
+      "translated": "Użyj poniższych opcji odzyskiwania, aby ponownie nawiązać połączenie."
     },
     {
       "id": "native.android.55bd10b5ca2368db",
       "source": "Chat is checking Gateway health.",
-      "translated": "Chat is checking Gateway health."
+      "translated": "Czat sprawdza stan Gateway."
     },
     {
       "id": "native.android.6bbe3c5b5193d985",
@@ -4142,6 +7162,76 @@
       "id": "native.android.579c05816c7dfa79",
       "source": "Copy diagnostics",
       "translated": "Kopiuj diagnostykę"
+    },
+    {
+      "id": "native.android.4396f9672e0878f7",
+      "source": "Catch me up",
+      "translated": "Nadrób zaległości"
+    },
+    {
+      "id": "native.android.1e5add56e48c99f9",
+      "source": "Summarize recent sessions and next steps.",
+      "translated": "Podsumuj ostatnie sesje i kolejne kroki."
+    },
+    {
+      "id": "native.android.06d515351bb79576",
+      "source": "Catch me up on my recent OpenClaw sessions and suggest next steps.",
+      "translated": "Podsumuj moje ostatnie sesje OpenClaw i zaproponuj kolejne kroki."
+    },
+    {
+      "id": "native.android.79f64f0b5ecaa07c",
+      "source": "Plan the work",
+      "translated": "Zaplanuj pracę"
+    },
+    {
+      "id": "native.android.370bb9d4a3b9d181",
+      "source": "Turn a goal into an actionable checklist.",
+      "translated": "Przekształć cel w praktyczną listę kontrolną."
+    },
+    {
+      "id": "native.android.99f8a61c8045a41a",
+      "source": "Help me turn this goal into a practical checklist: ",
+      "translated": "Pomóż mi przekształcić ten cel w praktyczną listę kontrolną: "
+    },
+    {
+      "id": "native.android.9d29c1cf7227e020",
+      "source": "Use this phone",
+      "translated": "Użyj tego telefonu"
+    },
+    {
+      "id": "native.android.1656b8b922a5e3f2",
+      "source": "Ask OpenClaw to use Android capabilities.",
+      "translated": "Poproś OpenClaw o użycie funkcji Androida."
+    },
+    {
+      "id": "native.android.04c826e3507eb47e",
+      "source": "What can you help me do from this phone right now?",
+      "translated": "W czym możesz mi teraz pomóc, korzystając z tego telefonu?"
+    },
+    {
+      "id": "native.android.67075c8d2ccc0bb5",
+      "source": "OpenClaw · Live",
+      "translated": "OpenClaw · Na żywo"
+    },
+    {
+      "id": "native.android.869f1130ca16bab5",
+      "source": "You",
+      "translated": "Ty"
+    },
+    {
+      "id": "native.android.345ac1150ada02f3",
+      "source": "System",
+      "translated": "System"
+    },
+    {
+      "id": "native.android.25d8575c0063aee5",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.android.e695e7b72d13e9e5",
+      "source": "Attachment",
+      "translated": "Załącznik"
     },
     {
       "id": "native.android.5aafbef3744d86f3",
@@ -4209,6 +7299,11 @@
       "translated": "Nie znaleziono poleceń"
     },
     {
+      "id": "native.android.b1a0dca9f421aaaa",
+      "source": "Command",
+      "translated": "Polecenie"
+    },
+    {
       "id": "native.android.8e3e367df24cae4b",
       "source": "Gateway offline",
       "translated": "Gateway offline"
@@ -4239,14 +7334,29 @@
       "translated": "Otwórz głos"
     },
     {
+      "id": "native.android.6f4dc5330b262dea",
+      "source": "Voice note · ${formatVoiceNoteDuration(duration)}",
+      "translated": "Notatka głosowa · ${formatVoiceNoteDuration(duration)}"
+    },
+    {
       "id": "native.android.5054269049758d6a",
       "source": "Remove attachment",
       "translated": "Usuń załącznik"
     },
     {
+      "id": "native.android.4437f3cbdb3c8cbe",
+      "source": "New chat",
+      "translated": "Nowy czat"
+    },
+    {
       "id": "native.android.5fa853a957713a56",
       "source": "Main",
       "translated": "Główne"
+    },
+    {
+      "id": "native.android.73ac058f6d3329a7",
+      "source": "Current",
+      "translated": "Bieżący"
     },
     {
       "id": "native.android.6ef0b7ad012c32da",
@@ -4259,9 +7369,74 @@
       "translated": "Wyślij"
     },
     {
+      "id": "native.android.fd6f7bd833bc4018",
+      "source": "Chat is still checking Gateway health.",
+      "translated": "Czat nadal sprawdza stan Gateway."
+    },
+    {
+      "id": "native.android.9c8f89ab0a5cadaf",
+      "source": "Gateway is offline. Fix the connection below or copy diagnostics.",
+      "translated": "Gateway jest offline. Napraw połączenie poniżej lub skopiuj dane diagnostyczne."
+    },
+    {
+      "id": "native.android.4e03ec248c0d5428",
+      "source": "Gateway authentication needs attention.",
+      "translated": "Uwierzytelnianie Gateway wymaga uwagi."
+    },
+    {
+      "id": "native.android.4d756c15804130ff",
+      "source": "Context ${(it * 100).roundToInt()}%",
+      "translated": "Kontekst ${(it * 100).roundToInt()}%"
+    },
+    {
+      "id": "native.android.5d9cafb38a925db9",
+      "source": "Context --",
+      "translated": "Kontekst --"
+    },
+    {
       "id": "native.android.4e6c67df44d588d3",
       "source": "$contextLabel · ${contextMeterThinkingLabel(thinkingLevel)}",
       "translated": "$contextLabel · ${contextMeterThinkingLabel(thinkingLevel)}"
+    },
+    {
+      "id": "native.android.c83c512c569b1b14",
+      "source": "Off",
+      "translated": "Wyłączone"
+    },
+    {
+      "id": "native.android.64d265ba8368ef14",
+      "source": "Minimal",
+      "translated": "Minimalny"
+    },
+    {
+      "id": "native.android.a5417a4ff18559cb",
+      "source": "Low",
+      "translated": "Niskie"
+    },
+    {
+      "id": "native.android.ea2fa8cf338c8156",
+      "source": "Medium",
+      "translated": "Średnie"
+    },
+    {
+      "id": "native.android.78aa878ce86276e7",
+      "source": "High",
+      "translated": "Wysokie"
+    },
+    {
+      "id": "native.android.d55aec3659fa34e5",
+      "source": "Xhigh",
+      "translated": "Bardzo wysoki"
+    },
+    {
+      "id": "native.android.fa48678391f78bed",
+      "source": "Adaptive",
+      "translated": "Adaptacyjny"
+    },
+    {
+      "id": "native.android.3200f8564c25a1fa",
+      "source": "Max",
+      "translated": "Maks."
     },
     {
       "id": "native.android.3df4e24a0fc8810b",
@@ -4341,7 +7516,7 @@
     {
       "id": "native.android.794873efdfcdff4f",
       "source": "OpenClaw gateway",
-      "translated": "OpenClaw gateway"
+      "translated": "OpenClaw Gateway"
     },
     {
       "id": "native.android.2d3b6dd9a8f186fe",
@@ -4386,87 +7561,232 @@
     {
       "id": "native.android.7a6a37643fcfb2d9",
       "source": "Accept",
-      "translated": "Accept"
+      "translated": "Akceptuj"
     },
     {
       "id": "native.android.969f267b28a69e16",
       "source": "Location",
-      "translated": "Location"
+      "translated": "Lokalizacja"
     },
     {
-      "id": "native.android.c5e56f0e8af094fb",
+      "id": "native.android.1b90d84b8fbff362",
       "source": "Speaking · waiting for reply",
       "translated": "Mówienie · oczekiwanie na odpowiedź"
     },
     {
-      "id": "native.android.7228c229ce9f97c6",
+      "id": "native.android.63722e202a33bd02",
       "source": "Speaking…",
       "translated": "Mówienie…"
     },
     {
-      "id": "native.android.6fbf0916309dbaba",
+      "id": "native.android.6105f54c40fb5d38",
+      "source": "Voice request failed",
+      "translated": "Żądanie głosowe nie powiodło się"
+    },
+    {
+      "id": "native.android.8642938c232cbdb3",
+      "source": "Response aborted",
+      "translated": "Odpowiedź została przerwana"
+    },
+    {
+      "id": "native.android.78d7a2ef9ff6d11f",
+      "source": "Microphone permission required",
+      "translated": "Wymagane jest uprawnienie do mikrofonu"
+    },
+    {
+      "id": "native.android.1369ecf9bc8adc90",
       "source": "Mic on · waiting for gateway",
       "translated": "Mikrofon włączony · oczekiwanie na Gateway"
     },
     {
-      "id": "native.android.d84c6c14e42763ff",
-      "source": "Mic off",
-      "translated": "Mikrofon wyłączony"
+      "id": "native.android.43c514df2d2012e5",
+      "source": "Transcription unavailable: $message",
+      "translated": "Transkrypcja niedostępna: $message"
     },
     {
-      "id": "native.android.9dda2b87d9668a4b",
+      "id": "native.android.ca2190761f679d29",
       "source": "Mic off · sending…",
       "translated": "Mikrofon wyłączony · wysyłanie…"
     },
     {
-      "id": "native.android.c802b757f76226d9",
-      "source": "Listening · sending queued voice",
-      "translated": "Słuchanie · wysyłanie głosu z kolejki"
+      "id": "native.android.fd6e35016b990650",
+      "source": "Mic off",
+      "translated": "Mikrofon wyłączony"
     },
     {
-      "id": "native.android.01ac388cd8ae0732",
+      "id": "native.android.8dd66e315d86e834",
       "source": "Sending queued voice",
       "translated": "Wysyłanie głosu z kolejki"
     },
     {
+      "id": "native.android.c317e1d35f8cb9ad",
+      "source": "Send failed: Chat failed before the run started; try again.",
+      "translated": "Wysyłanie nie powiodło się: czat zakończył się niepowodzeniem przed rozpoczęciem działania; spróbuj ponownie."
+    },
+    {
+      "id": "native.android.16182e30b210812a",
+      "source": "Send failed: $message",
+      "translated": "Wysyłanie nie powiodło się: $message"
+    },
+    {
       "id": "native.android.a4cd123d7ec88d53",
       "source": "Voice reply timed out; retrying queued turn",
-      "translated": "Voice reply timed out; retrying queued turn"
+      "translated": "Upłynął limit czasu odpowiedzi głosowej; ponawianie oczekującej tury"
     },
     {
-      "id": "native.android.b4f67e96603515bd",
+      "id": "native.android.b5554710cb6f4810",
+      "source": "${queuedMessageCount()} queued · waiting for gateway",
+      "translated": "${queuedMessageCount()} w kolejce · oczekiwanie na Gateway"
+    },
+    {
+      "id": "native.android.5397239aae94440e",
+      "source": "Transcription failed: $message",
+      "translated": "Transkrypcja nie powiodła się: $message"
+    },
+    {
+      "id": "native.android.04465040125a492a",
+      "source": "Listening · sending queued voice",
+      "translated": "Słuchanie · wysyłanie głosu z kolejki"
+    },
+    {
+      "id": "native.android.851d1cfc5fa18c66",
+      "source": "Listening · ${queuedMessageCount()} queued",
+      "translated": "Nasłuchiwanie · ${queuedMessageCount()} w kolejce"
+    },
+    {
+      "id": "native.android.f7b1155c15b4ad2a",
       "source": "Listening",
-      "translated": "Słuchanie"
+      "translated": "Nasłuchiwanie"
     },
     {
-      "id": "native.android.b88e4278ead724ba",
+      "id": "native.android.1f198e7aceb8411f",
+      "source": "Speech recognizer unavailable",
+      "translated": "Rozpoznawanie mowy jest niedostępne"
+    },
+    {
+      "id": "native.android.0faf9df3e5f708df",
+      "source": "Listening (PTT)",
+      "translated": "Nasłuchiwanie (PTT)"
+    },
+    {
+      "id": "native.android.47a59f8798682ea0",
       "source": "Ready",
       "translated": "Gotowe"
     },
     {
-      "id": "native.android.8d8230088f3baa2a",
+      "id": "native.android.8532cc9537b69224",
+      "source": "Start failed: $message",
+      "translated": "Uruchomienie nie powiodło się: $message"
+    },
+    {
+      "id": "native.android.a9216e087452b75b",
+      "source": "Connecting…",
+      "translated": "Łączenie…"
+    },
+    {
+      "id": "native.android.24bc808758b925ca",
       "source": "Off",
       "translated": "Wyłączone"
     },
     {
-      "id": "native.android.d6b7f86564ac3147",
+      "id": "native.android.fcd38b57e71b0a44",
       "source": "Talk failed: Realtime provider closed unexpectedly.",
       "translated": "Rozmowa nie powiodła się: dostawca w czasie rzeczywistym nieoczekiwanie zamknął połączenie."
     },
     {
-      "id": "native.android.eb6ac739ad55e63a",
+      "id": "native.android.508073ba8ce8dbab",
       "source": "Talk failed: Realtime provider closed: $reason",
       "translated": "Rozmowa nie powiodła się: dostawca w czasie rzeczywistym zamknął połączenie: $reason"
     },
     {
-      "id": "native.android.13531fe081a45711",
+      "id": "native.android.9f0677f24e9dcd77",
+      "source": "Thinking…",
+      "translated": "Myślenie…"
+    },
+    {
+      "id": "native.android.e4d0911aa66a7d0a",
+      "source": "Gateway not connected",
+      "translated": "Gateway nie jest połączony"
+    },
+    {
+      "id": "native.android.a052faac05102427",
       "source": "Aborted",
       "translated": "Przerwano"
     },
     {
-      "id": "native.android.42af8acef7e61a34",
+      "id": "native.android.d74e945c050d1270",
       "source": "Chat error",
       "translated": "Błąd czatu"
+    },
+    {
+      "id": "native.android.0e48d3c2b82ca21f",
+      "source": "No reply",
+      "translated": "Brak odpowiedzi"
+    },
+    {
+      "id": "native.android.13a84ef8eb52312d",
+      "source": "Talk failed: $message",
+      "translated": "Rozmowa nie powiodła się: $message"
+    },
+    {
+      "id": "native.android.bd863d5e8979cd79",
+      "source": "Generating voice…",
+      "translated": "Generowanie głosu…"
+    },
+    {
+      "id": "native.android.8ad4e794e6404e53",
+      "source": "Speak failed: $message",
+      "translated": "Odtwarzanie mowy nie powiodło się: $message"
+    },
+    {
+      "id": "native.android.92409eac33327a8d",
+      "source": "Speaking…",
+      "translated": "Mówienie…"
+    },
+    {
+      "id": "native.android.d1a7db2c16fd6d09",
+      "source": "Microphone permission required",
+      "translated": "Wymagane jest uprawnienie do mikrofonu"
+    },
+    {
+      "id": "native.android.e1941bdf45e3b6b5",
+      "source": "Audio error",
+      "translated": "Błąd dźwięku"
+    },
+    {
+      "id": "native.android.d7655b5fb45ee61e",
+      "source": "Client error",
+      "translated": "Błąd klienta"
+    },
+    {
+      "id": "native.android.82da5b44f8cb2021",
+      "source": "Network error",
+      "translated": "Błąd sieci"
+    },
+    {
+      "id": "native.android.76887f0c344ae1b7",
+      "source": "Network timeout",
+      "translated": "Przekroczono limit czasu sieci"
+    },
+    {
+      "id": "native.android.a445b7696f9b431c",
+      "source": "Recognizer busy",
+      "translated": "Mechanizm rozpoznawania jest zajęty"
+    },
+    {
+      "id": "native.android.297438db6f5fe8d7",
+      "source": "Server error",
+      "translated": "Błąd serwera"
+    },
+    {
+      "id": "native.android.7b4dacae0686d138",
+      "source": "Listening",
+      "translated": "Nasłuchiwanie"
+    },
+    {
+      "id": "native.android.ea5d9621ef0f0482",
+      "source": "Speech error ($error)",
+      "translated": "Błąd rozpoznawania mowy ($error)"
     },
     {
       "id": "native.android.f392ee2d50d6b7ce",
@@ -4531,7 +7851,7 @@
     {
       "id": "native.android.d6f7fd58d1959e6f",
       "source": "COMMIT",
-      "translated": "COMMIT"
+      "translated": "ZATWIERDŹ"
     },
     {
       "id": "native.android.b28b492b48e83ad3",

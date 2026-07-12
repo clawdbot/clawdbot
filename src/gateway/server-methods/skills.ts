@@ -75,6 +75,37 @@ import type {
 } from "./types.js";
 import { assertValidParams, type Validator } from "./validation.js";
 
+type ClawHubInstallResult = Awaited<ReturnType<typeof installSkillFromClawHub>>;
+type ClawHubInstallParams = Parameters<typeof installSkillFromClawHub>[0];
+
+const clawHubInstallsInFlight = new Map<string, Promise<ClawHubInstallResult>>();
+
+function installClawHubSkillDeduped(params: ClawHubInstallParams): Promise<ClawHubInstallResult> {
+  // A WebSocket can disappear after the request reached the Gateway. Keep one
+  // exact install per workspace in flight so a reconnect can safely reattach.
+  const key = JSON.stringify([
+    params.workspaceDir,
+    params.slug,
+    params.version ?? null,
+    params.force ?? false,
+    params.acknowledgeClawHubRisk ?? false,
+  ]);
+  const active = clawHubInstallsInFlight.get(key);
+  if (active) {
+    return active;
+  }
+  const install = installSkillFromClawHub(params);
+  clawHubInstallsInFlight.set(key, install);
+  void install
+    .finally(() => {
+      if (clawHubInstallsInFlight.get(key) === install) {
+        clawHubInstallsInFlight.delete(key);
+      }
+    })
+    .catch(() => undefined);
+  return install;
+}
+
 function resolveSkillsAgentWorkspace(params: unknown, context: GatewayRequestContext) {
   const cfg = context.getRuntimeConfig();
   const agentIdRaw =
@@ -610,7 +641,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
         force?: boolean;
         acknowledgeClawHubRisk?: boolean;
       };
-      const result = await installSkillFromClawHub({
+      const result = await installClawHubSkillDeduped({
         workspaceDir: workspaceDirRaw,
         slug: p.slug,
         version: p.version,

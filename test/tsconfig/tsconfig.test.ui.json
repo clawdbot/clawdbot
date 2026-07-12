@@ -1,5 +1,8 @@
 {
   "extends": "./tsconfig.test.json",
+  "compilerOptions": {
+    "noUncheckedIndexedAccess": true
+  },
   "include": [
     "../../src/**/*.d.ts",
     "../../ui/**/*.d.ts",

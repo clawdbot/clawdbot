@@ -2023,5 +2023,3 @@ export const testing = {
   runAfterCompactionHooks,
   runPostCompactionSideEffects,
 } as const;
-
-export { testing as __testing };

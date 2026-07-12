@@ -111,7 +111,6 @@ flow:
               expr: liveTurnTimeoutMs(env, 60000)
           saveAs: secondReply
         - assert:
-            expr: "String(secondTurnRequest.prompt ?? '').includes(config.expectedGoalContext)"
-            message:
-              expr: "`second-turn provider prompt missed active goal context: ${String(secondTurnRequest.prompt ?? '')}`"
+            expr: "String(secondTurnRequest.allInputText ?? '').includes(config.expectedGoalContext)"
+            message: second-turn provider request input missed active goal context
       detailsExpr: "`goal start reply=${goalStartReply.text}; second reply=${secondReply.text}`"

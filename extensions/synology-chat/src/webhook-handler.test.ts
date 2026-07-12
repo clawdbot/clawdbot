@@ -1,4 +1,5 @@
 // Synology Chat tests cover webhook handler plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { makeFormBody, makeReq, makeRes, makeStalledReq } from "./test-http-utils.js";
 import type { ResolvedSynologyChatAccount } from "./types.js";
@@ -267,7 +268,9 @@ describe("createWebhookHandler", () => {
       return req;
     });
     const responses = requests.map(() => makeRes());
-    const runs = requests.map((req, index) => handler(req, responses[index]));
+    const runs = requests.map((req, index) =>
+      handler(req, expectDefined(responses[index], `Synology response ${index}`)),
+    );
 
     // Default maxInFlightPerKey is 8; 12 total requests leaves 4 rejected with 429.
     expect(countMatching(responses, (res) => res.status === 0)).toBe(8);

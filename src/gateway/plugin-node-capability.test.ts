@@ -56,6 +56,19 @@ describe("plugin node capability helpers", () => {
     });
   });
 
+  test("treats the scoped path capability as authoritative over a stale query", () => {
+    const normalized = normalizePluginNodeCapabilityScopedUrl(
+      "/__openclaw__/cap/current-token/__openclaw__/canvas/?oc_cap=stale-token",
+    );
+    expect(normalized).toEqual({
+      pathname: "/__openclaw__/canvas/",
+      capability: "current-token",
+      rewrittenUrl: "/__openclaw__/canvas/?oc_cap=current-token",
+      scopedPath: true,
+      malformedScopedPath: false,
+    });
+  });
+
   test("replaces scoped capability tokens without nesting capability prefixes", () => {
     expect(
       replacePluginNodeCapabilityInScopedHostUrl(

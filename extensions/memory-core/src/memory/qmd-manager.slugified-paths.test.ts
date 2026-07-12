@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { Mock } from "vitest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -260,7 +261,8 @@ describe("QmdMemoryManager slugified path resolution", () => {
       },
     ]);
 
-    await expect(manager.readFile({ relPath: results[0].path })).resolves.toEqual({
+    const result = expectDefined(results[0], "slugified QMD search result");
+    await expect(manager.readFile({ relPath: result.path })).resolves.toEqual({
       path: actualRelative,
       text: "line-1\nline-2\nline-3",
       from: 1,
@@ -332,7 +334,8 @@ describe("QmdMemoryManager slugified path resolution", () => {
       },
     ]);
 
-    await expect(manager.readFile({ relPath: results[0].path })).resolves.toEqual({
+    const result = expectDefined(results[0], "vault QMD search result");
+    await expect(manager.readFile({ relPath: result.path })).resolves.toEqual({
       path: `qmd/${collectionName}/${actualRelative}`,
       text: "vault memory",
       from: 1,
@@ -391,7 +394,8 @@ describe("QmdMemoryManager slugified path resolution", () => {
       },
     ]);
 
-    await expect(manager.readFile({ relPath: results[0].path })).resolves.toEqual({
+    const result = expectDefined(results[0], "exact QMD search result");
+    await expect(manager.readFile({ relPath: result.path })).resolves.toEqual({
       path: exactRelative,
       text: "exact slugified path",
       from: 1,

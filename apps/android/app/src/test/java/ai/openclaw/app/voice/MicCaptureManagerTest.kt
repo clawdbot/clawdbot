@@ -195,6 +195,34 @@ class MicCaptureManagerTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
+  fun chatFailureRetainsLocalizedSourceForLaterLocaleChanges() =
+    runTest {
+      val manager =
+        createManager(
+          scope = this,
+          sendToGateway = { _, onRunIdKnown ->
+            onRunIdKnown("run-localized-error")
+            ChatSendAck(runId = "run-localized-error", status = "started")
+          },
+        )
+
+      manager.onGatewayConnectionChanged(true)
+      manager.submitTranscribedMessage("trigger failure")
+      runCurrent()
+      manager.handleGatewayEvent(
+        "chat",
+        """{"runId":"run-localized-error","state":"error"}""",
+      )
+      advanceUntilIdle()
+
+      val failure = manager.conversation.value.last()
+      assertEquals(VoiceConversationRole.Assistant, failure.role)
+      assertEquals("Voice request failed", failure.text)
+      assertEquals("Voice request failed", failure.localizedSource)
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
   fun terminalGatewayOkRefreshesHistoryWithoutWaitingForRunEvents() =
     runTest {
       var refreshCalls = 0

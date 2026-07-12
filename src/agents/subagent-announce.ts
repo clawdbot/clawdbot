@@ -2084,4 +2084,3 @@ export const testing = {
       : defaultSubagentAnnounceDeps;
   },
 };
-export { testing as __testing };

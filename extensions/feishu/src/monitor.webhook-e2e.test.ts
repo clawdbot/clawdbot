@@ -1,6 +1,7 @@
 // Feishu tests cover monitor.webhook e2e plugin behavior.
 import crypto from "node:crypto";
 import type { Server } from "node:http";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createFeishuRuntimeMockModule } from "./monitor.test-mocks.js";
 import {
@@ -254,7 +255,10 @@ describe("Feishu webhook signed-request e2e", () => {
           encryptKey: "encrypt_key",
           rawBody: JSON.stringify(payload),
         });
-        headers["x-lark-signature"] = headers["x-lark-signature"].slice(0, 12);
+        headers["x-lark-signature"] = expectDefined(
+          headers["x-lark-signature"],
+          "Feishu webhook signature",
+        ).slice(0, 12);
 
         const response = await fetch(url, {
           method: "POST",

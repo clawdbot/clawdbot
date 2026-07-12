@@ -2418,4 +2418,3 @@ export const testing = {
   appendToolSearchCodeStderrTail,
   runCodeModeChild,
 };
-export { testing as __testing };

@@ -2,6 +2,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { escapeRegExp, formatEnvelopeTimestamp } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { TelegramGroupConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
@@ -2081,7 +2082,7 @@ describe("createTelegramBot", () => {
             Math.min(pairingUpsertCall, testCase.pairingUpsertResults.length - 1)
           ];
         pairingUpsertCall += 1;
-        return result;
+        return expectDefined(result, `pairing upsert result ${pairingUpsertCall}`);
       });
 
       createTelegramBot({ token: "tok" });

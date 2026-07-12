@@ -129,6 +129,7 @@ const ANDROID_BUILTIN_UI_CALLS = new Set([
   "LazyRow",
   "nativeString",
   "nativeStringResource",
+  "nativeText",
   "OutlinedButton",
   "OutlinedTextField",
   "RadioButton",
@@ -148,7 +149,8 @@ const APPLE_SWITCH_BRANCH_START = /(?:\bcase\b[^:\n]+|\bdefault)\s*:\s*(?:return
 const ANDROID_STRING_FUNCTION =
   /\bfun\s+([A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)\s*:\s*String\s*(=|\{)/gu;
 const ANDROID_WHEN_BRANCH_START = /(?:[^\n{}]+|\belse)\s*->\s*/gu;
-const ANDROID_RESOURCE_STRINGS = /<string\b[^>]*>([\s\S]*?)<\/string>/gu;
+const ANDROID_RESOURCE_STRINGS = /<string\b([^>]*)>([\s\S]*?)<\/string>/gu;
+const ANDROID_RESOURCE_NAME = /\bname\s*=\s*"([^"]+)"/u;
 const ANDROID_RESOURCE_COLLECTIONS =
   /<(?:string-array|plurals)\b[^>]*>([\s\S]*?)<\/(?:string-array|plurals)>/gu;
 const ANDROID_RESOURCE_ITEMS = /<item\b[^>]*>([\s\S]*?)<\/item>/gu;
@@ -185,6 +187,7 @@ const APPLE_PLIST_STRINGS = /<string>([\s\S]*?)<\/string>/gu;
 const GENERATED_PATH_RE = /(?:^|[\\/])(?:build|\.gradle|\.build|DerivedData)(?:$|[\\/])/u;
 const EXCLUDED_PATH_RE = /(?:^|[\\/])(?:Tests?|UITests?|test|Preview(?:s)?)(?:$|[\\/])/u;
 const EXCLUDED_FILE_RE = /(?:Tests?|UITests?|Previews?|Testing)\.(?:swift|kt|kts)$/u;
+const GENERATED_FILE_RE = /(?:^|[\\/])NativeStringResources\.kt$/u;
 const BUILD_SETTING_RE = /\$\([A-Za-z0-9_.-]+\)/gu;
 const NATIVE_I18N_LOCALE_SET = new Set<string>(NATIVE_I18N_LOCALES);
 const ANDROID_LANGUAGE_PICKER_PATH =
@@ -1033,12 +1036,16 @@ export function extractNativeI18nCandidates(
   }
   if (surface === "android" && /\/res\/values\/[^/]+\.xml$/u.test(repoPath)) {
     for (const match of source.matchAll(ANDROID_RESOURCE_STRINGS)) {
-      if (match[1]) {
+      const resourceName = match[1]?.match(ANDROID_RESOURCE_NAME)?.[1];
+      if (resourceName?.startsWith("native_")) {
+        continue;
+      }
+      if (match[2]) {
         addCandidate(
           entries,
           surface,
           repoPath,
-          match[1],
+          match[2],
           "resource-string",
           lineNumber(source, match.index ?? 0),
         );
@@ -1104,7 +1111,8 @@ async function walkFiles(root: string, surface: NativeI18nSurface): Promise<stri
       const allowed = surface === "apple" ? APPLE_EXTENSIONS : ANDROID_EXTENSIONS;
       return entry.isFile() &&
         (allowed.has(extension) || isAndroidValuesXml) &&
-        !EXCLUDED_FILE_RE.test(entry.name)
+        !EXCLUDED_FILE_RE.test(entry.name) &&
+        !GENERATED_FILE_RE.test(fullPath)
         ? [fullPath]
         : [];
     }),

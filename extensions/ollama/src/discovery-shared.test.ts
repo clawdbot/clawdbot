@@ -1,4 +1,5 @@
 // Ollama tests cover discovery shared plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { describe, expect, it } from "vitest";
 import {
@@ -150,8 +151,11 @@ describe("resolveOllamaDiscoveryResult — hosted Ollama Cloud guard", () => {
       buildProvider: buildMockProvider,
     });
     expect(result).not.toBeNull();
-    expect(result!.provider.models).toHaveLength(1);
-    expect(result!.provider.models[0].id).toBe("minimax-m3:cloud");
+    const discoveryResult = expectDefined(result, "Ollama Cloud discovery result");
+    expect(discoveryResult.provider.models).toHaveLength(1);
+    expect(expectDefined(discoveryResult.provider.models[0], "Ollama Cloud model").id).toBe(
+      "minimax-m3:cloud",
+    );
   });
 
   it("does not call buildProvider for remote base URL without explicit models", async () => {

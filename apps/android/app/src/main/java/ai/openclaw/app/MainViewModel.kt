@@ -305,6 +305,11 @@ class MainViewModel(
   val skillsSummary: StateFlow<GatewaySkillsSummary> = runtimeState(initial = GatewaySkillsSummary(skills = emptyList())) { it.skillsSummary }
   val skillsRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.skillsRefreshing }
   val skillsErrorText: StateFlow<String?> = runtimeState(initial = null) { it.skillsErrorText }
+  val clawHubSkillMethodsAvailable: StateFlow<Boolean> =
+    runtimeState(initial = false) { it.clawHubSkillMethodsAvailable }
+  val skillMutationKeys: StateFlow<Set<String>> = runtimeState(initial = emptySet()) { it.skillMutationKeys }
+  val clawHubSkillSearchState: StateFlow<GatewayClawHubSkillSearchState> =
+    runtimeState(initial = GatewayClawHubSkillSearchState()) { it.clawHubSkillSearchState }
   val skillWorkshopSummary: StateFlow<GatewaySkillWorkshopSummary> =
     runtimeState(initial = GatewaySkillWorkshopSummary(proposals = emptyList())) { it.skillWorkshopSummary }
   val skillWorkshopRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.skillWorkshopRefreshing }
@@ -950,6 +955,37 @@ class MainViewModel(
 
   fun clearSkillWorkshopMessage() {
     ensureRuntime().clearSkillWorkshopMessage()
+  }
+
+  fun setSkillEnabled(
+    skillKey: String,
+    enabled: Boolean,
+  ) {
+    ensureRuntime().setSkillEnabled(skillKey, enabled)
+  }
+
+  fun searchClawHubSkills(query: String) {
+    ensureRuntime().searchClawHubSkills(query)
+  }
+
+  fun reviewClawHubSkillInstall(skill: GatewayClawHubSkillSummary) {
+    ensureRuntime().reviewClawHubSkillInstall(skill)
+  }
+
+  fun dismissClawHubSkillInstallReview() {
+    ensureRuntime().dismissClawHubSkillInstallReview()
+  }
+
+  fun installClawHubSkill(
+    slug: String,
+    acknowledgeClawHubRisk: Boolean = false,
+    version: String? = null,
+  ) {
+    ensureRuntime().installClawHubSkill(slug, acknowledgeClawHubRisk, version)
+  }
+
+  fun clearClawHubSkillMessage() {
+    ensureRuntime().clearClawHubSkillMessage()
   }
 
   fun refreshNodesDevices() {

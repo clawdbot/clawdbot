@@ -1,5 +1,6 @@
 // Memory Core tests cover manager search plugin behavior.
 import type { DatabaseSync } from "node:sqlite";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   ensureMemoryIndexSchema,
   loadSqliteVecExtension,
@@ -1543,8 +1544,10 @@ describe("searchVector sqlite-vec KNN", () => {
       });
       expect(results).toHaveLength(3);
       // Strictly decreasing scores confirms top-K maintenance is intact.
-      for (let i = 1; i < results.length; i += 1) {
-        expect(results[i - 1].score).toBeGreaterThan(results[i].score);
+      let previous = expectDefined(results[0], "first vector-search result");
+      for (const current of results.slice(1)) {
+        expect(previous.score).toBeGreaterThan(current.score);
+        previous = current;
       }
     } finally {
       db.close();
@@ -1581,9 +1584,11 @@ describe("searchVector sqlite-vec KNN", () => {
         let normB = 0;
         const len = Math.min(a.length, b.length);
         for (let i = 0; i < len; i += 1) {
-          dot += a[i] * b[i];
-          normA += a[i] * a[i];
-          normB += b[i] * b[i];
+          const aValue = expectDefined(a[i], `cosine vector a[${i}]`);
+          const bValue = expectDefined(b[i], `cosine vector b[${i}]`);
+          dot += aValue * bValue;
+          normA += aValue * aValue;
+          normB += bValue * bValue;
         }
         return dot / (Math.sqrt(normA) * Math.sqrt(normB));
       }

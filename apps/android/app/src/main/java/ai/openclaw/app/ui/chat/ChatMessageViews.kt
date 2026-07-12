@@ -8,6 +8,7 @@ import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.MessageSpeechPhase
 import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.normalizeVisibleChatMessageRole
+import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.tools.ToolDisplayRegistry
 import ai.openclaw.app.ui.MobileColorsAccessor
 import ai.openclaw.app.ui.design.ClawTheme
@@ -166,7 +167,7 @@ private fun MessageSpeechIndicator(
         tint = mobileTextSecondary,
       )
       Text(
-        text = if (phase == MessageSpeechPhase.Preparing) "Preparing audio…" else "Speaking…",
+        text = if (phase == MessageSpeechPhase.Preparing) nativeString("Preparing audio…") else nativeString("Speaking…"),
         style = mobileCaption1,
         color = mobileTextSecondary,
       )
@@ -198,7 +199,7 @@ private fun ChatBubbleContainer(
         verticalArrangement = Arrangement.spacedBy(3.dp),
       ) {
         Text(
-          text = roleLabel,
+          text = nativeString(roleLabel),
           style = mobileCaption2.copy(fontWeight = FontWeight.SemiBold, letterSpacing = 0.6.sp),
           color = style.roleColor,
         )
@@ -273,7 +274,7 @@ private fun ChatLinkPreview(
         verticalAlignment = Alignment.CenterVertically,
       ) {
         Text(
-          text = "Preview · $domain",
+          text = nativeString("Preview · \$domain", domain),
           style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold),
           color = mobileTextSecondary,
           modifier = Modifier.weight(1f),
@@ -282,7 +283,7 @@ private fun ChatLinkPreview(
         )
         androidx.compose.material3.Icon(
           imageVector = Icons.Default.ExpandMore,
-          contentDescription = "Expand link preview",
+          contentDescription = nativeString("Expand link preview"),
           tint = mobileTextSecondary,
         )
       }
@@ -325,8 +326,8 @@ private fun ChatLinkPreview(
       ) {
         Text(domain, style = mobileCaption2, color = mobileTextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
         when (val preview = result) {
-          null -> Text("Loading preview…", style = mobileCaption1, color = mobileTextSecondary)
-          LinkPreviewResult.Failed -> Text("No preview available", style = mobileCallout, color = mobileTextSecondary)
+          null -> Text(nativeString("Loading preview…"), style = mobileCaption1, color = mobileTextSecondary)
+          LinkPreviewResult.Failed -> Text(nativeString("No preview available"), style = mobileCallout, color = mobileTextSecondary)
           is LinkPreviewResult.Loaded -> {
             preview.metadata.title?.let { title ->
               Text(
@@ -372,7 +373,7 @@ fun ChatTypingIndicatorBubble() {
       horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
       DotPulse(color = mobileTextSecondary)
-      Text("Thinking...", style = mobileCallout, color = mobileTextSecondary)
+      Text(nativeString("Thinking..."), style = mobileCallout, color = mobileTextSecondary)
     }
   }
 }
@@ -391,11 +392,11 @@ fun ChatPendingToolsBubble(toolCalls: List<ChatPendingToolCall>) {
     roleLabel = "Tools",
   ) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-      Text("Running tools...", style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
+      Text(nativeString("Running tools..."), style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
       for (display in displays.take(6)) {
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
           Text(
-            "${display.emoji} ${display.label}",
+            nativeString("\${display.emoji} \${display.label}", display.emoji, display.label),
             style = mobileCallout,
             color = mobileTextSecondary,
             fontFamily = FontFamily.Monospace,
@@ -412,7 +413,7 @@ fun ChatPendingToolsBubble(toolCalls: List<ChatPendingToolCall>) {
       }
       if (toolCalls.size > 6) {
         Text(
-          text = "... +${toolCalls.size - 6} more",
+          text = nativeString("... +\${toolCalls.size - 6} more", toolCalls.size - 6),
           style = mobileCaption1,
           color = mobileTextSecondary,
         )
@@ -432,26 +433,26 @@ fun ChatOutboxBubble(
   val statusColor = if (failed) mobileDanger else mobileWarning
   val statusLabel =
     when (item.status) {
-      ChatOutboxStatus.Queued -> "Queued — sends when reconnected"
-      ChatOutboxStatus.Sending -> "Sending…"
-      ChatOutboxStatus.Accepted -> "Sent — confirming delivery…"
+      ChatOutboxStatus.Queued -> nativeString("Queued — sends when reconnected")
+      ChatOutboxStatus.Sending -> nativeString("Sending…")
+      ChatOutboxStatus.Accepted -> nativeString("Sent — confirming delivery…")
       ChatOutboxStatus.Failed ->
         item.lastError
           ?.trim()
           ?.takeIf { it.isNotEmpty() }
-          ?.let { "Failed — $it" } ?: "Failed"
+          ?.let { nativeString("Failed — \$it", it) } ?: nativeString("Failed")
     }
 
   ChatBubbleContainer(
     style = bubbleStyle("user").copy(borderColor = statusColor.copy(alpha = 0.6f)),
-    roleLabel = "You",
+    roleLabel = nativeString("You"),
   ) {
     if (item.text.isNotBlank()) {
       ChatMarkdown(text = item.text, textColor = mobileText)
     }
     item.attachments.forEach { attachment ->
       Text(
-        text = "📎 ${attachment.fileName}",
+        text = nativeString("📎 \${attachment.fileName}", attachment.fileName),
         style = mobileCaption1,
         color = mobileTextSecondary,
       )
@@ -467,12 +468,12 @@ fun ChatOutboxBubble(
         modifier = Modifier.weight(1f),
       )
       if (failed) {
-        ChatOutboxAction(label = "Retry", color = mobileAccent, onClick = onRetry)
+        ChatOutboxAction(label = nativeString("Retry"), color = mobileAccent, onClick = onRetry)
       }
       // Sending rows are mid-dispatch and accepted rows may already be delivered; both stay
       // action-free until reconciliation resolves them, so a delete can never race a send.
       if (item.status == ChatOutboxStatus.Queued || failed) {
-        ChatOutboxAction(label = "Delete", color = mobileTextSecondary, onClick = onDelete)
+        ChatOutboxAction(label = nativeString("Delete"), color = mobileTextSecondary, onClick = onDelete)
       }
     }
   }
@@ -540,9 +541,9 @@ private fun bubbleStyle(role: String): ChatBubbleStyle =
 
 private fun roleLabel(role: String): String =
   when (role) {
-    "user" -> "You"
-    "system" -> "System"
-    else -> "OpenClaw"
+    "user" -> nativeString("You")
+    "system" -> nativeString("System")
+    else -> nativeString("OpenClaw")
   }
 
 @Composable
@@ -565,7 +566,7 @@ internal fun ChatBase64Image(
       Box {
         Image(
           bitmap = image,
-          contentDescription = mimeType ?: "attachment",
+          contentDescription = mimeType ?: nativeString("Attachment"),
           contentScale = ContentScale.Fit,
           modifier = Modifier.fillMaxWidth(),
         )
@@ -578,7 +579,7 @@ internal fun ChatBase64Image(
           Box(contentAlignment = Alignment.Center) {
             Icon(
               imageVector = Icons.Default.OpenInFull,
-              contentDescription = "Open image preview",
+              contentDescription = nativeString("Open image preview"),
               modifier = Modifier.size(17.dp),
             )
           }
@@ -596,7 +597,7 @@ internal fun ChatBase64Image(
         ) {
           Image(
             bitmap = image,
-            contentDescription = "Image preview",
+            contentDescription = nativeString("Image preview"),
             contentScale = ContentScale.Fit,
             modifier = Modifier.fillMaxSize().padding(20.dp),
           )
@@ -610,7 +611,7 @@ internal fun ChatBase64Image(
             Box(contentAlignment = Alignment.Center) {
               Icon(
                 imageVector = Icons.Default.Close,
-                contentDescription = "Close image preview",
+                contentDescription = nativeString("Close image preview"),
                 modifier = Modifier.size(22.dp),
               )
             }
@@ -619,7 +620,7 @@ internal fun ChatBase64Image(
       }
     }
   } else if (imageState.failed) {
-    Text("Unsupported attachment", style = mobileCaption1, color = mobileTextSecondary)
+    Text(nativeString("Unsupported attachment"), style = mobileCaption1, color = mobileTextSecondary)
   }
 }
 

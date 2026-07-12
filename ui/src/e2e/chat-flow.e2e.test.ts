@@ -1,4 +1,5 @@
 // Control UI tests cover chat flow behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { SESSION_DRAG_MIME } from "../lib/sessions/drag.ts";
@@ -2591,8 +2592,10 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     });
     const page = await context.newPage();
     const sessions = chatSessionListResponse();
-    sessions.sessions[0].label = "Short";
-    sessions.sessions[1].label =
+    const firstSession = expectDefined(sessions.sessions[0], "first chat session fixture");
+    const secondSession = expectDefined(sessions.sessions[1], "second chat session fixture");
+    firstSession.label = "Short";
+    secondSession.label =
       "Review and repair the intentionally overlong sidebar session title before navigation ".repeat(
         4,
       );
@@ -2646,12 +2649,9 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await recentRow.locator("a.sidebar-recent-session__link").dispatchEvent("click", {
         button: 0,
       });
-      await page
-        .locator(".sidebar-recent-session--active")
-        .getByText(sessions.sessions[1].label)
-        .waitFor({
-          timeout: 10_000,
-        });
+      await page.locator(".sidebar-recent-session--active").getByText(secondSession.label).waitFor({
+        timeout: 10_000,
+      });
 
       const activeRow = page.locator(
         '.sidebar-recent-session[data-session-key="agent:main:session-b"]',

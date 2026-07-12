@@ -18,6 +18,7 @@ type SessionSqliteStartupImportRunner = (params: {
 
 type SessionSqliteStartupRestoreRunner = (params: {
   manifestPath: string;
+  trustedTargets: Array<{ agentId: string; sqlitePath: string; storePath: string }>;
 }) => DoctorSessionSqliteRestoreReport;
 
 type SessionSqliteStartupFailureReportWriter = (
@@ -137,7 +138,14 @@ async function restoreFailedStartupSessionSqliteRun(
     writeSessionSqliteMigrationFailureReports ??=
       doctorModule.writeSessionSqliteMigrationFailureReports;
   }
-  const restore = restoreSessionSqliteMigrationRun({ manifestPath });
+  const restore = restoreSessionSqliteMigrationRun({
+    manifestPath,
+    trustedTargets: report.targets.map(({ agentId, sqlitePath, storePath }) => ({
+      agentId,
+      sqlitePath,
+      storePath,
+    })),
+  });
   const failureReports = writeSessionSqliteMigrationFailureReports(manifestPath, {
     reason: `startup blocked on ${blockingIssues.length} session SQLite issue(s)`,
   });

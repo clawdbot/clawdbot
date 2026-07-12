@@ -1062,7 +1062,7 @@ describe("runEmbeddedAgent auth profile rotation", () => {
       });
 
       expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
-      expect(result.meta.aborted).toBe(true);
+      expect(result.meta.aborted).toBe(false);
 
       await expectProfileP2UsageUnchanged(agentDir);
     });
@@ -1388,7 +1388,7 @@ describe("runEmbeddedAgent auth profile rotation", () => {
     });
   });
 
-  it("can probe one billing-disabled profile when transient cooldown probe is allowed without fallback models", async () => {
+  it("does not spend a transient cooldown probe on billing-disabled profiles", async () => {
     await withTimedAgentWorkspace(async ({ agentDir, workspaceDir, now }) => {
       await writeAuthStore(agentDir, {
         usageStats: {
@@ -1405,34 +1405,25 @@ describe("runEmbeddedAgent auth profile rotation", () => {
         },
       });
 
-      runEmbeddedAttemptMock.mockResolvedValueOnce(
-        makeAttempt({
-          assistantTexts: ["ok"],
-          lastAssistant: buildAssistant({
-            stopReason: "stop",
-            content: [{ type: "text", text: "ok" }],
-          }),
+      await expect(
+        runEmbeddedAgentInline({
+          sessionId: "session:test",
+          sessionKey: "agent:test:billing-cooldown-probe-no-fallbacks",
+          sessionFile: path.join(workspaceDir, "session.jsonl"),
+          workspaceDir,
+          agentDir,
+          config: makeConfig(),
+          prompt: "hello",
+          provider: "openai",
+          model: "mock-1",
+          authProfileIdSource: "auto",
+          allowTransientCooldownProbe: true,
+          timeoutMs: 5_000,
+          runId: "run:billing-cooldown-probe-no-fallbacks",
         }),
-      );
+      ).rejects.toThrow("billing issue");
 
-      const result = await runEmbeddedAgentInline({
-        sessionId: "session:test",
-        sessionKey: "agent:test:billing-cooldown-probe-no-fallbacks",
-        sessionFile: path.join(workspaceDir, "session.jsonl"),
-        workspaceDir,
-        agentDir,
-        config: makeConfig(),
-        prompt: "hello",
-        provider: "openai",
-        model: "mock-1",
-        authProfileIdSource: "auto",
-        allowTransientCooldownProbe: true,
-        timeoutMs: 5_000,
-        runId: "run:billing-cooldown-probe-no-fallbacks",
-      });
-
-      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
-      expect(result.payloads?.[0]?.text ?? "").toContain("ok");
+      expect(runEmbeddedAttemptMock).not.toHaveBeenCalled();
     });
   });
 

@@ -965,10 +965,25 @@ extension GatewayNodeSession {
         channel: GatewayChannelActor,
         socketGeneration: UInt64) async
     {
-        guard await self.awaitLifecycleCallbacks(ifCurrentRoute: route) else { return }
         guard self.isCurrentRoute(route),
               self.channel === channel
         else { return }
+        // Lifecycle cleanup gates owner readiness. Reject while it is suspended instead of
+        // holding the Gateway request until timeout; the replacement route stays fail-closed.
+        if self.lifecycleCallbackBarrier != nil {
+            self.logger.info("node invoke rejected during lifecycle transition id=\(request.id, privacy: .public)")
+            await self.sendInvokeResult(
+                request: request,
+                response: BridgeInvokeResponse(
+                    id: request.id,
+                    ok: false,
+                    error: OpenClawNodeError(
+                        code: .unavailable,
+                        message: "UNAVAILABLE: node lifecycle transition in progress")),
+                channel: channel,
+                socketGeneration: socketGeneration)
+            return
+        }
         self.logger.info("node invoke executing id=\(request.id, privacy: .public)")
         let bridgeRequest = BridgeInvokeRequest(
             id: request.id,
@@ -1002,14 +1017,6 @@ extension GatewayNodeSession {
             response: response,
             channel: channel,
             socketGeneration: socketGeneration)
-    }
-
-    private func awaitLifecycleCallbacks(ifCurrentRoute route: GatewayNodeSessionRoute) async -> Bool {
-        while let lifecycleCallback = self.lifecycleCallbackBarrier {
-            await lifecycleCallback.task.value
-            guard self.isCurrentRoute(route), self.channel != nil else { return false }
-        }
-        return self.isCurrentRoute(route) && self.channel != nil
     }
 
     func invokeIfCurrentRoute(

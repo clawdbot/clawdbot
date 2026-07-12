@@ -1,4 +1,5 @@
 // Telegram tests cover outbound adapter plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { verifyDurableFinalCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
 import { adaptMessagePresentationForChannel } from "openclaw/plugin-sdk/interactive-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -354,8 +355,16 @@ describe("telegramOutbound", () => {
       "Done",
       expect.objectContaining({ accountId: "ops", replyToMessageId: 777 }),
     );
-    expect(reactMessageTelegramMock.mock.invocationCallOrder[0]).toBeLessThan(
-      sendMessageTelegramMock.mock.invocationCallOrder[0],
+    expect(
+      expectDefined(
+        reactMessageTelegramMock.mock.invocationCallOrder[0],
+        "Telegram reaction invocation",
+      ),
+    ).toBeLessThan(
+      expectDefined(
+        sendMessageTelegramMock.mock.invocationCallOrder[0],
+        "Telegram send invocation",
+      ),
     );
   });
 

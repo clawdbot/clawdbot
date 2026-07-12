@@ -501,6 +501,99 @@ describe("qa suite", () => {
     }
   });
 
+  it("uses Crabline generation artifact paths without rewriting them", async () => {
+    const outputDir = await tempDirs.makeTempDir("qa-suite-crabline-generation-");
+    const capabilityMatrixPath = path.join(
+      outputDir,
+      "crabline-generations",
+      "generation-1",
+      "capabilities.json",
+    );
+    const smokeArtifactPath = path.join(
+      outputDir,
+      "crabline-generations",
+      "generation-1",
+      "smoke.json",
+    );
+    await fs.mkdir(path.dirname(capabilityMatrixPath), { recursive: true });
+    await fs.writeFile(capabilityMatrixPath, "authoritative capabilities\n", "utf8");
+    await fs.writeFile(smokeArtifactPath, "authoritative smoke\n", "utf8");
+
+    const artifacts = await qaSuiteProgressTesting.writeQaSuiteArtifacts({
+      outputDir,
+      startedAt: new Date("2026-07-12T00:00:00.000Z"),
+      finishedAt: new Date("2026-07-12T00:01:00.000Z"),
+      scenarios: [{ name: "Telegram DM", status: "pass", steps: [] }],
+      scenarioDefinitions: [
+        {
+          ...makeQaSuiteTestScenario("telegram-dm", {
+            surface: "channel",
+          }),
+          coverage: {
+            primary: ["channels.dm"],
+          },
+        },
+      ],
+      transport: {
+        id: "qa-channel",
+        createReportNotes: () => [],
+      } as unknown as QaTransportAdapter,
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      alternateModel: "mock-openai/gpt-5.6-luna-alt",
+      fastMode: true,
+      concurrency: 1,
+      channelDriverSelection: {
+        capabilityMatrixPath: "crabline-fake-provider-capabilities.json",
+        channel: "telegram",
+        channelDriver: "crabline",
+        smokeArtifactPath: "crabline-fake-provider-smoke.json",
+      },
+      runCrablineChannelDriverSmoke: vi.fn(async () => ({
+        capabilityMatrixPath,
+        capabilityReport: {},
+        manifestPath: path.join(outputDir, "crabline-generations", "generation-1", "manifest.json"),
+        smoke: {},
+        smokeArtifactPath,
+      })),
+    });
+
+    await expect(fs.readFile(capabilityMatrixPath, "utf8")).resolves.toBe(
+      "authoritative capabilities\n",
+    );
+    await expect(fs.readFile(smokeArtifactPath, "utf8")).resolves.toBe("authoritative smoke\n");
+    await expect(
+      fs.access(path.join(outputDir, "crabline-fake-provider-capabilities.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      fs.access(path.join(outputDir, "crabline-fake-provider-smoke.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+
+    const evidence = JSON.parse(await fs.readFile(artifacts.evidencePath, "utf8")) as {
+      entries?: Array<{ execution?: { artifacts?: Array<{ kind?: string; path?: string }> } }>;
+    };
+    expect(evidence.entries?.[0]?.execution?.artifacts).toEqual(
+      expect.arrayContaining([
+        { kind: "channel-capability-matrix", path: capabilityMatrixPath, source: "qa-suite" },
+        { kind: "channel-driver-smoke", path: smokeArtifactPath, source: "qa-suite" },
+      ]),
+    );
+    const summary = JSON.parse(await fs.readFile(artifacts.summaryPath, "utf8")) as {
+      run?: {
+        channelCapabilityMatrixPath?: string;
+        channelDriverSmokePath?: string;
+      };
+    };
+    expect(summary.run).toMatchObject({
+      channelCapabilityMatrixPath: capabilityMatrixPath,
+      channelDriverSmokePath: smokeArtifactPath,
+    });
+    expect(artifacts.report).toContain(`Channel capability report: ${capabilityMatrixPath}.`);
+    expect(artifacts.report).toContain(`Channel driver smoke: ${smokeArtifactPath}.`);
+    expect(artifacts.report).not.toContain("crabline-fake-provider-capabilities.json");
+    expect(artifacts.report).not.toContain("crabline-fake-provider-smoke.json");
+  });
+
   it("arms gateway heap checkpoint env only when requested", () => {
     expect(
       qaSuiteProgressTesting.buildQaGatewayHeapCheckpointRuntimeEnvPatch({

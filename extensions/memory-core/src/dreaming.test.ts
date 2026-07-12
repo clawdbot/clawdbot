@@ -1,6 +1,7 @@
 // Memory Core tests cover dreaming plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { readMemoryHostEvents } from "openclaw/plugin-sdk/memory-host-events";
 import {
@@ -108,7 +109,7 @@ function createCronHarness(
       if (index < 0) {
         return {};
       }
-      const current = jobs[index];
+      const current = expectDefined(jobs[index], `managed cron job ${id}`);
       jobs[index] = {
         ...current,
         ...(patch.name ? { name: patch.name } : {}),

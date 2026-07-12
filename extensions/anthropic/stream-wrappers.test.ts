@@ -1,4 +1,5 @@
 // Anthropic tests cover stream wrappers plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -296,7 +297,7 @@ describe("Anthropic service_tier payload wrappers", () => {
   );
 
   it("fast mode injects service_tier=standard_only when disabled for API keys", () => {
-    const payload = serviceTierWrapperCases[0].run({
+    const payload = expectDefined(serviceTierWrapperCases[0], "disabled fast-mode case").run({
       apiKey: "sk-ant-api03-test-key",
       enabled: false,
     });
@@ -317,7 +318,7 @@ describe("Anthropic service_tier payload wrappers", () => {
   });
 
   it("explicit service tier injects service_tier=standard_only for regular API keys", () => {
-    const payload = serviceTierWrapperCases[1].run({
+    const payload = expectDefined(serviceTierWrapperCases[1], "explicit service-tier case").run({
       apiKey: "sk-ant-api03-test-key",
       serviceTier: "standard_only",
     });

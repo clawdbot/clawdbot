@@ -1,4 +1,5 @@
 // Ollama tests cover stream plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
@@ -209,8 +210,10 @@ describe("createOllamaStreamFn thinking events", () => {
 
     const thinkingDeltas = events.filter((e) => e.type === "thinking_delta");
     expect(thinkingDeltas).toHaveLength(2);
-    expect(thinkingDeltas[0].delta).toBe("Step 1");
-    expect(thinkingDeltas[1].delta).toBe(" and step 2");
+    expect(expectDefined(thinkingDeltas[0], "first Ollama thinking delta").delta).toBe("Step 1");
+    expect(expectDefined(thinkingDeltas[1], "second Ollama thinking delta").delta).toBe(
+      " and step 2",
+    );
 
     const thinkingStart = events.find((e) => e.type === "thinking_start");
     expect(thinkingStart?.contentIndex).toBe(0);

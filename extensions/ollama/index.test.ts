@@ -1,4 +1,5 @@
 // Ollama tests cover index plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   describeImageWithModel,
   describeImagesWithModel,
@@ -1860,7 +1861,7 @@ describe("ollama plugin", () => {
     );
 
     expect(mediaProviders).toHaveLength(1);
-    const [ollamaMedia] = mediaProviders;
+    const ollamaMedia = expectDefined(mediaProviders[0], "Ollama media provider");
     expect(ollamaMedia.id).toBe("ollama");
     expect(ollamaMedia.capabilities).toEqual(["image"]);
     expect(ollamaMedia.describeImage).toBe(describeImageWithModel);

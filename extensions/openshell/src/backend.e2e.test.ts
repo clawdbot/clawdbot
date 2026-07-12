@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { createSandboxTestContext } from "openclaw/plugin-sdk/test-fixtures";
 import {
   createSandboxBrowserConfig,
@@ -147,9 +148,10 @@ async function activeOpenShellGateway(
     for (const line of output.split(/\r?\n/u)) {
       const match = line.match(/\*\s+(\S+)/u);
       if (match) {
+        const gateway = expectDefined(match[1], "OpenShell gateway name");
         const info = await runCommand({
           command,
-          args: ["gateway", "info", "--gateway", match[1]],
+          args: ["gateway", "info", "--gateway", gateway],
           env,
           allowFailure: true,
           timeoutMs: 20_000,
@@ -164,12 +166,12 @@ async function activeOpenShellGateway(
         ) {
           const status = await runCommand({
             command,
-            args: ["--gateway", match[1], "sandbox", "list"],
+            args: ["--gateway", gateway, "sandbox", "list"],
             env,
             allowFailure: true,
             timeoutMs: 20_000,
           });
-          return status.code === 0 ? match[1] : null;
+          return status.code === 0 ? gateway : null;
         }
         return null;
       }

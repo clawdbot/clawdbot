@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -274,7 +275,9 @@ describe("googlechat google auth runtime", () => {
     const body = new ReadableStream<Uint8Array>({
       pull(controller) {
         if (chunkIndex < chunks.length) {
-          controller.enqueue(chunks[chunkIndex++]);
+          controller.enqueue(
+            expectDefined(chunks[chunkIndex++], `Google auth chunk ${chunkIndex}`),
+          );
           return;
         }
         controller.close();

@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import "../../../styles.css";
 import type { FileSidebarContent } from "./chat-sidebar.ts";
@@ -105,7 +106,9 @@ describe.runIf(browserMode)("chat file editor", () => {
     await userEvent.click(button(panel, "Save"));
 
     await expect.poll(() => save.mock.calls.length).toBe(1);
-    const saved = save.mock.calls[0][0] as { content: string };
+    const saved = expectDefined(save.mock.calls[0], "save callback call")[0] as {
+      content: string;
+    };
     expect(saved.content).toContain("\r\n");
     expect(saved.content).toContain("x");
   });

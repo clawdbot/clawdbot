@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import {
@@ -170,14 +171,16 @@ describe("default wiki prompt section", () => {
         },
       ],
     };
+    const firstPage = expectDefined(firstDigest.pages[0], "first Memory Wiki digest page");
+    const secondPage = expectDefined(firstDigest.pages[1], "second Memory Wiki digest page");
     const secondDigest = {
       ...firstDigest,
       pages: [
         {
-          ...firstDigest.pages[1],
-          topClaims: firstDigest.pages[1].topClaims.toReversed(),
+          ...secondPage,
+          topClaims: secondPage.topClaims.toReversed(),
         },
-        firstDigest.pages[0],
+        firstPage,
       ],
     };
 

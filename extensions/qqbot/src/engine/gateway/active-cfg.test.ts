@@ -1,4 +1,5 @@
 // Qqbot tests cover active cfg plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
 import { createActiveCfgProvider, resolveActiveCfg, type GatewayCfgLoader } from "./active-cfg.js";
@@ -59,7 +60,7 @@ describe("createActiveCfgProvider", () => {
     let index = 0;
     const provider = createActiveCfgProvider({
       fallback,
-      load: () => calls[index++],
+      load: () => expectDefined(calls[index++], `QQBot config load ${index}`),
     });
 
     expect(provider.getActiveCfg()).toBe(calls[0]);

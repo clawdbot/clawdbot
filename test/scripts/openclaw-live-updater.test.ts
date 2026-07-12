@@ -49,6 +49,13 @@ function git(cwd: string, ...args: string[]) {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 }
 
+function setTrustedGitConfig(cwd: string, key: string, value: string) {
+  git(cwd, "config", key, value);
+  // Git replaces config through a lockfile, inheriting the runner umask. Keep
+  // this trusted fixture deterministic without weakening the production guard.
+  chmodSync(path.join(cwd, ".git/config"), 0o600);
+}
+
 function fetchFixtureMain(checkout: string, remote: string) {
   const origin = fixtureOrigins.get(checkout);
   if (!origin) {
@@ -115,7 +122,11 @@ function writeBuild(mirror: string) {
   mkdirSync(path.join(mirror, "dist/control-ui"), { recursive: true });
   const head = git(mirror, "rev-parse", "HEAD");
   writeFileSync(path.join(mirror, "dist/build-info.json"), `${JSON.stringify({ commit: head })}\n`);
-  writeFileSync(path.join(mirror, "dist/index.js"), "// built\n");
+  const gatewayEntrypoint = path.join(mirror, "dist/index.js");
+  writeFileSync(gatewayEntrypoint, "// built\n");
+  // Snapshot ownership rejects group-writable executables, so fixtures must
+  // not inherit a permissive CI umask and accidentally model an unsafe build.
+  chmodSync(gatewayEntrypoint, 0o600);
   writeFileSync(path.join(mirror, "dist/entry.js"), "// built\n");
   mkdirSync(path.join(mirror, "dist/control-ui/assets"), { recursive: true });
   writeFileSync(
@@ -589,11 +600,15 @@ describe("openclaw live updater", () => {
     expect(isOwnedGatewayEntrypoint(mirror, home, entrypoint)).toBe(true);
     expect(isOwnedGatewayEntrypoint(mirror, home, path.join(mirror, "dist/index.js"))).toBe(true);
 
+    chmodSync(entrypoint, 0o620);
+    expect(isOwnedGatewayEntrypoint(mirror, home, entrypoint)).toBe(false);
+    chmodSync(entrypoint, 0o600);
+
     const fsmonitorMarker = path.join(root, "fsmonitor-ran");
     const fsmonitorHook = path.join(root, "fsmonitor.sh");
     writeFileSync(fsmonitorHook, `#!/bin/sh\ntouch ${fsmonitorMarker}\n`);
     chmodSync(fsmonitorHook, 0o755);
-    git(snapshot, "config", "core.fsmonitor", fsmonitorHook);
+    setTrustedGitConfig(snapshot, "core.fsmonitor", fsmonitorHook);
     rmSync(fsmonitorMarker, { force: true });
     expect(isOwnedGatewayEntrypoint(mirror, home, entrypoint)).toBe(true);
     expect(existsSync(fsmonitorMarker)).toBe(false);
@@ -601,12 +616,13 @@ describe("openclaw live updater", () => {
     git(snapshot, "switch", "-c", "mutable");
     expect(isOwnedGatewayEntrypoint(mirror, home, entrypoint)).toBe(false);
     git(snapshot, "checkout", "--detach", head);
+    chmodSync(path.join(snapshot, ".git/HEAD"), 0o600);
 
     const filterMarker = path.join(root, "filter-ran");
     const filterHook = path.join(root, "filter.sh");
     writeFileSync(filterHook, `#!/bin/sh\ntouch ${filterMarker}\ncat\n`);
     chmodSync(filterHook, 0o755);
-    git(snapshot, "config", "filter.untrusted.clean", filterHook);
+    setTrustedGitConfig(snapshot, "filter.untrusted.clean", filterHook);
     mkdirSync(path.join(snapshot, ".git/info"), { recursive: true });
     writeFileSync(path.join(snapshot, ".git/info/attributes"), "README.md filter=untrusted\n");
     writeFileSync(path.join(snapshot, "README.md"), "dirty\n");

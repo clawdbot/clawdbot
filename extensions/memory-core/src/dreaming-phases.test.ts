@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { RequestScopedSubagentRuntimeError } from "openclaw/plugin-sdk/error-runtime";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
@@ -2606,7 +2607,8 @@ describe("memory-core dreaming phases", () => {
       nowMs,
     });
     expect(baseline).toHaveLength(1);
-    const baselineScore = baseline[0].score;
+    const baselineCandidate = expectDefined(baseline[0], "baseline promotion candidate");
+    const baselineScore = baselineCandidate.score;
 
     const { beforeAgentReply } = createHarness(
       {
@@ -2656,14 +2658,14 @@ describe("memory-core dreaming phases", () => {
       minUniqueQueries: 0,
       nowMs,
     });
-    const reinforcedCandidate = requireCandidateByKey(reinforced, baseline[0].key);
+    const reinforcedCandidate = requireCandidateByKey(reinforced, baselineCandidate.key);
     expect(reinforcedCandidate.score).toBeGreaterThan(baselineScore);
 
     const phaseSignalStore = await shortTermTesting.readPhaseSignalStore(
       workspaceDir,
       new Date().toISOString(),
     );
-    const baselineSignals = phaseSignalStore.entries[baseline[0].key];
+    const baselineSignals = phaseSignalStore.entries[baselineCandidate.key];
     expect(baselineSignals?.lightHits).toBe(1);
     expect(baselineSignals?.remHits).toBe(1);
   });

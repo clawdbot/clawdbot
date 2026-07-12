@@ -1,4 +1,5 @@
 // Browser tests cover browser request.shared control state plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getFreePort } from "../browser/test-port.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -84,7 +85,10 @@ function browserConfig(params: {
 
 async function browserRequestStatus(): Promise<unknown> {
   const respond = vi.fn();
-  await browserHandlers["browser.request"]({
+  await expectDefined(
+    browserHandlers["browser.request"],
+    "browser request handler",
+  )({
     params: {
       method: "GET",
       path: "/",

@@ -804,4 +804,3 @@ export const testing = {
       : defaultOpenClawToolsDeps;
   },
 };
-export { testing as __testing };

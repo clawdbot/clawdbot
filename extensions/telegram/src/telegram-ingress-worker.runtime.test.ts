@@ -1,4 +1,5 @@
 // Telegram tests cover ingress worker runtime behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   TelegramIngressWorkerCommand,
@@ -49,7 +50,8 @@ function createRuntime(responses: Response[]): {
   };
   const fetchImpl: typeof fetch = async () => {
     calls.push(Date.now());
-    return responses[Math.min(calls.length - 1, responses.length - 1)];
+    const responseIndex = Math.min(calls.length - 1, responses.length - 1);
+    return expectDefined(responses[responseIndex], `Telegram response ${responseIndex}`);
   };
   const done = runTelegramIngressWorkerRuntime({
     options: {
@@ -102,7 +104,9 @@ describe("telegram ingress worker retry policy", () => {
     await runtime.done;
 
     expect(runtime.calls).toHaveLength(2);
-    expect(runtime.calls[1] - runtime.calls[0]).toBe(50);
+    const secondCall = expectDefined(runtime.calls[1], "second Telegram poll call");
+    const firstCall = expectDefined(runtime.calls[0], "first Telegram poll call");
+    expect(secondCall - firstCall).toBe(50);
     expect(runtime.messages).toContainEqual(
       expect.objectContaining({ type: "poll-success", count: 0 }),
     );
@@ -131,7 +135,9 @@ describe("telegram ingress worker retry policy", () => {
     await runtime.done;
 
     expect(runtime.calls).toHaveLength(2);
-    expect(runtime.calls[1] - runtime.calls[0]).toBe(1000);
+    const secondCall = expectDefined(runtime.calls[1], "second Telegram poll call");
+    const firstCall = expectDefined(runtime.calls[0], "first Telegram poll call");
+    expect(secondCall - firstCall).toBe(1000);
   });
 
   it("retries a non-json getUpdates 502 response as a server error", async () => {

@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventListener } from "../../api/gateway.ts";
 import {
@@ -27,6 +28,10 @@ import {
 } from "./index.ts";
 
 type MockClient = Pick<GatewayBrowserClient, "request" | "addEventListener">;
+
+function itemAt<T>(items: readonly T[], index: number, label: string): T {
+  return expectDefined(items[index], `${label} ${index}`);
+}
 
 function mockClient(overrides: Partial<MockClient> = {}): GatewayBrowserClient {
   return {
@@ -65,7 +70,9 @@ describe("normalizeWorkspace", () => {
     const ws = normalizeWorkspace(sampleDoc);
     expect(ws.workspaceVersion).toBe(3);
     expect(ws.tabs).toHaveLength(2);
-    expect(ws.tabs[0].widgets[0].grid).toEqual({ x: 0, y: 0, w: 4, h: 2 });
+    expect(itemAt(itemAt(ws.tabs, 0, "workspace tab").widgets, 0, "workspace widget").grid).toEqual(
+      { x: 0, y: 0, w: 4, h: 2 },
+    );
     expect(ws.prefs.tabOrder).toEqual(["archive", "main"]);
   });
 
@@ -74,8 +81,8 @@ describe("normalizeWorkspace", () => {
       tabs: [{ title: "no slug" }, { slug: "ok", widgets: [{ kind: "x" }, { id: "y" }] }],
     });
     expect(ws.tabs).toHaveLength(1);
-    expect(ws.tabs[0].slug).toBe("ok");
-    expect(ws.tabs[0].widgets).toHaveLength(0);
+    expect(itemAt(ws.tabs, 0, "workspace tab").slug).toBe("ok");
+    expect(itemAt(ws.tabs, 0, "workspace tab").widgets).toHaveLength(0);
   });
 
   it("clamps out-of-range grid coordinates", () => {
@@ -87,7 +94,9 @@ describe("normalizeWorkspace", () => {
         },
       ],
     });
-    expect(ws.tabs[0].widgets[0].grid).toEqual({ x: 0, y: 0, w: 12, h: 1 });
+    expect(itemAt(itemAt(ws.tabs, 0, "workspace tab").widgets, 0, "workspace widget").grid).toEqual(
+      { x: 0, y: 0, w: 12, h: 1 },
+    );
   });
 });
 
@@ -153,7 +162,7 @@ describe("optimistic mutations", () => {
     const request = vi.fn(async () => ({}));
     const client = mockClient({ request: request as never });
     await setWidgetCollapsed(state, client, { slug: "main", widgetId: "w1", collapsed: true });
-    expect(state.workspace?.tabs[0].widgets[0].collapsed).toBe(true);
+    expect(state.workspace?.tabs.at(0)?.widgets.at(0)?.collapsed).toBe(true);
     // Wire contract: the gateway's workspaces.widget.update reads { tab, id, patch }.
     expect(request).toHaveBeenCalledWith("workspaces.widget.update", {
       tab: "main",
@@ -227,7 +236,7 @@ describe("optimistic mutations", () => {
       grid: { x: 8, y: 0, w: 4, h: 2 },
     });
     // Reverted to original grid; error surfaced for the toast.
-    expect(state.workspace?.tabs[0].widgets[0].grid).toEqual({ x: 0, y: 0, w: 4, h: 2 });
+    expect(state.workspace?.tabs.at(0)?.widgets.at(0)?.grid).toEqual({ x: 0, y: 0, w: 4, h: 2 });
     expect(state.actionError).toBe("rejected");
     expect(state.pendingWidgetIds.has("w1")).toBe(false);
   });
@@ -263,7 +272,7 @@ describe("optimistic mutations", () => {
     rejectors[1]!(new Error("second rejected"));
     await Promise.all([first, second]);
 
-    expect(state.workspace?.tabs[0].widgets[0]).toMatchObject({
+    expect(state.workspace?.tabs.at(0)?.widgets.at(0)).toMatchObject({
       title: "Revenue",
       grid: { x: 0, y: 0, w: 4, h: 2 },
     });
@@ -297,7 +306,8 @@ describe("optimistic mutations", () => {
 
     // A concurrent broadcast refetch lands a FRESHER doc (version 4) mid-flight.
     const fresher = normalizeWorkspace({ ...sampleDoc, workspaceVersion: 4 });
-    fresher.tabs[0].widgets[0].title = "Revenue (v4)";
+    itemAt(itemAt(fresher.tabs, 0, "fresher workspace tab").widgets, 0, "fresher widget").title =
+      "Revenue (v4)";
     state.workspace = fresher;
 
     // Now the in-flight mutation fails.
@@ -307,7 +317,7 @@ describe("optimistic mutations", () => {
     // The fresher doc must survive — no revert to the stale pre-mutation snapshot.
     expect(state.workspace).toBe(fresher);
     expect(state.workspace?.workspaceVersion).toBe(4);
-    expect(state.workspace?.tabs[0].widgets[0].title).toBe("Revenue (v4)");
+    expect(state.workspace?.tabs.at(0)?.widgets.at(0)?.title).toBe("Revenue (v4)");
     expect(state.actionError).toBe("rejected");
   });
 });

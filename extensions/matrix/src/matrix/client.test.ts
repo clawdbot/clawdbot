@@ -1,4 +1,5 @@
 // Matrix tests cover client plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixTestRuntime } from "../test-runtime.js";
 import type { CoreConfig } from "../types.js";
@@ -589,8 +590,16 @@ describe("resolveMatrixAuth", () => {
       deviceId: "DEVICE123",
     });
     requireRecord(repairMeta.env, "repair env");
-    expect(repairCurrentTokenStorageMetaDeviceIdMock.mock.invocationCallOrder[0]).toBeLessThan(
-      saveBackfilledMatrixDeviceIdMock.mock.invocationCallOrder[0],
+    expect(
+      expectDefined(
+        repairCurrentTokenStorageMetaDeviceIdMock.mock.invocationCallOrder[0],
+        "Matrix token repair invocation",
+      ),
+    ).toBeLessThan(
+      expectDefined(
+        saveBackfilledMatrixDeviceIdMock.mock.invocationCallOrder[0],
+        "Matrix device save invocation",
+      ),
     );
     expect(deviceId).toBe("DEVICE123");
   });

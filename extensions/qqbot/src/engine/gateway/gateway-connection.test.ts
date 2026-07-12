@@ -1,5 +1,6 @@
 // Qqbot tests cover gateway connection close/disconnect status behavior.
 import { EventEmitter } from "node:events";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EngineAdapters } from "../adapter/index.js";
 import { MAX_RECONNECT_ATTEMPTS } from "./constants.js";
@@ -130,13 +131,21 @@ describe("GatewayConnection disconnect status", () => {
     });
 
     for (let attempt = 0; attempt < MAX_RECONNECT_ATTEMPTS; attempt++) {
-      sockets[attempt].emit("close", 1006, Buffer.from(""));
+      expectDefined(sockets[attempt], `QQBot socket ${attempt}`).emit(
+        "close",
+        1006,
+        Buffer.from(""),
+      );
       await vi.runOnlyPendingTimersAsync();
       await vi.waitFor(() => {
         expect(createQQWSClientMock).toHaveBeenCalledTimes(attempt + 2);
       });
     }
-    sockets[MAX_RECONNECT_ATTEMPTS].emit("close", 1006, Buffer.from(""));
+    expectDefined(sockets[MAX_RECONNECT_ATTEMPTS], "final QQBot socket").emit(
+      "close",
+      1006,
+      Buffer.from(""),
+    );
 
     expect(onDisconnected).toHaveBeenCalledWith({
       reason: "reconnect attempts exhausted",

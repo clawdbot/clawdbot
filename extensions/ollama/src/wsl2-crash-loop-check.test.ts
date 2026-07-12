@@ -1,5 +1,6 @@
 // Ollama tests cover wsl2 crash loop check plugin behavior.
 import { promisify } from "node:util";
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { isWSL2SyncMock } = vi.hoisted(() => ({
@@ -35,7 +36,9 @@ const accessMock = vi.mocked(access);
 const execFileMock = execFile as unknown as ReturnType<typeof vi.fn> & {
   [key: symbol]: ReturnType<typeof vi.fn>;
 };
-const execFilePromiseMock = vi.mocked(execFileMock[promisify.custom]);
+const execFilePromiseMock = vi.mocked(
+  expectDefined(execFileMock[promisify.custom], "promisified execFile mock"),
+);
 
 function createLogger() {
   return {

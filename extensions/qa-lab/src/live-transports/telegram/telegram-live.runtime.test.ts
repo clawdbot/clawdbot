@@ -1,4 +1,5 @@
 // Qa Lab tests cover telegram live plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -666,10 +667,13 @@ describe("telegram live qa runtime", () => {
     ).steps[0];
     expect(otherBotStep?.expectReply).toBe(false);
     expect(otherBotStep?.input).toBe("/status@OpenClawQaOtherBot");
+    const mentionedReplyRun = requireScenario(
+      scenarios,
+      "telegram-mentioned-message-reply",
+    ).buildRun("sut_bot");
     expect(
-      scenarios
-        .find((scenario) => scenario.id === "telegram-mentioned-message-reply")
-        ?.buildRun("sut_bot").steps[0].replyToLatestSutMessage,
+      expectDefined(mentionedReplyRun.steps[0], "mentioned-message reply step")
+        .replyToLatestSutMessage,
     ).toBe(true);
     expect(
       scenarios.find((scenario) => scenario.id === "telegram-mentioned-message-reply")

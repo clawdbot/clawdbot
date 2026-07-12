@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -751,7 +752,8 @@ cli note
       (entry) => entry !== "index.md",
     );
     expect(sourceFiles).toHaveLength(1);
-    const pageContent = await fs.readFile(path.join(rootDir, "sources", sourceFiles[0]), "utf8");
+    const sourceFile = expectDefined(sourceFiles[0], "imported ChatGPT source file");
+    const pageContent = await fs.readFile(path.join(rootDir, "sources", sourceFile), "utf8");
     expect(pageContent).toContain("ChatGPT Export: Travel preference check");
     expect(pageContent).toContain("I prefer aisle seats");
     expect(pageContent).toContain("Preference signals:");
@@ -789,7 +791,7 @@ cli note
     const conversations = JSON.parse(await fs.readFile(conversationsPath, "utf8")) as Array<
       Record<string, unknown>
     >;
-    conversations[0].update_time = 9_000_000_000_000;
+    expectDefined(conversations[0], "first ChatGPT conversation").update_time = 9_000_000_000_000;
     await fs.writeFile(conversationsPath, `${JSON.stringify(conversations, null, 2)}\n`, "utf8");
 
     const result = await runWikiChatGptImport({

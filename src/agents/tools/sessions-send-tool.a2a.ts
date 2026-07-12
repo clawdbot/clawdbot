@@ -268,4 +268,3 @@ export const testing = {
       : defaultSessionsSendA2ADeps;
   },
 };
-export { testing as __testing };

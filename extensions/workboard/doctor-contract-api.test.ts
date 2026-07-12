@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { createPluginStateKeyedStoreForTests as createPluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type {
   OpenKeyedStoreOptions,
@@ -93,7 +94,7 @@ describe("workboard doctor contract", () => {
         contentBase64: Buffer.from("ok").toString("base64"),
       });
 
-      const migration = stateMigrations[0];
+      const migration = expectDefined(stateMigrations[0], "workboard state migration");
       await expect(
         migration.detectLegacyState({
           config: {},
@@ -202,7 +203,10 @@ describe("workboard doctor contract", () => {
       });
       sqlite.close();
 
-      const result = await stateMigrations[0].migrateLegacyState({
+      const result = await expectDefined(
+        stateMigrations[0],
+        "workboard state migration",
+      ).migrateLegacyState({
         config: {},
         env,
         stateDir,
@@ -275,7 +279,10 @@ describe("workboard doctor contract", () => {
       });
       sqlite.close();
 
-      const result = await stateMigrations[0].migrateLegacyState({
+      const result = await expectDefined(
+        stateMigrations[0],
+        "workboard state migration",
+      ).migrateLegacyState({
         config: {},
         env,
         stateDir,
@@ -340,7 +347,10 @@ describe("workboard doctor contract", () => {
         contentBase64: Buffer.from("ok").toString("base64"),
       });
 
-      const result = await stateMigrations[0].migrateLegacyState({
+      const result = await expectDefined(
+        stateMigrations[0],
+        "workboard state migration",
+      ).migrateLegacyState({
         config: {},
         env,
         stateDir,
@@ -420,7 +430,10 @@ describe("workboard doctor contract", () => {
       });
       sqlite.close();
 
-      const result = await stateMigrations[0].migrateLegacyState({
+      const result = await expectDefined(
+        stateMigrations[0],
+        "workboard state migration",
+      ).migrateLegacyState({
         config: {},
         env,
         stateDir,

@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
@@ -52,7 +53,7 @@ describe("phone-control doctor state migration", () => {
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
     await fs.writeFile(sourcePath, JSON.stringify(legacyState));
 
-    const migration = stateMigrations[0];
+    const migration = expectDefined(stateMigrations[0], "phone-control state migration");
     await expect(
       migration.detectLegacyState({
         config: {},

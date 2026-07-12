@@ -1,4 +1,5 @@
 // Chutes tests cover models plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildChutesModelDefinition,
@@ -89,7 +90,7 @@ describe("chutes-models", () => {
   });
 
   it("buildChutesModelDefinition returns config with required fields", () => {
-    const entry = CHUTES_MODEL_CATALOG[0];
+    const entry = expectDefined(CHUTES_MODEL_CATALOG[0], "first Chutes catalog model");
     const def = buildChutesModelDefinition(entry);
     expect(def.id).toBe(entry.id);
     expect(def.name).toBe(entry.name);

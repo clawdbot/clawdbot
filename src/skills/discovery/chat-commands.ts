@@ -140,4 +140,3 @@ export function listSkillCommandsForAgents(params: {
 export const testing = {
   dedupeBySkillName,
 };
-export { testing as __testing };

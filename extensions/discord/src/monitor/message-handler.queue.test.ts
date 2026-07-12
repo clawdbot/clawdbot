@@ -1,4 +1,5 @@
 // Discord tests cover message handler.queue plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DiscordRetryableInboundError } from "./inbound-dedupe.js";
@@ -217,8 +218,16 @@ describe("createDiscordMessageHandler queue behavior", () => {
       }),
     );
     expect(replyTypingFeedback.onReplyStart).toHaveBeenCalledTimes(1);
-    expect(replyTypingFeedback.onReplyStart.mock.invocationCallOrder[0]).toBeLessThan(
-      processDiscordMessageMock.mock.invocationCallOrder[0],
+    expect(
+      expectDefined(
+        replyTypingFeedback.onReplyStart.mock.invocationCallOrder[0],
+        "Discord reply-start invocation",
+      ),
+    ).toBeLessThan(
+      expectDefined(
+        processDiscordMessageMock.mock.invocationCallOrder[0],
+        "Discord message processing invocation",
+      ),
     );
   });
 

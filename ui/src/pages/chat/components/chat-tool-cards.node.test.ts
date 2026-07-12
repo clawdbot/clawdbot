@@ -1,5 +1,6 @@
 // @vitest-environment node
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { extractToolCards } from "../../../lib/chat/tool-cards.ts";
 import { buildPreviewSidebarContent, buildToolCardSidebarContent } from "./chat-tool-cards.ts";
@@ -20,7 +21,7 @@ vi.mock("../../../lib/chat/tool-display.ts", () => ({
       }[name] ??
       name
         .split(/[._-]/g)
-        .map((part) => (part ? part[0].toUpperCase() + part.slice(1) : part))
+        .map((part) => (part ? part.charAt(0).toUpperCase() + part.slice(1) : part))
         .join(" "),
     icon: "zap",
   }),
@@ -338,7 +339,7 @@ describe("tool-card extraction", () => {
       "msg:3",
     );
 
-    const sidebar = buildToolCardSidebarContent(card);
+    const sidebar = buildToolCardSidebarContent(expectDefined(card, "deck tool card"));
     expect(sidebar).toBe(`## Deck Manage
 
 **Tool:** \`deck_manage\`
@@ -363,9 +364,10 @@ with Example Deck
       "msg:empty-success",
     );
 
-    expect(card).toMatchObject({ completed: true });
-    expect(card.outputText).toBeUndefined();
-    expect(buildToolCardSidebarContent(card)).toContain(
+    const completedCard = expectDefined(card, "empty-result tool card");
+    expect(completedCard).toMatchObject({ completed: true });
+    expect(completedCard.outputText).toBeUndefined();
+    expect(buildToolCardSidebarContent(completedCard)).toContain(
       "*No output — tool completed successfully.*",
     );
   });

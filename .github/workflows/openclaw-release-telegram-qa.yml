@@ -2035,6 +2035,7 @@ jobs:
           OPENCLAW_QA_TELEGRAM_SUT_UID: ${{ steps.create_sut.outputs.uid }}
           SUT_RUNTIME_ROOT: ${{ steps.create_sut.outputs.runtime_root }}
           SUT_UID: ${{ steps.create_sut.outputs.uid }}
+          TARGET_REF: ${{ inputs.target_ref }}
           TARGET_SHA: ${{ inputs.target_sha }}
         shell: bash
         run: |
@@ -2054,6 +2055,15 @@ jobs:
           trap terminate_sut_uid_on_exit EXIT
           trap 'exit 130' INT
           trap 'exit 143' TERM
+          qa_model="mock-openai/gpt-5.6-luna"
+          qa_alt_model="mock-openai/gpt-5.6-luna-alt"
+          candidate_telegram_qa="$CANDIDATE_ROOT/extensions/qa-lab/src/live-transports/telegram/telegram-live.runtime.ts"
+          if [[ -f "$candidate_telegram_qa" ]] &&
+            grep -Fq '"openai/gpt-5.5": {' "$candidate_telegram_qa" &&
+            ! grep -Fq '"openai/gpt-5.6-luna": {' "$candidate_telegram_qa"; then
+            qa_model="mock-openai/gpt-5.5"
+            qa_alt_model="mock-openai/gpt-5.5-alt"
+          fi
           {
             printf 'trusted_harness_sha=%s\n' "${{ needs.trusted_identity.outputs.workflow_sha }}"
             printf 'candidate_runtime_plugin_sha=%s\n' "$TARGET_SHA"
@@ -2075,8 +2085,8 @@ jobs:
                 --repo-root "$CANDIDATE_ROOT" \
                 --output-dir "${EVIDENCE_RELATIVE}/${output_name}" \
                 --provider-mode mock-openai \
-                --model mock-openai/gpt-5.6-luna \
-                --alt-model mock-openai/gpt-5.6-luna-alt \
+                --model "$qa_model" \
+                --alt-model "$qa_alt_model" \
                 --fast \
                 --credential-source convex \
                 --credential-role ci \

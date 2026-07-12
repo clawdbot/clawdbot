@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
@@ -163,7 +164,7 @@ describe("renderPlugins", () => {
     const container = mount(createProps({ result: createResult(plugins), onFilterChange }));
     const chips = container.querySelectorAll<HTMLButtonElement>(".plugins-filters button");
     expect(chips).toHaveLength(4);
-    chips[3].click();
+    expectDefined(chips[3], "issues filter chip").click();
     expect(onFilterChange).toHaveBeenCalledWith("issues");
   });
 

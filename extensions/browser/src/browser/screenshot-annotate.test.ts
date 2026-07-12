@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   ANNOTATION_OVERLAY_ATTR,
@@ -131,8 +132,18 @@ describe("planAnnotations - viewport off-screen accounting", () => {
 describe("planAnnotations - fullpage mode", () => {
   it("returns box equal to doc (document coordinates)", () => {
     const plan = planAnnotations({ inputs: sampleInputs, space: "fullpage" });
-    expect(plan.annotations[0].box).toEqual({ x: 100, y: 200, width: 50, height: 20 });
-    expect(plan.annotations[1].box).toEqual({ x: 300, y: 1500, width: 80, height: 18 });
+    expect(expectDefined(plan.annotations[0], "first full-page annotation").box).toEqual({
+      x: 100,
+      y: 200,
+      width: 50,
+      height: 20,
+    });
+    expect(expectDefined(plan.annotations[1], "second full-page annotation").box).toEqual({
+      x: 300,
+      y: 1500,
+      width: 80,
+      height: 18,
+    });
   });
 
   it("does not require scroll", () => {
@@ -149,7 +160,12 @@ describe("planAnnotations - element mode", () => {
       space: "element",
       elementRect,
     });
-    expect(plan.annotations[0].box).toEqual({ x: 10, y: 10, width: 40, height: 20 });
+    expect(expectDefined(plan.annotations[0], "element annotation").box).toEqual({
+      x: 10,
+      y: 10,
+      width: 40,
+      height: 20,
+    });
   });
 
   it("filters out inputs that do not overlap element rect", () => {
@@ -162,7 +178,7 @@ describe("planAnnotations - element mode", () => {
       elementRect,
     });
     expect(plan.annotations).toHaveLength(1);
-    expect(plan.annotations[0].ref).toBe("e1");
+    expect(expectDefined(plan.annotations[0], "overlapping element annotation").ref).toBe("e1");
     expect(plan.overlayItems).toHaveLength(1);
   });
 

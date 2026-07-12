@@ -181,4 +181,3 @@ export const testing = {
     messageActionTesting.resetLoggedMessageActionErrors();
   },
 };
-export { testing as __testing };

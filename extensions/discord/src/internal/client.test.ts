@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Client, ComponentRegistry, type AnyListener } from "./client.js";
 import { BaseCommand } from "./commands.js";
 import { Button, StringSelectMenu, parseCustomId } from "./components.js";
+import { DiscordError } from "./rest.js";
 import { attachRestMock, createInternalTestClient } from "./test-builders.test-support.js";
 
 function createDeferred<T = void>(): {
@@ -236,6 +237,78 @@ describe("Client.deployCommands", () => {
 
     expect(patch).not.toHaveBeenCalled();
     expect(post).not.toHaveBeenCalled();
+    expect(deleteRequest).not.toHaveBeenCalled();
+  });
+
+  it("bulk overwrites when a capped application cannot create a replacement", async () => {
+    const retainedCommands = Array.from({ length: 99 }, (_, index) =>
+      createTestCommand({ name: `retained-${index}` }),
+    );
+    const replacement = createTestCommand({ name: "replacement" });
+    const client = createInternalTestClient([...retainedCommands, replacement]);
+    const existing = [
+      ...retainedCommands.map((command, index) =>
+        Object.assign(command.serialize(), {
+          id: `retained-id-${index}`,
+          application_id: "app1",
+        }),
+      ),
+      Object.assign(createTestCommand({ name: "stale" }).serialize(), {
+        id: "stale-id",
+        application_id: "app1",
+      }),
+    ];
+    let deployedCount = existing.length;
+    const operations: string[] = [];
+    const get = vi.fn(async () => existing);
+    const post = vi.fn(async () => {
+      if (deployedCount >= 100) {
+        throw new DiscordError(new Response(null, { status: 400 }), {
+          message: "Maximum number of application commands reached (100).",
+          code: 30032,
+        });
+      }
+      deployedCount += 1;
+      operations.push("post");
+    });
+    const put = vi.fn(async () => {
+      deployedCount = 100;
+      operations.push("put");
+    });
+    const deleteRequest = vi.fn(async () => undefined);
+    attachRestMock(client, { get, post, put, delete: deleteRequest });
+
+    await client.deployCommands({ mode: "reconcile" });
+
+    expect(deleteRequest).not.toHaveBeenCalled();
+    expect(post).toHaveBeenCalledWith(Routes.applicationCommands("app1"), {
+      body: replacement.serialize(),
+    });
+    expect(put).toHaveBeenCalledWith(Routes.applicationCommands("app1"), {
+      body: [...retainedCommands, replacement].map((command) => command.serialize()),
+    });
+    expect(operations).toEqual(["put"]);
+    expect(deployedCount).toBe(100);
+  });
+
+  it("keeps stale commands when a replacement create fails below the cap", async () => {
+    const client = createInternalTestClient([createTestCommand({ name: "replacement" })]);
+    const get = vi.fn(async () => [
+      Object.assign(createTestCommand({ name: "stale" }).serialize(), {
+        id: "stale-id",
+        application_id: "app1",
+      }),
+    ]);
+    const post = vi.fn(async () => {
+      throw new Error("Discord unavailable");
+    });
+    const deleteRequest = vi.fn(async () => undefined);
+    attachRestMock(client, { get, post, delete: deleteRequest });
+
+    await expect(client.deployCommands({ mode: "reconcile" })).rejects.toThrow(
+      "Discord unavailable",
+    );
+
     expect(deleteRequest).not.toHaveBeenCalled();
   });
 

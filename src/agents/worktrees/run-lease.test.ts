@@ -12,7 +12,7 @@ import {
   releaseWorktreeRunLeaseRow,
 } from "./registry.js";
 import {
-  __testing,
+  testing as runLeaseTesting,
   abortWorktreeRemoval,
   acquireWorktreeRunLease,
   claimWorktreeRemoval,
@@ -55,7 +55,7 @@ describe("worktree run lease", () => {
   });
 
   afterEach(async () => {
-    __testing.resetForTest();
+    runLeaseTesting.resetForTest();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
@@ -113,7 +113,7 @@ describe("worktree run lease", () => {
       startTime: 4242,
       now: 1,
     });
-    __testing.setDeadPidResolverForTest((pid) => pid === 987_654);
+    runLeaseTesting.setDeadPidResolverForTest((pid) => pid === 987_654);
 
     expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
     expect(() =>
@@ -130,7 +130,7 @@ describe("worktree run lease", () => {
       startTime: 111,
       now: 1,
     });
-    __testing.setProcessStartTimeResolverForTest(() => 222);
+    runLeaseTesting.setProcessStartTimeResolverForTest(() => 222);
 
     expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
 
@@ -166,7 +166,7 @@ describe("worktree run lease", () => {
   it("recovers admission when the remover died before finalizing the removal", async () => {
     const created = await createSessionWorktree();
     claimWorktreeRemoval(env, { worktreeId: created.id, token: "remover", force: true });
-    __testing.setDeadPidResolverForTest((pid) => pid === process.pid);
+    runLeaseTesting.setDeadPidResolverForTest((pid) => pid === process.pid);
 
     const lease = await acquireWorktreeRunLease(created.id, { env });
     expect(lease.token).toBeTruthy();
@@ -196,7 +196,7 @@ describe("worktree run lease", () => {
     const record = getRegistryWorktree(env, created.id)!;
 
     let attempts = 0;
-    __testing.setReleaseRowImplForTest((rowEnv, id, token) => {
+    runLeaseTesting.setReleaseRowImplForTest((rowEnv, id, token) => {
       attempts += 1;
       if (attempts === 1) {
         throw new Error("simulated state database failure");
@@ -216,7 +216,7 @@ describe("worktree run lease", () => {
     const record = getRegistryWorktree(env, created.id)!;
 
     let fail = true;
-    __testing.setReleaseRowImplForTest((rowEnv, id, token) => {
+    runLeaseTesting.setReleaseRowImplForTest((rowEnv, id, token) => {
       if (fail) {
         throw new Error("simulated state database failure");
       }
@@ -231,7 +231,7 @@ describe("worktree run lease", () => {
     ).toThrow("worktree is busy");
 
     fail = false;
-    await __testing.drainPendingCleanupsForTest();
+    await runLeaseTesting.drainPendingCleanupsForTest();
     expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
     expect(await lockState(record)).toEqual({ kind: "none" });
     expect(() =>
@@ -261,7 +261,7 @@ describe("worktree run lease", () => {
     const record = getRegistryWorktree(env, created.id)!;
 
     let failUnlock = true;
-    __testing.setUnlockImplForTest(async (rec) => {
+    runLeaseTesting.setUnlockImplForTest(async (rec) => {
       if (failUnlock) {
         throw new Error("simulated git unlock failure");
       }
@@ -273,7 +273,7 @@ describe("worktree run lease", () => {
     expect(await lockState(record)).toEqual({ kind: "live", pid: process.pid });
 
     failUnlock = false;
-    await __testing.drainPendingCleanupsForTest();
+    await runLeaseTesting.drainPendingCleanupsForTest();
     expect(await lockState(record)).toEqual({ kind: "none" });
   });
 
@@ -283,7 +283,7 @@ describe("worktree run lease", () => {
     const record = getRegistryWorktree(env, created.id)!;
 
     let failUnlock = true;
-    __testing.setUnlockImplForTest(async (rec) => {
+    runLeaseTesting.setUnlockImplForTest(async (rec) => {
       if (failUnlock) {
         throw new Error("simulated git unlock failure");
       }
@@ -295,7 +295,7 @@ describe("worktree run lease", () => {
 
     const second = await acquireWorktreeRunLease(created.id, { env });
     failUnlock = false;
-    await __testing.drainPendingCleanupsForTest();
+    await runLeaseTesting.drainPendingCleanupsForTest();
     expect(await lockState(record)).toEqual({ kind: "live", pid: process.pid });
 
     await second.release();
@@ -319,9 +319,9 @@ describe("worktree run lease", () => {
     const created = await createSessionWorktree();
     claimWorktreeRemoval(env, { worktreeId: created.id, token: "remover-a", force: false });
 
-    __testing.setDeadPidResolverForTest((pid) => pid === process.pid);
+    runLeaseTesting.setDeadPidResolverForTest((pid) => pid === process.pid);
     claimWorktreeRemoval(env, { worktreeId: created.id, token: "remover-b", force: false });
-    __testing.setDeadPidResolverForTest(null);
+    runLeaseTesting.setDeadPidResolverForTest(null);
 
     abortWorktreeRemoval(env, created.id, "remover-a");
     await expect(acquireWorktreeRunLease(created.id, { env })).rejects.toThrow(

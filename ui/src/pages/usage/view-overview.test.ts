@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CostDailyEntry, UsageAggregates, UsageSessionEntry, UsageTotals } from "./types.ts";
@@ -211,11 +212,12 @@ describe("renderUsageInsights", () => {
 describe("renderDailyChartCompact", () => {
   it("keeps day selection operable with mouse and keyboard", () => {
     const { bars, onSelectDay } = renderDailyChart([dailyEntry("2026-05-04", 500, 0.2)]);
+    const bar = expectDefined(bars[0], "daily usage bar");
 
-    bars[0].dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
+    bar.dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
     expect(onSelectDay).toHaveBeenCalledWith("2026-05-04", true);
 
-    bars[0].dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }));
+    bar.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }));
     expect(onSelectDay).toHaveBeenCalledWith("2026-05-04", false);
 
     const space = new KeyboardEvent("keydown", {
@@ -224,7 +226,7 @@ describe("renderDailyChartCompact", () => {
       key: " ",
       shiftKey: true,
     });
-    bars[0].dispatchEvent(space);
+    bar.dispatchEvent(space);
     expect(space.defaultPrevented).toBe(true);
     expect(onSelectDay).toHaveBeenCalledWith("2026-05-04", true);
   });

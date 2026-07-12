@@ -1,4 +1,5 @@
 // Msteams tests cover file consent helpers plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { prepareFileConsentActivity, requiresFileConsent } from "./file-consent-helpers.js";
 import {
@@ -194,10 +195,10 @@ describe("prepareFileConsentActivity", () => {
       conversationId: "conv456",
     });
 
-    const attachment = (result.activity.attachments as unknown[])[0] as Record<
-      string,
-      { description: string }
-    >;
+    const attachment = expectDefined(
+      (result.activity.attachments as Array<{ content: { description: string } }>)[0],
+      "default file-consent attachment",
+    );
     expect(attachment.content.description).toBe("File: document.docx");
   });
 
@@ -212,10 +213,10 @@ describe("prepareFileConsentActivity", () => {
       description: "Q4 Financial Report",
     });
 
-    const attachment = (result.activity.attachments as unknown[])[0] as Record<
-      string,
-      { description: string }
-    >;
+    const attachment = expectDefined(
+      (result.activity.attachments as Array<{ content: { description: string } }>)[0],
+      "described file-consent attachment",
+    );
     expect(attachment.content.description).toBe("Q4 Financial Report");
   });
 
@@ -229,10 +230,14 @@ describe("prepareFileConsentActivity", () => {
       conversationId: "conv000",
     });
 
-    const attachment = (result.activity.attachments as unknown[])[0] as Record<
-      string,
-      { acceptContext: { uploadId: string } }
-    >;
+    const attachment = expectDefined(
+      (
+        result.activity.attachments as Array<{
+          content: { acceptContext: { uploadId: string } };
+        }>
+      )[0],
+      "file-consent upload attachment",
+    );
     expect(attachment.content.acceptContext.uploadId).toBe(mockUploadId);
   });
 

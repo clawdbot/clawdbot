@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, beforeEach, vi } from "vitest";
 const { createMatrixQaClient } = vi.hoisted(() => ({
   createMatrixQaClient: vi.fn(),
@@ -939,7 +940,7 @@ describe("matrix live qa scenarios", () => {
       scenarioTesting.buildMatrixQaTopologyForScenarios({
         defaultRoomName: "OpenClaw Matrix QA run",
         scenarios: [
-          MATRIX_QA_SCENARIOS[0],
+          expectDefined(MATRIX_QA_SCENARIOS[0], "first Matrix QA scenario"),
           {
             id: "matrix-secondary-room-open-trigger",
             standardId: "canary",
@@ -3926,7 +3927,7 @@ describe("matrix live qa scenarios", () => {
     const waitForRoomEvent = vi.fn().mockImplementation(async () => {
       const callIndex = waitForRoomEvent.mock.calls.length - 1;
       const mediaCaseIndex = Math.floor(callIndex / 2);
-      const mediaCase = mediaCases[mediaCaseIndex];
+      const mediaCase = expectDefined(mediaCases[mediaCaseIndex], `media case ${mediaCaseIndex}`);
       const sendOpts = sendMediaMessage.mock.calls[mediaCaseIndex]?.[0];
       if (callIndex % 2 === 0) {
         return {

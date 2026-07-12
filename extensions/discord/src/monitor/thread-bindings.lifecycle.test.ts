@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { ChannelType } from "discord-api-types/v10";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -473,11 +474,12 @@ describe("thread binding lifecycle", () => {
       });
 
       expect(updated).toHaveLength(1);
+      const updatedBinding = expectDefined(updated[0], "idle-timeout thread binding");
       expect(updated[0]?.lastActivityAt).toBe(new Date("2026-02-20T23:15:00.000Z").getTime());
       expect(updated[0]?.boundAt).toBe(boundAt);
       expect(
         resolveThreadBindingInactivityExpiresAt({
-          record: updated[0],
+          record: updatedBinding,
           defaultIdleTimeoutMs: manager.getIdleTimeoutMs(),
         }),
       ).toBe(new Date("2026-02-21T01:15:00.000Z").getTime());
@@ -514,11 +516,12 @@ describe("thread binding lifecycle", () => {
       });
 
       expect(updated).toHaveLength(1);
+      const updatedBinding = expectDefined(updated[0], "max-age thread binding");
       expect(updated[0]?.boundAt).toBe(new Date("2026-02-20T10:30:00.000Z").getTime());
       expect(updated[0]?.lastActivityAt).toBe(new Date("2026-02-20T10:30:00.000Z").getTime());
       expect(
         resolveThreadBindingMaxAgeExpiresAt({
-          record: updated[0],
+          record: updatedBinding,
           defaultMaxAgeMs: manager.getMaxAgeMs(),
         }),
       ).toBe(new Date("2026-02-20T13:30:00.000Z").getTime());

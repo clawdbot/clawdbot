@@ -321,7 +321,7 @@ export function hasLiveWorktreeRunLease(env: NodeJS.ProcessEnv, worktreeId: stri
   return hasLiveWorktreeRunLeaseRow(env, worktreeId, ownerChecks);
 }
 
-const testing = {
+export const testing = {
   setProcessStartTimeResolverForTest(resolver: ((pid: number) => number | null) | null): void {
     resolveSelfStartTime = resolver ?? getFileLockProcessStartTime;
     ownerChecks = { ...ownerChecks, getProcessStartTime: resolver ?? undefined };
@@ -348,5 +348,3 @@ const testing = {
     unlockWorktreeImpl = unlockWorktree;
   },
 };
-
-export { testing as __testing };

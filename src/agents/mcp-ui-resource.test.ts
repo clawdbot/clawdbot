@@ -8,7 +8,7 @@ import {
   resolveMcpAppSandboxPort,
 } from "./mcp-app-sandbox.js";
 import {
-  __testing,
+  testing as mcpUiResourceTesting,
   acquireMcpAppViewRequest,
   fetchMcpAppView,
   getMcpAppViewLease,
@@ -37,7 +37,7 @@ function runtime(readResource: SessionMcpRuntime["readResource"]): SessionMcpRun
 
 describe("MCP App UI resources", () => {
   beforeEach(() => {
-    __testing.clearViewStore();
+    mcpUiResourceTesting.clearViewStore();
   });
 
   afterEach(() => {

@@ -1,5 +1,6 @@
 // Qa Lab tests cover bounded CI smoke profile planning.
 import { OPENCLAW_CRABLINE_DEFAULT_CHANNEL } from "@openclaw/crabline";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { createQaSmokeCiPart } from "./ci-smoke-plan.js";
 import { readQaScenarioPack } from "./scenario-catalog.js";
@@ -69,9 +70,9 @@ describe("createQaSmokeCiPart", () => {
         ids.map((scenarioId) => estimateScenarioCost(scenarioById.get(scenarioId))),
       ),
     );
-    expect(Math.abs(primaryRunCosts[0] - primaryRunCosts[1])).toBeLessThanOrEqual(
-      largestScenarioCost,
-    );
+    const firstRunCost = expectDefined(primaryRunCosts[0], "first QA smoke run cost");
+    const secondRunCost = expectDefined(primaryRunCosts[1], "second QA smoke run cost");
+    expect(Math.abs(firstRunCost - secondRunCost)).toBeLessThanOrEqual(largestScenarioCost);
   });
 
   it("rejects undeclared profile parts", () => {

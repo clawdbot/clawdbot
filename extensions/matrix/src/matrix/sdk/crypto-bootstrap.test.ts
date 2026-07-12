@@ -1,4 +1,5 @@
 // Matrix tests cover crypto bootstrap plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { MatrixCryptoBootstrapper, type MatrixCryptoBootstrapperDeps } from "./crypto-bootstrap.js";
 import type { MatrixRecoveryKeyStore } from "./recovery-key-store.js";
@@ -308,8 +309,16 @@ describe("MatrixCryptoBootstrapper", () => {
     });
 
     expect(userHasCrossSigningKeys).toHaveBeenCalledWith("@bot:example.org", true);
-    expect(userHasCrossSigningKeys.mock.invocationCallOrder[0]).toBeLessThan(
-      bootstrapCrossSigning.mock.invocationCallOrder[0],
+    expect(
+      expectDefined(
+        userHasCrossSigningKeys.mock.invocationCallOrder[0],
+        "Matrix cross-signing lookup invocation",
+      ),
+    ).toBeLessThan(
+      expectDefined(
+        bootstrapCrossSigning.mock.invocationCallOrder[0],
+        "Matrix cross-signing bootstrap invocation",
+      ),
     );
   });
 

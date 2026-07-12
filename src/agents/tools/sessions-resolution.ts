@@ -484,4 +484,3 @@ export const testing = {
     );
   },
 };
-export { testing as __testing };

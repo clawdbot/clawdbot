@@ -1,4 +1,5 @@
 // Telegram tests cover bot message plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramMessageProcessingResult } from "./bot-processing-outcome.js";
@@ -12,6 +13,10 @@ const sleepWithAbort = vi.hoisted(() =>
 const upsertChannelPairingRequest = vi.hoisted(() =>
   vi.fn(async () => ({ code: "PAIRCODE", created: true })),
 );
+
+function requireInvocationOrder(mock: { invocationCallOrder: number[] }, context: string): number {
+  return expectDefined(mock.invocationCallOrder[0], context);
+}
 
 vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   createSubsystemLogger: () => ({
@@ -163,8 +168,8 @@ describe("telegram bot message processor", () => {
 
     expect(sendTyping).toHaveBeenCalledTimes(1);
     expect(dispatchTelegramMessage).toHaveBeenCalledTimes(1);
-    expect(sendTyping.mock.invocationCallOrder[0]).toBeLessThan(
-      dispatchTelegramMessage.mock.invocationCallOrder[0],
+    expect(requireInvocationOrder(sendTyping.mock, "send typing invocation")).toBeLessThan(
+      requireInvocationOrder(dispatchTelegramMessage.mock, "message dispatch invocation"),
     );
     expect(telegramInboundInfo).toHaveBeenCalledWith(
       "Inbound message telegram:123 -> @openclaw_bot (direct, 11 chars)",
@@ -225,11 +230,11 @@ describe("telegram bot message processor", () => {
     expect(sendTyping).toHaveBeenCalledTimes(1);
     expect(onDispatchStart).toHaveBeenCalledTimes(1);
     expect(dispatchTelegramMessage).toHaveBeenCalledTimes(1);
-    expect(sendTyping.mock.invocationCallOrder[0]).toBeLessThan(
-      onDispatchStart.mock.invocationCallOrder[0],
+    expect(requireInvocationOrder(sendTyping.mock, "send typing invocation")).toBeLessThan(
+      requireInvocationOrder(onDispatchStart.mock, "dispatch-start invocation"),
     );
-    expect(onDispatchStart.mock.invocationCallOrder[0]).toBeLessThan(
-      dispatchTelegramMessage.mock.invocationCallOrder[0],
+    expect(requireInvocationOrder(onDispatchStart.mock, "dispatch-start invocation")).toBeLessThan(
+      requireInvocationOrder(dispatchTelegramMessage.mock, "message dispatch invocation"),
     );
   });
 

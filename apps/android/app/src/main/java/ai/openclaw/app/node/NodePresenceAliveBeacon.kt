@@ -52,7 +52,7 @@ internal object NodePresenceAliveBeacon {
   }
 
   /** Human-readable Android version label included in presence payloads. */
-  fun androidPlatformLabel(): String {
+  fun androidPlatformMetadata(): String {
     val release =
       Build.VERSION.RELEASE
         ?.trim()

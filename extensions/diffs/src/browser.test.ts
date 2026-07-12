@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -139,15 +140,14 @@ describe("PlaywrightDiffScreenshotter", () => {
 
     expect(launchMock).toHaveBeenCalledTimes(1);
     expect(pages).toHaveLength(1);
-    expect(pages[0]?.pdf).toHaveBeenCalledTimes(1);
-    const pdfCall = firstMockCall(pages[0]?.pdf, "PDF render")[0] as
-      | Record<string, unknown>
-      | undefined;
+    const page = expectDefined(pages[0], "diffs browser page");
+    expect(page.pdf).toHaveBeenCalledTimes(1);
+    const pdfCall = firstMockCall(page.pdf, "PDF render")[0] as Record<string, unknown> | undefined;
     if (!pdfCall) {
       throw new Error("expected PDF render call");
     }
     expect(pdfCall).not.toHaveProperty("pageRanges");
-    expect(pages[0]?.screenshot).toHaveBeenCalledTimes(0);
+    expect(page.screenshot).toHaveBeenCalledTimes(0);
     await expect(fs.readFile(pdfPath, "utf8")).resolves.toContain("%PDF-1.7");
   });
 

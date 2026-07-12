@@ -1,4 +1,5 @@
 // Slack tests cover channel migration plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { migrateSlackChannelConfig, migrateSlackChannelsInPlace } from "./channel-migration.js";
 
@@ -62,7 +63,9 @@ describe("migrateSlackChannelConfig", () => {
 
     expect(result.migrated).toBe(true);
     expect(result.scopes).toEqual(["account"]);
-    expect(cfg.channels.slack.accounts.primary.channels).toEqual({
+    expect(
+      expectDefined(cfg.channels.slack.accounts.primary, "primary Slack account").channels,
+    ).toEqual({
       C999: { requireMention: true },
     });
   });
@@ -80,7 +83,9 @@ describe("migrateSlackChannelConfig", () => {
     });
 
     expect(result.migrated).toBe(true);
-    expect(cfg.channels.slack.accounts.Primary.channels).toEqual({
+    expect(
+      expectDefined(cfg.channels.slack.accounts.Primary, "Primary Slack account").channels,
+    ).toEqual({
       C999: {},
     });
   });

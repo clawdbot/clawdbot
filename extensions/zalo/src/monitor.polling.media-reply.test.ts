@@ -1,5 +1,6 @@
 // Zalo tests cover monitor.polling.media reply plugin behavior.
 import type { ServerResponse } from "node:http";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
@@ -315,7 +316,7 @@ describe("Zalo polling media replies", () => {
         (route) => route.source === "zalo-hosted-media",
       );
       expect(firstHostedMediaRoutes).toHaveLength(1);
-      const hostedMediaRoute = firstHostedMediaRoutes[0];
+      const hostedMediaRoute = expectDefined(firstHostedMediaRoutes[0], "Zalo hosted-media route");
       expect(hostedMediaRoute?.path).toBe("/hooks/zalo/media");
       expect(hostedMediaRoute?.pluginId).toBe("zalo");
       expect(hostedMediaRoute?.source).toBe("zalo-hosted-media");

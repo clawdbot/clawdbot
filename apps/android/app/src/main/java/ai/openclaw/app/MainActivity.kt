@@ -1,5 +1,6 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.OpenClawTheme
 import ai.openclaw.app.ui.RootScreen
 import android.content.Intent
@@ -118,7 +119,7 @@ class MainActivity : AppCompatActivity() {
         initializedViewModel?.let { handleLaunchIntent(viewModel = it, intent = routedIntent) }
       }
     if (!accepted) {
-      Toast.makeText(this, "Too many shares are waiting to be added.", Toast.LENGTH_SHORT).show()
+      Toast.makeText(this, nativeString("Too many shares are waiting to be added."), Toast.LENGTH_SHORT).show()
     }
   }
 
@@ -197,7 +198,7 @@ class MainActivity : AppCompatActivity() {
   ) {
     parseShareLaunchIntent(intent)?.let { request ->
       if (!viewModel.handleShareLaunch(request)) {
-        Toast.makeText(this, "Too many shares are waiting to be added.", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, nativeString("Too many shares are waiting to be added."), Toast.LENGTH_SHORT).show()
       }
       return
     }

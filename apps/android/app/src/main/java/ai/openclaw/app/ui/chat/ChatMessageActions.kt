@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.chat.ChatMessageContent
+import ai.openclaw.app.i18n.nativeString
 import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -41,7 +42,7 @@ internal fun quoteChatMessage(text: String): String {
     text
       .lineSequence()
       .joinToString("\n") { line -> if (line.isEmpty()) ">" else "> $line" }
-  return "$quoted\n\n"
+  return nativeString("\$quoted\n\n", quoted)
 }
 
 /** Long-press message actions shared by the full Chat tab and compact chat sheet. */
@@ -69,7 +70,7 @@ internal fun ChatMessageActionHost(
       modifier.combinedClickable(
         onClick = {},
         onLongClick = { menuExpanded = true },
-        onLongClickLabel = "Message actions",
+        onLongClickLabel = nativeString("Message actions"),
       ),
   ) {
     content()
@@ -78,24 +79,24 @@ internal fun ChatMessageActionHost(
       onDismissRequest = { menuExpanded = false },
     ) {
       onToggleListen?.let { toggleListen ->
-        MessageActionItem(label = if (listenActive) "Stop" else "Listen") {
+        MessageActionItem(label = if (listenActive) nativeString("Stop") else nativeString("Listen")) {
           toggleListen()
           menuExpanded = false
         }
       }
-      MessageActionItem(label = "Copy") {
+      MessageActionItem(label = nativeString("Copy")) {
         copyChatMessage(context, text)
         menuExpanded = false
       }
-      MessageActionItem(label = "Select text") {
+      MessageActionItem(label = nativeString("Select text")) {
         menuExpanded = false
         selectText = true
       }
-      MessageActionItem(label = "Share") {
+      MessageActionItem(label = nativeString("Share")) {
         shareChatMessage(context, text)
         menuExpanded = false
       }
-      MessageActionItem(label = "Reply") {
+      MessageActionItem(label = nativeString("Reply")) {
         onReply(quoteChatMessage(text))
         menuExpanded = false
       }
@@ -105,7 +106,7 @@ internal fun ChatMessageActionHost(
   if (selectText) {
     AlertDialog(
       onDismissRequest = { selectText = false },
-      title = { Text("Select text") },
+      title = { Text(nativeString("Select text")) },
       text = {
         Box(
           modifier =
@@ -121,7 +122,7 @@ internal fun ChatMessageActionHost(
       },
       confirmButton = {
         TextButton(onClick = { selectText = false }) {
-          Text("Done")
+          Text(nativeString("Done"))
         }
       },
     )
@@ -142,7 +143,7 @@ private fun copyChatMessage(
 ) {
   val clipboard = context.getSystemService(ClipboardManager::class.java)
   clipboard.setPrimaryClip(ClipData.newPlainText("OpenClaw chat message", text))
-  Toast.makeText(context, "Message copied", Toast.LENGTH_SHORT).show()
+  Toast.makeText(context, nativeString("Message copied"), Toast.LENGTH_SHORT).show()
 }
 
 private fun shareChatMessage(
@@ -153,10 +154,10 @@ private fun shareChatMessage(
     Intent(Intent.ACTION_SEND)
       .setType("text/plain")
       .putExtra(Intent.EXTRA_TEXT, text)
-  val chooser = Intent.createChooser(sendIntent, "Share message")
+  val chooser = Intent.createChooser(sendIntent, nativeString("Share message"))
   if (context !is Activity) chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
   runCatching { context.startActivity(chooser) }
     .onFailure {
-      Toast.makeText(context, "No app can share this message", Toast.LENGTH_SHORT).show()
+      Toast.makeText(context, nativeString("No app can share this message"), Toast.LENGTH_SHORT).show()
     }
 }

@@ -24,16 +24,21 @@ export function createCanvasHttpRouteHandler(params: {
   runtime: RuntimeEnv;
   allowInTests?: boolean;
 }): CanvasHttpRouteHandler {
+  let cachedHostConfig: ReturnType<typeof resolveCanvasHostConfig> | null = null;
+  const getHostConfig = () => {
+    cachedHostConfig ??= resolveCanvasHostConfig({
+      config: params.config,
+      pluginConfig: params.pluginConfig,
+    });
+    return cachedHostConfig;
+  };
   let hostHandlerPromise: Promise<CanvasHostHandler | null> | null = null;
   const loadHostHandler = async (): Promise<CanvasHostHandler | null> => {
     if (!isCanvasHostEnabled(params.config)) {
       return null;
     }
     hostHandlerPromise ??= (async () => {
-      const hostConfig = resolveCanvasHostConfig({
-        config: params.config,
-        pluginConfig: params.pluginConfig,
-      });
+      const hostConfig = getHostConfig();
       const handler = await createCanvasHostHandler({
         runtime: params.runtime,
         rootDir: hostConfig.root,
@@ -54,7 +59,7 @@ export function createCanvasHttpRouteHandler(params: {
       }
       const url = new URL(req.url ?? "/", "http://localhost");
       if (url.pathname === A2UI_PATH || url.pathname.startsWith(`${A2UI_PATH}/`)) {
-        return handleA2uiHttpRequest(req, res);
+        return handleA2uiHttpRequest(req, res, { liveReload: getHostConfig().liveReload });
       }
       return handler.handleHttpRequest(req, res);
     },

@@ -178,5 +178,3 @@ export function syncPersistedExternalCliAuthProfiles(
   }
   return next ?? store;
 }
-
-export { testing as __testing };

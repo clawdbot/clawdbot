@@ -1,5 +1,6 @@
 // Slack tests cover prepare plugin behavior.
 import fs from "node:fs/promises";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { App } from "@slack/bolt";
 import { expectChannelInboundContextContract as expectInboundContextContract } from "openclaw/plugin-sdk/channel-contract-testing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -1882,7 +1883,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
         message: createMainScopedDmMessage({ thread_ts: "1.000" }),
       },
     ];
-    delete cases[2].message.channel_type;
+    delete expectDefined(cases[2], "missing-channel-type Slack case").message.channel_type;
 
     for (const testCase of cases) {
       const prepared = await prepareMessageWith(

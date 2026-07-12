@@ -1,5 +1,6 @@
 // Copilot tests cover tool bridge plugin behavior.
 import type { Tool as SdkTool, ToolInvocation, ToolResultObject } from "@github/copilot-sdk";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { AnyAgentTool, SandboxContext } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -1411,8 +1412,10 @@ describe("convertOpenClawToolToSdkTool", () => {
       toolCallId: "call-42",
       toolName: "tool-a",
     });
-    expect(beforeExecute.mock.invocationCallOrder[0]).toBeLessThan(
-      sourceTool.execute.mock.invocationCallOrder[0],
+    expect(
+      expectDefined(beforeExecute.mock.invocationCallOrder[0], "Copilot before-execute invocation"),
+    ).toBeLessThan(
+      expectDefined(sourceTool.execute.mock.invocationCallOrder[0], "Copilot tool invocation"),
     );
   });
 

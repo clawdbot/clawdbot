@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import type { JsonSchema } from "../components/config-form.shared.ts";
 import {
@@ -536,8 +537,9 @@ describe("coerceFormValues", () => {
     const form = { items: [{ count: "5" }] };
     const coerced = coerceFormValues(form, schema) as Record<string, unknown>;
     const items = coerced.items as Array<Record<string, unknown>>;
-    expect(typeof items[0].count).toBe("number");
-    expect(items[0].count).toBe(5);
+    const firstItem = expectDefined(items[0], "first coerced form item");
+    expect(typeof firstItem.count).toBe("number");
+    expect(firstItem.count).toBe(5);
   });
 
   it("handles tuple array schemas by index", () => {

@@ -934,4 +934,3 @@ export const testing = {
       : defaultSubagentControlDeps;
   },
 };
-export { testing as __testing };

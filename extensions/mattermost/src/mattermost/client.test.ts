@@ -1,4 +1,5 @@
 // Mattermost tests cover client plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
@@ -60,6 +61,13 @@ function parseRequestJson(init: RequestInit | undefined): Record<string, unknown
     throw new Error("expected JSON object request body");
   }
   return parsed as Record<string, unknown>;
+}
+
+function requireRequestCall(
+  calls: readonly { url: string; init?: RequestInit }[],
+  index = 0,
+): { url: string; init?: RequestInit } {
+  return expectDefined(calls[index], `Mattermost request call ${index}`);
 }
 
 function streamingMattermostResponse(body: unknown): {
@@ -129,7 +137,7 @@ async function updatePostAndCapture(
   await updateMattermostPost(client, "post1", update);
   return {
     calls,
-    body: parseRequestJson(calls[0].init),
+    body: parseRequestJson(requireRequestCall(calls).init),
   };
 }
 
@@ -368,7 +376,7 @@ describe("createMattermostClient", () => {
       fetchImpl: mockFetch,
     });
     await client.request("/users/me");
-    const headers = new Headers(calls[0].init?.headers);
+    const headers = new Headers(requireRequestCall(calls).init?.headers);
     expect(headers.get("Authorization")).toBe("Bearer my-secret-token");
   });
 
@@ -380,7 +388,7 @@ describe("createMattermostClient", () => {
       fetchImpl: mockFetch,
     });
     await client.request("/posts", { method: "POST", body: JSON.stringify({ message: "hi" }) });
-    const headers = new Headers(calls[0].init?.headers);
+    const headers = new Headers(requireRequestCall(calls).init?.headers);
     expect(headers.get("Content-Type")).toBe("application/json");
   });
 
@@ -427,7 +435,7 @@ describe("createMattermostPost", () => {
       message: "Hello world",
     });
 
-    const body = parseRequestJson(calls[0].init);
+    const body = parseRequestJson(requireRequestCall(calls).init);
     expect(body.channel_id).toBe("ch123");
     expect(body.message).toBe("Hello world");
   });
@@ -446,7 +454,7 @@ describe("createMattermostPost", () => {
       rootId: "root456",
     });
 
-    const body = parseRequestJson(calls[0].init);
+    const body = parseRequestJson(requireRequestCall(calls).init);
     expect(body.root_id).toBe("root456");
   });
 
@@ -464,7 +472,7 @@ describe("createMattermostPost", () => {
       fileIds: ["file1", "file2"],
     });
 
-    const body = parseRequestJson(calls[0].init);
+    const body = parseRequestJson(requireRequestCall(calls).init);
     expect(body.file_ids).toEqual(["file1", "file2"]);
   });
 
@@ -491,7 +499,7 @@ describe("createMattermostPost", () => {
       props,
     });
 
-    const body = parseRequestJson(calls[0].init);
+    const body = parseRequestJson(requireRequestCall(calls).init);
     expect(body).toEqual({
       channel_id: "ch123",
       message: "Pick an option",
@@ -512,7 +520,7 @@ describe("createMattermostPost", () => {
       message: "No props",
     });
 
-    const body = parseRequestJson(calls[0].init);
+    const body = parseRequestJson(requireRequestCall(calls).init);
     expect(body.props).toBeUndefined();
   });
 });
@@ -523,10 +531,7 @@ describe("updateMattermostPost", () => {
   it("sends PUT to /posts/{id}", async () => {
     const { calls } = await updatePostAndCapture({ message: "Updated" });
 
-    const firstCall = calls[0];
-    if (!firstCall) {
-      throw new Error("expected Mattermost update post request");
-    }
+    const firstCall = requireRequestCall(calls);
     expect(firstCall.url).toContain("/posts/post1");
     if (!firstCall.init) {
       throw new Error("expected Mattermost update post request init");

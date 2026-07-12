@@ -125,4 +125,3 @@ export const testing = {
   resolveSearchProvider: (search?: Parameters<typeof resolveWebSearchProviderId>[0]["search"]) =>
     resolveWebSearchProviderId({ search }),
 };
-export { testing as __testing };

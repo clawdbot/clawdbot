@@ -1,4 +1,5 @@
 // Control UI tests cover workboard behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { nothing, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -942,11 +943,13 @@ describe("renderWorkboard", () => {
       ),
     ];
     expect(selects).toHaveLength(3);
+    const firstSelect = expectDefined(selects[0], "first workboard filter");
+    const secondSelect = expectDefined(selects[1], "second workboard filter");
 
-    selects[0].open = true;
-    selects[0].dispatchEvent(new Event("toggle"));
-    selects[1].open = true;
-    selects[1].dispatchEvent(new Event("toggle"));
+    firstSelect.open = true;
+    firstSelect.dispatchEvent(new Event("toggle"));
+    secondSelect.open = true;
+    secondSelect.dispatchEvent(new Event("toggle"));
 
     expect(selects[0]?.open).toBe(false);
     expect(selects[1]?.open).toBe(true);
@@ -1060,17 +1063,20 @@ describe("renderWorkboard", () => {
       expect(select).toBeTruthy();
       expect(trigger).toBeTruthy();
       expect(options.length).toBeGreaterThan(2);
-      options[1].disabled = true;
+      const firstOption = expectDefined(options[0], "first workboard filter option");
+      const disabledOption = expectDefined(options[1], "disabled workboard filter option");
+      const thirdOption = expectDefined(options[2], "third workboard filter option");
+      disabledOption.disabled = true;
 
       trigger!.focus();
       dispatchKey(trigger!, "ArrowDown");
       expect(select?.open).toBe(true);
-      expect(document.activeElement).toBe(options[0]);
+      expect(document.activeElement).toBe(firstOption);
 
-      dispatchKey(options[0], "ArrowDown");
-      expect(document.activeElement).toBe(options[2]);
+      dispatchKey(firstOption, "ArrowDown");
+      expect(document.activeElement).toBe(thirdOption);
 
-      dispatchKey(options[2], "End");
+      dispatchKey(thirdOption, "End");
       expect(document.activeElement).toBe(options.at(-1));
 
       dispatchKey(options.at(-1)!, "h");

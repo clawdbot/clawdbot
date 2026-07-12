@@ -9,6 +9,7 @@
  * - Error handling and edge cases
  */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveTwitchToken } from "./token.js";
 import { TwitchClientManager } from "./twitch-client.js";
@@ -644,7 +645,7 @@ describe("TwitchClientManager", () => {
       await manager.getClient(testAccount);
 
       // Get the onMessage callback
-      const onMessageCallback = messageHandlers[0];
+      const onMessageCallback = expectDefined(messageHandlers[0], "Twitch message handler");
       if (!onMessageCallback) {
         throw new Error("onMessageCallback not found");
       }
@@ -674,7 +675,7 @@ describe("TwitchClientManager", () => {
     it("should normalize channel names without # prefix", async () => {
       await manager.getClient(testAccount);
 
-      const onMessageCallback = messageHandlers[0];
+      const onMessageCallback = expectDefined(messageHandlers[0], "Twitch message handler");
 
       onMessageCallback("testchannel", "testuser", "Test", {
         userInfo: {
@@ -695,7 +696,7 @@ describe("TwitchClientManager", () => {
     it("should include user role flags in message", async () => {
       await manager.getClient(testAccount);
 
-      const onMessageCallback = messageHandlers[0];
+      const onMessageCallback = expectDefined(messageHandlers[0], "Twitch message handler");
 
       onMessageCallback("#testchannel", "moduser", "Test", {
         userInfo: {
@@ -719,7 +720,7 @@ describe("TwitchClientManager", () => {
     it("should handle broadcaster messages", async () => {
       await manager.getClient(testAccount);
 
-      const onMessageCallback = messageHandlers[0];
+      const onMessageCallback = expectDefined(messageHandlers[0], "Twitch message handler");
 
       onMessageCallback("#testchannel", "broadcaster", "Test", {
         userInfo: {

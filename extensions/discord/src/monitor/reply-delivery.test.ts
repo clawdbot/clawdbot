@@ -1,4 +1,5 @@
 // Discord tests cover reply delivery plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -133,7 +134,9 @@ describe("deliverDiscordReply", () => {
     expect(params.replyToMode).toBe("all");
 
     const deps = params.deps!;
-    await deps.discord("channel:101", "probe", { verbose: false });
+    await expectDefined(deps.discord, "Discord reply sender")("channel:101", "probe", {
+      verbose: false,
+    });
     expect(firstMockArg(sendMessageDiscordMock, "sendMessageDiscord", 0)).toBe("channel:101");
     expect(firstMockArg(sendMessageDiscordMock, "sendMessageDiscord", 1)).toBe("probe");
     const sendOptions = objectArgAt(sendMessageDiscordMock, 2);
@@ -515,10 +518,14 @@ describe("deliverDiscordReply", () => {
     });
 
     const deps = firstDeliverParams().deps!;
-    await deps.discordVoice("channel:123", "https://example.com/voice.ogg", {
-      cfg,
-      reply: { messageId: "reply-1", scope: "all" },
-    });
+    await expectDefined(deps.discordVoice, "Discord voice reply sender")(
+      "channel:123",
+      "https://example.com/voice.ogg",
+      {
+        cfg,
+        reply: { messageId: "reply-1", scope: "all" },
+      },
+    );
 
     expect(firstMockArg(sendVoiceMessageDiscordMock, "sendVoiceMessageDiscord", 0)).toBe(
       "channel:123",

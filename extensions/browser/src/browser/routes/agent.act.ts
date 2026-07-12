@@ -8,6 +8,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
+  ChromeMcpDocumentUnavailableError,
   clickChromeMcpElement,
   clickChromeMcpCoords,
   dragChromeMcpElement,
@@ -17,6 +18,7 @@ import {
   hoverChromeMcpElement,
   pressChromeMcpKey,
   resizeChromeMcpPage,
+  withChromeMcpDocument,
   type ChromeMcpOperationOptions,
   type ChromeMcpProfileOptions,
 } from "../chrome-mcp.js";
@@ -212,7 +214,10 @@ function buildExistingSessionWaitPredicate(params: {
     checks.push(`document.readyState === "complete"`);
   }
   if (params.fn) {
-    checks.push(`Boolean(await (${params.fn})())`);
+    // `fn` is admitted only by the same evaluateEnabled gate as evaluate.
+    // Preserve its async semantics; document binding guards scheduler rebinding.
+    const source = normalizeBrowserEvaluateFunctionSource(params.fn);
+    checks.push(`Boolean(await (${source})())`);
   }
   if (checks.length === 0) {
     return null;
@@ -231,6 +236,8 @@ async function waitForExistingSessionCondition(
     url?: string;
     loadState?: "load" | "domcontentloaded" | "networkidle";
     fn?: string;
+    ssrfPolicy?: BrowserNavigationPolicyOptions["ssrfPolicy"];
+    browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
   },
 ): Promise<void> {
   if (params.timeMs && params.timeMs > 0) {
@@ -243,24 +250,74 @@ async function waitForExistingSessionCondition(
   const timeoutMs = Math.max(250, params.timeoutMs ?? 10_000);
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    let ready = true;
-    if (predicate) {
-      ready = Boolean(
-        await evaluateChromeMcpScript({
-          ...params,
-          fn: `async () => ${predicate}`,
-        }),
-      );
-    }
-    if (ready && params.url) {
-      const currentUrl = await evaluateChromeMcpScript({
-        ...params,
-        fn: "() => window.location.href",
+    try {
+      const ready = await withChromeMcpDocument(params, async (document) => {
+        const readAllowedUrl = async () => {
+          const url = await document.evaluate(`(root) => {
+            const boundDocument = root?.nodeType === 9 ? root : root?.ownerDocument;
+            return boundDocument === globalThis.document ? globalThis.location.href : null;
+          }`);
+          if (typeof url !== "string" || !url.trim()) {
+            return null;
+          }
+          await assertBrowserNavigationResultAllowed({
+            url,
+            ...withBrowserNavigationPolicy(params.ssrfPolicy, {
+              browserProxyMode: params.browserProxyMode,
+            }),
+          });
+          return url;
+        };
+        const currentUrl = await readAllowedUrl();
+        if (!currentUrl) {
+          return false;
+        }
+        if (params.url && !matchBrowserUrlPattern(params.url, currentUrl)) {
+          return false;
+        }
+        if (!predicate) {
+          return true;
+        }
+        const outcome = await document.evaluate(`async (root) => {
+          const boundDocument = root?.nodeType === 9 ? root : root?.ownerDocument;
+          if (boundDocument !== globalThis.document) return { kind: "navigation" };
+          try {
+            return { kind: "result", ready: Boolean(await (${predicate})) };
+          } catch (error) {
+            const message = error && typeof error === "object" && "message" in error
+              ? String(error.message)
+              : String(error);
+            return { kind: "error", message };
+          }
+        }`);
+        if (!outcome || typeof outcome !== "object") {
+          throw new Error("Document-bound wait returned an invalid result");
+        }
+        if ("kind" in outcome && outcome.kind === "error") {
+          throw new Error(
+            "message" in outcome && typeof outcome.message === "string"
+              ? outcome.message
+              : "Wait predicate failed",
+          );
+        }
+        const predicateReady =
+          "kind" in outcome &&
+          outcome.kind === "result" &&
+          "ready" in outcome &&
+          outcome.ready === true;
+        if (!predicateReady || !params.url) {
+          return predicateReady;
+        }
+        const finalUrl = await readAllowedUrl();
+        return finalUrl !== null && matchBrowserUrlPattern(params.url, finalUrl);
       });
-      ready = typeof currentUrl === "string" && matchBrowserUrlPattern(params.url, currentUrl);
-    }
-    if (ready) {
-      return;
+      if (ready) {
+        return;
+      }
+    } catch (error) {
+      if (!(error instanceof ChromeMcpDocumentUnavailableError)) {
+        throw error;
+      }
     }
     await sleep(250, undefined, { signal: params.signal });
   }
@@ -600,15 +657,20 @@ export function registerBrowserAgentActRoutes(
                 });
                 return await jsonOk();
               case "wait":
-                await waitForExistingSessionCondition({
-                  ...existingSessionTarget,
-                  timeMs: action.timeMs,
-                  text: action.text,
-                  textGone: action.textGone,
-                  selector: action.selector,
-                  url: action.url,
-                  loadState: action.loadState,
-                  fn: action.fn,
+                await runExistingSessionActionWithNavigationGuard({
+                  execute: () =>
+                    waitForExistingSessionCondition({
+                      ...existingSessionTarget,
+                      timeMs: action.timeMs,
+                      text: action.text,
+                      textGone: action.textGone,
+                      selector: action.selector,
+                      url: action.url,
+                      loadState: action.loadState,
+                      fn: action.fn,
+                      ...navigationPolicy,
+                    }),
+                  guard: existingSessionNavigationGuard,
                 });
                 return await jsonOk();
               case "evaluate": {

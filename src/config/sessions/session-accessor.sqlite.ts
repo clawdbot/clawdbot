@@ -27,7 +27,10 @@ import {
 import {
   isAgentHarnessSessionKey,
   isValidAgentHarnessSessionStoreEntry,
+  MODEL_SELECTION_LOCK_REMOVAL_MESSAGE,
+  resolveAgentHarnessSessionStoreError,
   resolveAgentHarnessSessionStoreEntryError,
+  resolveAgentHarnessSessionStoreTransitionError,
 } from "../../sessions/agent-harness-session-key.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { extractAssistantVisibleText } from "../../shared/chat-message-content.js";
@@ -954,9 +957,6 @@ export async function resetSqliteSessionEntryLifecycle(
   });
 }
 
-const MODEL_SELECTION_LOCK_REMOVAL_MESSAGE =
-  "Model-selection-locked sessions cannot be removed, unlocked, or reassigned.";
-
 async function deleteSqliteSessionEntryLifecycleInternal(
   params: DeleteSessionEntryLifecycleParams,
   allowLockedEntryRemoval: boolean,
@@ -1157,6 +1157,90 @@ export async function applySqliteSessionEntryReplacements<T>(params: {
       },
       toDatabaseOptions(resolved),
       { operationLabel: "session.entry-replacements" },
+    );
+    finalizeSqliteSessionEntryMaintenancePlansBestEffort(resolved, maintenancePlans);
+    return operation.result;
+  });
+}
+
+/**
+ * Applies a detached whole-store projection under the SQLite writer lane.
+ * This exists only for bounded compatibility adapters that must preserve a
+ * legacy serialized callback without exposing mutable storage internals.
+ */
+export async function applySqliteSessionStoreProjection<T>(params: {
+  activeSessionKey?: string;
+  agentId?: string;
+  skipMaintenance?: boolean;
+  storePath: string;
+  update: (store: Record<string, SessionEntry>) =>
+    | Promise<{ persist: boolean; result: T }>
+    | {
+        persist: boolean;
+        result: T;
+      };
+}): Promise<T> {
+  const resolved = resolveSqliteScope({
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    sessionKey: params.activeSessionKey ?? "",
+    storePath: params.storePath,
+  });
+  return await runExclusiveSqliteSessionWrite(resolved, async () => {
+    const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+    const before = readSqliteSessionEntryStore(database);
+    const projected = structuredClone(before);
+    const operation = await params.update(projected);
+    if (!operation.persist) {
+      return operation.result;
+    }
+    const lockedEntriesBefore = new Map(
+      Object.entries(before).filter(([, entry]) => entry.modelSelectionLocked === true),
+    );
+    const transitionError = resolveAgentHarnessSessionStoreTransitionError({
+      before: lockedEntriesBefore,
+      store: projected,
+    });
+    const storeError = resolveAgentHarnessSessionStoreError(projected);
+    if (transitionError || storeError) {
+      throw new Error(transitionError ?? storeError);
+    }
+
+    const changedKeys = uniqueStrings([...Object.keys(before), ...Object.keys(projected)]).filter(
+      (sessionKey) => !sqliteSessionEntriesEqual(before[sessionKey], projected[sessionKey]),
+    );
+    if (changedKeys.length === 0) {
+      return operation.result;
+    }
+
+    const maintenancePlans: SqliteSessionEntryMaintenancePlan[] = [];
+    runOpenClawAgentWriteTransaction(
+      (transactionDb) => {
+        for (const sessionKey of changedKeys) {
+          const current = readExactSessionEntryRow(transactionDb, sessionKey)?.entry;
+          if (!sqliteSessionEntriesEqual(current, before[sessionKey])) {
+            throw new Error(
+              `SQLite session entry changed before store projection for ${sessionKey}`,
+            );
+          }
+        }
+        for (const sessionKey of changedKeys) {
+          const entry = projected[sessionKey];
+          if (entry) {
+            writeSessionEntry(transactionDb, sessionKey, cloneSessionEntry(entry));
+          } else {
+            deleteSqliteSessionEntryRows(transactionDb, sessionKey);
+          }
+        }
+        maintenancePlans.push(
+          applySqliteSessionEntryMaintenance(transactionDb, {
+            activeSessionKey: params.activeSessionKey ?? "",
+            archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
+            skipMaintenance: params.skipMaintenance,
+          }),
+        );
+      },
+      toDatabaseOptions(resolved),
+      { operationLabel: "session.store-projection" },
     );
     finalizeSqliteSessionEntryMaintenancePlansBestEffort(resolved, maintenancePlans);
     return operation.result;

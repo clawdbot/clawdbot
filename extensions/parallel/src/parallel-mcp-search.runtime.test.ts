@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
 
@@ -76,6 +77,10 @@ function readBody(call: EndpointCall): Record<string, unknown> {
 
 function headerOf(call: EndpointCall, name: string): string | undefined {
   return (call.init.headers as Record<string, string>)[name];
+}
+
+function requireEndpointCall(index: number): EndpointCall {
+  return expectDefined(endpointMockState.calls[index], `Parallel MCP endpoint call ${index}`);
 }
 
 function boundaryJsonPayload(base: Record<string, unknown>): {
@@ -247,17 +252,17 @@ describe("runParallelMcpSearch", () => {
       "tools/call",
     ]);
     // Server session id + a negotiated protocol version are echoed post-init.
-    expect(headerOf(endpointMockState.calls[1], "Mcp-Session-Id")).toBe("server-session-1");
-    expect(headerOf(endpointMockState.calls[2], "Mcp-Session-Id")).toBe("server-session-1");
-    expect(headerOf(endpointMockState.calls[2], "MCP-Protocol-Version")).toBe("2025-06-18");
+    expect(headerOf(requireEndpointCall(1), "Mcp-Session-Id")).toBe("server-session-1");
+    expect(headerOf(requireEndpointCall(2), "Mcp-Session-Id")).toBe("server-session-1");
+    expect(headerOf(requireEndpointCall(2), "MCP-Protocol-Version")).toBe("2025-06-18");
     // No bearer token on the anonymous free path.
-    expect(headerOf(endpointMockState.calls[0], "Authorization")).toBeUndefined();
+    expect(headerOf(requireEndpointCall(0), "Authorization")).toBeUndefined();
     // Every call identifies OpenClaw at the HTTP layer (not just node).
     for (const call of endpointMockState.calls) {
       expect(headerOf(call, "User-Agent")).toMatch(/^openclaw-parallel\//);
     }
     // tools/call carries the documented web_search args.
-    const callArgs = (readBody(endpointMockState.calls[2]).params as Record<string, unknown>)
+    const callArgs = (readBody(requireEndpointCall(2)).params as Record<string, unknown>)
       .arguments as Record<string, unknown>;
     expect(callArgs).toMatchObject({
       objective: "find examples",
@@ -285,7 +290,7 @@ describe("runParallelMcpSearch", () => {
 
     await runParallelMcpSearch({ searchQueries: ["alpha", "beta"], maxResults: 5 });
 
-    const callArgs = (readBody(endpointMockState.calls[2]).params as Record<string, unknown>)
+    const callArgs = (readBody(requireEndpointCall(2)).params as Record<string, unknown>)
       .arguments as Record<string, unknown>;
     expect(callArgs.objective).toBe("alpha beta");
   });
@@ -309,7 +314,7 @@ describe("runParallelMcpSearch", () => {
       maxResults: 5,
       sessionId: callerSessionId,
     });
-    const callArgs = (readBody(endpointMockState.calls[2]).params as Record<string, unknown>)
+    const callArgs = (readBody(requireEndpointCall(2)).params as Record<string, unknown>)
       .arguments as Record<string, unknown>;
     expect(callArgs.session_id).toBe(callerSessionId);
     expect(response.session_id).toBe(callerSessionId);
@@ -339,8 +344,8 @@ describe("runParallelMcpSearch", () => {
       "initialize",
       "notifications/initialized",
     ]);
-    expect(headerOf(endpointMockState.calls[1], "Mcp-Session-Id")).toBe("server-session-1");
-    expect(headerOf(endpointMockState.calls[1], "MCP-Protocol-Version")).toBe("2025-06-18");
+    expect(headerOf(requireEndpointCall(1), "Mcp-Session-Id")).toBe("server-session-1");
+    expect(headerOf(requireEndpointCall(1), "MCP-Protocol-Version")).toBe("2025-06-18");
   });
 
   it("bounds initialize error bodies without using response.text()", async () => {

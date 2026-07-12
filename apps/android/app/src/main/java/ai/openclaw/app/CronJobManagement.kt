@@ -1,6 +1,9 @@
 package ai.openclaw.app
 
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.i18n.NativeText
+import ai.openclaw.app.i18n.nativeText
+import ai.openclaw.app.i18n.resolveNativeText
 import ai.openclaw.app.node.asObjectOrNull
 import ai.openclaw.app.node.asStringOrNull
 import kotlinx.serialization.json.Json
@@ -65,10 +68,17 @@ sealed interface GatewayCronActionState {
 
   data class Notice(
     val id: String,
-    val message: String,
+    val message: NativeText,
     val kind: GatewayCronNoticeKind,
     val deleted: Boolean = false,
-  ) : GatewayCronActionState
+  ) : GatewayCronActionState {
+    constructor(
+      id: String,
+      message: String,
+      kind: GatewayCronNoticeKind,
+      deleted: Boolean = false,
+    ) : this(id = id, message = nativeText(message), kind = kind, deleted = deleted)
+  }
 }
 
 /** Owns one queued manual run id per job so a stale tracker cannot clear a newer run. */
@@ -253,14 +263,26 @@ internal fun CronEditorDraftState.reconcileRestoredAction(
   return if (isConnected && retainedSaveState) this else saveAborted()
 }
 
-internal enum class GatewayCronRunSkipReason(
-  val message: String,
-) {
-  NotDue("Cron job is not due yet."),
-  AlreadyRunning("Cron job is already running."),
-  RestartRecoveryPending("Gateway restart recovery is still in progress."),
-  InvalidSpec("Cron job has an invalid configuration."),
-  Stopped("Cron scheduler is stopped."),
+internal enum class GatewayCronRunSkipReason {
+  NotDue,
+  AlreadyRunning,
+  RestartRecoveryPending,
+  InvalidSpec,
+  Stopped,
+  ;
+
+  val message: String
+    get() = messageText.resolveNativeText()
+
+  val messageText: NativeText
+    get() =
+      when (this) {
+        NotDue -> nativeText("Cron job is not due yet.")
+        AlreadyRunning -> nativeText("Cron job is already running.")
+        RestartRecoveryPending -> nativeText("Gateway restart recovery is still in progress.")
+        InvalidSpec -> nativeText("Cron job has an invalid configuration.")
+        Stopped -> nativeText("Cron scheduler is stopped.")
+      }
 }
 
 internal sealed interface GatewayCronRunOutcome {
@@ -288,10 +310,10 @@ internal fun cronRunCompletionNotice(
 ): GatewayCronActionState.Notice {
   val (message, kind) =
     when (status) {
-      "ok" -> "Cron run finished." to GatewayCronNoticeKind.Success
-      "skipped" -> "Cron run skipped." to GatewayCronNoticeKind.Warning
-      "error" -> "Cron run failed." to GatewayCronNoticeKind.Error
-      else -> "Cron run finished with an unknown status." to GatewayCronNoticeKind.Warning
+      "ok" -> nativeText("Cron run finished.") to GatewayCronNoticeKind.Success
+      "skipped" -> nativeText("Cron run skipped.") to GatewayCronNoticeKind.Warning
+      "error" -> nativeText("Cron run failed.") to GatewayCronNoticeKind.Error
+      else -> nativeText("Cron run finished with an unknown status.") to GatewayCronNoticeKind.Warning
     }
   return GatewayCronActionState.Notice(id = jobId, message = message, kind = kind)
 }

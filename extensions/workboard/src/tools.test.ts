@@ -1,4 +1,5 @@
 // Workboard tests cover tools plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
 import { WorkboardStore, type PersistedWorkboardCard, type WorkboardKeyedStore } from "./store.js";
@@ -453,8 +454,9 @@ describe("workboard tools", () => {
     expect(attached.card).toMatchObject({
       metadata: { attachments: [expect.objectContaining({ fileName: "result.txt" })] },
     });
-    const attachmentId = (attached.card as { metadata: { attachments: Array<{ id: string }> } })
-      .metadata.attachments[0].id;
+    const attachments = (attached.card as { metadata: { attachments: Array<{ id: string }> } })
+      .metadata.attachments;
+    const attachmentId = expectDefined(attachments[0], "workboard attachment").id;
     const attachment = readPayload(
       await tools.get("workboard_attachment_read")?.execute("call-attachment-read", {
         id: attachmentId,

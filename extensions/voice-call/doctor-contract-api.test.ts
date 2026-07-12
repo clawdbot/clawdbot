@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   createPluginStateKeyedStoreForTests,
   createPluginStateSyncKeyedStoreForTests,
@@ -88,7 +89,10 @@ describe("voice-call doctor state migration", () => {
           },
         },
       };
-      const result = await stateMigrations[0].migrateLegacyState({
+      const result = await expectDefined(
+        stateMigrations[0],
+        "voice-call state migration",
+      ).migrateLegacyState({
         config,
         env: warmEnv,
         stateDir: warmStateDir,
@@ -179,7 +183,7 @@ describe("voice-call doctor state migration", () => {
       },
     ]);
 
-    const migration = stateMigrations[0];
+    const migration = expectDefined(stateMigrations[0], "voice-call state migration");
     const config = {
       plugins: {
         entries: {
@@ -256,7 +260,7 @@ describe("voice-call doctor state migration", () => {
     } finally {
       db.close();
     }
-    const migration = stateMigrations[0];
+    const migration = expectDefined(stateMigrations[0], "voice-call state migration");
     const config = {
       plugins: {
         entries: {
@@ -323,7 +327,10 @@ describe("voice-call doctor state migration", () => {
         },
       },
     };
-    const result = await stateMigrations[0].migrateLegacyState({
+    const result = await expectDefined(
+      stateMigrations[0],
+      "voice-call state migration",
+    ).migrateLegacyState({
       config,
       env,
       stateDir,

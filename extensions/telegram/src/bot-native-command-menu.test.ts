@@ -1,4 +1,5 @@
 // Telegram tests cover bot native command menu plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildCappedTelegramMenuCommands,
@@ -81,7 +82,7 @@ describe("bot-native-command-menu", () => {
     const allCommands = [
       ...canonicalCommands.slice(0, 99),
       { command: "side", description: "Alias", isAlias: true },
-      canonicalCommands[99],
+      expectDefined(canonicalCommands[99], "last canonical Telegram command"),
     ];
 
     const result = buildCappedTelegramMenuCommands({ allCommands });

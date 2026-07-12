@@ -5,6 +5,7 @@ import ai.openclaw.app.chat.AndroidVoiceNoteRecordingEngine
 import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.VoiceNoteRecorderController
 import ai.openclaw.app.chat.VoiceNoteRecorderState
+import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.design.TalkWaveform
 import ai.openclaw.app.ui.design.TalkWaveformPhase
@@ -109,7 +110,7 @@ internal fun VoiceNotePreparing(modifier: Modifier = Modifier) {
       horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
       Icon(imageVector = Icons.Default.Mic, contentDescription = null, modifier = Modifier.size(18.dp))
-      Text(text = "Preparing voice note…", style = ClawTheme.type.label)
+      Text(text = nativeString("Preparing voice note…"), style = ClawTheme.type.label)
     }
   }
 }
@@ -129,7 +130,7 @@ internal fun VoiceNoteRecordButton(
     contentColor = if (enabled) ClawTheme.colors.text else ClawTheme.colors.textSubtle,
   ) {
     Box(contentAlignment = Alignment.Center) {
-      Icon(imageVector = Icons.Default.Mic, contentDescription = "Record voice note", modifier = Modifier.size(18.dp))
+      Icon(imageVector = Icons.Default.Mic, contentDescription = nativeString("Record voice note"), modifier = Modifier.size(18.dp))
     }
   }
 }
@@ -171,7 +172,7 @@ internal fun VoiceNoteRecordingControls(
         contentColor = ClawTheme.colors.text,
       ) {
         Box(contentAlignment = Alignment.Center) {
-          Icon(imageVector = Icons.Default.Close, contentDescription = "Cancel voice note", modifier = Modifier.size(17.dp))
+          Icon(imageVector = Icons.Default.Close, contentDescription = nativeString("Cancel voice note"), modifier = Modifier.size(17.dp))
         }
       }
       Surface(
@@ -182,7 +183,7 @@ internal fun VoiceNoteRecordingControls(
         contentColor = ClawTheme.colors.primaryText,
       ) {
         Box(contentAlignment = Alignment.Center) {
-          Icon(imageVector = Icons.Default.Check, contentDescription = "Finish voice note", modifier = Modifier.size(17.dp))
+          Icon(imageVector = Icons.Default.Check, contentDescription = nativeString("Finish voice note"), modifier = Modifier.size(17.dp))
         }
       }
     }
@@ -209,7 +210,7 @@ internal fun VoiceNoteMessageRow(durationMs: Long?) {
       modifier = Modifier.size(16.dp),
       tint = ClawTheme.colors.textMuted,
     )
-    Text(text = "Voice note", style = ClawTheme.type.body, color = ClawTheme.colors.text)
+    Text(text = nativeString("Voice note"), style = ClawTheme.type.body, color = ClawTheme.colors.text)
     durationMs?.let { duration ->
       Text(
         text = formatVoiceNoteDuration(duration),

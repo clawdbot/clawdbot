@@ -2139,4 +2139,3 @@ export const testing = {
   parseOpenClawChannelsLoginShellCommand,
   validateScriptFileForShellBleed,
 };
-export { testing as __testing };

@@ -1,4 +1,5 @@
 // Line tests cover channel.sendPayload plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   verifyChannelMessageAdapterCapabilityProofs,
   verifyChannelMessageReceiveAckPolicyAdapterProofs,
@@ -368,7 +369,9 @@ describe("line outbound sendPayload", () => {
     );
     const mediaOrder = mocks.sendMessageLine.mock.invocationCallOrder[0];
     const quickReplyOrder = mocks.pushTextMessageWithQuickReplies.mock.invocationCallOrder[0];
-    expect(mediaOrder).toBeLessThan(quickReplyOrder);
+    expect(expectDefined(mediaOrder, "LINE media invocation")).toBeLessThan(
+      expectDefined(quickReplyOrder, "LINE quick-reply invocation"),
+    );
   });
 
   it("keeps generic media payloads on the image-only send path", async () => {

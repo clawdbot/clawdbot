@@ -3,17 +3,17 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeOptionalAgentRuntimeId } from "../../agents/agent-runtime-id.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { resolveStoredSessionOwnerAgentId } from "../../gateway/session-store-key.js";
 import { writeTextAtomic } from "../../infra/json-files.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
-  AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE,
   isAgentHarnessSessionKey,
   isValidAgentHarnessSessionStoreEntry,
+  MODEL_SELECTION_LOCK_REMOVAL_MESSAGE,
   resolveAgentHarnessSessionStoreError,
   resolveAgentHarnessSessionStoreEntryError,
+  resolveAgentHarnessSessionStoreTransitionError,
 } from "../../sessions/agent-harness-session-key.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
@@ -108,9 +108,6 @@ const writerLockedSessionEntries = new WeakMap<
   Record<string, SessionEntry>,
   ReadonlyMap<string, SessionEntry>
 >();
-
-const MODEL_SELECTION_LOCK_REMOVAL_MESSAGE =
-  "Model-selection-locked sessions cannot be removed, unlocked, or reassigned.";
 
 type SessionStoreInvariantContext = {
   allowedLockedEntryRemovals?: ReadonlyMap<string, SessionEntry>;
@@ -358,78 +355,14 @@ function snapshotLockedSessionEntries(
   return lockedEntries;
 }
 
-function sessionLockOwnerMatches(previous: SessionEntry, next: SessionEntry): boolean {
-  const previousOwner = normalizeOptionalString(previous.agentHarnessId)?.toLowerCase();
-  const nextOwner = normalizeOptionalString(next.agentHarnessId)?.toLowerCase();
-  return (
-    previousOwner === nextOwner &&
-    normalizeOptionalAgentRuntimeId(previousOwner) === normalizeOptionalAgentRuntimeId(nextOwner)
-  );
-}
-
-function hasEquivalentRelocatedLockedEntry(params: {
-  previousKey: string;
-  previousEntry: SessionEntry;
-  store: Record<string, SessionEntry>;
-}): boolean {
-  // Reserved keys are source identities, not aliases. Moving one would let a
-  // writer detach a native harness binding while retaining only its session id.
-  if (isAgentHarnessSessionKey(params.previousKey)) {
-    return false;
-  }
-  const sessionId = normalizeOptionalString(params.previousEntry.sessionId);
-  if (!sessionId) {
-    return false;
-  }
-  for (const [sessionKey, entry] of Object.entries(params.store)) {
-    if (
-      sessionKey === params.previousKey ||
-      entry.modelSelectionLocked !== true ||
-      entry.sessionId !== sessionId ||
-      !sessionLockOwnerMatches(params.previousEntry, entry)
-    ) {
-      continue;
-    }
-    return true;
-  }
-  return false;
-}
-
 function assertLockedSessionEntriesPreserved(params: {
   allowedRemovals?: ReadonlyMap<string, SessionEntry>;
   before?: ReadonlyMap<string, SessionEntry>;
   store: Record<string, SessionEntry>;
 }): void {
-  for (const [sessionKey, previousEntry] of params.before ?? []) {
-    const nextEntry = params.store[sessionKey];
-    if (
-      nextEntry?.modelSelectionLocked === true &&
-      sessionLockOwnerMatches(previousEntry, nextEntry)
-    ) {
-      if (nextEntry.sessionId !== previousEntry.sessionId) {
-        throw new Error(AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE);
-      }
-      continue;
-    }
-    const allowedRemoval = params.allowedRemovals?.get(sessionKey);
-    if (
-      nextEntry === undefined &&
-      allowedRemoval !== undefined &&
-      JSON.stringify(previousEntry) === JSON.stringify(allowedRemoval)
-    ) {
-      continue;
-    }
-    if (
-      nextEntry === undefined &&
-      hasEquivalentRelocatedLockedEntry({
-        previousKey: sessionKey,
-        previousEntry,
-        store: params.store,
-      })
-    ) {
-      continue;
-    }
-    throw new Error(MODEL_SELECTION_LOCK_REMOVAL_MESSAGE);
+  const error = resolveAgentHarnessSessionStoreTransitionError(params);
+  if (error) {
+    throw new Error(error);
   }
 }
 

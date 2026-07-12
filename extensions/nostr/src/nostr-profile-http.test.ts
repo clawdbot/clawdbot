@@ -4,6 +4,7 @@
 
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearNostrProfileRateLimitStateForTest,
@@ -46,7 +47,7 @@ import { TEST_HEX_PUBLIC_KEY, TEST_SETUP_RELAY_URLS } from "./test-fixtures.js";
 // Test Helpers
 // ============================================================================
 
-const TEST_PROFILE_RELAY_URL = TEST_SETUP_RELAY_URLS[0];
+const TEST_PROFILE_RELAY_URL = expectDefined(TEST_SETUP_RELAY_URLS[0], "Nostr profile relay URL");
 
 afterAll(() => {
   runtimeScopeMock.mockReset();

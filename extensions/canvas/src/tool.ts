@@ -159,7 +159,7 @@ export function createCanvasTool(options?: CanvasToolOptions): AnyAgentTool {
             payload?: { result?: string };
           };
           const result = raw?.payload?.result;
-          if (result) {
+          if (typeof result === "string") {
             return {
               content: [{ type: "text", text: result }],
               details: { result },

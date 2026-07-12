@@ -2,6 +2,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -655,9 +656,12 @@ describe("resolveTelegramFetch", () => {
     expect(transport.fetch).not.toBe(transport.sourceFetch);
     expect(transport.dispatcherAttempts).toHaveLength(3);
 
-    const [defaultAttempt, ipv4Attempt, pinnedAttempt] = transport.dispatcherAttempts as Array<{
+    const attempts = transport.dispatcherAttempts as Array<{
       dispatcherPolicy?: DirectTelegramDispatcherPolicy;
     }>;
+    const defaultAttempt = expectDefined(attempts[0], "default Telegram dispatcher attempt");
+    const ipv4Attempt = expectDefined(attempts[1], "IPv4 Telegram dispatcher attempt");
+    const pinnedAttempt = expectDefined(attempts[2], "pinned Telegram dispatcher attempt");
 
     const defaultPolicy = defaultAttempt.dispatcherPolicy;
     const ipv4Policy = ipv4Attempt.dispatcherPolicy;
@@ -694,9 +698,10 @@ describe("resolveTelegramFetch", () => {
     ).resolves.toEqual({ ok: true });
     // Only the default dispatcher — no IPv4 fallback or pinned IP attempts
     expect(transport.dispatcherAttempts).toHaveLength(1);
-    const [defaultAttempt] = transport.dispatcherAttempts as Array<{
+    const attempts = transport.dispatcherAttempts as Array<{
       dispatcherPolicy?: DirectTelegramDispatcherPolicy;
     }>;
+    const defaultAttempt = expectDefined(attempts[0], "default Telegram dispatcher attempt");
     expect(defaultAttempt.dispatcherPolicy?.mode).toBe("direct");
     expect(defaultAttempt.dispatcherPolicy?.connect?.autoSelectFamily).toBe(true);
   });
@@ -1330,7 +1335,7 @@ describe("resolveTelegramFetch", () => {
           dnsResultOrder: "ipv4first",
         },
       });
-      const instance = AgentCtor.mock.instances[0];
+      const instance = expectDefined(AgentCtor.mock.instances[0], "Telegram dispatcher instance");
 
       await transport.close();
       await transport.close();
@@ -1346,7 +1351,7 @@ describe("resolveTelegramFetch", () => {
           dnsResultOrder: "ipv4first",
         },
       });
-      const instance = AgentCtor.mock.instances[0];
+      const instance = expectDefined(AgentCtor.mock.instances[0], "Telegram dispatcher instance");
       instance.destroy.mockRejectedValueOnce(new Error("already destroyed"));
 
       await expect(transport.close()).resolves.toBeUndefined();

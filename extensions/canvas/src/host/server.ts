@@ -24,7 +24,7 @@ import { type WebSocket, WebSocketServer } from "ws";
 import {
   CANVAS_HOST_PATH,
   CANVAS_WS_PATH,
-  injectCanvasLiveReload,
+  injectCanvasRuntime,
   isA2uiPath,
 } from "./a2ui-shared.js";
 import { normalizeUrlPath, resolveFileWithinRoot } from "./file-resolver.js";
@@ -101,7 +101,7 @@ function defaultIndexHTML() {
   <div class="card">
     <div class="title">
       <h1>OpenClaw Canvas</h1>
-      <div class="sub">Interactive test page (auto-reload enabled)</div>
+      <div class="sub">Interactive test page</div>
     </div>
 
     <div class="row">
@@ -267,6 +267,18 @@ function resolveDefaultWatchFactory(): ChokidarWatch {
   throw new Error("chokidar.watch unavailable");
 }
 
+function shouldIgnoreCanvasWatchPath(rootReal: string, candidatePath: string): boolean {
+  const relative = path.relative(rootReal, candidatePath);
+  if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`)) {
+    return false;
+  }
+  // Chokidar evaluates ignored matchers against absolute paths. Scope the
+  // policy below the root so the default ~/.openclaw parent is still watched.
+  return relative
+    .split(/[\\/]/u)
+    .some((segment) => segment.startsWith(".") || segment === "node_modules");
+}
+
 /** Creates a Canvas static-file handler with optional live reload. */
 export async function createCanvasHostHandler(
   opts: CanvasHostHandlerOpts,
@@ -347,10 +359,7 @@ export async function createCanvasHostHandler(
           pollInterval: writePollIntervalMs,
         },
         usePolling: testMode,
-        ignored: [
-          /(^|[\\/])\../, // dotfiles
-          /(^|[\\/])node_modules([\\/]|$)/,
-        ],
+        ignored: (candidatePath) => shouldIgnoreCanvasWatchPath(rootReal, candidatePath),
       })
     : null;
   watcher?.on("all", () => scheduleReload());
@@ -453,7 +462,7 @@ export async function createCanvasHostHandler(
           res.end(html);
           return true;
         }
-        res.end(liveReload ? injectCanvasLiveReload(html) : html);
+        res.end(injectCanvasRuntime(html, { liveReload }));
         return true;
       }
 

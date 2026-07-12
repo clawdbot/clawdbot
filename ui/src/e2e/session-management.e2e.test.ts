@@ -558,7 +558,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
     });
     const page = await context.newPage();
     const sessionKey = "agent:main:disconnect-proof";
-    const otherSessionKeys = ["agent:main:other-a", "agent:main:other-b"];
+    const otherSessionKeys = ["agent:main:other-a", "agent:main:other-b"] as const;
     const gateway = await installMockGateway(page, {
       methodResponses: {
         "sessions.list": sessionsListResponse([
@@ -1076,10 +1076,12 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
           .filter((rect) => rect.bottom > rect.top)
           .toSorted((a, b) => a.top - b.top);
         let bad = 0;
-        for (let index = 1; index < rects.length; index += 1) {
-          if (rects[index].top < rects[index - 1].bottom - 2) {
+        let previousBottom: number | undefined;
+        for (const rect of rects) {
+          if (previousBottom !== undefined && rect.top < previousBottom - 2) {
             bad += 1;
           }
+          previousBottom = rect.bottom;
         }
         return bad;
       });
@@ -1139,10 +1141,12 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
           .filter((rect) => rect.bottom > rect.top)
           .toSorted((a, b) => a.top - b.top);
         let bad = 0;
-        for (let index = 1; index < rects.length; index += 1) {
-          if (rects[index].top < rects[index - 1].bottom - 2) {
+        let previousBottom: number | undefined;
+        for (const rect of rects) {
+          if (previousBottom !== undefined && rect.top < previousBottom - 2) {
             bad += 1;
           }
+          previousBottom = rect.bottom;
         }
         return bad;
       });

@@ -2068,7 +2068,6 @@ export const testing = {
   mergeParamsWithApprovalOverrides,
   isPlainObject,
 };
-export { testing as __testing };
 
 function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   if (value instanceof Error) {

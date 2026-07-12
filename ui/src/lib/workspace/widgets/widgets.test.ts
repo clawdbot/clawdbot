@@ -2,6 +2,7 @@
 // payload fixture into the rendered view model. The render fns are exercised
 // separately (empty/populated) to lock the empty/loading/error affordances.
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { describe, expect, it } from "vitest";
 import type { WorkspaceWidget } from "../types.ts";
@@ -132,8 +133,8 @@ describe("sessions mapping", () => {
       ],
     });
     expect(model.rows.map((r) => r.key)).toEqual(["main:1", "main:2"]);
-    expect(model.rows[0].active).toBe(true);
-    expect(model.rows[1].active).toBe(false);
+    expect(expectDefined(model.rows[0], "first session row").active).toBe(true);
+    expect(expectDefined(model.rows[1], "second session row").active).toBe(false);
   });
 
   it("renders a link per session and an empty state", () => {

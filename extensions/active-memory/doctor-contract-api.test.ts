@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
@@ -51,7 +52,7 @@ describe("active-memory doctor state migration", () => {
       }),
     );
 
-    const migration = stateMigrations[0];
+    const migration = expectDefined(stateMigrations[0], "active-memory state migration");
     await expect(
       migration.detectLegacyState({
         config: {},

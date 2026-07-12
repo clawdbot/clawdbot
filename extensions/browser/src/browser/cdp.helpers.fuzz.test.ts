@@ -1,4 +1,5 @@
 // Browser tests cover cdp.helpers.fuzz plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   appendCdpPath,
@@ -44,7 +45,8 @@ function randInt(rng: () => number, loInclusive: number, hiInclusive: number): n
 }
 
 function pick<T>(rng: () => number, arr: readonly T[]): T {
-  return arr[randInt(rng, 0, arr.length - 1)];
+  const index = randInt(rng, 0, arr.length - 1);
+  return expectDefined(arr[index], `fuzz choice at index ${index}`);
 }
 
 function randHost(rng: () => number): string {

@@ -293,6 +293,35 @@ describe("skills gateway handlers (clawhub)", () => {
     expect(result?.warning).toBe("Review ClawHub security details before installing.");
   });
 
+  it("deduplicates concurrent exact ClawHub installs across reconnects", async () => {
+    let finishInstall: ((value: unknown) => void) | undefined;
+    installSkillFromClawHubMock.mockReturnValue(
+      new Promise((resolve) => {
+        finishInstall = resolve;
+      }),
+    );
+
+    const params = {
+      source: "clawhub",
+      slug: "calendar",
+      version: "1.2.3",
+    } as const;
+    const first = callSkillsHandler("skills.install", params);
+    const reconnectRetry = callSkillsHandler("skills.install", params);
+
+    await vi.waitFor(() => expect(installSkillFromClawHubMock).toHaveBeenCalledTimes(1));
+    finishInstall?.({
+      ok: true,
+      slug: "calendar",
+      version: "1.2.3",
+      targetDir: "/tmp/workspace/skills/calendar",
+    });
+
+    const [firstResult, retryResult] = await Promise.all([first, reconnectRetry]);
+    expect(firstResult.ok).toBe(true);
+    expect(retryResult.ok).toBe(true);
+  });
+
   it("returns ClawHub skill install trust warnings in Gateway error details", async () => {
     installSkillFromClawHubMock.mockResolvedValue({
       ok: false,

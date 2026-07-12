@@ -1,4 +1,5 @@
 // Browser tests cover profiles plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { resolveBrowserConfig } from "./config.js";
 import {
@@ -186,21 +187,21 @@ describe("port collision prevention", () => {
 
 describe("color allocation", () => {
   it("allocates next unused color from palette", () => {
+    const first = expectDefined(PROFILE_COLORS[0], "first browser profile color");
+    const second = expectDefined(PROFILE_COLORS[1], "second browser profile color");
+    const third = expectDefined(PROFILE_COLORS[2], "third browser profile color");
+    const fourth = expectDefined(PROFILE_COLORS[3], "fourth browser profile color");
     const cases = [
-      { name: "none used", used: new Set<string>(), expected: PROFILE_COLORS[0] },
+      { name: "none used", used: new Set<string>(), expected: first },
       {
         name: "first color used",
-        used: new Set([PROFILE_COLORS[0].toUpperCase()]),
-        expected: PROFILE_COLORS[1],
+        used: new Set([first.toUpperCase()]),
+        expected: second,
       },
       {
         name: "multiple used colors",
-        used: new Set([
-          PROFILE_COLORS[0].toUpperCase(),
-          PROFILE_COLORS[1].toUpperCase(),
-          PROFILE_COLORS[2].toUpperCase(),
-        ]),
-        expected: PROFILE_COLORS[3],
+        used: new Set([first.toUpperCase(), second.toUpperCase(), third.toUpperCase()]),
+        expected: fourth,
       },
     ] as const;
     for (const testCase of cases) {

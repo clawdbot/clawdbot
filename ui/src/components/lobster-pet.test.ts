@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getLobsterdex, getLobsterdexEntries } from "./lobster-dex.ts";
@@ -74,7 +75,7 @@ async function advanceUntilAct(element: LobsterPetElement, maxMs: number): Promi
     await element.updateComplete;
     const match = /lobster-pet--act-([a-z]+)/.exec(spriteClasses(element));
     if (match) {
-      return match[1];
+      return expectDefined(match[1], "lobster act name");
     }
   }
   return null;
@@ -1100,16 +1101,17 @@ describe("lobster pet logo stand-in", () => {
 
     const arrived = await advanceUntil(element, () => phases.length > 0, 200_000);
     expect(arrived).toBe(true);
-    expect(phases[0].phase).toBe("in");
-    expect(phases[0].look).not.toBeNull();
-    expect(phases[0].name).toBeTruthy();
+    const firstPhase = expectDefined(phases[0], "first logo phase");
+    expect(firstPhase.phase).toBe("in");
+    expect(firstPhase.look).not.toBeNull();
+    expect(firstPhase.name).toBeTruthy();
     // One crab, two homes: the ledge stays empty while it plays logo.
     expect(spritePresent(element)).toBe(false);
 
     const left = await advanceUntil(element, () => phases.some((p) => p.phase === "out"), 400_000);
     expect(left).toBe(true);
     expect(phases.map((p) => p.phase)).toEqual(["in", "leaving", "out"]);
-    expect(phases[2].look).toBeNull();
+    expect(expectDefined(phases[2], "logo exit phase").look).toBeNull();
 
     // Logo visits are once per load: the next arrival is a normal ledge perch.
     const returned = await advanceUntil(element, () => spritePresent(element), 1_300_000);

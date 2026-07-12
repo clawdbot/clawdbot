@@ -1093,4 +1093,3 @@ export function createImageTool(options?: {
     },
   };
 }
-export { testing as __testing };

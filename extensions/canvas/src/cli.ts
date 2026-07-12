@@ -413,7 +413,7 @@ export function registerNodesCanvasCommands(nodes: Command, deps: CanvasCliDepen
             typeof raw === "object" && raw !== null
               ? (raw as { payload?: { result?: string } }).payload
               : undefined;
-          if (payload?.result) {
+          if (typeof payload?.result === "string") {
             deps.defaultRuntime.log(payload.result);
           } else {
             const { ok } = deps.getNodesTheme();

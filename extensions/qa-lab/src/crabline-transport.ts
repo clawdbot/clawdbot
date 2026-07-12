@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import {
-  OPENCLAW_CRABLINE_MANIFEST_PATH,
   startOpenClawCrablineAdapter,
   type OpenClawCrablineChannelDriverSelection,
   type OpenClawCrablineInbound,
@@ -473,11 +472,6 @@ export async function createQaCrablineTransportAdapter(params: {
     openclawConfig: {},
     recorderPath,
   });
-  await fs.writeFile(
-    path.join(params.outputDir, OPENCLAW_CRABLINE_MANIFEST_PATH),
-    `${JSON.stringify(adapter.manifest, null, 2)}\n`,
-    "utf8",
-  );
 
   const state = createCrablineState({
     adapter,

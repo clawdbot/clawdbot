@@ -10,8 +10,14 @@ type WorktreesPageTestElement = HTMLElement & {
   records: WorktreeRecord[];
   error: string | null;
   busyId: string | null;
+  creating: boolean;
+  createRepoRoot: string;
+  createBaseRef: string;
+  createBranches: string[];
   updateComplete: Promise<boolean>;
   requestUpdate: () => void;
+  loadCreateBranches: () => void;
+  createWorktree: () => Promise<void>;
   removeWorktree: (record: WorktreeRecord) => Promise<void>;
   restore: (record: WorktreeRecord) => Promise<void>;
 };
@@ -250,5 +256,91 @@ describe("WorktreesPage lifecycle", () => {
 
     expect(page.error).toBeNull();
     expect(page.busyId).toBeNull();
+  });
+
+  it("clears pending create state across a same-client reconnect", async () => {
+    const pendingCreate = deferred<unknown>();
+    const request = vi.fn((method: string) => {
+      if (method === "worktrees.create") {
+        return pendingCreate.promise;
+      }
+      return Promise.resolve({ worktrees: [] });
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const source = mutableGateway(client);
+    const page = document.createElement("openclaw-worktrees-page") as WorktreesPageTestElement;
+    page.context = contextWithGateway(source.gateway);
+    page.createRepoRoot = "/tmp/repo";
+    document.body.append(page);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("worktrees.list", {}));
+
+    const creating = page.createWorktree();
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("worktrees.create", { repoRoot: "/tmp/repo" }),
+    );
+    expect(page.creating).toBe(true);
+
+    source.emit(false);
+    source.emit(true);
+    expect(page.creating).toBe(false);
+
+    pendingCreate.reject(new Error("gateway closed"));
+    await creating;
+    expect(page.creating).toBe(false);
+    expect(page.error).toBeNull();
+  });
+
+  it("uses the current branch when a repository has no remote default", async () => {
+    const request = vi.fn((method: string) => {
+      if (method === "worktrees.branches") {
+        return Promise.resolve({ branches: [{ name: "main" }], headBranch: "main" });
+      }
+      return Promise.resolve({ worktrees: [] });
+    });
+    const page = document.createElement("openclaw-worktrees-page") as WorktreesPageTestElement;
+    page.context = contextWithGateway(
+      gatewayWithClient({ request } as unknown as GatewayBrowserClient),
+    );
+    page.createRepoRoot = "/tmp/repo";
+    document.body.append(page);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("worktrees.list", {}));
+
+    page.loadCreateBranches();
+
+    await vi.waitFor(() => expect(page.createBranches).toEqual(["main"]));
+    expect(page.createBaseRef).toBe("main");
+  });
+
+  it("ignores a stale branch failure after a newer request succeeds", async () => {
+    const firstBranches = deferred<unknown>();
+    let branchRequests = 0;
+    const request = vi.fn((method: string) => {
+      if (method === "worktrees.branches") {
+        branchRequests += 1;
+        return branchRequests === 1
+          ? firstBranches.promise
+          : Promise.resolve({ branches: [{ name: "main" }], headBranch: "main" });
+      }
+      return Promise.resolve({ worktrees: [] });
+    });
+    const page = document.createElement("openclaw-worktrees-page") as WorktreesPageTestElement;
+    page.context = contextWithGateway(
+      gatewayWithClient({ request } as unknown as GatewayBrowserClient),
+    );
+    page.createRepoRoot = "/tmp/repo";
+    document.body.append(page);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("worktrees.list", {}));
+
+    page.loadCreateBranches();
+    page.loadCreateBranches();
+    await vi.waitFor(() => expect(page.createBranches).toEqual(["main"]));
+    expect(page.createBaseRef).toBe("main");
+
+    firstBranches.reject(new Error("stale branch failure"));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(page.createBranches).toEqual(["main"]);
+    expect(page.createBaseRef).toBe("main");
   });
 });

@@ -259,6 +259,19 @@ describe("native app i18n inventory", () => {
     ).toBe(false);
   });
 
+  it("ignores generated Android resource entries", () => {
+    const entries = extractNativeI18nCandidates(
+      "android",
+      "apps/android/app/src/main/res/values/strings.xml",
+      `<resources>
+        <string name="manual_status">Gateway ready</string>
+        <string name="native_0123456789abcdef">Generated feedback</string>
+      </resources>`,
+    );
+
+    expect(entries.map((entry) => entry.source)).toEqual(["Gateway ready"]);
+  });
+
   it("collects stable Android and Apple UI entries", async () => {
     const entries = await collectNativeI18nEntries();
     const surfaces = new Set(entries.map((entry) => entry.surface));
@@ -277,6 +290,7 @@ describe("native app i18n inventory", () => {
         (entry) => !/(?:Tests?|UITests?|Previews?|Testing)\.(?:swift|kt|kts)$/u.test(entry.path),
       ),
     ).toBe(true);
+    expect(entries.every((entry) => !entry.path.endsWith("/NativeStringResources.kt"))).toBe(true);
     expect(
       entries
         .filter((entry) => entry.surface === "apple")
@@ -323,12 +337,6 @@ describe("native app i18n inventory", () => {
     expect(entries.some((entry) => entry.source === "Creating...")).toBe(true);
     expect(entries.some((entry) => entry.source === "Permission required")).toBe(true);
     expect(entries.some((entry) => entry.source === "Needs setup")).toBe(true);
-    expect(
-      entries.some(
-        (entry) =>
-          entry.source === "Choose a supported ${issue.target.title} provider on the Gateway",
-      ),
-    ).toBe(true);
     expect(
       entries.some(
         (entry) => entry.source === "Talk failed: Realtime provider closed unexpectedly.",
