@@ -19,11 +19,17 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CONTINUATION_WORK_CONTROLLER_ID } from "../../auto-reply/continuation/work-store.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { clearSessionStoreCacheForTest, type SessionEntry } from "../../config/sessions.js";
 import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  runWithDiagnosticTraceContext,
+  type DiagnosticTraceContext,
+} from "../../infra/diagnostic-trace-context.js";
 import { resetSystemEventsForTest } from "../../infra/system-events.js";
+import { listTaskFlowsForOwnerKey } from "../../tasks/task-flow-registry.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { runAgentAttempt } from "./attempt-execution.js";
 
@@ -50,6 +56,14 @@ vi.mock("../../auto-reply/reply/get-reply.js", () => ({
 }));
 
 const sessionKey = "agent:main:subagent:952-token";
+const ACTIVE_TRACEPARENT = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+const INHERITED_TRACEPARENT = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+const ATTACKER_TRACEPARENT = "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01";
+const ACTIVE_TRACE_CONTEXT: DiagnosticTraceContext = {
+  traceId: "0af7651916cd43dd8448eb211c80319c",
+  spanId: "b7ad6b7169203331",
+  traceFlags: "01",
+};
 
 function tokenRunResult(token: string): EmbeddedAgentRunResult {
   return {
@@ -71,7 +85,7 @@ describe("#952 subagent CONTINUE_WORK token self-continuation (token-form parity
   let tmpDir: string;
   let storePath: string;
 
-  function cfgWithStore(): OpenClawConfig {
+  function cfgWithStore(delayMs = 0): OpenClawConfig {
     return {
       // Point driveContinuationTurn's SQLite-backed accessor at the temp store
       // so the re-drive resolves the subagent session.
@@ -81,10 +95,10 @@ describe("#952 subagent CONTINUE_WORK token self-continuation (token-form parity
           continuation: {
             enabled: true,
             maxChainLength: 200,
-            // Zero delays so the armed wake matures immediately for the test.
-            defaultDelayMs: 0,
-            minDelayMs: 0,
-            maxDelayMs: 0,
+            // Most tests use zero delay; provenance tests keep the row queued.
+            defaultDelayMs: delayMs,
+            minDelayMs: delayMs,
+            maxDelayMs: delayMs,
             costCapTokens: 50_000_000,
             maxDelegatesPerTurn: 500,
             maxPendingWork: 10,
@@ -115,7 +129,13 @@ describe("#952 subagent CONTINUE_WORK token self-continuation (token-form parity
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  async function runTurnOne(token: string) {
+  async function runTurnOne(
+    token: string,
+    opts: Parameters<typeof runAgentAttempt>[0]["opts"] = {} as Parameters<
+      typeof runAgentAttempt
+    >[0]["opts"],
+    cfg = cfgWithStore(),
+  ) {
     const sessionEntry = { sessionId: "session-embedded", updatedAt: Date.now() } as SessionEntry;
     const sessionStore = { [sessionKey]: sessionEntry };
     expect(await upsertSessionEntry({ sessionKey, storePath }, sessionEntry)).not.toBeNull();
@@ -125,7 +145,7 @@ describe("#952 subagent CONTINUE_WORK token self-continuation (token-form parity
       providerOverride: "anthropic",
       originalProvider: "anthropic",
       modelOverride: "claude-sonnet-4.7",
-      cfg: cfgWithStore(),
+      cfg,
       sessionEntry,
       sessionId: sessionEntry.sessionId,
       sessionKey,
@@ -138,7 +158,7 @@ describe("#952 subagent CONTINUE_WORK token self-continuation (token-form parity
       resolvedThinkLevel: "medium",
       timeoutMs: 1000,
       runId: "run-952-token",
-      opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
+      opts,
       runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
       spawnedBy: undefined,
       messageChannel: undefined,
@@ -151,6 +171,19 @@ describe("#952 subagent CONTINUE_WORK token self-continuation (token-form parity
       storePath,
       sessionHasHistory: false,
     });
+  }
+
+  function readQueuedTraceState(): {
+    traceparent?: string;
+    traceparentProvenance?: string;
+  } {
+    const flow = listTaskFlowsForOwnerKey(sessionKey).find(
+      (candidate) => candidate.controllerId === CONTINUATION_WORK_CONTROLLER_ID,
+    );
+    return (
+      (flow?.stateJson as { traceparent?: string; traceparentProvenance?: string } | undefined) ??
+      {}
+    );
   }
 
   it("bare CONTINUE_WORK:N token arms a durable wake and re-drives the SAME subagent (hop-2 executes)", async () => {
@@ -180,5 +213,38 @@ describe("#952 subagent CONTINUE_WORK token self-continuation (token-form parity
     });
 
     expect(getReplyFromConfigMock).not.toHaveBeenCalled();
+  });
+
+  it("captures active internal trace context for spawn-init bracket work when opts are empty", async () => {
+    await runWithDiagnosticTraceContext(ACTIVE_TRACE_CONTEXT, () =>
+      runTurnOne(
+        `[[CONTINUE_DELEGATE: attacker context | traceparent=${ATTACKER_TRACEPARENT}]]\n[[CONTINUE_WORK:60]]`,
+        {} as Parameters<typeof runAgentAttempt>[0]["opts"],
+        cfgWithStore(60_000),
+      ),
+    );
+
+    const { traceparent, traceparentProvenance } = readQueuedTraceState();
+    expect(traceparent).toBe(ACTIVE_TRACEPARENT);
+    expect(traceparentProvenance).toBe("internal");
+    expect(traceparent).not.toBe(ATTACKER_TRACEPARENT);
+    expect(traceparent).toMatch(/^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$/);
+    expect(traceparent).not.toContain("00000000000000000000000000000000");
+    expect(traceparent).not.toContain("-0000000000000000-");
+  });
+
+  it("prefers inherited trusted opts traceparent over active context", async () => {
+    await runWithDiagnosticTraceContext(ACTIVE_TRACE_CONTEXT, () =>
+      runTurnOne(
+        "[[CONTINUE_WORK:60]]",
+        { traceparent: INHERITED_TRACEPARENT } as Parameters<typeof runAgentAttempt>[0]["opts"],
+        cfgWithStore(60_000),
+      ),
+    );
+
+    const { traceparent, traceparentProvenance } = readQueuedTraceState();
+    expect(traceparent).toBe(INHERITED_TRACEPARENT);
+    expect(traceparentProvenance).toBe("internal");
+    expect(traceparent).not.toBe(ACTIVE_TRACEPARENT);
   });
 });

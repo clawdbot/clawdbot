@@ -28,7 +28,10 @@ import {
   timestampOptsFromConfig,
 } from "../../gateway/server-methods/agent-timestamp.js";
 import { emitAgentAuditEvent, emitAgentEvent } from "../../infra/agent-events.js";
-import { resolveContinuationTraceparent } from "../../infra/continuation-tracer.js";
+import {
+  formatActiveContinuationTraceparent,
+  resolveContinuationTraceparent,
+} from "../../infra/continuation-tracer.js";
 import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import { runWithDiagnosticTraceparent } from "../../infra/diagnostic-trace-context.js";
 import { readErrorName } from "../../infra/errors.js";
@@ -1146,7 +1149,8 @@ export async function runAgentAttempt(params: {
       });
       if (extraction.signal?.kind === "work") {
         const internalBracketTraceparent = extraction.fromBracket
-          ? resolveContinuationTraceparent(params.opts.traceparent)
+          ? (resolveContinuationTraceparent(params.opts.traceparent) ??
+            formatActiveContinuationTraceparent())
           : undefined;
         // Tool elections fan out one wake each; a bracket signal has no per-tool
         // array, so it schedules a single election from the merged signal.
