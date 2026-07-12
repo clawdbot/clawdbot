@@ -397,11 +397,16 @@ export function buildFoundryProviderBaseUrl(
 }
 
 export function extractFoundryEndpoint(baseUrl: string | null | undefined): string | undefined {
-  if (!baseUrl) {
+  const trimmed = normalizeOptionalString(baseUrl);
+  if (!trimmed) {
     return undefined;
   }
   try {
-    return normalizeFoundryEndpoint(baseUrl);
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+      return undefined;
+    }
+    return normalizeFoundryEndpoint(trimmed) || undefined;
   } catch {
     return undefined;
   }

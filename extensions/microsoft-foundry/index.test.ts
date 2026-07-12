@@ -18,6 +18,7 @@ import {
   COGNITIVE_SERVICES_RESOURCE,
   FOUNDRY_ANTHROPIC_SCOPE,
   buildFoundryAuthResult,
+  extractFoundryEndpoint,
   formatFoundryApiLabel,
   isAnthropicFoundryDeployment,
   isFoundryMaiImageModel,
@@ -468,6 +469,28 @@ describe("microsoft-foundry plugin", () => {
     expect(execFileMock.mock.calls[0]?.[1]).toEqual(
       expect.arrayContaining(["--resource", COGNITIVE_SERVICES_RESOURCE]),
     );
+  });
+
+  it("falls back to Entra metadata when a configured Foundry endpoint is malformed", async () => {
+    const provider = registerProvider();
+    const prepareRuntimeAuth = requirePrepareRuntimeAuth(provider);
+    mockAzureCliToken({ accessToken: "test-token", expiresInMs: 60_000 });
+    ensureAuthProfileStoreMock.mockReturnValueOnce(buildEntraProfileStore());
+
+    const prepared = requireRuntimeAuthResult(
+      await prepareRuntimeAuth(
+        buildFoundryRuntimeAuthContext({
+          model: buildFoundryModel({ baseUrl: "not a url" }),
+        }),
+      ),
+    );
+
+    expect(extractFoundryEndpoint("not a url")).toBeUndefined();
+    expect(prepared.baseUrl).toBe("https://example.services.ai.azure.com/openai/v1");
+    expect(prepared.request?.auth).toEqual({
+      mode: "authorization-bearer",
+      token: "test-token",
+    });
   });
 
   it.each([
