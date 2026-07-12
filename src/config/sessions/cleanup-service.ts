@@ -625,6 +625,16 @@ export async function runSessionsCleanup(params: {
         },
       });
       const postApplyStore = loadCleanupSessionStore(target, { createIfMissing: true });
+      const appliedReport = lifecycleResult.maintenanceReport;
+      const appliedArchiveCleanup =
+        mode === "warn"
+          ? { ...EMPTY_SESSION_ARCHIVE_CLEANUP_REPORT }
+          : (appliedReport?.archiveCleanup ??
+            (await cleanupArchivedTranscriptsForSummary({
+              storePath: target.storePath,
+              maintenance,
+              dryRun: false,
+            })));
       const appliedUnreferencedArtifacts =
         mode === "warn"
           ? null
@@ -665,7 +675,6 @@ export async function runSessionsCleanup(params: {
       const preview = previewResults.find(
         (result) => result.summary.storePath === target.storePath,
       );
-      const appliedReport = lifecycleResult.maintenanceReport;
       const summary: SessionCleanupSummary =
         appliedReport === null
           ? {
@@ -687,13 +696,12 @@ export async function runSessionsCleanup(params: {
                 wouldMutate: false,
               }),
               dryRun: false,
-              archiveCleanup: preview?.summary.archiveCleanup ?? {
-                ...EMPTY_SESSION_ARCHIVE_CLEANUP_REPORT,
-              },
+              archiveCleanup: appliedArchiveCleanup,
               unreferencedArtifacts,
               diskBudget: appliedDiskBudget,
               wouldMutate:
                 removedSessionKeys.size > 0 ||
+                appliedArchiveCleanup.removedFiles > 0 ||
                 unreferencedArtifacts.removedFiles > 0 ||
                 (appliedDiskBudget?.removedEntries ?? 0) > 0 ||
                 (appliedDiskBudget?.removedFiles ?? 0) > 0 ||

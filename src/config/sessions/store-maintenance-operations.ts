@@ -206,11 +206,7 @@ async function cleanupRemovedSessionArtifacts(params: {
       restrictToStoreDir: true,
     });
   }
-  if (
-    archivedDirs.size === 0 &&
-    params.maintenance.resetArchiveRetentionMs == null &&
-    !params.forceMaintenance
-  ) {
+  if (params.maintenance.resetArchiveRetentionMs == null && !params.forceMaintenance) {
     return { ...EMPTY_SESSION_ARCHIVE_CLEANUP_REPORT };
   }
   const targetDirs =
