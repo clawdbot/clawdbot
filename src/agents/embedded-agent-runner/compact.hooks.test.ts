@@ -933,6 +933,18 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     });
   });
 
+  it("disables continuation tools when rebuilding nested compaction tools", async () => {
+    await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expectRecordFields(mockCallArg(createOpenClawCodingToolsMock), {
+      disableContinuationTools: true,
+    });
+  });
+
   it.each([
     { input: ["text"], modelHasVision: false },
     { input: ["text", "image"], modelHasVision: true },

@@ -126,6 +126,25 @@ describe("createOpenClawTools — silent partial-registration guard", () => {
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
+  it("does NOT warn or register continuation tools for an explicit maintenance run", () => {
+    const tools = createOpenClawTools({
+      agentSessionKey: "main",
+      disablePluginTools: true,
+      disableMessageTool: true,
+      disableContinuationTools: true,
+      config: {
+        session: { mainKey: "main", scope: "per-sender" },
+        agents: { defaults: { continuation: { enabled: true } } },
+      } as never,
+    });
+
+    const names = tools.map((tool) => tool.name);
+    expect(names).not.toContain("continue_work");
+    expect(names).not.toContain("continue_delegate");
+    expect(names).not.toContain("request_compaction");
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
   it("does NOT warn when only continueWorkOpts is supplied (request_compaction will not register, but continue_work IS registered — partial-registration concern only fires when neither is supplied)", () => {
     createOpenClawTools({
       agentSessionKey: "main",

@@ -245,6 +245,8 @@ export function createOpenClawTools(
     allowGatewaySubagentBinding?: boolean;
     /** Whether the current run consumes the continue_delegate staging queue. */
     drainsContinuationDelegateQueue?: boolean;
+    /** Internal maintenance/model-only runs that cannot schedule post-turn continuation work. */
+    disableContinuationTools?: boolean;
     /** Callback for continue_work to request a post-turn continuation. */
     continueWorkOpts?: {
       requestContinuation: (request: ContinueWorkRequest) => void;
@@ -499,6 +501,9 @@ export function createOpenClawTools(
   const sessionToolConfig = options?.liveSessionToolConfig
     ? ({ getConfig: getRuntimeConfig } as const)
     : ({ config: resolvedConfig } as const);
+  const continuationToolsEnabled =
+    options?.disableContinuationTools !== true &&
+    options?.config?.agents?.defaults?.continuation?.enabled === true;
   const tools: AnyAgentTool[] = [
     ...(embedded
       ? []
@@ -676,8 +681,7 @@ export function createOpenClawTools(
     // continue_delegate alone, with no warning. The guard below surfaces that silent partial-
     // registration so misconfiguration is observable instead of hidden.
     // Tracking: continuation tool-registration guard.
-    ...(options?.config?.agents?.defaults?.continuation?.enabled === true &&
-    options?.continueWorkOpts
+    ...(continuationToolsEnabled && options?.continueWorkOpts
       ? [
           createContinueWorkTool({
             agentSessionKey: options?.agentSessionKey,
@@ -685,16 +689,14 @@ export function createOpenClawTools(
           }),
         ]
       : []),
-    ...(options?.config?.agents?.defaults?.continuation?.enabled === true &&
-    options?.drainsContinuationDelegateQueue !== false
+    ...(continuationToolsEnabled && options?.drainsContinuationDelegateQueue !== false
       ? [
           createContinueDelegateTool({
             agentSessionKey: options?.agentSessionKey,
           }),
         ]
       : []),
-    ...(options?.config?.agents?.defaults?.continuation?.enabled === true &&
-    options?.requestCompactionOpts
+    ...(continuationToolsEnabled && options?.requestCompactionOpts
       ? [
           createRequestCompactionTool({
             agentSessionKey: options?.agentSessionKey,
@@ -706,11 +708,7 @@ export function createOpenClawTools(
       : []),
   ];
 
-  if (
-    options?.config?.agents?.defaults?.continuation?.enabled === true &&
-    !options?.continueWorkOpts &&
-    !options?.requestCompactionOpts
-  ) {
+  if (continuationToolsEnabled && !options?.continueWorkOpts && !options?.requestCompactionOpts) {
     log.warn(
       "continuation.enabled=true but neither continueWorkOpts nor requestCompactionOpts " +
         "were supplied — only continue_delegate will register. If this is a live runner, it " +

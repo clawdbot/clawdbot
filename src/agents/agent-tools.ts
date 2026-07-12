@@ -429,6 +429,8 @@ type OpenClawCodingToolsOptions = {
   allowGatewaySubagentBinding?: boolean;
   /** Whether this run consumes the continue_delegate staging queue. */
   drainsContinuationDelegateQueue?: boolean;
+  /** Internal maintenance/model-only runs that cannot schedule post-turn continuation work. */
+  disableContinuationTools?: boolean;
   /** Callback for continue_work to request a post-turn continuation. */
   continueWorkOpts?: {
     requestContinuation: (
@@ -513,6 +515,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   const execToolName = "exec";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
   const isMemoryFlushRun = options?.trigger === "memory";
+  const disableContinuationTools = options?.disableContinuationTools === true || isMemoryFlushRun;
   if (isMemoryFlushRun && !options?.memoryFlushWritePath) {
     throw new Error("memoryFlushWritePath required for memory-triggered tool runs");
   }
@@ -1056,6 +1059,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             onYield: options?.onYield,
             allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
             drainsContinuationDelegateQueue: options?.drainsContinuationDelegateQueue,
+            disableContinuationTools,
             continueWorkOpts: options?.continueWorkOpts,
             requestCompactionOpts: options?.requestCompactionOpts,
             recordToolPrepStage: options?.recordToolPrepStage,
