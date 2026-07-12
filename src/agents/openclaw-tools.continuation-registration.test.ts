@@ -75,6 +75,22 @@ describe("createOpenClawTools — continuation-tool registration visibility", ()
     expect(continuationToolNames(tools)).toEqual([]);
   });
 
+  it("registers no continuation tools when the caller disables their lifecycle", () => {
+    const tools = createOpenClawTools({
+      agentSessionKey: "main",
+      disablePluginTools: true,
+      disableMessageTool: true,
+      disableContinuationTools: true,
+      config: {
+        session: { mainKey: "main", scope: "per-sender" },
+        agents: { defaults: { continuation: { enabled: true } } },
+      } as never,
+      continueWorkOpts: buildContinueWorkOpts(),
+      requestCompactionOpts: buildRequestCompactionOpts(),
+    });
+    expect(continuationToolNames(tools)).toEqual([]);
+  });
+
   it("does not register request_compaction when continuation.enabled is true but requestCompactionOpts is missing", () => {
     const tools = createOpenClawTools({
       agentSessionKey: "main",
