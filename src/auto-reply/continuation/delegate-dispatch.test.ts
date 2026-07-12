@@ -6,9 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mockFlows = new Map<string, Record<string, unknown>>();
 const enqueueSystemEventMock = vi.fn();
 const loggerRecords: Array<{ level: string; message: string }> = [];
-// Observable persisted session store for recovery persist assertions (#1158):
-// updateSessionStore mutates the entry for its storePath here so a test can read
-// back the advanced/folded chain state the hedge-fired recovery persisted.
+// Observable persisted session entries for recovery persist assertions (#1158).
 const recoveryStoreByPath = new Map<string, Record<string, unknown>>();
 const spawnSubagentDirectMock = vi.fn();
 let flowIdCounter = 0;
@@ -50,21 +48,19 @@ vi.mock("../../infra/system-events.js", () => ({
   enqueueSystemEvent: (text: string, options: unknown) => enqueueSystemEventMock(text, options),
 }));
 
-vi.mock("../../config/sessions/store-load.js", () => ({
-  loadSessionStore: (storePath: string) => loadSessionStoreForRecoveryMock(storePath),
-}));
-
-vi.mock("../../config/sessions/store.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../config/sessions/store.js")>()),
-  // Recovery persists advanced chain state after dispatch/rejection; keep it in
-  // an observable in-memory store keyed by path so tests exercise the
-  // derive-from-store cost basis (#1144) and can read back the advanced/folded
-  // state a hedge-fired recovery persisted (#1158) without touching disk.
-  updateSessionStore: async <T>(
-    storePath: string,
-    mutator: (store: Record<string, unknown>) => Promise<T> | T,
+vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/session-accessor.js")>()),
+  loadSessionEntry: ({ sessionKey, storePath }: { sessionKey: string; storePath: string }) => {
+    const store = loadSessionStoreForRecoveryMock(storePath);
+    return store[sessionKey];
+  },
+  updateSessionEntry: async (
+    { sessionKey, storePath }: { sessionKey: string; storePath: string },
+    update: (
+      entry: Record<string, unknown>,
+    ) => Promise<Record<string, unknown> | null> | Record<string, unknown> | null,
     options?: Record<string, unknown>,
-  ): Promise<T> => {
+  ): Promise<Record<string, unknown> | null> => {
     updateSessionStoreForRecoveryOptions.push(options);
     if (options?.requireWriteSuccess === true) {
       updateSessionStoreForRecoveryRequiredWriteCalls++;
@@ -76,9 +72,21 @@ vi.mock("../../config/sessions/store.js", async (importOriginal) => ({
         throw new Error("session store write failed");
       }
     }
+    const sourceStore = loadSessionStoreForRecoveryMock(storePath);
+    const sourceEntry = recoveryStoreByPath.get(storePath)?.[sessionKey] ?? sourceStore[sessionKey];
+    if (!sourceEntry) {
+      return null;
+    }
+    const entry = { ...(sourceEntry as Record<string, unknown>) };
+    const patch = await update(entry);
+    if (!patch) {
+      return entry;
+    }
+    const persisted = { ...entry, ...patch };
     const store = recoveryStoreByPath.get(storePath) ?? {};
     recoveryStoreByPath.set(storePath, store);
-    return await mutator(store);
+    store[sessionKey] = persisted;
+    return persisted;
   },
 }));
 

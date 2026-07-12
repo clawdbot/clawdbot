@@ -531,8 +531,7 @@ async function driveContinuationTurn(
   const [
     { getRuntimeConfig },
     { resolveStorePath },
-    { loadSessionStore },
-    { resolveSessionStoreEntry },
+    { loadSessionEntry },
     { parseAgentSessionKey, isSubagentSessionKey },
     { resolveSessionLane },
     { getReplyFromConfig },
@@ -541,8 +540,7 @@ async function driveContinuationTurn(
   ] = await Promise.all([
     import("../../config/config.js"),
     import("../../config/sessions/paths.js"),
-    import("../../config/sessions/store-load.js"),
-    import("../../config/sessions/store-entry.js"),
+    import("../../config/sessions/session-accessor.js"),
     import("../../sessions/session-key-utils.js"),
     import("../../agents/embedded-agent-runner/lanes.js"),
     import("../reply/get-reply.js"),
@@ -581,9 +579,14 @@ async function driveContinuationTurn(
   const cfg = getRuntimeConfig();
   const agentId = parseAgentSessionKey(work.sessionKey)?.agentId;
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
-  const store = loadSessionStore(storePath);
-  const resolvedEntry = resolveSessionStoreEntry({ store, sessionKey: work.sessionKey });
-  if (!resolvedEntry.existing) {
+  const agentSessionEntry = loadSessionEntry({
+    clone: false,
+    hydrateSkillPromptRefs: false,
+    readConsistency: "latest",
+    sessionKey: work.sessionKey,
+    storePath,
+  });
+  if (!agentSessionEntry) {
     return { status: "skipped", reason: "missing-session" };
   }
 

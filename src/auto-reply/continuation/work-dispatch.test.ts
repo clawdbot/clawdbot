@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const turnGrants: unknown[] = [];
 const systemEvents: unknown[] = [];
@@ -14,6 +17,8 @@ let replyPayloadOverride: unknown;
 let activeQueueMode: "delivered" | "queued-without-proof" | "rejected" = "delivered";
 let activeQueueHandleAvailable = true;
 const mockSessionStore: Record<string, unknown> = {};
+const loadSessionEntryMock = vi.fn();
+let mockStorePath = "test-store";
 // #1144 test state: toggle continuation enablement (disabled-gate), capture the
 // active diagnostic traceparent at reply time (traceparent re-entry), and force
 // a revision race after the turn ran (failed durable delivered-mark).
@@ -127,31 +132,16 @@ vi.mock("../../config/config.js", () => ({
 }));
 
 vi.mock("../../config/sessions/paths.js", () => ({
-  resolveStorePath: () => "test-store",
+  resolveStorePath: () => mockStorePath,
 }));
 
-vi.mock("../../config/sessions/store-load.js", () => ({
-  loadSessionStore: () => mockSessionStore,
+vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/session-accessor.js")>()),
+  loadSessionEntry: (scope: { sessionKey: string }) => loadSessionEntryMock(scope),
 }));
 
-vi.mock("../../config/sessions/store-entry.js", () => ({
-  resolveSessionStoreEntry: ({
-    store,
-    sessionKey,
-  }: {
-    store: Record<string, unknown>;
-    sessionKey: string;
-  }) => {
-    const normalizedKey = sessionKey.trim();
-    return {
-      normalizedKey,
-      existing: store[normalizedKey] ?? store[sessionKey],
-      legacyKeys: normalizedKey === sessionKey ? [] : [sessionKey],
-    };
-  },
-}));
-
-vi.mock("../../sessions/session-key-utils.js", () => ({
+vi.mock("../../sessions/session-key-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../sessions/session-key-utils.js")>()),
   parseAgentSessionKey: (sessionKey: string) => {
     const match = /^agent:([^:]+)/.exec(sessionKey);
     return match ? { agentId: match[1] } : undefined;
@@ -507,6 +497,12 @@ describe("durable continuation_work dispatch", () => {
     for (const key of Object.keys(mockSessionStore)) {
       delete mockSessionStore[key];
     }
+    loadSessionEntryMock
+      .mockReset()
+      .mockImplementation(
+        ({ sessionKey }: { sessionKey: string }) => mockSessionStore[sessionKey.trim()],
+      );
+    mockStorePath = "test-store";
     mockFlows.clear();
     flowCounter = 0;
     subagentRuns.clear();
@@ -873,7 +869,7 @@ describe("durable continuation_work dispatch", () => {
     expect([...mockFlows.values()][0]?.chainId).toBe("chain-persisted");
   });
 
-  it("resolves normalized session-store aliases before treating work as missing-session", async () => {
+  it("resolves normalized accessor aliases before treating work as missing-session", async () => {
     const normalizedSessionKey = "agent:main:alias";
     const queuedSessionKey = `${normalizedSessionKey} `;
     mockSessionStore[normalizedSessionKey] = { sessionKey: normalizedSessionKey };
@@ -890,6 +886,13 @@ describe("durable continuation_work dispatch", () => {
     const result = await dispatchPendingContinuationWork({ sessionKey: queuedSessionKey });
 
     expect(result).toEqual({ dispatched: 1, failed: 0, reaped: 0 });
+    expect(loadSessionEntryMock).toHaveBeenCalledWith({
+      clone: false,
+      hydrateSkillPromptRefs: false,
+      readConsistency: "latest",
+      sessionKey: queuedSessionKey,
+      storePath: "test-store",
+    });
     expect(turnGrants).toEqual([
       expect.objectContaining({
         context: expect.objectContaining({
@@ -898,6 +901,49 @@ describe("durable continuation_work dispatch", () => {
         }),
       }),
     ]);
+  });
+
+  it("drives a freshly created SQLite session that is absent from the legacy snapshot", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-continuation-work-"));
+    mockStorePath = path.join(tempDir, "sessions.json");
+    const sessionKey = "agent:main:fresh-sqlite-session";
+    const actualAccessor = await vi.importActual<
+      typeof import("../../config/sessions/session-accessor.js")
+    >("../../config/sessions/session-accessor.js");
+    try {
+      await actualAccessor.upsertSessionEntry(
+        { sessionKey, storePath: mockStorePath },
+        {
+          sessionId: "fresh-sqlite-session-id",
+          updatedAt: Date.now(),
+        },
+      );
+      expect(mockSessionStore[sessionKey]).toBeUndefined();
+      loadSessionEntryMock.mockImplementation((scope) => actualAccessor.loadSessionEntry(scope));
+      enqueuePendingWork({
+        sessionKey,
+        hop: 2,
+        delayMs: 0,
+        electedAt: Date.now(),
+        dueAt: Date.now(),
+        maxChainLength: 8,
+        reason: "fresh SQLite proof",
+      });
+
+      const result = await dispatchPendingContinuationWork({ sessionKey });
+
+      expect(result).toEqual({ dispatched: 1, failed: 0, reaped: 0 });
+      expect(turnGrants).toEqual([
+        expect.objectContaining({
+          context: expect.objectContaining({
+            SessionKey: sessionKey,
+            Body: expect.stringContaining("fresh SQLite proof"),
+          }),
+        }),
+      ]);
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
   });
 
   it("recovers persisted idle-retry rows without waiting for the slow hedge", async () => {

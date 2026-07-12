@@ -22,9 +22,7 @@ import { spawnSubagentDirect } from "../../agents/subagent-spawn.js";
 import type { SpawnSubagentContext } from "../../agents/subagent-spawn.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
-import { loadSessionStore } from "../../config/sessions/store-load.js";
-import { updateSessionStore } from "../../config/sessions/store.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
   emitContinuationDelegateFireSpan,
   emitContinuationDisabledSpan,
@@ -855,7 +853,6 @@ export async function recoverPendingContinuationDelegates(
     queuedCreatedAtOrBefore: params.queuedCreatedAtOrBefore,
     includeRunningUpdatedAtOrBefore,
   });
-  const storeByPath = new Map<string, Record<string, SessionEntry>>();
   const runtimeConfigSnapshot = getRuntimeConfig();
   let dispatched = 0;
   let rejected = 0;
@@ -864,19 +861,20 @@ export async function recoverPendingContinuationDelegates(
     const agentId = parseAgentSessionKey(sessionKey)?.agentId;
     const storePath =
       params.storePath ?? resolveStorePath(runtimeConfigSnapshot.session?.store, { agentId });
-    let sessionStore = storeByPath.get(storePath);
-    if (!sessionStore) {
-      try {
-        sessionStore = loadSessionStore(storePath);
-      } catch (err) {
-        log.warn(
-          `[continuation:delegate-recovery-store-load-failed] path=${storePath} leaving queued/running delegates recoverable: ${formatErrorMessage(err)}`,
-        );
-        continue;
-      }
-      storeByPath.set(storePath, sessionStore);
+    let recoveredEntry: ReturnType<typeof loadSessionEntry>;
+    try {
+      recoveredEntry = loadSessionEntry({
+        hydrateSkillPromptRefs: false,
+        readConsistency: "latest",
+        sessionKey,
+        storePath,
+      });
+    } catch (err) {
+      log.warn(
+        `[continuation:delegate-recovery-store-load-failed] path=${storePath} leaving queued/running delegates recoverable: ${formatErrorMessage(err)}`,
+      );
+      continue;
     }
-    const recoveredEntry = sessionStore[sessionKey];
     let recoveryChainState = params.chainState;
     if (!recoveryChainState) {
       if (!recoveredEntry) {
@@ -896,10 +894,9 @@ export async function recoverPendingContinuationDelegates(
     let persistRecoveredChainState: ((nextState: ChainState) => Promise<void>) | undefined;
     if (!params.chainState && recoveredEntry) {
       persistRecoveredChainState = async (nextState: ChainState): Promise<void> => {
-        await updateSessionStore(
-          storePath,
-          (store) => {
-            const sessionEntry = store[sessionKey] ?? recoveredEntry;
+        const updated = await updateSessionEntry(
+          { sessionKey, storePath },
+          (sessionEntry) => {
             persistContinuationChainState({
               sessionEntry,
               count: nextState.currentChainCount,
@@ -907,10 +904,13 @@ export async function recoverPendingContinuationDelegates(
               tokens: nextState.accumulatedChainTokens,
               ...(nextState.chainId ? { chainId: nextState.chainId } : {}),
             });
-            store[sessionKey] = sessionEntry;
+            return sessionEntry;
           },
           { requireWriteSuccess: true },
         );
+        if (!updated) {
+          throw new Error(`session entry disappeared during recovery: ${sessionKey}`);
+        }
         persistContinuationChainState({
           sessionEntry: recoveredEntry,
           count: nextState.currentChainCount,
@@ -918,7 +918,6 @@ export async function recoverPendingContinuationDelegates(
           tokens: nextState.accumulatedChainTokens,
           ...(nextState.chainId ? { chainId: nextState.chainId } : {}),
         });
-        sessionStore[sessionKey] = recoveredEntry;
       };
     }
     let result: Awaited<ReturnType<typeof dispatchToolDelegates>>;
@@ -1333,28 +1332,27 @@ export async function recoverAndReleaseStagedPostCompactionDelegates(options: {
     list.push(delegate);
     delegatesBySession.set(sessionKey, list);
   }
-
   const runtimeConfigSnapshot = getRuntimeConfig();
-  const storeByPath = new Map<string, Record<string, SessionEntry>>();
   let dispatched = 0;
   let failed = 0;
   let recoveredSessions = 0;
   for (const [sessionKey, delegates] of delegatesBySession) {
     const agentId = parseAgentSessionKey(sessionKey)?.agentId;
     const storePath = resolveStorePath(runtimeConfigSnapshot.session?.store, { agentId });
-    let sessionStore = storeByPath.get(storePath);
-    if (!sessionStore) {
-      try {
-        sessionStore = loadSessionStore(storePath);
-      } catch (err) {
-        postCompactionLog.warn(
-          `[continuation:post-compaction-recovery-store-load-failed] path=${storePath} leaving staged delegates recoverable: ${formatErrorMessage(err)}`,
-        );
-        continue;
-      }
-      storeByPath.set(storePath, sessionStore);
+    let entry: ReturnType<typeof loadSessionEntry>;
+    try {
+      entry = loadSessionEntry({
+        hydrateSkillPromptRefs: false,
+        readConsistency: "latest",
+        sessionKey,
+        storePath,
+      });
+    } catch (err) {
+      postCompactionLog.warn(
+        `[continuation:post-compaction-recovery-store-load-failed] path=${storePath} leaving staged delegates recoverable: ${formatErrorMessage(err)}`,
+      );
+      continue;
     }
-    const entry = sessionStore[sessionKey];
     if (!entry) {
       postCompactionLog.warn(
         `[continuation:post-compaction-recovery-session-missing] path=${storePath} session=${sessionKey} leaving staged delegates recoverable`,
@@ -1386,10 +1384,9 @@ export async function recoverAndReleaseStagedPostCompactionDelegates(options: {
     // finish.
     if (result.dispatchedFlowIds.length > 0) {
       try {
-        await updateSessionStore(
-          storePath,
-          (store) => {
-            const sessionEntry = store[sessionKey] ?? entry;
+        const updated = await updateSessionEntry(
+          { sessionKey, storePath },
+          (sessionEntry) => {
             persistContinuationChainState({
               sessionEntry,
               count: result.chainState.currentChainCount,
@@ -1397,10 +1394,13 @@ export async function recoverAndReleaseStagedPostCompactionDelegates(options: {
               tokens: result.chainState.accumulatedChainTokens,
               ...(result.chainState.chainId ? { chainId: result.chainState.chainId } : {}),
             });
-            store[sessionKey] = sessionEntry;
+            return sessionEntry;
           },
           { requireWriteSuccess: true },
         );
+        if (!updated) {
+          throw new Error(`session entry disappeared during recovery: ${sessionKey}`);
+        }
       } catch (err) {
         postCompactionLog.warn(
           `[continuation:post-compaction-recovery-chain-persist-failed] session=${sessionKey} leaving accepted rows recoverable: ${formatErrorMessage(err)}`,
@@ -1414,7 +1414,6 @@ export async function recoverAndReleaseStagedPostCompactionDelegates(options: {
         tokens: result.chainState.accumulatedChainTokens,
         ...(result.chainState.chainId ? { chainId: result.chainState.chainId } : {}),
       });
-      sessionStore[sessionKey] = entry;
       const finalized = finalizeStagedPostCompactionDelegates(result.dispatchedFlowIds);
       assertStagedPostCompactionFinalizationComplete({
         flowIds: result.dispatchedFlowIds,
