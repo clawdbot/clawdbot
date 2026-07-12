@@ -99,7 +99,7 @@ describe("scripts/profile-extension-memory", () => {
       ["--timeout-ms", "1e3"],
       ["--combined-timeout-ms", "90000ms"],
       ["--top", "0x10"],
-    ];
+    ] as const;
 
     for (const [flag, value] of cases) {
       const result = runProfileExtensionMemory([flag, value]);

@@ -705,8 +705,8 @@ describe("codex provider", () => {
       stablePrefix: CODEX_GPT5_BEHAVIOR_CONTRACT,
     });
     const interactionStyle = contribution?.sectionOverrides?.interaction_style;
-    expect(interactionStyle).toContain("Live chat tone: short, natural, human.");
-    expect(interactionStyle).not.toContain("Use heartbeats to create useful proactive progress");
+    expect(interactionStyle).toContain("Live chat: short, natural, human.");
+    expect(interactionStyle).not.toContain("Heartbeat = useful proactive progress");
   });
 
   it("does not add the GPT-5 prompt overlay to non-GPT-5 Codex provider runs", () => {

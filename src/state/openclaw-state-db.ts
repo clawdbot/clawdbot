@@ -11,6 +11,10 @@ import {
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
+import {
+  repairCanonicalSqliteUniqueIndexes,
+  type CanonicalSqliteUniqueIndex,
+} from "../infra/sqlite-index-schema.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import {
@@ -42,6 +46,19 @@ export const OPENCLAW_STATE_SCHEMA_VERSION = 2;
 export const OPENCLAW_SQLITE_BUSY_TIMEOUT_MS = 5_000;
 const OPENCLAW_STATE_DIR_MODE = 0o700;
 const OPENCLAW_STATE_FILE_MODE = 0o600;
+const OPENCLAW_STATE_CANONICAL_UNIQUE_INDEXES = [
+  {
+    name: "idx_operator_approvals_resolution_ref",
+    definition: "ON operator_approvals(resolution_ref)",
+  },
+  {
+    name: "idx_worker_environments_provider_lease",
+    definition: `
+      ON worker_environments(provider_id, lease_id)
+      WHERE lease_id IS NOT NULL
+    `,
+  },
+] as const satisfies readonly CanonicalSqliteUniqueIndex[];
 
 /** Open shared SQLite database handle plus WAL maintenance lifecycle. */
 export type OpenClawStateDatabase = {
@@ -1460,6 +1477,7 @@ function ensureSchema(db: DatabaseSync, pathname: string): void {
       ensureAdditiveStateColumns(db);
       assertCanonicalStateSchemaShape(db, pathname);
       db.exec(OPENCLAW_STATE_SCHEMA_SQL);
+      repairCanonicalSqliteUniqueIndexes(db, pathname, OPENCLAW_STATE_CANONICAL_UNIQUE_INDEXES);
       // Retired node_pairing_* tables were created by earlier schema revisions but
       // never had a shipped writer (the node surface lives on device_pairing_paired
       // records), so dropping the always-empty tables is safe, not destructive.

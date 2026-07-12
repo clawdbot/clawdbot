@@ -327,13 +327,46 @@
 .cron-table__last {
   display: flex;
   align-items: center;
-  gap: 8px;
+}
+
+.cron-table__last-run {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.cron-last-glyph {
+  flex: 0 0 auto;
+  display: inline-flex;
+  color: var(--muted);
+}
+
+.cron-last-glyph svg {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  stroke-width: 2.5;
+  fill: none;
+}
+
+.cron-last-glyph--ok {
+  color: var(--ok);
+}
+
+.cron-last-glyph--error {
+  color: var(--danger);
 }
 
 .cron-table__last-time {
-  color: var(--muted);
+  color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cron-table__row--paused .cron-table__last-time {
+  color: var(--muted);
 }
 
 .cron-table__actions {
@@ -621,9 +654,8 @@
 .cron-editor {
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  padding: 16px;
-  max-width: 860px;
+  gap: 14px;
+  max-width: 1060px;
 }
 
 .cron-history,
@@ -631,39 +663,197 @@
   padding: 16px;
 }
 
-/* Prompt block */
+/* Prompt card: the instructions textarea plus a compact action/model/reasoning
+   footer, mirroring an in-box model picker. */
+
+.cron-prompt-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 16px;
+}
 
 .cron-prompt {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 
 .cron-prompt__label {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .cron-prompt textarea {
-  min-height: 96px;
+  min-height: 132px;
   resize: vertical;
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: 13.5px;
+  line-height: 1.55;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  box-shadow: none;
 }
 
-/* Row groups (Details / Frequency) */
+.cron-prompt textarea:focus,
+.cron-prompt textarea:focus-visible {
+  outline: none;
+  box-shadow: none;
+  border: 0;
+}
 
-.cron-row-group {
+/* The textarea is borderless, so the card itself carries the visible keyboard
+   focus indicator (required for a11y after suppressing the input outline). */
+.cron-prompt-card:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.cron-prompt-card__footer {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  align-items: center;
+  gap: 8px 18px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
 }
 
-.cron-row-group__title {
+.cron-compact-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.cron-compact-field__label {
   color: var(--muted);
   font-size: 12px;
   font-weight: 600;
+  white-space: nowrap;
+}
+
+.cron-compact-field input,
+.cron-compact-field select {
+  font-size: 12.5px;
+  padding: 4px 8px;
+  width: 110px;
+}
+
+.cron-compact-field select {
+  width: auto;
+}
+
+.cron-compact-field input.cron-compact-field__wide {
+  width: 220px;
+}
+
+/* Editor cards (General / Schedule / Delivery) */
+
+.cron-editor-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+
+.cron-editor-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+}
+
+.cron-editor-card__title {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.cron-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.cron-field__label {
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 550;
+}
+
+.cron-field input,
+.cron-field select {
+  width: 100%;
+}
+
+.cron-field input[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+/* Segmented schedule-kind picker */
+
+.cron-seg {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg-elevated) 72%, transparent);
+  align-self: flex-start;
+}
+
+.cron-seg__option {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 12px;
+  border-radius: calc(var(--radius-md) - 3px);
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+
+.cron-seg__option:hover {
+  color: var(--text);
+}
+
+.cron-seg__option--active {
+  background: var(--bg-hover);
+  color: var(--text-strong);
+}
+
+.cron-schedule-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg-elevated) 55%, transparent);
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.cron-schedule-summary svg {
+  flex: 0 0 auto;
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  fill: none;
+  color: var(--muted);
 }
 
 .cron-rows {
@@ -820,11 +1010,21 @@
   color: var(--text-strong);
 }
 
+/* Sticky save bar: stays visible while the long form scrolls in `.content`. */
 .cron-editor-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 10;
   display: flex;
   align-items: center;
   gap: 10px 14px;
   flex-wrap: wrap;
+  margin: 0 -4px;
+  padding: 12px 4px;
+  border-top: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }
 
 .cron-submit-reason {

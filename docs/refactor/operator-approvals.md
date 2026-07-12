@@ -35,16 +35,18 @@ Inline actions and deep links coexist. There is no approval-mode toggle.
 - Redesigning exec allowlists, plugin policy composition, or `allow-always` persistence except where required to make terminal outcomes unambiguous.
 - Making a gatewayless embedded TUI remotely reachable in the first increment. It remains local-only and must fail closed when no reviewer exists.
 
-## Existing system and evidence map
+## Pre-rollout baseline and evidence map
 
-| Surface           | Current entry point and owner                                                                                                                                   | Current behavior and gap                                                                                                                                                                     |
+This table records the implementation state when #103505 was opened. The rollout sections below track the durable registry, typed actions, deep-link page, and native-client increments built on top of that baseline.
+
+| Surface           | Baseline entry point and owner                                                                                                                                  | Baseline behavior and gap                                                                                                                                                                    |
 | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Agent exec        | `src/agents/bash-tools.exec-approval-request.ts`, `src/agents/bash-tools.exec-host-shared.ts`                                                                   | Two-phase `exec.approval.*` registration prevents an early `/approve` race, but timeout can still become allow through `askFallback`.                                                        |
 | Plugin tool gate  | `src/agents/agent-tools.before-tool-call.ts`                                                                                                                    | Requests `plugin.approval.*`; `timeoutBehavior: "allow"` can approve a timed-out gate. Embedded mode has separate process-local authority in `src/infra/embedded-plugin-approval-broker.ts`. |
 | Plugin node gate  | `src/gateway/node-invoke-plugin-policy.ts`                                                                                                                      | Creates and broadcasts directly through the plugin manager, duplicating part of the server-method lifecycle.                                                                                 |
 | Gateway authority | `src/gateway/server-aux-handlers.ts`, `src/gateway/exec-approval-manager.ts`, `src/gateway/server-methods/approval-shared.ts`                                   | Separate exec and plugin managers use process-local maps. Terminal entries survive for 15 seconds. First-answer-wins holds only inside one process.                                          |
 | Gateway protocol  | `packages/gateway-protocol/src/schema/exec-approvals.ts`, `packages/gateway-protocol/src/schema/plugin-approvals.ts`, `src/gateway/methods/core-descriptors.ts` | Exec has pending-only `get`; plugin has no `get`; no kind-agnostic terminal lookup exists for a deep link.                                                                                   |
-| Delivery          | `src/infra/exec-approval-channel-runtime.ts`, `src/infra/approval-native-runtime.ts`, `src/infra/approval-handler-runtime.ts`                                   | Supports origin routing, approver DMs, pending replay, native handlers, and in-process terminal cleanup. PR 5 adds durable terminal reconciliation.                                          |
+| Delivery          | `src/infra/exec-approval-channel-runtime.ts`, `src/infra/approval-native-runtime.ts`, `src/infra/approval-handler-runtime.ts`                                   | Supports origin routing, approver DMs, pending replay, native handlers, and in-process terminal cleanup. A separate follow-up adds durable terminal reconciliation.                          |
 | Portable actions  | `src/interactive/payload.ts`, `src/plugin-sdk/interactive-runtime.ts`, `src/plugin-sdk/approval-reply-runtime.ts`                                               | Approval buttons are command actions containing `/approve ...`; URL and Web App targets are untyped button fields.                                                                           |
 | Telegram          | `extensions/telegram/src/approval-handler.runtime.ts`, `extensions/telegram/src/button-types.ts`                                                                | The renderer parses command text to recognize approval semantics before producing private callback data.                                                                                     |
 | Control UI        | `ui/src/app/exec-approval.ts`, `ui/src/app/overlays.ts`, `ui/src/components/exec-approval.ts`                                                                   | Approval UI is a global modal. `ui/src/app-route-paths.ts` and `ui/src/app-routes.ts` use exact routes and rewrite unknown paths to Chat.                                                    |
@@ -200,10 +202,12 @@ Add an approval-scoped `session.approval` projection event. Publish the canonica
 
 - `sessionKey`: stream receiving the projection.
 - `sourceSessionKey`: child/source that raised the gate.
-- `phase`: `requested \| terminal`.
+- `phase`: `pending \| terminal`, discriminated against the approval status.
 - one safe `OperatorApproval` projection.
 
-Register the event under `operator.approvals` in `src/gateway/server-broadcast.ts`. Session subscription alone never grants approval visibility.
+Clients opt in with `sessions.messages.subscribe { key, agentId?, includeApprovals: true }`. The successful response adds an `approvalReplay` containing up to 1,000 current pending approvals for that exact stream key that the subscribing client is also record-authorized to review. `truncated: false` makes the filtered replay authoritative and reconnecting clients replace their local pending set with it; `truncated: true` is an overload signal and clients must keep unseen local entries until canonical lookup or later lifecycle events settle them. A later durable timeout discovered during replay emits terminal tombstones only to subscribed, record-authorized audiences before the new snapshot is returned. `operator.admin` may opt in directly; narrower clients require both a paired device identity and `operator.approvals`. Session subscription alone never grants approval visibility.
+
+Register the event under `operator.approvals` in `src/gateway/server-broadcast.ts`. The projection is observational: it never appends transcript rows, emits `sessions.changed`, or wakes an agent.
 
 Extend `MessagePresentationAction` in `src/interactive/payload.ts`:
 
@@ -290,13 +294,13 @@ Use a deterministic breadth-first walk:
 
 The registry source is `src/agents/subagent-registry-read.ts`; ownership fields are defined in `src/agents/subagent-registry.types.ts`. Session fallback fields are defined in `src/config/sessions/types.ts`.
 
-Requested and terminal projections use the same persisted audience even if focus/controller ownership changes while the approval is pending. This guarantees that every surface that displayed the request receives terminal cleanup. Resolution always targets the source approval ID; audience sessions never receive cloned approval state.
+Requested and terminal projections use the same persisted audience even if focus/controller ownership changes while the approval is pending. This guarantees terminal cleanup for every audience session stream that received the request projection. Resolution always targets the source approval ID; audience sessions never receive cloned approval state. Forwarded channel-message cleanup remains the separate delivery-locator follow-up below.
 
 Do not write transcript messages, inject system prompts, start owner turns, or emit `sessions.changed` solely for an approval.
 
 ## Delivered-surface convergence
 
-Native approval handlers already retain their delivered message entries long enough to replace or retire active controls. Generic forwarded approval messages currently discard the `MessageReceipt`, so a decision on another surface can leave their old controls looking pending. PR 5 closes that gap with an `operator_approval_deliveries` child table in the shared state database.
+Native approval handlers already retain their delivered message entries long enough to replace or retire active controls. Generic forwarded approval messages currently discard the `MessageReceipt`, so a decision on another surface can leave their old controls looking pending. A separate follow-up closes that gap with an `operator_approval_deliveries` child table in the shared state database.
 
 Each row stores the approval ID, a unique delivery ID, channel/account/exact route, a bounded JSON-validated channel-private message locator, delivery timestamps, and terminalization state. It never stores callback data, decision tokens, or raw approval requests. The channel owns locator encoding and message mutation; core owns canonical status, target selection, retry policy, and fallback terminal text.
 
@@ -331,13 +335,17 @@ Final strict behavior:
 - malformed trusted verdict -> `denied`, deny;
 - only an allowed explicit allow decision -> `allowed`.
 
-Current shipped behavior conflicts with this contract:
+Current shipped exec behavior still conflicts with this contract:
 
 - `src/agents/bash-tools.exec-host-shared.ts` may apply `askFallback`.
-- `src/agents/agent-tools.before-tool-call.ts` may honor `timeoutBehavior: "allow"`.
-- `docs/tools/exec-approvals.md`, `docs/cli/approvals.md`, and `docs/plugins/plugin-permission-requests.md` document those surfaces.
+- `docs/tools/exec-approvals.md` and `docs/cli/approvals.md` document that surface.
 
-Do not silently change them in the storage PR. The strict-semantics PR must update code, types, docs, tests, and changelog together, with explicit owner/security review. `askFallback` may continue to describe pre-gate policy selection during migration, but it must not turn a created pending record's timeout into approval.
+Plugin approvals now fail closed on timeout and malformed verdicts; the legacy
+`timeoutBehavior` field remains accepted but ignored. The exec strict-semantics
+follow-up must update code, types, docs, tests, and changelog together, with
+explicit owner/security review. `askFallback` may continue to describe
+pre-gate policy selection during migration, but it must not turn a created
+pending record's timeout into approval.
 
 ## Compatibility plan
 
@@ -369,7 +377,7 @@ Do not silently change them in the storage PR. The strict-semantics PR must upda
 - Transport-private callback encoding with explicit owner kind.
 - Durable fixed-size callback references for canonical IDs beyond transport limits.
 - Bundled channel migration away from command-text and approval-ID inference.
-- Canonical first-answer truth on the clicked surface and best-effort active-native terminal updates; durable reconciliation stays in PR 5.
+- Canonical first-answer truth on the clicked surface and best-effort active-native terminal updates; durable channel-message terminalization remains a follow-up.
 - SDK and bundled-channel tests.
 
 ### PR 3: Control UI deep link
@@ -382,17 +390,32 @@ Do not silently change them in the storage PR. The strict-semantics PR must upda
 
 ### PR 4: native clients
 
-- iOS, watchOS, and Android review surfaces use kind-aware `approval.get/resolve`.
+- iOS and Android review surfaces use kind-aware `approval.get/resolve`; watchOS relays reviewer-safe prompts and decisions through the paired iPhone.
+- Watch offers the exec decisions supported by its compact relay contract: allow once and deny.
 - Canonical first-answer terminal truth replaces local attempted-decision state.
+- Lost or ambiguous resolve acknowledgements freeze controls until canonical readback.
+- Previous shipped Gateway v4 instances retain exec review through a narrow legacy-method fallback; retained cross-surface terminal state requires the unified methods.
+- Reviewer warnings and owner context remain visible across iPhone, Watch, and Android.
 - Native unit, build, and platform proof.
 
-### PR 5: propagation and fail-closed behavior
+### PR 5: ancestor lifecycle propagation
 
-- `session.approval` request/terminal delivery from the audience snapshot persisted in PR 1.
-- Durable forwarded-delivery locators and canonical terminal cleanup across every delivered surface, including restart replay.
+- `session.approval` pending/terminal delivery from the audience snapshot persisted in PR 1.
+- Exact-session subscription, reconnect replay, and terminal tombstones without transcript mutation or agent wake.
+- Lifecycle callbacks run after durable insert/CAS and never become approval authority.
+- Nested-subagent and reconnect proof.
+
+### PR 6: fail-closed behavior
+
 - Migrate `node-invoke-plugin-policy.ts` and the embedded plugin broker away from duplicate authority.
-- Strict timeout/malformed/no-route semantics and compatibility docs.
-- Multi-surface and nested-subagent end-to-end proof.
+- Strict timeout, malformed, no-route, binding, and allow-once consumption semantics.
+- Deprecate shipped permissive timeout settings without honoring them after an ask is pending.
+- Multi-surface contention and failure-injection proof.
+
+### Follow-up: durable remote-message cleanup
+
+- Persist forwarded-delivery locators and terminalize every delivered channel message after restart.
+- Keep this transport lifecycle separate from canonical approval authority and typed presentation actions.
 
 ## Tests
 
@@ -415,7 +438,11 @@ Required focused coverage:
 - Owner projections cause no transcript mutation or agent wake.
 - Control UI route works at `/` and a configured base path; refresh shows pending or terminal truth.
 - Simultaneous Control UI and Telegram answers show one winner and "resolved elsewhere" on the loser.
-- User-path proof through Testbox/Crabbox, including a mobile-width approval page and Telegram action cleanup.
+- Native approval identifiers and Gateway owner identifiers preserve exact UTF-8 bytes across routing and reconciliation.
+- Native RPC-family negotiation pins one canonical or legacy family per admitted Gateway route and never silently downgrades after use.
+- Lost native resolve acknowledgements freeze actions until canonical readback; failed readback cannot fabricate a winner or acknowledge a Watch refresh.
+- Watch snapshot request correlation is accepted only for the exact paired Gateway owner and a completed canonical iPhone readback.
+- User-path proof through Testbox/Crabbox, including a mobile-width approval page, Telegram action cleanup, and one pending/resolve/late-loser round trip across Android, iPhone, and Watch.
 
 ## Observability
 
@@ -432,10 +459,10 @@ Track:
 - startup-orphan cancellations;
 - audience size.
 
-A committed transition is success even if later event delivery fails. Delivery failure is logged separately; PR 5 repairs remote state through durable delivery replay and canonical lookup.
+A committed transition is success even if later event delivery fails. Lifecycle subscribers recover through PR 5 replay and canonical lookup. Durable channel-message terminalization remains the separate follow-up above.
 
 ## Open decisions
 
 1. **Externally reachable Control UI origin.** Every snapshot carries the stable relative `urlPath`. An absolute URL may be advertised only from a cached Tailscale Serve/Funnel location after Gateway exposure succeeds; `allowedOrigins`, request Host headers, `gateway.remote.url`, and display-only loopback/LAN candidates are not canonical origins. Telegram can use its authenticated Mini App wrapper to retain the approval path through bootstrap. Arbitrary reverse proxies remain relative-only until a separately reviewed explicit public-URL contract exists. Never let a channel guess the origin.
-2. **Strict timeout compatibility cutover.** The target is fail-closed, but `askFallback` and plugin `timeoutBehavior: "allow"` are shipped contracts. Recommended: make the behavior change in PR 5 with explicit owner/security approval, changelog, docs, and a migration/deprecation decision rather than hiding it in PR 1.
+2. **Exec strict timeout compatibility cutover.** Plugin approval timeouts now fail closed and `timeoutBehavior` is deprecated. The remaining shipped `askFallback` contract needs explicit owner/security review, changelog, docs, and a migration/deprecation decision before it stops authorizing execution after a pending ask times out.
 3. **Gatewayless embedded mode.** Recommended: keep it local-only initially, then make it a client of the canonical service when a Gateway exists. Do not advertise a deep link that no server can resolve.

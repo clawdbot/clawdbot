@@ -835,11 +835,6 @@ async function resolveHostedCatalogSnapshotStore(params: {
   });
 }
 
-/** Keep signature verification crypto lazy for ordinary catalog metadata paths. */
-export async function loadOfficialExternalPluginCatalogEnvelopeVerifier() {
-  return await import("./official-external-plugin-catalog-envelope.js");
-}
-
 export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
   feedUrl?: string;
   feedProfile?: string;

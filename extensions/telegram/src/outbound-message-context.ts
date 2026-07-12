@@ -1,16 +1,11 @@
 // Telegram plugin module implements outbound message context behavior.
 import type { Message } from "grammy/types";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { buildTelegramSelfSenderName } from "./group-history-window.js";
 import { createTelegramMessageCache, resolveTelegramMessageCacheScope } from "./message-cache.js";
 import type { TelegramPromptContextProjection } from "./prompt-context-projection.js";
-
-type TelegramPromptContextChannelData = {
-  promptContextTimestampMs?: unknown;
-};
 
 type TelegramOutboundPromptContextUser = {
   id?: number;
@@ -38,38 +33,6 @@ type TelegramOutboundPromptContextAccount = {
   name?: string;
   bot?: { first_name?: string; username?: string };
 };
-
-export function resolveTelegramPromptContextTimestampMs(
-  payload: Pick<ReplyPayload, "channelData">,
-): number | undefined {
-  const telegramData = payload.channelData?.telegram as
-    | TelegramPromptContextChannelData
-    | undefined;
-  const timestamp = telegramData?.promptContextTimestampMs;
-  return typeof timestamp === "number" && Number.isFinite(timestamp) ? timestamp : undefined;
-}
-
-export function withTelegramPromptContextTimestampMs(
-  payload: ReplyPayload,
-  timestampMs: number | undefined,
-): ReplyPayload {
-  if (timestampMs === undefined) {
-    return payload;
-  }
-  const telegramData = payload.channelData?.telegram as
-    | TelegramPromptContextChannelData
-    | undefined;
-  return {
-    ...payload,
-    channelData: {
-      ...payload.channelData,
-      telegram: {
-        ...telegramData,
-        promptContextTimestampMs: timestampMs,
-      },
-    },
-  };
-}
 
 type TelegramOutboundGroupHistoryRecord = {
   chatId: string | number;

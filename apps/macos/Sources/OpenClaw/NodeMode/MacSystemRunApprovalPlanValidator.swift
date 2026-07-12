@@ -1,6 +1,5 @@
 import CryptoKit
 import Foundation
-import OpenClawIPC
 import OpenClawKit
 
 enum MacSystemRunApprovalPlanValidator {

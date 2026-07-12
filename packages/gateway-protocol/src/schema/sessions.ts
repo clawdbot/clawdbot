@@ -1,6 +1,7 @@
 // Gateway Protocol schema module defines protocol validation shapes.
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { ErrorShapeSchema } from "./frames.js";
 import { PluginJsonValueSchema } from "./plugins.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
 
@@ -422,6 +423,7 @@ export const SessionsCreateResultSchema = Type.Object(
     sessionId: Type.Optional(NonEmptyString),
     entry: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
     runStarted: Type.Optional(Type.Boolean()),
+    runError: Type.Optional(ErrorShapeSchema),
     worktree: Type.Optional(SessionWorktreeInfoSchema),
   },
   { additionalProperties: true },
@@ -446,6 +448,8 @@ export const SessionsMessagesSubscribeParamsSchema = Type.Object(
   {
     key: NonEmptyString,
     agentId: Type.Optional(NonEmptyString),
+    /** Opt in to sanitized durable approval events for this session and its descendants. */
+    includeApprovals: Type.Optional(Type.Literal(true)),
   },
   { additionalProperties: false },
 );

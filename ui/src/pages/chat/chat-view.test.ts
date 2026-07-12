@@ -717,6 +717,47 @@ describe("chat conversation width", () => {
   });
 });
 
+describe("chat history pagination", () => {
+  it("renders the auto-load sentinel and a spinner while older history loads", () => {
+    const container = renderChatView({
+      historyPagination: {
+        loading: true,
+        manualFallback: false,
+        onLoadOlder: () => undefined,
+      },
+    });
+    const threadInner = requireElement(container, ".chat-thread-inner", "chat thread inner");
+    const sentinel = requireElement(container, ".chat-history-sentinel", "history sentinel");
+
+    expect(threadInner.firstElementChild).toBe(sentinel);
+    expect(sentinel.querySelector(".session-run-spinner")).not.toBeNull();
+    expect(sentinel.querySelector('[role="status"]')?.textContent?.trim()).toBe(
+      t("common.loading"),
+    );
+    expect(sentinel.querySelector("button")).toBeNull();
+  });
+
+  it("keeps a manual button only when IntersectionObserver is unavailable", () => {
+    const onLoadOlder = vi.fn();
+    const container = renderChatView({
+      historyPagination: {
+        loading: false,
+        manualFallback: true,
+        onLoadOlder,
+      },
+    });
+    const button = requireElement(
+      container,
+      ".chat-history-fallback",
+      "history fallback",
+    ) as HTMLButtonElement;
+
+    expect(button.textContent?.trim()).toBe(t("chat.loadOlder"));
+    button.click();
+    expect(onLoadOlder).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("direct thread avatar mode", () => {
   function sessionsListWithKind(sessionKey: string, kind: "direct" | "group" | "global") {
     return {

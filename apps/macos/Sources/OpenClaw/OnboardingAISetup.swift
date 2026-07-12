@@ -1,7 +1,6 @@
 import Foundation
 import Observation
 import OpenClawChatUI
-import OpenClawIPC
 import OpenClawKit
 import OpenClawProtocol
 

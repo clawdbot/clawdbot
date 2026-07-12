@@ -240,7 +240,7 @@ function trimToValue(value: string | undefined) {
 const positiveIntegerPattern = /^[1-9]\d*$/u;
 const SHORT_OPTION_TOKENS = new Set(["-h"]);
 
-function isMissingOptionValue(value: string | undefined) {
+function isMissingOptionValue(value: string) {
   return !value || SHORT_OPTION_TOKENS.has(value) || value.startsWith("--");
 }
 
@@ -330,9 +330,12 @@ export function parseArgs(argvInput: string[]): Options {
   const seenSingleValueOptions = new Set<string>();
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
+    if (arg === undefined) {
+      usage();
+    }
     const readValue = (options: { repeatable?: boolean } = {}) => {
       const value = argv[index + 1];
-      if (isMissingOptionValue(value)) {
+      if (value === undefined || isMissingOptionValue(value)) {
         usage();
       }
       if (!options.repeatable) {

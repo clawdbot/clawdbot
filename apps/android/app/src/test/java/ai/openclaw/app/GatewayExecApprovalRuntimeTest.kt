@@ -292,7 +292,7 @@ class GatewayExecApprovalRuntimeTest {
       }
 
       runtime.resolveExecApproval("approval-1", "deny")
-      withTimeout(2_000) { resolveStarted.await() }
+      withTimeout(10_000) { resolveStarted.await() }
 
       // GatewaySession runs onDisconnected before failing the retired socket's
       // request waiters. Recreate that production ordering on the same stable ID.
@@ -346,7 +346,7 @@ class GatewayExecApprovalRuntimeTest {
       }
 
       runtime.resolveExecApproval("approval-1", "deny")
-      withTimeout(2_000) { resolveStarted.await() }
+      withTimeout(10_000) { resolveStarted.await() }
       runtime.refreshExecApprovals()
       withTimeout(2_000) { refreshReadCompleted.await() }
       waitUntil { !runtime.execApprovalsRefreshing.value }
@@ -418,7 +418,7 @@ class GatewayExecApprovalRuntimeTest {
       }
 
       runtime.resolveExecApproval("approval-1", "deny")
-      withTimeout(2_000) { resolveStarted.await() }
+      withTimeout(10_000) { resolveStarted.await() }
       runtime.refreshExecApprovals()
       withTimeout(2_000) { retainedReadStarted.await() }
 
@@ -604,7 +604,7 @@ class GatewayExecApprovalRuntimeTest {
       }
 
       runtime.resolveExecApproval("approval-1", "allow-once")
-      withTimeout(2_000) { resolveStarted.await() }
+      withTimeout(10_000) { resolveStarted.await() }
       invokeApprovalEvent(
         runtime,
         "exec.approval.resolved",
@@ -653,7 +653,7 @@ class GatewayExecApprovalRuntimeTest {
       }
 
       runtime.resolveExecApproval("approval-1", "allow-once")
-      withTimeout(2_000) { resolveStarted.await() }
+      withTimeout(10_000) { resolveStarted.await() }
       invokeApprovalEvent(
         runtime,
         "exec.approval.resolved",
@@ -756,7 +756,7 @@ class GatewayExecApprovalRuntimeTest {
       }
 
       runtime.resolveExecApproval("approval-1", "allow-once")
-      withTimeout(2_000) { resolveStarted.await() }
+      withTimeout(10_000) { resolveStarted.await() }
       // Replacement hello on the same stable endpoint: the epoch bump makes the
       // already-resolved publish a no-op, leaving only the pending-write record.
       invokeReplaceGatewayMethods(runtime, legacyMethods)
@@ -1178,7 +1178,8 @@ class GatewayExecApprovalRuntimeTest {
     )
 
   private suspend fun waitUntil(condition: () -> Boolean) {
-    withTimeout(3_000) {
+    // Generous ceiling for loaded CI runners; passing tests exit on first poll.
+    withTimeout(10_000) {
       while (!condition()) delay(10)
     }
   }

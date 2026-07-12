@@ -154,28 +154,37 @@ async function requestApproval(input: {
     severity: input.kind === "write" ? "warning" : "info",
     toolName: input.op,
   });
+  const approvalDecision: unknown = approval.decision;
 
-  if (approval.decision === "deny" || approval.decision === null || !approval.decision) {
+  if (approvalDecision !== "allow-once" && approvalDecision !== "allow-always") {
+    const unavailable = approvalDecision === null || approvalDecision === undefined;
+    const deniedByOperator = approvalDecision === "deny";
+    const reason = deniedByOperator
+      ? "operator denied"
+      : unavailable
+        ? "no operator available"
+        : "invalid approval decision";
     await appendFileTransferAudit({
       op: input.op,
       nodeId: input.ctx.nodeId,
       nodeDisplayName,
       requestedPath: input.path,
       decision: "denied:approval",
-      reason: approval.decision === "deny" ? "operator denied" : "no operator available",
+      reason,
       durationMs: Date.now() - input.startedAt,
     });
     return {
       ok: false,
-      code: approval.decision === "deny" ? "APPROVAL_DENIED" : "APPROVAL_UNAVAILABLE",
-      message:
-        approval.decision === "deny"
+      code: unavailable ? "APPROVAL_UNAVAILABLE" : "APPROVAL_DENIED",
+      message: unavailable
+        ? `${input.op} APPROVAL_UNAVAILABLE: no operator client connected to approve the request`
+        : deniedByOperator
           ? `${input.op} APPROVAL_DENIED: operator denied the prompt`
-          : `${input.op} APPROVAL_UNAVAILABLE: no operator client connected to approve the request`,
+          : `${input.op} APPROVAL_DENIED: invalid approval decision`,
     };
   }
 
-  if (approval.decision === "allow-always") {
+  if (approvalDecision === "allow-always") {
     try {
       await persistAllowAlways({
         nodeId: input.ctx.nodeId,
@@ -228,7 +237,7 @@ async function requestApproval(input: {
     nodeId: input.ctx.nodeId,
     nodeDisplayName,
     requestedPath: input.path,
-    decision: approval.decision === "allow-always" ? "allowed:always" : "allowed:once",
+    decision: approvalDecision === "allow-always" ? "allowed:always" : "allowed:once",
     durationMs: Date.now() - input.startedAt,
   });
   return {

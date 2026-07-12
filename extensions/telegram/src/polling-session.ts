@@ -41,6 +41,7 @@ import {
   claimNextTelegramSpooledUpdate,
   completeTelegramSpooledUpdateWithRetry,
   failTelegramSpooledUpdateClaim,
+  isTelegramSpooledCorruptClaimOwnedByOtherLiveProcess,
   isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess,
   listTelegramSpooledUpdateClaims,
   listTelegramSpooledUpdates,
@@ -948,6 +949,11 @@ export class TelegramPollingSession {
         !this.#isDeferredSpooledUpdateClaim(claim) &&
         !activeLaneKeys.has(this.#spooledUpdateLaneKey(claim)) &&
         !isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess(claim, {
+          maxAgeMs: TELEGRAM_SPOOLED_UPDATE_CLAIM_LEASE_MS,
+        }),
+      shouldRecoverCorrupt: (claim) =>
+        !(claim.laneKey && activeLaneKeys.has(claim.laneKey)) &&
+        !isTelegramSpooledCorruptClaimOwnedByOtherLiveProcess(claim, {
           maxAgeMs: TELEGRAM_SPOOLED_UPDATE_CLAIM_LEASE_MS,
         }),
     });

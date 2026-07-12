@@ -53,6 +53,7 @@ const probeGateway = vi.fn<
 const callGatewayCli = vi.fn();
 const isRestartEnabled = vi.fn<(config?: { commands?: unknown }) => boolean>(() => true);
 const loadConfig = vi.hoisted(() => vi.fn(() => ({})));
+const readActiveGatewayLockPort = vi.hoisted(() => vi.fn<() => Promise<number | undefined>>());
 const recoverInstalledLaunchAgent = vi.hoisted(() => vi.fn());
 const repairLoadedGatewayServiceForStart = vi.hoisted(() => vi.fn());
 const findInstalledSystemdGatewayScope = vi.hoisted(() =>
@@ -101,6 +102,10 @@ vi.mock("../../infra/gateway-processes.js", () => ({
   signalVerifiedGatewayPidSync: (pid: number, signal: "SIGTERM" | "SIGUSR1") =>
     signalVerifiedGatewayPidSync(pid, signal),
   formatGatewayPidList: (pids: number[]) => formatGatewayPidList(pids),
+}));
+
+vi.mock("../../infra/gateway-lock.js", () => ({
+  readActiveGatewayLockPort: () => readActiveGatewayLockPort(),
 }));
 
 vi.mock("../../gateway/probe.js", () => ({
@@ -214,6 +219,7 @@ describe("runDaemonRestart health checks", () => {
     callGatewayCli.mockReset();
     isRestartEnabled.mockReset();
     loadConfig.mockReset();
+    readActiveGatewayLockPort.mockReset();
     recoverInstalledLaunchAgent.mockReset();
     repairLoadedGatewayServiceForStart.mockReset();
 
@@ -224,6 +230,7 @@ describe("runDaemonRestart health checks", () => {
     service.restart.mockResolvedValue({ outcome: "completed" });
     runServiceStart.mockResolvedValue(undefined);
     recoverInstalledLaunchAgent.mockResolvedValue(null);
+    readActiveGatewayLockPort.mockResolvedValue(undefined);
     findInstalledSystemdGatewayScope.mockReset();
     findInstalledSystemdGatewayScope.mockResolvedValue(null);
     restartSystemdService.mockReset();
@@ -573,6 +580,26 @@ describe("runDaemonRestart health checks", () => {
     expect(waitForGatewayHealthyRestart).not.toHaveBeenCalled();
     expect(terminateStaleGatewayPids).not.toHaveBeenCalled();
     expect(service.restart).not.toHaveBeenCalled();
+  });
+
+  it("signals and verifies the active unmanaged port despite a config edit", async () => {
+    loadConfig.mockReturnValue({ gateway: { port: 19_001 } });
+    readActiveGatewayLockPort.mockResolvedValue(18_789);
+    findVerifiedGatewayListenerPidsOnPortSync.mockImplementation((port) =>
+      port === 18_789 ? [4200] : [],
+    );
+    mockUnmanagedRestart({ runPostRestartCheck: true });
+
+    await runDaemonRestart({ json: true });
+
+    expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(18_789);
+    expect(probeGateway).toHaveBeenCalledWith(
+      expect.objectContaining({ url: "ws://127.0.0.1:18789" }),
+    );
+    expect(signalVerifiedGatewayPidSync).toHaveBeenCalledWith(4200, "SIGUSR1");
+    expect(waitForGatewayHealthyListener).toHaveBeenCalledWith(
+      expect.objectContaining({ port: 18_789 }),
+    );
   });
 
   it("prefers launchd repair over unmanaged restart when an installed LaunchAgent is unloaded", async () => {

@@ -398,28 +398,6 @@ struct LowCoverageHelperTests {
         #expect(!body.contains("top-secret"))
     }
 
-    @Test @MainActor func `menu context card injector inserts and finds index`() {
-        let injector = MenuContextCardInjector()
-        let menu = NSMenu()
-        menu.minimumWidth = 280
-        menu.addItem(NSMenuItem(title: "Active", action: nil, keyEquivalent: ""))
-        menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "Send Heartbeats", action: nil, keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "Quit", action: nil, keyEquivalent: "q"))
-
-        let idx = injector._testFindInsertIndex(in: menu)
-        #expect(idx == 1)
-        #expect(injector._testInitialCardWidth(for: menu) >= 300)
-
-        injector._testSetCache(rows: [SessionRow.previewRows[0]], errorText: nil, updatedAt: Date())
-        injector.menuWillOpen(menu)
-        injector.menuDidClose(menu)
-
-        let fallbackMenu = NSMenu()
-        fallbackMenu.addItem(NSMenuItem(title: "First", action: nil, keyEquivalent: ""))
-        #expect(injector._testFindInsertIndex(in: fallbackMenu) == 1)
-    }
-
     @Test @MainActor func `canvas window helper functions`() throws {
         #expect(CanvasWindowController._testSanitizeSessionKey("  main ") == "main")
         #expect(CanvasWindowController._testSanitizeSessionKey("bad/..") == "bad___")

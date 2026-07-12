@@ -48,7 +48,6 @@ vi.resetModules();
 
 const {
   resolveManifestDeprecatedProviderAuthChoice,
-  resolveManifestProviderApiKeyChoice,
   resolveManifestProviderAuthChoice,
   resolveManifestProviderAuthChoices,
   resolveManifestProviderOnboardAuthFlags,
@@ -697,7 +696,7 @@ describe("provider auth choice manifest helpers", () => {
     ]);
   });
 
-  it("resolves api-key choices through manifest-owned provider auth aliases", () => {
+  it("resolves manifest-owned provider auth aliases", () => {
     setManifestPlugins([
       {
         id: "fixture-provider",
@@ -722,10 +721,5 @@ describe("provider auth choice manifest helpers", () => {
     const resolvedProviderId = resolveProviderIdForAuth("fixture-provider-plan");
     expect(pluginRegistryMocks.loadPluginMetadataSnapshot).toHaveBeenCalled();
     expect(resolvedProviderId).toBe("fixture-provider");
-    expect(
-      resolveManifestProviderApiKeyChoice({
-        providerId: "fixture-provider-plan",
-      })?.choiceId,
-    ).toBe("fixture-provider-api-key");
   });
 });

@@ -504,7 +504,7 @@ function buildSlackPresentationButtonBlock(
 }
 
 /** True when every portable table fits Slack's native per-message table budget. */
-export function canRenderSlackPresentationTables(
+function canRenderSlackPresentationTables(
   presentation: MessagePresentation,
   options: SlackBlockRenderOptions = {},
 ): boolean {
@@ -596,20 +596,6 @@ export function canRenderSlackPresentation(
     }
   }
   return true;
-}
-
-/** True when every non-table block survives while tables use text fallback. */
-export function canRenderSlackPresentationWithoutTables(
-  presentation: MessagePresentation,
-  options: SlackBlockRenderOptions = {},
-): boolean {
-  return canRenderSlackPresentation(
-    {
-      ...presentation,
-      blocks: presentation.blocks.filter((block) => block.type !== "table"),
-    },
-    options,
-  );
 }
 
 function buildSlackPresentationSelectBlock(

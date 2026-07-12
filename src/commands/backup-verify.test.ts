@@ -275,6 +275,47 @@ describe("backupVerifyCommand", () => {
     );
   });
 
+  it("rejects canonical SQLite snapshots with foreign-key violations", async () => {
+    const stateAssetArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw`;
+    const sqliteArchivePath = `${stateAssetArchivePath}/state/openclaw.sqlite`;
+    const sqlitePayload = await createSqlitePayload((database) => {
+      database.exec(`
+        PRAGMA foreign_keys = OFF;
+        CREATE TABLE schema_meta (
+          meta_key TEXT NOT NULL PRIMARY KEY,
+          role TEXT NOT NULL
+        );
+        INSERT INTO schema_meta (meta_key, role) VALUES ('primary', 'global');
+        CREATE TABLE parents (id INTEGER PRIMARY KEY);
+        CREATE TABLE children (
+          id INTEGER PRIMARY KEY,
+          parent_id INTEGER NOT NULL REFERENCES parents(id)
+        );
+        INSERT INTO children (id, parent_id) VALUES (1, 99);
+      `);
+    });
+
+    await withBrokenArchiveFixture(
+      {
+        tempPrefix: "openclaw-backup-foreign-key-",
+        manifestAssetArchivePath: stateAssetArchivePath,
+        payloads: [
+          {
+            fileName: "openclaw.sqlite",
+            contents: sqlitePayload,
+            archivePath: sqliteArchivePath,
+          },
+        ],
+      },
+      async (archivePath) => {
+        const runtime = createBackupVerifyRuntime();
+        await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
+          /Backup SQLite snapshot failed verification.*foreign_key_check failed.*children row 1 references parents \(foreign key 0\)/iu,
+        );
+      },
+    );
+  });
+
   it("does not interpret plugin-owned SQLite schemas without their owner runtime", async () => {
     const stateAssetArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw`;
     const sqliteArchivePath = `${stateAssetArchivePath}/plugins/dedicated/custom.sqlite`;

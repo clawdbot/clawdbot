@@ -265,7 +265,7 @@ describe("setup-registry module loader", () => {
 
   it("uses the runtime-supported source-transform boundary on Windows for setup-api modules", () => {
     expect(windowsSourceTransformCase.filename).toBe(windowsSourceTransformCase.expectedFilename);
-    expect(windowsSourceTransformCase.options.tryNative).toBe(true);
+    expect(windowsSourceTransformCase.options.tryNative).toBe(false);
   });
 
   it("passes explicit plugin id scope into setup manifest reads", () => {

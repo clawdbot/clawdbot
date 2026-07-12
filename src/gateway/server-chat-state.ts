@@ -229,10 +229,15 @@ export type SessionEventSubscriberRegistry = {
 };
 
 export type SessionMessageSubscriberRegistry = {
-  subscribe: (connId: string, sessionKey: string) => void;
+  subscribe: (
+    connId: string,
+    sessionKey: string,
+    opts?: { includeApprovals?: boolean },
+  ) => (() => void) | undefined;
   unsubscribe: (connId: string, sessionKey: string) => void;
   unsubscribeAll: (connId: string) => void;
   get: (sessionKey: string) => ReadonlySet<string>;
+  getApprovals: (sessionKey: string) => ReadonlySet<string>;
   clear: () => void;
 };
 
@@ -276,17 +281,23 @@ export function createSessionEventSubscriberRegistry(): SessionEventSubscriberRe
 export function createSessionMessageSubscriberRegistry(): SessionMessageSubscriberRegistry {
   const sessionToConnIds = new Map<string, Set<string>>();
   const connToSessionKeys = new Map<string, Set<string>>();
+  const approvalSessionToConnIds = new Map<string, Set<string>>();
+  const connToApprovalSessionKeys = new Map<string, Set<string>>();
   const empty = new Set<string>();
 
   const normalize = (value: string): string => value.trim();
 
-  return {
-    subscribe: (connId: string, sessionKey: string) => {
+  const registry: SessionMessageSubscriberRegistry = {
+    subscribe: (connId: string, sessionKey: string, opts) => {
       const normalizedConnId = normalize(connId);
       const normalizedSessionKey = normalize(sessionKey);
       if (!normalizedConnId || !normalizedSessionKey) {
-        return;
+        return undefined;
       }
+      const hadMessages =
+        sessionToConnIds.get(normalizedSessionKey)?.has(normalizedConnId) ?? false;
+      const hadApprovals =
+        approvalSessionToConnIds.get(normalizedSessionKey)?.has(normalizedConnId) ?? false;
       const connIds = sessionToConnIds.get(normalizedSessionKey) ?? new Set<string>();
       connIds.add(normalizedConnId);
       sessionToConnIds.set(normalizedSessionKey, connIds);
@@ -294,6 +305,42 @@ export function createSessionMessageSubscriberRegistry(): SessionMessageSubscrib
       const sessionKeys = connToSessionKeys.get(normalizedConnId) ?? new Set<string>();
       sessionKeys.add(normalizedSessionKey);
       connToSessionKeys.set(normalizedConnId, sessionKeys);
+
+      if (opts?.includeApprovals) {
+        const approvalConnIds =
+          approvalSessionToConnIds.get(normalizedSessionKey) ?? new Set<string>();
+        approvalConnIds.add(normalizedConnId);
+        approvalSessionToConnIds.set(normalizedSessionKey, approvalConnIds);
+
+        const approvalSessionKeys =
+          connToApprovalSessionKeys.get(normalizedConnId) ?? new Set<string>();
+        approvalSessionKeys.add(normalizedSessionKey);
+        connToApprovalSessionKeys.set(normalizedConnId, approvalSessionKeys);
+      } else {
+        const approvalConnIds = approvalSessionToConnIds.get(normalizedSessionKey);
+        approvalConnIds?.delete(normalizedConnId);
+        if (approvalConnIds?.size === 0) {
+          approvalSessionToConnIds.delete(normalizedSessionKey);
+        }
+        const approvalSessionKeys = connToApprovalSessionKeys.get(normalizedConnId);
+        approvalSessionKeys?.delete(normalizedSessionKey);
+        if (approvalSessionKeys?.size === 0) {
+          connToApprovalSessionKeys.delete(normalizedConnId);
+        }
+      }
+      // Replay setup subscribes before reading its snapshot. Preserve the exact
+      // prior state so a failed read cannot leave a ghost or remove a retry.
+      return () => {
+        if (!hadMessages) {
+          registry.unsubscribe(normalizedConnId, normalizedSessionKey);
+          return;
+        }
+        registry.subscribe(
+          normalizedConnId,
+          normalizedSessionKey,
+          hadApprovals ? { includeApprovals: true } : undefined,
+        );
+      };
     },
     unsubscribe: (connId: string, sessionKey: string) => {
       const normalizedConnId = normalize(connId);
@@ -313,6 +360,20 @@ export function createSessionMessageSubscriberRegistry(): SessionMessageSubscrib
         sessionKeys.delete(normalizedSessionKey);
         if (sessionKeys.size === 0) {
           connToSessionKeys.delete(normalizedConnId);
+        }
+      }
+      const approvalConnIds = approvalSessionToConnIds.get(normalizedSessionKey);
+      if (approvalConnIds) {
+        approvalConnIds.delete(normalizedConnId);
+        if (approvalConnIds.size === 0) {
+          approvalSessionToConnIds.delete(normalizedSessionKey);
+        }
+      }
+      const approvalSessionKeys = connToApprovalSessionKeys.get(normalizedConnId);
+      if (approvalSessionKeys) {
+        approvalSessionKeys.delete(normalizedSessionKey);
+        if (approvalSessionKeys.size === 0) {
+          connToApprovalSessionKeys.delete(normalizedConnId);
         }
       }
     },
@@ -336,6 +397,16 @@ export function createSessionMessageSubscriberRegistry(): SessionMessageSubscrib
         }
       }
       connToSessionKeys.delete(normalizedConnId);
+
+      const approvalSessionKeys = connToApprovalSessionKeys.get(normalizedConnId);
+      for (const sessionKey of approvalSessionKeys ?? []) {
+        const connIds = approvalSessionToConnIds.get(sessionKey);
+        connIds?.delete(normalizedConnId);
+        if (connIds?.size === 0) {
+          approvalSessionToConnIds.delete(sessionKey);
+        }
+      }
+      connToApprovalSessionKeys.delete(normalizedConnId);
     },
     get: (sessionKey: string) => {
       const normalizedSessionKey = normalize(sessionKey);
@@ -344,11 +415,21 @@ export function createSessionMessageSubscriberRegistry(): SessionMessageSubscrib
       }
       return sessionToConnIds.get(normalizedSessionKey) ?? empty;
     },
+    getApprovals: (sessionKey: string) => {
+      const normalizedSessionKey = normalize(sessionKey);
+      if (!normalizedSessionKey) {
+        return empty;
+      }
+      return approvalSessionToConnIds.get(normalizedSessionKey) ?? empty;
+    },
     clear: () => {
       sessionToConnIds.clear();
       connToSessionKeys.clear();
+      approvalSessionToConnIds.clear();
+      connToApprovalSessionKeys.clear();
     },
   };
+  return registry;
 }
 
 /** Create the run-id recipient registry used for streaming tool events. */

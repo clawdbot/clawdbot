@@ -408,6 +408,9 @@ class NodeRuntime private constructor(
     val stableId: String,
     val id: String,
     val decision: String,
+    // Captured at registration: canonical readback needs it after a refresh has
+    // already replaced the visible rows, or the legacy get parse drops the row.
+    val createdAtMs: Long?,
   ) {
     @Volatile var requestInFlight: Boolean = true
   }
@@ -5016,7 +5019,13 @@ class NodeRuntime private constructor(
           val currentRows = _execApprovals.value
           if (currentRows.none { it.id == id && it.resolvingDecision == null }) return@synchronized
           if (pendingExecApprovalWrites.containsKey(id)) return@synchronized
-          val pendingWrite = PendingExecApprovalWrite(gatewayScope.stableId, id, decision)
+          val pendingWrite =
+            PendingExecApprovalWrite(
+              gatewayScope.stableId,
+              id,
+              decision,
+              currentRows.firstOrNull { it.id == id }?.createdAtMs,
+            )
           pendingExecApprovalWrites[id] = pendingWrite
           registeredWrite = pendingWrite
           invalidateExecApprovalRefreshes()
@@ -5232,7 +5241,9 @@ class NodeRuntime private constructor(
           gatewayScope = gatewayScope,
           methodsSnapshot = methodsSnapshot,
           id = pendingWrite.id,
-          createdAtMs = _execApprovals.value.firstOrNull { it.id == pendingWrite.id }?.createdAtMs,
+          createdAtMs =
+            pendingWrite.createdAtMs
+              ?: _execApprovals.value.firstOrNull { it.id == pendingWrite.id }?.createdAtMs,
         )
       } catch (_: Throwable) {
         return

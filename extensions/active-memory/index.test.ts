@@ -8,13 +8,11 @@ import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import { parseSqliteSessionFileMarker } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import plugin, { testing } from "./index.js";
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
 
 // Match only lone surrogates so valid supplementary-plane characters remain allowed.
 const UNPAIRED_SURROGATE_RE =
@@ -30,6 +28,16 @@ async function expectPathMissing(targetPath: string): Promise<void> {
   throw new Error(`expected missing path ${targetPath}`);
 }
 
+async function expectSingleTranscriptArtifact(directory: string): Promise<string> {
+  const files = await fs.readdir(directory);
+  expect(files).toEqual([expect.stringMatching(/^active-memory-[a-z0-9]+-[a-f0-9]{8}\.jsonl$/)]);
+  const filename = files[0];
+  if (!filename) {
+    throw new Error(`expected active-memory transcript in ${directory}`);
+  }
+  return path.join(directory, filename);
+}
+
 const hoisted = vi.hoisted(() => {
   const sessionStore: Record<string, Record<string, unknown>> = {
     "agent:main:main": {
@@ -39,6 +47,9 @@ const hoisted = vi.hoisted(() => {
   };
   return {
     closeActiveMemorySearchManager: vi.fn(async () => {}),
+    cleanupSessionLifecycleArtifacts: vi.fn(),
+    patchSessionEntry: vi.fn(),
+    runtimeTranscriptFiles: {} as Record<string, string>,
     sessionStore,
     updateSessionStore: vi.fn(
       async (
@@ -61,7 +72,44 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
   );
   return {
     ...actual,
+    cleanupSessionLifecycleArtifacts: hoisted.cleanupSessionLifecycleArtifacts,
+    patchSessionEntry: hoisted.patchSessionEntry,
     updateSessionStore: hoisted.updateSessionStore,
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/session-transcript-runtime")
+  >("openclaw/plugin-sdk/session-transcript-runtime");
+  return {
+    ...actual,
+    readSessionTranscriptEvents: async (
+      target: Parameters<typeof actual.readSessionTranscriptEvents>[0],
+    ) => {
+      const testSessionFile = hoisted.runtimeTranscriptFiles[target.sessionId];
+      if (testSessionFile) {
+        try {
+          const content = await fs.readFile(testSessionFile, "utf8");
+          return content
+            .split("\n")
+            .map((line) => line.trim())
+            .filter(Boolean)
+            .flatMap((line) => {
+              try {
+                return [JSON.parse(line) as unknown];
+              } catch {
+                return [];
+              }
+            });
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+            throw error;
+          }
+        }
+      }
+      return await actual.readSessionTranscriptEvents(target);
+    },
   };
 });
 
@@ -80,6 +128,41 @@ describe("active-memory plugin", () => {
   const hookOptions: Record<string, Record<string, unknown> | undefined> = {};
   const registeredCommands: Record<string, any> = {};
   const runEmbeddedAgent = vi.fn();
+  const runtimeRunEmbeddedAgent = vi.fn(async (params: Record<string, unknown>) => {
+    const sessionId =
+      typeof params.sessionId === "string" && params.sessionId.length > 0
+        ? params.sessionId
+        : "unknown";
+    const testSessionFile = path.join(stateDir, `${sessionId}.jsonl`);
+    hoisted.runtimeTranscriptFiles[sessionId] = testSessionFile;
+    const result = await runEmbeddedAgent({ ...params, sessionFile: testSessionFile });
+    if (typeof result !== "object" || result === null || Array.isArray(result)) {
+      return result;
+    }
+    const resultRecord = result as Record<string, unknown>;
+    const meta =
+      typeof resultRecord.meta === "object" &&
+      resultRecord.meta !== null &&
+      !Array.isArray(resultRecord.meta)
+        ? (resultRecord.meta as Record<string, unknown>)
+        : {};
+    const agentMeta =
+      typeof meta.agentMeta === "object" &&
+      meta.agentMeta !== null &&
+      !Array.isArray(meta.agentMeta)
+        ? (meta.agentMeta as Record<string, unknown>)
+        : {};
+    return {
+      ...resultRecord,
+      meta: {
+        ...meta,
+        agentMeta: {
+          sessionFile: testSessionFile,
+          ...agentMeta,
+        },
+      },
+    };
+  });
   let stateDir = "";
   let configFile: Record<string, unknown> = {};
   let pluginConfig: Record<string, unknown> = {
@@ -132,7 +215,7 @@ describe("active-memory plugin", () => {
     logger: { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
     runtime: {
       agent: {
-        runEmbeddedAgent,
+        runEmbeddedAgent: runtimeRunEmbeddedAgent,
         session: {
           resolveStorePath: vi.fn(() => path.join(stateDir, "sessions.json")),
           loadSessionStore: vi.fn(() => hoisted.sessionStore),
@@ -145,6 +228,11 @@ describe("active-memory plugin", () => {
               sessionKey,
               entry,
             })),
+          ),
+          upsertSessionEntry: vi.fn(
+            async (params: { sessionKey: string; entry: Record<string, unknown> }) => {
+              hoisted.sessionStore[params.sessionKey] = { ...params.entry };
+            },
           ),
           patchSessionEntry: vi.fn(
             async (params: {
@@ -333,12 +421,14 @@ describe("active-memory plugin", () => {
     const calls = runEmbeddedAgent.mock.calls;
     return requireRecord(calls[calls.length - 1]?.[0], "expected embedded run params");
   };
+  const lastRuntimeEmbeddedRunParams = () => {
+    const calls = runtimeRunEmbeddedAgent.mock.calls;
+    return requireRecord(calls[calls.length - 1]?.[0], "expected runtime embedded run params");
+  };
   const lastEmbeddedPrompt = () =>
     requireNonEmptyString(lastEmbeddedRunParams().prompt, "expected embedded prompt");
   const lastEmbeddedSessionKey = () =>
     requireNonEmptyString(lastEmbeddedRunParams().sessionKey, "expected embedded session key");
-  const lastEmbeddedSessionFile = () =>
-    requireNonEmptyString(lastEmbeddedRunParams().sessionFile, "expected embedded session file");
   const lastSessionStoreUpdater = () => {
     const calls = hoisted.updateSessionStore.mock.calls;
     const updater = calls[calls.length - 1]?.[1] as
@@ -407,6 +497,9 @@ describe("active-memory plugin", () => {
     for (const key of Object.keys(hoisted.sessionStore)) {
       delete hoisted.sessionStore[key];
     }
+    for (const key of Object.keys(hoisted.runtimeTranscriptFiles)) {
+      delete hoisted.runtimeTranscriptFiles[key];
+    }
     hoisted.sessionStore["agent:main:main"] = {
       sessionId: "s-main",
       updatedAt: 0,
@@ -426,6 +519,53 @@ describe("active-memory plugin", () => {
         payloads: [{ text: "- lemon pepper wings\n- blue cheese" }],
       };
     });
+    hoisted.patchSessionEntry.mockImplementation(
+      async (params: {
+        fallbackEntry?: Record<string, unknown>;
+        replaceEntry?: boolean;
+        sessionKey: string;
+        skipMaintenance?: boolean;
+        update: (
+          entry: Record<string, unknown>,
+          context: { existingEntry?: Record<string, unknown> },
+        ) => Record<string, unknown> | null;
+      }) => {
+        const existingEntry = hoisted.sessionStore[params.sessionKey];
+        const entry = existingEntry ?? params.fallbackEntry;
+        if (!entry) {
+          return null;
+        }
+        const patch = params.update({ ...entry }, { existingEntry });
+        if (!patch) {
+          return existingEntry ?? entry;
+        }
+        const next = params.replaceEntry ? { ...patch } : { ...entry, ...patch };
+        hoisted.sessionStore[params.sessionKey] = next;
+        return next;
+      },
+    );
+    hoisted.cleanupSessionLifecycleArtifacts.mockImplementation(
+      async (params: { sessionKeySegmentPrefix: string }) => {
+        const entry = Object.entries(hoisted.sessionStore).find(([sessionKey]) => {
+          const parsed = sessionKey.split(":").slice(2).join(":");
+          return parsed.startsWith(params.sessionKeySegmentPrefix);
+        });
+        if (!entry) {
+          return { archivedTranscriptArtifacts: 0, removedEntries: 0 };
+        }
+        const [sessionKey, sessionEntry] = entry;
+        const sessionId = sessionEntry.sessionId;
+        if (typeof sessionId === "string") {
+          const testSessionFile = hoisted.runtimeTranscriptFiles[sessionId];
+          if (testSessionFile) {
+            await fs.rm(testSessionFile, { force: true });
+            delete hoisted.runtimeTranscriptFiles[sessionId];
+          }
+        }
+        delete hoisted.sessionStore[sessionKey];
+        return { archivedTranscriptArtifacts: 0, removedEntries: 1 };
+      },
+    );
     testing.resetActiveRecallCacheForTests();
     testing.setTimeoutPartialDataGraceMsForTests(5);
     plugin.register(api as unknown as OpenClawPluginApi);
@@ -496,6 +636,147 @@ describe("active-memory plugin", () => {
     );
 
     expect(lastEmbeddedRunParams().lane).toBe("active-memory");
+  });
+
+  it("creates and removes the exact SQLite recall session around the embedded run", async () => {
+    let persistedEntryAtRun: Record<string, unknown> | undefined;
+    runEmbeddedAgent.mockImplementationOnce(async (params: Record<string, unknown>) => {
+      const sessionKey = requireNonEmptyString(params.sessionKey, "expected embedded session key");
+      persistedEntryAtRun = structuredClone(hoisted.sessionStore[sessionKey]);
+      const sessionFile = requireNonEmptyString(
+        params.sessionFile,
+        "expected test transcript artifact",
+      );
+      await writeUsableMemoryTranscript(sessionFile, "lemon pepper wings");
+      return { payloads: [{ text: "- lemon pepper wings" }] };
+    });
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order?", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    const runtimeParams = lastRuntimeEmbeddedRunParams();
+    const sessionId = requireNonEmptyString(runtimeParams.sessionId, "expected runtime session id");
+    const sessionKey = requireNonEmptyString(
+      runtimeParams.sessionKey,
+      "expected runtime session key",
+    );
+    const runtimeSessionFile = requireNonEmptyString(
+      runtimeParams.sessionFile,
+      "expected runtime session file",
+    );
+    expect(parseSqliteSessionFileMarker(runtimeSessionFile)).toEqual({
+      agentId: "main",
+      sessionId,
+      storePath: path.join(stateDir, "sessions.json"),
+    });
+    expect(persistedEntryAtRun).toMatchObject({
+      pluginOwnerId: "active-memory",
+      sessionId,
+      sessionFile: runtimeSessionFile,
+    });
+    expect(hoisted.patchSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fallbackEntry: expect.objectContaining({
+          pluginOwnerId: "active-memory",
+          sessionId,
+          sessionFile: runtimeSessionFile,
+        }),
+        replaceEntry: true,
+        sessionKey,
+        skipMaintenance: true,
+        storePath: path.join(stateDir, "sessions.json"),
+      }),
+    );
+    expect(hoisted.cleanupSessionLifecycleArtifacts).toHaveBeenCalledWith({
+      agentId: "main",
+      archiveRemovedEntryTranscripts: false,
+      orphanTranscriptMinAgeMs: 0,
+      sessionKeySegmentPrefix: parseAgentSessionKey(sessionKey)?.rest,
+      storePath: path.join(stateDir, "sessions.json"),
+      transcriptContentMarker: `"runId":"${sessionId}"`,
+    });
+    expect(hoisted.sessionStore[sessionKey]).toBeUndefined();
+    expectPrependContextContains(result, "lemon pepper wings");
+  });
+
+  it("uses a unique SQLite session key for repeated identical recalls", async () => {
+    const hookParams = {
+      agentId: "main",
+      trigger: "user",
+      sessionKey: "agent:main:main",
+      messageProvider: "webchat",
+    };
+    const event = { prompt: "what wings should i order?", messages: [] };
+
+    await hooks.before_prompt_build(event, hookParams);
+    const firstSessionKey = requireNonEmptyString(
+      lastRuntimeEmbeddedRunParams().sessionKey,
+      "expected first runtime session key",
+    );
+    testing.resetActiveRecallCacheForTests();
+    await hooks.before_prompt_build(event, hookParams);
+    const secondSessionKey = requireNonEmptyString(
+      lastRuntimeEmbeddedRunParams().sessionKey,
+      "expected second runtime session key",
+    );
+
+    expect(secondSessionKey).not.toBe(firstSessionKey);
+  });
+
+  it("retries transient SQLite recall cleanup failures", async () => {
+    hoisted.cleanupSessionLifecycleArtifacts.mockRejectedValueOnce(
+      new Error("session store is busy"),
+    );
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order? retry cleanup", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    expectPrependContextContains(result, "lemon pepper wings");
+    expect(hoisted.cleanupSessionLifecycleArtifacts).toHaveBeenCalledTimes(2);
+    expect(api.logger.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("failed to clean up recall session"),
+    );
+  });
+
+  it("cleans the transient workspace when SQLite recall cleanup retries are exhausted", async () => {
+    const rmSpy = vi.spyOn(fs, "rm");
+    hoisted.cleanupSessionLifecycleArtifacts.mockRejectedValue(
+      new Error("session store remains busy"),
+    );
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order? cleanup failure", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(result).toBeUndefined();
+    expect(hoisted.cleanupSessionLifecycleArtifacts).toHaveBeenCalledTimes(3);
+    expect(rmSpy).toHaveBeenCalledWith(expect.stringMatching(/openclaw-active-memory-.*/), {
+      recursive: true,
+      force: true,
+    });
+    expect(api.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("failed to clean up recall session"),
+    );
   });
 
   it("registers a session-scoped active-memory toggle command", async () => {
@@ -881,9 +1162,9 @@ describe("active-memory plugin", () => {
 
   it.each([
     {
-      label: "a reserved Codex harness key",
+      label: "a missing reserved Codex harness key",
       sessionKey: "agent:main:harness:codex:supervision:thread-1",
-      entry: { sessionId: "codex-1", updatedAt: 1 },
+      entry: undefined,
     },
     {
       label: "a model-locked session",
@@ -898,7 +1179,9 @@ describe("active-memory plugin", () => {
   ])(
     "skips recall before state or model side effects for $label",
     async ({ sessionKey, entry }) => {
-      hoisted.sessionStore[sessionKey] = entry;
+      if (entry) {
+        hoisted.sessionStore[sessionKey] = entry;
+      }
       const openKeyedStore = vi.spyOn(api.runtime.state, "openKeyedStore");
 
       const result = await hooks.before_prompt_build(
@@ -3274,6 +3557,19 @@ describe("active-memory plugin", () => {
     expect(result).toBeUndefined();
     expectLinesToContain(getActiveMemoryLines(sessionKey), "🧩 Active Memory: status=failed");
     expect(getActiveMemoryLines(sessionKey).join("\n")).not.toContain(
+      "must not be surfaced from generic errors",
+    );
+    const transcriptDir = path.join(
+      stateDir,
+      "plugins",
+      "active-memory",
+      "transcripts",
+      "agents",
+      "main",
+      "active-memory",
+    );
+    const transcriptPath = await expectSingleTranscriptArtifact(transcriptDir);
+    expect(await fs.readFile(transcriptPath, "utf8")).toContain(
       "must not be surfaced from generic errors",
     );
   });
@@ -5744,9 +6040,7 @@ describe("active-memory plugin", () => {
     );
 
     expect(mkdtempSpy).toHaveBeenCalled();
-    const sessionFile = lastEmbeddedSessionFile();
-    expect(sessionFile).toMatch(/openclaw-active-memory-.*\/session\.jsonl$/);
-    expect(rmSpy).toHaveBeenCalledWith(path.dirname(sessionFile), {
+    expect(rmSpy).toHaveBeenCalledWith(expect.stringMatching(/openclaw-active-memory-.*/), {
       recursive: true,
       force: true,
     });
@@ -5781,11 +6075,8 @@ describe("active-memory plugin", () => {
     );
     expect(mkdirSpy).toHaveBeenCalledWith(expectedDir, { recursive: true, mode: 0o700 });
     expect(mkdtempSpy).not.toHaveBeenCalled();
-    expect(lastEmbeddedSessionFile()).toMatch(
-      new RegExp(
-        `^${escapeRegExp(expectedDir)}${escapeRegExp(path.sep)}active-memory-[a-z0-9]+-[a-f0-9]{8}\\.jsonl$`,
-      ),
-    );
+    const transcriptPath = await expectSingleTranscriptArtifact(expectedDir);
+    expect(await fs.readFile(transcriptPath, "utf8")).toContain("lemon pepper wings");
     const infoLines = vi
       .mocked(api.logger.info)
       .mock.calls.map((call: unknown[]) => String(call[0]));
@@ -5825,11 +6116,13 @@ describe("active-memory plugin", () => {
       "active-memory",
     );
     expect(mkdirSpy).toHaveBeenCalledWith(expectedDir, { recursive: true, mode: 0o700 });
-    expect(lastEmbeddedSessionFile()).toMatch(
-      new RegExp(
-        `^${escapeRegExp(expectedDir)}${escapeRegExp(path.sep)}active-memory-[a-z0-9]+-[a-f0-9]{8}\\.jsonl$`,
-      ),
+    const runtimeSessionFile = requireNonEmptyString(
+      lastRuntimeEmbeddedRunParams().sessionFile,
+      "expected runtime session file",
     );
+    expect(parseSqliteSessionFileMarker(runtimeSessionFile)).toMatchObject({
+      agentId: "main",
+    });
   });
 
   it("scopes persisted subagent transcripts by agent", async () => {
@@ -5862,11 +6155,13 @@ describe("active-memory plugin", () => {
       "active-memory-subagents",
     );
     expect(mkdirSpy).toHaveBeenCalledWith(expectedDir, { recursive: true, mode: 0o700 });
-    expect(lastEmbeddedSessionFile()).toMatch(
-      new RegExp(
-        `^${escapeRegExp(expectedDir)}${escapeRegExp(path.sep)}active-memory-[a-z0-9]+-[a-f0-9]{8}\\.jsonl$`,
-      ),
+    const runtimeSessionFile = requireNonEmptyString(
+      lastRuntimeEmbeddedRunParams().sessionFile,
+      "expected runtime session file",
     );
+    expect(parseSqliteSessionFileMarker(runtimeSessionFile)).toMatchObject({
+      agentId: "support/agent",
+    });
   });
 
   it("sanitizes control characters out of debug lines", async () => {

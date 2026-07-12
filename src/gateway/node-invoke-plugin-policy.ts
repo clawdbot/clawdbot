@@ -145,7 +145,16 @@ function createApprovalRuntime(params: {
           });
         },
       });
-      return { id: record.id, decision: await decisionPromise };
+      const decision = await decisionPromise;
+      // This return hands execution authority to the plugin policy. Claim a
+      // one-shot decision here so observation or retry cannot replay it.
+      if (
+        decision === "allow-once" &&
+        !manager.consumeAllowOnce(record.id, `plugin.node.invoke:${record.id}`)
+      ) {
+        return { id: record.id, decision: null };
+      }
+      return { id: record.id, decision };
     },
   };
 }

@@ -2,7 +2,6 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     // Plugin production indexed reads must account for missing entries.
-    "noUncheckedIndexedAccess": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "tsBuildInfoFile": ".artifacts/tsgo-cache/extensions.tsbuildinfo"

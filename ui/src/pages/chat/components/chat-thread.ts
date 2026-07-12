@@ -90,6 +90,11 @@ type ChatThreadProps = {
   paneId: string;
   sessionKey: string;
   loading: boolean;
+  historyPagination?: {
+    loading: boolean;
+    manualFallback: boolean;
+    onLoadOlder: () => void;
+  };
   messages: unknown[];
   toolMessages: unknown[];
   streamSegments: ChatStreamSegment[];
@@ -828,6 +833,30 @@ export function renderChatThread(props: ChatThreadProps) {
       @pointerup=${(event: PointerEvent) => handleChatThreadSelectionPointerUp(event, props)}
     >
       <div class="chat-thread-inner">
+        ${props.historyPagination
+          ? html`
+              <div class="chat-history-sentinel">
+                ${props.historyPagination.loading
+                  ? html`
+                      <div class="chat-history-loading" role="status">
+                        <span class="session-run-spinner" aria-hidden="true"></span>
+                        <span>${t("common.loading")}</span>
+                      </div>
+                    `
+                  : props.historyPagination.manualFallback
+                    ? html`
+                        <button
+                          class="btn btn--sm chat-history-fallback"
+                          type="button"
+                          @click=${props.historyPagination.onLoadOlder}
+                        >
+                          ${t("chat.loadOlder")}
+                        </button>
+                      `
+                    : nothing}
+              </div>
+            `
+          : nothing}
         ${showLoadingSkeleton ? renderLoadingSkeleton() : nothing}
         ${isEmpty && !state.searchOpen ? renderWelcomeState(props) : nothing}
         ${isEmpty && state.searchOpen

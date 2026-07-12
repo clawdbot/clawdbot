@@ -284,4 +284,52 @@ describe("runDoctorStateSqliteCompact", () => {
       after.close();
     }
   });
+
+  it("rejects foreign-key violations before mutating the database", () => {
+    const env = createStateEnv();
+    const sqlitePath = seedStateDatabase({ env, withBloat: true });
+    const sqlite = requireNodeSqlite();
+    const corrupted = new sqlite.DatabaseSync(sqlitePath);
+    try {
+      corrupted.exec(`
+        PRAGMA foreign_keys = OFF;
+        CREATE TABLE compact_parents (id INTEGER PRIMARY KEY);
+        CREATE TABLE compact_children (
+          id INTEGER PRIMARY KEY,
+          parent_id INTEGER NOT NULL REFERENCES compact_parents(id)
+        );
+        INSERT INTO compact_children (id, parent_id) VALUES (1, 99);
+      `);
+      expect(corrupted.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
+      expect(corrupted.prepare("PRAGMA integrity_check").get()).toEqual({
+        integrity_check: "ok",
+      });
+      expect(corrupted.prepare("PRAGMA foreign_key_check").get()).toEqual({
+        table: "compact_children",
+        rowid: 1,
+        parent: "compact_parents",
+        fkid: 0,
+      });
+    } finally {
+      corrupted.close();
+    }
+
+    expect(() => runDoctorStateSqliteCompact({ env })).toThrow(
+      /foreign_key_check failed.*compact_children row 1 references compact_parents \(foreign key 0\)/iu,
+    );
+
+    const after = new sqlite.DatabaseSync(sqlitePath, { readOnly: true });
+    try {
+      expect(readPragma(after, "auto_vacuum")).toBe(0);
+      expect(readPragma(after, "freelist_count")).toBeGreaterThan(0);
+      expect(after.prepare("PRAGMA foreign_key_check").get()).toEqual({
+        table: "compact_children",
+        rowid: 1,
+        parent: "compact_parents",
+        fkid: 0,
+      });
+    } finally {
+      after.close();
+    }
+  });
 });

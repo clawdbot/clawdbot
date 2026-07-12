@@ -1,5 +1,5 @@
 // Matrix tests cover approval reactions plugin behavior.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildMatrixApprovalReactionHint,
   clearMatrixApprovalReactionTargetsForTest,
@@ -8,7 +8,7 @@ import {
   resolveMatrixApprovalReactionTargetWithPersistence as resolveMatrixApprovalReactionTargetWithPersistenceRaw,
   unregisterMatrixApprovalReactionTarget as unregisterMatrixApprovalReactionTargetRaw,
 } from "./approval-reactions.js";
-import { setMatrixRuntime } from "./runtime.js";
+import { clearMatrixRuntime, setMatrixRuntime } from "./runtime.js";
 
 type RegisterTargetParams = Parameters<typeof registerMatrixApprovalReactionTargetRaw>[0];
 type ResolveTargetParams = Parameters<
@@ -53,8 +53,13 @@ function createRuntimeLogger(overrides: { warn?: ReturnType<typeof vi.fn> } = {}
   };
 }
 
+beforeEach(() => {
+  clearMatrixRuntime();
+});
+
 afterEach(() => {
   clearMatrixApprovalReactionTargetsForTest();
+  clearMatrixRuntime();
   vi.restoreAllMocks();
 });
 

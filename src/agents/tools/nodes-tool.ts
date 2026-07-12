@@ -47,6 +47,7 @@ const NODES_TOOL_ACTIONS = [
   "device_info",
   "device_permissions",
   "device_health",
+  "which",
   "invoke",
 ] as const;
 
@@ -127,6 +128,14 @@ const NodesToolSchema = Type.Object({
   notificationAction: optionalStringEnum(NOTIFICATIONS_ACTIONS),
   notificationKey: Type.Optional(Type.String()),
   notificationReplyText: Type.Optional(Type.String()),
+  // which
+  bins: Type.Optional(
+    Type.Array(Type.String({ minLength: 1 }), {
+      minItems: 1,
+      maxItems: 64,
+      description: "which: executable names to resolve on the selected node.",
+    }),
+  ),
   // invoke
   invokeCommand: Type.Optional(Type.String()),
   invokeParamsJson: Type.Optional(Type.String()),
@@ -152,7 +161,7 @@ export function createNodesTool(options?: {
     label: "Nodes",
     name: "nodes",
     description:
-      "Paired nodes: status/list with active-computer presence; pass node to describe/control. Pairing, notify, camera/photos/screen/location/notifications/invoke. Files: file_fetch.",
+      "Paired nodes: status/list with active-computer presence; pass node to describe/control. Pairing, notify, camera/photos/screen/location/notifications, executable lookup (which + bins), generic invoke. Files: file_fetch.",
     parameters: NodesToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -300,6 +309,15 @@ export function createNodesTool(options?: {
               mediaInvokeActions: MEDIA_INVOKE_ACTIONS,
             });
           }
+          case "which": {
+            return await executeNodeCommandAction({
+              action,
+              input: params,
+              gatewayOpts,
+              allowMediaInvokeCommands: options?.allowMediaInvokeCommands,
+              mediaInvokeActions: MEDIA_INVOKE_ACTIONS,
+            });
+          }
           case "invoke": {
             return await executeNodeCommandAction({
               action,
@@ -321,7 +339,10 @@ export function createNodesTool(options?: {
             : "default";
         const agentLabel = agentId ?? "unknown";
         let message = formatErrorMessage(err);
-        const pairing = action === "invoke" ? readConnectPairingRequiredMessage(message) : null;
+        const pairing =
+          action === "invoke" || action === "which"
+            ? readConnectPairingRequiredMessage(message)
+            : null;
         if (pairing) {
           const requestId = pairing.requestId ?? null;
           const approveHint = requestId

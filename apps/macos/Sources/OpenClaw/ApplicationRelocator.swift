@@ -115,7 +115,7 @@ enum ApplicationRelocator {
         case let .handOff(destination):
             return self.relaunchAndTerminate(at: destination)
         case let .offerInstall(destination, replacing):
-            guard self.confirmInstall(destination: destination, replacing: replacing) else {
+            guard self.confirmInstall(replacing: replacing) else {
                 return .continueLaunch(startUpdater: false)
             }
             do {
@@ -276,7 +276,7 @@ enum ApplicationRelocator {
         }
     }
 
-    private static func confirmInstall(destination: URL, replacing: Bool) -> Bool {
+    private static func confirmInstall(replacing: Bool) -> Bool {
         let alert = NSAlert()
         alert.messageText = replacing
             ? "Replace the older OpenClaw in Applications?"

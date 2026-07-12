@@ -49,15 +49,6 @@ struct SessionTokenStats {
         return min(100, Int(round((Double(self.total) / Double(self.contextTokens)) * 100)))
     }
 
-    var summary: String {
-        let parts = ["in \(input)", "out \(output)", "total \(total)"]
-        var text = parts.joined(separator: " | ")
-        if let percentUsed {
-            text += " (\(percentUsed)% of \(self.contextTokens))"
-        }
-        return text
-    }
-
     static func formatKTokens(_ value: Int) -> String {
         if value < 1000 { return "\(value)" }
         let thousands = Double(value) / 1000
@@ -201,15 +192,6 @@ extension SessionRow {
     }
 }
 
-extension String? {
-    var isNilOrEmpty: Bool {
-        switch self {
-        case .none: true
-        case let .some(value): value.isEmpty
-        }
-    }
-}
-
 enum SessionLoadError: LocalizedError {
     case gatewayUnavailable(String)
     case decodeFailed(String)
@@ -308,10 +290,6 @@ enum SessionLoader {
         }.sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
 
         return SessionStoreSnapshot(storePath: decoded.path, defaults: defaults, rows: rows)
-    }
-
-    static func loadRows() async throws -> [SessionRow] {
-        try await self.loadSnapshot().rows
     }
 
     private static func standardize(_ path: String) -> String {

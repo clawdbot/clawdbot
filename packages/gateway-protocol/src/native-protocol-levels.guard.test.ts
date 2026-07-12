@@ -79,7 +79,7 @@ function stringLiteralUnionValues(schema: unknown): string[] | undefined {
   }
   const candidate = schema as { anyOf?: unknown; oneOf?: unknown };
   const branches = candidate.oneOf ?? candidate.anyOf;
-  if (!Array.isArray(branches) || branches.length < 2) {
+  if (!Array.isArray(branches) || branches.length === 0) {
     return undefined;
   }
 
@@ -244,5 +244,30 @@ describe("native Gateway protocol levels", () => {
         );
       }
     }
+  });
+
+  it("emits the session approval event as a discriminated Swift union", async () => {
+    const swiftGeneratedPath =
+      "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift";
+    const swiftGenerated = await readRepoFile(swiftGeneratedPath);
+
+    assertPattern(
+      swiftGenerated,
+      swiftGeneratedPath,
+      /public enum SessionApprovalEvent: Codable, Sendable \{/,
+      "missing the generated SessionApprovalEvent union.",
+    );
+    assertPattern(
+      swiftGenerated,
+      swiftGeneratedPath,
+      /case pending\(PendingSessionApprovalEvent\)/,
+      "SessionApprovalEvent must decode pending transitions.",
+    );
+    assertPattern(
+      swiftGenerated,
+      swiftGeneratedPath,
+      /case terminal\(TerminalSessionApprovalEvent\)/,
+      "SessionApprovalEvent must decode terminal transitions.",
+    );
   });
 });

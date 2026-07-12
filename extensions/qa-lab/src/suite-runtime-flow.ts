@@ -46,6 +46,7 @@ import {
   resolveGeneratedImagePath,
   runAgentPrompt,
   runQaCli,
+  seedQaSessionTranscript,
   startAgentRun,
   waitForAgentHistoryReply,
   waitForAgentRun,
@@ -204,6 +205,7 @@ function createQaSuiteScenarioDeps(params: QaSuiteScenarioDepsParams) {
     readEffectiveTools,
     readSkillStatus,
     readRawQaSessionStore,
+    seedQaSessionTranscript,
     readGatewayLogs: () => params.env.gateway.logs?.() ?? "",
     markGatewayLogCursor: () => (params.env.gateway.logs?.() ?? "").length,
     scanGatewayLogSentinels: (options?: Parameters<typeof scanGatewayLogSentinels>[1]) =>

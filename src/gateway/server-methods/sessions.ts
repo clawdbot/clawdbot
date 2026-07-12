@@ -101,7 +101,8 @@ import {
 } from "../../sessions/session-state-events.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
-import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { canReviewOperatorApproval } from "../operator-approval-authorization.js";
+import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../operator-scopes.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
 import {
   createFileBackedCompactionCheckpointStore,
@@ -1180,6 +1181,17 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     if (!key) {
       return;
     }
+    if (p.includeApprovals === true && !canReviewOperatorApproval(client)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `sessions.messages.subscribe includeApprovals requires a paired device and gateway scope: ${APPROVALS_SCOPE}`,
+        ),
+      );
+      return;
+    }
     const cfg = context.getRuntimeConfig();
     const requestedAgent = resolveRequestedGlobalAgentId(cfg, key, p.agentId);
     if (!requestedAgent.ok) {
@@ -1194,8 +1206,52 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       defaultAgentId: resolveDefaultAgentId(cfg),
     });
     if (connId) {
-      context.subscribeSessionMessageEvents(connId, subscriptionKey);
-      respond(true, { subscribed: true, key: canonicalKey }, undefined);
+      let approvalReplay;
+      if (p.includeApprovals === true) {
+        // Subscribe before the authoritative snapshot so a transition cannot
+        // land between replay and live delivery. Clients reconcile by id.
+        const rollbackSubscription = context.subscribeSessionMessageEvents(
+          connId,
+          subscriptionKey,
+          { includeApprovals: true },
+        );
+        try {
+          approvalReplay = context.listSessionPendingApprovals?.(subscriptionKey, client);
+        } catch (error) {
+          rollbackSubscription?.();
+          context.logGateway.error(`session approval replay failed: ${String(error)}`);
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.UNAVAILABLE, "session approval replay unavailable"),
+          );
+          return;
+        }
+        if (!approvalReplay) {
+          rollbackSubscription?.();
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.UNAVAILABLE, "session approval replay unavailable"),
+          );
+          return;
+        }
+      } else {
+        context.subscribeSessionMessageEvents(connId, subscriptionKey);
+      }
+      respond(
+        true,
+        {
+          subscribed: true,
+          key: canonicalKey,
+          ...(p.includeApprovals === true
+            ? {
+                approvalReplay,
+              }
+            : {}),
+        },
+        undefined,
+      );
       return;
     }
     respond(true, { subscribed: false, key: canonicalKey }, undefined);

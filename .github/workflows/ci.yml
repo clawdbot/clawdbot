@@ -1424,9 +1424,11 @@ jobs:
 
       - name: Setup Go for docs i18n
         if: matrix.requires_go == true
+        # The current workflow validates frozen targets whose go.mod may predate this patch pin.
+        # Keep the runner toolchain owned by the workflow while using the target only for cache keys.
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
         with:
-          go-version-file: scripts/docs-i18n/go.mod
+          go-version: "1.25.12"
           cache-dependency-path: scripts/docs-i18n/go.sum
 
       - name: Verify docs i18n Go toolchain
@@ -2322,6 +2324,8 @@ jobs:
     if: needs.preflight.outputs.run_ios_build == 'true'
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'macos-26' || (github.repository == 'openclaw/openclaw' && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
     timeout-minutes: 45
+    env:
+      HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
     steps:
       - *platform_checkout_step
 
@@ -2357,9 +2361,47 @@ jobs:
             echo "$swift_tools_dir" >> "$GITHUB_PATH"
             "$swift_tools_dir/swiftformat" --version
             "$swift_tools_dir/swiftlint" version
+          elif [[ "$HISTORICAL_TARGET" == "true" ]]; then
+            # The generated Xcode project runs SwiftFormat during the build, so
+            # frozen targets must keep the formatter contract they were authored for.
+            brew install xcodegen swiftlint
+            swiftformat_min_version="$(awk '$1 == "--min-version" { print $2; exit }' config/swiftformat)"
+            case "$swiftformat_min_version" in
+              ""|0.61.1)
+                swiftformat_version="0.61.1"
+                swiftformat_checksum="b990400779aceb7d7020796eb9ba814d4480543f671d38fc0ff48cb72f04c584"
+                ;;
+              0.62.1)
+                swiftformat_version="0.62.1"
+                swiftformat_checksum="7cb1cb1fae04932047c7015441c543848e8e60e1572d808d080e0a1f1661114a"
+                ;;
+              *)
+                echo "Unsupported frozen-target SwiftFormat minimum: $swiftformat_min_version" >&2
+                exit 1
+                ;;
+            esac
+            swiftformat_archive="$RUNNER_TEMP/swiftformat-$swiftformat_version.zip"
+            swift_tools_dir="$RUNNER_TEMP/openclaw-legacy-swift-tools"
+            curl --fail --location --silent --show-error --retry 3 \
+              --output "$swiftformat_archive" \
+              "https://github.com/nicklockwood/SwiftFormat/releases/download/$swiftformat_version/swiftformat.zip"
+            if [[ "$(shasum -a 256 "$swiftformat_archive" | awk '{print $1}')" != "$swiftformat_checksum" ]]; then
+              echo "SwiftFormat $swiftformat_version archive checksum mismatch" >&2
+              exit 1
+            fi
+            mkdir -p "$swift_tools_dir"
+            unzip -q "$swiftformat_archive" -d "$swift_tools_dir"
+            chmod +x "$swift_tools_dir/swiftformat"
+            echo "$swift_tools_dir" >> "$GITHUB_PATH"
+            [[ "$("$swift_tools_dir/swiftformat" --version)" == "$swiftformat_version" ]]
+            # Legacy generated Xcode phases prepend Homebrew ahead of GITHUB_PATH.
+            # Point that lookup at the verified binary or the build can bypass the pin.
+            swiftformat_link="$(brew --prefix)/bin/swiftformat"
+            ln -sfn "$swift_tools_dir/swiftformat" "$swiftformat_link"
+            [[ "$("$swiftformat_link" --version)" == "$swiftformat_version" ]]
           else
-            # Frozen release targets before the pinned installer used Homebrew directly.
-            brew install xcodegen swiftlint swiftformat
+            echo "Current CI targets must provide scripts/install-swift-tools.sh." >&2
+            exit 1
           fi
 
       - name: Swift lint

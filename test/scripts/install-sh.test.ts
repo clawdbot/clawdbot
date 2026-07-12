@@ -2354,7 +2354,8 @@ describe("install.sh doctor cancellation and dashboard guard", () => {
     const bareDoctor = /^\s+run_doctor\s*$/m;
     const lines = script.split("\n");
     for (let i = 0; i < lines.length; i++) {
-      if (bareDoctor.test(lines[i])) {
+      const line = lines[i];
+      if (line !== undefined && bareDoctor.test(line)) {
         // A bare run_doctor is only acceptable inside the run_doctor
         // function definition itself, not at a call site
         const context = lines.slice(Math.max(0, i - 3), i + 3).join("\n");

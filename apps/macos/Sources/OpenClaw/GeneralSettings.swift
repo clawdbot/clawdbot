@@ -1,7 +1,6 @@
 import AppKit
 import Observation
 import OpenClawDiscovery
-import OpenClawIPC
 import OpenClawKit
 import SwiftUI
 

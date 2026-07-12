@@ -813,10 +813,5 @@ actor VoiceWakeRuntime {
         self.matchedTriggerWordText(transcript: text, triggers: triggers)
     }
 
-    static func _testAttributedColor(isFinal: Bool) -> NSColor {
-        VoiceOverlayTextFormatting.makeAttributed(committed: "sample", volatile: "", isFinal: isFinal)
-            .attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor ?? .clear
-    }
-
     #endif
 }

@@ -105,11 +105,6 @@ enum MacChatTranscriptCache {
             sshRemotePort: sshRemotePort)
     }
 
-    @MainActor
-    static func make() -> OpenClawChatSQLiteTranscriptCache? {
-        self.makeContext()?.store
-    }
-
     /// Loads the small process-stable routing fact before Chat constructs its
     /// view model, so cache partitioning and offline sends never bootstrap
     /// against a nil agent.

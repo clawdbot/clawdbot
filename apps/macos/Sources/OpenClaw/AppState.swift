@@ -1241,10 +1241,6 @@ enum AppStateStore {
             await LaunchAgentManager.set(enabled: enabled, bundlePath: Bundle.main.bundlePath)
         }
     }
-
-    static var canvasEnabled: Bool {
-        UserDefaults.standard.object(forKey: canvasEnabledKey) as? Bool ?? true
-    }
 }
 
 @MainActor

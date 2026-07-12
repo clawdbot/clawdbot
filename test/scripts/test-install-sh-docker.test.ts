@@ -13,6 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import path, { join } from "node:path";
 import { runInNewContext } from "node:vm";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
@@ -55,7 +56,7 @@ function extractNonrootNodePreflight(): string {
   if (!match) {
     throw new Error("non-root smoke Node preflight was not found");
   }
-  return match[1];
+  return expectDefined(match[1], "non-root smoke Node preflight capture");
 }
 
 function runNonrootNodePreflight(version: string, options: { sqlite?: boolean } = {}) {
@@ -128,7 +129,7 @@ function extractInstallE2eAgentJsonParser(): string {
   if (!match) {
     throw new Error("install E2E agent JSON parser was not found");
   }
-  return match[1];
+  return expectDefined(match[1], "install E2E agent JSON parser capture");
 }
 
 function normalizeInstallE2eAgentOutput(output: string) {
@@ -158,7 +159,7 @@ function extractInstallSmokeUpdateJsonParser(): string {
   if (!match) {
     throw new Error("install smoke update JSON parser was not found");
   }
-  return match[1];
+  return expectDefined(match[1], "install smoke update JSON parser capture");
 }
 
 function validateInstallSmokeUpdateJson(doctorStep?: Record<string, unknown>) {
@@ -240,7 +241,7 @@ function extractReadPackTarballFilename(): string {
   if (!match) {
     throw new Error("read_pack_tarball_filename helper was not found");
   }
-  return match[1];
+  return expectDefined(match[1], "pack tarball filename helper capture");
 }
 
 function runReadPackTarballFilename(filename: string) {
@@ -275,7 +276,7 @@ function extractEnsureLocalUpdateDistImportClosure(): string {
   if (!match) {
     throw new Error("ensure_local_update_dist_import_closure helper was not found");
   }
-  return match[1];
+  return expectDefined(match[1], "local update import closure helper capture");
 }
 
 type RestorePathEscape = "packages" | "ai";
@@ -290,7 +291,7 @@ function runRestoreLocalDistFixture(
     ["dist/root.txt", "old-root"],
     ["packages/ai/dist/ai.txt", "old-ai"],
     ["packages/ai/package.json", "{}"],
-  ]) {
+  ] as const) {
     const target = join(fixtureRoot, relativePath);
     mkdirSync(path.dirname(target), { recursive: true });
     writeFileSync(target, contents);
@@ -298,7 +299,7 @@ function runRestoreLocalDistFixture(
   for (const [relativePath, contents] of [
     ["app/dist/root.txt", "new-root"],
     ["app/node_modules/@openclaw/ai/dist/ai.txt", "new-ai"],
-  ]) {
+  ] as const) {
     const target = join(imageRoot, relativePath);
     mkdirSync(path.dirname(target), { recursive: true });
     writeFileSync(target, contents);

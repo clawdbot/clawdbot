@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   collectHostedGateEvidence as collectHostedGateEvidenceRaw,
@@ -106,7 +107,7 @@ describe("verify-pr-hosted-gates", () => {
       successfulRun(name, index + 1, `2026-06-17T10:4${index}:00Z`),
     );
     workflowRuns[2] = {
-      ...workflowRuns[2],
+      ...expectDefined(workflowRuns[2], "Blacksmith ARM Testbox workflow run"),
       conclusion: "failure",
       updated_at: "2026-06-17T10:50:00Z",
     };

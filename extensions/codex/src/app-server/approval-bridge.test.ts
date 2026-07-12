@@ -2248,6 +2248,36 @@ describe("Codex app-server approval bridge", () => {
     });
   });
 
+  it("ignores waitDecision replies bound to a different approval id", async () => {
+    const params = createParams();
+    const onNativeToolFailureDisposition = vi.fn();
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-mismatch", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-other", decision: "allow-once" });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-mismatch",
+        command: "pnpm test",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      onNativeToolFailureDisposition,
+    });
+
+    // A misrouted allow for another approval must not release this gate.
+    expect(result).toEqual({ decision: "decline" });
+    expect(onNativeToolFailureDisposition).toHaveBeenCalledWith("cmd-mismatch", "failed");
+    findApprovalEvent(params, {
+      status: "unavailable",
+      approvalId: "plugin:approval-mismatch",
+    });
+  });
+
   it("sanitizes reason previews before forwarding approval text and events", async () => {
     const params = createParams();
     mockCallGatewayTool.mockResolvedValueOnce({

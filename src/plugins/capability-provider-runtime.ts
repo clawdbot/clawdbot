@@ -17,7 +17,6 @@ import {
   hasManifestContractValue,
   isManifestPluginAvailableForControlPlane,
   loadManifestContractSnapshot,
-  listAvailableManifestContractValues,
 } from "./manifest-contract-eligibility.js";
 import {
   resolveConfigScopedRuntimeCacheValue,
@@ -148,33 +147,6 @@ function resolveBundledCapabilityCompatPluginIds(params: {
   providerId?: string;
 }): string[] {
   return resolveCapabilityPluginIds(params).bundledCompatPluginIds;
-}
-
-export function resolveManifestCapabilityProviderIds(params: {
-  key: CapabilityProviderRegistryKey;
-  cfg?: OpenClawConfig;
-  workspaceDir?: string;
-}): string[] {
-  const contractKey = CAPABILITY_CONTRACT_KEY[params.key];
-  return listAvailableManifestContractValues({
-    snapshot: loadCapabilityManifestSnapshot(params),
-    contract: contractKey,
-    config: params.cfg,
-  });
-}
-
-export function resolveBundledCapabilityProviderIds(params: {
-  key: CapabilityProviderRegistryKey;
-  cfg?: OpenClawConfig;
-  workspaceDir?: string;
-}): string[] {
-  const contractKey = CAPABILITY_CONTRACT_KEY[params.key];
-  const snapshot = loadCapabilityManifestSnapshot(params);
-  return sortUniqueStrings(
-    snapshot.plugins.flatMap((plugin) =>
-      plugin.origin === "bundled" ? (plugin.contracts?.[contractKey] ?? []) : [],
-    ),
-  );
 }
 
 function resolveCapabilityProviderConfig(params: {

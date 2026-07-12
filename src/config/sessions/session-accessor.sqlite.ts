@@ -3866,6 +3866,9 @@ function emitArchivedSqliteTranscriptUpdates(
 
 function deleteSqliteSessionStateRows(database: OpenClawAgentDatabase, sessionId: string): void {
   const db = getSessionKysely(database.db);
+  // The sessions row cascades canonical transcript tables, but FTS is virtual
+  // and its watermark has no cascade; clear both before dropping the owner row.
+  deleteSessionTranscriptIndexInTransaction(database.db, sessionId);
   executeSqliteQuerySync(
     database.db,
     db.deleteFrom("sessions").where("session_id", "=", sessionId),

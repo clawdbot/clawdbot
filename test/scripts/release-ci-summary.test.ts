@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   expectedChildDispatches,
@@ -1178,10 +1179,10 @@ describe("release CI summary child correlation", () => {
         id: pageIndex * 100 + runIndex,
       })),
     );
-    pages[9][99] = exact;
+    expectDefined(pages[9], "last child run page")[99] = exact;
 
     expect(selectExactChildRunFromPages(pages, expected, "main")).toBe(exact);
-    pages[0][0] = { ...exact, id: 1001 };
+    expectDefined(pages[0], "first child run page")[0] = { ...exact, id: 1001 };
     expect(() => selectExactChildRunFromPages(pages, expected, "main")).toThrow(
       "multiple child runs have exact dispatch title and branch",
     );
@@ -1492,7 +1493,10 @@ describe("release CI summary child correlation", () => {
   });
 
   it("validates manifest child workflow, dispatch tuple, branch, and attempt", () => {
-    const child = expectedChildDispatches("29090000000", 3, "main")[0];
+    const child = expectDefined(
+      expectedChildDispatches("29090000000", 3, "main")[0],
+      "expected CI child dispatch",
+    );
     const parentManifest = {
       runAttempt: 3,
       runId: "29090000000",

@@ -143,7 +143,11 @@ function cleanupSmokeLogTailHelpers(): string {
   if (!match) {
     throw new Error("cleanup smoke log helpers were not found");
   }
-  return match[1];
+  const helpers = match[1];
+  if (helpers === undefined) {
+    throw new Error("cleanup smoke log helper capture was not found");
+  }
+  return helpers;
 }
 
 function runCleanupDefaultPlatform(env: Record<string, string>, hostArch: string): string {

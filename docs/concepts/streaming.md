@@ -138,8 +138,8 @@ without block replies. The `blockStreaming*` defaults live under
 
 ## Preview streaming modes
 
-Canonical key: `channels.<channel>.streaming` (nested `{ mode, ... }`; a
-top-level boolean is a legacy alias).
+Canonical key: `channels.<channel>.streaming` (nested `{ mode, ... }`; legacy
+top-level boolean/string spellings are rewritten by `openclaw doctor --fix`).
 
 | Mode       | Behavior                                                              |
 | ---------- | --------------------------------------------------------------------- |
@@ -150,8 +150,9 @@ top-level boolean is a legacy alias).
 
 `streaming.mode: "block"` is a preview-streaming mode for edit-capable
 channels such as Discord and Telegram; it does not by itself enable channel
-block delivery there. Use `streaming.block.enabled` (or the legacy
-`blockStreaming` channel key) for normal block replies. Microsoft Teams is the
+block delivery there. Use `streaming.block.enabled` for normal block replies
+(channels without a nested `streaming` config keep the flat `blockStreaming`
+key instead). Microsoft Teams is the
 exception: it has no draft-preview block transport, so `streaming.mode:
 "block"` disables native streaming entirely and the reply lands as regular
 block delivery instead of native partial/progress streaming. Mattermost also
@@ -185,11 +186,11 @@ Slack-only:
 
 ### Legacy key migration
 
-| Channel  | Legacy keys                                                 | Status                                                                                                                                                       |
-| -------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Telegram | `streamMode`, scalar/boolean `streaming`                    | Detected and migrated to `streaming.mode` by doctor/config compatibility paths                                                                               |
-| Discord  | `streamMode`, boolean `streaming`                           | Runtime aliases for the `streaming` enum; run `openclaw doctor --fix` to rewrite persisted config                                                            |
-| Slack    | `streamMode`; boolean `streaming`; legacy `nativeStreaming` | Runtime aliases for `streaming.mode` (and `streaming.nativeTransport` for the boolean/legacy forms); run `openclaw doctor --fix` to rewrite persisted config |
+| Channel  | Legacy keys                                                 | Status                                                                                                                                       |
+| -------- | ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Telegram | `streamMode`, scalar/boolean `streaming`                    | Rewritten to `streaming.mode` by `openclaw doctor --fix`; not read at runtime                                                                |
+| Discord  | `streamMode`, boolean `streaming`                           | Rewritten to `streaming.mode` by `openclaw doctor --fix`; not read at runtime                                                                |
+| Slack    | `streamMode`; boolean `streaming`; legacy `nativeStreaming` | Rewritten to `streaming.mode` (and `streaming.nativeTransport` for the boolean/legacy forms) by `openclaw doctor --fix`; not read at runtime |
 
 ## Runtime behavior
 

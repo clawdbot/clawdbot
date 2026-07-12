@@ -24,6 +24,7 @@ const createSession = vi.hoisted(() => vi.fn());
 const readEffectiveTools = vi.hoisted(() => vi.fn());
 const readSkillStatus = vi.hoisted(() => vi.fn());
 const readRawQaSessionStore = vi.hoisted(() => vi.fn());
+const seedQaSessionTranscript = vi.hoisted(() => vi.fn());
 const readSessionTranscriptSummary = vi.hoisted(() => vi.fn());
 const runQaCli = vi.hoisted(() => vi.fn());
 const extractMediaPathFromText = vi.hoisted(() => vi.fn());
@@ -95,6 +96,7 @@ vi.mock("./suite-runtime-agent.js", () => ({
   readEffectiveTools,
   readSkillStatus,
   readRawQaSessionStore,
+  seedQaSessionTranscript,
   readSessionTranscriptSummary,
   runQaCli,
   extractMediaPathFromText,
@@ -252,6 +254,7 @@ describe("qa suite runtime flow", () => {
         markGatewayLogCursor: () => number;
         assertNoGatewayLogSentinels: typeof assertNoGatewayLogSentinels;
         readSessionTranscriptSummary: typeof readSessionTranscriptSummary;
+        seedQaSessionTranscript: typeof seedQaSessionTranscript;
         findManagedDreamingCronJob: typeof findManagedDreamingCronJob;
         forceMemoryIndex: typeof forceMemoryIndex;
         runAgentPrompt: typeof runAgentPrompt;
@@ -277,6 +280,7 @@ describe("qa suite runtime flow", () => {
     expect(call.deps.markGatewayLogCursor()).toBe(0);
     expect(() => call.deps.assertNoGatewayLogSentinels()).not.toThrow();
     expect(call.deps.readSessionTranscriptSummary).toBe(readSessionTranscriptSummary);
+    expect(call.deps.seedQaSessionTranscript).toBe(seedQaSessionTranscript);
     expect(call.deps.findManagedDreamingCronJob).toBe(findManagedDreamingCronJob);
     expect(call.deps.forceMemoryIndex).toBe(forceMemoryIndex);
     expect(call.deps.waitForAgentHistoryReply).toBe(waitForAgentHistoryReply);

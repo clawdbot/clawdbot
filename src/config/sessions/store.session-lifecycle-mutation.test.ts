@@ -261,6 +261,64 @@ describe("session store lifecycle mutations", () => {
     );
   });
 
+  it("deletes transcript search state with archived session rows", async () => {
+    const sessionId = "delete-indexed-session";
+    await replaceSessionEntry(
+      { sessionKey: "agent:main:delete-indexed", storePath },
+      { sessionId, updatedAt: Date.now() },
+    );
+    await replaceSqliteTranscriptEvents(
+      { sessionKey: "agent:main:delete-indexed", sessionId, storePath },
+      [
+        {
+          type: "message",
+          id: "delete-indexed-message",
+          parentId: null,
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "remove this searchable transcript" }],
+          },
+          timestamp: Date.now(),
+        } as unknown as TestTranscriptEvent,
+      ],
+    );
+    const database = openLifecycleTestDatabase(storePath);
+    const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db);
+    const readSearchState = () => ({
+      fts: executeSqliteQuerySync(
+        database.db,
+        db
+          .selectFrom("session_transcript_fts")
+          .select("session_id")
+          .where("session_id", "=", sessionId),
+      ).rows,
+      watermarks: executeSqliteQuerySync(
+        database.db,
+        db
+          .selectFrom("session_transcript_index_state")
+          .select("session_id")
+          .where("session_id", "=", sessionId),
+      ).rows,
+    });
+
+    expect(readSearchState()).toEqual({
+      fts: [{ session_id: sessionId }],
+      watermarks: [{ session_id: sessionId }],
+    });
+
+    const result = await deleteSessionEntryLifecycle({
+      archiveTranscript: true,
+      storePath,
+      target: {
+        canonicalKey: "agent:main:delete-indexed",
+        storeKeys: ["agent:main:delete-indexed"],
+      },
+    });
+
+    expect(result.deleted).toBe(true);
+    expect(readSearchState()).toEqual({ fts: [], watermarks: [] });
+  });
+
   it("durably writes SQLite transcript archives before deleting entry rows", async () => {
     const now = Date.now();
     await replaceSessionEntry(

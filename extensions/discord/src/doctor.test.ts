@@ -8,6 +8,7 @@ import {
   maybeRepairDiscordNumericIds,
   scanDiscordNumericIdEntries,
 } from "./doctor.js";
+import { resolveDiscordPreviewStreamMode } from "./preview-streaming.js";
 
 function getDiscordCompatibilityNormalizer(): NonNullable<
   typeof discordDoctor.normalizeCompatibilityConfig
@@ -79,6 +80,59 @@ describe("discord doctor", () => {
       "Moved channels.discord.draftChunk → channels.discord.streaming.preview.chunk.",
       "Moved channels.discord.accounts.work.streaming (boolean) → channels.discord.accounts.work.streaming.mode (off).",
       "Moved channels.discord.accounts.work.blockStreamingCoalesce → channels.discord.accounts.work.streaming.block.coalesce.",
+    ]);
+  });
+
+  it("pins progress mode when migrating delivery-only aliases", () => {
+    const normalize = getDiscordCompatibilityNormalizer();
+
+    const result = normalize({
+      cfg: {
+        channels: {
+          discord: { blockStreaming: true },
+        },
+      } as never,
+    });
+
+    const migrated = result.config.channels?.discord as Record<string, unknown>;
+    expect(migrated).toEqual({
+      streaming: { mode: "progress", block: { enabled: true } },
+    });
+    // Effective preview-mode parity: `streaming` absent resolved to progress
+    // before migration, so the migrated object must keep progress instead of
+    // falling to the object-without-mode default (off).
+    expect(resolveDiscordPreviewStreamMode(migrated)).toBe(resolveDiscordPreviewStreamMode({}));
+    expect(result.changes).toEqual([
+      "Moved channels.discord.blockStreaming → channels.discord.streaming.block.enabled.",
+      "Set channels.discord.streaming.mode (progress) to keep the previous default while migrating flat streaming keys.",
+    ]);
+  });
+
+  it("pins the inherited root mode when migrating account delivery aliases", () => {
+    const normalize = getDiscordCompatibilityNormalizer();
+
+    // Account `streaming` objects replace the root object wholesale on merge,
+    // so the migrated account must carry the root mode it previously inherited.
+    const result = normalize({
+      cfg: {
+        channels: {
+          discord: {
+            streaming: { mode: "off" },
+            accounts: { work: { chunkMode: "newline" } },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.config.channels?.discord).toEqual({
+      streaming: { mode: "off" },
+      accounts: {
+        work: { streaming: { mode: "off", chunkMode: "newline" } },
+      },
+    });
+    expect(result.changes).toEqual([
+      "Moved channels.discord.accounts.work.chunkMode → channels.discord.accounts.work.streaming.chunkMode.",
+      "Set channels.discord.accounts.work.streaming.mode (off) to keep the previous default while migrating flat streaming keys.",
     ]);
   });
 

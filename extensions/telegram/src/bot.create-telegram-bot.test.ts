@@ -5910,7 +5910,13 @@ describe("createTelegramBot", () => {
     await runMiddlewareChain(ctx);
 
     expect(resolveExecApprovalSpy).toHaveBeenCalledTimes(2);
-    expect(editMessageReplyMarkupSpy).toHaveBeenCalledTimes(1);
+    expect(editMessageTextSpy).toHaveBeenCalledWith(
+      1234,
+      231,
+      expect.stringContaining("Result: Allowed once"),
+      { reply_markup: { inline_keyboard: [] } },
+    );
+    expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
     expect(sendMessageSpy).not.toHaveBeenCalled();
   });
 

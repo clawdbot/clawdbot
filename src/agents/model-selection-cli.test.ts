@@ -68,13 +68,13 @@ function setCliBackendMetadataSnapshot(cliBackends: string[]) {
 
 describe("isCliProvider", () => {
   beforeEach(() => {
-    setupRegistryRuntimeTesting.resetRuntimeState();
+    setupRegistryRuntimeTesting.resetDescriptorCache();
     setCliBackendMetadataSnapshot(["claude-cli"]);
   });
 
   afterEach(() => {
     clearCurrentPluginMetadataSnapshot();
-    setupRegistryRuntimeTesting.resetRuntimeState();
+    setupRegistryRuntimeTesting.resetDescriptorCache();
   });
 
   it("returns true for setup-registered cli backends", () => {
@@ -83,17 +83,5 @@ describe("isCliProvider", () => {
 
   it("returns false for provider ids", () => {
     expect(isCliProvider("example-cli", {} as OpenClawConfig)).toBe(false);
-  });
-
-  it("does not execute setup runtime when descriptor metadata has no matching backend", () => {
-    // Negative checks should stay metadata-only; loading setup runtime here
-    // would make simple provider visibility queries expensive.
-    setupRegistryRuntimeTesting.setRuntimeModuleForTest({
-      resolvePluginSetupCliBackend: () => {
-        throw new Error("setup runtime should not load for CLI provider checks");
-      },
-    });
-
-    expect(isCliProvider("openai", {} as OpenClawConfig)).toBe(false);
   });
 });

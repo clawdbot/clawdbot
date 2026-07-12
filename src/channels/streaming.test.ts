@@ -95,9 +95,10 @@ describe("buildChannelProgressDraftLine", () => {
 });
 
 describe("streaming config resolution", () => {
-  // Legacy flat aliases are doctor-migrated (`openclaw doctor --fix`); runtime
-  // resolution reads only the canonical nested streaming shape.
-  it("ignores legacy flat streaming keys", () => {
+  // Flat delivery keys stay canonical for channels without a nested streaming
+  // schema and for SDK plugins; mode-family aliases (streamMode, scalar
+  // streaming, nativeStreaming) are doctor-migrated and unread at runtime.
+  it("resolves flat delivery keys while ignoring mode-family aliases", () => {
     const legacyEntry = {
       streamMode: "block",
       chunkMode: "newline",
@@ -108,10 +109,10 @@ describe("streaming config resolution", () => {
     } as never;
 
     expect(resolveChannelPreviewStreamMode(legacyEntry, "partial")).toBe("partial");
-    expect(resolveChannelStreamingChunkMode(legacyEntry)).toBeUndefined();
-    expect(resolveChannelStreamingBlockEnabled(legacyEntry)).toBeUndefined();
-    expect(resolveChannelStreamingPreviewChunk(legacyEntry)).toBeUndefined();
-    expect(resolveChannelStreamingBlockCoalesce(legacyEntry)).toBeUndefined();
+    expect(resolveChannelStreamingChunkMode(legacyEntry)).toBe("newline");
+    expect(resolveChannelStreamingBlockEnabled(legacyEntry)).toBe(true);
+    expect(resolveChannelStreamingPreviewChunk(legacyEntry)).toEqual({ minChars: 10 });
+    expect(resolveChannelStreamingBlockCoalesce(legacyEntry)).toEqual({ idleMs: 5 });
     expect(resolveChannelStreamingNativeTransport(legacyEntry)).toBeUndefined();
   });
 

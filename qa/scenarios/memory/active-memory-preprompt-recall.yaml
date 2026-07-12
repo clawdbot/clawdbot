@@ -23,10 +23,10 @@ scenario:
             allowedChatTypes:
               - direct
             logging: true
-            persistTranscripts: true
-            transcriptDir: qa-memory-e2e
             queryMode: recent
             maxSummaryChars: 220
+            timeoutMs: 15000
+            setupGraceTimeoutMs: 30000
   successCriteria:
     - With Active Memory off after doctor migrates the legacy session toggle, the session shows no Active Memory plugin activity.
     - With Active Memory on, plugin-owned evidence shows the Active Memory sub-agent searched memory before the main reply.
@@ -51,7 +51,6 @@ scenario:
       expectedNeedle: lemon pepper wings
       prompt: "Silent snack recall check: what snack do I usually want for QA movie night? Reply in one short sentence."
       promptSnippet: "Silent snack recall check"
-      transcriptDir: qa-memory-e2e
 
 flow:
   steps:
@@ -85,17 +84,9 @@ flow:
         - set: activeSessionKey
           value:
             expr: "'agent:qa:qa-channel:direct:active-memory-on'"
-        - set: transcriptRoot
-          value:
-            expr: "path.join(env.gateway.tempRoot, 'state', 'plugins', 'active-memory', 'transcripts', 'agents', 'qa', config.transcriptDir)"
         - set: toggleStorePath
           value:
             expr: "path.join(env.gateway.tempRoot, 'state', 'plugins', 'active-memory', 'session-toggles.json')"
-        - call: fs.rm
-          args:
-            - ref: transcriptRoot
-            - recursive: true
-              force: true
         - call: fs.rm
           args:
             - ref: toggleStorePath
@@ -198,30 +189,19 @@ flow:
                   message:
                     expr: "`active memory reply missed the hidden preference: ${activeOutbound.text}`"
         - call: waitForCondition
-          saveAs: transcriptPath
-          args:
-            - lambda:
-                async: true
-                expr: "await (async () => { const entries = (await fs.readdir(transcriptRoot).catch(() => [])).filter((entry) => entry.endsWith('.jsonl')).toSorted(); return entries.length > 0 ? path.join(transcriptRoot, entries.at(-1)) : undefined; })()"
-            - 10000
-        - call: fs.readFile
-          saveAs: transcriptText
-          args:
-            - ref: transcriptPath
-            - utf8
-        - assert:
-            expr: "transcriptText.includes('memory_search')"
-            message: active memory transcript missing memory_search
-        - assert:
-            expr: "transcriptText.includes('memory_get')"
-            message: active memory transcript missing memory_get
-        - call: waitForCondition
           saveAs: activeSessionEntry
           args:
             - lambda:
                 async: true
                 expr: "await (async () => { const store = await readRawQaSessionStore(env); const entry = store[activeSessionKey]; if (!entry || !Array.isArray(entry.pluginDebugEntries)) return undefined; return entry.pluginDebugEntries.some((pluginEntry) => pluginEntry?.pluginId === 'active-memory' && Array.isArray(pluginEntry.lines) && pluginEntry.lines.some((line) => line.includes('Active Memory: status=ok'))) ? entry : undefined; })()"
             - 10000
+        - call: readRawQaSessionStore
+          saveAs: sessionStoreAfterRecall
+          args:
+            - ref: env
+        - assert:
+            expr: "!Object.keys(sessionStoreAfterRecall).some((sessionKey) => sessionKey.startsWith(`${activeSessionKey}:active-memory:`))"
+            message: active memory recall left a transient SQLite session behind
         - if:
             expr: "Boolean(env.mock)"
             then:
@@ -234,4 +214,4 @@ flow:
               - assert:
                   expr: "mockRequests.some((request) => request.allInputText.includes('You are a memory search agent.') && request.plannedToolName === 'memory_get')"
                   message: expected mock Active Memory memory_get request
-      detailsExpr: "`${activeOutbound.text}\\n\\ntranscript=${transcriptPath}`"
+      detailsExpr: activeOutbound.text

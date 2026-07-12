@@ -88,7 +88,7 @@ struct ConfigSchemaForm: View {
                     if sortedKeys.isEmpty, self.mode == .channelQuick, self.isChannelRoot(path) {
                         self.renderChannelQuickEmptyState()
                     }
-                    if self.shouldRenderAdditionalProperties(schema, path: path, value: value) {
+                    if self.shouldRenderAdditionalProperties(schema, value: value) {
                         self.renderAdditionalProperties(schema, path: path, value: value)
                     }
                 })
@@ -202,7 +202,6 @@ struct ConfigSchemaForm: View {
 
     private func shouldRenderAdditionalProperties(
         _ schema: ConfigSchemaNode,
-        path: ConfigPath,
         value: Any?) -> Bool
     {
         guard schema.allowsAdditionalProperties else { return false }
@@ -256,7 +255,7 @@ struct ConfigSchemaForm: View {
                 }
             }
 
-            if self.shouldRenderAdditionalProperties(schema, path: path, value: value) {
+            if self.shouldRenderAdditionalProperties(schema, value: value) {
                 self.renderAdditionalProperties(schema, path: path, value: value)
             }
         }

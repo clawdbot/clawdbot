@@ -166,32 +166,3 @@ export function buildManifestBuiltInModelSuppressionResolver(params: {
     };
   };
 }
-
-/**
- * Resolves whether a built-in model should be suppressed based on manifest declarations.
- *
- * Note: This function instantiates a fresh resolver on every call, which incurs a full
- * filesystem scan of the manifest registry. For hot paths (like building the model catalog),
- * instantiate and reuse `buildManifestBuiltInModelSuppressionResolver` instead.
- */
-export function resolveManifestBuiltInModelSuppression(params: {
-  provider?: string | null;
-  id?: string | null;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  baseUrl?: string | null;
-  unconditionalOnly?: boolean;
-}) {
-  const resolver = buildManifestBuiltInModelSuppressionResolver({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  });
-  return resolver({
-    provider: params.provider,
-    id: params.id,
-    baseUrl: params.baseUrl,
-    unconditionalOnly: params.unconditionalOnly,
-  });
-}

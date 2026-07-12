@@ -320,10 +320,16 @@ function verifyApkSignature(path: string, expectedCertificateSha256: string): vo
     throw new Error(`apksigner verification failed for ${path}`);
   }
 
-  const fingerprints = Array.from(
-    output.matchAll(/^Signer #[0-9]+ certificate SHA-256 digest: ([a-fA-F0-9:]+)$/gmu),
-    (match) => match[1].replaceAll(":", "").toLowerCase(),
-  );
+  const fingerprints: string[] = [];
+  for (const match of output.matchAll(
+    /^Signer #[0-9]+ certificate SHA-256 digest: ([a-fA-F0-9:]+)$/gmu,
+  )) {
+    const fingerprint = match[1];
+    if (!fingerprint) {
+      throw new Error(`Malformed SHA-256 signing certificate output for ${path}`);
+    }
+    fingerprints.push(fingerprint.replaceAll(":", "").toLowerCase());
+  }
   if (fingerprints.length !== 1 || !/^[a-f0-9]{64}$/u.test(fingerprints[0] ?? "")) {
     throw new Error(`Expected exactly one SHA-256 signing certificate for ${path}`);
   }

@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import {
   BUILD_ALL_PROFILES,
@@ -327,13 +328,20 @@ describe("resolveBuildAllSteps", () => {
   });
 
   it("skips bundled tsdown declarations for runtime-only profiles", () => {
-    for (const profile of ["gatewayWatch", "qaRuntime", "sourcePerformance", "cliStartup"]) {
+    for (const profile of [
+      "gatewayWatch",
+      "qaRuntime",
+      "sourcePerformance",
+      "cliStartup",
+    ] as const) {
       const tsdown = resolveBuildAllSteps(profile).find((step) => step.label === "tsdown");
       if (!tsdown) {
         throw new Error(`Missing ${profile} tsdown step`);
       }
 
-      expect(BUILD_ALL_PROFILE_STEP_ENV[profile].tsdown).toMatchObject({
+      expect(
+        expectDefined(BUILD_ALL_PROFILE_STEP_ENV[profile], `${profile} build step env`).tsdown,
+      ).toMatchObject({
         OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
       });
       expect(
@@ -429,7 +437,7 @@ describe("resolveBuildAllSteps", () => {
   });
 
   it("skips generated static plugin assets for minimal backend-only profiles", () => {
-    for (const profile of ["gatewayWatch", "cliStartup"]) {
+    for (const profile of ["gatewayWatch", "cliStartup"] as const) {
       const runtimePostbuild = resolveBuildAllSteps(profile).find(
         (step) => step.label === "runtime-postbuild",
       );
@@ -437,7 +445,11 @@ describe("resolveBuildAllSteps", () => {
         throw new Error(`Missing ${profile} runtime-postbuild step`);
       }
 
-      expect(BUILD_ALL_PROFILE_STEP_ENV[profile]["runtime-postbuild"]).toEqual({
+      expect(
+        expectDefined(BUILD_ALL_PROFILE_STEP_ENV[profile], `${profile} build step env`)[
+          "runtime-postbuild"
+        ],
+      ).toEqual({
         OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0",
       });
       expect(
@@ -451,7 +463,7 @@ describe("resolveBuildAllSteps", () => {
   });
 
   it("keeps generated static plugin assets enabled for QA-backed profiles", () => {
-    for (const profile of ["qaRuntime", "sourcePerformance"]) {
+    for (const profile of ["qaRuntime", "sourcePerformance"] as const) {
       const runtimePostbuild = resolveBuildAllSteps(profile).find(
         (step) => step.label === "runtime-postbuild",
       );
@@ -459,7 +471,11 @@ describe("resolveBuildAllSteps", () => {
         throw new Error(`Missing ${profile} runtime-postbuild step`);
       }
 
-      expect(BUILD_ALL_PROFILE_STEP_ENV[profile]["runtime-postbuild"]).toBeUndefined();
+      expect(
+        expectDefined(BUILD_ALL_PROFILE_STEP_ENV[profile], `${profile} build step env`)[
+          "runtime-postbuild"
+        ],
+      ).toBeUndefined();
       expect(
         resolveBuildAllStep(runtimePostbuild, {
           env: { OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "1" },

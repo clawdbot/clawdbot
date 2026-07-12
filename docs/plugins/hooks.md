@@ -40,7 +40,6 @@ export default definePluginEntry({
             description: `Allow search query: ${String(event.params.query ?? "")}`,
             severity: "info",
             timeoutMs: 60_000,
-            timeoutBehavior: "deny",
           },
         };
       },
@@ -251,6 +250,7 @@ type BeforeToolCallResult = {
     description: string;
     severity?: "info" | "warning" | "critical";
     timeoutMs?: number;
+    /** @deprecated Unresolved approvals always deny. */
     timeoutBehavior?: "allow" | "deny";
     allowedDecisions?: Array<"allow-once" | "allow-always" | "deny">;
     pluginId?: string;

@@ -511,10 +511,10 @@ describe("Codex app-server native code mode config", () => {
     });
 
     expect(instructions).toContain("## Skill Workshop");
-    expect(instructions).toContain("Route durable skill work");
-    expect(instructions).toContain("through the `skill_workshop` tool");
-    expect(instructions).toContain("Generated skills are pending proposals.");
-    expect(instructions).toContain("only when the user explicitly asks");
+    expect(instructions).toContain("Durable reusable skill/playbook/workflow work");
+    expect(instructions).toContain("`skill_workshop`");
+    expect(instructions).toContain("Generated = pending proposal");
+    expect(instructions).toContain("only explicit user ask");
   });
 
   it("keeps developer instructions compact when no dynamic tools are deferred", () => {
@@ -1268,7 +1268,7 @@ describe("Codex app-server turn params", () => {
       "This is an OpenClaw heartbeat turn. Apply these instructions only to this heartbeat wake",
     );
     expect(heartbeatCollaborationMode.settings.developer_instructions).toContain(
-      "Use heartbeats to create useful proactive progress",
+      "Heartbeat = useful proactive progress",
     );
     expect(heartbeatCollaborationMode.settings.developer_instructions).toContain(
       "If `heartbeat_respond` is not already available and `tool_search` is available",

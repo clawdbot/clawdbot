@@ -30,7 +30,7 @@ suite("Claude native session catalog", () => {
     await server?.close();
   });
 
-  it("uses native sidebar/chat pagination and disables paired-node continuation", async () => {
+  it("auto-loads older chat without moving the viewport and disables paired-node continuation", async () => {
     const page = await browser.newPage();
     await page.clock.install();
     const catalogResponse = (threadId: string, name: string, nextCursor?: string) => ({
@@ -100,7 +100,14 @@ suite("Claude native session catalog", () => {
               response: {
                 hostId: "node:devbox",
                 threadId: "remote-thread",
-                items: [{ id: "a1", type: "agentMessage", text: "newer answer" }],
+                items: Array.from({ length: 40 }, (_, index) => ({
+                  id: `a${index + 1}`,
+                  type: index % 2 === 0 ? "agentMessage" : "userMessage",
+                  text:
+                    index === 0
+                      ? "newer answer"
+                      : `recent transcript message ${index + 1} with enough text to fill the pane`,
+                })),
                 nextCursor: "older",
               },
             },
@@ -123,8 +130,32 @@ suite("Claude native session catalog", () => {
     await page.getByText("Older remote review", { exact: true }).waitFor();
     await page.getByText("Remote architecture review", { exact: true }).click();
     await expect.poll(() => page.getByText("newer answer", { exact: true }).count()).toBe(1);
-    await page.getByRole("button", { name: "Load older" }).click();
+    const thread = page.locator(".chat-thread");
+    await expect
+      .poll(() => thread.evaluate((element) => element.scrollHeight > element.clientHeight + 100))
+      .toBe(true);
+    const initialReadCount = (await gateway.getRequests("sessions.catalog.read")).length;
+    await gateway.deferNext("sessions.catalog.read");
+    const before = await thread.evaluate((element) => {
+      element.scrollTop = 0;
+      return { scrollHeight: element.scrollHeight, scrollTop: element.scrollTop };
+    });
+    await expect
+      .poll(() => gateway.getRequests("sessions.catalog.read").then((requests) => requests.length))
+      .toBe(initialReadCount + 1);
+    await page.locator(".chat-history-loading").waitFor();
+    expect(await page.getByRole("button", { name: "Load older" }).count()).toBe(0);
+    await gateway.resolveDeferred("sessions.catalog.read");
     await expect.poll(() => page.getByText("older question", { exact: true }).count()).toBe(1);
+    const after = await thread.evaluate((element) => ({
+      scrollHeight: element.scrollHeight,
+      scrollTop: element.scrollTop,
+    }));
+    expect(after.scrollTop).toBeGreaterThan(0);
+    expect(after.scrollTop).toBeCloseTo(
+      before.scrollTop + (after.scrollHeight - before.scrollHeight),
+      0,
+    );
     expect(await page.locator(".agent-chat__composer-combobox > textarea").isDisabled()).toBe(true);
     await expect
       .poll(() => page.getByText("This session is on a paired node and is view-only.").count())
@@ -133,6 +164,14 @@ suite("Claude native session catalog", () => {
       catalogId: "claude",
       cursor: "older",
     });
+    const exhaustedReadCount = (await gateway.getRequests("sessions.catalog.read")).length;
+    await thread.evaluate((element) => {
+      element.scrollTop = 0;
+    });
+    await page.clock.runFor(500);
+    expect(await page.locator(".chat-history-loading").count()).toBe(0);
+    expect(await page.getByRole("button", { name: "Load older" }).count()).toBe(0);
+    expect(await gateway.getRequests("sessions.catalog.read")).toHaveLength(exhaustedReadCount);
     await page.close();
   });
 });

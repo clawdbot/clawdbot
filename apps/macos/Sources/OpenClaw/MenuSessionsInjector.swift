@@ -1300,10 +1300,6 @@ extension MenuSessionsInjector {
         self.controlChannelStatusText(for: state)
     }
 
-    func testingMenuStatusText(_ text: String) -> String {
-        Self.menuStatusText(text)
-    }
-
     func testingFindInsertIndex(in menu: NSMenu) -> Int? {
         self.findInsertIndex(in: menu)
     }

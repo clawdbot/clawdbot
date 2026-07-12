@@ -965,7 +965,7 @@ describe("plugin publication artifact", () => {
 
     const tamperFixture = createFixture();
     const tampered = Buffer.from(tamperFixture.zip);
-    tampered[35] ^= 0xff;
+    tampered[35] = tampered.readUInt8(35) ^ 0xff;
     writeFileSync(tamperFixture.zipPath, tampered);
     expect(() => verifyFixture(tamperFixture)).toThrow(/digest/u);
   });

@@ -7,10 +7,6 @@ extension CanvasWindowController {
         self.sanitizeSessionKey(key)
     }
 
-    static func _testJSStringLiteral(_ value: String) -> String {
-        self.jsStringLiteral(value)
-    }
-
     static func _testJSOptionalStringLiteral(_ value: String?) -> String {
         self.jsOptionalStringLiteral(value)
     }

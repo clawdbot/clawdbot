@@ -63,6 +63,7 @@ export type QaScenarioRuntimeDeps = {
   readEffectiveTools: QaScenarioRuntimeFunction;
   readSkillStatus: QaScenarioRuntimeFunction;
   readRawQaSessionStore: QaScenarioRuntimeFunction;
+  seedQaSessionTranscript: QaScenarioRuntimeFunction;
   readGatewayLogs: QaScenarioRuntimeFunction;
   markGatewayLogCursor: QaScenarioRuntimeFunction;
   scanGatewayLogSentinels: QaScenarioRuntimeFunction;
@@ -159,6 +160,7 @@ type QaScenarioRuntimeApi<
   readEffectiveTools: TDeps["readEffectiveTools"];
   readSkillStatus: TDeps["readSkillStatus"];
   readRawQaSessionStore: TDeps["readRawQaSessionStore"];
+  seedQaSessionTranscript: TDeps["seedQaSessionTranscript"];
   readGatewayLogs: TDeps["readGatewayLogs"];
   markGatewayLogCursor: TDeps["markGatewayLogCursor"];
   scanGatewayLogSentinels: TDeps["scanGatewayLogSentinels"];
@@ -272,6 +274,7 @@ export function createQaScenarioRuntimeApi<
     readEffectiveTools: params.deps.readEffectiveTools,
     readSkillStatus: params.deps.readSkillStatus,
     readRawQaSessionStore: params.deps.readRawQaSessionStore,
+    seedQaSessionTranscript: params.deps.seedQaSessionTranscript,
     readGatewayLogs: params.deps.readGatewayLogs,
     markGatewayLogCursor: params.deps.markGatewayLogCursor,
     scanGatewayLogSentinels: params.deps.scanGatewayLogSentinels,

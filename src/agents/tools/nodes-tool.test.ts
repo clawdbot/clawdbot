@@ -222,6 +222,32 @@ describe("createNodesTool screen_record duration guardrails", () => {
     );
   });
 
+  it("advertises typed executable lookup instead of requiring raw invoke JSON", () => {
+    const tool = createNodesTool();
+    const schema = tool.parameters as {
+      properties?: {
+        action?: { enum?: string[] };
+        bins?: {
+          type?: string;
+          minItems?: number;
+          maxItems?: number;
+          items?: { type?: string; minLength?: number };
+          description?: string;
+        };
+      };
+    };
+
+    expect(tool.description).toContain("executable lookup (which + bins)");
+    expect(schema.properties?.action?.enum).toContain("which");
+    expect(schema.properties?.bins).toMatchObject({
+      type: "array",
+      minItems: 1,
+      maxItems: 64,
+      items: { type: "string", minLength: 1 },
+      description: "which: executable names to resolve on the selected node.",
+    });
+  });
+
   it("requires an explicit node for describe and points to status", async () => {
     const tool = createNodesTool();
 
@@ -600,6 +626,46 @@ describe("createNodesTool screen_record duration guardrails", () => {
 
     expect(result.details).toBeNull();
     expect(result.content).toEqual([{ type: "text", text: "null" }]);
+  });
+
+  it("forwards typed which bins to system.which", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({
+      payload: { bins: ["hostname"], paths: { hostname: "/bin/hostname" } },
+    });
+    const tool = createNodesTool();
+
+    const result = await tool.execute("call-which", {
+      action: "which",
+      node: "macbook",
+      bins: ["hostname"],
+    });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      {},
+      {
+        nodeId: "node-1",
+        command: "system.which",
+        params: { bins: ["hostname"] },
+        idempotencyKey: expect.any(String),
+      },
+    );
+    expect(result.details).toEqual({
+      bins: ["hostname"],
+      paths: { hostname: "/bin/hostname" },
+    });
+  });
+
+  it("rejects which without bins before gateway invoke", async () => {
+    const tool = createNodesTool();
+
+    await expect(
+      tool.execute("call-which-missing-bins", {
+        action: "which",
+        node: "macbook",
+      }),
+    ).rejects.toThrow("bins required");
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
   });
 
   it("uses operator.pairing plus operator.admin to approve exec-capable node pair requests", async () => {

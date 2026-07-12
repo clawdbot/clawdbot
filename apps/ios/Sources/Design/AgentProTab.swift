@@ -8,7 +8,6 @@ struct AgentProTab: View {
     let headerLeadingAction: OpenClawSidebarHeaderAction?
     let headerTitle: String
     let openSettings: (() -> Void)?
-    @State var navigationPath: [AgentRoute] = []
     @State var overview: AgentOverviewSnapshot?
     @State var overviewErrorText: String?
     @State var overviewLoading: Bool = false
@@ -155,7 +154,7 @@ struct AgentProTab: View {
     }
 
     private var overviewNavigation: some View {
-        NavigationStack(path: self.$navigationPath) {
+        NavigationStack {
             ZStack {
                 OpenClawProBackground()
                 ScrollView {

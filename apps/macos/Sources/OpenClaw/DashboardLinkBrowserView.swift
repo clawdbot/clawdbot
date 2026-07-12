@@ -606,10 +606,6 @@ extension DashboardLinkBrowserView {
         self.tabs.map(\.representedURL)
     }
 
-    var _testTabTitles: [String] {
-        self.tabs.map { self.displayTitle(for: $0) }
-    }
-
     var _testActiveTabIndex: Int? {
         guard let activeTabID else { return nil }
         return self.tabs.firstIndex { $0.id == activeTabID }

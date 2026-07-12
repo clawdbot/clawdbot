@@ -7,6 +7,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import * as readline from "node:readline";
+import { setTimeout as sleep } from "node:timers/promises";
 import {
   DEFAULT_PROVIDER,
   parseModelRef,
@@ -29,7 +30,12 @@ import {
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { parseAgentSessionKey, parseThreadSessionSuffix } from "openclaw/plugin-sdk/routing";
 import { isPathInside } from "openclaw/plugin-sdk/security-runtime";
-import { parseSqliteSessionFileMarker } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  cleanupSessionLifecycleArtifacts,
+  formatSqliteSessionFileMarker,
+  patchSessionEntry,
+  parseSqliteSessionFileMarker,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import {
   readSessionTranscriptEvents,
   type SessionTranscriptTargetParams,
@@ -62,6 +68,7 @@ const DEFAULT_QUERY_MODE = "recent" as const;
 const DEFAULT_QMD_SEARCH_MODE = "search" as const;
 const DEFAULT_TRANSCRIPT_DIR = "active-memory";
 const ACTIVE_MEMORY_RECALL_LANE = "active-memory";
+const ACTIVE_MEMORY_CLEANUP_RETRY_DELAYS_MS = [0, 50, 250] as const;
 const DEFAULT_CIRCUIT_BREAKER_MAX_TIMEOUTS = 3;
 const DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS = 60_000;
 const DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW = ["memory_search", "memory_get"] as const;
@@ -3140,6 +3147,43 @@ async function persistActiveMemoryTranscriptArtifact(params: {
   );
 }
 
+async function cleanupActiveMemoryRecallSession(params: {
+  agentId: string;
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+}): Promise<void> {
+  const sessionKeySegmentPrefix =
+    parseAgentSessionKey(params.sessionKey)?.rest ?? params.sessionKey;
+  let lastError: unknown;
+  for (const delayMs of ACTIVE_MEMORY_CLEANUP_RETRY_DELAYS_MS) {
+    if (delayMs > 0) {
+      await sleep(delayMs);
+    }
+    try {
+      const result = await cleanupSessionLifecycleArtifacts({
+        agentId: params.agentId,
+        archiveRemovedEntryTranscripts: false,
+        orphanTranscriptMinAgeMs: 0,
+        sessionKeySegmentPrefix,
+        storePath: params.storePath,
+        transcriptContentMarker: `"runId":"${params.sessionId}"`,
+      });
+      if (result.removedEntries !== 1) {
+        throw new Error(
+          `active-memory recall cleanup removed ${String(result.removedEntries)} sessions`,
+        );
+      }
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error(`active-memory recall cleanup failed: ${String(lastError)}`);
+}
+
 async function runRecallSubagent(params: {
   api: OpenClawPluginApi;
   config: ResolvedActiveRecallPluginConfig;
@@ -3178,7 +3222,7 @@ async function runRecallSubagent(params: {
   const subagentScope = parentSessionKey ?? params.sessionId ?? crypto.randomUUID();
   const subagentSuffix = `active-memory:${crypto
     .createHash("sha1")
-    .update(`${subagentScope}:${params.query}`)
+    .update(`${subagentScope}:${params.query}:${subagentSessionId}`)
     .digest("hex")
     .slice(0, 12)}`;
   const subagentSessionKey = parentSessionKey
@@ -3197,7 +3241,7 @@ async function runRecallSubagent(params: {
         params.config.transcriptDir,
       )
     : undefined;
-  const sessionFile =
+  const artifactSessionFile =
     persistedDir !== undefined
       ? path.join(persistedDir, `${subagentSessionId}.jsonl`)
       : path.join(requireTransientWorkspaceDir(tempDir), "session.jsonl");
@@ -3207,6 +3251,11 @@ async function runRecallSubagent(params: {
       agentId: params.agentId,
     },
   );
+  const runtimeSessionFile = formatSqliteSessionFileMarker({
+    agentId: params.agentId,
+    sessionId: subagentSessionId,
+    storePath,
+  });
   const runtimeSource: ActiveMemoryTranscriptSource = {
     kind: "runtime",
     target: {
@@ -3217,32 +3266,53 @@ async function runRecallSubagent(params: {
     },
   };
   let transcriptSources = collectActiveMemoryTranscriptSources({
-    artifactSessionFile: sessionFile,
+    artifactSessionFile,
     runtimeSource,
     activeSessionKey: subagentSessionKey,
-  });
-  params.onTranscriptSources?.(transcriptSources);
-  if (persistedDir) {
-    await fs.mkdir(persistedDir, { recursive: true, mode: 0o700 });
-    await fs.chmod(persistedDir, 0o700).catch(() => undefined);
-  }
-  const prompt = buildRecallPrompt({
-    config: params.config,
-    query: params.query,
-    searchQuery: params.searchQuery,
-  });
-  const { messageChannel, messageProvider } = resolveRecallRunChannelContext({
-    api: params.api,
-    agentId: params.agentId,
-    sessionKey: parentSessionKey,
-    sessionId: params.sessionId,
-    messageProvider: params.messageProvider,
-    channelId: params.channelId,
   });
 
   let harnessHasUsableMemoryResult = false;
   let harnessHasUnavailableMemorySearchResult = false;
+  let transcriptArtifactPersisted = false;
+  let runtimeSessionCreated = false;
   try {
+    const runtimeEntry = {
+      pluginOwnerId: params.api.id,
+      sessionId: subagentSessionId,
+      sessionFile: runtimeSessionFile,
+      updatedAt: Date.now(),
+    };
+    const createdEntry = await patchSessionEntry({
+      agentId: params.agentId,
+      fallbackEntry: runtimeEntry,
+      replaceEntry: true,
+      sessionKey: subagentSessionKey,
+      skipMaintenance: true,
+      storePath,
+      update: (_entry, context) => (context.existingEntry ? null : runtimeEntry),
+    });
+    if (createdEntry?.sessionId !== subagentSessionId) {
+      throw new Error(`active-memory recall session already exists: ${subagentSessionKey}`);
+    }
+    runtimeSessionCreated = true;
+    params.onTranscriptSources?.(transcriptSources);
+    if (persistedDir) {
+      await fs.mkdir(persistedDir, { recursive: true, mode: 0o700 });
+      await fs.chmod(persistedDir, 0o700).catch(() => undefined);
+    }
+    const prompt = buildRecallPrompt({
+      config: params.config,
+      query: params.query,
+      searchQuery: params.searchQuery,
+    });
+    const { messageChannel, messageProvider } = resolveRecallRunChannelContext({
+      api: params.api,
+      agentId: params.agentId,
+      sessionKey: parentSessionKey,
+      sessionId: params.sessionId,
+      messageProvider: params.messageProvider,
+      channelId: params.channelId,
+    });
     const embeddedConfig = applyActiveMemoryRuntimeConfigSnapshot(params.api.config, params.config);
     const embeddedTimeoutMs = params.config.timeoutMs + params.config.setupGraceTimeoutMs;
     const result = await params.api.runtime.agent.runEmbeddedAgent({
@@ -3257,7 +3327,7 @@ async function runRecallSubagent(params: {
       },
       messageChannel,
       messageProvider,
-      sessionFile,
+      sessionFile: runtimeSessionFile,
       workspaceDir,
       agentDir,
       config: embeddedConfig,
@@ -3288,9 +3358,10 @@ async function runRecallSubagent(params: {
         harnessHasUnavailableMemorySearchResult ||= evidence.hasUnavailableMemorySearchResult;
       },
     });
-    const activeSessionFile = readActiveMemorySessionFileFromRunResult(result) ?? sessionFile;
+    const activeSessionFile =
+      readActiveMemorySessionFileFromRunResult(result) ?? runtimeSessionFile;
     transcriptSources = collectActiveMemoryTranscriptSources({
-      artifactSessionFile: sessionFile,
+      artifactSessionFile,
       runtimeSource,
       activeSessionFile,
       activeSessionKey: subagentSessionKey,
@@ -3314,7 +3385,11 @@ async function runRecallSubagent(params: {
       .join("\n")
       .trim();
     if (params.config.persistTranscripts) {
-      await persistActiveMemoryTranscriptArtifact({ sources: transcriptSources, sessionFile });
+      await persistActiveMemoryTranscriptArtifact({
+        sources: transcriptSources,
+        sessionFile: artifactSessionFile,
+      });
+      transcriptArtifactPersisted = true;
     }
     const transcriptState = await readMergedActiveMemoryTranscriptState({
       sources: transcriptSources,
@@ -3324,7 +3399,7 @@ async function runRecallSubagent(params: {
       transcriptState.searchDebug ?? readActiveMemorySearchDebugFromRunResult(result);
     return {
       rawReply: rawReply || "NONE",
-      transcriptPath: params.config.persistTranscripts ? sessionFile : undefined,
+      transcriptPath: params.config.persistTranscripts ? artifactSessionFile : undefined,
       searchDebug,
       hasUsableMemoryResult: transcriptState.hasUsableMemoryResult || harnessHasUsableMemoryResult,
       hasUnavailableMemorySearchResult:
@@ -3362,7 +3437,39 @@ async function runRecallSubagent(params: {
     }
     throw error;
   } finally {
-    await transientWorkspace?.cleanup();
+    try {
+      if (runtimeSessionCreated) {
+        if (params.config.persistTranscripts && !transcriptArtifactPersisted) {
+          await persistActiveMemoryTranscriptArtifact({
+            sources: transcriptSources,
+            sessionFile: artifactSessionFile,
+          }).catch((error: unknown) => {
+            const message = toSingleLineLogValue(
+              error instanceof Error ? error.message : String(error),
+            );
+            params.api.logger.debug?.(
+              `active-memory: failed to persist recall transcript ${artifactSessionFile}: ${message}`,
+            );
+          });
+        }
+        await cleanupActiveMemoryRecallSession({
+          agentId: params.agentId,
+          sessionId: subagentSessionId,
+          sessionKey: subagentSessionKey,
+          storePath,
+        }).catch((error: unknown) => {
+          const message = toSingleLineLogValue(
+            error instanceof Error ? error.message : String(error),
+          );
+          params.api.logger.warn?.(
+            `active-memory: failed to clean up recall session ${subagentSessionKey}: ${message}`,
+          );
+          throw error;
+        });
+      }
+    } finally {
+      await transientWorkspace?.cleanup();
+    }
   }
 }
 

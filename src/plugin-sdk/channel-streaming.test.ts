@@ -120,9 +120,11 @@ describe("channel-streaming", () => {
     ).toBe(false);
   });
 
-  it("ignores legacy flat fields when the canonical object is absent", () => {
-    // Doctor migrates the flat aliases (`openclaw doctor --fix`); runtime reads
-    // only the nested streaming shape.
+  it("resolves flat delivery keys when no nested streaming config exists", () => {
+    // Flat delivery keys stay canonical for channels without a nested
+    // streaming schema (Mattermost, WhatsApp, Google Chat, IRC, Signal) and
+    // for external SDK plugins; mode-family aliases (streamMode, scalar
+    // streaming, nativeStreaming) are doctor-only and stay unread.
     const entry = {
       chunkMode: "newline",
       blockStreaming: true,
@@ -132,11 +134,19 @@ describe("channel-streaming", () => {
     } as never;
 
     expect(getChannelStreamingConfigObject(entry)).toBeUndefined();
-    expect(resolveChannelStreamingChunkMode(entry)).toBeUndefined();
+    expect(resolveChannelStreamingChunkMode(entry)).toBe("newline");
     expect(resolveChannelStreamingNativeTransport(entry)).toBeUndefined();
-    expect(resolveChannelStreamingBlockEnabled(entry)).toBeUndefined();
-    expect(resolveChannelStreamingBlockCoalesce(entry)).toBeUndefined();
-    expect(resolveChannelStreamingPreviewChunk(entry)).toBeUndefined();
+    expect(resolveChannelStreamingBlockEnabled(entry)).toBe(true);
+    expect(resolveChannelStreamingBlockCoalesce(entry)).toEqual({
+      minChars: 120,
+      maxChars: 240,
+      idleMs: 500,
+    });
+    expect(resolveChannelStreamingPreviewChunk(entry)).toEqual({
+      minChars: 8,
+      maxChars: 16,
+      breakPreference: "newline",
+    });
     expect(resolveChannelStreamingPreviewToolProgress(entry)).toBe(true);
   });
 
@@ -155,9 +165,9 @@ describe("channel-streaming", () => {
         streaming: { mode: "block", block: { enabled: true } },
       }),
     ).toBe(true);
-    expect(
-      resolveChannelStreamingBlockEnabled({ streaming: "block", blockStreaming: false } as never),
-    ).toBeUndefined();
+    expect(resolveChannelStreamingBlockEnabled({ streaming: "block", blockStreaming: false })).toBe(
+      false,
+    );
   });
 
   it("selects a longer transcript candidate for ellipsis-truncated finals", async () => {

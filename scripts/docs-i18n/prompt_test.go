@@ -144,6 +144,7 @@ func TestTranslationPromptAddsRepresentativeLocaleRules(t *testing.T) {
 		{locale: "ja-JP", wants: []string{"technical Japanese", "〜でございます", "「 and 」"}},
 		{locale: "de", wants: []string{"Sie/Ihr/Ihnen", "du/dein/dir"}},
 		{locale: "pt-BR", wants: []string{"Brazilian Portuguese, not European Portuguese"}},
+		{locale: "nl", wants: []string{"Use informal “je/jouw” consistently", "do not switch to formal “u/uw” except inside protected literal quotations"}},
 		{locale: "fa", wants: []string{"Persian ی and ک", "right-to-left"}},
 		{locale: "uk", wants: []string{"Ukrainian terminology rather than Russian calques"}},
 		{locale: "th", wants: []string{"Do not insert spaces between every Thai word"}},

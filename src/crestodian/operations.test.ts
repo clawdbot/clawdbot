@@ -559,6 +559,24 @@ describe("parseCrestodianOperation", () => {
     expect(runGatewayRestart).not.toHaveBeenCalled();
   });
 
+  it("does not report or audit a gateway restart that returned false", async () => {
+    const tempDir = opTempDirs.make("crestodian-restart-failed-");
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    const { runtime, lines } = createCrestodianTestRuntime();
+    const runGatewayRestart = vi.fn(async () => false);
+
+    await expect(
+      executeCrestodianOperation({ kind: "gateway-restart" }, runtime, {
+        approved: true,
+        deps: { runGatewayRestart },
+      }),
+    ).rejects.toThrow("Gateway restart did not complete");
+
+    expect(lines.join("\n")).toContain("[crestodian] running: gateway.restart");
+    expect(lines.join("\n")).not.toContain("[crestodian] done: gateway.restart");
+    await expect(fs.access(path.join(tempDir, "audit", "crestodian.jsonl"))).rejects.toThrow();
+  });
+
   it("validates missing config without exiting the process", async () => {
     mockConfig.missing("/tmp/openclaw.json");
     const { runtime, lines } = createCrestodianTestRuntime();

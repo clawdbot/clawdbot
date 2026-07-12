@@ -241,7 +241,7 @@
     "tools": [
       {
         "deferLoading": true,
-        "description": "Paired nodes: status/list with active-computer presence; pass node to describe/control. Pairing, notify, camera/photos/screen/location/notifications/invoke. Files: file_fetch.",
+        "description": "Paired nodes: status/list with active-computer presence; pass node to describe/control. Pairing, notify, camera/photos/screen/location/notifications, executable lookup (which + bins), generic invoke. Files: file_fetch.",
         "inputSchema": {
           "properties": {
             "action": {
@@ -265,9 +265,20 @@
                 "device_info",
                 "device_permissions",
                 "device_health",
+                "which",
                 "invoke"
               ],
               "type": "string"
+            },
+            "bins": {
+              "description": "which: executable names to resolve on the selected node.",
+              "items": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 64,
+              "minItems": 1,
+              "type": "array"
             },
             "body": {
               "type": "string"

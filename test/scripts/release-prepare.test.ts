@@ -1,4 +1,5 @@
 // Release prepare tests cover shadow planning, cutover commands, and candidate manifests.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildReleasePreparationManifest,
@@ -57,7 +58,7 @@ describe("release preparation plan", () => {
       version: "2026.7.2-beta.1",
     });
 
-    expect(steps[0].args).toEqual([
+    expect(expectDefined(steps[0], "release version preparation step").args).toEqual([
       "--import",
       "tsx",
       "scripts/release-version.ts",
@@ -68,7 +69,7 @@ describe("release preparation plan", () => {
       "--android",
       "--write",
     ]);
-    expect(steps[1].args).toEqual([
+    expect(expectDefined(steps[1], "release preflight preparation step").args).toEqual([
       "scripts/release-preflight.mjs",
       "--fix",
       "--scope",

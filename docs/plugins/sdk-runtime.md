@@ -675,7 +675,7 @@ two-party event loops that do not go through the shared inbound reply runner.
 
     `openSyncKeyedStore<T>(...)` returns the same store shape with synchronous methods (`register`, `registerIfAbsent`, `lookup`, `consume`, `clear` all return values directly instead of promises) for callers that cannot await.
 
-    `openChannelIngressQueue<TPayload>(...)` opens a persisted ingress queue scoped to the calling plugin, for buffering inbound events that need at-least-once processing across restarts.
+    `openChannelIngressQueue<TPayload>(...)` opens a persisted ingress queue scoped to the calling plugin, for buffering inbound events that need at-least-once processing across restarts. When stale-claim recovery uses `shouldRecover`, also provide `shouldRecoverCorrupt` if corrupt claimed payloads should be quarantined: its payload-independent claim identity lets the plugin preserve live owner and lane policy before the queue tombstones the row.
 
     <Warning>
     `openKeyedStore`, `openSyncKeyedStore`, and `openChannelIngressQueue` are available only to bundled plugins and trusted official plugin installations in this release.

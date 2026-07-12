@@ -256,30 +256,6 @@ function splitPreparedTelegramRichHtml(params: {
   return splitTelegramHtmlChunks(escapeTelegramHtml(params.sourceFallback), params.textLimit);
 }
 
-export function isTelegramRichMessageWithinStructuralLimits(
-  message: TelegramInputRichMessage,
-): boolean {
-  if (message.markdown !== undefined) {
-    if (splitTelegramRichMarkdownBlocks(message.markdown, TELEGRAM_RICH_BLOCK_LIMIT).length > 1) {
-      return false;
-    }
-    return (
-      splitTelegramHtmlChunks(
-        prepareTelegramRichHtml(markdownToTelegramRichHtml(message.markdown)).html,
-        TELEGRAM_RICH_TEXT_LIMIT,
-        TELEGRAM_RICH_HTML_CHUNK_LIMITS,
-      ).length <= 1
-    );
-  }
-  return (
-    splitTelegramHtmlChunks(
-      prepareTelegramRichHtml(message.html).html,
-      TELEGRAM_RICH_TEXT_LIMIT,
-      TELEGRAM_RICH_HTML_CHUNK_LIMITS,
-    ).length <= 1
-  );
-}
-
 type RichMarkdownFenceSpan = {
   start: number;
   end: number;

@@ -2099,7 +2099,7 @@ describe("package artifact reuse", () => {
       ["run_live_discord", "Upload Discord QA artifacts", "always()"],
       ["run_live_whatsapp", "Upload WhatsApp QA artifacts", "always()"],
       ["run_live_slack", "Upload Slack QA artifacts", "always()"],
-    ];
+    ] as const;
 
     for (const [jobName, stepName, uploadCondition] of cases) {
       const uploadStep = workflowStep(workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, jobName), stepName);
@@ -2130,7 +2130,7 @@ describe("package artifact reuse", () => {
       ["qa_live_discord_release_checks", "Upload Discord QA artifacts"],
       ["qa_live_whatsapp_release_checks", "Upload WhatsApp QA artifacts"],
       ["qa_live_slack_release_checks", "Upload Slack QA artifacts"],
-    ];
+    ] as const;
 
     for (const [jobName, stepName] of cases) {
       const uploadStep = workflowStep(workflowJob(RELEASE_CHECKS_WORKFLOW, jobName), stepName);

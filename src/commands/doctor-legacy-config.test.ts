@@ -19,6 +19,7 @@ function normalizeStreaming(params: {
   entry: Record<string, unknown>;
   pathPrefix: string;
   resolvedMode: string;
+  aliasOnlyMode?: string;
   resolvedNativeTransport?: unknown;
   offModeLegacyNotice?: (pathPrefix: string) => string;
 }) {
@@ -88,6 +89,67 @@ describe("normalizeCompatibilityConfigValues preview streaming aliases", () => {
     expect(res.changes).toEqual([
       "Moved channels.discord.streamMode → channels.discord.streaming.mode (off).",
       'channels.discord.streaming remains off by default to avoid Discord preview-edit rate limits; set channels.discord.streaming.mode="partial" to opt in explicitly.',
+    ]);
+  });
+
+  it("pins the previous default mode when delivery-only aliases create the streaming object", () => {
+    // Discord previews default to progress only while `streaming` is absent;
+    // without aliasOnlyMode the migrated object would resolve to off.
+    const res = normalizeStreaming({
+      entry: { blockStreaming: true },
+      pathPrefix: "channels.discord",
+      resolvedMode: "off",
+      aliasOnlyMode: "progress",
+    });
+
+    expect(res.entry.streaming).toEqual({ mode: "progress", block: { enabled: true } });
+    expect(res.changes).toEqual([
+      "Moved channels.discord.blockStreaming → channels.discord.streaming.block.enabled.",
+      "Set channels.discord.streaming.mode (progress) to keep the previous default while migrating flat streaming keys.",
+    ]);
+  });
+
+  it("keeps delivery-only alias migration mode-free without aliasOnlyMode", () => {
+    const res = normalizeStreaming({
+      entry: { blockStreaming: true },
+      pathPrefix: "channels.telegram",
+      resolvedMode: "partial",
+    });
+
+    expect(res.entry.streaming).toEqual({ block: { enabled: true } });
+    expect(res.changes).toEqual([
+      "Moved channels.telegram.blockStreaming → channels.telegram.streaming.block.enabled.",
+    ]);
+  });
+
+  it("does not apply aliasOnlyMode when a legacy mode source exists", () => {
+    const res = normalizeStreaming({
+      entry: { streamMode: "partial", blockStreaming: true },
+      pathPrefix: "channels.discord",
+      resolvedMode: "partial",
+      aliasOnlyMode: "progress",
+    });
+
+    expect(res.entry.streaming).toEqual({ mode: "partial", block: { enabled: true } });
+    expect(res.changes).toEqual([
+      "Moved channels.discord.streamMode → channels.discord.streaming.mode (partial).",
+      "Moved channels.discord.blockStreaming → channels.discord.streaming.block.enabled.",
+    ]);
+  });
+
+  it("does not apply aliasOnlyMode when a nested streaming object already exists", () => {
+    // A pre-existing object already resolved with object-without-mode
+    // semantics, so pinning a mode would change behavior instead of keeping it.
+    const res = normalizeStreaming({
+      entry: { streaming: { chunkMode: "newline" }, blockStreaming: true },
+      pathPrefix: "channels.discord",
+      resolvedMode: "off",
+      aliasOnlyMode: "progress",
+    });
+
+    expect(res.entry.streaming).toEqual({ chunkMode: "newline", block: { enabled: true } });
+    expect(res.changes).toEqual([
+      "Moved channels.discord.blockStreaming → channels.discord.streaming.block.enabled.",
     ]);
   });
 

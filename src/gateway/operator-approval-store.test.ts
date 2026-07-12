@@ -179,6 +179,74 @@ describe("operator approval store", () => {
     ]);
   });
 
+  it("filters an audience before applying the replay limit across scan pages", () => {
+    const databaseOptions = createDatabaseOptions();
+    for (let index = 0; index < 256; index += 1) {
+      const id = `unrelated-${String(index).padStart(3, "0")}`;
+      expect(
+        insertOperatorApproval({
+          approval: approval(id, {
+            audienceSessionKeys: ["agent:main:other"],
+            createdAtMs: 1_000 + index,
+          }),
+          databaseOptions,
+        }),
+      ).toMatchObject({ outcome: "inserted" });
+    }
+    expect(
+      insertOperatorApproval({
+        approval: approval("target-after-first-page", {
+          audienceSessionKeys: ["agent:main:target"],
+          createdAtMs: 2_000,
+        }),
+        databaseOptions,
+      }),
+    ).toMatchObject({ outcome: "inserted" });
+
+    expect(
+      listPendingOperatorApprovals({
+        audienceSessionKey: "agent:main:target",
+        limit: 1,
+        nowMs: 3_000,
+        databaseOptions,
+      }),
+    ).toMatchObject([{ id: "target-after-first-page" }]);
+  });
+
+  it("applies a record filter before the replay limit across scan pages", () => {
+    const databaseOptions = createDatabaseOptions();
+    for (let index = 0; index < 256; index += 1) {
+      const id = `unrelated-reviewer-${String(index).padStart(3, "0")}`;
+      expect(
+        insertOperatorApproval({
+          approval: approval(id, {
+            reviewerDeviceIds: ["unrelated-device"],
+            createdAtMs: 1_000 + index,
+          }),
+          databaseOptions,
+        }),
+      ).toMatchObject({ outcome: "inserted" });
+    }
+    expect(
+      insertOperatorApproval({
+        approval: approval("authorized-after-first-page", {
+          reviewerDeviceIds: ["authorized-device"],
+          createdAtMs: 2_000,
+        }),
+        databaseOptions,
+      }),
+    ).toMatchObject({ outcome: "inserted" });
+
+    expect(
+      listPendingOperatorApprovals({
+        recordFilter: (record) => record.reviewerDeviceIds.includes("authorized-device"),
+        limit: 1,
+        nowMs: 3_000,
+        databaseOptions,
+      }),
+    ).toMatchObject([{ id: "authorized-after-first-page" }]);
+  });
+
   it("reads the default clock after waiting for the SQLite write lock", async () => {
     const databaseOptions = createDatabaseOptions();
     const createdAtMs = Date.now();
@@ -282,6 +350,23 @@ describe("operator approval store", () => {
         }),
       ).toThrow(/approval id/);
     }
+  });
+
+  it("preserves protocol-valid boundary whitespace as opaque approval identity", () => {
+    const databaseOptions = createDatabaseOptions();
+    for (const [index, id] of ["\uFEFF", "\u00A0", " approval-edge "].entries()) {
+      const inserted = insertOperatorApproval({
+        approval: approval(id, { createdAtMs: 1_000 + index }),
+        databaseOptions,
+      });
+
+      expect(inserted).toMatchObject({ outcome: "inserted", record: { id } });
+      expect(getOperatorApproval({ id, nowMs: 2_000, databaseOptions })).toMatchObject({
+        id,
+        status: "pending",
+      });
+    }
+    expect(getOperatorApproval({ id: "approval-edge", nowMs: 2_000, databaseOptions })).toBeNull();
   });
 
   it("keeps canonical ids and transport references in disjoint lookup namespaces", () => {

@@ -224,13 +224,14 @@ The command:
    process and retry if the checkpoint is busy.
 4. Sets `auto_vacuum` to `INCREMENTAL`, runs a full `VACUUM`, and checkpoints
    again.
-5. Runs both `quick_check` and `integrity_check`, then reapplies owner-only
-   permissions to the database and SQLite sidecar files.
+5. Runs `quick_check`, `integrity_check`, and `foreign_key_check`, then
+   reapplies owner-only permissions to the database and SQLite sidecar files.
 
 JSON output reports the database and WAL sizes, freelist pages, page size, and
-`auto_vacuum` value before and after compaction, plus reclaimed bytes and both
-verification results. SQLite reports `auto_vacuum` as `0` for none, `1` for
-full, and `2` for incremental.
+`auto_vacuum` value before and after compaction, plus reclaimed bytes and the
+`quick_check` and `integrity_check` results. `foreign_key_check` is enforced
+fail-closed and has no separate success field. SQLite reports `auto_vacuum` as
+`0` for none, `1` for full, and `2` for incremental.
 
 Compaction fails without mutation when the schema is old, newer than the
 running OpenClaw build, or belongs to an agent database. Run

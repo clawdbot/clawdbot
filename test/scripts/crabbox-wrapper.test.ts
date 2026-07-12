@@ -1598,7 +1598,7 @@ describe("scripts/crabbox-wrapper", () => {
         "env -i bash scripts/package-mac-app.sh >out.log 2>&1",
         "openclaw_crabbox_env -i bash scripts/package-mac-app.sh >out.log 2>&1",
       ],
-    ]) {
+    ] as const) {
       const result = runWrapper(
         "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
         ["run", "--provider", "aws", "--target", "macos", "--shell", "--", shellCommand],
@@ -1654,7 +1654,7 @@ describe("scripts/crabbox-wrapper", () => {
         "time env -i bash scripts/package-mac-app.sh",
         "time openclaw_crabbox_env -i bash scripts/package-mac-app.sh",
       ],
-    ]) {
+    ] as const) {
       const result = runWrapper(
         "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
         ["run", "--provider", "aws", "--target", "macos", "--shell", "--", shellCommand],
@@ -1681,7 +1681,7 @@ describe("scripts/crabbox-wrapper", () => {
         "{ env -i bash scripts/package-mac-app.sh; }",
         "{ openclaw_crabbox_env -i bash scripts/package-mac-app.sh; }",
       ],
-    ]) {
+    ] as const) {
       const result = runWrapper(
         "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
         ["run", "--provider", "aws", "--target", "macos", "--shell", "--", shellCommand],
@@ -1773,7 +1773,7 @@ describe("scripts/crabbox-wrapper", () => {
         "PATH=/usr/bin:/bin env -i bash scripts/package-mac-app.sh",
         "PATH=/usr/bin:/bin openclaw_crabbox_env -i bash scripts/package-mac-app.sh",
       ],
-    ]) {
+    ] as const) {
       const result = runWrapper(
         "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
         ["run", "--provider", "aws", "--target", "macos", "--shell", "--", shellCommand],

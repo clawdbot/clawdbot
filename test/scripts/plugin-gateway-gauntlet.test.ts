@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildObservationGuardFailures,
@@ -234,10 +235,11 @@ describe("plugin gateway gauntlet helpers", () => {
       runtimeSlashAliases: [{ name: "alpha", kind: "runtime-slash", cliCommand: "plugins" }],
       skills: [],
     });
-    expect(matrix[1].runtimeSlashAliases).toEqual([
+    const beta = expectDefined(matrix[1], "beta bundled plugin manifest");
+    expect(beta.runtimeSlashAliases).toEqual([
       { name: "dreaming", kind: "runtime-slash", cliCommand: null },
     ]);
-    expect(matrix[1].buildId).toBe("beta");
+    expect(beta.buildId).toBe("beta");
   });
 
   it("keeps manifest ids separate from bounded build entry ids", async () => {
@@ -251,7 +253,8 @@ describe("plugin gateway gauntlet helpers", () => {
         id: "kimi",
       }),
     ]);
-    expect(buildGauntletPrebuildEnv({}, { buildIds: [matrix[0].buildId] })).toEqual({
+    const kimi = expectDefined(matrix[0], "Kimi bundled plugin manifest");
+    expect(buildGauntletPrebuildEnv({}, { buildIds: [kimi.buildId] })).toEqual({
       OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "kimi-coding",
       PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
     });
@@ -332,9 +335,9 @@ describe("plugin gateway gauntlet helpers", () => {
       { id: "beta", requiredPlugins: ["alpha"] },
     ];
 
-    expect(() => collectRequiredPluginEntries(entries, [entries[0]])).toThrow(
-      "Bundled plugin dependency cycle detected: alpha -> beta -> alpha",
-    );
+    expect(() =>
+      collectRequiredPluginEntries(entries, [expectDefined(entries[0], "alpha plugin entry")]),
+    ).toThrow("Bundled plugin dependency cycle detected: alpha -> beta -> alpha");
   });
 
   it("detects required schema fields recursively", () => {

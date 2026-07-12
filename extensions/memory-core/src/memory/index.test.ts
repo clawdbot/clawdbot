@@ -880,7 +880,7 @@ describe("memory index", () => {
 
       expect(providerRuntimeBatchCalls).toHaveLength(3);
       expect(providerRuntimeBatchCalls.every((call) => call.length === 1)).toBe(true);
-      expect(providerRuntimeBatchCalls.map((call) => call[0]).toSorted()).toEqual(
+      expect(providerRuntimeBatchCalls.map((call) => call[0] ?? "").toSorted()).toEqual(
         [
           "# Log\nAlpha memory line.\nZebra memory line.",
           "# Log\nBeta memory line.",

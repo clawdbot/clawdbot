@@ -3,8 +3,14 @@ from __future__ import annotations
 
 import argparse
 import ast
+import base64
+import binascii
+import bisect
 import concurrent.futures
 import copy
+import functools
+import hashlib
+import io
 import json
 import os
 import queue
@@ -17,9 +23,10 @@ import tempfile
 import textwrap
 import threading
 import time
+import unicodedata
 import urllib.parse
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable
+from typing import Any, Callable, NamedTuple
 
 
 ENGINES = ("codex", "claude", "droid", "copilot", "pi", "opencode", "cursor")
@@ -71,7 +78,12 @@ TRACKED_CREDENTIAL_DIR_PATTERN = re.compile(
     r"(?:[._-].*)?$",
     re.IGNORECASE,
 )
+CREDENTIAL_FILE_PATTERN = re.compile(
+    r"(^|/)(?:\.netrc|\.git-credentials)$",
+    re.IGNORECASE,
+)
 SENSITIVE_NAME_PATTERNS = [
+    CREDENTIAL_FILE_PATTERN,
     re.compile(r"(^|/)\.env($|[._/-])", re.IGNORECASE),
     re.compile(r"(^|/)(id_rsa|id_dsa|id_ecdsa|id_ed25519)(\.pub)?$", re.IGNORECASE),
     re.compile(r"\.(pem|p12|pfx|key)$", re.IGNORECASE),
@@ -81,6 +93,7 @@ SENSITIVE_NAME_PATTERNS = [
     ),
 ]
 TRACKED_SENSITIVE_NAME_PATTERNS = [
+    CREDENTIAL_FILE_PATTERN,
     re.compile(
         r"(^|/)\.env(?:$|/|[._-](?!(?:example|sample|template)$)[^/]*)",
         re.IGNORECASE,
@@ -137,21 +150,64 @@ TRACKED_TOKEN_CREDENTIAL_EXTENSIONS = {
     ".yaml",
     ".yml",
 }
+SECRET_KEY_NAME_PATTERN = (
+    r"(?:api[_-]?key|aws[_-]?secret[_-]?access[_-]?key"
+    r"|client[_-]?secret|refresh[_-]?token|access[_-]?token"
+    r"|auth[_-]?token|id[_-]?token|token|secret|password"
+    r"|credentials?|private[_-]?key)"
+)
+SECRET_SEPARATED_KEY_NAME_PATTERN = (
+    rf"(?:[A-Za-z0-9]{{1,64}}"
+    rf"(?:[_-][A-Za-z0-9]{{1,64}}){{0,15}}[_-]"
+    rf"{SECRET_KEY_NAME_PATTERN})"
+)
+SECRET_LOWER_KEY_NAME_PATTERN = (
+    r"(?-i:[a-z][a-z0-9]*"
+    r"(?:apikey|awssecretaccesskey|clientsecret|refreshtoken"
+    r"|accesstoken|authtoken|idtoken|token|secret|password"
+    r"|credential|credentials|privatekey))"
+)
+SECRET_CAMEL_KEY_NAME_PATTERN = (
+    r"(?-i:[A-Za-z][A-Za-z0-9]*"
+    r"(?:ApiKey|APIKey|AwsSecretAccessKey|AWSSecretAccessKey"
+    r"|ClientSecret|RefreshToken|AccessToken|AuthToken|IdToken|IDToken"
+    r"|Token|Secret|Password"
+    r"|Credential|Credentials|PrivateKey))"
+)
+SECRET_UPPER_KEY_NAME_PATTERN = (
+    r"(?-i:[A-Z][A-Z0-9]*"
+    r"(?:APIKEY|AWSSECRETACCESSKEY|CLIENTSECRET|REFRESHTOKEN"
+    r"|ACCESSTOKEN|AUTHTOKEN|IDTOKEN|TOKEN|SECRET|PASSWORD"
+    r"|CREDENTIAL|CREDENTIALS|PRIVATEKEY))"
+)
+SECRET_ASSIGNMENT_KEY_NAME_PATTERN = (
+    rf"(?:{SECRET_SEPARATED_KEY_NAME_PATTERN}"
+    rf"|{SECRET_LOWER_KEY_NAME_PATTERN}"
+    rf"|{SECRET_CAMEL_KEY_NAME_PATTERN}"
+    rf"|{SECRET_UPPER_KEY_NAME_PATTERN}"
+    rf"|{SECRET_KEY_NAME_PATTERN})"
+)
+SECRET_ASSIGNMENT_KEY_PATTERN = (
+    rf"(?:[\"']{SECRET_ASSIGNMENT_KEY_NAME_PATTERN}[\"']"
+    rf"|(?<![A-Za-z0-9]){SECRET_ASSIGNMENT_KEY_NAME_PATTERN}"
+    rf"(?![A-Za-z0-9]))"
+)
 SECRET_ASSIGNMENT_PATTERN = re.compile(
-    r"(?i)(?:"
-    r"[\"'](?:api[_-]?key|aws[_-]?secret[_-]?access[_-]?key|client[_-]?secret|refresh[_-]?token|access[_-]?token|auth[_-]?token|id[_-]?token|token|secret|password)[\"']"
-    r"|(?:api[_-]?key|aws[_-]?secret[_-]?access[_-]?key|client[_-]?secret|refresh[_-]?token|access[_-]?token|auth[_-]?token|id[_-]?token|token|secret|password)"
-    r")\s*[:=]\s*"
-    r"(?:\"(?P<double_value>[^\"\r\n]{12,})\"|"
-    r"'(?P<single_value>[^'\r\n]{12,})'|"
-    r"`(?P<backtick_value>[^`\r\n]{12,})`|"
+    rf"(?i){SECRET_ASSIGNMENT_KEY_PATTERN}\s*[:=]\s*"
+    r"(?:\"(?P<double_value>[^\"\r\n]{8,})\"|"
+    r"'(?P<single_value>[^'\r\n]{8,})'|"
+    r"`(?P<backtick_value>[^`\r\n]{8,})`|"
     r"(?P<call_value>[A-Za-z_$][A-Za-z0-9_$]*"
-    r"(?:(?:\?\.|\.)[A-Za-z_$][A-Za-z0-9_$]*)*)(?=\()|"
+    r"(?:(?:\?\.|\.)[A-Za-z_$][A-Za-z0-9_$]*)*)(?=[ \t]*\()|"
     r"(?P<reference_value>[A-Za-z_$][A-Za-z0-9_$]*"
     r"(?:(?:\?\.|\.)[A-Za-z_$][A-Za-z0-9_$]*"
     r"|\[(?:[\"'][A-Za-z_$][A-Za-z0-9_$]*[\"']|[0-9]+)\])+)"
     r"(?![A-Za-z0-9_./+=:@#$%&*!?-])|"
-    r"(?P<bare_value>[A-Za-z0-9_./+=:@#$%&*!?-]{20,}))"
+    r"(?P<bare_value>[A-Za-z0-9_./+=:@#$%&*!?-]{8,}))"
+)
+SECRET_ASSIGNMENT_PREFIX_PATTERN = re.compile(
+    rf"(?i){SECRET_ASSIGNMENT_KEY_PATTERN}"
+    r"\s*(?:=(?!=|>)|:(?![:=]))\s*"
 )
 SECRET_VALUE_PATTERNS = [
     re.compile(
@@ -170,6 +226,47 @@ SECRET_VALUE_PATTERNS = [
     re.compile(r"\bya29\.[0-9A-Za-z_-]{20,}\b"),
     re.compile(r"\beyJ[A-Za-z0-9_-]{7,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b"),
 ]
+BASIC_AUTHORIZATION_PATTERN = re.compile(
+    r"(?i)(?:^|[^A-Za-z0-9_])[\"']?authorization[\"']?"
+    r"\s*[:=]\s*[\"']?"
+    r"basic\s+(?P<credential>[A-Za-z0-9+/]{8,}={0,2})"
+    r"(?![A-Za-z0-9+/=])"
+)
+URI_SCHEME_PATTERN = re.compile(
+    r"\b[A-Za-z][A-Za-z0-9+.-]*:(?:\\?/){2}",
+    re.IGNORECASE,
+)
+URI_PASSWORD_REFERENCE_PATTERNS = (
+    re.compile(r"^\$[A-Za-z_][A-Za-z0-9_]*$"),
+    re.compile(r"^\$\{[A-Za-z_][A-Za-z0-9_]*\}$"),
+    re.compile(r"^\{[A-Za-z_][A-Za-z0-9_]*\}$"),
+    re.compile(
+        r"^\$\{[A-Za-z_$][A-Za-z0-9_$]*"
+        r"(?:(?:\?\.|\.)[A-Za-z_$][A-Za-z0-9_$]*"
+        r"|\[(?:[0-9]+|[\"'][A-Za-z_$][A-Za-z0-9_$]*[\"'])\])+\}$"
+    ),
+    re.compile(
+        r"^\{[A-Za-z_$][A-Za-z0-9_$]*"
+        r"(?:(?:\?\.|\.)[A-Za-z_$][A-Za-z0-9_$]*"
+        r"|\[(?:[0-9]+|[\"'][A-Za-z_$][A-Za-z0-9_$]*[\"'])\])+\}$"
+    ),
+)
+URI_CREDENTIAL_REFERENCE_TEXT = (
+    r"[A-Za-z_$][A-Za-z0-9_$]*"
+    r"(?:(?:\?\.|\.)[A-Za-z_$][A-Za-z0-9_$]*"
+    r"|\[(?:[0-9]+|[\"'][A-Za-z_$][A-Za-z0-9_$]*[\"'])\])*"
+)
+URI_CREDENTIAL_REFERENCE_PATTERN = re.compile(
+    rf"^{URI_CREDENTIAL_REFERENCE_TEXT}$"
+)
+URI_COMPUTED_REFERENCE_PATTERN = re.compile(
+    rf"^{URI_CREDENTIAL_REFERENCE_TEXT}"
+    rf"\(\s*{URI_CREDENTIAL_REFERENCE_TEXT}\s*\)$"
+)
+POWERSHELL_ENV_REFERENCE_PATTERN = re.compile(
+    r"^\$env:[A-Za-z_][A-Za-z0-9_]*$",
+    re.IGNORECASE,
+)
 MAX_BUNDLE_TEXT_BYTES = 180_000
 MAX_REVIEW_PROMPT_BYTES = 512_000
 SECRET_PLACEHOLDER_VALUES = {
@@ -189,6 +286,119 @@ SECRET_PLACEHOLDER_VALUES = {
     "clawrouter-e2e-secret",
     "very-long-browser-token-0123456789",
 }
+FETCH_CREDENTIAL_MODE_VALUES = {"include", "omit", "same-origin"}
+URI_PASSWORD_PLACEHOLDER_VALUES = {
+    "clawrouter-e2e-secret",
+    "dummy",
+    "example",
+    "fake",
+    "not-a-real",
+    "placeholder",
+    "redacted",
+    "sample",
+    "test-auth-token",
+    "test-token-placeholder",
+    "token-oversized",
+    "very-long-browser-token-0123456789",
+}
+URI_CREDENTIAL_NAME_PATTERN = re.compile(
+    r"(?:api[_-]?key|auth|credential|pass(?:word)?|pwd|secret|token)",
+    re.IGNORECASE,
+)
+SHELL_COMMAND_WRAPPERS = {"command", "env", "sudo"}
+NON_SHELL_COMMAND_WORDS = {
+    "assert",
+    "await",
+    "case",
+    "catch",
+    "class",
+    "const",
+    "def",
+    "else",
+    "except",
+    "export",
+    "finally",
+    "for",
+    "from",
+    "function",
+    "if",
+    "import",
+    "include",
+    "interface",
+    "let",
+    "match",
+    "new",
+    "print",
+    "raise",
+    "require",
+    "return",
+    "switch",
+    "throw",
+    "try",
+    "type",
+    "var",
+    "while",
+    "with",
+    "yield",
+}
+PUBLIC_PROMPT_TARGETS = {"getpass.getpass", "input", "prompt"}
+GENERIC_CREDENTIAL_PROMPT_PATTERN = re.compile(
+    r"(?i)\s*(?:(?:enter|type|provide)\s+(?:(?:your|the)\s+)?)?"
+    r"(?:password|passphrase|api[\s_-]*(?:key|token))"
+    r"(?:\s+for\s+(?:the\s+)?"
+    r"(?P<service>[A-Za-z][A-Za-z0-9 _-]{0,48}))?"
+    r"\s*[:?]?\s*"
+)
+PROMPT_SECRET_THEME_WORDS = frozenset(
+    {
+        "admin",
+        "autumn",
+        "fall",
+        "password",
+        "secret",
+        "spring",
+        "summer",
+        "vacation",
+        "welcome",
+        "winter",
+    }
+)
+CSHARP_STANDALONE_REFERENCE_PATTERN = re.compile(
+    r"(?:credential|credentials|pass|passwd|password|pwd|secret|token)",
+    re.IGNORECASE,
+)
+CSHARP_METHOD_MODIFIERS_PATTERN = (
+    r"(?:(?:async|extern|internal|new|override|partial|private|protected"
+    r"|public|sealed|static|unsafe|virtual)\s+)*"
+)
+CSHARP_ATTRIBUTE_PATTERN = r"(?:\[[^\[\]{};]*\]\s*)*"
+CSHARP_TYPE_MODIFIERS_PATTERN = (
+    r"(?:(?:abstract|file|internal|new|partial|private|protected|public"
+    r"|readonly|ref|sealed|static|unsafe)\s+)*"
+)
+CSHARP_TYPE_PREFIX_PATTERN = (
+    rf"{CSHARP_ATTRIBUTE_PATTERN}"
+    rf"{CSHARP_TYPE_MODIFIERS_PATTERN}"
+    r"(?:class|interface|namespace|record(?:\s+(?:class|struct))?|struct)\s+"
+    r"[A-Za-z_][A-Za-z0-9_.]*(?:<[^{};]+>)?[^{;]*\{"
+)
+CSHARP_RETURN_TYPE_PATTERN = (
+    r"(?:(?:ref\s+(?:readonly\s+)?|scoped\s+)?"
+    r"(?:(?:[A-Za-z_][A-Za-z0-9_]*::)?"
+    r"[A-Za-z_][A-Za-z0-9_.]*"
+    r"(?:<[^{};]+>)?"
+    r"|\([^{};]+\))(?:\?|\*|\[[,\s]*\])*)"
+)
+CSHARP_METHOD_PREFIX_PATTERN = (
+    rf"{CSHARP_ATTRIBUTE_PATTERN}"
+    rf"{CSHARP_METHOD_MODIFIERS_PATTERN}"
+    r"(?!function\b)"
+    rf"{CSHARP_RETURN_TYPE_PATTERN}\s+"
+    r"[A-Za-z_][A-Za-z0-9_]*(?:<[^(){};]+>)?\s*"
+    r"\([^{};]*\)\s*"
+    r"(?:where\s+[^{;]+)?\{"
+)
+CSHARP_EVIDENCE_WINDOW = 8192
 QUOTED_SECRET_REFERENCE_PATTERNS = (
     re.compile(r"^\$[A-Za-z_][A-Za-z0-9_]*$"),
     re.compile(r"^\$env:[A-Za-z_][A-Za-z0-9_]*$", re.IGNORECASE),
@@ -197,7 +407,7 @@ QUOTED_SECRET_REFERENCE_PATTERNS = (
     re.compile(r"^\{\{\s*[A-Za-z_][A-Za-z0-9_.-]*\s*\}\}$"),
     re.compile(
         r"^\$\{(?:process\.env|os\.environ|env|cfg|config|params|payload|provider|user|"
-        r"request|response|result|account|client|auth|auth_response|oauth_response|"
+        r"request|response|result|account|client|options|auth|auth_response|oauth_response|"
         r"token_response|api_response|authentication|credentials|settings|self|this)"
         r"(?:(?:\?\.|\.)[A-Za-z_$][A-Za-z0-9_$]*"
         r"|\[(?:[\"'][A-Za-z_$][A-Za-z0-9_$]*[\"']|[0-9]+)\])+\}$"
@@ -208,7 +418,7 @@ UNQUOTED_SECRET_REFERENCE_PATTERNS = (
     *QUOTED_SECRET_REFERENCE_PATTERNS,
     re.compile(
         r"^(?:process\.env|os\.environ|env|cfg|config|params|payload|provider|user|"
-        r"request|response|result|account|client|auth|auth_response|oauth_response|"
+        r"request|response|result|account|client|options|auth|auth_response|oauth_response|"
         r"token_response|api_response|authentication|credentials|settings|self|this)"
         r"(?:(?:\?\.|[.\[]).*)$"
     ),
@@ -217,6 +427,12 @@ UNQUOTED_SECRET_REFERENCE_PATTERNS = (
         r"(?:api[_-]?key|aws[_-]?secret[_-]?access[_-]?key|client[_-]?secret|"
         r"refresh[_-]?token|access[_-]?token|auth[_-]?token|id[_-]?token|"
         r"token|secret|password)$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^(?:computed|derived|generated|provided|runtime)_"
+        r"[A-Za-z0-9_]*(?:api[_-]?key|credential|password|secret|token)"
+        r"[A-Za-z0-9_]*(?:ref|reference)$",
         re.IGNORECASE,
     ),
 )
@@ -597,6 +813,12 @@ def global_excludes_file(repo: Path) -> Path | None:
     return resolved
 
 
+def global_excludes_git_args(repo: Path) -> list[str]:
+    if excludes_file := global_excludes_file(repo):
+        return ["-c", f"core.excludesFile={excludes_file}"]
+    return []
+
+
 def safe_engine_path(repo: Path, extra_paths: list[Path] | None = None) -> str:
     entries: list[str] = []
     resolved_repo = repo.resolve()
@@ -915,6 +1137,7 @@ def safe_engine_env(
             env["XDG_RUNTIME_DIR"] = xdg_runtime_dir
         for key in CODEX_TRUST_PATH_ENV_KEYS:
             value = os.environ.get(key)
+            env.pop(key, None)
             normalized = (
                 normalize_external_env_path_value(repo, key, value)
                 if value
@@ -925,6 +1148,7 @@ def safe_engine_env(
     if engine in {"claude", "opencode", "pi"}:
         for key in PROVIDER_CREDENTIAL_PATH_ENV_KEYS:
             value = os.environ.get(key)
+            env.pop(key, None)
             normalized = (
                 normalize_external_env_path_value(repo, key, value)
                 if value
@@ -1342,7 +1566,7 @@ def run_with_stream(
         display = stream_display(name, line) if stream_display else line
         if display:
             target = sys.stdout if name == "stdout" else sys.stderr
-            target.write(display)
+            target.write(stream_display_escape(display))
             target.flush()
 
     for thread in threads:
@@ -1352,7 +1576,11 @@ def run_with_stream(
     return subprocess.CompletedProcess(args, returncode, "".join(stdout_parts), "".join(stderr_parts))
 
 
-def git(repo: Path, *args: str, check: bool = True) -> str:
+def git_result(
+    repo: Path,
+    *args: str,
+    check: bool = True,
+) -> subprocess.CompletedProcess[str]:
     try:
         return run(
             [resolve_command("git", repo), "--no-optional-locks", *SAFE_GIT_CONFIG_ARGS, *args],
@@ -1360,12 +1588,16 @@ def git(repo: Path, *args: str, check: bool = True) -> str:
             check=check,
             env=safe_git_env(repo),
             text_errors="strict",
-        ).stdout
+        )
     except UnicodeDecodeError as exc:
         raise SystemExit(
             "refusing non-UTF-8 Git output because paths and diff content "
             "cannot be validated without loss"
         ) from exc
+
+
+def git(repo: Path, *args: str, check: bool = True) -> str:
+    return git_result(repo, *args, check=check).stdout
 
 
 def git_path_list(repo: Path, *args: str, check: bool = True) -> list[str]:
@@ -1410,7 +1642,14 @@ def current_branch(repo: Path) -> str:
 
 
 def is_dirty(repo: Path) -> bool:
-    return bool(git(repo, "status", "--porcelain").strip())
+    return bool(
+        git(
+            repo,
+            *global_excludes_git_args(repo),
+            "status",
+            "--porcelain",
+        ).strip()
+    )
 
 
 def choose_target(repo: Path, mode: str, base_ref: str | None) -> tuple[str, str | None]:
@@ -1541,6 +1780,37 @@ def bounded_field(text: str, limit: int) -> str:
     return text[: max(0, limit - len(suffix))] + suffix
 
 
+def display_escape(text: object, limit: int, *, multiline: bool = False) -> str:
+    parts: list[str] = []
+    for char in str(text):
+        codepoint = ord(char)
+        if multiline and char == "\n":
+            parts.append(char)
+        elif codepoint < 32 or 127 <= codepoint <= 159:
+            parts.append(f"\\x{codepoint:02x}")
+        elif unicodedata.category(char) in {"Cf", "Cs"}:
+            parts.append(
+                f"\\u{codepoint:04x}"
+                if codepoint <= 0xFFFF
+                else f"\\U{codepoint:08x}"
+            )
+        else:
+            parts.append(char)
+    rendered = "".join(parts)
+    if len(rendered) <= limit:
+        return rendered
+    suffix = "...[truncated]"
+    return rendered[: max(0, limit - len(suffix))] + suffix[:limit]
+
+
+def stream_display_escape(text: str) -> str:
+    return display_escape(
+        text,
+        max(1000, len(text) * 10),
+        multiline=True,
+    )
+
+
 def read_prefix(path: Path, limit: int) -> tuple[bytes, bool]:
     descriptor: int | None = None
     try:
@@ -1578,7 +1848,10 @@ def read_prefix(path: Path, limit: int) -> tuple[bytes, bool]:
             raise OSError("file changed while reading")
         data = b"".join(chunks)
     except OSError as exc:
-        raise SystemExit(f"unreadable file: {path}: {exc}") from exc
+        raise SystemExit(
+            f"unreadable file: {display_escape(path, 500)}: "
+            f"{display_escape(exc, 500)}"
+        ) from exc
     finally:
         if descriptor is not None:
             os.close(descriptor)
@@ -1662,6 +1935,10 @@ def fallback_expression(text: str) -> str:
                 quote = None
             cursor += 1
             continue
+        regex_end = javascript_regex_literal_end(text, cursor)
+        if regex_end is not None:
+            cursor = regex_end
+            continue
         if char == "/" and next_char == "/":
             line_comment = True
             cursor += 2
@@ -1698,15 +1975,1714 @@ def fallback_expression(text: str) -> str:
     return text[:cursor]
 
 
-def fallback_secret_risk(text: str) -> bool:
-    expression = fallback_expression(text)
-    if any(pattern.search(expression) for pattern in SECRET_VALUE_PATTERNS):
+def top_level_fallback_suffix(
+    text: str,
+    *,
+    allow_chained_assignment: bool = False,
+) -> str | None:
+    stack: list[tuple[str, bool]] = []
+    pairs = {"(": ")", "[": "]", "{": "}"}
+    outer_group_openers: set[int] = set()
+    probe = 0
+    while probe < len(text) and text[probe].isspace():
+        probe += 1
+    while probe < len(text) and text[probe] == "(":
+        outer_group_openers.add(probe)
+        probe += 1
+        while probe < len(text) and text[probe].isspace():
+            probe += 1
+    quote: str | None = None
+    escaped = False
+    line_comment = False
+    block_comment = False
+    cursor = 0
+    while cursor < len(text):
+        char = text[cursor]
+        next_char = text[cursor + 1] if cursor + 1 < len(text) else ""
+        if line_comment:
+            if char == "\n":
+                line_comment = False
+                object_member_context = any(
+                    closer == "}"
+                    for closer, _is_outer in stack
+                )
+                remaining = text[cursor + 1 :]
+                top_level_statement = (
+                    not stack
+                    and re.match(
+                        r"\s*(?:\|\||&&|\?\?|\+|\?(?!\.)|or\b)",
+                        remaining,
+                    )
+                    is None
+                )
+                object_sibling = (
+                    object_member_context
+                    and starts_sibling_assignment(remaining)
+                )
+                if top_level_statement or object_sibling:
+                    return None
+            cursor += 1
+            continue
+        if block_comment:
+            if char == "*" and next_char == "/":
+                block_comment = False
+                cursor += 2
+            else:
+                cursor += 1
+            continue
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            cursor += 1
+            continue
+        if char == "\\" and next_char:
+            cursor += 2
+            continue
+        regex_end = javascript_regex_literal_end(text, cursor)
+        if regex_end is not None:
+            cursor = regex_end
+            continue
+        if char == "/" and next_char == "/":
+            line_comment = True
+            cursor += 2
+            continue
+        if char == "/" and next_char == "*":
+            block_comment = True
+            cursor += 2
+            continue
+        if char in {'"', "'", "`"}:
+            quote = char
+            cursor += 1
+            continue
+        if char in pairs:
+            stack.append((pairs[char], cursor in outer_group_openers))
+            cursor += 1
+            continue
+        if stack and char == stack[-1][0]:
+            stack.pop()
+            cursor += 1
+            continue
+        fallback_depth = not stack or all(is_outer for _closer, is_outer in stack)
+        if fallback_depth:
+            if char == "," and not stack:
+                sibling = sibling_assignment_match(text[cursor + 1 :])
+                if sibling is not None:
+                    if not allow_chained_assignment:
+                        return None
+                    value_start = cursor + 1 + sibling.end()
+                    value = fallback_expression(text[value_start:])
+                    if fallback_secret_risk(value):
+                        return value
+                    cursor = value_start + len(value)
+                    continue
+                if allow_chained_assignment:
+                    value_start = cursor + 1
+                    value = fallback_expression(text[value_start:])
+                    if fallback_secret_risk(value):
+                        return value
+                    cursor = value_start + len(value)
+                    continue
+            if text.startswith(("||", "&&", "??"), cursor):
+                return text[cursor:]
+            if char in {"+", "?"} and not text.startswith("?.", cursor):
+                return text[cursor:]
+            left_boundary = cursor == 0 or not (
+                text[cursor - 1].isalnum() or text[cursor - 1] == "_"
+            )
+            word = (
+                re.match(r"(?:or|and|if|unless)\b", text[cursor:])
+                if left_boundary
+                else None
+            )
+            if word is not None:
+                return text[cursor:]
+            if char in "\n;" and not stack:
+                return None
+        cursor += 1
+    return None
+
+
+def starts_sibling_assignment(text: str) -> bool:
+    return sibling_assignment_match(text) is not None
+
+
+def sibling_assignment_match(text: str) -> re.Match[str] | None:
+    return re.match(
+        r"\s*(?:"
+        r"\.\.\.[^,\r\n]+(?:,|$)"
+        r"|(?:[A-Za-z_$][A-Za-z0-9_$]*"
+        r"|[0-9]+(?:\.[0-9]+)?"
+        r"|[\"'][^\"'\r\n]+[\"']"
+        r"|\[[^\]\r\n]+\]"
+        r"|\{[^}\r\n]+\})\s*"
+        r"(?::(?![:=])|=(?!=|>)))",
+        text,
+    )
+
+
+def top_level_line_assignment_positions(
+    text: str,
+    positions: set[int],
+) -> set[int]:
+    top_level: set[int] = set()
+    stack: list[str] = []
+    quote: str | None = None
+    escaped = False
+    line_comment = False
+    block_comment = False
+    line_start = 0
+    cursor = 0
+    while cursor < len(text):
+        if (
+            cursor in positions
+            and not stack
+            and not text[line_start:cursor].strip()
+        ):
+            top_level.add(cursor)
+        char = text[cursor]
+        next_char = text[cursor + 1] if cursor + 1 < len(text) else ""
+        if line_comment:
+            if char == "\n":
+                line_comment = False
+                line_start = cursor + 1
+            cursor += 1
+            continue
+        if block_comment:
+            if char == "*" and next_char == "/":
+                block_comment = False
+                cursor += 2
+            else:
+                if char == "\n":
+                    line_start = cursor + 1
+                cursor += 1
+            continue
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            if char == "\n":
+                line_start = cursor + 1
+            cursor += 1
+            continue
+        regex_end = javascript_regex_literal_end(text, cursor)
+        if regex_end is not None:
+            cursor = regex_end
+            continue
+        if char == "/" and next_char == "/":
+            line_comment = True
+            cursor += 2
+            continue
+        if char == "/" and next_char == "*":
+            block_comment = True
+            cursor += 2
+            continue
+        if char == "#" and not javascript_private_member_marker(text, cursor):
+            line_comment = True
+            cursor += 1
+            continue
+        if char in {'"', "'", "`"}:
+            quote = char
+        elif char == "(":
+            stack.append(")")
+        elif char == "[":
+            stack.append("]")
+        elif stack and char == stack[-1]:
+            stack.pop()
+        if char == "\n":
+            line_start = cursor + 1
+        cursor += 1
+    return top_level
+
+
+def raw_double_quote_start(
+    text: str,
+    start: int,
+) -> tuple[str, int] | None:
+    if (
+        not text.startswith('"""', start)
+        or "@" in text[max(0, start - 2) : start]
+    ):
+        return None
+    width = 3
+    while start + width < len(text) and text[start + width] == '"':
+        width += 1
+    after = start + width
+    delimiter = '"' * width
+    return delimiter, after
+
+
+def raw_double_quote_end(
+    text: str,
+    start: int,
+    width: int,
+) -> int | None:
+    cursor = start
+    while cursor < len(text):
+        run_start = text.find('"', cursor)
+        if run_start < 0:
+            return None
+        run_end = run_start + 1
+        while run_end < len(text) and text[run_end] == '"':
+            run_end += 1
+        if run_end - run_start >= width:
+            return run_end
+        cursor = run_end
+    return None
+
+
+def csharp_quoted_literal_end(
+    text: str,
+    quote_start: int,
+    *,
+    verbatim: bool,
+    interpolated: bool,
+    nesting: int = 0,
+) -> int | None:
+    if nesting > 64:
+        return None
+    quote = text[quote_start]
+    cursor = quote_start + 1
+    interpolation_depth = 0
+    while cursor < len(text):
+        char = text[cursor]
+        next_char = text[cursor + 1] if cursor + 1 < len(text) else ""
+        if interpolation_depth:
+            if char == "/" and next_char == "/":
+                line_end = text.find("\n", cursor + 2)
+                cursor = len(text) if line_end < 0 else line_end
+                continue
+            if char == "/" and next_char == "*":
+                comment_end = text.find("*/", cursor + 2)
+                cursor = len(text) if comment_end < 0 else comment_end + 2
+                continue
+            if char == '"':
+                raw_start = raw_double_quote_start(text, cursor)
+                if raw_start is not None:
+                    delimiter, content_start = raw_start
+                    raw_end = raw_double_quote_end(
+                        text,
+                        content_start,
+                        len(delimiter),
+                    )
+                    if raw_end is None:
+                        return None
+                    cursor = raw_end
+                    continue
+            if char in {'"', "'"}:
+                marker = text[max(0, cursor - 2) : cursor]
+                nested_end = csharp_quoted_literal_end(
+                    text,
+                    cursor,
+                    verbatim=char == '"' and "@" in marker,
+                    interpolated=char == '"' and "$" in marker,
+                    nesting=nesting + 1,
+                )
+                if nested_end is None:
+                    return None
+                cursor = nested_end
+                continue
+            if char == "{":
+                interpolation_depth += 1
+            elif char == "}":
+                interpolation_depth -= 1
+            cursor += 1
+            continue
+        if interpolated and char == "{":
+            if next_char == "{":
+                cursor += 2
+                continue
+            interpolation_depth = 1
+            cursor += 1
+            continue
+        if interpolated and char == "}" and next_char == "}":
+            cursor += 2
+            continue
+        if verbatim and char == '"' and next_char == '"':
+            cursor += 2
+            continue
+        if not verbatim and char == "\\":
+            cursor += 2
+            continue
+        if char == quote:
+            return cursor + 1
+        cursor += 1
+    return None
+
+
+@functools.lru_cache(maxsize=8)
+def mask_csharp_evidence_prefix(text: str) -> str:
+    masked = list(text)
+
+    def mask_span(start: int, end: int) -> None:
+        for index in range(start, end):
+            if masked[index] not in "\r\n":
+                masked[index] = " "
+
+    cursor = 0
+    line_has_content = False
+    while cursor < len(text):
+        char = text[cursor]
+        next_char = text[cursor + 1] if cursor + 1 < len(text) else ""
+        line_leading = not line_has_content
+        if char == "\n":
+            line_has_content = False
+            cursor += 1
+            continue
+        if line_leading and char == "#":
+            line_end = text.find("\n", cursor)
+            line_end = len(text) if line_end < 0 else line_end
+            mask_span(cursor, line_end)
+            line_has_content = True
+            cursor = line_end
+            continue
+        if (
+            line_leading
+            and char == "["
+            and re.match(r"\[(?:assembly|module)\s*:", text[cursor:])
+        ):
+            depth = 0
+            end = cursor
+            quote: str | None = None
+            verbatim_quote = False
+            escaped = False
+            while end < len(text):
+                current = text[end]
+                if quote is not None:
+                    if escaped:
+                        escaped = False
+                    elif (
+                        verbatim_quote
+                        and quote == '"'
+                        and text.startswith('""', end)
+                    ):
+                        end += 2
+                        continue
+                    elif current == "\\" and not verbatim_quote:
+                        escaped = True
+                    elif current == quote:
+                        quote = None
+                        verbatim_quote = False
+                elif current in {'"', "'"}:
+                    quote = current
+                    verbatim_quote = (
+                        current == '"'
+                        and text[max(cursor, end - 1) : end] == "@"
+                    )
+                elif current == "[":
+                    depth += 1
+                elif current == "]":
+                    depth -= 1
+                    if depth == 0:
+                        end += 1
+                        break
+                end += 1
+            mask_span(cursor, end)
+            line_has_content = True
+            cursor = end
+            continue
+        if char == "/" and next_char == "/":
+            line_end = text.find("\n", cursor)
+            line_end = len(text) if line_end < 0 else line_end
+            mask_span(cursor, line_end)
+            line_has_content = True
+            cursor = line_end
+            continue
+        if char == "/" and next_char == "*":
+            comment_end = text.find("*/", cursor + 2)
+            comment_end = len(text) if comment_end < 0 else comment_end + 2
+            mask_span(cursor, comment_end)
+            line_has_content = True
+            cursor = comment_end
+            continue
+        if char in {'"', "'"}:
+            raw_start = raw_double_quote_start(text, cursor)
+            if raw_start is not None:
+                delimiter, content_start = raw_start
+                end = raw_double_quote_end(
+                    text,
+                    content_start,
+                    len(delimiter),
+                )
+                end = len(text) if end is None else end
+                mask_span(cursor, end)
+                line_has_content = True
+                cursor = end
+                continue
+            marker = text[max(0, cursor - 2) : cursor]
+            end = csharp_quoted_literal_end(
+                text,
+                cursor,
+                verbatim=char == '"' and "@" in marker,
+                interpolated=char == '"' and "$" in marker,
+            )
+            end = len(text) if end is None else end
+            mask_span(cursor, min(end, len(text)))
+            line_has_content = True
+            cursor = end
+            continue
+        if not char.isspace():
+            line_has_content = True
+        cursor += 1
+    return "".join(masked)
+
+
+def csharp_verbatim_string_content(text: str, quote_start: int) -> str:
+    quote_end = csharp_quoted_literal_end(
+        text,
+        quote_start,
+        verbatim=True,
+        interpolated=True,
+    )
+    end = len(text) if quote_end is None else quote_end - 1
+    return text[quote_start + 1 : end]
+
+
+@functools.lru_cache(maxsize=8)
+def mask_shell_heredoc_bodies(text: str) -> str:
+    masked = list(text)
+    pending: list[tuple[str, bool]] = []
+    offset = 0
+    code_keywords = {
+        "class",
+        "const",
+        "for",
+        "foreach",
+        "if",
+        "interface",
+        "namespace",
+        "new",
+        "record",
+        "return",
+        "struct",
+        "switch",
+        "using",
+        "var",
+        "while",
+    }
+    for line in text.splitlines(keepends=True):
+        content = line.rstrip("\r\n")
+        if pending:
+            delimiter, strip_tabs = pending[0]
+            comparison = content.lstrip("\t") if strip_tabs else content
+            for index in range(offset, offset + len(content)):
+                masked[index] = " "
+            if comparison == delimiter:
+                pending.pop(0)
+            offset += len(line)
+            continue
+        for match in re.finditer(
+            r"<<(?P<strip>-)?[ \t]*(?P<quote>['\"]?)"
+            r"(?P<delimiter>[A-Za-z_][A-Za-z0-9_]*)"
+            r"(?P=quote)",
+            content,
+        ):
+            quote = match.group("quote")
+            prefix = content[: match.start()]
+            shell_segment = re.split(r"[;|&]", prefix)[-1].strip()
+            first_word = (
+                re.match(r"[A-Za-z_][A-Za-z0-9_.-]*", shell_segment)
+                if shell_segment
+                else None
+            )
+            shell_like = (
+                first_word is not None
+                and first_word.group(0) not in code_keywords
+                and re.fullmatch(
+                    r"[A-Za-z_][A-Za-z0-9_.-]*"
+                    r"(?:[ \t]+[^=(){}\[\];|&]+)*[ \t]*",
+                    shell_segment,
+                )
+                is not None
+            )
+            if shell_like:
+                for index in range(
+                    offset + match.start(),
+                    offset + match.end(),
+                ):
+                    masked[index] = " "
+                pending.append(
+                    (match.group("delimiter"), match.group("strip") is not None)
+                )
+        offset += len(line)
+    return "".join(masked)
+
+
+@functools.lru_cache(maxsize=8)
+def csharp_recognized_scope_intervals(
+    text: str,
+) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    masked = mask_csharp_evidence_prefix(mask_shell_heredoc_bodies(text))
+    starts: list[int] = []
+    ends: list[int] = []
+    stack: list[bool] = []
+    recognized_start: int | None = None
+    for cursor, char in enumerate(masked):
+        if char == "{":
+            recognized = False
+            if recognized_start is None:
+                quick_prefix = masked[max(0, cursor - 256) : cursor]
+                scope_candidate = ")" in quick_prefix or re.search(
+                    r"\b(?:class|interface|namespace|record|struct)\b",
+                    quick_prefix,
+                )
+                if scope_candidate:
+                    prefix = masked[max(0, cursor - 4096) : cursor + 1]
+                    recognized = (
+                        re.search(
+                            rf"(?:^|[;}}])\s*"
+                            rf"{CSHARP_TYPE_PREFIX_PATTERN}\s*$",
+                            prefix,
+                            re.DOTALL,
+                        )
+                        is not None
+                        or re.search(
+                            rf"(?:^|[;{{}}])\s*"
+                            rf"{CSHARP_METHOD_PREFIX_PATTERN}\s*$",
+                            prefix,
+                            re.DOTALL,
+                        )
+                        is not None
+                    )
+            stack.append(recognized)
+            if recognized:
+                recognized_start = cursor
+        elif char == "}" and stack:
+            recognized = stack.pop()
+            if recognized:
+                assert recognized_start is not None
+                starts.append(recognized_start)
+                ends.append(cursor + 1)
+                recognized_start = None
+    if recognized_start is not None:
+        starts.append(recognized_start)
+        ends.append(len(text))
+    return tuple(starts), tuple(ends)
+
+
+def csharp_recognized_scope_at(text: str, position: int) -> bool:
+    starts, ends = csharp_recognized_scope_intervals(text)
+    index = bisect.bisect_right(starts, position) - 1
+    return index >= 0 and position < ends[index]
+
+
+def csharp_interpolated_string_context(
+    text: str,
+    quote_start: int,
+) -> bool:
+    masked = mask_csharp_evidence_prefix(mask_shell_heredoc_bodies(text))
+    prefix = masked[
+        max(0, quote_start - CSHARP_EVIDENCE_WINDOW) : quote_start
+    ]
+    statement_start = max(
+        prefix.rfind(";"),
+        prefix.rfind("}"),
+    )
+    statement = prefix[statement_start + 1 :]
+    marker = re.search(r"(?:\$@|@\$)$", statement)
+    if marker is None:
+        return False
+    quote_end = csharp_quoted_literal_end(
+        text,
+        quote_start,
+        verbatim=True,
+        interpolated=True,
+    )
+    if quote_end is None:
+        return False
+    terminator = re.match(
+        r"\s*(?:[,;)}:\[\].!?]|==|!=|<=|>=|>>>|>>|<<|&&|\|\||\?\?"
+        r"|\+\+|--|[+\-*/%&|^<>]|\b(?:as|is)\b)",
+        text[quote_end:],
+    )
+    if terminator is None:
+        return False
+    expression_prefix = statement[: marker.start()]
+    typed_declaration = re.search(
+        r"\b(?:bool|byte|char|decimal|double|dynamic|float|int|long|object"
+        r"|sbyte|short|string|uint|ulong|ushort|var|"
+        r"[A-Z][A-Za-z0-9_.<>,?\[\]]*)\s+"
+        r"[A-Za-z_][A-Za-z0-9_]*\s*(?<![=!<>])=(?!=)\s*[^;]*$",
+        expression_prefix,
+    )
+    csharp_statement = (
+        re.search(
+            r"(?:^|[;{}])\s*(?:return\s+|new\s+"
+            r"[A-Za-z_][A-Za-z0-9_.<>,?\[\]]*\b)[^;]*$",
+            expression_prefix,
+            re.DOTALL,
+        )
+        is not None
+        or re.search(
+            rf"(?:^|[;}}])\s*{CSHARP_TYPE_PREFIX_PATTERN}.*$",
+            expression_prefix,
+            re.DOTALL,
+        )
+        is not None
+        or re.search(
+            rf"(?:^|[;{{}}])\s*{CSHARP_METHOD_PREFIX_PATTERN}.*$",
+            expression_prefix,
+            re.DOTALL,
+        )
+        is not None
+    )
+    assignment_operator = re.search(
+        r"(?<![=!<>])(?:=|[+\-*/%&|^]=|\?\?=|<<=|>>=|>>>=)\s*$",
+        expression_prefix,
+    )
+    surrounding_prefix = prefix[max(0, statement_start - 4096) : statement_start + 1]
+    surrounding_csharp = (
+        re.search(
+            r"(?:^|[;}\n])\s*using\s+(?:static\s+)?"
+            r"[A-Za-z_][A-Za-z0-9_.]*\s*;\s*$",
+            surrounding_prefix,
+        )
+        is not None
+        or re.search(
+            rf"(?:^|[;}}])\s*{CSHARP_TYPE_PREFIX_PATTERN}.*$",
+            surrounding_prefix,
+            re.DOTALL,
+        )
+        is not None
+        or re.search(
+            r"\b[A-Za-z_][A-Za-z0-9_.]*\([^;\r\n]*\)\s*;\s*$",
+            surrounding_prefix,
+        )
+        is not None
+        or re.search(
+            rf"(?:^|[;{{}}])\s*{CSHARP_METHOD_PREFIX_PATTERN}.*$",
+            surrounding_prefix,
+            re.DOTALL,
+        )
+        is not None
+        or re.search(
+            r"(?:^|[;}\n])\s*(?:bool|byte|char|decimal|double|dynamic|float"
+            r"|int|long|object|sbyte|short|string|uint|ulong|ushort|var|"
+            r"[A-Z][A-Za-z0-9_.<>,?\[\]]*)\s+"
+            r"[A-Za-z_][A-Za-z0-9_]*\s*(?<![=!<>])=(?!=)[^;]*;\s*$",
+            surrounding_prefix,
+        )
+        is not None
+    )
+    surrounding_csharp = surrounding_csharp or csharp_recognized_scope_at(
+        text,
+        quote_start,
+    )
+    csharp_control_context = (
+        re.search(
+            r"\b(?:catch|for|foreach|if|lock|switch|while)\s*"
+            r"\([^)]*\)\s*\{[^{}]*$",
+            expression_prefix,
+            re.DOTALL,
+        )
+        is not None
+        or re.search(
+            r"\bif\s*\([^)]*(?:==|!=|<=|>=|&&|\|\||\bis\b)[^)]*$",
+            expression_prefix,
+            re.DOTALL,
+        )
+        is not None
+        or re.search(
+            r"\b(?:do|else|finally|try)\s*\{[^{}]*$",
+            expression_prefix,
+            re.DOTALL,
+        )
+        is not None
+        or (
+            surrounding_csharp
+            and re.search(
+                r"\bif\s*\([^)]*$",
+                expression_prefix,
+                re.DOTALL,
+            )
+            is not None
+        )
+    )
+    unmatched_parenthesis = (
+        expression_prefix.count("(") > expression_prefix.count(")")
+    )
+    open_parenthesized_call = (
+        unmatched_parenthesis
+        and re.search(
+            r"\b[A-Za-z_][A-Za-z0-9_.]*\s*\([^()]*$",
+            expression_prefix,
+            re.DOTALL,
+        )
+        is not None
+    )
+    spaced_assignment = (
+        re.search(
+            r"\b[A-Za-z_][A-Za-z0-9_]*[ \t]+"
+            r"(?<![=!<>])=(?!=)[ \t]*$",
+            expression_prefix,
+        )
+        is not None
+    )
+    standalone_content = csharp_verbatim_string_content(
+        text,
+        quote_start,
+    )
+    standalone_fields = re.findall(r"\{([^{}]*)\}", standalone_content)
+    standalone_reference_assignment = (
+        spaced_assignment
+        and bool(standalone_fields)
+        and standalone_content.count("{") == len(standalone_fields)
+        and standalone_content.count("}") == len(standalone_fields)
+        and all(
+            CSHARP_STANDALONE_REFERENCE_PATTERN.fullmatch(field)
+            is not None
+            for field in standalone_fields
+        )
+    )
+    expression_evidence = (
+        csharp_statement
+        or csharp_control_context
+        or typed_declaration is not None
+        or "=>" in expression_prefix
+        or open_parenthesized_call
+        # Standalone spaced assignments are ambiguous with shell commands, so
+        # recover only ordinary credential references in this C#-only shape.
+        or standalone_reference_assignment
+        or (assignment_operator is not None and surrounding_csharp)
+    )
+    return expression_evidence
+
+
+def quote_prefix_matches(
+    text: str,
+    quote_start: int,
+    pattern: str,
+    *,
+    limit: int = 4,
+) -> bool:
+    prefix_tail = text[max(0, quote_start - limit) : quote_start]
+    return re.search(pattern, prefix_tail) is not None
+
+
+def csharp_interpolated_marker(text: str, quote_start: int) -> bool:
+    return text[max(0, quote_start - 2) : quote_start] in {"$@", "@$"}
+
+
+@functools.lru_cache(maxsize=8)
+def csharp_interpolated_verbatim_spans(
+    text: str,
+) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    masked = mask_csharp_evidence_prefix(mask_shell_heredoc_bodies(text))
+    starts: list[int] = []
+    ends: list[int] = []
+    for marker in re.finditer(r"(?:\$@|@\$)(?=\")", text):
+        quote_start = marker.end()
+        if masked[marker.start() : quote_start] != text[marker.start() : quote_start]:
+            continue
+        quote_end = csharp_quoted_literal_end(
+            text,
+            quote_start,
+            verbatim=True,
+            interpolated=True,
+        )
+        if quote_end is None:
+            continue
+        starts.append(quote_start)
+        ends.append(quote_end)
+    return tuple(starts), tuple(ends)
+
+
+def explicit_csharp_interpolated_context(
+    text: str,
+    position: int,
+) -> tuple[str, int] | None:
+    starts, ends = csharp_interpolated_verbatim_spans(text)
+    index = bisect.bisect_right(starts, position) - 1
+    if index < 0 or position >= ends[index]:
+        return None
+    quote_start = starts[index]
+    if not csharp_interpolated_string_context(text, quote_start):
+        return None
+    return '"', quote_start
+
+
+def bounded_line_start(
+    text: str,
+    position: int,
+    *,
+    limit: int = 4096,
+) -> int:
+    search_start = max(0, position - limit)
+    found = max(
+        text.rfind("\n", search_start, position),
+        text.rfind("\r", search_start, position),
+    )
+    return found if found >= 0 else search_start - 1
+
+
+def uri_authority_end(
+    text: str,
+    start: int,
+    context: tuple[str, int] | None,
+) -> int:
+    outer_quote = context[0] if context is not None else None
+    quote_start = context[1] if context is not None else -1
+    brace_interpolation = (
+        outer_quote in {'"', "'", '"""', "'''"}
+        and (
+            quote_prefix_matches(
+                text,
+                quote_start,
+                r"(?i)(?:^|[^A-Za-z0-9_])(?:f|fr|rf|(?<!@)\$)$",
+            )
+            or (
+                outer_quote == '"'
+                and csharp_interpolated_marker(text, quote_start)
+                and csharp_interpolated_string_context(text, quote_start)
+            )
+        )
+    )
+    interpolation_depth = 0
+    interpolation_quote: str | None = None
+    escaped = False
+    outer_escaped = False
+    cursor = start
+    while cursor < len(text):
+        char = text[cursor]
+        next_char = text[cursor + 1] if cursor + 1 < len(text) else ""
+        if interpolation_quote is not None:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == interpolation_quote:
+                interpolation_quote = None
+            cursor += 1
+            continue
+        if outer_quote is not None and not interpolation_depth:
+            if outer_escaped:
+                outer_escaped = False
+                cursor += 1
+                continue
+            if char == "\\":
+                if next_char in "/?#":
+                    break
+                outer_escaped = True
+                cursor += 1
+                continue
+        if interpolation_depth:
+            if char in {'"', "'", "`"}:
+                interpolation_quote = char
+            elif char == "{":
+                interpolation_depth += 1
+            elif char == "}":
+                interpolation_depth -= 1
+            cursor += 1
+            continue
+        if outer_quote == "`" and text.startswith("${", cursor):
+            interpolation_depth = 1
+            cursor += 2
+            continue
+        if brace_interpolation and char == "{":
+            interpolation_depth = 1
+            cursor += 1
+            continue
+        if char.isspace() or char in "/?#":
+            break
+        if outer_quote is not None and text.startswith(outer_quote, cursor):
+            break
+        if outer_quote is None and char in {'"', "'", "`"}:
+            break
+        cursor += 1
+    return cursor
+
+
+def uri_authority_ranges(
+    text: str,
+) -> tuple[tuple[int, int, int, tuple[str, int] | None], ...]:
+    matches = list(URI_SCHEME_PATTERN.finditer(text))
+    contexts = string_contexts_at(
+        text,
+        {match.start() for match in matches},
+    )
+    return tuple(
+        (
+            match.start(),
+            match.end(),
+            uri_authority_end(
+                text,
+                match.end(),
+                contexts.get(match.start()),
+            ),
+            contexts.get(match.start()),
+        )
+        for match in matches
+    )
+
+
+def credentialed_uri_risk(
+    text: str,
+    authorities: tuple[
+        tuple[int, int, int, tuple[str, int] | None],
+        ...,
+    ] | None = None,
+) -> bool:
+    for authority_range in (
+        authorities if authorities is not None else uri_authority_ranges(text)
+    ):
+        credential = uri_authority_credential(text, authority_range)
+        if credential is None:
+            continue
+        if (
+            credential.has_password
+            and uri_userinfo_literal_risk(
+                credential.username,
+                allow_plus_address=True,
+            )
+            and not uri_password_is_interpolated(
+                text,
+                credential.scheme_start,
+                credential.username,
+                credential.host,
+                credential.context,
+            )
+        ):
+            return True
+        if uri_password_is_interpolated(
+            text,
+            credential.scheme_start,
+            credential.value,
+            credential.host,
+            credential.context,
+        ):
+            continue
+        if credential.has_password or uri_userinfo_literal_risk(
+            credential.value,
+            allow_plus_address=True,
+        ):
+            return True
+    return False
+
+
+class UriAuthorityCredential(NamedTuple):
+    username: str
+    value: str
+    host: str
+    has_password: bool
+    empty_password: bool
+    scheme_start: int
+    context: tuple[str, int] | None
+    value_start: int
+    value_end: int
+
+
+def uri_authority_credential(
+    text: str,
+    authority_range: tuple[
+        int,
+        int,
+        int,
+        tuple[str, int] | None,
+    ],
+) -> UriAuthorityCredential | None:
+    scheme_start, authority_start, authority_end, context = authority_range
+    authority = text[authority_start:authority_end]
+    userinfo, authority_separator, host = authority.rpartition("@")
+    if not authority_separator:
+        return None
+    username, password_separator, password = userinfo.partition(":")
+    has_password = bool(password_separator and password)
+    empty_password = bool(password_separator and not password)
+    value = password if has_password else (userinfo if not password_separator else username)
+    value_start = (
+        authority_start + len(username) + 1
+        if has_password
+        else authority_start
+    )
+    return UriAuthorityCredential(
+        username,
+        value,
+        host,
+        has_password,
+        empty_password,
+        scheme_start,
+        context,
+        value_start,
+        value_start + len(value),
+    )
+
+
+def interpolated_empty_password_uri_ranges(
+    text: str,
+    authorities: tuple[
+        tuple[int, int, int, tuple[str, int] | None],
+        ...,
+    ],
+) -> tuple[tuple[int, int], ...]:
+    safe: list[tuple[int, int]] = []
+    for authority_range in authorities:
+        credential = uri_authority_credential(text, authority_range)
+        if credential is None or not credential.empty_password:
+            continue
+        if uri_password_is_interpolated(
+            text,
+            credential.scheme_start,
+            credential.value,
+            credential.host,
+            credential.context,
+        ):
+            safe.append(
+                (credential.value_start, credential.value_end)
+            )
+    return tuple(safe)
+
+
+def mask_ranges(
+    text: str,
+    ranges: tuple[tuple[int, int], ...],
+) -> str:
+    masked = list(text)
+    for start, end in ranges:
+        masked[start:end] = " " * (end - start)
+    return "".join(masked)
+
+
+def position_in_ranges(
+    position: int,
+    ranges: tuple[tuple[int, int], ...],
+) -> bool:
+    return any(
+        start <= position < end
+        for start, end in ranges
+    )
+
+
+def secret_assignment_matches(
+    pattern: re.Pattern[str],
+    text: str,
+    masked_text: str,
+    safe_ranges: tuple[tuple[int, int], ...],
+) -> tuple[re.Match[str], ...]:
+    matches: list[re.Match[str]] = []
+    spans: set[tuple[int, int]] = set()
+    for match in pattern.finditer(text):
+        if position_in_ranges(match.start(), safe_ranges):
+            continue
+        matches.append(match)
+        spans.add(match.span())
+    for match in pattern.finditer(masked_text):
+        if match.span() not in spans:
+            matches.append(match)
+    return tuple(matches)
+
+
+def string_contexts_at(
+    text: str,
+    positions: set[int],
+) -> dict[int, tuple[str, int] | None]:
+    contexts: dict[int, tuple[str, int] | None] = {}
+    quote: str | None = None
+    quote_start = -1
+    verbatim_quote = False
+    escaped = False
+    line_comment = False
+    block_comment = False
+    brace_depth = 0
+    class_depths: list[int] = []
+    pending_class = False
+    cursor = 0
+    while cursor < len(text) and len(contexts) < len(positions):
+        if cursor in positions:
+            contexts[cursor] = explicit_csharp_interpolated_context(
+                text,
+                cursor,
+            ) or (
+                None if quote is None else (quote, quote_start)
+            )
+        char = text[cursor]
+        next_char = text[cursor + 1] if cursor + 1 < len(text) else ""
+        if line_comment:
+            if char == "\n":
+                line_comment = False
+            cursor += 1
+            continue
+        if block_comment:
+            if char == "*" and next_char == "/":
+                block_comment = False
+                cursor += 2
+            else:
+                cursor += 1
+            continue
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif (
+                verbatim_quote
+                and quote == '"'
+                and text.startswith('""', cursor)
+            ):
+                cursor += 2
+                continue
+            elif char == "\\" and not verbatim_quote:
+                escaped = True
+            elif text.startswith(quote, cursor):
+                quote_length = len(quote)
+                quote = None
+                quote_start = -1
+                verbatim_quote = False
+                cursor += quote_length
+                continue
+        elif (
+            regex_end := javascript_regex_literal_end(text, cursor)
+        ) is not None:
+            cursor = regex_end
+            continue
+        elif text.startswith('"""', cursor):
+            quote = '"""'
+            quote_start = cursor
+            cursor += 3
+            continue
+        elif text.startswith("'''", cursor):
+            quote = "'''"
+            quote_start = cursor
+            cursor += 3
+            continue
+        elif char == "/" and next_char == "/":
+            line_comment = True
+            cursor += 2
+            continue
+        elif char == "/" and next_char == "*":
+            block_comment = True
+            cursor += 2
+            continue
+        elif char == "#" and not javascript_private_member_marker(
+            text,
+            cursor,
+            allow_bare=bool(class_depths),
+        ):
+            line_comment = True
+        elif char in {'"', "'", "`"}:
+            quote = char
+            quote_start = cursor
+            verbatim_quote = (
+                char == '"'
+                and text[max(0, cursor - 2) : cursor] in {"$@", "@$"}
+            )
+        elif char.isalpha() or char in "_$":
+            word_end = cursor + 1
+            while word_end < len(text) and (
+                text[word_end].isalnum() or text[word_end] in "_$"
+            ):
+                word_end += 1
+            if text[cursor:word_end] == "class":
+                pending_class = True
+            cursor = word_end
+            continue
+        elif char == "{":
+            brace_depth += 1
+            if pending_class:
+                class_depths.append(brace_depth)
+                pending_class = False
+        elif char == "}":
+            if class_depths and class_depths[-1] == brace_depth:
+                class_depths.pop()
+            brace_depth = max(0, brace_depth - 1)
+        elif char == ";":
+            pending_class = False
+        cursor += 1
+    for position in positions - contexts.keys():
+        contexts[position] = None if quote is None else (quote, quote_start)
+    return contexts
+
+
+def uri_password_is_interpolated(
+    text: str,
+    scheme_start: int,
+    password: str,
+    host: str,
+    context: tuple[str, int] | None,
+) -> bool:
+    if uri_placeholder_password_is_safe(password, host):
+        return True
+    if context is not None:
+        quote, quote_start = context
+        if quote == "`":
+            if any(
+                pattern.fullmatch(password)
+                for pattern in URI_PASSWORD_REFERENCE_PATTERNS[1:2]
+                + URI_PASSWORD_REFERENCE_PATTERNS[3:4]
+            ):
+                return True
+            return dynamic_uri_expression(password, "${", "}")
+        if quote == '"' and (
+            quote_prefix_matches(text, quote_start, r"(?<!@)\$$")
+            or (
+                csharp_interpolated_marker(text, quote_start)
+                and csharp_interpolated_string_context(text, quote_start)
+            )
+        ):
+            if URI_PASSWORD_REFERENCE_PATTERNS[2].fullmatch(password):
+                return True
+            return dynamic_uri_expression(password, "{", "}")
+        if quote in {'"', "'", '"""', "'''"} and quote_prefix_matches(
+            text,
+            quote_start,
+            r"(?i)(?:^|[^A-Za-z0-9_])(?:f|fr|rf)$",
+        ):
+            if any(
+                pattern.fullmatch(password)
+                for pattern in URI_PASSWORD_REFERENCE_PATTERNS[2:3]
+                + URI_PASSWORD_REFERENCE_PATTERNS[4:5]
+            ):
+                return True
+            return dynamic_uri_expression(password, "{", "}")
+        if (
+            quote == '"'
+            and quote_prefix_matches(
+                text,
+                quote_start,
+                r"\$[A-Za-z_][A-Za-z0-9_]*\s*=\s*$",
+                limit=256,
+            )
+            and URI_PASSWORD_REFERENCE_PATTERNS[0].fullmatch(password)
+        ):
+            return True
+        if (
+            quote == '"'
+            and config_uri_reference_is_safe(
+                text,
+                scheme_start,
+                password,
+                allow_lowercase_key=False,
+            )
+        ):
+            return True
+        line_start = bounded_line_start(text, quote_start)
+        assignment = text[line_start + 1 : quote_start]
+        if (
+            quote == '"'
+            and POWERSHELL_ENV_REFERENCE_PATTERN.fullmatch(password)
+            and powershell_assignment_prefix(assignment)
+        ):
+            return True
+        if quote == '"' and shell_assignment_prefix(assignment):
+            return any(
+                pattern.fullmatch(password)
+                for pattern in URI_PASSWORD_REFERENCE_PATTERNS[:2]
+            )
+        if quote == '"' and shell_command_prefix(text, quote_start):
+            return any(
+                pattern.fullmatch(password)
+                for pattern in URI_PASSWORD_REFERENCE_PATTERNS[:2]
+            )
+        return uri_password_is_format_placeholder(
+            text,
+            password,
+            quote,
+            quote_start,
+        )
+    if config_uri_reference_is_safe(
+        text,
+        scheme_start,
+        password,
+        allow_lowercase_key=True,
+    ):
+        return True
+    if shell_command_prefix(text, scheme_start) and any(
+        pattern.fullmatch(password)
+        for pattern in URI_PASSWORD_REFERENCE_PATTERNS[:2]
+    ):
+        return True
+    line_start = bounded_line_start(text, scheme_start)
+    assignment = text[line_start + 1 : scheme_start]
+    if not shell_assignment_prefix(assignment):
+        return False
+    return any(
+        pattern.fullmatch(password)
+        for pattern in URI_PASSWORD_REFERENCE_PATTERNS[:2]
+    )
+
+
+def uri_placeholder_password_is_safe(password: str, host: str) -> bool:
+    normalized_password = password.lower()
+    if normalized_password in URI_PASSWORD_PLACEHOLDER_VALUES:
+        return True
+    normalized_host = host.lower()
+    if normalized_host.startswith("[") and "]" in normalized_host:
+        normalized_host = normalized_host[1 : normalized_host.index("]")]
+    elif normalized_host.count(":") == 1:
+        normalized_host = normalized_host.split(":", 1)[0]
+    localhost = (
+        normalized_host in {"127.0.0.1", "::1", "localhost"}
+        or normalized_host.endswith(".localhost")
+    )
+    return localhost and normalized_password in {
+        *SECRET_PLACEHOLDER_VALUES,
+        "password",
+    }
+
+
+def uri_userinfo_literal_risk(
+    value: str,
+    *,
+    allow_plus_address: bool = False,
+) -> bool:
+    if value.lower() in URI_PASSWORD_PLACEHOLDER_VALUES:
+        return False
+    if value.startswith(("$", "{")):
+        return True
+    credential_name = URI_CREDENTIAL_NAME_PATTERN.search(value) is not None
+    structured_username = (
+        re.fullmatch(
+            r"(?=[^\r\n]*[._-])"
+            r"[A-Za-z][A-Za-z0-9]*(?:[._-][A-Za-z0-9]+)+",
+            value,
+        )
+        is not None
+    )
+    character_classes = sum(
+        (
+            any(char.islower() for char in value),
+            any(char.isupper() for char in value),
+            any(char.isdigit() for char in value),
+            any(not char.isalnum() for char in value),
+        )
+    )
+    opaque_alphanumeric = (
+        re.fullmatch(r"[A-Za-z0-9]{20,}", value) is not None
+        and character_classes >= 3
+    )
+    opaque_hex = (
+        re.fullmatch(r"[0-9A-Fa-f]{32,}", value) is not None
+        or re.fullmatch(
+            r"[0-9A-Fa-f]{8}-"
+            r"(?:[0-9A-Fa-f]{4}-){3}"
+            r"[0-9A-Fa-f]{12}",
+            value,
+        )
+        is not None
+    )
+    plus_local, plus_separator, plus_tag = value.rpartition("+")
+    local_case_transitions = sum(
+        left.islower() != right.islower()
+        for left, right in zip(plus_local, plus_local[1:])
+        if left.isalpha() and right.isalpha()
+    )
+    tag_case_transitions = sum(
+        left.islower() != right.islower()
+        for left, right in zip(plus_tag, plus_tag[1:])
+        if left.isalpha() and right.isalpha()
+    )
+    plus_address_username = (
+        bool(plus_separator)
+        and (
+            plus_local == plus_local.lower()
+            or re.search(r"[._-]", plus_local) is not None
+        )
+        and re.fullmatch(
+            r"[A-Za-z]+[0-9]*(?:[._-][A-Za-z]+[0-9]*)*",
+            plus_local,
+        )
+        is not None
+        and (
+            re.fullmatch(r"[0-9]{1,4}", plus_tag) is not None
+            or re.fullmatch(
+                r"[A-Za-z]+[0-9]{0,4}"
+                r"(?:[._-](?:[A-Za-z]+[0-9]{0,4}|[0-9]{1,4}))*",
+                plus_tag,
+            )
+            is not None
+        )
+        and local_case_transitions <= (
+            8 if re.search(r"[._-]", plus_local) else 4
+        )
+        and tag_case_transitions <= 4
+    )
+    opaque_plus_tag = (
+        bool(plus_separator)
+        and len(plus_local) >= 16
+        and len(plus_tag) >= 16
+        and re.fullmatch(r"[A-Za-z0-9]+", plus_tag) is not None
+        and any(char.isdigit() for char in plus_tag)
+        and local_case_transitions >= 6
+        and tag_case_transitions >= 6
+    )
+    return len(value) >= 20 and (
+        credential_name
+        or opaque_alphanumeric
+        or opaque_hex
+        or opaque_plus_tag
+        or (
+            character_classes >= 4
+            and not structured_username
+            and not (allow_plus_address and plus_address_username)
+        )
+    )
+
+
+def uri_named_credential_reference(password: str) -> bool:
+    if not any(
+        pattern.fullmatch(password)
+        for pattern in URI_PASSWORD_REFERENCE_PATTERNS[:3]
+    ):
+        return False
+    name = password
+    if name.startswith("${") and name.endswith("}"):
+        name = name[2:-1]
+    elif name.startswith(("$", "{")):
+        name = name[1:-1] if name.startswith("{") else name[1:]
+    return (
+        re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) is not None
+        and URI_CREDENTIAL_NAME_PATTERN.search(name) is not None
+    )
+
+
+def dynamic_uri_expression(
+    password: str,
+    prefix: str,
+    suffix: str,
+) -> bool:
+    if not password.startswith(prefix) or not password.endswith(suffix):
+        return False
+    expression = password[len(prefix) : -len(suffix)]
+    return (
+        URI_CREDENTIAL_REFERENCE_PATTERN.fullmatch(expression) is not None
+        or URI_COMPUTED_REFERENCE_PATTERN.fullmatch(expression) is not None
+    )
+
+
+@functools.lru_cache(maxsize=64)
+def quoted_string_end(
+    text: str,
+    quote: str,
+    quote_start: int,
+    *,
+    doubled_quote_escape: bool = False,
+) -> int | None:
+    quote_end = quote_start + len(quote)
+    if doubled_quote_escape:
+        doubled_quote = quote + quote
+        while quote_end < len(text):
+            if text.startswith(doubled_quote, quote_end):
+                quote_end += len(doubled_quote)
+            elif text.startswith(quote, quote_end):
+                return quote_end + len(quote)
+            else:
+                quote_end += 1
+        return None
+    escaped = False
+    while quote_end < len(text):
+        char = text[quote_end]
+        if escaped:
+            escaped = False
+            quote_end += 1
+        elif char == "\\":
+            escaped = True
+            quote_end += 1
+        elif text.startswith(quote, quote_end):
+            quote_end += len(quote)
+            break
+        else:
+            quote_end += 1
+    else:
+        return None
+    return quote_end
+
+
+def uri_password_is_format_placeholder(
+    text: str,
+    password: str,
+    quote: str,
+    quote_start: int,
+) -> bool:
+    quote_end = quoted_string_end(text, quote, quote_start)
+    if quote_end is None:
+        return False
+    prefix_tail = text[max(0, quote_start - 32) : quote_start]
+    suffix = text[quote_end : quote_end + 8192]
+    formatter = re.search(
+        r"(?:\bfmt\.Sprintf|\bformat!)\(\s*$",
+        prefix_tail,
+    )
+    if formatter is not None:
+        arguments = re.match(r"\s*,\s*(?P<args>.*?)\s*\)", suffix, re.DOTALL)
+        if arguments is not None and format_arguments_are_references(
+            arguments.group("args")
+        ):
+            return password == "%s" or re.fullmatch(
+                r"\{(?:[A-Za-z_][A-Za-z0-9_]*|[0-9]*)\}",
+                password,
+            ) is not None
+    if password == "%s":
+        python_percent_format = re.match(
+            rf"\s*%\s*(?:"
+            rf"(?P<single>{URI_CREDENTIAL_REFERENCE_TEXT})\b"
+            rf"|\((?P<tuple>[^()]*)\)"
+            rf")",
+            suffix,
+        )
+        if python_percent_format is not None:
+            arguments = (
+                [python_percent_format.group("single")]
+                if python_percent_format.group("single") is not None
+                else split_top_level_call_arguments(
+                    python_percent_format.group("tuple") or ""
+                )
+            )
+            return all(
+                argument is not None
+                and URI_CREDENTIAL_REFERENCE_PATTERN.fullmatch(argument.strip())
+                for argument in arguments
+            )
+        return False
+    field_match = re.fullmatch(
+        r"\{(?P<field>[A-Za-z_][A-Za-z0-9_]*|[0-9]*)\}",
+        password,
+    )
+    if field_match is not None:
+        field = field_match.group("field")
+        format_call = re.match(
+            r"\s*\.format\s*\((?P<args>.*?)\)",
+            suffix,
+            re.DOTALL,
+        )
+        if format_call is not None and format_arguments_are_references(
+            format_call.group("args")
+        ):
+            return True
+    return False
+
+
+def format_arguments_are_references(arguments: str) -> bool:
+    values = split_top_level_call_arguments(arguments)
+    if not values or any(not value.strip() for value in values):
+        return False
+    for value in values:
+        expression = value.strip()
+        named = re.fullmatch(
+            rf"[A-Za-z_][A-Za-z0-9_]*\s*=\s*"
+            rf"(?P<value>{URI_CREDENTIAL_REFERENCE_TEXT})",
+            expression,
+        )
+        if named is not None:
+            expression = named.group("value")
+        if URI_CREDENTIAL_REFERENCE_PATTERN.fullmatch(expression) is None:
+            return False
+    return True
+
+
+def config_assignment_context(
+    text: str,
+    position: int,
+) -> tuple[str, str] | None:
+    line_start = bounded_line_start(text, position)
+    prefix = text[line_start + 1 : position]
+    match = re.fullmatch(
+        r"\s*(?P<comment>#\s*)?(?:-\s+)?[\"']?"
+        r"(?P<key>(?:[A-Za-z_][A-Za-z0-9_.-]*)?(?:dsn|uri|url))"
+        r"[\"']?\s*(?P<separator>[:=])\s*[\"']?",
+        prefix,
+        re.IGNORECASE,
+    )
+    if match is None or (
+        match.group("separator") != ":" and match.group("comment") is None
+    ):
+        return None
+    return match.group("key"), match.group("separator")
+
+
+def config_assignment_prefix(text: str, position: int) -> bool:
+    return config_assignment_context(text, position) is not None
+
+
+def config_uri_reference_is_safe(
+    text: str,
+    position: int,
+    password: str,
+    *,
+    allow_lowercase_key: bool,
+) -> bool:
+    context = config_assignment_context(text, position)
+    if context is None:
+        return False
+    key, separator = context
+    syntactic_reference = any(
+        pattern.fullmatch(password)
+        for pattern in URI_PASSWORD_REFERENCE_PATTERNS[:2]
+    )
+    return syntactic_reference and (
+        uri_named_credential_reference(password)
+        or key == key.upper()
+        or (allow_lowercase_key and separator == ":")
+    )
+
+
+def shell_assignment_prefix(text: str) -> bool:
+    match = re.fullmatch(
+        r"\s*(?:-\s+)?(?P<export>export\s+)?(?P<name>[A-Za-z_][A-Za-z0-9_]*)=",
+        text,
+    )
+    return match is not None and (
+        match.group("export") is not None
+        or match.group("name") == match.group("name").upper()
+    )
+
+
+def powershell_assignment_prefix(text: str) -> bool:
+    return (
+        re.match(
+            r"(?i)\s*(?:"
+            r"\[[^\]\r\n]+\]\s*\$[A-Za-z_][A-Za-z0-9_]*"
+            r"|\$env:[A-Za-z_][A-Za-z0-9_]*)\s*=",
+            text,
+        )
+        is not None
+    )
+
+
+def shell_command_prefix(text: str, position: int) -> bool:
+    line_start = bounded_line_start(text, position)
+    prefix = text[line_start + 1 : position]
+    match = re.fullmatch(
+        r"\s*(?P<command>[A-Za-z0-9_./-]+)"
+        r"(?:[ \t]+[^ \t\"'`]+)*[ \t]+",
+        prefix,
+    )
+    if match is None:
+        return False
+    tokens = prefix.split()
+    while tokens and tokens[0].rsplit("/", 1)[-1] in SHELL_COMMAND_WRAPPERS:
+        wrapper = tokens.pop(0).rsplit("/", 1)[-1]
+        while tokens and (
+            tokens[0].startswith("-")
+            or (wrapper == "env" and "=" in tokens[0])
+        ):
+            tokens.pop(0)
+    if not tokens:
+        return False
+    command = tokens[0].rsplit("/", 1)[-1]
+    return (
+        command == command.lower()
+        and command not in NON_SHELL_COMMAND_WORDS
+        and re.fullmatch(r"[a-z0-9][a-z0-9._+-]*", command) is not None
+        and not any(
+            token in {"=", "=>", ":", "::"} or token.endswith(("=", "=>"))
+            for token in tokens[1:]
+        )
+    )
+
+
+def secret_literal_risk(expression: str, minimum_length: int = 12) -> bool:
+    if credentialed_uri_risk(expression) or basic_authorization_risk(expression) or any(
+        pattern.search(expression) for pattern in SECRET_VALUE_PATTERNS
+    ):
         return True
     value_pattern = re.compile(
-        r'"(?P<double>[^"\r\n]{12,})"'
-        r"|'(?P<single>[^'\r\n]{12,})'"
-        r"|`(?P<backtick>[^`\r\n]{12,})`"
-        r"|(?P<bare>[A-Za-z0-9_./+=:@#$%&*!?-]{20,})"
+        rf'"(?P<double>[^"\r\n]{{{minimum_length},}})"'
+        rf"|'(?P<single>[^'\r\n]{{{minimum_length},}})'"
+        rf"|`(?P<backtick>[^`\r\n]{{{minimum_length},}})`"
+        rf"|(?P<bare>[A-Za-z0-9_./+=:@#$%&*!?-]{{{max(20, minimum_length)},}})"
     )
     for match in value_pattern.finditer(expression):
         value = next(group for group in match.groups() if group is not None)
@@ -1732,6 +3708,13 @@ def fallback_secret_risk(text: str) -> bool:
                 continue
         return True
     return False
+
+
+def fallback_secret_risk(text: str, minimum_length: int = 8) -> bool:
+    return secret_literal_risk(
+        fallback_expression(text),
+        minimum_length=minimum_length,
+    )
 
 
 def safe_secret_assignment_suffix(text: str, end: int) -> bool:
@@ -1847,7 +3830,10 @@ def split_top_level_call_arguments(text: str) -> list[str]:
                 quote = None
             index += 1
             continue
-        if char == "/" and next_char == "/":
+        regex_end = javascript_regex_literal_end(text, index)
+        if regex_end is not None:
+            index = regex_end
+        elif char == "/" and next_char == "/":
             line_comment = True
             index += 2
         elif char == "/" and next_char == "*":
@@ -1872,6 +3858,421 @@ def split_top_level_call_arguments(text: str) -> list[str]:
     return arguments
 
 
+def javascript_private_member_marker(
+    text: str,
+    index: int,
+    *,
+    allow_bare: bool = False,
+) -> bool:
+    next_char = text[index + 1] if index + 1 < len(text) else ""
+    return (
+        text[index : index + 1] == "#"
+        and bool(next_char)
+        and (next_char.isalpha() or next_char in "_$")
+        and (
+            allow_bare
+            or (index > 0 and text[index - 1] == ".")
+        )
+    )
+
+
+@functools.lru_cache(maxsize=16)
+def javascript_control_contexts(text: str) -> frozenset[int]:
+    closes: set[int] = set()
+    stack: list[str | None] = []
+    quote: str | None = None
+    escaped = False
+    line_comment = False
+    block_comment = False
+    last_word: str | None = None
+    prior_word: str | None = None
+    last_word_is_member = False
+    after_dot = False
+    cursor = 0
+    while cursor < len(text):
+        char = text[cursor]
+        next_char = text[cursor + 1] if cursor + 1 < len(text) else ""
+        if line_comment:
+            if char == "\n":
+                line_comment = False
+            cursor += 1
+            continue
+        if block_comment:
+            if char == "*" and next_char == "/":
+                block_comment = False
+                cursor += 2
+            else:
+                cursor += 1
+            continue
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            cursor += 1
+            continue
+        regex_end = javascript_regex_literal_end(
+            text,
+            cursor,
+            control_conditions=False,
+            known_control_closes=closes,
+        )
+        if regex_end is not None:
+            cursor = regex_end
+            last_word = None
+            prior_word = None
+            last_word_is_member = False
+            after_dot = False
+        elif char == "/" and next_char == "/":
+            line_comment = True
+            cursor += 2
+        elif char == "/" and next_char == "*":
+            block_comment = True
+            cursor += 2
+        elif char in {'"', "'", "`"}:
+            quote = char
+            cursor += 1
+            last_word = None
+            prior_word = None
+            last_word_is_member = False
+            after_dot = False
+        elif char.isalpha() or char in "_$":
+            word_end = cursor + 1
+            while word_end < len(text) and (
+                text[word_end].isalnum() or text[word_end] in "_$"
+            ):
+                word_end += 1
+            word = text[cursor:word_end]
+            prior_word = last_word if not after_dot else None
+            last_word = word
+            last_word_is_member = after_dot
+            after_dot = False
+            cursor = word_end
+        elif char == "(":
+            control_kind: str | None = None
+            if not last_word_is_member:
+                if last_word in {"if", "while", "with"}:
+                    control_kind = "control"
+                elif last_word == "for" or (
+                    prior_word == "for" and last_word == "await"
+                ):
+                    control_kind = "for"
+            stack.append(control_kind)
+            last_word = None
+            prior_word = None
+            last_word_is_member = False
+            after_dot = False
+            cursor += 1
+        elif char == ")":
+            if not stack:
+                cursor += 1
+                continue
+            if stack.pop() is not None:
+                closes.add(cursor)
+            last_word = None
+            prior_word = None
+            last_word_is_member = False
+            after_dot = False
+            cursor += 1
+        elif char == ".":
+            last_word = None
+            prior_word = None
+            last_word_is_member = False
+            after_dot = True
+            cursor += 1
+        elif javascript_private_member_marker(
+            text,
+            cursor,
+            allow_bare=True,
+        ):
+            last_word = None
+            prior_word = None
+            last_word_is_member = False
+            after_dot = True
+            cursor += 1
+        elif char == ";":
+            last_word = None
+            prior_word = None
+            last_word_is_member = False
+            after_dot = False
+            cursor += 1
+        elif char.isspace():
+            cursor += 1
+        else:
+            last_word = None
+            prior_word = None
+            last_word_is_member = False
+            after_dot = False
+            cursor += 1
+    return frozenset(closes)
+
+
+@functools.lru_cache(maxsize=16)
+def javascript_control_condition_closes(text: str) -> frozenset[int]:
+    return javascript_control_contexts(text)
+
+
+def javascript_regex_literal_end(
+    text: str,
+    start: int,
+    *,
+    control_conditions: bool = True,
+    known_control_closes: set[int] | frozenset[int] | None = None,
+) -> int | None:
+    if text[start : start + 1] != "/" or text[start + 1 : start + 2] in {
+        "/",
+        "*",
+    }:
+        return None
+    previous = start - 1
+    while previous >= 0 and text[previous].isspace():
+        previous -= 1
+    if (
+        previous >= 2
+        and text[previous - 2 : previous + 1] == "..."
+        and (previous == 2 or text[previous - 3] != ".")
+    ):
+        previous = -1
+    if previous >= 0 and text[previous] == ")":
+        closes_control_condition = (
+            previous in known_control_closes
+            if known_control_closes is not None
+            else (
+                control_conditions
+                and previous in javascript_control_condition_closes(text)
+            )
+        )
+        if closes_control_condition:
+            previous = -1
+    if previous >= 0 and text[previous] not in "([{:;,=!?&|+-*%^~<>":
+        word_start = previous
+        while word_start >= 0 and (
+            text[word_start].isalnum() or text[word_start] in "_$"
+        ):
+            word_start -= 1
+        keyword = text[word_start + 1 : previous + 1]
+        expression_keyword = keyword in {
+            "case",
+            "default",
+            "delete",
+            "do",
+            "else",
+            "extends",
+            "in",
+            "instanceof",
+            "new",
+            "return",
+            "throw",
+            "typeof",
+            "void",
+        }
+        if (
+            not expression_keyword
+            or (word_start >= 0 and text[word_start] == ".")
+        ):
+            return None
+    if (
+        previous > 0
+        and text[previous] in "+-"
+        and text[previous - 1] == text[previous]
+    ):
+        return None
+    if text[previous : previous + 1] == "!":
+        before = previous - 1
+        while before >= 0 and text[before].isspace():
+            before -= 1
+        if before >= 0 and (
+            text[before].isalnum() or text[before] in "_$)]}"
+        ):
+            return None
+    escaped = False
+    character_class = False
+    cursor = start + 1
+    while cursor < len(text):
+        char = text[cursor]
+        if char in "\r\n":
+            return None
+        if escaped:
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char == "[":
+            character_class = True
+        elif char == "]" and character_class:
+            character_class = False
+        elif char == "/" and not character_class:
+            cursor += 1
+            while cursor < len(text) and text[cursor].isalpha():
+                cursor += 1
+            return cursor
+        cursor += 1
+    return None
+
+
+def regex_tail_end(text: str, start: int, limit: int) -> int | None:
+    escaped = False
+    character_class = False
+    cursor = start
+    while cursor < limit:
+        char = text[cursor]
+        if escaped:
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char == "[":
+            character_class = True
+        elif char == "]" and character_class:
+            character_class = False
+        elif char == "/" and not character_class:
+            return cursor + 1
+        cursor += 1
+    return None
+
+
+def previous_regex_delimiter(text: str, start: int, lower: int) -> int | None:
+    character_class = False
+    cursor = start - 1
+    while cursor >= lower:
+        char = text[cursor]
+        backslashes = 0
+        previous = cursor - 1
+        while previous >= lower and text[previous] == "\\":
+            backslashes += 1
+            previous -= 1
+        escaped = backslashes % 2 == 1
+        if not escaped:
+            if char == "]":
+                character_class = True
+            elif char == "[" and character_class:
+                character_class = False
+            elif char == "/" and not character_class:
+                return cursor
+        cursor -= 1
+    return None
+
+
+def text_without_ranges(
+    text: str,
+    start: int,
+    end: int,
+    ranges: list[tuple[int, int]],
+) -> str:
+    parts: list[str] = []
+    cursor = start
+    for range_start, range_end in ranges:
+        if range_end <= cursor or range_start >= end:
+            continue
+        if cursor < range_start:
+            parts.append(text[cursor:range_start])
+        parts.append(" ")
+        cursor = max(cursor, range_end)
+    if cursor < end:
+        parts.append(text[cursor:end])
+    return "".join(parts)
+
+
+def premature_regex_call_tail(
+    text: str,
+    call_start: int,
+    cursor: int,
+) -> tuple[str, int] | None:
+    line_end = len(text)
+    for delimiter in ("\n", "\r"):
+        found = text.find(delimiter, cursor)
+        if found >= 0:
+            line_end = min(line_end, found)
+    line_start = max(
+        text.rfind("\n", 0, cursor),
+        text.rfind("\r", 0, cursor),
+    ) + 1
+    search_start = max(call_start, line_start)
+    nearest = previous_regex_delimiter(text, cursor, search_start)
+    candidates = []
+    if nearest is not None:
+        candidates.append(nearest)
+        previous = previous_regex_delimiter(text, nearest, search_start)
+        if previous is not None:
+            candidates.append(previous)
+    for regex_start in candidates:
+        regex_end = regex_tail_end(text, regex_start + 1, line_end)
+        if regex_end is None or ")" not in text[regex_start + 1 : regex_end - 1]:
+            continue
+        depth = 0
+        quote: str | None = None
+        escaped = False
+        line_comment = False
+        block_comment = False
+        regex_ranges = [(regex_start, regex_end)]
+        index = call_start
+        while index < len(text):
+            char = text[index]
+            next_char = text[index + 1] if index + 1 < len(text) else ""
+            if line_comment:
+                if char == "\n":
+                    line_comment = False
+                index += 1
+                continue
+            if block_comment:
+                if char == "*" and next_char == "/":
+                    block_comment = False
+                    index += 2
+                else:
+                    index += 1
+                continue
+            if quote is not None:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == quote:
+                    quote = None
+                index += 1
+                continue
+            if index == regex_start:
+                index = regex_end
+            elif (
+                later_regex_end := javascript_regex_literal_end(text, index)
+            ) is not None:
+                regex_ranges.append((index, later_regex_end))
+                index = later_regex_end
+            elif char == "/" and next_char == "/":
+                line_comment = True
+                index += 2
+            elif char == "/" and next_char == "*":
+                block_comment = True
+                index += 2
+            # This recovery scans JavaScript; `#name` is a private identifier,
+            # so only JavaScript's slash-delimited comment forms apply here.
+            elif char in {'"', "'", "`"}:
+                quote = char
+                index += 1
+            elif char == "(":
+                depth += 1
+                index += 1
+            elif char == ")":
+                depth -= 1
+                index += 1
+                if depth == 0:
+                    return (
+                        (
+                            text_without_ranges(
+                                text,
+                                cursor,
+                                index,
+                                regex_ranges,
+                            ),
+                            index,
+                        )
+                        if index > cursor
+                        else None
+                    )
+            else:
+                index += 1
+    return None
+
+
 def safe_credential_lookup_argument(
     call_target: str,
     argument: str,
@@ -1880,8 +4281,15 @@ def safe_credential_lookup_argument(
     if argument_index != 0:
         return False
     normalized_target = call_target.replace("?.", ".")
+    result_lookup = normalized_target in {
+        "response.json().get",
+        "response.get",
+        "result.get",
+    }
     if (
-        normalized_target not in {"os.getenv", "os.environ.get"}
+        not result_lookup
+        and normalized_target not in {"os.getenv", "os.environ.get"}
+        and normalized_target != "headers.get"
         and not normalized_target.endswith(".headers.get")
     ):
         return False
@@ -1889,9 +4297,81 @@ def safe_credential_lookup_argument(
     if match is None:
         return False
     key = match.group(2)
+    if result_lookup and any(
+        pattern.search(key) for pattern in SECRET_VALUE_PATTERNS
+    ):
+        return False
     return (
-        re.fullmatch(r"[A-Z][A-Z0-9_]{2,}", key) is not None
+        (
+            result_lookup
+            and key.casefold()
+            in {
+                "access_token",
+                "api_key",
+                "auth_token",
+                "client_secret",
+                "credential",
+                "credentials",
+                "id_token",
+                "password",
+                "refresh_token",
+                "secret",
+                "token",
+            }
+        )
+        or (
+            not result_lookup
+            and re.fullmatch(r"[A-Z][A-Z0-9_]{2,}", key) is not None
+        )
         or key.casefold() in {"authorization", "proxy-authorization"}
+    )
+
+
+def prompt_service_segment_is_secret_like(segment: str) -> bool:
+    suffix = re.search(r"\d{4,}$", segment)
+    if suffix is None:
+        return False
+    prefix = segment[: suffix.start()]
+    components = re.findall(
+        r"[A-Z]+(?=[A-Z][a-z]|$)|[A-Z]?[a-z]+",
+        prefix,
+    )
+    theme_phrase = bool(components) and all(
+        component.casefold() in PROMPT_SECRET_THEME_WORDS
+        for component in components
+    )
+    sequential_letters = len(prefix) >= 8 and all(
+        ord(right.casefold()) == ord(left.casefold()) + 1
+        for left, right in zip(prefix, prefix[1:])
+    )
+    return theme_phrase or sequential_letters
+
+
+def generic_credential_prompt_is_safe(value: str) -> bool:
+    match = GENERIC_CREDENTIAL_PROMPT_PATTERN.fullmatch(value)
+    if match is None:
+        return False
+    service = match.group("service")
+    if service is None:
+        return True
+    service = service.strip()
+    segments = re.split(r"[ _-]+", service)
+    secret_like_version = any(
+        prompt_service_segment_is_secret_like(segment)
+        for segment in segments
+    )
+    natural_service = bool(service) and len(segments) <= 5 and all(
+        re.fullmatch(r"[A-Za-z][A-Za-z0-9]{0,23}", segment) is not None
+        and sum(
+            left.islower() != right.islower()
+            for left, right in zip(segment, segment[1:])
+            if left.isalpha() and right.isalpha()
+        )
+        <= 4
+        for segment in segments
+    )
+    return natural_service and not secret_like_version and not any(
+        pattern.search(service) for pattern in SECRET_VALUE_PATTERNS
     )
 
 
@@ -1904,14 +4384,23 @@ def public_call_argument_risk(
     target_parts = normalized_target.split(".")
     credential_scope_call = (
         len(target_parts) >= 2
-        and target_parts[-2] in {"credential", "credentials"}
+        and target_parts[-2].lstrip("_") in {"credential", "credentials"}
         and target_parts[-1] == "get_token"
     )
-    if not credential_scope_call and normalized_target not in {
-        "input",
-        "getpass.getpass",
-    }:
+    if (
+        not credential_scope_call
+        and normalized_target not in PUBLIC_PROMPT_TARGETS
+    ):
         return None
+    if normalized_target == "prompt":
+        match = re.fullmatch(r"\s*([\"'])([^\"'\r\n]+)\1\s*", argument)
+        if (
+            argument_index == 0
+            and match is not None
+            and generic_credential_prompt_is_safe(match.group(2))
+        ):
+            return False
+        return secret_literal_risk(argument, minimum_length=8)
     if not credential_scope_call and argument_index != 0:
         return None
     literal_argument = argument
@@ -1939,6 +4428,12 @@ def public_call_argument_risk(
             return True
         if secret_text_risk(decoded_value):
             return True
+        if re.fullmatch(
+            r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-"
+            r"[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}/\.default",
+            decoded_value,
+        ):
+            return False
         if "://" not in decoded_value:
             return None
         try:
@@ -1967,12 +4462,7 @@ def public_call_argument_risk(
             and not parsed.fragment
         )
         return False if valid_scope_uri else None
-    generic_prompt = re.fullmatch(
-        r"(?i)\s*(?:(?:enter|type|provide)\s+(?:your\s+)?)?"
-        r"(?:password|passphrase)\s*[:?]\s*",
-        value,
-    )
-    return False if generic_prompt is not None else None
+    return False if generic_credential_prompt_is_safe(value) else None
 
 
 def call_arguments_risk(arguments: str, call_target: str) -> bool:
@@ -1984,7 +4474,7 @@ def call_arguments_risk(arguments: str, call_target: str) -> bool:
             continue
         if not safe_credential_lookup_argument(
             call_target, argument, index
-        ) and fallback_secret_risk(argument):
+        ) and fallback_secret_risk(argument, minimum_length=12):
             return True
     return False
 
@@ -2024,13 +4514,19 @@ def safe_secret_call_suffix(text: str, end: int, call_target: str) -> bool:
                     quote = None
                 index += 1
                 continue
-            if char == "/" and next_char == "/":
+            regex_end = javascript_regex_literal_end(text, index)
+            if regex_end is not None:
+                index = regex_end
+            elif char == "/" and next_char == "/":
                 line_comment = True
                 index += 2
             elif char == "/" and next_char == "*":
                 block_comment = True
                 index += 2
-            elif char == "#":
+            elif char == "#" and not javascript_private_member_marker(
+                text,
+                index,
+            ):
                 line_comment = True
                 index += 1
             elif char in {'"', "'", "`"}:
@@ -2060,17 +4556,33 @@ def safe_secret_call_suffix(text: str, end: int, call_target: str) -> bool:
     cursor = safe_call_end(end, call_target)
     if cursor is None:
         return False
-    chained_target = "<call-result>"
+    regex_recovery = premature_regex_call_tail(text, end, cursor)
+    if regex_recovery is not None:
+        regex_tail, cursor = regex_recovery
+        if secret_literal_risk(regex_tail):
+            return False
+    chained_target = (
+        "response.json()"
+        if call_target.replace("?.", ".") == "response.json"
+        else "<call-result>"
+    )
     while True:
         match = re.match(r"\s*(?:\?\.|\.)[A-Za-z_][A-Za-z0-9_]*", text[cursor:])
         if match is not None:
             member = re.search(r"[A-Za-z_][A-Za-z0-9_]*$", match.group(0))
             assert member is not None
-            chained_target = (
-                f"{chained_target}.{member.group(0)}"
-                if chained_target
-                else member.group(0)
-            )
+            member_name = member.group(0)
+            if chained_target == "response.json()" and member_name == "get":
+                chained_target = "response.json().get"
+            elif chained_target == "<call-result>" and member_name == "headers":
+                chained_target = "<call-result>.headers"
+            elif (
+                chained_target == "<call-result>.headers"
+                and member_name == "get"
+            ):
+                chained_target = "<call-result>.headers.get"
+            else:
+                chained_target = "<call-result>"
             cursor += match.end()
             continue
         whitespace = re.match(r"\s*", text[cursor:])
@@ -2114,10 +4626,232 @@ def safe_backtick_secret_template(value: str) -> bool:
     )
 
 
+def javascript_template_literal_end(
+    text: str,
+    start: int,
+    nesting: int = 0,
+) -> int | None:
+    if nesting > 64:
+        return None
+    cursor = start + 1
+    expression_depth = 0
+    while cursor < len(text):
+        char = text[cursor]
+        next_char = text[cursor + 1] if cursor + 1 < len(text) else ""
+        if expression_depth:
+            if char == "/" and next_char == "/":
+                line_end = text.find("\n", cursor + 2)
+                cursor = len(text) if line_end < 0 else line_end
+                continue
+            if char == "/" and next_char == "*":
+                comment_end = text.find("*/", cursor + 2)
+                cursor = len(text) if comment_end < 0 else comment_end + 2
+                continue
+            regex_end = javascript_regex_literal_end(text, cursor)
+            if regex_end is not None:
+                cursor = regex_end
+                continue
+            if char in {'"', "'"}:
+                string_end = csharp_quoted_literal_end(
+                    text,
+                    cursor,
+                    verbatim=False,
+                    interpolated=False,
+                )
+                if string_end is None:
+                    return None
+                cursor = string_end
+                continue
+            if char == "`":
+                nested_end = javascript_template_literal_end(
+                    text,
+                    cursor,
+                    nesting + 1,
+                )
+                if nested_end is None:
+                    return None
+                cursor = nested_end
+                continue
+            if char == "{":
+                expression_depth += 1
+            elif char == "}":
+                expression_depth -= 1
+            cursor += 1
+            continue
+        if char == "\\":
+            cursor += 2
+            continue
+        if char == "`":
+            return cursor + 1
+        if char == "$" and next_char == "{":
+            expression_depth = 1
+            cursor += 2
+            continue
+        cursor += 1
+    return None
+
+
+@functools.lru_cache(maxsize=8)
+def mask_reference_declaration_evidence(text: str) -> str:
+    masked = list(text)
+
+    def mask_span(start: int, end: int) -> None:
+        for index in range(start, end):
+            if masked[index] not in "\r\n":
+                masked[index] = " "
+
+    cursor = 0
+    while cursor < len(text):
+        char = text[cursor]
+        next_char = text[cursor + 1] if cursor + 1 < len(text) else ""
+        if char == "/" and next_char == "/":
+            line_end = text.find("\n", cursor + 2)
+            cursor = len(text) if line_end < 0 else line_end
+            continue
+        if char == "/" and next_char == "*":
+            comment_end = text.find("*/", cursor + 2)
+            cursor = len(text) if comment_end < 0 else comment_end + 2
+            continue
+        if char == "#" and not javascript_private_member_marker(text, cursor):
+            line_end = text.find("\n", cursor + 1)
+            line_end = len(text) if line_end < 0 else line_end
+            mask_span(cursor, line_end)
+            cursor = line_end
+            continue
+        regex_end = javascript_regex_literal_end(text, cursor)
+        if regex_end is not None:
+            mask_span(cursor, regex_end)
+            cursor = regex_end
+            continue
+        if char in {'"', "'"}:
+            raw_start = (
+                raw_double_quote_start(text, cursor)
+                if char == '"'
+                else None
+            )
+            if raw_start is not None:
+                delimiter, content_start = raw_start
+                raw_end = raw_double_quote_end(
+                    text,
+                    content_start,
+                    len(delimiter),
+                )
+                cursor = len(text) if raw_end is None else raw_end
+                continue
+            marker = text[max(0, cursor - 2) : cursor]
+            string_end = csharp_quoted_literal_end(
+                text,
+                cursor,
+                verbatim=char == '"' and "@" in marker,
+                interpolated=char == '"' and "$" in marker,
+            )
+            cursor = len(text) if string_end is None else string_end
+            continue
+        if char != "`":
+            cursor += 1
+            continue
+        template_end = javascript_template_literal_end(text, cursor)
+        template_end = len(text) if template_end is None else template_end
+        mask_span(cursor, min(template_end, len(text)))
+        cursor = template_end
+    return mask_csharp_evidence_prefix("".join(masked))
+
+
+def bare_code_reference(
+    text: str,
+    start: int,
+    separator: str,
+    value: str,
+) -> bool:
+    camel_reference = re.fullmatch(
+        r"[a-z][A-Za-z0-9]*[A-Z][A-Za-z0-9]*",
+        value,
+    )
+    snake_reference = re.fullmatch(
+        r"[a-z][a-z0-9]*(?:_[a-z0-9]+)+",
+        value,
+    )
+    line_start = max(text.rfind("\n", 0, start), text.rfind("\r", 0, start))
+    masked_text = mask_reference_declaration_evidence(text)
+    declaration = masked_text[line_start + 1 : start]
+    pascal_type_reference = re.fullmatch(
+        r"[A-Z][A-Za-z]*(?:Credential|Credentials|Options|Config|Type|Enum)",
+        value,
+    )
+    if separator == ":" and pascal_type_reference is not None:
+        type_prefix = masked_text[
+            max(0, start - 2048) : start
+        ]
+        if re.search(
+            r"\b(?:class|interface|record|struct|type)\b"
+            r"[^{};\r\n]*\{[^}]*$",
+            type_prefix,
+            re.DOTALL,
+        ):
+            return True
+    if camel_reference is None and snake_reference is None:
+        return False
+    return bool(
+        re.search(r"\b(?:const|let|var)\s+$", declaration)
+        or re.search(
+            r"\b(?:const|let|var)\s+[A-Za-z_$][A-Za-z0-9_$]*"
+            r"\s*=\s*\{[^{}]*$",
+            declaration,
+            re.DOTALL,
+        )
+    )
+
+
+def basic_authorization_risk(text: str) -> bool:
+    for match in BASIC_AUTHORIZATION_PATTERN.finditer(text):
+        encoded = match.group("credential")
+        padded = encoded + "=" * (-len(encoded) % 4)
+        try:
+            decoded = base64.b64decode(padded, validate=True)
+        except (binascii.Error, ValueError):
+            continue
+        if b":" in decoded:
+            return True
+    return False
+
+
 def secret_text_risk(text: str) -> bool:
-    if any(pattern.search(text) for pattern in SECRET_VALUE_PATTERNS):
+    uri_authorities = uri_authority_ranges(text)
+    if credentialed_uri_risk(text, uri_authorities) or basic_authorization_risk(text) or any(
+        pattern.search(text) for pattern in SECRET_VALUE_PATTERNS
+    ):
         return True
-    for match in SECRET_ASSIGNMENT_PATTERN.finditer(text):
+    safe_uri_credentials = interpolated_empty_password_uri_ranges(
+        text,
+        uri_authorities,
+    )
+    assignment_scan_text = mask_ranges(text, safe_uri_credentials)
+    assignment_prefixes = secret_assignment_matches(
+        SECRET_ASSIGNMENT_PREFIX_PATTERN,
+        text,
+        assignment_scan_text,
+        safe_uri_credentials,
+    )
+    chained_assignment_positions = top_level_line_assignment_positions(
+        text,
+        {prefix.start() for prefix in assignment_prefixes},
+    )
+    for prefix in assignment_prefixes:
+        fallback = top_level_fallback_suffix(
+            text[prefix.end() :],
+            allow_chained_assignment=(
+                re.search(r"=(?!=|>)\s*$", prefix.group(0)) is not None
+                and prefix.start() in chained_assignment_positions
+            ),
+        )
+        if fallback is not None and fallback_secret_risk(fallback):
+            return True
+    for match in secret_assignment_matches(
+        SECRET_ASSIGNMENT_PATTERN,
+        text,
+        assignment_scan_text,
+        safe_uri_credentials,
+    ):
         quoted = any(
             match.group(name) is not None
             for name in ("double_value", "single_value", "backtick_value")
@@ -2131,6 +4865,16 @@ def secret_text_risk(text: str) -> bool:
             or match.group("bare_value")
         )
         if value is None:
+            continue
+        key = re.split(r"\s*[:=]\s*", match.group(0), maxsplit=1)[0]
+        separator_match = re.search(r"[:=]", match.group(0))
+        assert separator_match is not None
+        separator = separator_match.group(0)
+        if (
+            key.strip("\"'").lower() == "credentials"
+            and value.lower() in FETCH_CREDENTIAL_MODE_VALUES
+            and safe_secret_assignment_suffix(text, match.end())
+        ):
             continue
         if (
             match.group("backtick_value") is not None
@@ -2148,6 +4892,20 @@ def secret_text_risk(text: str) -> bool:
             if safe_secret_assignment_suffix(text, match.end()):
                 continue
             return True
+        if (
+            match.group("bare_value") is not None
+            and len(value) < 12
+            and re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", value)
+        ):
+            if safe_secret_assignment_suffix(text, match.end()):
+                continue
+            return True
+        if (
+            match.group("bare_value") is not None
+            and bare_code_reference(text, match.start(), separator, value)
+            and safe_secret_assignment_suffix(text, match.end())
+        ):
+            continue
         reference_patterns = (
             QUOTED_SECRET_REFERENCE_PATTERNS
             if quoted
@@ -2157,8 +4915,33 @@ def secret_text_risk(text: str) -> bool:
             r"[A-Za-z_][A-Za-z0-9_]*(?:(?:\.|\?\.)[A-Za-z_][A-Za-z0-9_]*)*",
             value,
         )
-        if not quoted and call_target and text[match.end() :].startswith("("):
-            if safe_secret_call_suffix(text, match.end(), value):
+        suffix = text[match.end() :]
+        # Crossing a newline can misread the next shell subshell as this value's call.
+        whitespace = re.match(r"[ \t]*", suffix)
+        assert whitespace is not None
+        call_start = match.end() + whitespace.end()
+        if (
+            call_start > match.end()
+            and text[call_start : call_start + 1] == "("
+        ):
+            if (
+                call_target
+                and call_target.group(0).replace("?.", ".")
+                in PUBLIC_PROMPT_TARGETS
+                and safe_secret_call_suffix(
+                    text,
+                    call_start,
+                    call_target.group(0),
+                )
+            ):
+                continue
+            return True
+        if (
+            not quoted
+            and call_target
+            and text[call_start : call_start + 1] == "("
+        ):
+            if safe_secret_call_suffix(text, call_start, value):
                 continue
             return True
         if any(pattern.fullmatch(value) for pattern in reference_patterns):
@@ -2209,6 +4992,32 @@ def unified_diff_contents(patch: str) -> tuple[str, str]:
                 old_content.append(content)
                 new_content.append(content)
     return "\n".join(old_content), "\n".join(new_content)
+
+
+def unified_diff_metadata(patch: str) -> str:
+    metadata: list[str] = []
+    in_hunk = False
+    prefix_columns = 1
+    for line in patch.splitlines():
+        hunk_header = re.match(r"^(@{2,})", line)
+        if hunk_header:
+            metadata.append(line)
+            in_hunk = True
+            prefix_columns = len(hunk_header.group(1)) - 1
+            continue
+        if line.startswith("diff --"):
+            metadata.append(line)
+            in_hunk = False
+            continue
+        prefix = line[:prefix_columns]
+        hunk_content = (
+            in_hunk
+            and len(prefix) == prefix_columns
+            and set(prefix) <= {"+", "-", " "}
+        )
+        if not hunk_content:
+            metadata.append(line)
+    return "\n".join(metadata)
 
 
 def sensitive_repo_path_risk(rel: str) -> str | None:
@@ -2336,7 +5145,7 @@ def validate_review_patch(
     limit: int = MAX_BUNDLE_TEXT_BYTES,
 ) -> str:
     blocked = [
-        f"{rel} ({risk})"
+        f"{display_escape(rel, 500)} ({risk})"
         for rel in paths
         if (risk := tracked_sensitive_repo_path_risk(rel)) is not None
     ]
@@ -2347,15 +5156,15 @@ def validate_review_patch(
             f"refusing to include tracked sensitive paths in {label}:\n"
             f"{details}{more}"
         )
-    require_no_secret_values(label, patch)
-    for content in unified_diff_contents(patch):
-        require_no_secret_values(label, content)
     patch_bytes = len(patch.encode("utf-8"))
     if patch_bytes > limit:
         raise SystemExit(
             f"{label} is too large to review safely "
             f"({patch_bytes} bytes; limit {limit}); split the change into smaller review targets"
         )
+    require_no_secret_values(label, unified_diff_metadata(patch))
+    for content in unified_diff_contents(patch):
+        require_no_secret_values(label, content)
     return patch
 
 
@@ -2368,7 +5177,10 @@ def require_no_binary_diff(label: str, numstat: str) -> None:
         if len(fields) == 3 and fields[0] == "-" and fields[1] == "-":
             binary_paths.append(fields[2])
     if binary_paths:
-        details = "\n".join(f"- {path}" for path in binary_paths[:20])
+        details = "\n".join(
+            f"- {display_escape(path, 500)}"
+            for path in binary_paths[:20]
+        )
         more = f"\n... {len(binary_paths) - 20} more" if len(binary_paths) > 20 else ""
         raise SystemExit(
             f"refusing binary changes in {label} because their contents cannot be reviewed:\n"
@@ -2396,7 +5208,10 @@ def require_no_gitlink_diff(label: str, raw_diff: str) -> None:
         path = records[index + 1] if index + 1 < len(records) else "<unknown>"
         gitlink_paths.append(path or "<unknown>")
     if gitlink_paths:
-        details = "\n".join(f"- {path}" for path in gitlink_paths[:20])
+        details = "\n".join(
+            f"- {display_escape(path, 500)}"
+            for path in gitlink_paths[:20]
+        )
         more = (
             f"\n... {len(gitlink_paths) - 20} more"
             if len(gitlink_paths) > 20
@@ -2464,12 +5279,9 @@ def file_bundle_snapshot(
 
 
 def safe_untracked_file_snapshots(repo: Path) -> list[tuple[str, str, bool]]:
-    args: list[str] = []
-    if excludes_file := global_excludes_file(repo):
-        args.extend(["-c", f"core.excludesFile={excludes_file}"])
     files = git_path_list(
         repo,
-        *args,
+        *global_excludes_git_args(repo),
         "ls-files",
         "--others",
         "--exclude-standard",
@@ -2485,7 +5297,7 @@ def safe_untracked_file_snapshots(repo: Path) -> list[tuple[str, str, bool]]:
             allow_binary_omission=True,
         )
         if risk:
-            blocked.append(f"{rel} ({risk})")
+            blocked.append(f"{display_escape(rel, 500)} ({risk})")
         else:
             included.append((rel, content, truncated))
     if blocked:
@@ -2567,6 +5379,157 @@ def local_bundle(repo: Path) -> tuple[str, bool]:
             input_truncated = input_truncated or truncated
             parts.append(f"## {rel}\n{content}")
     return "\n\n".join(parts), input_truncated
+
+
+def source_file_fingerprint(path: Path) -> tuple[str, int, int, str]:
+    try:
+        before = os.stat(path, follow_symlinks=False)
+    except FileNotFoundError:
+        return "missing", 0, 0, ""
+    file_mode = stat.S_IMODE(before.st_mode)
+    if stat.S_ISLNK(before.st_mode):
+        try:
+            target = os.readlink(path)
+            after = os.stat(path, follow_symlinks=False)
+        except OSError as exc:
+            raise SystemExit(
+                f"unreadable file: {display_escape(path, 500)}: "
+                f"{display_escape(exc, 500)}"
+            ) from exc
+        if (
+            before.st_dev,
+            before.st_ino,
+            before.st_mode,
+            before.st_size,
+            before.st_mtime_ns,
+        ) != (
+            after.st_dev,
+            after.st_ino,
+            after.st_mode,
+            after.st_size,
+            after.st_mtime_ns,
+        ):
+            raise SystemExit(
+                f"file changed while reading: {display_escape(path, 500)}"
+            )
+        data = os.fsencode(target)
+        return "symlink", file_mode, len(data), hashlib.sha256(data).hexdigest()
+    if not stat.S_ISREG(before.st_mode):
+        return "other", file_mode, before.st_size, ""
+
+    descriptor: int | None = None
+    digest = hashlib.sha256()
+    try:
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_BINARY", 0)
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        descriptor = os.open(path, flags)
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino)
+        ):
+            raise OSError("file changed while opening")
+        while chunk := os.read(descriptor, 1024 * 1024):
+            digest.update(chunk)
+        after = os.fstat(descriptor)
+        if (
+            opened.st_dev,
+            opened.st_ino,
+            opened.st_mode,
+            opened.st_size,
+            opened.st_mtime_ns,
+        ) != (
+            after.st_dev,
+            after.st_ino,
+            after.st_mode,
+            after.st_size,
+            after.st_mtime_ns,
+        ):
+            raise OSError("file changed while reading")
+    except OSError as exc:
+        raise SystemExit(
+            f"unreadable file: {display_escape(path, 500)}: "
+            f"{display_escape(exc, 500)}"
+        ) from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+    return "file", file_mode, before.st_size, digest.hexdigest()
+
+
+def source_tree_snapshot(
+    repo: Path,
+) -> tuple[
+    str,
+    str,
+    tuple[tuple[str, object], ...],
+]:
+    head_result = git_result(
+        repo,
+        "rev-parse",
+        "--verify",
+        "HEAD",
+        check=False,
+    )
+    head = head_result.stdout.strip()
+    if head_result.returncode != 0:
+        symbolic_result = git_result(
+            repo,
+            "symbolic-ref",
+            "-q",
+            "HEAD",
+            check=False,
+        )
+        symbolic_head = symbolic_result.stdout.strip()
+        if symbolic_result.returncode != 0 or not symbolic_head:
+            raise SystemExit("unable to resolve HEAD for source snapshot")
+        ref_result = git_result(
+            repo,
+            "show-ref",
+            "--verify",
+            "--quiet",
+            symbolic_head,
+            check=False,
+        )
+        if ref_result.returncode != 1:
+            raise SystemExit("unable to verify unborn HEAD for source snapshot")
+        head = f"unborn:{symbolic_head}"
+    index_entries = git(
+        repo,
+        "ls-files",
+        "--stage",
+        "-z",
+    )
+    tracked = git_path_list(repo, "ls-files", "-z")
+    index_modes = {
+        rel: metadata.split(" ", 1)[0]
+        for record in index_entries.split("\0")
+        if record and "\t" in record
+        for metadata, rel in (record.split("\t", 1),)
+    }
+    untracked = git_path_list(
+        repo,
+        *global_excludes_git_args(repo),
+        "ls-files",
+        "--others",
+        "--exclude-standard",
+        "-z",
+    )
+    fingerprints = tuple(
+        (
+            rel,
+            source_tree_snapshot(repo / rel)
+            if index_modes.get(rel) == "160000"
+            and (repo / rel / ".git").exists()
+            else source_file_fingerprint(repo / rel),
+        )
+        for rel in sorted(set(tracked + untracked))
+    )
+    return head, index_entries, fingerprints
 
 
 def branch_bundle(repo: Path, base_ref: str) -> tuple[str, bool]:
@@ -3746,7 +6709,7 @@ class CodexStreamDisplay:
 
     def __call__(self, name: str, line: str) -> str | None:
         if name != "stdout":
-            return line
+            return stream_display_escape(line)
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
@@ -3780,7 +6743,7 @@ class CodexStreamDisplay:
 
     def visible(self, text: str) -> str:
         self.last_visible = time.monotonic()
-        return text
+        return stream_display_escape(text)
 
 
 class ClaudeStreamDisplay:
@@ -3792,7 +6755,7 @@ class ClaudeStreamDisplay:
 
     def __call__(self, name: str, line: str) -> str | None:
         if name != "stdout":
-            return line
+            return stream_display_escape(line)
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
@@ -3854,7 +6817,7 @@ class ClaudeStreamDisplay:
 
     def visible(self, text: str) -> str:
         self.last_visible = time.monotonic()
-        return text
+        return stream_display_escape(text)
 
 
 class CursorStreamDisplay:
@@ -4205,6 +7168,8 @@ import sys
 record = os.environ["AUTOREVIEW_FAKE_RECORD"]
 args = sys.argv[1:]
 Path(record).write_text(json.dumps({"argv": args, "cwd": os.getcwd(), "stdin": sys.stdin.read()}))
+if mutation := os.environ.get("AUTOREVIEW_FAKE_MUTATE"):
+    Path(mutation).write_text("mutated during review\n")
 try:
     output_path = args[args.index("--output-last-message") + 1]
 except ValueError:
@@ -4918,7 +7883,12 @@ def self_test_heartbeat_metrics() -> None:
     print("autoreview heartbeat metrics self-test: ok")
 
 
-def validate_report(report: dict[str, Any], repo: Path, changed_paths: set[str], required: list[str]) -> None:
+def _validate_report(
+    report: dict[str, Any],
+    repo: Path,
+    changed_paths: set[str],
+    required: list[str],
+) -> None:
     allowed_top = {"findings", "overall_correctness", "overall_explanation", "overall_confidence"}
     extra_top = set(report) - allowed_top
     if extra_top:
@@ -4996,10 +7966,19 @@ def validate_report(report: dict[str, Any], repo: Path, changed_paths: set[str],
         for index, finding, rel, line in ignored_findings:
             title = finding.get("title", "<untitled>")
             print(
-                f"autoreview ignored out-of-scope finding {index}: {title} ({rel}:{line})",
+                "autoreview ignored out-of-scope finding "
+                f"{index}: {display_escape(title, 140)} "
+                f"({display_escape(rel, 500)}:{line})",
                 file=sys.stderr,
             )
-            print(bounded_field(str(finding.get("body", "")), 500), file=sys.stderr)
+            print(
+                display_escape(
+                    finding.get("body", ""),
+                    500,
+                    multiline=True,
+                ),
+                file=sys.stderr,
+            )
         report["findings"] = kept_findings
         if not kept_findings and report["overall_correctness"] == "patch is incorrect":
             note = f"Ignored {len(ignored_findings)} out-of-scope finding(s) outside the reviewed change."
@@ -5012,26 +7991,52 @@ def validate_report(report: dict[str, Any], repo: Path, changed_paths: set[str],
             raise SystemExit(f"required finding text not found: {needle}")
 
 
+def validate_report(
+    report: dict[str, Any],
+    repo: Path,
+    changed_paths: set[str],
+    required: list[str],
+) -> None:
+    try:
+        _validate_report(report, repo, changed_paths, required)
+    except SystemExit as exc:
+        if isinstance(exc.code, str):
+            raise SystemExit(
+                display_escape(exc.code, 4000, multiline=True)
+            ) from None
+        raise
+
+
 def number_in_range(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value <= 1
 
 
 def print_report(report: dict[str, Any], *, label: str = "autoreview") -> None:
     findings = report["findings"]
+    display_label = display_escape(label, 200)
     if findings:
-        print(f"{label} findings: {len(findings)}")
+        print(f"{display_label} findings: {len(findings)}")
     elif report["overall_correctness"] == "patch is incorrect":
-        print(f"{label} verdict: patch is incorrect without discrete findings")
+        print(
+            f"{display_label} verdict: "
+            "patch is incorrect without discrete findings"
+        )
     else:
-        print(f"{label} clean: no accepted/actionable findings reported")
+        print(
+            f"{display_label} clean: "
+            "no accepted/actionable findings reported"
+        )
     for finding in findings:
         loc = finding["code_location"]
-        print(f"[{finding['priority']}] {finding['title']}")
-        print(f"{loc['file_path']}:{loc['line']}")
-        print(f"{finding['body']}")
+        print(
+            f"[{finding['priority']}] "
+            f"{display_escape(finding['title'], 140)}"
+        )
+        print(f"{display_escape(loc['file_path'], 500)}:{loc['line']}")
+        print(display_escape(finding["body"], 2000, multiline=True))
         print()
     print(f"overall: {report['overall_correctness']} ({report['overall_confidence']})")
-    print(report["overall_explanation"])
+    print(display_escape(report["overall_explanation"], 3000, multiline=True))
 
 
 def start_parallel_tests(
@@ -5427,7 +8432,9 @@ def run_reviewer(
             if attempt >= attempts or not is_structured_output_failure(str(exc)):
                 raise
             print(
-                f"retrying {args.engine} structured output validation after attempt {attempt}: {exc}",
+                "retrying "
+                f"{args.engine} structured output validation after attempt "
+                f"{attempt}: {display_escape(exc, 4000, multiline=True)}",
                 file=sys.stderr,
             )
     raise SystemExit(f"{args.engine} structured output validation failed after {attempts} attempts")
@@ -5484,11 +8491,19 @@ def run_panel(
                 failures.append(f"{label}: {exc}")
             except Exception as exc:
                 failures.append(f"{label}: {exc}")
-    if failures and not args.allow_partial_panel:
-        raise SystemExit("autoreview panel failed\n" + "\n".join(failures))
-    if failures:
-        for failure in failures:
-            print(f"panel reviewer failed: {failure}")
+    escaped_failures = [
+        display_escape(failure, 4000, multiline=True)
+        for failure in failures
+    ]
+    if escaped_failures and not args.allow_partial_panel:
+        raise SystemExit(
+            "autoreview panel failed\n" + "\n".join(escaped_failures)
+        )
+    if escaped_failures:
+        for failure in escaped_failures:
+            print(
+                "panel reviewer failed: " + failure
+            )
     if not reports:
         raise SystemExit("autoreview panel produced no reports")
     reports.sort(key=lambda item: item[0])
@@ -5760,6 +8775,50 @@ def self_test() -> int:
     return self_test_engine_isolation()
 
 
+def reject_repo_output_paths(args: argparse.Namespace, repo: Path) -> None:
+    repo_root_path = repo.resolve()
+    for option, value in (
+        ("--json-output", args.json_output),
+        ("--output", args.output),
+    ):
+        if not value:
+            continue
+        path = Path(value).expanduser()
+        resolved = (
+            path if path.is_absolute() else Path.cwd() / path
+        ).resolve()
+        inside_repo = resolved.is_relative_to(repo_root_path)
+        if not inside_repo:
+            for ancestor in (resolved, *resolved.parents):
+                try:
+                    if os.path.samefile(ancestor, repo_root_path):
+                        inside_repo = True
+                        break
+                except OSError:
+                    continue
+        if not inside_repo:
+            continue
+        raise SystemExit(
+            f"{option} must point outside the reviewed repository: "
+            f"{display_escape(value, 500)}"
+        )
+
+
+def atomic_write_text(path: Path, content: str) -> None:
+    parent = path.parent
+    descriptor, temporary = tempfile.mkstemp(
+        dir=parent,
+        prefix=f".{path.name}.",
+    )
+    temporary_path = Path(temporary)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(content)
+        os.replace(temporary_path, path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
 def main() -> int:
     args = parse_args()
     if args.self_test:
@@ -5792,6 +8851,7 @@ def main() -> int:
         return self_test_json_array_parser()
     reviewers = reviewer_args(args)
     repo = repo_root()
+    reject_repo_output_paths(args, repo)
     target, target_ref = choose_target(repo, args.mode, args.base)
     print(f"autoreview target: {target}")
     print(f"branch: {current_branch(repo)}")
@@ -5822,6 +8882,7 @@ def main() -> int:
     if args.dry_run:
         return 0
 
+    review_source_snapshot = source_tree_snapshot(repo)
     if target == "local":
         bundle, bundle_truncated = local_bundle(repo)
     elif target == "branch":
@@ -5843,6 +8904,11 @@ def main() -> int:
     )
     changed_paths = review_paths(repo, target, target_ref, args.commit)
     print(f"bundle: {len(prompt)} chars")
+    if source_tree_snapshot(repo) != review_source_snapshot:
+        raise SystemExit(
+            "source changed while the review bundle was being created; "
+            "rerun autoreview against the updated tree"
+        )
 
     tests_proc: tuple[subprocess.Popen, float] | None = None
     if args.parallel_tests:
@@ -5861,19 +8927,36 @@ def main() -> int:
         else:
             report = run_panel(args, reviewers, repo, prompt, changed_paths, input_truncated)
             label = "autoreview panel"
-        if args.json_output:
-            Path(args.json_output).write_text(json.dumps(report, indent=2) + "\n")
-
-        if args.output:
-            original_stdout = sys.stdout
-            with Path(args.output).open("w") as handle:
-                sys.stdout = Tee(original_stdout, handle)
-                print_report(report, label=label)
-                sys.stdout = original_stdout
-        else:
-            print_report(report, label=label)
     finally:
         tests_status = finish_parallel_tests(*tests_proc) if tests_proc else 0
+
+    if source_tree_snapshot(repo) != review_source_snapshot:
+        print(
+            "source changed after the review bundle was created; "
+            "rerun autoreview against the updated tree",
+            file=sys.stderr,
+        )
+        return 1
+
+    if args.json_output:
+        atomic_write_text(
+            Path(args.json_output),
+            json.dumps(report, indent=2) + "\n",
+        )
+
+    if args.output:
+        rendered = io.StringIO()
+        original_stdout = sys.stdout
+        try:
+            sys.stdout = rendered
+            print_report(report, label=label)
+        finally:
+            sys.stdout = original_stdout
+        output = rendered.getvalue()
+        print(output, end="")
+        atomic_write_text(Path(args.output), output)
+    else:
+        print_report(report, label=label)
 
     has_findings = bool(report["findings"])
     overall_incorrect = report["overall_correctness"] == "patch is incorrect"
@@ -5884,18 +8967,16 @@ def main() -> int:
     return 1 if has_findings or overall_incorrect else 0
 
 
-class Tee:
-    def __init__(self, *streams: Any) -> None:
-        self.streams = streams
-
-    def write(self, data: str) -> None:
-        for stream in self.streams:
-            stream.write(data)
-
-    def flush(self) -> None:
-        for stream in self.streams:
-            stream.flush()
+def sanitized_main() -> int:
+    try:
+        return main()
+    except SystemExit as exc:
+        if isinstance(exc.code, str):
+            raise SystemExit(
+                display_escape(exc.code, 4000, multiline=True)
+            ) from None
+        raise
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(sanitized_main())

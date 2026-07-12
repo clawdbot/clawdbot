@@ -2,7 +2,6 @@ import AppKit
 import CryptoKit
 import Observation
 import OpenClawDiscovery
-import OpenClawIPC
 import SwiftUI
 
 enum UIStrings {

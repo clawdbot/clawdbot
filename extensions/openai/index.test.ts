@@ -416,14 +416,12 @@ describe("openai plugin", () => {
         interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
       },
     });
-    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain("Live chat tone: short, natural, human.");
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain("Live chat: short, natural, human.");
     expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
-      "Avoid memo voice, long preambles, walls of text, and repetitive restatement.",
+      "No memo voice, long preamble, wall, repetition.",
     );
-    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain("Show grounded emotional range when it fits");
-    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
-      "Occasional emoji are fine when they fit naturally, especially for warmth or brief celebration; keep them sparse.",
-    );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain("Grounded emotion when fitting:");
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain("Sparse natural emoji ok.");
     expect(
       openaiProvider.resolveSystemPromptContribution?.({
         ...contributionContext,
@@ -461,51 +459,41 @@ describe("openai plugin", () => {
   });
 
   it("includes the tagged GPT-5 behavior contract in the OpenAI prompt overlay", () => {
-    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain("Keep progress updates concrete.");
-    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
-      'Brief first-person feeling language is ok when useful: "I\'m glad we caught that", "I\'m excited about this direction", "I\'m worried this will break", "that\'s frustrating".',
-    );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain("Concrete progress; ego-free decisions.");
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain("Brief first-person feeling ok.");
     expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).not.toContain(
       "Use heartbeats to create useful proactive progress",
     );
     expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
-      "Use heartbeats to create useful proactive progress, not chatter.",
+      "Heartbeat = useful proactive progress, not chatter.",
+    );
+    expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain("Wake, orient, read HEARTBEAT.md, act.");
+    expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
+      "Assigned/ongoing work: pursue spirit with judgment.",
+    );
+    expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain("Prefer action/silent progress.");
+    expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
+      'Never repetitive "same/no change/still" updates.',
     );
     expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
-      "Treat a heartbeat as a wake-up: orient, read HEARTBEAT.md when present, then do what is actually useful now.",
+      "Interrupt only for meaningful development/result/blocker/decision/time risk.",
     );
-    expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
-      "If HEARTBEAT.md assigns concrete or ongoing work, execute its spirit with judgment.",
-    );
-    expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
-      "Prefer meaningful action over commentary. A good heartbeat often looks like silent progress.",
-    );
-    expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
-      'Do not send "same state", "no change", "still", or repetitive summaries because a problem continues.',
-    );
-    expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
-      "Notify only for something worth interrupting the user",
-    );
-    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain(
-      "Occasional emoji are fine when they fit naturally, especially for warmth or brief celebration; keep them sparse.",
-    );
+    expect(OPENAI_FRIENDLY_PROMPT_OVERLAY).toContain("Sparse natural emoji ok.");
     expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<persona_latch>");
     expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<execution_policy>");
     expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<tool_discipline>");
     expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<output_contract>");
     expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("<completion_contract>");
     expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain(
-      "For irreversible, external, destructive, or privacy-sensitive actions: ask first.",
+      "Irreversible/external/destructive/privacy-sensitive: ask first.",
     );
     expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain(
-      "Prefer tool evidence over recall when action, state, or mutable facts matter.",
+      "Action/state/mutable fact: tool evidence > recall.",
     );
+    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("Another call likely improves answer: do it.");
+    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("Requested sections/order/limits only.");
     expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain(
-      "If more tool work would likely change the answer, do it before replying.",
-    );
-    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain("Return requested sections/order only.");
-    expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).toContain(
-      "Treat the task as incomplete until every requested item is handled",
+      "Incomplete until every item handled or [blocked] with missing input.",
     );
     expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).not.toContain("/approve");
     expect(OPENAI_GPT5_BEHAVIOR_CONTRACT).not.toContain("GPT-5 Output Contract");

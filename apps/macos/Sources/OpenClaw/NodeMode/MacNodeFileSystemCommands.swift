@@ -1,5 +1,4 @@
 import Foundation
-import OpenClawIPC
 import OpenClawKit
 
 enum MacNodeFileSystemCommands {

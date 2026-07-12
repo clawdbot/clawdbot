@@ -1336,7 +1336,7 @@ describe("provider-runtime", () => {
 
     expect(contribution?.stablePrefix).toContain("<persona_latch>");
     expect(contribution?.sectionOverrides?.interaction_style).toContain(
-      "Live chat tone: short, natural, human.",
+      "Live chat: short, natural, human.",
     );
   });
 

@@ -120,6 +120,21 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   margin-inline: auto;
 }
 
+.chat-history-sentinel {
+  display: flex;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+}
+
+.chat-history-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 /* The zero-height anchor keeps the affordance out of the flex flow so showing
    it never shrinks the transcript or moves the composer. */
 .chat-scroll-to-bottom-wrap {

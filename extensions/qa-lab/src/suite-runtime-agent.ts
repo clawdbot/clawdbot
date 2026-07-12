@@ -5,6 +5,7 @@ export {
   readRawQaSessionStore,
   readSessionTranscriptSummary,
   readSkillStatus,
+  seedQaSessionTranscript,
 } from "./suite-runtime-agent-session.js";
 export {
   forceMemoryIndex,

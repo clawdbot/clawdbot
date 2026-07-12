@@ -670,6 +670,48 @@ describe("createBackupArchive", () => {
     );
   });
 
+  it("rejects foreign-key violations before creating a backup archive", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-foreign-key-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputDir = state.path("backups");
+        await fs.mkdir(outputDir, { recursive: true });
+        openOpenClawStateDatabase({ env: state.env });
+        closeOpenClawStateDatabase();
+
+        const sqlite = requireNodeSqlite();
+        const database = new sqlite.DatabaseSync(resolveOpenClawStateSqlitePath(state.env));
+        try {
+          database.exec("PRAGMA foreign_keys = OFF;");
+          database
+            .prepare("INSERT INTO task_delivery_state (task_id) VALUES (?)")
+            .run("missing-task");
+          expect(database.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
+          expect(database.prepare("PRAGMA integrity_check").get()).toEqual({
+            integrity_check: "ok",
+          });
+        } finally {
+          database.close();
+        }
+
+        await expect(
+          createBackupArchive({
+            output: outputDir,
+            includeWorkspace: false,
+            nowMs: Date.UTC(2026, 4, 9, 8, 30, 30),
+          }),
+        ).rejects.toThrow(
+          /foreign_key_check failed.*task_delivery_state row 1 references task_runs \(foreign key 0\)/iu,
+        );
+        expect(await fs.readdir(outputDir)).toEqual([]);
+      },
+    );
+  });
+
   it("snapshots per-agent SQLite auth stores without deleted secret pages", async () => {
     await withOpenClawTestState(
       {

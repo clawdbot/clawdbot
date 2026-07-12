@@ -1,6 +1,7 @@
 // Release Beta Verifier tests cover release beta verifier script behavior.
 /* oxlint-disable typescript/no-base-to-string -- fetch mock normalizes standard RequestInfo inputs for URL assertions. */
 import { createHash } from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   downloadClawHubBootstrapReadback,
@@ -372,9 +373,10 @@ describe("validateClawHubBootstrapEvidence", () => {
           ...evidence,
           packages: [
             {
-              ...evidence.packages[0],
+              ...expectDefined(evidence.packages[0], "first beta release package evidence"),
               artifactMetadata: {
-                ...evidence.packages[0].artifactMetadata,
+                ...expectDefined(evidence.packages[0], "first beta release package evidence")
+                  .artifactMetadata,
                 npmIntegrity: "sha512-different",
               },
             },

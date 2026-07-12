@@ -1,16 +1,6 @@
 import Commander
 import Foundation
 
-@MainActor
-struct ServiceRootCommand: ParsableCommand {
-    static var commandDescription: CommandDescription {
-        CommandDescription(
-            commandName: "service",
-            abstract: "Manage launchd agent",
-            subcommands: [ServiceInstall.self, ServiceUninstall.self, ServiceStatus.self])
-    }
-}
-
 private enum LaunchdHelper {
     static let label = "com.swabble.agent"
 

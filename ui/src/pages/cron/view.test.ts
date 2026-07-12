@@ -195,7 +195,12 @@ describe("cron view list pane", () => {
     expect(rows[1]?.classList.contains("cron-table__row--paused")).toBe(true);
     expect(rows[1]?.textContent).toContain("Paused");
     expect(rows[2]?.querySelector(".cron-table__dot--error")).not.toBeNull();
-    expect(rows[2]?.textContent).toContain("Error");
+    expect(rows[2]?.querySelector(".cron-last-glyph--error")).not.toBeNull();
+    expect(rows[2]?.querySelector(".cron-table__last-run")?.getAttribute("aria-label")).toBe(
+      "Error",
+    );
+    expect(rows[0]?.querySelector(".cron-last-glyph--ok")).toBeNull();
+    expect(rows[0]?.textContent).toContain("n/a");
 
     (rows[1] as HTMLElement).click();
     expect(onSelectJob).toHaveBeenCalledWith(paused);
@@ -361,7 +366,7 @@ describe("cron view run history", () => {
 });
 
 describe("cron view editor", () => {
-  it("renders the create view with prompt, details, and frequency rows", () => {
+  it("renders the create view with prompt, general, and schedule cards", () => {
     const onSubmit = vi.fn();
     const onClosePanel = vi.fn();
     const container = renderView({ createOpen: true, onSubmit, onClosePanel });
@@ -369,7 +374,9 @@ describe("cron view editor", () => {
     expect(container.querySelector(".cron-page--detail")?.textContent).toContain("New automation");
     expect(container.querySelector("#cron-payload-text")).toBeInstanceOf(HTMLTextAreaElement);
     expect(container.querySelector("#cron-name")).toBeInstanceOf(HTMLInputElement);
-    expect(container.querySelector("#cron-schedule-kind")).toBeInstanceOf(HTMLSelectElement);
+    expect(container.querySelector('[data-test-id="cron-schedule-kind-every"]')).toBeInstanceOf(
+      HTMLButtonElement,
+    );
     // Create mode has no run-history tab and no enabled switch.
     expect(container.querySelector('[data-test-id="cron-detail-tab-history"]')).toBeNull();
     expect(container.querySelector('[data-test-id="cron-toggle-enabled"]')).toBeNull();
@@ -396,13 +403,27 @@ describe("cron view editor", () => {
     expect(onFormChange).toHaveBeenCalledWith({ name: "Thing" });
   });
 
-  it("switches frequency rows by schedule kind", () => {
+  it("switches schedule inputs by segmented kind and wires kind changes", () => {
+    const onFormChange = vi.fn();
     const everyContainer = renderView({
       createOpen: true,
       form: { ...DEFAULT_CRON_FORM, scheduleKind: "every" },
+      onFormChange,
     });
     expect(everyContainer.querySelector("#cron-every-amount")).not.toBeNull();
     expect(everyContainer.querySelector("#cron-cron-expr")).toBeNull();
+    const activeEvery = getElement(
+      everyContainer,
+      '[data-test-id="cron-schedule-kind-every"]',
+      HTMLButtonElement,
+    );
+    expect(activeEvery.getAttribute("aria-pressed")).toBe("true");
+    getElement(
+      everyContainer,
+      '[data-test-id="cron-schedule-kind-cron"]',
+      HTMLButtonElement,
+    ).click();
+    expect(onFormChange).toHaveBeenCalledWith({ scheduleKind: "cron" });
 
     const atContainer = renderView({
       createOpen: true,
@@ -416,23 +437,49 @@ describe("cron view editor", () => {
     });
     expect(cronContainer.querySelector("#cron-cron-expr")).not.toBeNull();
 
+    // on-exit jobs keep a pill so they can convert to an editable schedule;
+    // the on-exit pill only exists while it is the current value.
     const onExitContainer = renderView({
       createOpen: true,
       form: { ...DEFAULT_CRON_FORM, scheduleKind: "on-exit" },
     });
-    // on-exit jobs keep the Repeat select so they can convert to an editable
-    // schedule; the on-exit option only exists while it is the current value.
-    const onExitSelect = onExitContainer.querySelector("#cron-schedule-kind") as HTMLSelectElement;
-    expect(onExitSelect).not.toBeNull();
-    const optionValues = Array.from(onExitSelect.querySelectorAll("option")).map(
-      (option) => option.value,
-    );
-    expect(optionValues).toEqual(["on-exit", "every", "at", "cron"]);
     expect(
-      (everyContainer.querySelector("#cron-schedule-kind") as HTMLSelectElement).querySelector(
-        'option[value="on-exit"]',
-      ),
-    ).toBeNull();
+      onExitContainer.querySelector('[data-test-id="cron-schedule-kind-on-exit"]'),
+    ).not.toBeNull();
+    expect(everyContainer.querySelector('[data-test-id="cron-schedule-kind-on-exit"]')).toBeNull();
+  });
+
+  it("shows a live schedule summary when inputs are valid", () => {
+    const plural = renderView({
+      createOpen: true,
+      form: { ...DEFAULT_CRON_FORM, scheduleKind: "every", everyAmount: "30" },
+    });
+    expect(plural.querySelector(".cron-schedule-summary")?.textContent).toContain(
+      "Runs every 30 minutes",
+    );
+
+    const singular = renderView({
+      createOpen: true,
+      form: { ...DEFAULT_CRON_FORM, scheduleKind: "every", everyAmount: "1", everyUnit: "hours" },
+    });
+    expect(singular.querySelector(".cron-schedule-summary")?.textContent).toContain(
+      "Runs every hour",
+    );
+
+    const invalid = renderView({
+      createOpen: true,
+      form: { ...DEFAULT_CRON_FORM, scheduleKind: "every", everyAmount: "" },
+    });
+    expect(invalid.querySelector(".cron-schedule-summary")).toBeNull();
+
+    // One-shot summaries render the parsed date/time, not a duration.
+    const once = renderView({
+      createOpen: true,
+      form: { ...DEFAULT_CRON_FORM, scheduleKind: "at", scheduleAt: "2026-07-14T09:00" },
+    });
+    const onceText = once.querySelector(".cron-schedule-summary")?.textContent ?? "";
+    expect(onceText).toContain("Runs once at");
+    expect(onceText).toContain("2026");
   });
 
   it("renders supported delivery options and normalizes stale announce selection", () => {

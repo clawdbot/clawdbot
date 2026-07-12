@@ -94,9 +94,13 @@ function collectProductionLintSuppressions(): SuppressionEntry[] {
       if (!match) {
         continue;
       }
+      const rule = match[1];
+      if (rule === undefined) {
+        continue;
+      }
       entries.push({
         file: relativePath,
-        rule: match[1],
+        rule,
       });
     }
   }
@@ -134,15 +138,19 @@ function collectProductionLintSuppressionsFromGit(): SuppressionEntry[] | null {
     if (!match) {
       continue;
     }
-    const [, file, sourceLine] = match;
-    if (!isProductionCodeFile(file)) {
+    const file = match[1];
+    const sourceLine = match[2];
+    if (file === undefined || sourceLine === undefined || !isProductionCodeFile(file)) {
       continue;
     }
     const suppression = sourceLine.match(SUPPRESSION_PATTERN);
     if (!suppression) {
       continue;
     }
-    entries.push({ file, rule: suppression[1] });
+    const rule = suppression[1];
+    if (rule !== undefined) {
+      entries.push({ file, rule });
+    }
   }
   return entries;
 }
@@ -166,7 +174,7 @@ function summarizeSuppressions(entries: readonly SuppressionEntry[]): string[] {
 function filterExpectedSuppressionsForPresentFiles(entries: readonly string[]): string[] {
   return entries.filter((entry) => {
     const [file] = entry.split("|", 1);
-    return fs.existsSync(path.join(repoRoot, file));
+    return file !== undefined && fs.existsSync(path.join(repoRoot, file));
   });
 }
 

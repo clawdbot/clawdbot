@@ -130,8 +130,8 @@ describe("dev tooling safety helpers", () => {
       nested: [{ message: `Authorization: Bearer ${token}` }],
     }) as { nested: Array<{ message: string }> };
 
-    expect(redacted.nested[0].message).not.toContain(token);
-    expect(redacted.nested[0].message).toContain("Authorization");
+    expect(redacted.nested[0]?.message).not.toContain(token);
+    expect(redacted.nested[0]?.message).toContain("Authorization");
   });
 
   it("parses boolean env values explicitly", () => {

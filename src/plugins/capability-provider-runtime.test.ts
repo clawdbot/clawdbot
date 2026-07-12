@@ -124,8 +124,6 @@ vi.mock("./bundled-compat.js", () => ({
 
 let resolvePluginCapabilityProviders: typeof import("./capability-provider-runtime.js").resolvePluginCapabilityProviders;
 let resolvePluginCapabilityProvider: typeof import("./capability-provider-runtime.js").resolvePluginCapabilityProvider;
-let resolveBundledCapabilityProviderIds: typeof import("./capability-provider-runtime.js").resolveBundledCapabilityProviderIds;
-let resolveManifestCapabilityProviderIds: typeof import("./capability-provider-runtime.js").resolveManifestCapabilityProviderIds;
 let clearCurrentPluginMetadataSnapshot: typeof import("./current-plugin-metadata-snapshot.js").clearCurrentPluginMetadataSnapshot;
 let setCurrentPluginMetadataSnapshot: typeof import("./current-plugin-metadata-snapshot.js").setCurrentPluginMetadataSnapshot;
 let clearPluginMetadataLifecycleCaches: typeof import("./plugin-metadata-lifecycle.js").clearPluginMetadataLifecycleCaches;
@@ -284,12 +282,8 @@ function expectCompatChainApplied(params: {
 describe("resolvePluginCapabilityProviders", () => {
   beforeAll(async () => {
     vi.resetModules();
-    ({
-      resolveBundledCapabilityProviderIds,
-      resolveManifestCapabilityProviderIds,
-      resolvePluginCapabilityProvider,
-      resolvePluginCapabilityProviders,
-    } = await import("./capability-provider-runtime.js"));
+    ({ resolvePluginCapabilityProvider, resolvePluginCapabilityProviders } =
+      await import("./capability-provider-runtime.js"));
     ({ clearCurrentPluginMetadataSnapshot, setCurrentPluginMetadataSnapshot } =
       await import("./current-plugin-metadata-snapshot.js"));
     ({ clearPluginMetadataLifecycleCaches } = await import("./plugin-metadata-lifecycle.js"));
@@ -323,10 +317,25 @@ describe("resolvePluginCapabilityProviders", () => {
     clearLoadPluginMetadataSnapshotMemo();
   });
 
-  it("resolves bundled capability ids from the current metadata snapshot", () => {
+  it("resolves bundled capability plugins from the current metadata snapshot", () => {
+    const loaded = createEmptyPluginRegistry();
+    loaded.imageGenerationProviders.push({
+      pluginId: "fal",
+      pluginName: "fal",
+      source: "test",
+      provider: {
+        id: "fal",
+        defaultModel: "fal-ai/flux/dev",
+        models: ["fal-ai/flux/dev"],
+        isConfigured: () => true,
+        generateImage: async () => ({ images: [] }),
+      },
+    } as never);
+    mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
+      params === undefined ? undefined : loaded,
+    );
     setCurrentPluginMetadataSnapshot({
       policyHash: resolveInstalledPluginIndexPolicyHash({}),
-      workspaceDir: "/workspace",
       index: { plugins: [] },
       registryDiagnostics: [],
       manifestRegistry: { plugins: [], diagnostics: [] },
@@ -360,19 +369,35 @@ describe("resolvePluginCapabilityProviders", () => {
       },
     } as never);
 
-    expect(
-      resolveBundledCapabilityProviderIds({
-        key: "imageGenerationProviders",
-        workspaceDir: "/workspace",
-      }),
-    ).toEqual(["fal"]);
+    expectResolvedCapabilityProviderIds(
+      resolvePluginCapabilityProviders({ key: "imageGenerationProviders" }),
+      ["fal"],
+    );
+    expectActiveRegistryLookup(["fal"]);
     expect(mocks.loadPluginManifestRegistry).not.toHaveBeenCalled();
   });
 
-  it("resolves enabled external capability ids from the current metadata snapshot", () => {
+  it("resolves enabled external capability plugins from the current metadata snapshot", () => {
+    const loaded = createEmptyPluginRegistry();
+    loaded.imageGenerationProviders.push({
+      pluginId: "external-image",
+      pluginName: "external-image",
+      source: "test",
+      provider: {
+        id: "external-image",
+        label: "External Image",
+        isConfigured: () => true,
+        generate: async () => ({
+          kind: "image",
+          images: [],
+        }),
+      },
+    } as never);
+    mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
+      params === undefined ? undefined : loaded,
+    );
     setCurrentPluginMetadataSnapshot({
       policyHash: resolveInstalledPluginIndexPolicyHash({}),
-      workspaceDir: "/workspace",
       index: {
         plugins: [
           { pluginId: "external-image", origin: "global", enabled: true },
@@ -416,12 +441,11 @@ describe("resolvePluginCapabilityProviders", () => {
       },
     } as never);
 
-    expect(
-      resolveManifestCapabilityProviderIds({
-        key: "imageGenerationProviders",
-        workspaceDir: "/workspace",
-      }),
-    ).toEqual(["external-image"]);
+    expectResolvedCapabilityProviderIds(
+      resolvePluginCapabilityProviders({ key: "imageGenerationProviders" }),
+      ["external-image"],
+    );
+    expectActiveRegistryLookup(["external-image"]);
     expect(mocks.loadPluginManifestRegistry).not.toHaveBeenCalled();
   });
 

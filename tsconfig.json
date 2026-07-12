@@ -12,6 +12,7 @@
     "moduleResolution": "NodeNext",
     "noImplicitOverride": true,
     "noImplicitReturns": true,
+    "noUncheckedIndexedAccess": true,
     "noEmit": true,
     "noEmitOnError": true,
     "noUncheckedSideEffectImports": true,

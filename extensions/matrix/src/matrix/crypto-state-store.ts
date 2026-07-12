@@ -120,17 +120,6 @@ function readMatrixRecoveryKeyStateWithKey(params: {
   );
 }
 
-export function writeMatrixRecoveryKeyState(params: {
-  storageRootDir: string;
-  payload: MatrixStoredRecoveryKey;
-}): void {
-  writeMatrixRecoveryKeyStateWithKey({
-    storageRootDir: params.storageRootDir,
-    stateKey: STATE_KEY,
-    payload: params.payload,
-  });
-}
-
 export function writeMatrixRecoveryKeyStateForPath(params: {
   recoveryKeyPath: string;
   payload: MatrixStoredRecoveryKey;

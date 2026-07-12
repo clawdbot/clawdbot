@@ -3,6 +3,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 
 const helperPath = path.resolve("scripts/lib/openclaw-e2e-instance.sh");
@@ -1103,7 +1104,7 @@ exit 1
       expect(result.status).toBe(1);
       expect(result.stdout).toContain("recent command tail");
       expect(result.stdout).not.toContain("DO_NOT_PRINT_OLD_COMMAND_LOG");
-      const [logFile] = fs.readdirSync(logDir);
+      const logFile = expectDefined(fs.readdirSync(logDir)[0], "OpenClaw E2E command log file");
       expect(fs.readFileSync(path.join(logDir, logFile), "utf8")).toContain(
         "DO_NOT_PRINT_OLD_COMMAND_LOG",
       );

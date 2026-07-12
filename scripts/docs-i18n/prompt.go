@@ -88,7 +88,7 @@ var localeRules = map[string]string{
 	"vi": `Locale rules:
 - Write standard Vietnamese in a neutral technical tone. Use “bạn” consistently when direct address is necessary and avoid unnecessary English outside protected terms.`,
 	"nl": `Locale rules:
-- Write standard Dutch in a concise, neutral technical tone. Keep forms of address consistent and avoid unnecessary English outside protected terms.`,
+- Write standard Dutch in a concise, neutral technical tone. Use informal “je/jouw” consistently for direct address; do not switch to formal “u/uw” except inside protected literal quotations. Avoid unnecessary English outside protected terms.`,
 	"fa": `Locale rules:
 - Write standard Iranian Persian in a neutral technical tone. Use Persian ی and ک rather than Arabic ي and ك, and use standard Persian half-spaces where required.
 - Keep prose naturally right-to-left without reordering or altering left-to-right code, commands, URLs, placeholders, or product names.`,

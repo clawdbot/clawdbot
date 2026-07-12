@@ -1269,13 +1269,6 @@ extension GatewayEndpointStore {
         self.resolveGatewayToken(isRemote: isRemote, root: root, env: env, launchdSnapshot: launchdSnapshot)
     }
 
-    static func _testResolveGatewayBindMode(
-        root: [String: Any],
-        env: [String: String]) -> String?
-    {
-        self.resolveGatewayBindMode(root: root, env: env)
-    }
-
     static func _testResolveLocalGatewayHost(
         bindMode: String?,
         tailscaleIP: String?,

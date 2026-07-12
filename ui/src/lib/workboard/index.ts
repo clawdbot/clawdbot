@@ -3912,13 +3912,11 @@ export async function startWorkboardCard(params: {
             bootstrapContextMode: "lightweight",
             idempotencyKey: buildCardRunIdempotencyKey(card),
           })
-        : {
-            key: await requestSessionCreate(params.client, {
-              ...(card.agentId ? { agentId: card.agentId } : {}),
-              label: buildCardSessionLabel(card),
-              ...(engine ? { model: WORKBOARD_ENGINE_MODELS[engine] } : {}),
-            }),
-          };
+        : await requestSessionCreate(params.client, {
+            ...(card.agentId ? { agentId: card.agentId } : {}),
+            label: buildCardSessionLabel(card),
+            ...(engine ? { model: WORKBOARD_ENGINE_MODELS[engine] } : {}),
+          });
     const sessionKey =
       isRecord(created) && typeof created.sessionKey === "string" && created.sessionKey.trim()
         ? created.sessionKey.trim()

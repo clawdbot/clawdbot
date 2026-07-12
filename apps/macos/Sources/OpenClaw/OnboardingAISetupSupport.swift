@@ -1,6 +1,5 @@
 import Foundation
 import OpenClawChatUI
-import OpenClawIPC
 import OpenClawKit
 
 extension OnboardingAISetupModel {

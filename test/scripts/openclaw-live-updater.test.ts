@@ -14,7 +14,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, test } from "vitest";
 import {
   acquireMaintenanceLock,
@@ -29,6 +29,8 @@ import {
   prepareGatewaySuspension,
   replaceLaunchAgentProgramArgument,
   repointManagedGatewayDeployment,
+  resolveManagedGatewaySourceRoot,
+  resolveManagedPluginSourceRoots,
   resolveManagedGatewayEntrypoint,
   runBuiltGatewayCall,
   verifyGatewayReadiness,
@@ -252,6 +254,218 @@ describe("openclaw live updater", () => {
     });
   });
 
+  test("ignores restart-window logs emitted by a foreign OpenClaw checkout", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-log-attribution-"));
+    const sourceRoot = path.join(root, "managed/openclaw/dist");
+    const foreignRoot = path.join(root, "worktree/openclaw");
+    mkdirSync(path.join(foreignRoot, ".git"), { recursive: true });
+    writeFileSync(path.join(foreignRoot, "package.json"), '{"name":"openclaw"}\n');
+    const output = [
+      {
+        "0": '{"subsystem":"gateway"}',
+        "1": "managed warning",
+        time: "2026-07-11T08:00:03.000Z",
+        _meta: {
+          date: "2026-07-11T08:00:03.000Z",
+          logLevelName: "WARN",
+          path: { fullFilePath: `${sourceRoot}/subsystem-current.js` },
+        },
+      },
+      {
+        "0": "[tools] browser failed",
+        time: "2026-07-11T08:00:04.000Z",
+        _meta: {
+          date: "2026-07-11T08:00:04.000Z",
+          logLevelName: "ERROR",
+          path: {
+            fullFilePath: pathToFileURL(path.join(foreignRoot, "dist/console-foreign.js")).href,
+          },
+        },
+      },
+    ]
+      .map((entry) => JSON.stringify(entry))
+      .join("\n");
+
+    expect(
+      parseGatewayLogAudit(output, Date.parse("2026-07-11T08:00:02.000Z"), sourceRoot),
+    ).toEqual({
+      entries: 1,
+      errorCount: 0,
+      warningCount: 1,
+      errors: [],
+      warnings: [
+        {
+          time: "2026-07-11T08:00:03.000Z",
+          level: "warn",
+          subsystem: "gateway",
+          message: "managed warning",
+        },
+      ],
+    });
+  });
+
+  test("keeps managed restart logs when the deployment root is symlinked", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-log-symlink-attribution-"));
+    const releaseRoot = path.join(root, "releases/abc");
+    const releaseDist = path.join(releaseRoot, "dist");
+    const linkedRoot = path.join(root, "current");
+    mkdirSync(releaseDist, { recursive: true });
+    mkdirSync(path.join(releaseRoot, ".git"));
+    writeFileSync(path.join(releaseRoot, "package.json"), '{"name":"openclaw"}\n');
+    const sourceFile = path.join(releaseDist, "console-managed.js");
+    writeFileSync(sourceFile, "export {};\n");
+    symlinkSync(releaseRoot, linkedRoot);
+    const output = JSON.stringify({
+      "0": "managed failure",
+      time: "2026-07-11T08:00:03.000Z",
+      _meta: {
+        date: "2026-07-11T08:00:03.000Z",
+        logLevelName: "ERROR",
+        path: { fullFilePath: sourceFile },
+      },
+    });
+
+    expect(
+      parseGatewayLogAudit(
+        output,
+        Date.parse("2026-07-11T08:00:02.000Z"),
+        path.join(linkedRoot, "dist"),
+      ),
+    ).toMatchObject({ entries: 1, errorCount: 1 });
+  });
+
+  test("scopes embedded RPC records without dropping unattributed errors", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-rpc-log-attribution-"));
+    const sourceRoot = path.join(root, "managed/openclaw/dist");
+    const foreignRoot = path.join(root, "worktree/openclaw");
+    mkdirSync(path.join(foreignRoot, ".git"), { recursive: true });
+    writeFileSync(path.join(foreignRoot, "package.json"), '{"name":"openclaw"}\n');
+    const configuredPluginFile = path.join(foreignRoot, "configured-plugin.ts");
+    writeFileSync(configuredPluginFile, "export default {};\n");
+    const output = [
+      {
+        type: "log",
+        time: "2026-07-11T08:00:03.000Z",
+        level: "error",
+        message: "managed failure",
+      },
+      {
+        type: "log",
+        time: "2026-07-11T08:00:04.000Z",
+        level: "error",
+        message: "foreign failure",
+        raw: JSON.stringify({
+          "0": "foreign failure",
+          time: "2026-07-11T08:00:04.000Z",
+          _meta: {
+            date: "2026-07-11T08:00:04.000Z",
+            logLevelName: "ERROR",
+            path: {
+              fullFilePath: pathToFileURL(path.join(foreignRoot, "dist/console-foreign.js")).href,
+            },
+          },
+        }),
+      },
+      {
+        type: "log",
+        time: "2026-07-11T08:00:05.000Z",
+        level: "error",
+        message: "installed plugin failure",
+        raw: JSON.stringify({
+          "0": "installed plugin failure",
+          time: "2026-07-11T08:00:05.000Z",
+          _meta: {
+            date: "2026-07-11T08:00:05.000Z",
+            logLevelName: "ERROR",
+            path: {
+              fullFilePath: path.join(root, "extensions/example/dist/logger.js"),
+            },
+          },
+        }),
+      },
+      {
+        type: "log",
+        time: "2026-07-11T08:00:06.000Z",
+        level: "error",
+        message: "configured foreign-checkout plugin failure",
+        raw: JSON.stringify({
+          "0": "configured foreign-checkout plugin failure",
+          time: "2026-07-11T08:00:06.000Z",
+          _meta: {
+            date: "2026-07-11T08:00:06.000Z",
+            logLevelName: "ERROR",
+            path: {
+              fullFilePath: path.join(foreignRoot, "extensions/configured/dist/logger.js"),
+            },
+          },
+        }),
+      },
+      {
+        type: "log",
+        time: "2026-07-11T08:00:07.000Z",
+        level: "error",
+        message: "configured standalone plugin failure",
+        raw: JSON.stringify({
+          "0": "configured standalone plugin failure",
+          time: "2026-07-11T08:00:07.000Z",
+          _meta: {
+            date: "2026-07-11T08:00:07.000Z",
+            logLevelName: "ERROR",
+            path: { fullFilePath: `${configuredPluginFile}:12:3` },
+          },
+        }),
+      },
+    ]
+      .map((entry) => JSON.stringify(entry))
+      .join("\n");
+
+    expect(
+      parseGatewayLogAudit(output, Date.parse("2026-07-11T08:00:02.000Z"), sourceRoot, [
+        path.join(foreignRoot, "extensions/configured"),
+        configuredPluginFile,
+      ]),
+    ).toMatchObject({
+      entries: 4,
+      errorCount: 4,
+      errors: [
+        { message: "managed failure" },
+        { message: "installed plugin failure" },
+        { message: "configured foreign-checkout plugin failure" },
+        { message: "configured standalone plugin failure" },
+      ],
+    });
+
+    expect(
+      parseGatewayLogAudit(output, Date.parse("2026-07-11T08:00:02.000Z"), sourceRoot, null),
+    ).toMatchObject({ entries: 5, errorCount: 5 });
+  });
+
+  test("uses every enabled plugin root reported by managed discovery", () => {
+    expect(
+      resolveManagedPluginSourceRoots({
+        plugins: [
+          { id: "configured", rootDir: "/opt/configured-plugin" },
+          { id: "workspace", rootDir: "/srv/workspace/.openclaw/extensions/workspace" },
+          { id: "global", rootDir: "/Users/test/.openclaw/extensions/global" },
+        ],
+      }),
+    ).toEqual([
+      "/opt/configured-plugin",
+      "/srv/workspace/.openclaw/extensions/workspace",
+      "/Users/test/.openclaw/extensions/global",
+    ]);
+    expect(resolveManagedPluginSourceRoots({ plugins: [{ id: "unknown" }] })).toBeNull();
+    expect(resolveManagedPluginSourceRoots({})).toBeNull();
+  });
+
+  test("scopes restart logs to the effective managed runtime", () => {
+    expect(
+      resolveManagedGatewaySourceRoot("/srv/openclaw", {
+        entrypoint: "/srv/runtime/gateway-abc/dist/index.js",
+      }),
+    ).toBe("/srv/runtime/gateway-abc/dist");
+  });
+
   test("retries bounded Gateway readiness after restart", () => {
     const { mirror } = makeFixture();
     writeBuild(mirror);
@@ -367,6 +581,8 @@ describe("openclaw live updater", () => {
     git(runtimeRoot, "clone", origin, snapshot);
     git(snapshot, "remote", "set-url", "origin", "https://github.com/openclaw/openclaw.git");
     git(snapshot, "checkout", "--detach", head);
+    chmodSync(path.join(snapshot, ".git/HEAD"), 0o600);
+    chmodSync(path.join(snapshot, ".git/config"), 0o600);
     writeBuild(snapshot);
     const entrypoint = path.join(snapshot, "dist/index.js");
 

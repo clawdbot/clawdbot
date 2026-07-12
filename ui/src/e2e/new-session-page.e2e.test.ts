@@ -161,6 +161,94 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     }
   });
 
+  it("keeps a rejected first message visible and retryable after reload", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const sessionKey = "agent:main:rejected-first-message";
+    const message = "keep this rejected first message";
+    const runError = "send blocked by session policy";
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "agents.list": {
+          agents: [
+            {
+              id: "main",
+              identity: { name: "Main" },
+              name: "Main",
+              workspace: WORKSPACE,
+              workspaceGit: true,
+            },
+          ],
+          defaultId: "main",
+          mainKey: "main",
+          scope: "agent",
+        },
+        "worktrees.branches": {
+          branches: [{ kind: "local", name: "main" }],
+          defaultBranch: "main",
+        },
+        "sessions.list": {
+          count: 1,
+          path: "",
+          sessions: [
+            {
+              hasActiveRun: false,
+              key: sessionKey,
+              kind: "direct",
+              status: "done",
+              updatedAt: Date.now(),
+            },
+          ],
+          ts: Date.now(),
+        },
+        "sessions.create": {
+          key: sessionKey,
+          runStarted: false,
+          runError: { code: "INVALID_REQUEST", message: runError },
+        },
+        "chat.history": {
+          messages: [],
+          sessionId: "rejected-first-message",
+          sessionInfo: { hasActiveRun: false, key: sessionKey, status: "done" },
+        },
+        "chat.send": { runId: "retry-run", status: "started" },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      await page.locator(".new-session-page__message").fill(message);
+      await page.getByRole("button", { name: "Start session" }).click();
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).toMatchObject({ message });
+
+      await page.waitForURL((url) => url.searchParams.get("session") === sessionKey, {
+        timeout: 30_000,
+      });
+      await expect.poll(() => page.locator(".chat-queue__text").allInnerTexts()).toContain(message);
+      await expect
+        .poll(() => page.locator(".chat-queue__error").allInnerTexts())
+        .toContain(runError);
+
+      await page.reload();
+      await expect.poll(() => page.locator(".chat-queue__text").allInnerTexts()).toContain(message);
+      await expect
+        .poll(() => page.locator(".chat-queue__error").allInnerTexts())
+        .toContain(runError);
+
+      await page.getByRole("button", { name: "Retry queued message" }).click();
+      const retry = await gateway.waitForRequest("chat.send");
+      expect(retry.params).toMatchObject({ sessionKey, message });
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("shows Gateway and every node at the browser super-root and browses a capable node", async () => {
     const context = await browser.newContext({
       locale: "en-US",

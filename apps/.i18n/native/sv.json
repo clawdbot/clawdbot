@@ -10584,26 +10584,6 @@
       "translated": "Obligatoriskt"
     },
     {
-      "id": "native.apple.ff860c1c4be92ede",
-      "source": "Context",
-      "translated": "Kontext"
-    },
-    {
-      "id": "native.apple.185e2d2285227daf",
-      "source": "No active sessions",
-      "translated": "Inga aktiva sessioner"
-    },
-    {
-      "id": "native.apple.285a3ac6017334f9",
-      "source": "main",
-      "translated": "main"
-    },
-    {
-      "id": "native.apple.7d8890e2fc64e695",
-      "source": "000k/000k",
-      "translated": "000k/000k"
-    },
-    {
       "id": "native.apple.ae89998eb6f436e0",
       "source": "Context",
       "translated": "Kontext"
@@ -12622,11 +12602,6 @@
       "id": "native.apple.3e248379359c7593",
       "source": "Disconnected (using System default)",
       "translated": "Frånkopplad (använder systemstandard)"
-    },
-    {
-      "id": "native.apple.0c726ae72b63e9dc",
-      "source": "\\(firstLine.prefix(87))…",
-      "translated": "\\(firstLine.prefix(87))…"
     },
     {
       "id": "native.apple.5a99e1ae62fe0ab9",

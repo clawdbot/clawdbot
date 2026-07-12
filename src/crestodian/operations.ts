@@ -114,7 +114,7 @@ export type CrestodianCommandDeps = {
     cliOptions: ConfigSetOptions;
   }) => Promise<void>;
   runDoctor?: (runtime: RuntimeEnv, options: DoctorOptions) => Promise<void>;
-  runGatewayRestart?: () => Promise<void>;
+  runGatewayRestart?: () => Promise<void | boolean>;
   runGatewayStart?: () => Promise<void>;
   runGatewayStop?: () => Promise<void>;
   runPluginInstall?: (spec: string, runtime: RuntimeEnv) => Promise<void>;
@@ -560,7 +560,9 @@ function formatGatewayStatusLine(overview: CrestodianOverview): string {
     .join("\n");
 }
 
-async function runGatewayLifecycle(operation: "start" | "stop" | "restart"): Promise<void> {
+async function runGatewayLifecycle(
+  operation: "start" | "stop" | "restart",
+): Promise<void | boolean> {
   const lifecycle = await import("../cli/daemon-cli/lifecycle.js");
   if (operation === "start") {
     await lifecycle.runDaemonStart();
@@ -570,7 +572,7 @@ async function runGatewayLifecycle(operation: "start" | "stop" | "restart"): Pro
     await lifecycle.runDaemonStop();
     return;
   }
-  await lifecycle.runDaemonRestart();
+  return await lifecycle.runDaemonRestart();
 }
 
 async function readConfigFileSnapshotLazy(): Promise<ConfigFileSnapshot> {
@@ -1493,7 +1495,10 @@ export async function executeCrestodianOperation(
         run: async (ctx) => {
           const runGatewayRestart =
             ctx.deps?.runGatewayRestart ?? (() => runGatewayLifecycle("restart"));
-          await ctx.commit(runGatewayRestart);
+          const restarted = await ctx.commit(runGatewayRestart);
+          if (restarted === false) {
+            throw new Error("Gateway restart did not complete");
+          }
           return { summary: "Restarted Gateway" };
         },
       });

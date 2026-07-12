@@ -4,7 +4,6 @@
     // Node-side production code must not see browser globals; ui/ owns DOM via tsconfig.ui.json.
     "lib": ["ES2023"],
     // Production indexed reads must account for missing entries.
-    "noUncheckedIndexedAccess": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "tsBuildInfoFile": ".artifacts/tsgo-cache/core.tsbuildinfo"

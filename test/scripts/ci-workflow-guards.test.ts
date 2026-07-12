@@ -13,6 +13,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { NATIVE_I18N_LOCALES } from "../../scripts/native-app-i18n.ts";
@@ -273,14 +274,18 @@ function runMaturityArtifactCopyScenario(
     if (options.extraFile) {
       writeFileSync(path.join(staging, "unexpected.txt"), "unexpected\n", "utf8");
     }
+    const firstGeneratedPath = expectDefined(
+      MATURITY_GENERATED_PR_PATHS[0],
+      "first maturity generated PR path",
+    );
     if (options.sourceSymlink) {
-      const staged = path.join(staging, MATURITY_GENERATED_PR_PATHS[0]);
+      const staged = path.join(staging, firstGeneratedPath);
       rmSync(staged);
       symlinkSync("missing-score-source", staged);
     }
     const escaped = path.join(root, "escaped.txt");
     if (options.destinationSymlink) {
-      const selected = path.join(root, "selected", MATURITY_GENERATED_PR_PATHS[0]);
+      const selected = path.join(root, "selected", firstGeneratedPath);
       writeFileSync(escaped, "outside\n", "utf8");
       rmSync(selected);
       symlinkSync(escaped, selected);
@@ -1399,7 +1404,7 @@ describe("ci workflow guards", () => {
       [".github/workflows/ci-check-arm-testbox.yml", "120s"],
       [".github/workflows/ci-build-artifacts-testbox.yml", "120s"],
       [".github/workflows/crabbox-hydrate.yml", "30s"],
-    ];
+    ] as const;
 
     for (const [workflowPath, timeoutSeconds] of workflowPaths) {
       const workflow = readFileSync(workflowPath, "utf8");
@@ -1562,10 +1567,33 @@ describe("ci workflow guards", () => {
 
     for (const installStep of [macosInstallStep, iosInstallStep]) {
       expect(installStep.run).toContain("if [[ -x ./scripts/install-swift-tools.sh ]]; then");
+      expect(installStep.run).toContain("brew install xcodegen swiftlint");
+      expect(installStep.run).not.toContain("brew install xcodegen swiftlint swiftformat");
+      expect(installStep.run).toContain(
+        "https://github.com/nicklockwood/SwiftFormat/releases/download/$swiftformat_version/swiftformat.zip",
+      );
+      expect(installStep.run).toContain(
+        'swiftformat_checksum="b990400779aceb7d7020796eb9ba814d4480543f671d38fc0ff48cb72f04c584"',
+      );
+      expect(installStep.run).toContain(
+        'swiftformat_checksum="7cb1cb1fae04932047c7015441c543848e8e60e1572d808d080e0a1f1661114a"',
+      );
+      expect(installStep.run).toContain(
+        '[[ "$("$swift_tools_dir/swiftformat" --version)" == "$swiftformat_version" ]]',
+      );
     }
-    expect(macosInstallStep.run).toContain("brew install xcodegen swiftlint");
-    expect(macosInstallStep.run).not.toContain("brew install xcodegen swiftlint swiftformat");
-    expect(iosInstallStep.run).toContain("brew install xcodegen swiftlint swiftformat");
+    for (const jobName of ["macos-swift", "ios-build"]) {
+      expect(workflow.jobs[jobName].env.HISTORICAL_TARGET).toBe(
+        "${{ needs.preflight.outputs.compatibility_target }}",
+      );
+    }
+    expect(iosInstallStep.run).toContain('swiftformat_link="$(brew --prefix)/bin/swiftformat"');
+    expect(iosInstallStep.run).toContain(
+      'ln -sfn "$swift_tools_dir/swiftformat" "$swiftformat_link"',
+    );
+    expect(iosInstallStep.run).toContain(
+      '[[ "$("$swiftformat_link" --version)" == "$swiftformat_version" ]]',
+    );
     for (const lintStep of [macosLintStep, iosLintStep]) {
       expect(lintStep.run).toContain(
         "if [[ -x ./scripts/lint-swift.sh && -x ./scripts/format-swift.sh ]]; then",
@@ -1685,7 +1713,14 @@ describe("ci workflow guards", () => {
     expect(legacy.outputs.run_qa_smoke_ci).toBe("false");
     expect(legacy.outputs.run_channel_contracts_shards).toBe("false");
     expect(legacy.outputs.run_protocol_event_coverage).toBe("false");
-    expect(JSON.parse(legacy.outputs.checks_node_core_nondist_matrix).include).toContainEqual(
+    expect(
+      JSON.parse(
+        expectDefined(
+          legacy.outputs.checks_node_core_nondist_matrix,
+          "legacy node core nondist matrix output",
+        ),
+      ).include,
+    ).toContainEqual(
       expect.objectContaining({
         check_name: "legacy-node-plan",
         shard_name: "legacy-node-plan",
@@ -1700,7 +1735,14 @@ describe("ci workflow guards", () => {
     expect(current.outputs.run_channel_contracts_shards).toBe("true");
     expect(current.outputs.run_protocol_event_coverage).toBe("true");
     expect(current.outputs.run_format_check).toBe("true");
-    expect(JSON.parse(current.outputs.checks_node_core_nondist_matrix).include).toContainEqual(
+    expect(
+      JSON.parse(
+        expectDefined(
+          current.outputs.checks_node_core_nondist_matrix,
+          "current node core nondist matrix output",
+        ),
+      ).include,
+    ).toContainEqual(
       expect.objectContaining({
         check_name: "bundled-node-plan",
         shard_name: "bundled-node-plan",
@@ -1776,7 +1818,12 @@ describe("ci workflow guards", () => {
     expect(legacyReleaseCandidate.status, legacyReleaseCandidate.output).toBe(0);
     expect(legacyReleaseCandidate.outputs.compatibility_target).toBe("true");
     expect(
-      JSON.parse(legacyReleaseCandidate.outputs.checks_node_core_nondist_matrix).include,
+      JSON.parse(
+        expectDefined(
+          legacyReleaseCandidate.outputs.checks_node_core_nondist_matrix,
+          "release candidate node core nondist matrix output",
+        ),
+      ).include,
     ).toContainEqual(expect.objectContaining({ check_name: "legacy-node-plan" }));
 
     const currentMissingProtocolCoverage = runCiManifestFixture({
@@ -2037,7 +2084,7 @@ describe("ci workflow guards", () => {
     );
   });
 
-  it("keeps docs i18n CI on the patched preferred Go toolchain", () => {
+  it("keeps docs i18n CI on the workflow-owned patched Go toolchain", () => {
     const workflow = readCiWorkflow();
     const nodeTestJob = workflow.jobs["checks-node-core-test-nondist-shard"];
     const setupGoStep = nodeTestJob.steps.find(
@@ -2050,11 +2097,11 @@ describe("ci workflow guards", () => {
       if: "matrix.requires_go == true",
       uses: SETUP_GO_V6,
       with: {
-        "go-version-file": "scripts/docs-i18n/go.mod",
+        "go-version": "1.25.12",
         "cache-dependency-path": "scripts/docs-i18n/go.sum",
       },
     });
-    expect(setupGoStep.with).not.toHaveProperty("go-version");
+    expect(setupGoStep.with).not.toHaveProperty("go-version-file");
     expect(verifyGoStep).toMatchObject({
       if: "matrix.requires_go == true",
       run: 'test "$(go env GOVERSION)" = "go1.25.12"',

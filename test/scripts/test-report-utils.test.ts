@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   collectVitestAssertionDurations,
@@ -159,7 +160,7 @@ describe("scripts/test-report-utils runVitestJsonReport", () => {
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1234567890);
     spawnSyncMock.mockImplementation((_command: string, args: string[]) => {
       const outputFileIndex = args.indexOf("--outputFile") + 1;
-      const outputFile = args[outputFileIndex];
+      const outputFile = expectDefined(args[outputFileIndex], "Vitest JSON report output path");
       reportPaths.push(outputFile);
       fs.writeFileSync(outputFile, `${JSON.stringify({ testResults: [] })}\n`, "utf8");
       return { status: 0 };

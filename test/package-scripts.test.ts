@@ -1,5 +1,6 @@
 // Package script tests validate root package script invariants.
 import fs from "node:fs";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 
 type RootPackageJson = {
@@ -124,7 +125,10 @@ describe("package scripts", () => {
     { scriptName: "build:plugin-sdk:strict-smoke", expectedCount: 1 },
     { scriptName: "build:strict-smoke", expectedCount: 1 },
   ])("runs TypeScript steps in $scriptName through tsx", ({ scriptName, expectedCount }) => {
-    const script = readPackageJson().scripts[scriptName];
+    const script = expectDefined(
+      readPackageJson().scripts[scriptName],
+      `package script ${scriptName}`,
+    );
 
     expect(script).not.toContain("--experimental-strip-types");
     expect(script.match(/node --import tsx scripts\/[^\s]+\.ts/gu)).toHaveLength(expectedCount);

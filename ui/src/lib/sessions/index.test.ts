@@ -178,6 +178,40 @@ describe("createSessionCapability", () => {
     sessions.dispose();
   });
 
+  it("returns the initial-run rejection without discarding the created session key", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.create") {
+        return {
+          key: "agent:main:rejected",
+          runStarted: false,
+          runError: { code: "INVALID_REQUEST", message: "send blocked by session policy" },
+        };
+      }
+      if (method === "sessions.list") {
+        return sessionsResult([], 2);
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const sessions = createSessionCapability({
+      snapshot: {
+        client,
+        connected: true,
+        sessionKey: "agent:main:source",
+        assistantAgentId: "main",
+        hello: null,
+      },
+      subscribe: () => () => undefined,
+      subscribeEvents: () => () => undefined,
+    });
+
+    await expect(sessions.createResult({ agentId: "main", message: "hello" })).resolves.toEqual({
+      key: "agent:main:rejected",
+      initialRun: { status: "rejected", error: "send blocked by session policy" },
+    });
+    sessions.dispose();
+  });
+
   it("reports a reset as stale when its connection epoch retires", async () => {
     const staleReset = deferred<unknown>();
     const request = vi.fn(async (method: string) => {

@@ -134,11 +134,10 @@ export function resolveMattermostAccount(params: {
     oncharPrefixes: merged.oncharPrefixes,
     requireMention,
     textChunkLimit: merged.textChunkLimit,
-    chunkMode: resolveChannelStreamingChunkMode(merged) ?? merged.chunkMode,
+    chunkMode: resolveChannelStreamingChunkMode(merged),
     streamingMode: resolveChannelPreviewStreamMode(merged, "partial"),
-    blockStreaming: resolveChannelStreamingBlockEnabled(merged) ?? merged.blockStreaming,
-    blockStreamingCoalesce:
-      resolveChannelStreamingBlockCoalesce(merged) ?? merged.blockStreamingCoalesce,
+    blockStreaming: resolveChannelStreamingBlockEnabled(merged),
+    blockStreamingCoalesce: resolveChannelStreamingBlockCoalesce(merged),
   };
 }
 

@@ -47,8 +47,6 @@ import {
   updateSqliteSessionLastRoute,
   loadExactSqliteSessionEntry,
   loadLatestSqliteAssistantText,
-  loadLatestSqliteAssistantMessage,
-  loadLatestSqliteMessage,
   loadSqliteSessionEntry,
   loadSqliteTranscriptEvents,
   loadSqliteTranscriptEventsSync,
@@ -327,16 +325,6 @@ export type LatestTranscriptAssistantText = {
   id?: string;
   text: string;
   timestamp?: number;
-};
-
-export type LatestTranscriptAssistantMessage = {
-  id?: string;
-  message: unknown;
-};
-
-export type LatestTranscriptMessage = {
-  id?: string;
-  message: unknown;
 };
 
 export type SessionTranscriptWriteLockAccessorContext = {
@@ -2392,22 +2380,6 @@ export function readLatestTranscriptAssistantText(
   options: { includeTranscriptOnlyOpenClawAssistant?: boolean } = {},
 ): LatestTranscriptAssistantText | undefined {
   return loadLatestSqliteAssistantText(scope, options);
-}
-
-/** Reads the latest assistant message payload without materializing the whole transcript. */
-export function readLatestTranscriptAssistantMessage(
-  scope: SessionTranscriptReadScope,
-  options: { includeTranscriptOnlyOpenClawAssistant?: boolean } = {},
-): LatestTranscriptAssistantMessage | undefined {
-  return loadLatestSqliteAssistantMessage(scope, options);
-}
-
-/** Reads the latest transcript message payload without materializing the whole transcript. */
-export function readLatestTranscriptMessage(
-  scope: SessionTranscriptReadScope,
-  options: { includeTranscriptOnlyOpenClawAssistant?: boolean } = {},
-): LatestTranscriptMessage | undefined {
-  return loadLatestSqliteMessage(scope, options);
 }
 
 /**

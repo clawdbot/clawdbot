@@ -656,6 +656,40 @@ describe("openclaw state database", () => {
     expect(database.path).toBe(path.join(stateDir, "state", "openclaw.sqlite"));
   });
 
+  it("repairs a same-name shared-state uniqueness index", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const created = openOpenClawStateDatabase({ env });
+    const databasePath = created.path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const drifted = new DatabaseSync(databasePath);
+    try {
+      drifted.exec(`
+        DROP INDEX idx_operator_approvals_resolution_ref;
+        CREATE UNIQUE INDEX idx_operator_approvals_resolution_ref
+          ON operator_approvals(approval_id);
+      `);
+      expect(drifted.prepare("PRAGMA integrity_check").get()).toEqual({
+        integrity_check: "ok",
+      });
+    } finally {
+      drifted.close();
+    }
+
+    const reopened = openOpenClawStateDatabase({ env });
+    expect(
+      reopened.db
+        .prepare(
+          "SELECT sql FROM sqlite_schema WHERE type = 'index' AND name = 'idx_operator_approvals_resolution_ref'",
+        )
+        .get(),
+    ).toEqual({
+      sql: "CREATE UNIQUE INDEX idx_operator_approvals_resolution_ref ON operator_approvals(resolution_ref)",
+    });
+  });
+
   it("migrates the released audit ledger to message-compatible attribution exactly once", () => {
     const stateDir = createTempStateDir();
     const databasePath = createLegacyAuditStateDatabase(stateDir);
@@ -1223,6 +1257,74 @@ describe("openclaw state database", () => {
           }),
         ]),
       );
+    } finally {
+      after.close();
+    }
+  });
+
+  it("rejects foreign-key violations before writable initialization", () => {
+    const stateDir = createTempStateDir();
+    const databasePath = createCanonicalAuditStateDatabase(stateDir);
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const { DatabaseSync } = requireNodeSqlite();
+    const corrupted = new DatabaseSync(databasePath);
+    try {
+      corrupted.exec("PRAGMA foreign_keys = OFF;");
+      corrupted.prepare("INSERT INTO task_delivery_state (task_id) VALUES (?)").run("missing-task");
+      expect(corrupted.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
+      expect(corrupted.prepare("PRAGMA integrity_check").get()).toEqual({
+        integrity_check: "ok",
+      });
+      expect(corrupted.prepare("PRAGMA foreign_key_check").get()).toEqual({
+        table: "task_delivery_state",
+        rowid: 1,
+        parent: "task_runs",
+        fkid: 0,
+      });
+    } finally {
+      corrupted.close();
+    }
+
+    const before = new DatabaseSync(databasePath, { readOnly: true });
+    let metadataBefore: unknown;
+    try {
+      metadataBefore = before
+        .prepare(
+          "SELECT schema_version, updated_at FROM schema_meta WHERE meta_key = 'primary' LIMIT 1",
+        )
+        .get();
+    } finally {
+      before.close();
+    }
+
+    const failure =
+      /foreign_key_check failed.*task_delivery_state row 1 references task_runs \(foreign key 0\)/iu;
+    expect(() => openOpenClawStateDatabase(options)).toThrow(failure);
+    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+      changes: [],
+      warnings: [expect.stringMatching(failure)],
+    });
+    const checkpointCallback = vi.fn();
+    expect(() =>
+      withOpenClawStateStartupMigrationCheckpointDatabase(checkpointCallback, options),
+    ).toThrow(failure);
+    expect(checkpointCallback).not.toHaveBeenCalled();
+
+    const after = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(
+        after
+          .prepare(
+            "SELECT schema_version, updated_at FROM schema_meta WHERE meta_key = 'primary' LIMIT 1",
+          )
+          .get(),
+      ).toEqual(metadataBefore);
+      expect(after.prepare("PRAGMA foreign_key_check").get()).toEqual({
+        table: "task_delivery_state",
+        rowid: 1,
+        parent: "task_runs",
+        fkid: 0,
+      });
     } finally {
       after.close();
     }

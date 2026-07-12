@@ -18,6 +18,7 @@ import { isSessionRunActive } from "../session-run-state.ts";
 import {
   requestSessionCreate,
   resolveSessionCreateParams,
+  type SessionCreateOutcome,
   type SessionCreateParams,
 } from "./create.ts";
 import { scopedAgentListParamsForSession } from "./navigation.ts";
@@ -173,6 +174,7 @@ export type SessionCapability = {
   reconcileChanged: (payload: unknown, options?: SessionReconcileOptions) => SessionChangedResult;
   reconcileRunTerminal: (terminal: SessionRunTerminal) => boolean;
   refresh: (options?: SessionRefreshOptions) => Promise<void>;
+  createResult: (params?: SessionCreateParams) => Promise<SessionCreateOutcome | null>;
   create: (params?: SessionCreateParams) => Promise<string | null>;
   patch: (
     key: string,
@@ -237,7 +239,7 @@ export type SessionCapability = {
 };
 
 export { requestSessionCreate } from "./create.ts";
-export type { SessionCreateParams } from "./create.ts";
+export type { SessionCreateOutcome, SessionCreateParams } from "./create.ts";
 export { resolveSessionKey } from "./navigation.ts";
 export {
   compareSessionRowsByUpdatedAt,
@@ -790,14 +792,14 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     return request;
   };
 
-  const create = async (params: SessionCreateParams = {}) => {
+  const createResult = async (params: SessionCreateParams = {}) => {
     const scope = captureConnection();
     if (!scope || state.loading) {
       return null;
     }
     try {
       const { currentSessionKey, ...requestParams } = params;
-      const key = await requestSessionCreate(scope.client, {
+      const result = await requestSessionCreate(scope.client, {
         ...requestParams,
         ...resolveSessionCreateParams(currentSessionKey, params.agentId),
       });
@@ -811,9 +813,9 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       // Creation can originate outside the sidebar. Notify presentation owners
       // after refresh so they can reconcile the new row without guessing from list churn.
       for (const listener of createdListeners) {
-        listener(key);
+        listener(result.key);
       }
-      return key;
+      return result;
     } catch (error) {
       if (isCurrentConnection(scope)) {
         publish({ ...state, error: String(error) });
@@ -821,6 +823,9 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       return null;
     }
   };
+
+  const create = async (params: SessionCreateParams = {}) =>
+    (await createResult(params))?.key ?? null;
 
   const LEGACY_GROUPS_STORAGE_KEY = "openclaw:sessions:custom-groups";
   let groupsLoadedEpoch = -1;
@@ -1389,6 +1394,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     reconcileChanged,
     reconcileRunTerminal,
     refresh,
+    createResult,
     create,
     patch,
     setModelOverride,

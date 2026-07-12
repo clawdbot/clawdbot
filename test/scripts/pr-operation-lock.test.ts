@@ -19,6 +19,7 @@ import {
 } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -803,8 +804,11 @@ describePosix("scripts/pr per-PR operation lock", () => {
       ]);
 
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-      const [blockedLine] = result.stdout.trim().split("\n");
-      const [, ownerOid] = blockedLine.split("\t");
+      const blockedLine = expectDefined(
+        result.stdout.trim().split("\n")[0],
+        "blocked PR operation lock output",
+      );
+      const ownerOid = expectDefined(blockedLine.split("\t")[1], "blocked PR operation owner oid");
       expect(blockedLine).toMatch(/^2\t[0-9a-f]{40}$/u);
       expect(result.stderr).toContain("operation lock is orphaned");
       expect(result.stderr).toContain(

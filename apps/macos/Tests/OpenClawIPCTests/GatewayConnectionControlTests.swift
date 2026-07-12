@@ -2,7 +2,6 @@ import Foundation
 import OpenClawProtocol
 import Testing
 @testable import OpenClaw
-@testable import OpenClawIPC
 @testable import OpenClawKit
 @testable import OpenClawMacCLI
 

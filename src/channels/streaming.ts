@@ -34,12 +34,21 @@ export type StreamingCompatEntry = {
    * Mattermost) also accept a scalar mode string or boolean here.
    */
   streaming?: unknown;
+  chunkMode?: unknown;
+  blockStreaming?: unknown;
+  blockStreamingCoalesce?: unknown;
+  draftChunk?: unknown;
 };
 
-// Config reads consume the canonical nested streaming shape only. Legacy flat
-// keys (streamMode, chunkMode, blockStreaming, draftChunk,
-// blockStreamingCoalesce, nativeStreaming) are migrated by `openclaw doctor
-// --fix` via channel doctor contracts and are ignored at runtime.
+// Nested streaming config wins. The flat delivery keys (chunkMode,
+// blockStreaming, blockStreamingCoalesce, draftChunk) are still canonical for
+// channels without a nested streaming schema (Mattermost, WhatsApp, Google
+// Chat, IRC, Signal) and for external SDK plugins, so these public resolvers
+// keep reading them; dropping the fallback here silently disables configured
+// chunking/block delivery for those consumers. Remove the flat reads only
+// after the remaining bundled channels migrate to nested schemas + doctor
+// rules and the SDK deprecation window closes. Mode-family aliases
+// (streamMode, scalar/boolean streaming) are doctor-only and stay unread here.
 
 function asObjectRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -771,25 +780,37 @@ export function getChannelStreamingConfigObject(
 export function resolveChannelStreamingChunkMode(
   entry: StreamingCompatEntry | null | undefined,
 ): TextChunkMode | undefined {
-  return asTextChunkMode(getChannelStreamingConfigObject(entry)?.chunkMode);
+  return (
+    asTextChunkMode(getChannelStreamingConfigObject(entry)?.chunkMode) ??
+    asTextChunkMode(entry?.chunkMode)
+  );
 }
 
 export function resolveChannelStreamingBlockEnabled(
   entry: StreamingCompatEntry | null | undefined,
 ): boolean | undefined {
-  return asBoolean(getChannelStreamingConfigObject(entry)?.block?.enabled);
+  return (
+    asBoolean(getChannelStreamingConfigObject(entry)?.block?.enabled) ??
+    asBoolean(entry?.blockStreaming)
+  );
 }
 
 export function resolveChannelStreamingBlockCoalesce(
   entry: StreamingCompatEntry | null | undefined,
 ): BlockStreamingCoalesceConfig | undefined {
-  return asBlockStreamingCoalesceConfig(getChannelStreamingConfigObject(entry)?.block?.coalesce);
+  return (
+    asBlockStreamingCoalesceConfig(getChannelStreamingConfigObject(entry)?.block?.coalesce) ??
+    asBlockStreamingCoalesceConfig(entry?.blockStreamingCoalesce)
+  );
 }
 
 export function resolveChannelStreamingPreviewChunk(
   entry: StreamingCompatEntry | null | undefined,
 ): BlockStreamingChunkConfig | undefined {
-  return asBlockStreamingChunkConfig(getChannelStreamingConfigObject(entry)?.preview?.chunk);
+  return (
+    asBlockStreamingChunkConfig(getChannelStreamingConfigObject(entry)?.preview?.chunk) ??
+    asBlockStreamingChunkConfig(entry?.draftChunk)
+  );
 }
 
 export function resolveChannelStreamingPreviewToolProgress(

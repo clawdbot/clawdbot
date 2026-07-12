@@ -587,10 +587,9 @@ describe("scripts/lib/docker-e2e-plan", () => {
     const scripts = packageJson.scripts ?? {};
     const missing = plan.lanes
       .flatMap((lane) =>
-        Array.from(lane.command.matchAll(/\bpnpm\s+(test:docker:[\w:-]+)/gu), (match) => ({
-          lane: lane.name,
-          script: match[1],
-        })),
+        Array.from(lane.command.matchAll(/\bpnpm\s+(test:docker:[\w:-]+)/gu)).flatMap((match) =>
+          match[1] === undefined ? [] : [{ lane: lane.name, script: match[1] }],
+        ),
       )
       .filter(({ script }) => !scripts[script]);
 

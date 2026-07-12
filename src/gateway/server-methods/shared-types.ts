@@ -1,3 +1,4 @@
+import type { SessionApprovalReplay } from "../../../packages/gateway-protocol/src/index.js";
 // Shared server-method types define the client, context, response, and handler
 // contracts used by every gateway RPC method module.
 import type {
@@ -96,6 +97,10 @@ export type GatewayRequestContext = {
   execApprovalManager?: ExecApprovalManager;
   pluginApprovalManager?: ExecApprovalManager<PluginApprovalRequestPayload>;
   forwardPluginApprovalRequest?: (request: PluginApprovalRequest) => Promise<boolean>;
+  listSessionPendingApprovals?: (
+    sessionKey: string,
+    client: GatewayClient | null,
+  ) => SessionApprovalReplay;
   loadGatewayModelCatalog: (params?: { readOnly?: boolean }) => Promise<ModelCatalogEntry[]>;
   loadGatewayModelCatalogSnapshot: (params?: {
     readOnly?: boolean;
@@ -157,7 +162,11 @@ export type GatewayRequestContext = {
   ) => ChatRunEntry | undefined;
   subscribeSessionEvents: (connId: string) => void;
   unsubscribeSessionEvents: (connId: string) => void;
-  subscribeSessionMessageEvents: (connId: string, sessionKey: string) => void;
+  subscribeSessionMessageEvents: (
+    connId: string,
+    sessionKey: string,
+    opts?: { includeApprovals?: boolean },
+  ) => (() => void) | undefined;
   unsubscribeSessionMessageEvents: (connId: string, sessionKey: string) => void;
   unsubscribeAllSessionEvents: (connId: string) => void;
   getSessionEventSubscriberConnIds: () => ReadonlySet<string>;

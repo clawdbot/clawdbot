@@ -36,6 +36,7 @@ const rawSqliteAllowPathGroups = {
   ],
   "SQLite database lifecycle, schema, transactions, and pragmas": [
     "src/infra/node-sqlite.ts",
+    "src/infra/sqlite-index-schema.ts",
     "src/infra/sqlite-integrity.ts",
     "src/infra/sqlite-pragma.test-support.ts",
     "src/infra/sqlite-transaction.ts",

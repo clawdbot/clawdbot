@@ -10,6 +10,10 @@ import {
 } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
+import {
+  repairCanonicalSqliteUniqueIndexes,
+  type CanonicalSqliteUniqueIndex,
+} from "../infra/sqlite-index-schema.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import {
   runSqliteImmediateTransactionSync,
@@ -56,6 +60,35 @@ export const OPENCLAW_AGENT_SCHEMA_VERSION = 6;
 const OPENCLAW_AGENT_DB_DIR_MODE = 0o700;
 const OPENCLAW_AGENT_DB_FILE_MODE = 0o600;
 const OPENCLAW_AGENT_DB_SLOW_OPEN_MS = 1_000;
+const OPENCLAW_AGENT_CANONICAL_UNIQUE_INDEXES = [
+  {
+    name: "idx_agent_conversations_identity",
+    definition: `
+      ON conversations(
+        channel,
+        account_id,
+        kind,
+        peer_id,
+        IFNULL(parent_conversation_id, ''),
+        IFNULL(thread_id, '')
+      )
+    `,
+  },
+  {
+    name: "idx_agent_session_conversations_primary",
+    definition: `
+      ON session_conversations(session_id)
+      WHERE role = 'primary'
+    `,
+  },
+  {
+    name: "idx_agent_transcript_message_idempotency",
+    definition: `
+      ON transcript_event_identities(session_id, message_idempotency_key)
+      WHERE message_idempotency_key IS NOT NULL
+    `,
+  },
+] as const satisfies readonly CanonicalSqliteUniqueIndex[];
 const agentDbLog = createSubsystemLogger("state/agent-db");
 
 /** Open per-agent SQLite database handle plus lifecycle maintenance. */
@@ -567,6 +600,7 @@ function ensureAgentSchema(db: DatabaseSync, agentId: string, pathname: string):
       migrateMemoryIndexSourcesIdentity(db);
       migrateOpenClawAgentSchema(db);
       db.exec(OPENCLAW_AGENT_SCHEMA_SQL);
+      repairCanonicalSqliteUniqueIndexes(db, pathname, OPENCLAW_AGENT_CANONICAL_UNIQUE_INDEXES);
       backfillOpenClawAgentSchema(db, previousVersion);
       const kysely = getNodeSqliteKysely<OpenClawAgentMetadataDatabase>(db);
       db.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`);

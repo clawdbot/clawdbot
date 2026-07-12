@@ -39,6 +39,19 @@ vi.mock("./tools/gateway.js", () => ({
   callGatewayTool: vi.fn(),
 }));
 
+const agentToolsWarnSpy = vi.hoisted(() => vi.fn());
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => {
+      const logger = actual.createSubsystemLogger(subsystem);
+      // Capture agents/tools warnings so the deprecation signal is assertable.
+      return subsystem === "agents/tools" ? { ...logger, warn: agentToolsWarnSpy } : logger;
+    },
+  };
+});
+
 const mockGetGlobalHookRunner = vi.mocked(getGlobalHookRunner);
 const mockCallGatewayTool = vi.mocked(callGatewayTool);
 
@@ -218,6 +231,120 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
       deniedReason: "plugin-approval",
     });
     expect(onResolution).toHaveBeenCalledWith(PluginApprovalResolutions.CANCELLED);
+  });
+
+  it("blocks embedded approvals on timeout even when deprecated timeoutBehavior is allow", async () => {
+    setEmbeddedMode(true);
+    const broker = new EmbeddedPluginApprovalBroker();
+    setEmbeddedPluginApprovalBroker(broker);
+    const onResolution = vi.fn();
+    runBeforeToolCallMock.mockResolvedValue({
+      requireApproval: {
+        pluginId: "test-plugin",
+        title: "Needs approval",
+        description: "Test approval request",
+        timeoutMs: 1,
+        timeoutBehavior: "allow",
+        onResolution,
+      },
+      params: { adjusted: true },
+    });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "exec",
+      params: { command: "ls" },
+      toolCallId: "call-skill-timeout",
+      ctx: { agentId: "main", sessionKey: "agent:main:main" },
+    });
+
+    expect(result).toEqual({
+      blocked: true,
+      kind: "failure",
+      disposition: "timed_out",
+      deniedReason: "plugin-approval",
+      reason: "Approval timed out",
+      params: { command: "ls" },
+    });
+    expect(onResolution).toHaveBeenCalledWith(PluginApprovalResolutions.TIMEOUT);
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("warns once per plugin when deprecated timeoutBehavior allow arrives, still failing closed", async () => {
+    agentToolsWarnSpy.mockClear();
+    setEmbeddedMode(true);
+    const broker = new EmbeddedPluginApprovalBroker();
+    setEmbeddedPluginApprovalBroker(broker);
+    runBeforeToolCallMock.mockResolvedValue({
+      requireApproval: {
+        pluginId: "deprecated-timeout-plugin",
+        title: "Needs approval",
+        description: "Test approval request",
+        timeoutMs: 1,
+        timeoutBehavior: "allow",
+      },
+    });
+
+    const first = await runBeforeToolCallHook({
+      toolName: "exec",
+      params: { command: "ls" },
+      toolCallId: "call-deprecated-warn-1",
+      ctx: { agentId: "main", sessionKey: "agent:main:main" },
+    });
+    const second = await runBeforeToolCallHook({
+      toolName: "exec",
+      params: { command: "ls" },
+      toolCallId: "call-deprecated-warn-2",
+      ctx: { agentId: "main", sessionKey: "agent:main:main" },
+    });
+
+    expect(first).toMatchObject({ blocked: true, disposition: "timed_out" });
+    expect(second).toMatchObject({ blocked: true, disposition: "timed_out" });
+    const deprecationWarnings = agentToolsWarnSpy.mock.calls.filter(
+      ([message]) =>
+        typeof message === "string" &&
+        message.includes("deprecated-timeout-plugin") &&
+        message.includes("timeoutBehavior"),
+    );
+    expect(deprecationWarnings).toHaveLength(1);
+  });
+
+  it("blocks embedded allow decisions excluded by the request", async () => {
+    setEmbeddedMode(true);
+    const broker = new EmbeddedPluginApprovalBroker();
+    setEmbeddedPluginApprovalBroker(broker);
+    vi.spyOn(broker, "request").mockResolvedValue({
+      id: "plugin:unexpected-decision",
+      decision: PluginApprovalResolutions.ALLOW_ALWAYS,
+    });
+    const onResolution = vi.fn();
+    runBeforeToolCallMock.mockResolvedValue({
+      requireApproval: {
+        pluginId: "test-plugin",
+        title: "Restricted approval",
+        description: "Allow once only",
+        allowedDecisions: ["allow-once", "deny"],
+        onResolution,
+      },
+      params: { adjusted: true },
+    });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "exec",
+      params: { command: "unsafe-command" },
+      toolCallId: "call-restricted-approval",
+      ctx: { agentId: "main", sessionKey: "agent:main:main" },
+    });
+
+    expect(result).toEqual({
+      blocked: true,
+      kind: "failure",
+      disposition: "timed_out",
+      deniedReason: "plugin-approval",
+      reason: "Approval timed out",
+      params: { command: "unsafe-command" },
+    });
+    expect(onResolution).toHaveBeenCalledWith(PluginApprovalResolutions.TIMEOUT);
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
   });
 
   it("reports approval-required tools without opening an approval request", async () => {

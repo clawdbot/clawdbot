@@ -215,6 +215,9 @@ export function parseArgs(argv: string[]): WindowsOptions {
   };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
+    if (arg === undefined) {
+      die(`missing argument at index ${i}`);
+    }
     if (arg === "--") {
       break;
     }

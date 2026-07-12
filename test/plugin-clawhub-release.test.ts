@@ -1990,8 +1990,9 @@ function createClawHubPlanFetch(config: {
     requests.push(url.pathname);
 
     const packageMatch = url.pathname.match(/^\/api\/v1\/packages\/([^/]+)$/u);
-    if (packageMatch) {
-      const packageName = decodeURIComponent(packageMatch[1]);
+    const encodedPackageName = packageMatch?.[1];
+    if (encodedPackageName !== undefined) {
+      const packageName = decodeURIComponent(encodedPackageName);
       const packageResponse = config.packages[packageName];
       if (!packageResponse) {
         throw new Error(`Unexpected package detail request for ${packageName}`);
@@ -2004,8 +2005,9 @@ function createClawHubPlanFetch(config: {
     const trustedPublisherMatch = url.pathname.match(
       /^\/api\/v1\/packages\/([^/]+)\/trusted-publisher$/u,
     );
-    if (trustedPublisherMatch) {
-      const packageName = decodeURIComponent(trustedPublisherMatch[1]);
+    const encodedTrustedPublisherPackageName = trustedPublisherMatch?.[1];
+    if (encodedTrustedPublisherPackageName !== undefined) {
+      const packageName = decodeURIComponent(encodedTrustedPublisherPackageName);
       const trustedPublisherResponse = config.trustedPublishers?.[packageName];
       if (!trustedPublisherResponse) {
         throw new Error(`Unexpected trusted-publisher request for ${packageName}`);
@@ -2016,9 +2018,11 @@ function createClawHubPlanFetch(config: {
     }
 
     const versionMatch = url.pathname.match(/^\/api\/v1\/packages\/([^/]+)\/versions\/([^/]+)$/u);
-    if (versionMatch) {
-      const packageName = decodeURIComponent(versionMatch[1]);
-      const version = decodeURIComponent(versionMatch[2]);
+    const encodedVersionPackageName = versionMatch?.[1];
+    const encodedVersion = versionMatch?.[2];
+    if (encodedVersionPackageName !== undefined && encodedVersion !== undefined) {
+      const packageName = decodeURIComponent(encodedVersionPackageName);
+      const version = decodeURIComponent(encodedVersion);
       const status = config.versions?.[`${packageName}@${version}`];
       if (!status) {
         throw new Error(`Unexpected version detail request for ${packageName}@${version}`);

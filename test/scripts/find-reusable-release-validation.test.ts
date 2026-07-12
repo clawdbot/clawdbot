@@ -3,6 +3,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -708,20 +709,22 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     {
       label: "duplicate child run id",
       mutate(record: NormalizedEvidence) {
-        record.children[1].runId = record.children[0].runId;
+        const firstChild = expectDefined(record.children[0], "first reusable release child");
+        const secondChild = expectDefined(record.children[1], "second reusable release child");
+        secondChild.runId = firstChild.runId;
       },
     },
     {
       label: "failed child",
       mutate(record: NormalizedEvidence) {
-        record.children[0].conclusion = "failure";
+        expectDefined(record.children[0], "failed reusable release child").conclusion = "failure";
       },
     },
     {
       label: "extra child role",
       mutate(record: NormalizedEvidence) {
         record.children.push({
-          ...record.children[0],
+          ...expectDefined(record.children[0], "base reusable release child"),
           role: "npmTelegram",
           runId: "205",
         });

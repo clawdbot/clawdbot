@@ -5,8 +5,8 @@ import { DatabaseSync } from "node:sqlite";
 /**
  * Test helpers for comparing SQLite schema shape.
  *
- * The collected shape intentionally ignores SQLite autoindex suffixes so
- * generated schema tests assert contract-relevant table, column, and index data.
+ * The collected shape intentionally ignores SQLite autoindex suffixes while
+ * preserving named index terms, ordering, collation, expressions, and predicates.
  */
 type ColumnShape = {
   name: string;
@@ -21,6 +21,15 @@ type IndexShape = {
   unique: number;
   origin: string;
   partial: number;
+  sql: string | null;
+  terms: IndexTermShape[];
+};
+
+type IndexTermShape = {
+  kind: "column" | "expression" | "rowid";
+  name: string | null;
+  coll: string;
+  desc: number;
 };
 
 /** Comparable SQLite schema summary used by generated-schema tests. */
@@ -36,12 +45,28 @@ type TableInfoRow = ColumnShape & {
   cid: number;
 };
 
-type IndexListRow = IndexShape & {
+type IndexListRow = {
   seq: number;
+  name: string;
+  unique: number;
+  origin: string;
+  partial: number;
 };
 
 type SqliteMasterRow = {
   name: string;
+};
+
+type IndexSqlRow = {
+  sql?: unknown;
+};
+
+type IndexXInfoRow = {
+  cid: number;
+  name: string | null;
+  coll: string;
+  desc: number;
+  key: number;
 };
 
 /** Execute schema SQL in memory and return its comparable shape. */
@@ -98,13 +123,38 @@ function collectIndexes(db: DatabaseSync, tableName: string): IndexShape[] {
   return (
     db.prepare(`PRAGMA index_list(${quoteSqliteIdentifier(tableName)})`).all() as IndexListRow[]
   )
-    .map(({ name, unique, origin, partial }) => ({
-      name: normalizeAutoIndexName(name),
-      unique,
-      origin,
-      partial,
-    }))
-    .toSorted((left, right) => left.name.localeCompare(right.name));
+    .map(({ name, unique, origin, partial }) => {
+      const row = db
+        .prepare("SELECT sql FROM sqlite_schema WHERE type = 'index' AND name = ?")
+        .get(name) as IndexSqlRow | undefined;
+      return {
+        name: normalizeAutoIndexName(name),
+        unique,
+        origin,
+        partial,
+        sql: typeof row?.sql === "string" ? row.sql : null,
+        terms: collectIndexTerms(db, name),
+      };
+    })
+    .toSorted((left, right) => {
+      const nameOrder = left.name.localeCompare(right.name);
+      return nameOrder !== 0
+        ? nameOrder
+        : JSON.stringify(left).localeCompare(JSON.stringify(right));
+    });
+}
+
+function collectIndexTerms(db: DatabaseSync, indexName: string): IndexTermShape[] {
+  return (
+    db.prepare(`PRAGMA index_xinfo(${quoteSqliteIdentifier(indexName)})`).all() as IndexXInfoRow[]
+  )
+    .filter((term) => term.key === 1)
+    .map(({ cid, name, coll, desc }) => ({
+      kind: cid === -2 ? "expression" : cid === -1 ? "rowid" : "column",
+      name,
+      coll,
+      desc,
+    }));
 }
 
 function normalizeAutoIndexName(name: string): string {

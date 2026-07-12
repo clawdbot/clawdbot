@@ -504,6 +504,16 @@ export function normalizeCompatibilityConfig({
   let changed;
   const bindingsToAdd: AgentBindingConfig[] = [];
 
+  // Discord previews default to progress only while `streaming` is absent;
+  // any present object (even without `mode`) resolves off. Migration must pin
+  // the entry's previous effective mode when delivery-only aliases create the
+  // object, or doctor silently flips preview behavior.
+  const discordEffectiveMode = (entry: Record<string, unknown>) =>
+    entry.streaming === undefined && entry.streamMode === undefined
+      ? "progress"
+      : resolveLegacyAliasStreamingMode(entry, "off");
+  const rootEffectiveMode = discordEffectiveMode(rawEntry);
+
   const aliases = normalizeLegacyChannelAliases({
     entry: rawEntry,
     pathPrefix: "channels.discord",
@@ -514,6 +524,11 @@ export function normalizeCompatibilityConfig({
       // Runtime mode resolution dropped legacy streamMode reads; the doctor
       // resolver keeps them so migration preserves configured intent.
       resolvedMode: resolveLegacyAliasStreamingMode(entry, "off"),
+      // Accounts without their own mode source inherit the root's effective
+      // mode at runtime (account `streaming` objects replace the root object
+      // wholesale on merge), so pin that. The root only hits the alias-only
+      // branch when both mode sources are absent, where this is "progress".
+      aliasOnlyMode: rootEffectiveMode,
       includePreviewChunk: true,
     }),
     normalizeAccountExtra: ({ account, pathPrefix }) => {

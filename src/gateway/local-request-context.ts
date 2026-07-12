@@ -131,7 +131,7 @@ function createLocalGatewayRequestContext(
     unsubscribeSessionEvents: (connId) => {
       sessionEvents.delete(connId);
     },
-    subscribeSessionMessageEvents: () => {},
+    subscribeSessionMessageEvents: () => undefined,
     unsubscribeSessionMessageEvents: () => {},
     unsubscribeAllSessionEvents: (connId) => {
       sessionEvents.delete(connId);

@@ -10,6 +10,13 @@ export type { CompatMutationResult };
 /** Resolved streaming values a channel doctor supplies while migrating legacy aliases. */
 export type LegacyStreamingAliasOptions = {
   resolvedMode: string;
+  /**
+   * Mode to persist when migration creates the `streaming` object from flat
+   * delivery aliases alone (no streamMode/scalar/boolean mode source). Only
+   * needed by channels whose "streaming absent" runtime default differs from
+   * their object-without-mode default (Discord: progress vs off).
+   */
+  aliasOnlyMode?: string;
   includePreviewChunk?: boolean;
   resolvedNativeTransport?: unknown;
   offModeLegacyNotice?: (pathPrefix: string) => string;
@@ -211,6 +218,25 @@ export function normalizeLegacyStreamingAliases(
     streaming.nativeTransport = params.resolvedNativeTransport;
     params.changes.push(
       `Moved ${params.pathPrefix}.streaming (boolean) → ${params.pathPrefix}.streaming.nativeTransport.`,
+    );
+    changed = true;
+  }
+
+  // Materializing `streaming` for delivery-only aliases would otherwise flip
+  // channels whose runtime treats "streaming absent" differently from an
+  // object without `mode` (Discord defaults to progress only when the whole
+  // object is absent). Pin the previous effective mode so migration never
+  // changes behavior. Guarded on `changed` so entries with no movable alias
+  // stay a no-op instead of minting a mode-only mutation.
+  if (
+    changed &&
+    beforeStreaming === undefined &&
+    streaming.mode === undefined &&
+    params.aliasOnlyMode !== undefined
+  ) {
+    streaming.mode = params.aliasOnlyMode;
+    params.changes.push(
+      `Set ${params.pathPrefix}.streaming.mode (${params.aliasOnlyMode}) to keep the previous default while migrating flat streaming keys.`,
     );
     changed = true;
   }

@@ -710,7 +710,9 @@ describe("release candidate checklist", () => {
     ) as {
       on: { workflow_dispatch: { inputs: Record<string, unknown> } };
     };
-    const emittedInputs = [...command.matchAll(/'-f' '([^=']+)=/gu)].map((match) => match[1]);
+    const emittedInputs = [...command.matchAll(/'-f' '([^=']+)=/gu)].flatMap((match) =>
+      match[1] === undefined ? [] : [match[1]],
+    );
     for (const input of emittedInputs) {
       expect(workflow.on.workflow_dispatch.inputs).toHaveProperty(input);
     }

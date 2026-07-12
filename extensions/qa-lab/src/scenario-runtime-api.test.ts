@@ -51,6 +51,7 @@ function createDeps(overrides?: Partial<QaScenarioRuntimeDeps>): QaScenarioRunti
     readEffectiveTools: fn,
     readSkillStatus: fn,
     readRawQaSessionStore: fn,
+    seedQaSessionTranscript: fn,
     readGatewayLogs: fn,
     markGatewayLogCursor: fn,
     scanGatewayLogSentinels: fn,
@@ -194,6 +195,7 @@ describe("createQaScenarioRuntimeApi", () => {
     expect(api.markGatewayLogCursor).toBe(deps.markGatewayLogCursor);
     expect(api.assertNoGatewayLogSentinels).toBe(deps.assertNoGatewayLogSentinels);
     expect(api.readSessionTranscriptSummary).toBe(deps.readSessionTranscriptSummary);
+    expect(api.seedQaSessionTranscript).toBe(deps.seedQaSessionTranscript);
     for (const toolName of browserAndWebRuntimeTools) {
       expect(api[toolName]).toBe(deps[toolName]);
     }

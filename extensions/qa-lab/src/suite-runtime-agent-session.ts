@@ -3,9 +3,13 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
+  formatSqliteSessionFileMarker,
   listSessionEntries,
   loadTranscriptEventsSync,
+  resolveStorePath,
+  upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
+import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
   isRecord,
   normalizeOptionalString as readNonEmptyString,
@@ -25,6 +29,18 @@ type QaGatewayCallEnv = Pick<
   QaSuiteRuntimeEnv,
   "gateway" | "primaryModel" | "alternateModel" | "providerMode"
 >;
+
+type QaSessionTranscriptSeedParams = {
+  label?: string;
+  messages: readonly {
+    role: "assistant" | "user";
+    text: string;
+    timestamp: number;
+  }[];
+  sessionId: string;
+  sessionKey: string;
+  updatedAt: number;
+};
 
 const SESSION_STORE_LOCK_RETRY_DELAYS_MS = [1_000, 3_000, 5_000] as const;
 let sessionStoreLockRetryDelaysMsForTests: readonly number[] | undefined;
@@ -220,6 +236,62 @@ function qaSessionRuntimeEnv(tempRoot: string): NodeJS.ProcessEnv {
   };
 }
 
+async function seedQaSessionTranscript(
+  env: Pick<QaSuiteRuntimeEnv, "gateway">,
+  params: QaSessionTranscriptSeedParams,
+): Promise<void> {
+  const sessionId = params.sessionId.trim();
+  const sessionKey = params.sessionKey.trim();
+  if (!sessionId || !sessionKey) {
+    throw new Error("seedQaSessionTranscript requires sessionId and sessionKey");
+  }
+  if (params.messages.length === 0) {
+    throw new Error("seedQaSessionTranscript requires at least one message");
+  }
+
+  const runtimeEnv = qaSessionRuntimeEnv(env.gateway.tempRoot);
+  const storePath = resolveStorePath(undefined, {
+    agentId: "qa",
+    env: runtimeEnv,
+  });
+  const label = params.label?.trim();
+  await upsertSessionEntry({
+    agentId: "qa",
+    env: runtimeEnv,
+    sessionKey,
+    storePath,
+    entry: {
+      sessionFile: formatSqliteSessionFileMarker({
+        agentId: "qa",
+        sessionId,
+        storePath,
+      }),
+      sessionId,
+      updatedAt: params.updatedAt,
+      ...(label ? { origin: { label } } : {}),
+    },
+  });
+
+  for (const seed of params.messages) {
+    const appended = await appendSessionTranscriptMessageByIdentity({
+      agentId: "qa",
+      env: runtimeEnv,
+      sessionId,
+      sessionKey,
+      storePath,
+      now: seed.timestamp,
+      message: {
+        role: seed.role,
+        timestamp: seed.timestamp,
+        content: [{ type: "text", text: seed.text }],
+      },
+    });
+    if (!appended?.appended) {
+      throw new Error(`failed to seed QA session transcript for ${sessionKey}`);
+    }
+  }
+}
+
 async function readRawQaSessionStore(env: Pick<QaSuiteRuntimeEnv, "gateway">) {
   return Object.fromEntries(
     listSessionEntries({ agentId: "qa", env: qaSessionRuntimeEnv(env.gateway.tempRoot) }).map(
@@ -259,6 +331,7 @@ export {
   readRawQaSessionStore,
   readSessionTranscriptSummary,
   readSkillStatus,
+  seedQaSessionTranscript,
   setSessionStoreLockRetryDelaysMsForTests,
 };
 

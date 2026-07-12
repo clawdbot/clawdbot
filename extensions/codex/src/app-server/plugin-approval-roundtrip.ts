@@ -93,8 +93,14 @@ export async function waitForPluginApprovalDecision(params: {
     { timeoutMs: resolveCodexGatewayTimeoutWithGraceMs(timeoutMs) },
     { id: params.approvalId },
   );
+  // Bind the verdict to the approval that parked this prompt. A stale or
+  // misrouted reply maps to "unavailable" instead of releasing another gate.
+  const bindDecision = (
+    result: ApprovalWaitResult | undefined,
+  ): ExecApprovalDecision | null | undefined =>
+    result?.id === params.approvalId ? result.decision : undefined;
   if (!params.signal) {
-    return (await waitPromise)?.decision;
+    return bindDecision(await waitPromise);
   }
   let onAbort: (() => void) | undefined;
   const abortPromise = new Promise<never>((_, reject) => {
@@ -106,7 +112,7 @@ export async function waitForPluginApprovalDecision(params: {
     params.signal!.addEventListener("abort", onAbort, { once: true });
   });
   try {
-    return (await Promise.race([waitPromise, abortPromise]))?.decision;
+    return bindDecision(await Promise.race([waitPromise, abortPromise]));
   } finally {
     if (onAbort) {
       params.signal.removeEventListener("abort", onAbort);

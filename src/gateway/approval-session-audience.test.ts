@@ -1,8 +1,22 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  resolveApprovalFallbackAudienceSessionKey,
+  resolveApprovalSessionAudience,
   resolveApprovalSessionAudienceFromSources,
+  resolveApprovalSourceStreamKey,
   type ApprovalSessionAudienceSources,
 } from "./approval-session-audience.js";
+
+const getRuntimeConfigMock = vi.fn(() => ({}) as object);
+vi.mock("../config/io.js", () => ({
+  getRuntimeConfig: () => getRuntimeConfigMock(),
+}));
+vi.mock("../agents/subagent-registry-read.js", () => ({
+  buildLatestSubagentRunReadIndex: () => ({ getLatestSubagentRun: () => undefined }),
+}));
+vi.mock("../config/sessions/session-accessor.js", () => ({
+  loadSessionEntry: () => undefined,
+}));
 
 type GraphNode = {
   registry?: {
@@ -32,6 +46,13 @@ function resolveAudience(
 }
 
 describe("resolveApprovalSessionAudienceFromSources", () => {
+  it("scopes a global source to the agent-specific stream key", () => {
+    expect(resolveApprovalSourceStreamKey(" global ", "Work Agent")).toBe(
+      "agent:work-agent:global",
+    );
+    expect(resolveApprovalSourceStreamKey("agent:work:child", "work")).toBe("agent:work:child");
+  });
+
   it("keeps the canonical source first when it has no ancestors", () => {
     expect(
       resolveAudience(" Child ", {}, (key) => `agent:main:${key.trim().toLowerCase()}`),
@@ -137,5 +158,48 @@ describe("resolveApprovalSessionAudienceFromSources", () => {
     expect(audience).toHaveLength(64);
     expect(audience[0]).toBe("session-0");
     expect(audience.at(-1)).toBe("session-63");
+  });
+});
+
+describe("resolveApprovalFallbackAudienceSessionKey", () => {
+  it("canonicalizes configured main-key aliases when config loads", () => {
+    getRuntimeConfigMock.mockReturnValueOnce({ session: { mainKey: "boss" } });
+    expect(resolveApprovalFallbackAudienceSessionKey("main", "work")).toBe("agent:work:boss");
+  });
+
+  it("scopes unscoped aliases even when config loading throws", () => {
+    getRuntimeConfigMock.mockImplementationOnce(() => {
+      throw new Error("config unavailable");
+    });
+    expect(resolveApprovalFallbackAudienceSessionKey("child", "work")).toBe("agent:work:child");
+  });
+});
+
+describe("resolveApprovalSourceStreamKey fallback scoping", () => {
+  it("scopes raw fallback aliases to the raising agent", () => {
+    expect(resolveApprovalSourceStreamKey("child", "work")).toBe("agent:work:child");
+    expect(resolveApprovalSourceStreamKey("GLOBAL", "work")).toBe("agent:work:global");
+  });
+
+  it("keeps agent-scoped, unknown, and agent-less keys exact", () => {
+    expect(resolveApprovalSourceStreamKey("agent:other:child", "work")).toBe("agent:other:child");
+    expect(resolveApprovalSourceStreamKey("unknown", "work")).toBe("unknown");
+    expect(resolveApprovalSourceStreamKey("child", null)).toBe("child");
+  });
+});
+
+describe("resolveApprovalSessionAudience runtime scoping", () => {
+  it("scopes unscoped source aliases to the raising agent", () => {
+    expect(resolveApprovalSessionAudience("child", "work")).toEqual(["agent:work:child"]);
+  });
+
+  it("scopes a global source to the raising agent stream", () => {
+    expect(resolveApprovalSessionAudience("global", "work")).toEqual(["agent:work:global"]);
+  });
+
+  it("keeps explicit cross-agent source keys exact", () => {
+    expect(resolveApprovalSessionAudience("agent:other:child", "work")).toEqual([
+      "agent:other:child",
+    ]);
   });
 });

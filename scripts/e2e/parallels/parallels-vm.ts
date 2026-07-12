@@ -91,7 +91,7 @@ export function resolveUbuntuVmName(requested: string, explicit = false): string
     names
       .map((name) => ({ name, parts: parseUbuntuVersionParts(name) }))
       .filter((item): item is { name: string; parts: number[] } => Boolean(item.parts))
-      .filter((item) => item.parts[0] >= 24)
+      .filter((item) => item.parts[0] !== undefined && item.parts[0] >= 24)
       .toSorted((a, b) => compareVersions(b.parts, a.parts))[0]?.name ??
     names.find(isSafeUbuntuFallbackName);
   if (!fallback) {

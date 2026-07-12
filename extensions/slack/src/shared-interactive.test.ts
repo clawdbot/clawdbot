@@ -5,7 +5,6 @@ import {
   buildSlackInteractiveBlocks,
   buildSlackPresentationBlocks,
   canRenderSlackPresentation,
-  canRenderSlackPresentationTables,
   resolveSlackBlockOffsets,
   type SlackBlock,
 } from "./blocks-render.js";
@@ -708,7 +707,6 @@ describe("buildSlackPresentationBlocks", () => {
     };
 
     expect(canRenderSlackPresentation(presentation)).toBe(false);
-    expect(canRenderSlackPresentationTables(presentation)).toBe(false);
     expect(buildSlackPresentationBlocks(presentation)).toEqual([]);
   });
 

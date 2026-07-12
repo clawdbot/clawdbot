@@ -12,6 +12,7 @@ import {
 } from "../../daemon/systemd.js";
 import { callGatewayCli } from "../../gateway/call.js";
 import { probeGateway } from "../../gateway/probe.js";
+import { readActiveGatewayLockPort } from "../../infra/gateway-lock.js";
 import {
   findVerifiedGatewayListenerPidsOnPortSync,
   formatGatewayPidList,
@@ -334,9 +335,14 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
   let restartedWithoutServiceManager = false;
   const restartIntent = resolveGatewayRestartIntentOptions(opts);
   const configuredPort = await resolveExplicitGatewayConfigPort();
-  const restartPort =
+  const managedRestartPort =
     configuredPort ??
     (await resolveGatewayLifecyclePort(service).catch(() => resolveGatewayPortFallback()));
+  // An unmanaged run loop keeps its lock port across in-process restarts, even
+  // when config changes underneath it. Use that port for both the signal and
+  // health proof or a valid CLI/env override looks like a failed restart.
+  const unmanagedPort =
+    (await readActiveGatewayLockPort().catch(() => undefined)) ?? managedRestartPort;
   const restartHealthAttempts = postRestartHealthAttempts();
   const restartWaitMs = restartHealthAttempts * POST_RESTART_HEALTH_DELAY_MS;
   const restartWaitSeconds = Math.round(restartWaitMs / 1000);
@@ -369,7 +375,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
           return recovered;
         }
       }
-      const handled = await restartGatewayWithoutServiceManager(restartPort, restartIntent);
+      const handled = await restartGatewayWithoutServiceManager(unmanagedPort, restartIntent);
       if (handled) {
         restartedWithoutServiceManager = true;
         return handled;
@@ -380,7 +386,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       if (restartedWithoutServiceManager) {
         // SIGUSR1 restarts have no service-manager state to watch; use listener health only.
         const health = await waitForGatewayHealthyListener({
-          port: restartPort,
+          port: unmanagedPort,
           attempts: restartHealthAttempts,
           delayMs: POST_RESTART_HEALTH_DELAY_MS,
         });
@@ -389,7 +395,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         }
 
         const diagnostics = renderGatewayPortHealthDiagnostics(health);
-        const timeoutLine = `Timed out after ${restartWaitSeconds}s waiting for gateway port ${restartPort} to become healthy.`;
+        const timeoutLine = `Timed out after ${restartWaitSeconds}s waiting for gateway port ${unmanagedPort} to become healthy.`;
         if (!jsonOutput) {
           defaultRuntime.log(theme.warn(timeoutLine));
           for (const line of diagnostics) {
@@ -409,7 +415,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
 
       let health = await waitForGatewayHealthyRestart({
         service,
-        port: restartPort,
+        port: managedRestartPort,
         attempts: restartHealthAttempts,
         delayMs: POST_RESTART_HEALTH_DELAY_MS,
         includeUnknownListenersAsStale: process.platform === "win32",
@@ -432,7 +438,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         }
         health = await waitForGatewayHealthyRestart({
           service,
-          port: restartPort,
+          port: managedRestartPort,
           attempts: restartHealthAttempts,
           delayMs: POST_RESTART_HEALTH_DELAY_MS,
           includeUnknownListenersAsStale: process.platform === "win32",
@@ -446,12 +452,12 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       const diagnostics = renderRestartDiagnostics(health);
       const failure = formatRestartFailure({
         health,
-        port: restartPort,
+        port: managedRestartPort,
         timeoutSeconds: restartWaitSeconds,
       });
       const runningNoPortLine =
         health.runtime.status === "running" && health.portUsage.status === "free"
-          ? `Gateway process is running but port ${restartPort} is still free (startup hang/crash loop or very slow VM startup).`
+          ? `Gateway process is running but port ${managedRestartPort} is still free (startup hang/crash loop or very slow VM startup).`
           : null;
       if (!jsonOutput) {
         defaultRuntime.log(theme.warn(failure.statusLine));

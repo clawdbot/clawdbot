@@ -24,6 +24,8 @@ describe("managed worktree protocol schemas", () => {
       Value.Check(SessionsCreateResultSchema, {
         ok: true,
         key: "agent:main:dashboard:test",
+        runStarted: false,
+        runError: { code: "INVALID_REQUEST", message: "send blocked by session policy" },
         worktree: { id: "id", path: "/worktree", branch: "openclaw/wt-test" },
       }),
     ).toBe(true);

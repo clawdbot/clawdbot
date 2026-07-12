@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   DEPENDENCY_EVIDENCE_REPORTS,
@@ -241,7 +242,12 @@ describe("generate-dependency-release-evidence", () => {
       }),
     ).toBe("v2026.5.1");
     expect(calls.map(({ args }) => args[0])).toEqual(["describe", "fetch", "describe"]);
-    expect(calls[1].args).toEqual(["fetch", "--tags", "--force", "origin"]);
+    expect(expectDefined(calls[1], "release tag fetch call").args).toEqual([
+      "fetch",
+      "--tags",
+      "--force",
+      "origin",
+    ]);
   });
 
   it("collects report counts and renders human summaries", async () => {

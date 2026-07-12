@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
@@ -659,7 +660,9 @@ esac
     const plan = findStep("Kova version and plan sanity");
     const runKova = findStep("Run Kova");
     const matrixEntries = kovaMatrixEntries();
-    const includeFilters = matrixEntries.map((entry) => entry.include_filters);
+    const includeFilters = matrixEntries.map((entry, index) =>
+      expectDefined(entry.include_filters, `Kova matrix include filters ${index}`),
+    );
     const expectedReleaseEntries = matrixEntries.map((entry) => entry.expected_release_entries);
 
     expect(includeFilters).toEqual([

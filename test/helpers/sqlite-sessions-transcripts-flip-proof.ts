@@ -8,6 +8,7 @@ import path from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import type { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   readSessionArchiveContentSync,
   stripSessionArchiveCompressionSuffix,
@@ -500,11 +501,19 @@ export async function runSqliteSessionsTranscriptsFlipProof(
         await deleteSession(postResetClient, context.deleteSessionKey);
         await record("after-sessions-delete");
 
-        await deleteSession(postResetClient, context.sharedSessionKeys[0]);
-        await requireTrackedSession(postResetClient, context.sharedSessionKeys[1]);
+        const firstSharedSessionKey = expectDefined(
+          context.sharedSessionKeys[0],
+          "first shared SQLite proof session key",
+        );
+        const secondSharedSessionKey = expectDefined(
+          context.sharedSessionKeys[1],
+          "second shared SQLite proof session key",
+        );
+        await deleteSession(postResetClient, firstSharedSessionKey);
+        await requireTrackedSession(postResetClient, secondSharedSessionKey);
         await record("after-shared-first-delete");
 
-        await deleteSession(postResetClient, context.sharedSessionKeys[1]);
+        await deleteSession(postResetClient, secondSharedSessionKey);
         await record("after-shared-final-delete");
       } finally {
         await disconnectGatewayClient(postResetClient);
@@ -737,14 +746,22 @@ async function seedLegacySessionStore(context: ProofContext): Promise<void> {
   await fs.mkdir(context.legacySessionsDir, { recursive: true });
   await fs.mkdir(path.join(context.stateDir, "agent"), { recursive: true });
   const now = Date.now();
+  const firstSharedSessionKey = expectDefined(
+    context.sharedSessionKeys[0],
+    "first legacy shared SQLite proof session key",
+  );
+  const secondSharedSessionKey = expectDefined(
+    context.sharedSessionKeys[1],
+    "second legacy shared SQLite proof session key",
+  );
   const entries: Record<string, ReturnType<typeof legacyEntry>> = {
     [context.concurrentDeleteSessionKey]: legacyEntry("sqlite-concurrent-delete", now - 8_000),
     [context.concurrentResetSessionKey]: legacyEntry("sqlite-concurrent-reset", now - 9_000),
     [context.deleteSessionKey]: legacyEntry("sqlite-delete-session", now - 1_000),
-    [context.sharedSessionKeys[0]]: legacyEntry("sqlite-shared-session", now - 2_000, {
+    [firstSharedSessionKey]: legacyEntry("sqlite-shared-session", now - 2_000, {
       sessionFile: "sqlite-shared-a.jsonl",
     }),
-    [context.sharedSessionKeys[1]]: legacyEntry("sqlite-shared-session", now - 3_000, {
+    [secondSharedSessionKey]: legacyEntry("sqlite-shared-session", now - 3_000, {
       sessionFile: "sqlite-shared-b.jsonl",
     }),
   };

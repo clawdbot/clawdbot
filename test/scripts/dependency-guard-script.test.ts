@@ -580,7 +580,7 @@ describe("dependency guard script", () => {
       "base:/repos/openclaw/openclaw/contents/pnpm-lock.yaml?ref=base-sha",
       "write:graphql",
     ]);
-    expect(calls[1].variables).toMatchObject({
+    expect(calls[1]?.variables).toMatchObject({
       input: {
         branch: {
           repositoryNameWithOwner: "contributor/openclaw",

@@ -42,9 +42,7 @@ type ProviderBlockStreamingConfig = {
 function resolveScopedBlockStreamingCoalesce(
   config: ProviderBlockStreamingConfig | undefined,
 ): BlockStreamingCoalesceConfig | undefined {
-  return config
-    ? (resolveChannelStreamingBlockCoalesce(config) ?? config.blockStreamingCoalesce)
-    : undefined;
+  return config ? resolveChannelStreamingBlockCoalesce(config) : undefined;
 }
 
 function resolveProviderBlockStreamingCoalesce(params: {

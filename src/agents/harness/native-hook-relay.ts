@@ -2132,7 +2132,9 @@ async function requestNativeHookRelayPermissionApproval(
       signal: request.signal,
       timeoutMs,
     });
-    decision = waitResult?.decision;
+    // Bind the verdict to the request that parked this call. A stale or
+    // misrouted reply must never release a different tool gate.
+    decision = waitResult?.id === approvalId ? waitResult.decision : undefined;
   }
   if (decision === PluginApprovalResolutions.ALLOW_ONCE) {
     return "allow";
