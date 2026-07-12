@@ -796,6 +796,10 @@ describe("slackPlugin outbound", () => {
     ).toBe(false);
   });
 
+  it("prefers final assistant text for text-only cron announce delivery", () => {
+    expect(slackPlugin.outbound?.preferFinalAssistantVisibleText).toBe(true);
+  });
+
   it("advertises the 8000-character Slack default chunk limit", () => {
     expect(slackOutbound.textChunkLimit).toBe(8000);
     expect(slackPlugin.outbound?.textChunkLimit).toBe(8000);

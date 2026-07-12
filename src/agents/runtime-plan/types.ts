@@ -361,7 +361,6 @@ export type AgentRuntimeTranscriptPolicy = {
     allowBase64Only?: boolean;
     includeCamelCase?: boolean;
   };
-  sanitizeThinkingSignatures: boolean;
   dropThinkingBlocks: boolean;
   dropReasoningFromHistory?: boolean;
   applyGoogleTurnOrdering: boolean;

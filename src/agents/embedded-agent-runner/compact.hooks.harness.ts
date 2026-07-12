@@ -306,7 +306,6 @@ function createCompactHooksRuntimePlan(params: BuildAgentRuntimePlanParams): Age
     preserveNativeAnthropicToolUseIds: false,
     repairToolUseResultPairing: false,
     preserveSignatures: false,
-    sanitizeThinkingSignatures: false,
     dropThinkingBlocks: false,
     applyGoogleTurnOrdering: false,
     validateGeminiTurns: false,

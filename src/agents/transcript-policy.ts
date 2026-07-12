@@ -31,7 +31,6 @@ export type TranscriptPolicy = {
     allowBase64Only?: boolean;
     includeCamelCase?: boolean;
   };
-  sanitizeThinkingSignatures: boolean;
   dropThinkingBlocks: boolean;
   dropReasoningFromHistory?: boolean;
   applyGoogleTurnOrdering: boolean;
@@ -75,7 +74,6 @@ const DEFAULT_TRANSCRIPT_POLICY: TranscriptPolicy = {
   repairToolUseResultPairing: true,
   preserveSignatures: false,
   sanitizeThoughtSignatures: undefined,
-  sanitizeThinkingSignatures: false,
   dropThinkingBlocks: false,
   dropReasoningFromHistory: false,
   applyGoogleTurnOrdering: false,

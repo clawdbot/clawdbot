@@ -737,7 +737,6 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
               preserveNativeAnthropicToolUseIds: false,
               repairToolUseResultPairing: true,
               preserveSignatures: true,
-              sanitizeThinkingSignatures: false,
               dropThinkingBlocks: false,
               dropReasoningFromHistory: false,
               applyGoogleTurnOrdering: false,
