@@ -513,9 +513,10 @@ export async function waitForWaConnection(
       }
       if (update.connection === "close") {
         cleanup();
+        const disconnectError = update.lastDisconnect?.error ?? update.lastDisconnect;
         reject(
           toLintErrorObject(
-            update.lastDisconnect ?? new Error("Connection closed"),
+            disconnectError ?? new Error("Connection closed"),
             "Non-Error rejection",
           ),
         );

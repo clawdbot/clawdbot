@@ -803,7 +803,7 @@ function hasUnsupportedV1DirectorySymlink(manifest: SessionSqliteMigrationManife
   });
 }
 
-function canonicalMigrationFilePath(filePath: string): string {
+export function canonicalMigrationFilePath(filePath: string): string {
   const resolvedPath = path.resolve(filePath);
   const fileName = path.basename(resolvedPath);
   const directoryPath = path.dirname(resolvedPath);

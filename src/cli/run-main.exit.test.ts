@@ -2029,6 +2029,26 @@ describe("runCli exit behavior", () => {
     expect(closeActiveMemorySearchManagersMock).not.toHaveBeenCalled();
   });
 
+  it("propagates precomputed help metadata failures", async () => {
+    outputPrecomputedSecretsHelpTextMock.mockImplementationOnce(() => {
+      throw new Error("startup metadata failed");
+    });
+
+    await expect(runCli(["node", "openclaw", "secrets", "--help"])).rejects.toThrow(
+      "startup metadata failed",
+    );
+  });
+
+  it("propagates nodes live-config probe failures", async () => {
+    loadRootHelpRenderOptionsForConfigSensitivePluginsMock.mockRejectedValueOnce(
+      new Error("live config failed"),
+    );
+
+    await expect(runCli(["node", "openclaw", "nodes", "--help"])).rejects.toThrow(
+      "live config failed",
+    );
+  });
+
   it("keeps root help on the precomputed path without proxy bootstrap", async () => {
     outputPrecomputedRootHelpTextMock.mockReturnValueOnce(true);
 

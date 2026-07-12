@@ -2,17 +2,14 @@
 import { describe, expect, it } from "vitest";
 import type { PluginManifestCommandAliasRegistry } from "../plugins/manifest-command-aliases.js";
 import { resolveGatewayRunPreBootstrapOptions } from "./gateway-run-argv.js";
+import { resolvePrecomputedSubcommandHelpCommand } from "./precomputed-help.js";
 import {
-  resolvePrecomputedSubcommandHelpFastPath,
   rewriteUpdateFlagArgv,
   resolveMissingPluginCommandMessage,
   shouldHandleBareRoot,
   shouldEnsureCliPath,
   shouldStartProxyForCli,
-  shouldUseBrowserHelpFastPath,
-  shouldUseNodesHelpFastPath,
   shouldUseRootHelpFastPath,
-  shouldUseSecretsHelpFastPath,
   shouldUseSetupOnboardConfigureHelpFastPath,
 } from "./run-main-policy.js";
 import { isGatewayRunFastPathArgv } from "./run-main.js";
@@ -207,40 +204,6 @@ describe("shouldUseRootHelpFastPath", () => {
   });
 });
 
-describe("shouldUseBrowserHelpFastPath", () => {
-  it("uses the fast path for browser command help only", () => {
-    expect(shouldUseBrowserHelpFastPath(["node", "openclaw", "browser", "--help"])).toBe(true);
-    expect(shouldUseBrowserHelpFastPath(["node", "openclaw", "browser", "-h"])).toBe(true);
-    expect(
-      shouldUseBrowserHelpFastPath(["node", "openclaw", "--profile", "work", "browser", "-h"]),
-    ).toBe(true);
-    expect(shouldUseBrowserHelpFastPath(["node", "openclaw", "browser", "status", "--help"])).toBe(
-      false,
-    );
-    expect(shouldUseBrowserHelpFastPath(["node", "openclaw", "browser", "--version"])).toBe(false);
-    expect(shouldUseBrowserHelpFastPath(["node", "openclaw", "status", "--help"])).toBe(false);
-    expect(shouldUseBrowserHelpFastPath(["node", "openclaw", "browser", "--version"])).toBe(false);
-  });
-});
-
-describe("parent command help fast paths", () => {
-  it("use fast paths for secrets and nodes parent help only", () => {
-    expect(shouldUseSecretsHelpFastPath(["node", "openclaw", "secrets", "--help"])).toBe(true);
-    expect(shouldUseSecretsHelpFastPath(["node", "openclaw", "secrets", "-h"])).toBe(true);
-    expect(shouldUseSecretsHelpFastPath(["node", "openclaw", "secrets", "--version"])).toBe(false);
-    expect(shouldUseSecretsHelpFastPath(["node", "openclaw", "secrets", "audit", "--help"])).toBe(
-      false,
-    );
-
-    expect(shouldUseNodesHelpFastPath(["node", "openclaw", "nodes", "--help"])).toBe(true);
-    expect(shouldUseNodesHelpFastPath(["node", "openclaw", "nodes", "-h"])).toBe(true);
-    expect(shouldUseNodesHelpFastPath(["node", "openclaw", "nodes", "--version"])).toBe(false);
-    expect(shouldUseNodesHelpFastPath(["node", "openclaw", "nodes", "invoke", "--help"])).toBe(
-      false,
-    );
-  });
-});
-
 describe("shouldUseSetupOnboardConfigureHelpFastPath", () => {
   it("uses the fast path only for setup, onboard, and configure help", () => {
     expect(
@@ -274,16 +237,16 @@ describe("shouldUseSetupOnboardConfigureHelpFastPath", () => {
   });
 });
 
-describe("resolvePrecomputedSubcommandHelpFastPath", () => {
-  it("uses the fast path only for allowlisted parent command help", () => {
-    expect(resolvePrecomputedSubcommandHelpFastPath(["node", "openclaw", "doctor", "--help"])).toBe(
+describe("resolvePrecomputedSubcommandHelpCommand", () => {
+  it("matches only strict allowlisted parent command help", () => {
+    expect(resolvePrecomputedSubcommandHelpCommand(["node", "openclaw", "doctor", "--help"])).toBe(
       "doctor",
     );
-    expect(resolvePrecomputedSubcommandHelpFastPath(["node", "openclaw", "gateway", "-h"])).toBe(
+    expect(resolvePrecomputedSubcommandHelpCommand(["node", "openclaw", "gateway", "-h"])).toBe(
       "gateway",
     );
     expect(
-      resolvePrecomputedSubcommandHelpFastPath([
+      resolvePrecomputedSubcommandHelpCommand([
         "node",
         "openclaw",
         "--profile",
@@ -293,23 +256,23 @@ describe("resolvePrecomputedSubcommandHelpFastPath", () => {
         "-h",
       ]),
     ).toBe("models");
+    expect(resolvePrecomputedSubcommandHelpCommand(["node", "openclaw", "plugins", "--help"])).toBe(
+      "plugins",
+    );
     expect(
-      resolvePrecomputedSubcommandHelpFastPath(["node", "openclaw", "plugins", "--help"]),
-    ).toBe("plugins");
-    expect(
-      resolvePrecomputedSubcommandHelpFastPath(["node", "openclaw", "sessions", "--help"]),
+      resolvePrecomputedSubcommandHelpCommand(["node", "openclaw", "sessions", "--help"]),
     ).toBe("sessions");
-    expect(resolvePrecomputedSubcommandHelpFastPath(["node", "openclaw", "tasks", "-h"])).toBe(
+    expect(resolvePrecomputedSubcommandHelpCommand(["node", "openclaw", "tasks", "-h"])).toBe(
       "tasks",
     );
     expect(
-      resolvePrecomputedSubcommandHelpFastPath(["node", "openclaw", "doctor", "--version"]),
+      resolvePrecomputedSubcommandHelpCommand(["node", "openclaw", "doctor", "--version"]),
     ).toBeNull();
     expect(
-      resolvePrecomputedSubcommandHelpFastPath(["node", "openclaw", "gateway", "-V"]),
+      resolvePrecomputedSubcommandHelpCommand(["node", "openclaw", "gateway", "-V"]),
     ).toBeNull();
     expect(
-      resolvePrecomputedSubcommandHelpFastPath([
+      resolvePrecomputedSubcommandHelpCommand([
         "node",
         "openclaw",
         "doctor",
@@ -318,27 +281,22 @@ describe("resolvePrecomputedSubcommandHelpFastPath", () => {
       ]),
     ).toBeNull();
     expect(
-      resolvePrecomputedSubcommandHelpFastPath(["node", "openclaw", "doctor", "--version", "-h"]),
+      resolvePrecomputedSubcommandHelpCommand(["node", "openclaw", "doctor", "--version", "-h"]),
     ).toBeNull();
     expect(
-      resolvePrecomputedSubcommandHelpFastPath(["node", "openclaw", "--bogus", "doctor", "--help"]),
+      resolvePrecomputedSubcommandHelpCommand(["node", "openclaw", "--bogus", "doctor", "--help"]),
     ).toBeNull();
     expect(
-      resolvePrecomputedSubcommandHelpFastPath(["node", "openclaw", "doctor", "--help", "--bogus"]),
+      resolvePrecomputedSubcommandHelpCommand(["node", "openclaw", "doctor", "--help", "--bogus"]),
     ).toBeNull();
     expect(
-      resolvePrecomputedSubcommandHelpFastPath(["node", "openclaw", "doctor", "--help", "extra"]),
+      resolvePrecomputedSubcommandHelpCommand(["node", "openclaw", "doctor", "--help", "extra"]),
     ).toBeNull();
     expect(
-      resolvePrecomputedSubcommandHelpFastPath(["node", "openclaw", "gateway", "status", "--help"]),
+      resolvePrecomputedSubcommandHelpCommand(["node", "openclaw", "gateway", "status", "--help"]),
     ).toBeNull();
     expect(
-      resolvePrecomputedSubcommandHelpFastPath(["node", "openclaw", "status", "--help"]),
-    ).toBeNull();
-    expect(
-      resolvePrecomputedSubcommandHelpFastPath(["node", "openclaw", "doctor", "--help"], {
-        OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH: "1",
-      }),
+      resolvePrecomputedSubcommandHelpCommand(["node", "openclaw", "status", "--help"]),
     ).toBeNull();
   });
 });

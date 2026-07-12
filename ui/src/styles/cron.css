@@ -656,6 +656,10 @@
   flex-direction: column;
   gap: 14px;
   max-width: 1060px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
 }
 
 .cron-history,

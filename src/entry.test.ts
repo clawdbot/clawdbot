@@ -253,6 +253,34 @@ describe("entry precomputed command help fast path", () => {
     expect(handled).toBe(false);
   });
 
+  it("falls through when startup metadata loading fails", async () => {
+    const handled = await tryHandlePrecomputedCommandHelpFastPath(
+      ["node", "openclaw", "secrets", "--help"],
+      {
+        env: {},
+        outputPrecomputedSecretsHelpText: () => {
+          throw new Error("startup metadata failed");
+        },
+      },
+    );
+
+    expect(handled).toBe(false);
+  });
+
+  it("falls through when the nodes live-config probe fails", async () => {
+    const handled = await tryHandlePrecomputedCommandHelpFastPath(
+      ["node", "openclaw", "nodes", "--help"],
+      {
+        env: {},
+        loadRootHelpRenderOptionsForConfigSensitivePlugins: async () => {
+          throw new Error("live config failed");
+        },
+      },
+    );
+
+    expect(handled).toBe(false);
+  });
+
   it("ignores nested subcommand help invocations", async () => {
     let outputPrecomputedNodesHelpTextCalls = 0;
 

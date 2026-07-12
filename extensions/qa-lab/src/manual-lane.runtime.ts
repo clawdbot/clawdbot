@@ -95,7 +95,9 @@ export async function runQaManualLane(params: QaManualLaneParams) {
     });
     const transport = transportFactoryResult.adapter;
     transportCleanup = transportFactoryResult.cleanup;
-    mock = await startQaProviderServer(params.providerMode);
+    mock = await startQaProviderServer(params.providerMode, {
+      modelRefs: [params.primaryModel, params.alternateModel],
+    });
     gateway = await startQaGatewayChild({
       repoRoot: params.repoRoot,
       providerBaseUrl: mock ? `${mock.baseUrl}/v1` : undefined,

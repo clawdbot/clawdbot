@@ -47,6 +47,9 @@ const previousEnv = {
 const lexicalTempDir = path.resolve(os.tmpdir());
 const realTempDir = fs.realpathSync.native(os.tmpdir());
 const hasPlatformTempAlias = lexicalTempDir !== realTempDir;
+const lexicalRootTempDir = path.resolve("/tmp");
+const realRootTempDir = canonicalTestPath(lexicalRootTempDir);
+const hasPlatformRootTempAlias = lexicalRootTempDir !== realRootTempDir;
 
 beforeEach(() => {
   closeOpenClawAgentDatabasesForTest();
@@ -1002,7 +1005,7 @@ describe("runDoctorSessionSqlite", () => {
       const outsideDir = path.join(store.tempDir, "outside", "nested");
       const outsideArchivePath = path.join(path.dirname(outsideDir), "payload.jsonl");
       const traversalArchivePath = path.join(archiveDir, "escape", "..", "payload.jsonl");
-      const sourcePath = path.join(store.sessionDir, "payload.jsonl");
+      const sourcePath = path.join(canonicalTestPath(store.sessionDir), "payload.jsonl");
       fs.mkdirSync(outsideDir, { recursive: true });
       fs.symlinkSync(outsideDir, path.join(archiveDir, "escape"));
       fs.writeFileSync(outsideArchivePath, '{"type":"outside"}\n', { mode: 0o600 });
@@ -1064,6 +1067,30 @@ describe("runDoctorSessionSqlite", () => {
       expect(restore.conflicts).toEqual([]);
       expect(restore.restoredFiles).toContain(canonicalTestPath(store.transcriptPath));
       expect(fs.existsSync(store.transcriptPath)).toBe(true);
+    },
+  );
+
+  it.skipIf(!hasPlatformRootTempAlias)(
+    "imports a legacy store written through a platform root alias",
+    async () => {
+      const store = createLegacyStore({ tempRoot: lexicalRootTempDir });
+
+      const report = await runDoctorSessionSqlite({
+        env: store.env,
+        mode: "import",
+        store: store.storePath,
+      });
+
+      expect(report.totals).toMatchObject({ importedEntries: 1, issues: 0 });
+      const manifest = readMigrationManifest(report.migrationRun?.manifestPath);
+      expect(manifest.targets[0]?.storePath).toBe(
+        path.join(realRootTempDir, path.relative(lexicalRootTempDir, store.storePath)),
+      );
+      expect(
+        manifest.targets[0]?.completedMoves.every((move) =>
+          move.sourcePath.startsWith(realRootTempDir + path.sep),
+        ),
+      ).toBe(true);
     },
   );
 
@@ -2288,10 +2315,13 @@ function createLegacyStore(
     agentDirName?: string;
     customStore?: boolean;
     entryOverrides?: Record<string, unknown>;
+    tempRoot?: string;
     transcriptLines?: string[];
   } = {},
 ): TestStore {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-session-sqlite-"));
+  const tempDir = fs.mkdtempSync(
+    path.join(params.tempRoot ?? os.tmpdir(), "openclaw-doctor-session-sqlite-"),
+  );
   const stateDir = path.join(tempDir, "state");
   const configPath = path.join(tempDir, "openclaw.json");
   const sessionDir = params.customStore

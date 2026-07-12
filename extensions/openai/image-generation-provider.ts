@@ -265,6 +265,14 @@ function resolveNativeOpenAIImageSizesForModel(model: string): readonly string[]
   }
 }
 
+function resolveConfiguredOpenAIImageBaseUrl(cfg: OpenClawConfig | undefined, model: string) {
+  const modelId = model.trim().replace(/^openai\//u, "");
+  const modelBaseUrl = cfg?.models?.providers?.openai?.models
+    .find((candidate) => candidate.id.trim().replace(/^openai\//u, "") === modelId)
+    ?.baseUrl?.trim();
+  return modelBaseUrl || resolveConfiguredOpenAIBaseUrl(cfg);
+}
+
 function resolveOpenAIImageRequestSize(params: {
   model: string;
   requestedSize?: string;
@@ -297,6 +305,7 @@ function resolveOpenAIImageRequestSize(params: {
 
 function shouldAllowPrivateImageEndpoint(req: {
   provider: string;
+  model: string;
   cfg: OpenClawConfig | undefined;
 }) {
   if (req.provider === MOCK_OPENAI_PROVIDER_ID) {
@@ -305,7 +314,7 @@ function shouldAllowPrivateImageEndpoint(req: {
   if (isPrivateNetworkOptInEnabled(req.cfg?.browser?.ssrfPolicy)) {
     return true;
   }
-  const baseUrl = resolveConfiguredOpenAIBaseUrl(req.cfg);
+  const baseUrl = resolveConfiguredOpenAIImageBaseUrl(req.cfg, req.model);
   if (!baseUrl.startsWith("http://127.0.0.1:") && !baseUrl.startsWith("http://localhost:")) {
     return false;
   }
@@ -860,7 +869,7 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
     async generateImage(req) {
       const inputImages = req.inputImages ?? [];
       const isEdit = inputImages.length > 0;
-      const rawBaseUrl = resolveConfiguredOpenAIBaseUrl(req.cfg);
+      const rawBaseUrl = resolveConfiguredOpenAIImageBaseUrl(req.cfg, req.model);
       const publicOpenAIBaseUrl = isPublicOpenAIImageBaseUrl(rawBaseUrl);
       const chatGPTBaseUrl = isOpenAICodexBaseUrl(rawBaseUrl);
       const codexResponsesConfigured =

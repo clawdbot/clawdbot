@@ -269,6 +269,34 @@ describe("applyPatch", () => {
     expect(memory.files.get("/sandbox/source.txt")).toBe("a\nafter-a\nb\nafter-b\nc\n");
   });
 
+  it("normalizes supported punctuation while matching update hunks", async () => {
+    const cases = [
+      ["a\u2010\u2011\u2012\u2013\u2014\u2015\u2212b", "a-------b"],
+      ["a\u2018\u2019\u201A\u201Bb", "a''''b"],
+      ["a\u201C\u201D\u201E\u201Fb", 'a""""b'],
+      [
+        "a\u00A0\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u202F\u205F\u3000b",
+        "a             b",
+      ],
+    ] as const;
+
+    for (const [sourceLine, patchLine] of cases) {
+      const memory = createMemoryPatchSandbox({
+        "source.txt": `${sourceLine}\n`,
+      });
+      const patch = `*** Begin Patch
+*** Update File: source.txt
+@@
+-${patchLine}
++updated
+*** End Patch`;
+
+      await applyPatch(patch, memory.options);
+
+      expect(memory.files.get("/sandbox/source.txt")).toBe("updated\n");
+    }
+  });
+
   it("supports end-of-file inserts", async () => {
     const memory = createMemoryPatchSandbox({
       "end.txt": "line1\n",

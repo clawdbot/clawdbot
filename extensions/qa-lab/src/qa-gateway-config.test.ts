@@ -112,6 +112,27 @@ describe("buildQaGatewayConfig", () => {
     expect(cfg.messages?.groupChat?.visibleReplies).toBe("automatic");
   });
 
+  it("adds selected target-era models to the mock provider catalog", () => {
+    const cfg = buildQaGatewayConfig({
+      bind: "loopback",
+      gatewayPort: 18789,
+      gatewayToken: "token",
+      providerBaseUrl: "http://127.0.0.1:44080/v1",
+      workspaceDir: "/tmp/qa-workspace",
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.5",
+      alternateModel: "mock-openai/gpt-5.5-alt",
+    });
+
+    expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("mock-openai/gpt-5.5");
+    expect(cfg.models?.providers?.["mock-openai"]?.models.map((model) => model.id)).toEqual([
+      "gpt-5.5",
+      "gpt-5.5-alt",
+      "gpt-image-1",
+    ]);
+    expect(cfg.models?.providers?.openai?.models.map((model) => model.id)).toContain("gpt-5.5");
+  });
+
   it("maps provider-qualified openai and anthropic refs through the mock provider lane", () => {
     const cfg = buildQaGatewayConfig({
       bind: "loopback",
@@ -257,6 +278,45 @@ describe("buildQaGatewayConfig", () => {
     expect(cfg.agents?.defaults?.models?.["openai/gpt-5.6-luna"]).toEqual({});
     expect(cfg.agents?.defaults?.models?.["openai/gpt-5.4"]).toEqual({});
     expect(cfg.agents?.list?.[0]?.fastModeDefault).toBe(true);
+  });
+
+  it("routes forced Codex mock cells through the app-server OpenAI provider", () => {
+    const cfg = buildQaGatewayConfig({
+      bind: "loopback",
+      gatewayPort: 18789,
+      gatewayToken: "token",
+      providerBaseUrl: "http://127.0.0.1:44080/v1",
+      workspaceDir: "/tmp/qa-workspace",
+      providerMode: "mock-openai",
+      forcedRuntime: "codex",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      alternateModel: "mock-openai/gpt-5.6-luna-alt",
+      enabledPluginIds: ["codex"],
+      ...createQaChannelTransportParams(),
+    });
+
+    expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("openai/gpt-5.6-luna");
+    expect(getModelFallbacks(cfg.agents?.defaults?.model)).toEqual(["openai/gpt-5.6-luna-alt"]);
+    expect(cfg.models?.mode).toBe("merge");
+    expect(cfg.models?.providers?.openai?.baseUrl).toBe("https://api.openai.com/v1");
+    expect(cfg.models?.providers?.openai?.request).toBeUndefined();
+    expect(cfg.models?.providers?.openai?.models.map((model) => model.id)).toContain(
+      "gpt-5.6-luna-alt",
+    );
+    expect(cfg.plugins?.allow).toEqual([
+      "acpx",
+      "memory-core",
+      "qa-lab",
+      "codex",
+      "openai",
+      "qa-channel",
+    ]);
+    expect(cfg.plugins?.entries?.codex).toEqual({ enabled: true });
+    expect(cfg.plugins?.entries?.openai).toEqual({ enabled: true });
+    expect(cfg.agents?.defaults?.models).toEqual({
+      "openai/gpt-5.6-luna": {},
+      "openai/gpt-5.6-luna-alt": {},
+    });
   });
 
   it("does not force OpenAI when the frontier lane only needs Anthropic and Google", () => {

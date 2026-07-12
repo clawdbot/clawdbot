@@ -2,6 +2,37 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 
+const TEST_GITHUB_TOKEN = ["github", "token"].join("-");
+const TEST_CACHED_COPILOT_TOKEN = [
+  "cached",
+  ["proxy-ep", "proxy.individual.githubcopilot.com"].join("="),
+].join(";");
+
+async function withPartialCopilotResponse(run: (port: number) => Promise<void>): Promise<void> {
+  const { once } = await import("node:events");
+  const http = await import("node:http");
+  const server = http.createServer((_req, res) => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.write('{"token":"partial');
+  });
+
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("expected server address");
+  }
+
+  try {
+    await run(address.port);
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+      server.closeAllConnections();
+    });
+  }
+}
+
 type FallbackStoreCaseResult = {
   profileIds: string[];
   resolvedKey: string | undefined;
@@ -77,6 +108,7 @@ describe("provider auth profile helpers", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.doUnmock("../agents/agent-scope-config.js");
     vi.doUnmock("../agents/auth-profiles/external-cli-discovery.js");
     vi.doUnmock("../agents/auth-profiles/oauth.js");
@@ -295,6 +327,7 @@ describe("provider auth profile helpers", () => {
         "Copilot-Integration-Id": "vscode-chat",
       }),
     );
+    expect(init.signal).toBeInstanceOf(AbortSignal);
   });
 
   it("rejects malformed Copilot proxy hints", async () => {
@@ -564,6 +597,229 @@ describe("provider auth profile helpers", () => {
         token: "fresh;proxy-ep=proxy.individual.githubcopilot.com",
       }),
     ]);
+  });
+
+  it("aborts hung Copilot token exchange instead of waiting forever", async () => {
+    vi.resetModules();
+
+    vi.spyOn(AbortSignal, "timeout").mockImplementation((timeoutMs) => {
+      expect(timeoutMs).toBe(30_000);
+      const controller = new AbortController();
+      queueMicrotask(() => {
+        controller.abort(new DOMException("timed out", "TimeoutError"));
+      });
+      return controller.signal;
+    });
+
+    const fetchImpl = vi.fn((_url: string, init?: RequestInit) => {
+      return new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        if (!signal) {
+          reject(new Error("missing abort signal"));
+          return;
+        }
+        const abort = () => {
+          reject(
+            signal.reason instanceof Error
+              ? signal.reason
+              : new DOMException("aborted", "AbortError"),
+          );
+        };
+        if (signal.aborted) {
+          abort();
+          return;
+        }
+        signal.addEventListener("abort", abort, { once: true });
+      });
+    });
+
+    const { resolveCopilotApiToken } = await import("./provider-auth.js");
+
+    await expect(
+      resolveCopilotApiToken({
+        githubToken: "github-token",
+        fetchImpl: fetchImpl as typeof fetch,
+        cachePath: "/tmp/copilot-token-hang.json",
+        loadJsonFileImpl: () => undefined,
+        saveJsonFileImpl: () => {
+          throw new Error("should not save timed-out token");
+        },
+      }),
+    ).rejects.toThrow("Copilot token exchange failed: timed out after 30000ms");
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("preserves the owned timeout reason as the normalized error cause", async () => {
+    vi.resetModules();
+
+    const ownedReason = new DOMException("owned deadline", "TimeoutError");
+    vi.spyOn(AbortSignal, "timeout").mockReturnValue(AbortSignal.abort(ownedReason));
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      throw init?.signal?.reason;
+    });
+    const { resolveCopilotApiToken } = await import("./provider-auth.js");
+
+    await expect(
+      resolveCopilotApiToken({
+        githubToken: TEST_GITHUB_TOKEN,
+        fetchImpl: fetchImpl as typeof fetch,
+        cachePath: "/tmp/copilot-token-owned-timeout.json",
+        loadJsonFileImpl: () => undefined,
+        saveJsonFileImpl: () => {},
+      }),
+    ).rejects.toMatchObject({
+      message: "Copilot token exchange failed: timed out after 30000ms",
+      cause: ownedReason,
+    });
+  });
+
+  it("aborts hung Copilot token exchange over HTTP transport", async () => {
+    vi.resetModules();
+
+    const http = await import("node:http");
+    const { once } = await import("node:events");
+    let connections = 0;
+
+    const server = http.createServer((_req, _res) => {
+      connections += 1;
+      // Intentionally never write headers/body so fetch stays pending until abort.
+    });
+
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected server address");
+    }
+
+    try {
+      // Keep the real fetch/undici abort path while shortening the production
+      // deadline for this loopback transport test.
+      const realTimeout = AbortSignal.timeout.bind(AbortSignal);
+      vi.spyOn(AbortSignal, "timeout").mockImplementation((timeoutMs) => {
+        expect(timeoutMs).toBe(30_000);
+        return realTimeout(250);
+      });
+      const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+        expect(init?.signal).toBeInstanceOf(AbortSignal);
+        return await fetch(`http://127.0.0.1:${address.port}/token`, init);
+      });
+      const { resolveCopilotApiToken } = await import("./provider-auth.js");
+      const startedAt = Date.now();
+
+      await expect(
+        resolveCopilotApiToken({
+          githubToken: "github-token",
+          fetchImpl: fetchImpl as typeof fetch,
+          cachePath: "/tmp/copilot-token-http-hang.json",
+          loadJsonFileImpl: () => undefined,
+          saveJsonFileImpl: () => {
+            throw new Error("should not save timed-out token");
+          },
+        }),
+      ).rejects.toThrow("Copilot token exchange failed: timed out after 30000ms");
+
+      expect(Date.now() - startedAt).toBeGreaterThanOrEqual(200);
+      expect(Date.now() - startedAt).toBeLessThan(5_000);
+      expect(connections).toBe(1);
+      expect(fetchImpl.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+        server.closeAllConnections();
+      });
+    }
+  });
+
+  for (const errorName of ["AbortError", "TimeoutError"] as const) {
+    it(`preserves a foreign ${errorName} by identity`, async () => {
+      vi.resetModules();
+
+      const ownedReason = new DOMException("owned deadline", "TimeoutError");
+      vi.spyOn(AbortSignal, "timeout").mockReturnValue(AbortSignal.abort(ownedReason));
+      const foreignError = new DOMException("foreign failure", errorName);
+      const fetchImpl = vi.fn(async () => {
+        throw foreignError;
+      });
+      const { resolveCopilotApiToken } = await import("./provider-auth.js");
+
+      await expect(
+        resolveCopilotApiToken({
+          githubToken: TEST_GITHUB_TOKEN,
+          fetchImpl,
+          cachePath: "/tmp/copilot-token-foreign-error.json",
+          loadJsonFileImpl: () => undefined,
+          saveJsonFileImpl: () => {},
+        }),
+      ).rejects.toBe(foreignError);
+    });
+  }
+
+  it("returns a valid cached token without creating a deadline or fetching", async () => {
+    vi.resetModules();
+
+    const timeout = vi.spyOn(AbortSignal, "timeout");
+    const fetchImpl = vi.fn();
+    const { COPILOT_INTEGRATION_ID, resolveCopilotApiToken } = await import("./provider-auth.js");
+    const cachedValue = TEST_CACHED_COPILOT_TOKEN;
+
+    const result = await resolveCopilotApiToken({
+      githubToken: TEST_GITHUB_TOKEN,
+      fetchImpl: fetchImpl as typeof fetch,
+      cachePath: "/tmp/copilot-token-cache-hit.json",
+      loadJsonFileImpl: () => ({
+        token: cachedValue,
+        expiresAt: Date.now() + 60 * 60 * 1000,
+        updatedAt: Date.now(),
+        integrationId: COPILOT_INTEGRATION_ID,
+      }),
+      saveJsonFileImpl: () => {},
+    });
+
+    expect(result.source).toBe("cache:/tmp/copilot-token-cache-hit.json");
+    expect(timeout).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("times out while reading a stalled HTTP response body", async () => {
+    vi.resetModules();
+
+    const realTimeout = AbortSignal.timeout.bind(AbortSignal);
+    vi.spyOn(AbortSignal, "timeout").mockImplementation((timeoutMs) => {
+      expect(timeoutMs).toBe(30_000);
+      return realTimeout(250);
+    });
+
+    await withPartialCopilotResponse(async (port) => {
+      const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+        return await fetch(`http://127.0.0.1:${port}/token`, init);
+      });
+      const { resolveCopilotApiToken } = await import("./provider-auth.js");
+      let rejection: unknown;
+
+      try {
+        await resolveCopilotApiToken({
+          githubToken: TEST_GITHUB_TOKEN,
+          fetchImpl: fetchImpl as typeof fetch,
+          cachePath: "/tmp/copilot-token-partial-body.json",
+          loadJsonFileImpl: () => undefined,
+          saveJsonFileImpl: () => {
+            throw new Error("should not save timed-out token");
+          },
+        });
+      } catch (error) {
+        rejection = error;
+      }
+
+      const signal = fetchImpl.mock.calls[0]?.[1]?.signal;
+      expect(rejection).toMatchObject({
+        message: "Copilot token exchange failed: timed out after 30000ms",
+      });
+      expect((rejection as Error & { cause?: unknown }).cause).toBe(signal?.reason);
+      expect(signal?.aborted).toBe(true);
+    });
   });
 });
 

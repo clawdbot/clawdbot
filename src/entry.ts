@@ -3,11 +3,11 @@
 // CLI process entrypoint for OpenClaw command execution.
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { getCommandPathWithRootOptions, hasFlag, isRootHelpInvocation } from "./cli/argv.js";
+import { isRootHelpInvocation } from "./cli/argv.js";
 import { parseCliContainerArgs, resolveCliContainerTarget } from "./cli/container-target.js";
 import {
-  resolvePrecomputedSubcommandHelpCommand,
-  type PrecomputedSubcommandHelpName,
+  tryOutputPrecomputedCommandHelp,
+  type PrecomputedCommandHelpDeps,
 } from "./cli/precomputed-help.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
 import type { RootHelpRenderOptions } from "./cli/program/root-help.js";
@@ -29,9 +29,6 @@ const ENTRY_WRAPPER_PAIRS = [
   { wrapperBasename: "openclaw.mjs", entryBasename: "entry.js" },
   { wrapperBasename: "openclaw.js", entryBasename: "entry.js" },
 ] as const;
-
-type PrecomputedCommandHelpName = "browser" | "secrets" | "nodes";
-type OutputPrecomputedHelpText = () => boolean;
 
 const loadRootHelpLiveConfigModule = async () => await import("./cli/root-help-live-config.js");
 const loadRootHelpMetadataModule = async () => await import("./cli/root-help-metadata.js");
@@ -184,85 +181,17 @@ export async function tryHandleRootHelpFastPath(
   }
 }
 
-function resolvePrecomputedCommandHelpName(argv: string[]): PrecomputedCommandHelpName | null {
-  if (!hasFlag(argv, "--help") && !hasFlag(argv, "-h")) {
-    return null;
-  }
-  const commandPath = getCommandPathWithRootOptions(argv, 2);
-  if (commandPath.length !== 1) {
-    return null;
-  }
-  const [commandName] = commandPath;
-  if (commandName === "browser" || commandName === "secrets" || commandName === "nodes") {
-    return commandName;
-  }
-  return null;
-}
-
-function resolvePrecomputedSubcommandHelpName(
-  argv: string[],
-): PrecomputedSubcommandHelpName | null {
-  return resolvePrecomputedSubcommandHelpCommand(argv);
-}
-
 export async function tryHandlePrecomputedCommandHelpFastPath(
   argv: string[],
-  deps: {
-    outputPrecomputedBrowserHelpText?: OutputPrecomputedHelpText;
-    outputPrecomputedSecretsHelpText?: OutputPrecomputedHelpText;
-    outputPrecomputedNodesHelpText?: OutputPrecomputedHelpText;
-    outputPrecomputedSubcommandHelpText?: (commandName: string) => boolean;
-    loadRootHelpRenderOptionsForConfigSensitivePlugins?: (
-      env?: NodeJS.ProcessEnv,
-    ) => Promise<RootHelpRenderOptions | null>;
-    env?: NodeJS.ProcessEnv;
-  } = {},
+  deps: PrecomputedCommandHelpDeps = {},
 ): Promise<boolean> {
   const env = deps.env ?? process.env;
-  if (env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH === "1") {
-    return false;
-  }
   if (resolveCliContainerTarget(argv, env)) {
-    return false;
-  }
-  const commandName = resolvePrecomputedCommandHelpName(argv);
-  const subcommandName = commandName ? null : resolvePrecomputedSubcommandHelpName(argv);
-  if (!commandName && !subcommandName) {
     return false;
   }
 
   try {
-    if (subcommandName) {
-      const outputPrecomputedSubcommandHelpText =
-        deps.outputPrecomputedSubcommandHelpText ??
-        (await loadRootHelpMetadataModule()).outputPrecomputedSubcommandHelpText;
-      return outputPrecomputedSubcommandHelpText(subcommandName);
-    }
-    if (commandName === "nodes") {
-      const loadRootHelpRenderOptionsForConfigSensitivePlugins =
-        deps.loadRootHelpRenderOptionsForConfigSensitivePlugins ??
-        (await loadRootHelpLiveConfigModule()).loadRootHelpRenderOptionsForConfigSensitivePlugins;
-      const liveRootHelpOptions = await loadRootHelpRenderOptionsForConfigSensitivePlugins(env);
-      if (liveRootHelpOptions) {
-        return false;
-      }
-    }
-    if (commandName === "browser") {
-      const outputPrecomputedBrowserHelpText =
-        deps.outputPrecomputedBrowserHelpText ??
-        (await loadRootHelpMetadataModule()).outputPrecomputedBrowserHelpText;
-      return outputPrecomputedBrowserHelpText();
-    }
-    if (commandName === "secrets") {
-      const outputPrecomputedSecretsHelpText =
-        deps.outputPrecomputedSecretsHelpText ??
-        (await loadRootHelpMetadataModule()).outputPrecomputedSecretsHelpText;
-      return outputPrecomputedSecretsHelpText();
-    }
-    const outputPrecomputedNodesHelpText =
-      deps.outputPrecomputedNodesHelpText ??
-      (await loadRootHelpMetadataModule()).outputPrecomputedNodesHelpText;
-    return outputPrecomputedNodesHelpText();
+    return await tryOutputPrecomputedCommandHelp(argv, { ...deps, env });
   } catch {
     return false;
   }

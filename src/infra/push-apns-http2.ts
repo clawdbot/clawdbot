@@ -20,7 +20,7 @@ const APNS_AUTHORITIES = new Set([
 type ApnsAuthority = "https://api.push.apple.com" | "https://api.sandbox.push.apple.com";
 
 export const APNS_HTTP2_CANCEL_CODE = http2.constants.NGHTTP2_CANCEL;
-export const APNS_RESPONSE_BODY_MAX_BYTES = 8192;
+const APNS_RESPONSE_BODY_MAX_BYTES = 8192;
 const APNS_HTTP2_MIN_TIMEOUT_MS = 1000;
 
 export type ApnsResponseBodyCapture = {

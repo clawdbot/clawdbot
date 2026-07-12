@@ -190,4 +190,12 @@ describe("fetchClawHubPromotionsFeed", () => {
     const init = fetchImpl.mock.calls[0]?.[1] as RequestInit;
     expect(new Headers(init?.headers).get("if-none-match")).toBe('"seq-3"');
   });
+
+  it("does not extend the interactive feed timeout with transient retries", async () => {
+    const fetchImpl = vi.fn().mockRejectedValue(new Error("offline"));
+
+    await expect(fetchClawHubPromotionsFeed({ fetchImpl })).rejects.toThrow("offline");
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
 });

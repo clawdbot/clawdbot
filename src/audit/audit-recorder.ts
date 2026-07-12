@@ -59,7 +59,3 @@ export function createAuditEventRecorder(options: {
     },
   };
 }
-
-export function resetAuditEventRecorderForTest(): void {
-  persistenceFailureWarned = false;
-}

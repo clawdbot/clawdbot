@@ -4846,6 +4846,24 @@ describe("qa mock openai server", () => {
     expect(ids).toContain("gpt-4o-transcribe");
   });
 
+  it("advertises selected target-era models on /v1/models", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+      modelRefs: ["mock-openai/gpt-5.5", "mock-openai/gpt-5.5-alt"],
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/models`);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { data: Array<{ id: string }> };
+    expect(body.data.map((entry) => entry.id)).toEqual(
+      expect.arrayContaining(["gpt-5.5", "gpt-5.5-alt", "gpt-image-1"]),
+    );
+  });
+
   it("serves deterministic OpenAI-compatible audio transcription responses", async () => {
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",

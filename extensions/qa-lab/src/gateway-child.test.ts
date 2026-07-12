@@ -8,6 +8,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   testing,
+  buildQaForcedRuntimeEnvPatch,
   buildQaRuntimeEnv,
   resolveQaControlUiRoot,
   startQaGatewayChild,
@@ -97,6 +98,34 @@ function requireAuthProfile(
   }
   return profile;
 }
+
+describe("forced runtime environment", () => {
+  it("pins forced Codex mock runs to the managed provider endpoint", () => {
+    expect(
+      buildQaForcedRuntimeEnvPatch({
+        forcedRuntime: "codex",
+        providerMode: "mock-openai",
+        providerBaseUrl: "http://127.0.0.1:44080/v1/",
+      }),
+    ).toEqual({
+      OPENCLAW_BUILD_PRIVATE_QA: "1",
+      OPENCLAW_QA_FORCE_RUNTIME: "codex",
+      OPENCLAW_CODEX_APP_SERVER_ARGS:
+        "app-server -c openai_base_url=http://127.0.0.1:44080/v1 --listen stdio://",
+      OPENAI_API_KEY: ["qa", "mock", "openai", "key"].join("-"),
+      CODEX_API_KEY: ["qa", "mock", "openai", "key"].join("-"),
+    });
+  });
+
+  it("fails closed when a forced Codex mock run lacks its managed endpoint", () => {
+    expect(() =>
+      buildQaForcedRuntimeEnvPatch({
+        forcedRuntime: "codex",
+        providerMode: "mock-openai",
+      }),
+    ).toThrow("forced Codex mock QA requires the managed mock provider URL");
+  });
+});
 
 function requireSsrFetchCall(index = 0): SsrFetchCall {
   const call = fetchWithSsrFGuardMock.mock.calls[index];

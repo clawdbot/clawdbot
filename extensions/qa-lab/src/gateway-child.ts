@@ -71,6 +71,7 @@ const QA_GATEWAY_CHILD_STARTUP_MAX_ATTEMPTS = 5;
 const QA_GATEWAY_CHILD_RPC_STARTUP_TIMEOUT_MS = 30_000;
 const QA_GATEWAY_CHILD_RPC_RETRY_HEALTH_TIMEOUT_MS = 60_000;
 const QA_GATEWAY_CHILD_RESTART_BOUNDARY_TIMEOUT_MS = 90_000;
+const QA_MOCK_OPENAI_API_KEY = ["qa", "mock", "openai", "key"].join("-");
 const QA_GATEWAY_CHILD_BLOCKED_SECRET_ENV_VARS = Object.freeze([
   "OPENCLAW_QA_CONVEX_SECRET_CI",
   "OPENCLAW_QA_CONVEX_SECRET_MAINTAINER",
@@ -397,6 +398,31 @@ export function buildQaRuntimeEnv(params: {
   delete normalizedEnv[QA_LIVE_ANTHROPIC_SETUP_TOKEN_ENV];
   delete normalizedEnv[QA_LIVE_SETUP_TOKEN_VALUE_ENV];
   return scrubQaGatewayChildSecretEnv(normalizedEnv);
+}
+
+export function buildQaForcedRuntimeEnvPatch(params: {
+  forcedRuntime?: RuntimeId;
+  providerMode: QaProviderMode;
+  providerBaseUrl?: string;
+}): NodeJS.ProcessEnv | undefined {
+  if (!params.forcedRuntime) {
+    return undefined;
+  }
+  const patch: NodeJS.ProcessEnv = {
+    OPENCLAW_BUILD_PRIVATE_QA: "1",
+    OPENCLAW_QA_FORCE_RUNTIME: params.forcedRuntime,
+  };
+  if (params.forcedRuntime !== "codex" || params.providerMode !== "mock-openai") {
+    return patch;
+  }
+  const providerBaseUrl = params.providerBaseUrl?.trim().replace(/\/+$/u, "");
+  if (!providerBaseUrl) {
+    throw new Error("forced Codex mock QA requires the managed mock provider URL");
+  }
+  patch.OPENCLAW_CODEX_APP_SERVER_ARGS = `app-server -c openai_base_url=${providerBaseUrl} --listen stdio://`;
+  patch.OPENAI_API_KEY = QA_MOCK_OPENAI_API_KEY;
+  patch.CODEX_API_KEY = QA_MOCK_OPENAI_API_KEY;
+  return patch;
 }
 
 function isRetryableGatewayCallError(details: string): boolean {
@@ -1171,7 +1197,14 @@ export async function startQaGatewayChild(params: {
           stagedBundledPluginsRoot,
           compatibilityHostVersion: stagedPluginRuntime.runtimeHostVersion,
           providerMode,
-          runtimeEnvPatch: params.runtimeEnvPatch,
+          runtimeEnvPatch: {
+            ...params.runtimeEnvPatch,
+            ...buildQaForcedRuntimeEnvPatch({
+              forcedRuntime: params.forcedRuntime,
+              providerMode,
+              providerBaseUrl: params.providerBaseUrl,
+            }),
+          },
           forwardHostHomeForClaudeCli: liveProviderIds.includes("claude-cli"),
           claudeCliAuthMode: params.claudeCliAuthMode,
         });

@@ -85,26 +85,6 @@ export function selectUsageSessionKeys(
   return selected.length === 1 && selected[0] === key ? [] : [key];
 }
 
-const QUERY_KEYS = new Set([
-  "agent",
-  "channel",
-  "chat",
-  "provider",
-  "model",
-  "tool",
-  "label",
-  "key",
-  "session",
-  "id",
-  "has",
-  "mintokens",
-  "maxtokens",
-  "mincost",
-  "maxcost",
-  "minmessages",
-  "maxmessages",
-]);
-
 const normalizeQueryText = (value: string): string => normalizeLowercaseStringOrEmpty(value);
 
 const globToRegex = (pattern: string): RegExp => {
@@ -199,6 +179,48 @@ const getSessionModels = (session: UsageSessionQueryTarget): string[] => {
 const getSessionTools = (session: UsageSessionQueryTarget): string[] =>
   (session.usage?.toolUsage?.tools ?? []).map((tool) => normalizeLowercaseStringOrEmpty(tool.name));
 
+type UsageQueryPredicate = (session: UsageSessionQueryTarget) => boolean;
+
+const HAS_PREDICATES: Readonly<Record<string, UsageQueryPredicate>> = {
+  tools: (session) => (session.usage?.toolUsage?.totalCalls ?? 0) > 0,
+  errors: (session) => (session.usage?.messageCounts?.errors ?? 0) > 0,
+  context: (session) => Boolean(session.contextWeight),
+  usage: (session) => Boolean(session.usage),
+  model: (session) => getSessionModels(session).length > 0,
+  provider: (session) => getSessionProviders(session).length > 0,
+};
+
+type NumericQuerySpec = readonly [
+  value: (session: UsageSessionQueryTarget) => number,
+  matches: (value: number, threshold: number) => boolean,
+];
+
+const atLeast = (value: number, threshold: number): boolean => value >= threshold;
+const atMost = (value: number, threshold: number): boolean => value <= threshold;
+const NUMERIC_QUERY_SPECS: Readonly<Record<string, NumericQuerySpec>> = {
+  mintokens: [(session) => session.usage?.totalTokens ?? 0, atLeast],
+  maxtokens: [(session) => session.usage?.totalTokens ?? 0, atMost],
+  mincost: [(session) => session.usage?.totalCost ?? 0, atLeast],
+  maxcost: [(session) => session.usage?.totalCost ?? 0, atMost],
+  minmessages: [(session) => session.usage?.messageCounts?.total ?? 0, atLeast],
+  maxmessages: [(session) => session.usage?.messageCounts?.total ?? 0, atMost],
+};
+
+const QUERY_KEYS = new Set([
+  "agent",
+  "channel",
+  "chat",
+  "provider",
+  "model",
+  "tool",
+  "label",
+  "key",
+  "session",
+  "id",
+  "has",
+  ...Object.keys(NUMERIC_QUERY_SPECS),
+]);
+
 const matchesUsageQuery = (session: UsageSessionQueryTarget, term: UsageQueryTerm): boolean => {
   const value = normalizeQueryText(term.value ?? "");
   if (!value) {
@@ -237,68 +259,21 @@ const matchesUsageQuery = (session: UsageSessionQueryTarget, term: UsageQueryTer
         normalizeLowercaseStringOrEmpty(session.key).includes(value) ||
         normalizeLowercaseStringOrEmpty(session.sessionId).includes(value)
       );
-    case "has":
-      switch (value) {
-        case "tools":
-          return (session.usage?.toolUsage?.totalCalls ?? 0) > 0;
-        case "errors":
-          return (session.usage?.messageCounts?.errors ?? 0) > 0;
-        case "context":
-          return Boolean(session.contextWeight);
-        case "usage":
-          return Boolean(session.usage);
-        case "model":
-          return getSessionModels(session).length > 0;
-        case "provider":
-          return getSessionProviders(session).length > 0;
-        default:
-          return true;
-      }
-    case "mintokens": {
-      const threshold = parseQueryNumber(value);
-      if (threshold === null) {
-        return true;
-      }
-      return (session.usage?.totalTokens ?? 0) >= threshold;
+    case "has": {
+      const predicate = Object.hasOwn(HAS_PREDICATES, value) ? HAS_PREDICATES[value] : undefined;
+      return predicate?.(session) ?? true;
     }
-    case "maxtokens": {
-      const threshold = parseQueryNumber(value);
-      if (threshold === null) {
-        return true;
-      }
-      return (session.usage?.totalTokens ?? 0) <= threshold;
-    }
-    case "mincost": {
-      const threshold = parseQueryNumber(value);
-      if (threshold === null) {
-        return true;
-      }
-      return (session.usage?.totalCost ?? 0) >= threshold;
-    }
-    case "maxcost": {
-      const threshold = parseQueryNumber(value);
-      if (threshold === null) {
-        return true;
-      }
-      return (session.usage?.totalCost ?? 0) <= threshold;
-    }
-    case "minmessages": {
-      const threshold = parseQueryNumber(value);
-      if (threshold === null) {
-        return true;
-      }
-      return (session.usage?.messageCounts?.total ?? 0) >= threshold;
-    }
-    case "maxmessages": {
-      const threshold = parseQueryNumber(value);
-      if (threshold === null) {
-        return true;
-      }
-      return (session.usage?.messageCounts?.total ?? 0) <= threshold;
-    }
-    default:
-      return true;
   }
+
+  const numericSpec = Object.hasOwn(NUMERIC_QUERY_SPECS, key)
+    ? NUMERIC_QUERY_SPECS[key]
+    : undefined;
+  if (!numericSpec) {
+    return true;
+  }
+  const threshold = parseQueryNumber(value);
+  const [getValue, matches] = numericSpec;
+  return threshold === null || matches(getValue(session), threshold);
 };
 
 export const filterSessionsByQuery = <TSession extends UsageSessionQueryTarget>(
@@ -323,20 +298,19 @@ export const filterSessionsByQuery = <TSession extends UsageSessionQueryTarget>(
     if (term.value === "") {
       warnings.push(`Missing value for ${term.key}`);
     }
-    if (normalizedKey === "has") {
-      const allowed = new Set(["tools", "errors", "context", "usage", "model", "provider"]);
-      if (term.value && !allowed.has(normalizeQueryText(term.value))) {
-        warnings.push(`Unknown has:${term.value}`);
-      }
+    if (
+      normalizedKey === "has" &&
+      term.value &&
+      !Object.hasOwn(HAS_PREDICATES, normalizeQueryText(term.value))
+    ) {
+      warnings.push(`Unknown has:${term.value}`);
     }
     if (
-      ["mintokens", "maxtokens", "mincost", "maxcost", "minmessages", "maxmessages"].includes(
-        normalizedKey,
-      )
+      Object.hasOwn(NUMERIC_QUERY_SPECS, normalizedKey) &&
+      term.value &&
+      parseQueryNumber(term.value) === null
     ) {
-      if (term.value && parseQueryNumber(term.value) === null) {
-        warnings.push(`Invalid number for ${term.key}`);
-      }
+      warnings.push(`Invalid number for ${term.key}`);
     }
   }
 

@@ -1758,7 +1758,9 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
   let runError: unknown;
   try {
     writeQaSuiteProgress(progressEnabled, `provider start: ${providerMode}`);
-    const activeMock = await startQaProviderServer(providerMode);
+    const activeMock = await startQaProviderServer(providerMode, {
+      modelRefs: [primaryModel, alternateModel],
+    });
     mock = activeMock;
     writeQaSuiteProgress(
       progressEnabled,

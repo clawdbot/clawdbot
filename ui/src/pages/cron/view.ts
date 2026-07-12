@@ -868,6 +868,7 @@ function renderDetailView(props: CronProps, mode: CronPanelMode) {
           type="button"
           class="cron-back"
           data-test-id="cron-back"
+          ?disabled=${props.busy}
           @click=${props.onClosePanel}
         >
           ${icon("arrowLeft")} ${t("cron.detail.back")}
@@ -988,7 +989,7 @@ function renderEditor(props: CronProps, mode: CronPanelMode) {
         : t("cron.form.fixFieldsPlural", { count: String(blockingFields.length) })
       : "";
   return html`
-    <div class="cron-editor">
+    <fieldset class="cron-editor" ?disabled=${props.busy} aria-busy=${String(props.busy)}>
       ${renderPromptCard(props, { payloadLocked, isAgentTurn })}
       <div class="cron-editor-grid">
         ${renderGeneralCard(props)} ${renderScheduleCard(props)}
@@ -1054,7 +1055,7 @@ function renderEditor(props: CronProps, mode: CronPanelMode) {
           ? html` <div class="cron-submit-reason" aria-live="polite">${submitDisabledReason}</div> `
           : nothing}
       </div>
-    </div>
+    </fieldset>
   `;
 }
 

@@ -215,7 +215,7 @@ async function buildClawHubQueryError(
   request: Awaited<ReturnType<typeof fetchClawHubRequest>>,
 ): Promise<Error> {
   const { response } = request;
-  let body = "";
+  let body: string;
   try {
     body = (
       await readBoundedResponseText(response, message, CLAWHUB_ERROR_BODY_MAX_BYTES, {

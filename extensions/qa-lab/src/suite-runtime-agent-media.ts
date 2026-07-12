@@ -151,6 +151,8 @@ async function ensureImageGenerationConfigured(env: QaSuiteRuntimeEnv) {
       providerBaseUrl: env.mock ? `${env.mock.baseUrl}/v1` : undefined,
       requiredPluginIds: env.transport.requiredPluginIds,
       existingPluginIds: readPluginAllow(snapshot.config),
+      forcedRuntime:
+        env.gateway?.runtimeEnv?.OPENCLAW_QA_FORCE_RUNTIME === "codex" ? "codex" : undefined,
     }),
   });
   await waitForGatewayHealthy(env);

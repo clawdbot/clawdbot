@@ -264,6 +264,18 @@ type MissingPluginInstallPayload = {
 
 type PostUpdatePluginWarning = NonNullable<PostCorePluginUpdateResult["warnings"]>[number];
 
+export function resolvePostSyncPluginUpdateSkipIds(params: {
+  switchedToClawHub: readonly string[];
+  switchedToNpm: readonly string[];
+  repairedMissingPayloadIds: ReadonlySet<string>;
+}): Set<string> {
+  return new Set([
+    ...params.switchedToClawHub,
+    ...params.switchedToNpm,
+    ...params.repairedMissingPayloadIds,
+  ]);
+}
+
 function isClawHubTrustNotice(message: string): boolean {
   const trimmed = stripAnsi(message).trimStart();
   return (
@@ -2324,7 +2336,11 @@ export async function updatePluginsAfterCoreUpdate(params: {
     timeoutMs: params.timeoutMs,
     updateChannel: pluginUpdateChannel,
     coreVersion: coreVersion ?? undefined,
-    skipIds: new Set([...syncResult.summary.switchedToNpm, ...missingPayloadIdSet]),
+    skipIds: resolvePostSyncPluginUpdateSkipIds({
+      switchedToClawHub: syncResult.summary.switchedToClawHub,
+      switchedToNpm: syncResult.summary.switchedToNpm,
+      repairedMissingPayloadIds: missingPayloadIdSet,
+    }),
     skipDisabledPlugins: true,
     syncOfficialPluginInstalls: true,
     disableOnFailure: true,

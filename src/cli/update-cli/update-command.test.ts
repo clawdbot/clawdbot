@@ -18,6 +18,7 @@ import {
   resolvePostCoreUpdateChildStdio,
   resolvePostUpdateServiceStateReadEnv,
   resolvePostInstallDoctorEnv,
+  resolvePostSyncPluginUpdateSkipIds,
   shouldPrepareUpdatedInstallRestart,
   resolveUpdatedGatewayRestartPort,
   shouldUseLegacyProcessRestartAfterUpdate,
@@ -538,6 +539,18 @@ describe("collectMissingPluginInstallPayloads", () => {
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("resolvePostSyncPluginUpdateSkipIds", () => {
+  it("skips plugins already switched through ClawHub or npm and repaired payloads", () => {
+    expect(
+      resolvePostSyncPluginUpdateSkipIds({
+        switchedToClawHub: ["whatsapp"],
+        switchedToNpm: ["voice-call"],
+        repairedMissingPayloadIds: new Set(["telegram"]),
+      }),
+    ).toStrictEqual(new Set(["whatsapp", "voice-call", "telegram"]));
   });
 });
 

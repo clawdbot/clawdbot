@@ -897,6 +897,44 @@ describe("openai image generation provider", () => {
     expect(result.images).toHaveLength(1);
   });
 
+  it("uses a model-specific QA image endpoint without changing the text provider route", async () => {
+    mockGeneratedPngResponse();
+    vi.stubEnv("OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER", "1");
+
+    const provider = buildOpenAIImageGenerationProvider();
+    await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-1",
+      prompt: "Draw a QA lighthouse",
+      cfg: {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [
+                {
+                  id: "gpt-image-1",
+                  name: "gpt-image-1",
+                  api: "openai-responses",
+                  baseUrl: "http://127.0.0.1:44080/v1",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128_000,
+                  maxTokens: 4096,
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+
+    expect(httpConfigCall().baseUrl).toBe("http://127.0.0.1:44080/v1");
+    expect(jsonRequestCall().url).toBe("http://127.0.0.1:44080/v1/images/generations");
+    expect(jsonRequestCall().allowPrivateNetwork).toBe(true);
+  });
+
   it("forwards edit count, custom size, and multiple input images", async () => {
     mockGeneratedPngResponse();
 

@@ -424,6 +424,7 @@ type ClawHubRequestParams = {
   search?: Record<string, string | undefined>;
   fetchImpl?: FetchLike;
   skipAuth?: boolean;
+  retryTransientReads?: boolean;
   headers?: Record<string, string>;
 };
 
@@ -729,7 +730,7 @@ async function clawhubRequest(
 
   // A write may have committed before its response failed, so only replay
   // idempotent reads across transient ClawHub transport failures.
-  if ((params.method ?? "GET") !== "GET") {
+  if ((params.method ?? "GET") !== "GET" || params.retryTransientReads === false) {
     return await request();
   }
   return await retryClawHubRead(request, {
@@ -1967,6 +1968,9 @@ export async function fetchClawHubPromotionsFeed(
     path: "/api/v1/feeds/promotions",
     timeoutMs: params.timeoutMs,
     fetchImpl: params.fetchImpl,
+    // This passive refresh runs inline from interactive commands. Its cache
+    // cadence owns retries; shared backoff would turn the 2.5s cap into ~24s.
+    retryTransientReads: false,
     // Public CDN-served snapshot; an Authorization header would only
     // fragment edge caches.
     skipAuth: true,

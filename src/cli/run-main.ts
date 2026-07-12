@@ -35,21 +35,18 @@ import {
 } from "./gateway-run-argv.js";
 import { hasJsonOutputFlag, withConsoleLogsRoutedToStderrForJson } from "./json-output-mode.js";
 import { flushExitAfterOneShotOutput } from "./one-shot-exit.js";
+import { tryOutputPrecomputedCommandHelp } from "./precomputed-help.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
 import { formatCliCommandSuggestions } from "./program/command-suggestions.js";
 import { getCoreCliCommandNames } from "./program/core-command-descriptors.js";
 import { getSubCliEntries } from "./program/subcli-descriptors.js";
 import {
-  resolvePrecomputedSubcommandHelpFastPath,
   resolveMissingPluginCommandMessage as resolveMissingPluginCommandMessageFromPolicy,
   rewriteUpdateFlagArgv,
   shouldHandleBareRoot,
   shouldEnsureCliPath,
   shouldStartProxyForCli,
-  shouldUseBrowserHelpFastPath,
-  shouldUseNodesHelpFastPath,
   shouldUseRootHelpFastPath,
-  shouldUseSecretsHelpFastPath,
   shouldUseSetupOnboardConfigureHelpFastPath,
 } from "./run-main-policy.js";
 import { registerSignalExitBarrier, waitForSignalExitBarriers } from "./signal-exit-barrier.js";
@@ -57,15 +54,11 @@ import { createGatewayStartupTrace } from "./startup-trace.js";
 import { normalizeWindowsArgv } from "./windows-argv.js";
 
 export {
-  resolvePrecomputedSubcommandHelpFastPath,
   rewriteUpdateFlagArgv,
   shouldHandleBareRoot,
   shouldEnsureCliPath,
   shouldStartProxyForCli,
-  shouldUseBrowserHelpFastPath,
-  shouldUseNodesHelpFastPath,
   shouldUseRootHelpFastPath,
-  shouldUseSecretsHelpFastPath,
   shouldUseSetupOnboardConfigureHelpFastPath,
 } from "./run-main-policy.js";
 
@@ -1136,11 +1129,8 @@ export async function runCli(argv: string[] = process.argv) {
       return;
     }
 
-    if (shouldUseBrowserHelpFastPath(normalizedArgv)) {
-      const { outputPrecomputedBrowserHelpText } = await loadRootHelpMetadataModule();
-      if (outputPrecomputedBrowserHelpText()) {
-        return;
-      }
+    if (await tryOutputPrecomputedCommandHelp(normalizedArgv)) {
+      return;
     }
 
     if (shouldUseSetupOnboardConfigureHelpFastPath(normalizedArgv)) {
@@ -1148,35 +1138,6 @@ export async function runCli(argv: string[] = process.argv) {
         await import("./setup-onboard-configure-help-fast-path.js");
       if (await tryOutputSetupOnboardConfigureHelp(normalizedArgv)) {
         return;
-      }
-    }
-
-    if (shouldUseSecretsHelpFastPath(normalizedArgv)) {
-      const { outputPrecomputedSecretsHelpText } = await loadRootHelpMetadataModule();
-      if (outputPrecomputedSecretsHelpText()) {
-        return;
-      }
-    }
-
-    const precomputedSubcommandHelp = resolvePrecomputedSubcommandHelpFastPath(normalizedArgv);
-    if (precomputedSubcommandHelp) {
-      const { outputPrecomputedSubcommandHelpText } = await loadRootHelpMetadataModule();
-      if (outputPrecomputedSubcommandHelpText(precomputedSubcommandHelp)) {
-        return;
-      }
-    }
-
-    if (shouldUseNodesHelpFastPath(normalizedArgv)) {
-      const { loadRootHelpRenderOptionsForConfigSensitivePlugins } =
-        await loadRootHelpLiveConfigModule();
-      const liveRootHelpOptions = await loadRootHelpRenderOptionsForConfigSensitivePlugins(
-        process.env,
-      );
-      if (!liveRootHelpOptions) {
-        const { outputPrecomputedNodesHelpText } = await loadRootHelpMetadataModule();
-        if (outputPrecomputedNodesHelpText()) {
-          return;
-        }
       }
     }
 

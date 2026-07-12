@@ -597,6 +597,24 @@ describe("web session", () => {
     await expect(promise).rejects.toBeInstanceOf(Error);
   });
 
+  it("preserves the underlying Baileys disconnect error", async () => {
+    const ev = new EventEmitter();
+    const promise = waitForWaConnection(
+      { ev } as unknown as ReturnType<typeof baileys.makeWASocket>,
+      { timeout: "none" },
+    );
+    const disconnectError = Object.assign(new Error("logged out"), {
+      output: { statusCode: 401 },
+    });
+    ev.emit("connection.update", {
+      connection: "close",
+      lastDisconnect: { date: new Date(), error: disconnectError },
+    });
+    const error = await promise.catch((caught: unknown) => caught);
+    expect(error).toBe(disconnectError);
+    expect(error).toMatchObject({ message: "logged out", output: { statusCode: 401 } });
+  });
+
   it("rejects after timeout with no connection event", async () => {
     vi.useFakeTimers();
     const ev = new EventEmitter();

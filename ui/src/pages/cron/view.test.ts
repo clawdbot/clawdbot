@@ -594,6 +594,23 @@ describe("cron view editor", () => {
     expect(onDetailTabChange).toHaveBeenCalledWith("history");
   });
 
+  it("locks the editor and back navigation while a save is pending", () => {
+    const job = createJob("job-1", { name: "Nightly digest" });
+    const container = renderView({ jobs: [job], editingJobId: "job-1", busy: true });
+
+    const editor = getElement(container, ".cron-editor", HTMLFieldSetElement);
+    const name = getElement(container, "#cron-name", HTMLInputElement);
+    const back = getElement(container, '[data-test-id="cron-back"]', HTMLButtonElement);
+    const submit = getElement(container, '[data-test-id="cron-submit"]', HTMLButtonElement);
+
+    expect(editor.disabled).toBe(true);
+    expect(editor.getAttribute("aria-busy")).toBe("true");
+    expect(name.matches(":disabled")).toBe(true);
+    expect(back.disabled).toBe(true);
+    expect(submit.disabled).toBe(true);
+    expect(submit.textContent).toContain("Saving");
+  });
+
   it("shows run history instead of the editor on the history tab", () => {
     const job = createJob("job-1", { name: "Nightly digest" });
     const container = renderView({

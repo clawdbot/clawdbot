@@ -143,6 +143,7 @@ export const DEFAULT_COPILOT_API_BASE_URL = "https://api.individual.githubcopilo
 const COPILOT_PROVIDER_ID = "github-copilot";
 
 const DEFAULT_GITHUB_COPILOT_DOMAIN = "github.com";
+const COPILOT_TOKEN_EXCHANGE_TIMEOUT_MS = 30_000;
 
 // Matches a data-residency GHE tenant root (`<tenant>.ghe.com`, single label).
 // GitHub defines a GHE.com enterprise as a dedicated `SUBDOMAIN.ghe.com` domain;
@@ -446,24 +447,37 @@ export async function resolveCopilotApiToken(params: {
   }
 
   const fetchImpl = params.fetchImpl ?? fetch;
-  const res = await fetchImpl(tokenUrl, {
-    method: "GET",
-    headers: {
-      Accept: "application/json",
-      Authorization: `Bearer ${params.githubToken}`,
-      "Copilot-Integration-Id": COPILOT_INTEGRATION_ID,
-      ...buildCopilotIdeHeaders({ includeApiVersion: true }),
-    },
-  });
+  const signal = AbortSignal.timeout(COPILOT_TOKEN_EXCHANGE_TIMEOUT_MS);
+  let json: ReturnType<typeof parseCopilotTokenResponse>;
+  try {
+    const res = await fetchImpl(tokenUrl, {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${params.githubToken}`,
+        "Copilot-Integration-Id": COPILOT_INTEGRATION_ID,
+        ...buildCopilotIdeHeaders({ includeApiVersion: true }),
+      },
+      signal,
+    });
 
-  if (!res.ok) {
-    await cancelUnreadResponseBody(res);
-    throw new Error(`Copilot token exchange failed: HTTP ${res.status}`);
+    if (!res.ok) {
+      await cancelUnreadResponseBody(res);
+      throw new Error(`Copilot token exchange failed: HTTP ${res.status}`);
+    }
+
+    json = parseCopilotTokenResponse(await readProviderJsonResponse(res, "github-copilot.token"));
+  } catch (error) {
+    // Normalize only the deadline owned by this exchange. Callers still need
+    // transport aborts and provider failures unchanged for correct recovery.
+    if (signal.aborted && error === signal.reason) {
+      throw new Error(
+        `Copilot token exchange failed: timed out after ${COPILOT_TOKEN_EXCHANGE_TIMEOUT_MS}ms`,
+        { cause: error },
+      );
+    }
+    throw error;
   }
-
-  const json = parseCopilotTokenResponse(
-    await readProviderJsonResponse(res, "github-copilot.token"),
-  );
   const payload: CachedCopilotToken = {
     token: json.token,
     expiresAt: json.expiresAt,

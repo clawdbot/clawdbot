@@ -8,6 +8,7 @@ import { closeQaHttpServer } from "../../bus-server.js";
 import { QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY } from "../../qa-web-search-provider.js";
 import { parseQaDebugRequestCursor } from "../shared/debug-request-cursor.js";
 import { writeJson } from "../shared/http-json.js";
+import { listMockOpenAiServerModelIds } from "../shared/mock-model-config.js";
 
 type ResponsesInputItem = Record<string, unknown>;
 
@@ -3765,6 +3766,7 @@ export async function startQaMockOpenAiServer(params?: {
   host?: string;
   port?: number;
   finalOnlyMarkerPauseMs?: number;
+  modelRefs?: readonly string[];
 }) {
   const host = params?.host ?? "127.0.0.1";
   const finalOnlyMarkerPauseMs = params?.finalOnlyMarkerPauseMs ?? 1_500;
@@ -3797,15 +3799,10 @@ export async function startQaMockOpenAiServer(params?: {
       }
       if (req.method === "GET" && url.pathname === "/v1/models") {
         writeJson(res, 200, {
-          data: [
-            { id: "gpt-5.6-luna", object: "model" },
-            { id: "gpt-5.6-luna-alt", object: "model" },
-            { id: "gpt-image-1", object: "model" },
-            { id: "gpt-4o-transcribe", object: "model" },
-            { id: "text-embedding-3-small", object: "model" },
-            { id: "claude-opus-4-8", object: "model" },
-            { id: "claude-sonnet-4-6", object: "model" },
-          ],
+          data: listMockOpenAiServerModelIds(params?.modelRefs).map((id) => ({
+            id,
+            object: "model",
+          })),
         });
         return;
       }

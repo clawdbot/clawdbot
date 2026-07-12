@@ -108,7 +108,9 @@ export async function startQaLiveLaneGateway(params: {
   mockAuthAgentIds?: readonly string[];
   mutateConfig?: (cfg: OpenClawConfig) => OpenClawConfig;
 }) {
-  const mock = await startQaProviderServer(params.providerMode);
+  const mock = await startQaProviderServer(params.providerMode, {
+    modelRefs: [params.primaryModel, params.alternateModel],
+  });
   try {
     const gateway = await startQaGatewayChild({
       repoRoot: params.repoRoot,
