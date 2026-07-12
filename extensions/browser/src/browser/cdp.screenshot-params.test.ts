@@ -14,7 +14,6 @@ const sentMessages = vi.hoisted(() => {
 // can return different values for the "emulated tab" vs "non-emulated tab" tests.
 const mockState = vi.hoisted(() => ({
   bringToFrontError: undefined as Error | undefined,
-  userAgent: undefined as string | undefined,
   emulationCleared: false,
   emulatedTab: true,
   viewport: { w: 800, h: 600, dpr: 2, sw: 800, sh: 600 } as Record<string, unknown>,
@@ -30,11 +29,6 @@ vi.mock("./cdp.helpers.js", () => ({
     ) => {
       const send = (method: string, params?: Record<string, unknown>) => {
         sentMessages.push({ method, params });
-        if (method === "Browser.getVersion") {
-          return Promise.resolve(
-            mockState.userAgent === undefined ? {} : { userAgent: mockState.userAgent },
-          );
-        }
         if (method === "Page.bringToFront" && mockState.bringToFrontError) {
           return Promise.reject(mockState.bringToFrontError);
         }
@@ -100,7 +94,6 @@ const localProfile: ResolvedBrowserProfile = {
 beforeEach(() => {
   sentMessages.length = 0;
   mockState.bringToFrontError = undefined;
-  mockState.userAgent = undefined;
   mockState.emulationCleared = false;
   mockState.emulatedTab = true;
   mockState.viewport = { w: 800, h: 600, dpr: 2, sw: 800, sh: 600 };
@@ -146,47 +139,24 @@ describe("CDP screenshot params", () => {
     requireSentMessage("Page.captureScreenshot");
   });
 
-  it("does not steal focus on a headed browser (#105357)", async () => {
-    mockState.userAgent =
-      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36";
-
-    await captureScreenshot({ wsUrl: "ws://localhost:9222/devtools/page/X", format: "png" });
+  it("managed headed profile skips activation (headless=false, #105357)", async () => {
+    // The only case that skips activation: a confirmed-headed managed profile.
+    // No UA round-trip — the launch flag is authoritative.
+    await captureScreenshot({
+      wsUrl: "ws://localhost:9222/devtools/page/X",
+      format: "png",
+      headless: false,
+    });
 
     const methods = sentMessages.map((message) => message.method);
     expect(methods).not.toContain("Page.bringToFront");
+    expect(methods).not.toContain("Browser.getVersion");
     expect(methods).toContain("Page.captureScreenshot");
   });
 
-  it("still activates the tab on a headless browser (#105357)", async () => {
-    mockState.userAgent =
-      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/146.0.0.0 Safari/537.36";
-
-    await captureScreenshot({ wsUrl: "ws://localhost:9222/devtools/page/X", format: "png" });
-
-    const methods = sentMessages.map((message) => message.method);
-    expect(methods).toContain("Page.bringToFront");
-    expect(methods.indexOf("Page.bringToFront")).toBeLessThan(
-      methods.indexOf("Page.captureScreenshot"),
-    );
-  });
-
-  it("activates when headed detection is unavailable (safe default, #105357)", async () => {
-    mockState.userAgent = undefined; // Browser.getVersion returns no userAgent
-
-    await captureScreenshot({ wsUrl: "ws://localhost:9222/devtools/page/X", format: "png" });
-
-    const methods = sentMessages.map((message) => message.method);
-    expect(methods).toContain("Page.bringToFront");
-  });
-
-  it("managed headless profile activates even with a custom non-headless UA (#105357)", async () => {
-    // A managed headless Chrome can run with a custom --user-agent (extraArgs),
-    // so a UA sniff would misclassify it as headed and drop the activation that
-    // prevents the background-capture stall (#100857). The authoritative launch
-    // flag must win, and there is no need to re-derive state over CDP.
-    mockState.userAgent =
-      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36";
-
+  it("managed headless profile activates (headless=true, #105357)", async () => {
+    // Managed headless keeps activating to avoid the #100857 background stall,
+    // even if launched with a custom non-headless --user-agent (via extraArgs).
     await captureScreenshot({
       wsUrl: "ws://localhost:9222/devtools/page/X",
       format: "png",
@@ -201,20 +171,18 @@ describe("CDP screenshot params", () => {
     expect(methods).not.toContain("Browser.getVersion");
   });
 
-  it("managed headed profile skips activation even with a headless UA (#105357)", async () => {
-    // The authoritative launch flag also wins the other way: a headed managed
-    // browser never steals the visible tab, regardless of any headless UA.
-    mockState.userAgent =
-      "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/146.0.0.0 Safari/537.36";
-
-    await captureScreenshot({
-      wsUrl: "ws://localhost:9222/devtools/page/X",
-      format: "png",
-      headless: false,
-    });
+  it("attached/external session activates when headless is unknown (#105357)", async () => {
+    // headless=undefined (attached/external): the real state cannot be detected
+    // — a custom --user-agent erases every headless marker — so we activate. This
+    // is the case that would otherwise stall (a headless attached tab with a
+    // spoofed UA). No Browser.getVersion sniff is attempted.
+    await captureScreenshot({ wsUrl: "ws://localhost:9222/devtools/page/X", format: "png" });
 
     const methods = sentMessages.map((message) => message.method);
-    expect(methods).not.toContain("Page.bringToFront");
+    expect(methods).toContain("Page.bringToFront");
+    expect(methods.indexOf("Page.bringToFront")).toBeLessThan(
+      methods.indexOf("Page.captureScreenshot"),
+    );
     expect(methods).not.toContain("Browser.getVersion");
   });
 
