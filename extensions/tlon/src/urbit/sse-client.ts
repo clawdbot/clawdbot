@@ -26,7 +26,12 @@ type UrbitSseOptions = {
   logger?: UrbitSseLogger;
 };
 
+const MAX_SSE_PAYLOAD_BYTES = 16 * 1024 * 1024;
+
 function parseUrbitSsePayload(data: string): { id?: number; json?: unknown; response?: string } {
+  if (Buffer.byteLength(data, "utf8") > MAX_SSE_PAYLOAD_BYTES) {
+    throw new Error("Tlon Urbit SSE payload exceeds 16 MiB limit");
+  }
   try {
     return JSON.parse(data) as { id?: number; json?: unknown; response?: string };
   } catch (cause) {
@@ -232,21 +237,73 @@ export class UrbitSSEClient {
       body instanceof ReadableStream
         ? Readable.fromWeb(body as never)
         : (body as NodeJS.ReadableStream);
+    const decoder = new TextDecoder();
     let buffer = "";
+    let bufferBytes = 0;
+    let pendingDelimiterNewline = false;
+
+    const appendPending = (text: string) => {
+      const previousCodeUnit = buffer.charCodeAt(buffer.length - 1);
+      const firstCodeUnit = text.charCodeAt(0);
+      const joinsSurrogatePair =
+        previousCodeUnit >= 0xd800 &&
+        previousCodeUnit <= 0xdbff &&
+        firstCodeUnit >= 0xdc00 &&
+        firstCodeUnit <= 0xdfff;
+      // Buffer.byteLength counts either lone surrogate as three bytes. When
+      // chunks join a pair, correct the retained total to the combined four bytes.
+      const nextBytes =
+        bufferBytes + Buffer.byteLength(text, "utf8") - (joinsSurrogatePair ? 2 : 0);
+      if (nextBytes > MAX_SSE_PAYLOAD_BYTES) {
+        throw new Error("Tlon Urbit SSE stream buffer exceeded 16 MiB limit");
+      }
+      buffer += text;
+      bufferBytes = nextBytes;
+    };
+    const consumeText = (text: string) => {
+      let offset = 0;
+      if (pendingDelimiterNewline && text.length > 0) {
+        pendingDelimiterNewline = false;
+        if (text.startsWith("\n")) {
+          this.processEvent(buffer);
+          buffer = "";
+          bufferBytes = 0;
+          offset = 1;
+        } else {
+          // A trailing newline stays outside the budget until the next byte
+          // distinguishes an event delimiter from retained event data.
+          appendPending("\n");
+        }
+      }
+      while (offset < text.length) {
+        const eventEnd = text.indexOf("\n\n", offset);
+        if (eventEnd === -1) {
+          const endsWithNewline = text.endsWith("\n");
+          appendPending(text.slice(offset, endsWithNewline ? -1 : undefined));
+          pendingDelimiterNewline = endsWithNewline;
+          return;
+        }
+        appendPending(text.slice(offset, eventEnd));
+        this.processEvent(buffer);
+        buffer = "";
+        bufferBytes = 0;
+        offset = eventEnd + 2;
+      }
+    };
 
     try {
       for await (const chunk of stream) {
         if (this.aborted) {
           break;
         }
-        buffer += chunk.toString();
-        let eventEnd;
-        while ((eventEnd = buffer.indexOf("\n\n")) !== -1) {
-          const eventData = buffer.slice(0, eventEnd);
-          buffer = buffer.slice(eventEnd + 2);
-          this.processEvent(eventData);
+        if (typeof chunk === "string") {
+          consumeText(decoder.decode());
+          consumeText(chunk);
+        } else {
+          consumeText(decoder.decode(chunk as Uint8Array, { stream: true }));
         }
       }
+      consumeText(decoder.decode());
     } finally {
       if (this.streamRelease) {
         const release = this.streamRelease;
