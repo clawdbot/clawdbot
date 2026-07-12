@@ -45,7 +45,7 @@ import {
 const readSchema = Type.Object({
   path: Type.String({ description: "File path; relative/absolute." }),
   offset: Type.Optional(Type.Integer({ minimum: 1, description: "Start line; 1-based." })),
-  limit: Type.Optional(Type.Number({ description: "Max lines." })),
+  limit: Type.Optional(Type.Integer({ description: "Max lines." })),
 });
 
 const ReadTruncationOutputSchema = Type.Object(
