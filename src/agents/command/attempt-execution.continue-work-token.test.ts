@@ -19,11 +19,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
-import {
-  clearSessionStoreCacheForTest,
-  saveSessionStore,
-  type SessionEntry,
-} from "../../config/sessions.js";
+import { clearSessionStoreCacheForTest, type SessionEntry } from "../../config/sessions.js";
+import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetSystemEventsForTest } from "../../infra/system-events.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
@@ -75,8 +72,8 @@ describe("#952 subagent CONTINUE_WORK token self-continuation (token-form parity
 
   function cfgWithStore(): OpenClawConfig {
     return {
-      // Point driveContinuationTurn's store load at the temp store so the
-      // re-drive resolves the subagent session.
+      // Point driveContinuationTurn's SQLite-backed accessor at the temp store
+      // so the re-drive resolves the subagent session.
       session: { store: storePath },
       agents: {
         defaults: {
@@ -120,7 +117,7 @@ describe("#952 subagent CONTINUE_WORK token self-continuation (token-form parity
   async function runTurnOne(token: string) {
     const sessionEntry = { sessionId: "session-embedded", updatedAt: Date.now() } as SessionEntry;
     const sessionStore = { [sessionKey]: sessionEntry };
-    await saveSessionStore(storePath, sessionStore, { skipMaintenance: true });
+    expect(await upsertSessionEntry({ sessionKey, storePath }, sessionEntry)).not.toBeNull();
     clearSessionStoreCacheForTest();
     runEmbeddedAgentMock.mockResolvedValueOnce(tokenRunResult(token));
     return runAgentAttempt({
