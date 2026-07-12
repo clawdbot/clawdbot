@@ -469,8 +469,7 @@ describe("createFeishuWSClient proxy handling", () => {
 
     const options = firstWsClientOptions();
     expect(options.wsConfig).toEqual({
-      PingInterval: 30,
-      PingTimeout: 3,
+      pingTimeout: 3,
     });
   });
 
@@ -493,8 +492,7 @@ describe("createFeishuWSClient proxy handling", () => {
     expect(options.onReconnected).toBe(onReconnected);
     expect(options.onReconnecting).toBe(onReconnecting);
     expect(options.wsConfig).toEqual({
-      PingInterval: 30,
-      PingTimeout: 3,
+      pingTimeout: 3,
     });
   });
 
