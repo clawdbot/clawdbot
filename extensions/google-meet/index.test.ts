@@ -835,6 +835,12 @@ describe("google-meet plugin", () => {
       "https://meet.google.com/abc-defg-hij",
     );
     expect(() => normalizeMeetUrl("https://example.com/abc-defg-hij")).toThrow("meet.google.com");
+    expect(() => normalizeMeetUrl("https://user@meet.google.com/abc-defg-hij")).toThrow(
+      "meet.google.com",
+    );
+    expect(() => normalizeMeetUrl("https://meet.google.com:444/abc-defg-hij")).toThrow(
+      "meet.google.com",
+    );
   });
 
   it("advertises only the googlemeet CLI descriptor", () => {
