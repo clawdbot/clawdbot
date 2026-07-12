@@ -155,7 +155,7 @@ describe("runEmbeddedAgent continuation opts forwarding", () => {
     expect(attemptParams.requestCompactionOpts).toBe(requestCompactionOpts);
   });
 
-  it("forwards both continueWorkOpts and requestCompactionOpts in the same call", async () => {
+  it("forwards callbacks and delegate-drain ownership in the same call", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
 
     const continueWorkOpts = { requestContinuation: () => undefined };
@@ -170,6 +170,7 @@ describe("runEmbeddedAgent continuation opts forwarding", () => {
       provider: "openai",
       model: "gpt-5.4",
       runId: "run-868-both-forward",
+      drainsContinuationDelegateQueue: true,
       continueWorkOpts,
       requestCompactionOpts,
     });
@@ -178,9 +179,11 @@ describe("runEmbeddedAgent continuation opts forwarding", () => {
     const attemptParams = mockedRunEmbeddedAttempt.mock.calls[0]?.[0] as {
       continueWorkOpts?: typeof continueWorkOpts;
       requestCompactionOpts?: typeof requestCompactionOpts;
+      drainsContinuationDelegateQueue?: boolean;
     };
     expect(attemptParams.continueWorkOpts).toBe(continueWorkOpts);
     expect(attemptParams.requestCompactionOpts).toBe(requestCompactionOpts);
+    expect(attemptParams.drainsContinuationDelegateQueue).toBe(true);
   });
 
   it("leaves both undefined when caller omits them", async () => {

@@ -2698,6 +2698,7 @@ async function runEmbeddedAgentInternal(
             // auto-reply/reply/agent-runner-execution.ts:2472 + :2504 and arrive
             // here on the RunEmbeddedAgent params, but were not threaded through
             // to the attempt layer.
+            drainsContinuationDelegateQueue: params.drainsContinuationDelegateQueue,
             continueWorkOpts: params.continueWorkOpts,
             requestCompactionOpts: params.requestCompactionOpts,
             promptCacheKey: params.promptCacheKey,
