@@ -239,6 +239,8 @@ const QA_RELEASE_AUDIT_PROMPT_RE = /release readiness audit for the small projec
 const QA_TOOL_SEARCH_PROMPT_RE = /tool search qa check/i;
 const QA_TOOL_SEARCH_FAILURE_PROMPT_RE = /tool search qa failure/i;
 const QA_MCP_CODE_MODE_PROMPT_RE = /mcp code mode qa check/i;
+const QA_RESTART_CODE_MODE_WAIT_PROMPT_RE = /code mode restart wait qa check/i;
+const QA_RESTART_RECOVERY_PROMPT_RE = /previous turn was interrupted by a gateway restart/i;
 const QA_AUDIO_TRANSCRIPTION_TEXT =
   "Reply with only this exact marker: WHATSAPP_QA_AUDIO_TRANSCRIPT_OK";
 const QA_GROUP_AUDIO_TRANSCRIPTION_TEXT =
@@ -1247,6 +1249,12 @@ function hasDeclaredTool(body: Record<string, unknown>, name: string) {
   return false;
 }
 
+function hasToolDefinition(body: Record<string, unknown>, name: string) {
+  const tools = Array.isArray(body.tools) ? body.tools : [];
+  const dynamicTools = Array.isArray(body.dynamicTools) ? body.dynamicTools : [];
+  return [...tools, ...dynamicTools].some((tool) => toolDefinitionMentionsName(tool, name));
+}
+
 function toolDefinitionMentionsName(value: unknown, name: string, depth = 0): boolean {
   if (depth > 6 || !value || typeof value !== "object") {
     return false;
@@ -2226,6 +2234,39 @@ async function buildResponsesPayload(
     if (targetTool && (hasDeclaredTool(body, targetTool) || isQaToolSearchFixture(allInputText))) {
       return buildToolCallEventsWithArgs(targetTool, plannedArgs);
     }
+  }
+  if (QA_RESTART_CODE_MODE_WAIT_PROMPT_RE.test(allInputText)) {
+    if (QA_RESTART_RECOVERY_PROMPT_RE.test(allInputText)) {
+      if (toolOutput.includes("unsafe-probe-executed")) {
+        return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
+      }
+      if (hasToolDefinition(body, "qa_restart_unsafe_probe")) {
+        return buildToolCallEventsWithArgs("qa_restart_unsafe_probe", {});
+      }
+      return buildAssistantEvents(exactReplyDirective ?? "RESTART-CODE-MODE-WAIT-OK");
+    }
+    if (toolJson?.status === "completed" && toolJson.value === "RESTART-CODE-MODE-WAIT-OK") {
+      return buildAssistantEvents(exactReplyDirective ?? "RESTART-CODE-MODE-WAIT-OK");
+    }
+    if (
+      toolJson?.status === "waiting" &&
+      typeof toolJson.runId === "string" &&
+      hasDeclaredTool(body, "wait")
+    ) {
+      return buildToolCallEventsWithArgs("wait", { runId: toolJson.runId });
+    }
+    if (!toolOutput && hasDeclaredTool(body, "exec")) {
+      return buildToolCallEventsWithArgs("exec", {
+        language: "javascript",
+        restartSafe: true,
+        code: [
+          'const matches = await tools.search("qa_restart_wait");',
+          "await tools.call(matches[0].id, {});",
+          'return "RESTART-CODE-MODE-WAIT-OK";',
+        ].join("\n"),
+      });
+    }
+    return buildAssistantEvents("RESTART-CODE-MODE-WAIT-FAIL");
   }
   if (
     QA_MCP_CODE_MODE_API_FILE_PROMPT_RE.test(allInputText) ||

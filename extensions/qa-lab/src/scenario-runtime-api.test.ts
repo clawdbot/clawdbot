@@ -46,6 +46,7 @@ function createDeps(overrides?: Partial<QaScenarioRuntimeDeps>): QaScenarioRunti
     patchConfig: fn,
     applyConfig: fn,
     readConfigSnapshot: fn,
+    restartGatewayWithConfigPatch: fn,
     createSession: fn,
     readEffectiveTools: fn,
     readSkillStatus: fn,

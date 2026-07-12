@@ -221,6 +221,9 @@ export class OpenClawModalDialog extends OpenClawLitElement {
     const active = this.getActiveElement();
     const first = focusable[0];
     const last = focusable[focusable.length - 1];
+    if (!first || !last) {
+      return;
+    }
     const focusInside = active ? focusable.includes(active) : false;
 
     if (event.shiftKey && (!focusInside || active === first || active === this.dialogElement)) {

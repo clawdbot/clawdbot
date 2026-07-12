@@ -125,6 +125,81 @@ afterEach(() => {
 });
 
 describe("updateSessionStoreAfterAgentRun", () => {
+  it("clears the durable replay-safe recovery guard after the recovery run terminates", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const sessionKey = "agent:main:explicit:restart-recovery";
+      const sessionId = "restart-recovery-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          restartRecoveryForceSafeTools: true,
+        },
+      };
+      await seedSessionStore(storePath, sessionStore);
+
+      await updateSessionStoreAfterAgentRun({
+        cfg: {} as OpenClawConfig,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.5",
+        clearRestartRecoveryForceSafeTools: true,
+        result: {
+          meta: {
+            durationMs: 1,
+            agentMeta: { sessionId, provider: "openai", model: "gpt-5.5" },
+          },
+        },
+      });
+
+      expect(sessionStore[sessionKey]?.restartRecoveryForceSafeTools).toBeUndefined();
+      expect(
+        loadPersistedSessionEntry(storePath, sessionKey)?.restartRecoveryForceSafeTools,
+      ).toBeUndefined();
+    });
+  });
+
+  it("keeps the durable replay-safe recovery guard when the recovery run is aborted", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const sessionKey = "agent:main:explicit:aborted-restart-recovery";
+      const sessionId = "aborted-restart-recovery-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          restartRecoveryForceSafeTools: true,
+        },
+      };
+      await seedSessionStore(storePath, sessionStore);
+
+      await updateSessionStoreAfterAgentRun({
+        cfg: {} as OpenClawConfig,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.5",
+        clearRestartRecoveryForceSafeTools: true,
+        result: {
+          meta: {
+            durationMs: 1,
+            aborted: true,
+            agentMeta: { sessionId, provider: "openai", model: "gpt-5.5" },
+          },
+        },
+      });
+
+      expect(sessionStore[sessionKey]?.restartRecoveryForceSafeTools).toBe(true);
+      expect(loadPersistedSessionEntry(storePath, sessionKey)?.restartRecoveryForceSafeTools).toBe(
+        true,
+      );
+    });
+  });
+
   it("preserves a concurrent rename and unpin during final accounting", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const sessionKey = "agent:main:explicit:test-management-race";

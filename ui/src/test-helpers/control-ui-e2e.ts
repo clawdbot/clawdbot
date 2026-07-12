@@ -881,6 +881,9 @@ function installControlUiMockGateway(input: {
         throw new Error(`No deferred mock Gateway response for ${method}`);
       }
       const [response] = deferredResponses.splice(index, 1);
+      if (!response) {
+        throw new Error(`Deferred mock Gateway response disappeared for ${method}`);
+      }
       response.socket.deliver({
         error: {
           code: error?.code ?? "INVALID_REQUEST",
@@ -900,6 +903,9 @@ function installControlUiMockGateway(input: {
         throw new Error(`No deferred mock Gateway response for ${method}`);
       }
       const [response] = deferredResponses.splice(index, 1);
+      if (!response) {
+        throw new Error(`Deferred mock Gateway response disappeared for ${method}`);
+      }
       response.socket.deliver({
         id: response.id,
         ok: true,

@@ -36,7 +36,8 @@ function resolveColumns(widget: WorkspaceWidget, rows: Array<Record<string, unkn
       return picked;
     }
   }
-  return rows.length > 0 ? Object.keys(rows[0]) : [];
+  const firstRow = rows[0];
+  return firstRow ? Object.keys(firstRow) : [];
 }
 
 function rowLimit(widget: WorkspaceWidget): number {

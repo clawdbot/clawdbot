@@ -564,7 +564,8 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
   const busy = props.busyKey === skill.skillKey;
   const apiKey = props.edits[skill.skillKey] ?? "";
   const message = props.messages[skill.skillKey] ?? null;
-  const canInstall = skill.install.length > 0 && skill.missing.bins.length > 0;
+  const installOption = skill.install[0];
+  const canInstall = installOption !== undefined && skill.missing.bins.length > 0;
   const showBundledBadge = Boolean(skill.bundled && skill.source !== "openclaw-bundled");
   const missing = computeSkillMissing(skill);
   const reasons = computeSkillReasons(skill);
@@ -668,9 +669,10 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
               ? html`<button
                   class="btn"
                   ?disabled=${busy}
-                  @click=${() => props.onInstall(skill.skillKey, skill.name, skill.install[0].id)}
+                  @click=${() =>
+                    installOption && props.onInstall(skill.skillKey, skill.name, installOption.id)}
                 >
-                  ${busy ? "Installing\u2026" : skill.install[0].label}
+                  ${busy ? "Installing\u2026" : installOption?.label}
                 </button>`
               : nothing}
           </div>

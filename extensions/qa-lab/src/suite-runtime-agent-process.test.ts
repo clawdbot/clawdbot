@@ -630,6 +630,42 @@ describe("qa suite runtime agent process helpers", () => {
     expect(gatewayArgs?.[2]).toBeTypeOf("object");
   });
 
+  it("starts an interactive run without CLI task tracking", async () => {
+    const gatewayCall = vi.fn(async () => ({ runId: "run-chat", status: "started" }));
+    const buildAgentDelivery = vi.fn(() => ({
+      channel: "qa-channel",
+      replyChannel: "qa-channel",
+      replyTo: "dm:qa-operator",
+    }));
+    const env = {
+      gateway: { call: gatewayCall },
+      transport: {
+        buildAgentDelivery,
+      },
+    } as never;
+
+    await expect(
+      startAgentRun(env, {
+        sessionKey: "agent:qa:main",
+        message: "hello",
+        taskTracking: false,
+      }),
+    ).resolves.toEqual({ runId: "run-chat", status: "started" });
+    expect(gatewayCall).toHaveBeenCalledWith(
+      "chat.send",
+      {
+        idempotencyKey: expect.any(String),
+        sessionKey: "agent:qa:main",
+        message: "hello",
+        deliver: true,
+        originatingChannel: "qa-channel",
+        originatingTo: "dm:qa-operator",
+      },
+      { timeoutMs: 30_000 },
+    );
+    expect(buildAgentDelivery).toHaveBeenCalledWith({ target: "dm:qa-operator" });
+  });
+
   it("finds managed dreaming cron jobs across legacy and current payload contracts", () => {
     const legacy = {
       id: "legacy",

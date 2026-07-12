@@ -1,4 +1,5 @@
 // Control UI view renders dreaming screen content.
+import { expectDefined } from "@openclaw/normalization-core";
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import {
@@ -1009,7 +1010,7 @@ function renderDiaryImportsSection(props: DreamingProps) {
   }
 
   const clusterIndex = Math.max(0, Math.min(state.diaryPage, clusters.length - 1));
-  const cluster = clusters[clusterIndex];
+  const cluster = expectDefined(clusters[clusterIndex], "selected imported insight cluster");
 
   return html`
     <div class="dreams-diary__daychips">
@@ -1201,7 +1202,7 @@ function renderMemoryPalaceSection(props: DreamingProps) {
   }
 
   const clusterIndex = Math.max(0, Math.min(state.diaryPage, clusters.length - 1));
-  const cluster = clusters[clusterIndex];
+  const cluster = expectDefined(clusters[clusterIndex], "selected memory palace cluster");
   const totalPages = palace?.totalPages ?? palace?.totalItems ?? 0;
   const totalClaims = palace?.totalClaims ?? 0;
   const totalQuestions = palace?.totalQuestions ?? 0;
@@ -1387,7 +1388,7 @@ function renderDreamDiaryEntries(props: DreamingProps) {
 
   const reversed = buildDiaryNavigation(entries);
   const page = Math.max(0, Math.min(state.diaryPage, reversed.length - 1));
-  const entry = reversed[page];
+  const entry = expectDefined(reversed[page], "selected dreaming diary entry");
 
   return html`
     <div class="dreams-diary__daychips">

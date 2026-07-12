@@ -87,7 +87,7 @@ export function extractContinuationSignal(params: {
     // last-emitted one wins (matches the model's "most recent intent" shape).
     for (let i = payloads.length - 1; i >= 0; i--) {
       const payload = payloads[i];
-      if (!payload.text) {
+      if (!payload?.text) {
         continue;
       }
       const result = stripContinuationSignal(payload.text);

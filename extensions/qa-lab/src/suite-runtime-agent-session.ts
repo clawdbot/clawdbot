@@ -36,6 +36,11 @@ function resolveSessionStoreLockRetryDelaysMs(): readonly number[] {
 type QaSessionTranscriptSummary = {
   finalText: string;
   hasDirectReplySelfMessage: boolean;
+  lastAssistantContentTypes?: string[];
+  lastAssistantErrorMessage?: string;
+  lastAssistantStopReason?: string;
+  lastAssistantToolNames?: string[];
+  lastMessageRole?: string;
 };
 
 function isSessionStoreLockTimeout(error: unknown) {
@@ -54,22 +59,57 @@ function readSessionTranscriptEventMessage(event: unknown) {
   return isRecord(event) && isRecord(event.message) ? event.message : undefined;
 }
 
+function readAssistantToolNames(message: Record<string, unknown>): string[] {
+  if (!Array.isArray(message.content)) {
+    return [];
+  }
+  return message.content.flatMap((block) => {
+    if (!isRecord(block)) {
+      return [];
+    }
+    const type = readNonEmptyString(block.type);
+    if (type !== "toolCall" && type !== "toolUse" && type !== "tool_use") {
+      return [];
+    }
+    const name = readNonEmptyString(block.name);
+    return name ? [name] : [];
+  });
+}
+
 function summarizeSessionTranscriptEvents(
   events: unknown[],
   sessionKey: string,
 ): QaSessionTranscriptSummary {
   const scanner = createDirectReplyTranscriptSentinelScanner();
   let finalText = "";
+  let lastAssistantContentTypes: string[] = [];
+  let lastAssistantErrorMessage: string | undefined;
+  let lastAssistantStopReason: string | undefined;
+  let lastAssistantToolNames: string[] = [];
+  let lastMessageRole: string | undefined;
 
   for (const event of events) {
     const message = readSessionTranscriptEventMessage(event);
-    if (!message || message.role !== "assistant") {
+    if (!message) {
+      continue;
+    }
+    lastMessageRole = readNonEmptyString(message.role);
+    if (message.role !== "assistant") {
       continue;
     }
     const text = extractGatewayMessageText(message);
     if (text) {
       finalText = text;
     }
+    lastAssistantContentTypes = Array.isArray(message.content)
+      ? message.content.flatMap((block) => {
+          const type = isRecord(block) ? readNonEmptyString(block.type) : undefined;
+          return type ? [type] : [];
+        })
+      : [];
+    lastAssistantErrorMessage = readNonEmptyString(message.errorMessage);
+    lastAssistantStopReason = readNonEmptyString(message.stopReason);
+    lastAssistantToolNames = readAssistantToolNames(message);
     scanner.recordMessage(message);
   }
 
@@ -80,6 +120,11 @@ function summarizeSessionTranscriptEvents(
   return {
     finalText,
     hasDirectReplySelfMessage: scanner.findings().length > 0,
+    ...(lastAssistantContentTypes.length > 0 ? { lastAssistantContentTypes } : {}),
+    ...(lastAssistantErrorMessage ? { lastAssistantErrorMessage } : {}),
+    ...(lastAssistantStopReason ? { lastAssistantStopReason } : {}),
+    ...(lastAssistantToolNames.length > 0 ? { lastAssistantToolNames } : {}),
+    ...(lastMessageRole ? { lastMessageRole } : {}),
   };
 }
 

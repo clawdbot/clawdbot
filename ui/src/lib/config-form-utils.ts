@@ -146,6 +146,9 @@ function resolvePathContainer(
   for (let i = 0; i < path.length - 1; i += 1) {
     const key = path[i];
     const nextKey = path[i + 1];
+    if (key === undefined) {
+      return null;
+    }
     if (typeof key === "number") {
       if (!Array.isArray(current)) {
         return null;
@@ -173,9 +176,13 @@ function resolvePathContainer(
     current = record[key] as Record<string, unknown> | unknown[];
   }
 
+  const lastKey = path.at(-1);
+  if (lastKey === undefined) {
+    return null;
+  }
   return {
     current,
-    lastKey: path[path.length - 1],
+    lastKey,
   };
 }
 

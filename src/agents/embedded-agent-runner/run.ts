@@ -2851,6 +2851,7 @@ async function runEmbeddedAgentInternal(
             ...(params.crestodianTool ? { crestodianTool: params.crestodianTool } : {}),
             cleanupBundleMcpOnRunEnd: params.cleanupBundleMcpOnRunEnd,
             disableMessageTool: params.disableMessageTool,
+            forceRestartSafeTools: params.forceRestartSafeTools,
             forceMessageTool: params.forceMessageTool,
             enableHeartbeatTool: params.enableHeartbeatTool,
             forceHeartbeatTool: params.forceHeartbeatTool,

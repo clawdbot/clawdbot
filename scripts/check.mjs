@@ -119,7 +119,6 @@ export async function main(argv = process.argv.slice(2)) {
         : [
             { name: "typecheck prod", args: ["tsgo:prod"] },
             { name: "typecheck scripts", args: ["tsgo:scripts"] },
-            { name: "typecheck strict ratchet", args: ["tsgo:strict-ratchet"] },
             { name: "typecheck test root", args: ["tsgo:test:root"] },
           ],
     },

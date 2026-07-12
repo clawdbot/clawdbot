@@ -1334,6 +1334,7 @@ public struct AgentParams: Codable, Sendable {
     public let sessioneffects: AnyCodable?
     public let sourcereplydeliverymode: AnyCodable?
     public let disablemessagetool: Bool?
+    public let forcerestartsafetools: Bool?
     public let voicewaketrigger: String?
     public let idempotencykey: String
     public let label: String?
@@ -1377,6 +1378,7 @@ public struct AgentParams: Codable, Sendable {
         sessioneffects: AnyCodable? = nil,
         sourcereplydeliverymode: AnyCodable? = nil,
         disablemessagetool: Bool? = nil,
+        forcerestartsafetools: Bool? = nil,
         voicewaketrigger: String? = nil,
         idempotencykey: String,
         label: String? = nil)
@@ -1419,6 +1421,7 @@ public struct AgentParams: Codable, Sendable {
         self.sessioneffects = sessioneffects
         self.sourcereplydeliverymode = sourcereplydeliverymode
         self.disablemessagetool = disablemessagetool
+        self.forcerestartsafetools = forcerestartsafetools
         self.voicewaketrigger = voicewaketrigger
         self.idempotencykey = idempotencykey
         self.label = label
@@ -1463,6 +1466,7 @@ public struct AgentParams: Codable, Sendable {
         case sessioneffects = "sessionEffects"
         case sourcereplydeliverymode = "sourceReplyDeliveryMode"
         case disablemessagetool = "disableMessageTool"
+        case forcerestartsafetools = "forceRestartSafeTools"
         case voicewaketrigger = "voiceWakeTrigger"
         case idempotencykey = "idempotencyKey"
         case label

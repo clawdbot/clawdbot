@@ -482,10 +482,10 @@ function tokenizeCommand(command: string): CommandToken[] {
   let index = 0;
   let expectName = true;
   while (index < command.length) {
-    const char = command[index];
+    const char = command.charAt(index);
     if (/\s/.test(char)) {
       let end = index;
-      while (end < command.length && /\s/.test(command[end])) {
+      while (end < command.length && /\s/.test(command.charAt(end))) {
         end++;
       }
       tokens.push({ text: command.slice(index, end), cls: "ws" });
@@ -494,8 +494,8 @@ function tokenizeCommand(command: string): CommandToken[] {
     }
     if (char === "'" || char === '"') {
       let end = index + 1;
-      while (end < command.length && command[end] !== char) {
-        end += command[end] === "\\" ? 2 : 1;
+      while (end < command.length && command.charAt(end) !== char) {
+        end += command.charAt(end) === "\\" ? 2 : 1;
       }
       end = Math.min(end + 1, command.length);
       tokens.push({ text: command.slice(index, end), cls: "str" });
@@ -505,7 +505,7 @@ function tokenizeCommand(command: string): CommandToken[] {
     }
     if (COMMAND_OP_CHARS.has(char)) {
       let end = index;
-      while (end < command.length && COMMAND_OP_CHARS.has(command[end])) {
+      while (end < command.length && COMMAND_OP_CHARS.has(command.charAt(end))) {
         end++;
       }
       tokens.push({ text: command.slice(index, end), cls: "op" });
@@ -516,10 +516,10 @@ function tokenizeCommand(command: string): CommandToken[] {
     let end = index;
     while (
       end < command.length &&
-      !/\s/.test(command[end]) &&
-      !COMMAND_OP_CHARS.has(command[end]) &&
-      command[end] !== "'" &&
-      command[end] !== '"'
+      !/\s/.test(command.charAt(end)) &&
+      !COMMAND_OP_CHARS.has(command.charAt(end)) &&
+      command.charAt(end) !== "'" &&
+      command.charAt(end) !== '"'
     ) {
       end++;
     }

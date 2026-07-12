@@ -336,7 +336,7 @@ export function resolveModelLabel(model?: unknown): string {
 
 export function normalizeModelValue(label: string): string {
   const match = label.match(/^(.+) \(\+\d+ fallback\)$/);
-  return match ? match[1] : label;
+  return match?.[1] ?? label;
 }
 
 export function resolveModelPrimary(model?: unknown): string | null {

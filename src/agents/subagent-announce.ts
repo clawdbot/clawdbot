@@ -96,6 +96,15 @@ let subagentSpawnRuntimePromise: Promise<
 > | null = null;
 const CONTINUATION_CHAIN_HOP_PATTERN = /\[continuation:chain-hop:(\d+)\]/;
 
+function parseContinuationChainHop(task: string): number | undefined {
+  const hopText = task.match(CONTINUATION_CHAIN_HOP_PATTERN)?.[1];
+  if (!hopText) {
+    return undefined;
+  }
+  const hop = Number.parseInt(hopText, 10);
+  return Number.isFinite(hop) ? hop : undefined;
+}
+
 function resolveCompletionTraceContext(params: {
   traceparent?: string;
   task: string;
@@ -104,12 +113,8 @@ function resolveCompletionTraceContext(params: {
   if (!params.traceparent) {
     return {};
   }
-  const hopMatch = params.task.match(CONTINUATION_CHAIN_HOP_PATTERN);
-  if (!hopMatch) {
-    return { traceparent: params.traceparent };
-  }
-  const childChainHop = Number.parseInt(hopMatch[1], 10);
-  if (!Number.isFinite(childChainHop)) {
+  const childChainHop = parseContinuationChainHop(params.task);
+  if (childChainHop === undefined) {
     return { traceparent: params.traceparent };
   }
   const chainStepRemaining = Math.max(0, params.resolveMaxChainLength() - childChainHop);
@@ -1398,8 +1403,7 @@ export async function runSubagentAnnounceFlow(params: {
           const { maxChainLength, costCapTokens, minDelayMs, maxDelayMs, crossSessionTargeting } =
             subagentAnnounceDeps.resolveContinuationRuntimeConfig(cfg);
 
-          const hopMatch = childTask.match(CONTINUATION_CHAIN_HOP_PATTERN);
-          const childChainHop = hopMatch ? Number.parseInt(hopMatch[1], 10) : 0;
+          const childChainHop = parseContinuationChainHop(childTask) ?? 0;
           const nextChainHop = childChainHop + 1;
 
           let chainGuardResult:
@@ -1629,8 +1633,7 @@ export async function runSubagentAnnounceFlow(params: {
           costCapTokens: toolCostCapTokens,
           crossSessionTargeting: toolCrossSessionTargeting,
         } = subagentAnnounceDeps.resolveContinuationRuntimeConfig(cfg);
-        const hopMatch = childTask.match(CONTINUATION_CHAIN_HOP_PATTERN);
-        const childChainHop = hopMatch ? Number.parseInt(hopMatch[1], 10) : 0;
+        const childChainHop = parseContinuationChainHop(childTask) ?? 0;
         // Use the current-chain reservation flag captured before findings was
         // mutated. A post-compaction bracket delegate is only staged for a later
         // compaction seam, so it must not charge the child chain's tool delegates now.
@@ -1809,8 +1812,7 @@ export async function runSubagentAnnounceFlow(params: {
         !postBracketChildDrainArmed &&
         !delayedBracketDelegateDrainArmed
       ) {
-        const hopMatch = childTask.match(CONTINUATION_CHAIN_HOP_PATTERN);
-        const childChainHop = hopMatch ? Number.parseInt(hopMatch[1], 10) : 0;
+        const childChainHop = parseContinuationChainHop(childTask) ?? 0;
         const chainState = buildChildContinuationSpawnState(
           childChainHop + (bracketDelegateReservedCurrentHop ? 1 : 0),
         );

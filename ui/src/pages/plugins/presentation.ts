@@ -1,5 +1,6 @@
 // Presentation data for the plugins catalog: bundled cover art, deterministic
 // fallback gradients, category shelving, and curated connector suggestions.
+import { expectDefined } from "@openclaw/normalization-core";
 import { inferControlUiPublicAssetPath } from "../../app/public-assets.ts";
 import { t } from "../../i18n/index.ts";
 
@@ -208,9 +209,12 @@ const FALLBACK_GRADIENTS: ReadonlyArray<readonly [string, string]> = [
 export function pluginFallbackGradient(id: string): readonly [string, string] {
   let hash = 0;
   for (const char of id) {
-    hash = (hash * 31 + char.codePointAt(0)!) >>> 0;
+    hash = (hash * 31 + (char.codePointAt(0) ?? 0)) >>> 0;
   }
-  return FALLBACK_GRADIENTS[hash % FALLBACK_GRADIENTS.length]!;
+  return expectDefined(
+    FALLBACK_GRADIENTS[hash % FALLBACK_GRADIENTS.length],
+    "plugin fallback gradient palette entry",
+  );
 }
 
 export function pluginMonogram(name: string): string {
@@ -218,7 +222,9 @@ export function pluginMonogram(name: string): string {
   if (words.length === 0) {
     return "";
   }
-  const initials = words.length === 1 ? words[0].slice(0, 2) : `${words[0][0]}${words[1][0]}`;
+  const first = expectDefined(words[0], "plugin monogram first word");
+  const second = words[1];
+  const initials = second ? `${first.charAt(0)}${second.charAt(0)}` : first.slice(0, 2);
   return initials.toLocaleUpperCase();
 }
 

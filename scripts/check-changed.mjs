@@ -447,9 +447,6 @@ export function createChangedCheckPlan(result, options = {}) {
   if (lanes.scripts) {
     addTypecheck("typecheck scripts", ["tsgo:scripts"]);
   }
-  if (lanes.strictRatchet) {
-    addTypecheck("typecheck strict ratchet", ["tsgo:strict-ratchet"]);
-  }
   if (lanes.testRoot) {
     addTypecheck("typecheck test root", ["tsgo:test:root"]);
   }

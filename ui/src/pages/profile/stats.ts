@@ -120,13 +120,16 @@ export function computeStreaks(daily: readonly DailyTokensEntry[], today: string
   let longest = 1;
   let run = 1;
   for (let index = 1; index < dates.length; index += 1) {
-    const gapDays = Math.round(
-      (dateToUtcNoon(dates[index]) - dateToUtcNoon(dates[index - 1])) / DAY_MS,
-    );
+    const currentDate = dates[index];
+    const previousDate = dates[index - 1];
+    if (!currentDate || !previousDate) {
+      continue;
+    }
+    const gapDays = Math.round((dateToUtcNoon(currentDate) - dateToUtcNoon(previousDate)) / DAY_MS);
     run = gapDays === 1 ? run + 1 : 1;
     longest = Math.max(longest, run);
   }
-  const last = dates[dates.length - 1];
+  const last = dates.at(-1) ?? today;
   const sinceLast = Math.round((dateToUtcNoon(today) - dateToUtcNoon(last)) / DAY_MS);
   return { current: sinceLast <= 1 ? run : 0, longest };
 }
@@ -134,7 +137,7 @@ export function computeStreaks(daily: readonly DailyTokensEntry[], today: string
 function levelThresholds(values: number[]): [number, number, number] {
   const sorted = values.toSorted((a, b) => a - b);
   const pick = (ratio: number) =>
-    sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * ratio))];
+    sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * ratio))] ?? 0;
   return [pick(0.25), pick(0.5), pick(0.75)];
 }
 

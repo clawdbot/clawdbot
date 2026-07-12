@@ -65,6 +65,8 @@ export async function updateSessionStoreAfterAgentRun(params: {
    */
   preserveRuntimeModel?: boolean;
   preserveUserFacingSessionModelState?: boolean;
+  /** Clear the durable replay-safe recovery guard after this recovery run terminates. */
+  clearRestartRecoveryForceSafeTools?: boolean;
 }) {
   const {
     cfg,
@@ -197,6 +199,9 @@ export async function updateSessionStoreAfterAgentRun(params: {
       }
     }
     next.abortedLastRun = result.meta.aborted ?? false;
+    if (params.clearRestartRecoveryForceSafeTools && result.meta.aborted !== true) {
+      next.restartRecoveryForceSafeTools = undefined;
+    }
     if (result.meta.systemPromptReport) {
       next.systemPromptReport = result.meta.systemPromptReport;
     }

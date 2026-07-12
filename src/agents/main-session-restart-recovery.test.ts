@@ -940,6 +940,7 @@ describe("main-session-restart-recovery", () => {
         updatedAt: Date.now() - 10_000,
         status: "running",
         abortedLastRun: true,
+        restartRecoveryForceSafeTools: true,
         pendingFinalDelivery: true,
         pendingFinalDeliveryText: pendingPayload,
         pendingFinalDeliveryContext: {
@@ -971,6 +972,7 @@ describe("main-session-restart-recovery", () => {
       channel: "discord",
       to: "discord:dm:final",
       accountId: "main",
+      forceRestartSafeTools: true,
     });
     expect(firstGatewayParams().message).toContain(pendingPayload);
 
@@ -982,11 +984,48 @@ describe("main-session-restart-recovery", () => {
     expect(entry?.pendingFinalDeliveryText).toBe(pendingPayload);
     expect(entry?.pendingFinalDeliveryAttemptCount).toBe(1);
     expect(entry?.pendingFinalDeliveryLastError).toBeNull();
+    expect(entry?.restartRecoveryForceSafeTools).toBe(true);
     expect(entry?.pendingFinalDeliveryCreatedAt).toBeLessThanOrEqual(beforeStoreRead);
     expect(entry?.pendingFinalDeliveryLastAttemptAt).toBeLessThanOrEqual(beforeStoreRead);
     expect(entry?.pendingFinalDeliveryLastAttemptAt ?? 0).toBeGreaterThanOrEqual(
       entry?.pendingFinalDeliveryCreatedAt ?? Number.POSITIVE_INFINITY,
     );
+  });
+
+  it("retains restart safety when the first restart follows pending final persistence", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        pendingFinalDelivery: true,
+        pendingFinalDeliveryText: "Safe work finished.",
+        pendingFinalDeliveryCreatedAt: Date.now() - 5_000,
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "do the thing" },
+      {
+        role: "toolResult",
+        toolName: "exec",
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({ status: "completed", value: "done", replaySafe: true }),
+          },
+        ],
+      },
+      { role: "assistant", content: [{ type: "text", text: "Safe work finished." }] },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(firstGatewayParams()).toMatchObject({ forceRestartSafeTools: true });
+    const store = readStore(path.join(sessionsDir, "sessions.json"));
+    expect(store["agent:main:main"]?.restartRecoveryForceSafeTools).toBe(true);
   });
 
   it("sanitizes durable pending final delivery payloads before resume prompts", async () => {
@@ -1028,6 +1067,27 @@ describe("main-session-restart-recovery", () => {
 
     const store = readStore(path.join(sessionsDir, "sessions.json"));
     expect(store["agent:main:main"]?.pendingFinalDeliveryText).toBe("The final answer is 42.");
+  });
+
+  it("resumes an unguarded pending final delivery without a transcript", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "missing-transcript-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        pendingFinalDelivery: true,
+        pendingFinalDeliveryText: "The durable final answer.",
+        pendingFinalDeliveryCreatedAt: Date.now() - 5_000,
+      },
+    });
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(firstGatewayParams().message).toContain("The durable final answer.");
+    expect(firstGatewayParams()).not.toHaveProperty("forceRestartSafeTools");
   });
 
   it("resumes pending final delivery even when the transcript tail is assistant output", async () => {
@@ -1350,7 +1410,7 @@ describe("main-session-restart-recovery", () => {
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 
-  it("fails marked sessions whose transcript tail cannot be resumed", async () => {
+  it("fails marked sessions without a meaningful transcript tail", async () => {
     const sessionsDir = await makeSessionsDir();
     await writeStore(sessionsDir, {
       "agent:main:main": {
@@ -1361,8 +1421,7 @@ describe("main-session-restart-recovery", () => {
       },
     });
     await writeTranscript(sessionsDir, "main-session", [
-      { role: "user", content: "hello" },
-      { role: "assistant", content: "partial answer" },
+      { role: "system", content: "session metadata only" },
     ]);
 
     const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
@@ -1374,7 +1433,69 @@ describe("main-session-restart-recovery", () => {
     expect(store["agent:main:main"]?.abortedLastRun).toBe(true);
   });
 
-  it("sends a visible notice through legacy session route before failing an unresumable main session", async () => {
+  it.each([
+    [
+      "completed assistant output",
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "finished answer" }],
+        stopReason: "stop",
+      },
+    ],
+    [
+      "errored assistant output",
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "provider failed" }],
+        stopReason: "error",
+      },
+    ],
+    [
+      "completed tool call",
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call-1", name: "write", arguments: {} }],
+        stopReason: "toolUse",
+      },
+    ],
+    [
+      "aborted tool call",
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call-1", name: "write", arguments: {} }],
+        stopReason: "aborted",
+      },
+    ],
+    [
+      "aborted assistant output with text",
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "partial answer" }],
+        stopReason: "aborted",
+      },
+    ],
+  ])("does not resume %s at the transcript tail", async (_label, assistantMessage) => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "do the thing" },
+      assistantMessage,
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 0, failed: 1, skipped: 0 });
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("sends a visible notice through the legacy route when no resumable transcript survives", async () => {
     const sessionsDir = await makeSessionsDir();
     await writeStore(sessionsDir, {
       "agent:main:demo-channel:room-1": {
@@ -1389,8 +1510,7 @@ describe("main-session-restart-recovery", () => {
       },
     });
     await writeTranscript(sessionsDir, "main-session", [
-      { role: "user", content: "do the thing" },
-      { role: "assistant", content: "partial answer" },
+      { role: "system", content: "session metadata only" },
     ]);
 
     const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
@@ -1427,5 +1547,714 @@ describe("main-session-restart-recovery", () => {
     const store = readStore(path.join(sessionsDir, "sessions.json"));
     expect(store["agent:main:demo-channel:room-1"]?.status).toBe("failed");
     expect(store["agent:main:demo-channel:room-1"]?.abortedLastRun).toBe(true);
+  });
+
+  it("resumes a restart interrupted at the Code Mode wait control", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:demo-channel:room-1": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryDeliveryContext: {
+          channel: "discord",
+          to: "discord:channel:room-1",
+          accountId: "default",
+          threadId: "thread-1",
+        },
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "do the thing" },
+      {
+        role: "toolResult",
+        toolName: "exec",
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              status: "waiting",
+              runId: "cm_interrupted",
+              reason: "yield",
+              replaySafe: true,
+            }),
+          },
+        ],
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "The read-only work is still pending." },
+          { type: "text", text: "" },
+          {
+            type: "toolCall",
+            id: "call-wait-1",
+            name: "wait",
+            arguments: { runId: "cm_interrupted" },
+          },
+        ],
+        stopReason: "toolUse",
+      },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(callGateway).toHaveBeenCalledOnce();
+    const gatewayCall = vi.mocked(callGateway).mock.calls[0]?.[0] as
+      | {
+          method?: string;
+          params?: Record<string, unknown>;
+        }
+      | undefined;
+    expect(gatewayCall?.method).toBe("agent");
+    expect(gatewayCall?.params).toMatchObject({
+      message: expect.stringContaining("Continue from the existing transcript"),
+      deliver: true,
+      channel: "discord",
+      accountId: "default",
+      sessionKey: "agent:main:demo-channel:room-1",
+      to: "discord:channel:room-1",
+      threadId: "thread-1",
+      bestEffortDeliver: true,
+      forceRestartSafeTools: true,
+    });
+
+    const store = readStore(path.join(sessionsDir, "sessions.json"));
+    expect(store["agent:main:demo-channel:room-1"]?.status).toBe("running");
+    expect(store["agent:main:demo-channel:room-1"]?.abortedLastRun).toBe(false);
+    expect(store["agent:main:demo-channel:room-1"]?.restartRecoveryForceSafeTools).toBe(true);
+  });
+
+  it("reads a provider-native Code Mode wait input", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "do the thing" },
+      {
+        role: "toolResult",
+        toolName: "exec",
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              status: "waiting",
+              runId: "cm_interrupted",
+              replaySafe: true,
+            }),
+          },
+        ],
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: "call-wait-1",
+            name: "wait",
+            input: { runId: "cm_interrupted" },
+          },
+        ],
+        stopReason: "toolUse",
+      },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(firstGatewayParams()).toMatchObject({ forceRestartSafeTools: true });
+  });
+
+  it.each([
+    {
+      replaySafe: true,
+      expected: { recovered: 1, failed: 0, skipped: 0 },
+      gatewayCalls: 1,
+    },
+    {
+      replaySafe: false,
+      expected: { recovered: 0, failed: 1, skipped: 0 },
+      gatewayCalls: 0,
+    },
+  ])(
+    "classifies a direct waiting checkpoint with replaySafe=$replaySafe",
+    async ({ replaySafe, expected, gatewayCalls }) => {
+      const sessionsDir = await makeSessionsDir();
+      await writeStore(sessionsDir, {
+        "agent:main:main": {
+          sessionId: "main-session",
+          updatedAt: Date.now() - 10_000,
+          status: "running",
+          abortedLastRun: true,
+        },
+      });
+      await writeTranscript(sessionsDir, "main-session", [
+        { role: "user", content: "do the thing" },
+        {
+          role: "toolResult",
+          toolName: "exec",
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                status: "waiting",
+                runId: "cm_interrupted",
+                replaySafe,
+              }),
+            },
+          ],
+        },
+      ]);
+
+      const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+      expect(result).toEqual(expected);
+      expect(callGateway).toHaveBeenCalledTimes(gatewayCalls);
+      if (replaySafe) {
+        expect(firstGatewayParams()).toMatchObject({ forceRestartSafeTools: true });
+      }
+    },
+  );
+
+  it.each(["completed", "failed"] as const)(
+    "keeps restart safety after a terminal Code Mode %s result",
+    async (status) => {
+      const sessionsDir = await makeSessionsDir();
+      await writeStore(sessionsDir, {
+        "agent:main:main": {
+          sessionId: "main-session",
+          updatedAt: Date.now() - 10_000,
+          status: "running",
+          abortedLastRun: true,
+        },
+      });
+      await writeTranscript(sessionsDir, "main-session", [
+        { role: "user", content: "do the thing" },
+        {
+          role: "toolResult",
+          toolName: "wait",
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                status,
+                replaySafe: true,
+                ...(status === "completed" ? { value: "done" } : { error: "safe failure" }),
+              }),
+            },
+          ],
+        },
+      ]);
+
+      const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+      expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+      expect(firstGatewayParams()).toMatchObject({ forceRestartSafeTools: true });
+    },
+  );
+
+  it("keeps restart safety across a second restart of the recovery turn", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryForceSafeTools: true,
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "do the thing" },
+      {
+        role: "user",
+        content:
+          "[System] Your previous turn was interrupted by a gateway restart while OpenClaw was waiting on tool/model work. Continue from the existing transcript and finish the interrupted response.",
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call-read-1",
+            name: "read",
+            arguments: { path: "README.md" },
+          },
+        ],
+        stopReason: "toolUse",
+      },
+      {
+        role: "toolResult",
+        toolName: "read",
+        content: [{ type: "text", text: "read result" }],
+      },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(firstGatewayParams()).toMatchObject({ forceRestartSafeTools: true });
+  });
+
+  it("keeps restart safety after the recovery prompt leaves the recent transcript window", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryForceSafeTools: true,
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "do the thing" },
+      ...Array.from({ length: 24 }, (_, index) => ({
+        role: "toolResult",
+        toolName: "read",
+        content: [{ type: "text", text: `read result ${index}` }],
+      })),
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(firstGatewayParams()).toMatchObject({ forceRestartSafeTools: true });
+  });
+
+  it("resumes an in-flight safe tool call across a repeated restart", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryForceSafeTools: true,
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "do the thing" },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "I need one more read." },
+          { type: "toolCall", id: "call-read-2", name: "read", arguments: { path: "README.md" } },
+        ],
+        stopReason: "toolUse",
+      },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(firstGatewayParams()).toMatchObject({ forceRestartSafeTools: true });
+  });
+
+  it("does not resume completed assistant output just because the restart-safe guard remains", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryForceSafeTools: true,
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "do the thing" },
+      { role: "assistant", content: [{ type: "text", text: "Done already." }] },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 0, failed: 1, skipped: 0 });
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("does not treat a historical recovery prompt as current recovery state", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      {
+        role: "user",
+        content:
+          "[System] Your previous turn was interrupted by a gateway restart while OpenClaw was waiting on tool/model work. Continue from the existing transcript and finish the interrupted response.",
+      },
+      { role: "assistant", content: [{ type: "text", text: "Finished that recovery." }] },
+      { role: "user", content: "a later request" },
+      { role: "assistant", content: [{ type: "text", text: "Finished the later request." }] },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 0, failed: 1, skipped: 0 });
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("does not replay visible assistant text beside a Code Mode wait", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "do the thing" },
+      {
+        role: "toolResult",
+        toolName: "exec",
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              status: "waiting",
+              runId: "cm_interrupted",
+              replaySafe: true,
+            }),
+          },
+        ],
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "I already sent this part." },
+          {
+            type: "toolCall",
+            id: "call-wait-1",
+            name: "wait",
+            arguments: { runId: "cm_interrupted" },
+          },
+        ],
+        stopReason: "toolUse",
+      },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 0, failed: 1, skipped: 0 });
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      label: "empty provider abort artifact",
+      content: [],
+      expected: { recovered: 1, failed: 0, skipped: 0 },
+      gatewayCalls: 1,
+    },
+    {
+      label: "provider abort artifact with partial output",
+      content: [{ type: "text", text: "partial answer" }],
+      expected: { recovered: 0, failed: 1, skipped: 0 },
+      gatewayCalls: 0,
+    },
+  ])(
+    "handles $label without discarding assistant output",
+    async ({ content, expected, gatewayCalls }) => {
+      const sessionsDir = await makeSessionsDir();
+      await writeStore(sessionsDir, {
+        "agent:main:main": {
+          sessionId: "main-session",
+          updatedAt: Date.now() - 10_000,
+          status: "running",
+          abortedLastRun: true,
+        },
+      });
+      await writeTranscript(sessionsDir, "main-session", [
+        { role: "user", content: "do the thing" },
+        {
+          role: "toolResult",
+          toolName: "exec",
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                status: "waiting",
+                runId: "cm_interrupted",
+                replaySafe: true,
+              }),
+            },
+          ],
+        },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call-wait-1",
+              name: "wait",
+              arguments: { runId: "cm_interrupted" },
+            },
+          ],
+          stopReason: "toolUse",
+        },
+        {
+          role: "assistant",
+          content,
+          stopReason: "error",
+          errorMessage: "Request was aborted",
+        },
+      ]);
+
+      const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+      expect(result).toEqual(expected);
+      expect(callGateway).toHaveBeenCalledTimes(gatewayCalls);
+    },
+  );
+
+  it("resumes through the shutdown error persisted for an interrupted Code Mode wait", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "do the thing" },
+      {
+        role: "toolResult",
+        toolName: "wait",
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              status: "waiting",
+              runId: "cm_interrupted",
+              replaySafe: true,
+            }),
+          },
+        ],
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call-wait-1",
+            name: "wait",
+            arguments: { runId: "cm_interrupted" },
+          },
+        ],
+        stopReason: "toolUse",
+      },
+      {
+        role: "toolResult",
+        toolName: "wait",
+        toolCallId: "call-wait-1",
+        content: [{ type: "text", text: "Error: The operation was aborted." }],
+        details: {
+          status: "failed",
+          error: "Error: The operation was aborted.",
+          code: "internal_error",
+        },
+        isError: true,
+      },
+      {
+        role: "assistant",
+        content: [],
+        stopReason: "aborted",
+        errorMessage: "Request was aborted",
+      },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(firstGatewayParams()).toMatchObject({ forceRestartSafeTools: true });
+  });
+
+  it("keeps an unmatched failed wait restricted when its checkpoint is replay-safe", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "do the thing" },
+      {
+        role: "toolResult",
+        toolName: "wait",
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              status: "waiting",
+              runId: "cm_interrupted",
+              replaySafe: true,
+            }),
+          },
+        ],
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call-wait-1",
+            name: "wait",
+            arguments: { runId: "cm_interrupted" },
+          },
+        ],
+        stopReason: "toolUse",
+      },
+      {
+        role: "toolResult",
+        toolName: "wait",
+        toolCallId: "call-other",
+        content: [{ type: "text", text: "Error: The operation was aborted." }],
+        details: {
+          status: "failed",
+          error: "Error: The operation was aborted.",
+          code: "internal_error",
+        },
+        isError: true,
+      },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(firstGatewayParams()).toMatchObject({ forceRestartSafeTools: true });
+  });
+
+  it.each([
+    {
+      label: "non-replay-safe checkpoint",
+      checkpoint: {
+        status: "waiting",
+        runId: "cm_interrupted",
+        reason: "pending_tools",
+        replaySafe: false,
+      },
+    },
+    {
+      label: "replay-safe checkpoint for another run",
+      checkpoint: {
+        status: "waiting",
+        runId: "cm_other",
+        reason: "yield",
+        replaySafe: true,
+      },
+    },
+  ])("does not resume a Code Mode wait after a $label", async ({ checkpoint }) => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "do the thing" },
+      {
+        role: "toolResult",
+        toolName: "wait",
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(checkpoint),
+          },
+        ],
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call-wait-1",
+            name: "wait",
+            arguments: { runId: "cm_interrupted" },
+          },
+        ],
+        stopReason: "toolUse",
+      },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 0, failed: 1, skipped: 0 });
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("does not resume a mixed Code Mode wait and side-effecting tool tail", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "do the thing" },
+      {
+        role: "toolResult",
+        toolName: "exec",
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              status: "waiting",
+              runId: "cm_interrupted",
+              replaySafe: true,
+            }),
+          },
+        ],
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call-wait-1",
+            name: "wait",
+            arguments: { runId: "cm_interrupted" },
+          },
+          {
+            type: "toolCall",
+            id: "call-write-1",
+            name: "write",
+            arguments: { path: "result.txt", content: "done" },
+          },
+        ],
+        stopReason: "toolUse",
+      },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 0, failed: 1, skipped: 0 });
+    expect(callGateway).not.toHaveBeenCalled();
   });
 });

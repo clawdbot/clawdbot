@@ -123,6 +123,15 @@ function commitExists(checkout, sha) {
   }
 }
 
+function isAncestorCommit(checkout, ancestor, descendant = "HEAD") {
+  try {
+    git(checkout, ["merge-base", "--is-ancestor", ancestor, descendant]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function classifyActions(
   changedPaths,
   { buildProvenanceKnown, buildRequired, nodeModulesPresent },
@@ -530,6 +539,54 @@ function defaultRunCommand(command, args, checkout) {
   });
 }
 
+function readSnapshotMetadata(snapshotRoot) {
+  const gitDir = path.join(snapshotRoot, ".git");
+  const headPath = path.join(gitDir, "HEAD");
+  const configPath = path.join(gitDir, "config");
+  const gitDirStat = lstatSync(gitDir);
+  const headStat = lstatSync(headPath);
+  const configStat = lstatSync(configPath);
+  const owner = typeof process.getuid === "function" ? process.getuid() : null;
+  const isTrustedMetadataFile = (filePath, fileStat) =>
+    fileStat.isFile() &&
+    !fileStat.isSymbolicLink() &&
+    (owner === null || fileStat.uid === owner) &&
+    (fileStat.mode & 0o022) === 0 &&
+    realpathSync(filePath) === filePath;
+  if (
+    !gitDirStat.isDirectory() ||
+    gitDirStat.isSymbolicLink() ||
+    realpathSync(gitDir) !== gitDir ||
+    !isTrustedMetadataFile(headPath, headStat) ||
+    !isTrustedMetadataFile(configPath, configStat)
+  ) {
+    return null;
+  }
+
+  const head = readFileSync(headPath, "utf8").trim().toLowerCase();
+  if (!FULL_SHA_RE.test(head)) {
+    return null;
+  }
+  let inOrigin = false;
+  let originUrl = null;
+  for (const rawLine of readFileSync(configPath, "utf8").split("\n")) {
+    const line = rawLine.trim();
+    if (line.startsWith("[") && line.endsWith("]")) {
+      inOrigin = /^\[remote\s+"origin"\]$/u.test(line);
+      continue;
+    }
+    if (!inOrigin) {
+      continue;
+    }
+    const urlMatch = line.match(/^url\s*=\s*(.+)$/u);
+    if (urlMatch) {
+      originUrl = urlMatch[1].trim().replace(/^"(.*)"$/u, "$1");
+      break;
+    }
+  }
+  return originUrl ? { head, originUrl } : null;
+}
+
 export function isOwnedGatewayEntrypoint(checkout, home, entrypoint) {
   const sourceEntrypoint = path.join(checkout, "dist/index.js");
   if (entrypoint === sourceEntrypoint) {
@@ -549,30 +606,30 @@ export function isOwnedGatewayEntrypoint(checkout, home, entrypoint) {
   }
 
   try {
+    const metadata = readSnapshotMetadata(snapshotRoot);
+    const entrypointStat = lstatSync(entrypoint);
+    const owner = typeof process.getuid === "function" ? process.getuid() : null;
     if (
       realpathSync(snapshotRoot) !== snapshotRoot ||
       realpathSync(entrypoint) !== entrypoint ||
-      !originMatches(gitText(snapshotRoot, ["remote", "get-url", "origin"])) ||
-      gitText(snapshotRoot, ["status", "--porcelain"]) !== ""
+      !entrypointStat.isFile() ||
+      entrypointStat.isSymbolicLink() ||
+      (owner !== null && entrypointStat.uid !== owner) ||
+      (entrypointStat.mode & 0o022) !== 0 ||
+      !metadata ||
+      !originMatches(metadata.originUrl)
     ) {
       return false;
     }
-    try {
-      git(snapshotRoot, ["symbolic-ref", "-q", "HEAD"]);
-      return false;
-    } catch {
-      // Immutable runtime snapshots are detached from every mutable branch.
-    }
-    const snapshotHead = gitText(snapshotRoot, ["rev-parse", "HEAD"]);
+    const snapshotHead = metadata.head;
     if (
       !FULL_SHA_RE.test(snapshotHead) ||
       snapshotName !== `gateway-${snapshotHead.slice(0, 7)}` ||
       !commitExists(checkout, snapshotHead) ||
-      !inspectBuildState(snapshotRoot, snapshotHead).current
+      !isAncestorCommit(checkout, snapshotHead)
     ) {
       return false;
     }
-    git(checkout, ["merge-base", "--is-ancestor", snapshotHead, "HEAD"]);
     return true;
   } catch {
     return false;
@@ -926,7 +983,24 @@ export function parseLaunchctlArguments(output) {
 }
 
 function runBuiltGatewayCli(checkout, args, deployment) {
-  const managedDeployment = deployment ?? readManagedGatewayLaunchAgent(checkout);
+  const observedDeployment = deployment ?? readManagedGatewayLaunchAgent(checkout);
+  const sourceEntrypoint = path.join(checkout, "dist/index.js");
+  let managedDeployment = observedDeployment;
+  if (observedDeployment.entrypoint !== sourceEntrypoint) {
+    const currentHead = gitText(checkout, ["rev-parse", "HEAD"]);
+    managedDeployment = resolveGatewayControlDeployment(
+      checkout,
+      observedDeployment,
+      inspectBuildState(checkout, currentHead),
+      currentHead,
+    );
+    if (!managedDeployment) {
+      throw new UpdateInvariantError(
+        "gateway_snapshot_control_unavailable",
+        "refusing to execute a managed Gateway runtime snapshot without a trusted source control build",
+      );
+    }
+  }
   const {
     configPath,
     entrypoint,
@@ -1326,6 +1400,15 @@ function restartGateway(
   return startedAtMs;
 }
 
+function isManagedGatewayLoaded(deployment) {
+  const result = spawnSync(
+    "/bin/launchctl",
+    ["print", `gui/${process.getuid()}/${deployment.label}`],
+    { encoding: "utf8" },
+  );
+  return result.status === 0;
+}
+
 function verifyGateway(runCommand, checkout, expectedSha, deployment = null) {
   assertExactBuild(checkout, expectedSha);
   if (deployment) {
@@ -1555,6 +1638,9 @@ export function maintainMain(options, dependencies = {}) {
     const replaceGatewayEntrypoint =
       dependencies.replaceGatewayEntrypoint ?? replaceLaunchAgentEntrypoint;
     const verifyGatewayRuntime = dependencies.verifyGatewayRuntime ?? verifyManagedGatewayRuntime;
+    const verifyGatewayProbe = dependencies.verifyGateway ?? verifyGateway;
+    const verifyGatewayAfterRestart = dependencies.verifyAndAuditGateway ?? verifyAndAuditGateway;
+    const isGatewayLoaded = dependencies.isGatewayLoaded ?? isManagedGatewayLoaded;
     const prepareSuspension =
       dependencies.prepareGatewaySuspension ??
       ((checkout, deployment) =>
@@ -1760,7 +1846,7 @@ export function maintainMain(options, dependencies = {}) {
         gatewayDeployment,
         gatewayDeployment !== null,
       );
-      gatewayLogAudit = verifyAndAuditGateway({
+      gatewayLogAudit = verifyGatewayAfterRestart({
         runCommand,
         auditGatewayLogs,
         checkout: update.checkout,
@@ -1772,19 +1858,22 @@ export function maintainMain(options, dependencies = {}) {
       gatewayRuntime = verifyGatewayRuntime(update.checkout, update.afterSha);
     } else {
       try {
-        verifyGateway(runCommand, update.checkout, update.afterSha, gatewayControlDeployment);
+        verifyGatewayProbe(runCommand, update.checkout, update.afterSha, gatewayControlDeployment);
         gatewayRuntime = verifyGatewayRuntime(update.checkout, update.afterSha);
       } catch {
         actions.gatewayRestart = true;
         actions.gatewaySelfHeal = true;
+        const bootstrap =
+          gatewayControlDeployment !== null && !isGatewayLoaded(gatewayControlDeployment);
         const restartStartedAt = restartGateway(
           runCommand,
           update.checkout,
           update.afterSha,
           Date.now(),
           gatewayControlDeployment,
+          bootstrap,
         );
-        gatewayLogAudit = verifyAndAuditGateway({
+        gatewayLogAudit = verifyGatewayAfterRestart({
           runCommand,
           auditGatewayLogs,
           checkout: update.checkout,
@@ -1821,7 +1910,7 @@ export function maintainMain(options, dependencies = {}) {
           update.checkout,
         );
         const macTarget = verifyMacTarget(update.checkout);
-        verifyGateway(
+        verifyGatewayProbe(
           runCommand,
           update.checkout,
           update.afterSha,

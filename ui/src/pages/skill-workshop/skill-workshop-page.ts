@@ -267,7 +267,10 @@ function renderSkillWorkshopPage(
               selectedIndex < 0
                 ? 0
                 : (selectedIndex + delta + visibleProposals.length) % visibleProposals.length;
-            selectProposal(visibleProposals[nextIndex].key);
+            const nextProposal = visibleProposals[nextIndex];
+            if (nextProposal) {
+              selectProposal(nextProposal.key);
+            }
           };
           const selectVisibleFallback = (proposals: typeof visibleProposals) => {
             if (
@@ -276,7 +279,10 @@ function renderSkillWorkshopPage(
             ) {
               return;
             }
-            selectProposal(proposals[0].key);
+            const firstProposal = proposals[0];
+            if (firstProposal) {
+              selectProposal(firstProposal.key);
+            }
           };
           return renderSkillWorkshop({
             loading: state.skillWorkshopLoading,

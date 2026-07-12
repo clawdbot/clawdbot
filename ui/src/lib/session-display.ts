@@ -129,6 +129,9 @@ function parseSessionKey(key: string): SessionKeyInfo {
   if (directMatch) {
     const channel = directMatch[1];
     const identifier = directMatch[2];
+    if (!channel || !identifier) {
+      return { prefix: "", fallbackName: key };
+    }
     const channelLabel = CHANNEL_LABELS[channel] ?? capitalize(channel);
     return { prefix: "", fallbackName: `${channelLabel} · ${shortenPeerId(identifier)}` };
   }
@@ -137,6 +140,9 @@ function parseSessionKey(key: string): SessionKeyInfo {
   const groupMatch = key.match(/^agent:[^:]+:([^:]+):group:(.+)$/);
   if (groupMatch) {
     const channel = groupMatch[1];
+    if (!channel) {
+      return { prefix: "", fallbackName: key };
+    }
     const channelLabel = CHANNEL_LABELS[channel] ?? capitalize(channel);
     return { prefix: "", fallbackName: `${channelLabel} Group` };
   }
@@ -159,8 +165,9 @@ function parseSessionKey(key: string): SessionKeyInfo {
   // drop the agent:<id>: routing boilerplate and shorten opaque id runs so the
   // slug reads as a name instead of a raw key.
   const agentKeyMatch = key.match(/^agent:[^:]+:(?:explicit:)?(.+)$/);
-  if (agentKeyMatch) {
-    return { prefix: "", fallbackName: shortenOpaqueIdRuns(agentKeyMatch[1]) };
+  const agentKeyName = agentKeyMatch?.[1];
+  if (agentKeyName) {
+    return { prefix: "", fallbackName: shortenOpaqueIdRuns(agentKeyName) };
   }
 
   // Unknown: return key as-is.

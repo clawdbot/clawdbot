@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   collectReplaySafeToolNames,
   isAgentToolReplaySafe,
+  isAgentToolRestartSafe,
   isCoreToolNameReplaySafe,
 } from "./tool-replay-safety.js";
 
@@ -30,6 +31,21 @@ describe("agent tool replay safety", () => {
 
     expect(isAgentToolReplaySafe(xSearch, { declaredReplaySafe })).toBe(true);
     expect(isAgentToolReplaySafe(vendorWidget, { declaredReplaySafe })).toBe(false);
+  });
+
+  it("accepts owner-declared concrete tools for restart-safe turns", () => {
+    const pluginTool = { name: "vendor_widget" };
+
+    expect(
+      isAgentToolRestartSafe(pluginTool, {
+        declaredReplaySafe: (tool) => (tool === pluginTool ? true : undefined),
+      }),
+    ).toBe(true);
+    expect(
+      isAgentToolRestartSafe(pluginTool, {
+        declaredReplaySafe: () => false,
+      }),
+    ).toBe(false);
   });
 
   it("rejects memory_search because it records durable recall signals", () => {

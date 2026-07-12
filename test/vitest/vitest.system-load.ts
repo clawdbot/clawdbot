@@ -50,6 +50,9 @@ export function parseVitestProcessStats(
     }
 
     const [, rawPid, rawCpu, args] = match;
+    if (!rawPid || !rawCpu || args === undefined) {
+      continue;
+    }
     const pid = Number.parseInt(rawPid, 10);
     if (!Number.isFinite(pid) || pid === selfPid) {
       continue;

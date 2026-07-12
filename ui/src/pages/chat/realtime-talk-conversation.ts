@@ -112,6 +112,9 @@ function upsertRealtimeConversationEntry(
     return upsertRealtimeConversationEntry(state, role, null, text, isFinal, nowMs);
   }
   const entry = state.entries[targetIndex];
+  if (!entry) {
+    return upsertRealtimeConversationEntry(state, role, null, text, isFinal, nowMs);
+  }
   const updatedText =
     role === "assistant"
       ? mergeAssistantTranscriptText(entry.text, text, isFinal)

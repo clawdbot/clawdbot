@@ -173,13 +173,17 @@ function requireThemeId(value: string) {
 
 function normalizeThemeIdFromPath(pathname: string): string | null {
   const segments = pathname.split("/").filter(Boolean);
+  const themeId = segments.at(-1);
+  if (!themeId) {
+    return null;
+  }
   if (segments.length === 2 && segments[0] === "themes") {
-    requireThemeId(segments[1]);
-    return segments[1];
+    requireThemeId(themeId);
+    return themeId;
   }
   if (segments.length === 3 && segments[0] === "r" && segments[1] === "themes") {
-    requireThemeId(segments[2]);
-    return segments[2];
+    requireThemeId(themeId);
+    return themeId;
   }
   return null;
 }

@@ -4,6 +4,7 @@
 // Drawn in the smooth OpenClaw lobster style (see the dreams scene and
 // icons.lobster). Look and personality are seeded per session + page load so
 // every new session hatches a slightly different lobster.
+import { expectDefined } from "@openclaw/normalization-core";
 import { html, LitElement, nothing, svg, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import { isLobsterDay } from "../../../src/shared/lobster-day.js";
@@ -362,7 +363,10 @@ const RARE_NAMES: Partial<Record<LobsterPetPaletteId, string>> = {
 };
 
 export function lobsterPetName(look: LobsterPetLook, seed: number): string {
-  return RARE_NAMES[look.palette.id] ?? PET_NAMES[(seed >>> 3) % PET_NAMES.length];
+  return (
+    RARE_NAMES[look.palette.id] ??
+    expectDefined(PET_NAMES[(seed >>> 3) % PET_NAMES.length], "lobster pet name catalog entry")
+  );
 }
 
 // Rare-event loads, planned per seed so tests can probe them purely: a molt
@@ -485,7 +489,7 @@ function pickWeighted<T>(rng: () => number, entries: Array<[T, number]>): T {
       return value;
     }
   }
-  return entries[entries.length - 1][0];
+  return expectDefined(entries.at(-1), "weighted lobster choice fallback")[0];
 }
 
 function randomBetween(rng: () => number, min: number, max: number): number {
@@ -1586,7 +1590,13 @@ export class LobsterPet extends LitElement {
       // The shed shell keeps the true pre-molt size; a max-tier pet sheds a
       // max-tier shell.
       this.shellScale = this.look.scale;
-      this.look = { ...this.look, scale: tiers[Math.min(index + 1, tiers.length - 1)] };
+      this.look = {
+        ...this.look,
+        scale: expectDefined(
+          tiers[Math.min(index + 1, tiers.length - 1)],
+          "lobster molt size tier",
+        ),
+      };
     }
     this.shellSpotPct = this.spotPct;
     this.shellVisible = true;

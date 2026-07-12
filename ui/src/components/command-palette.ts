@@ -226,6 +226,9 @@ function trapFocus(event: KeyboardEvent, root: HTMLElement) {
   const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   const first = focusable[0];
   const last = focusable[focusable.length - 1];
+  if (!first || !last) {
+    return;
+  }
   const focusInside = active ? focusable.includes(active) : false;
 
   if (event.shiftKey && (!focusInside || active === first)) {
@@ -265,8 +268,11 @@ function handleKeydown(e: KeyboardEvent, props: CommandPaletteProps) {
       break;
     case "Enter":
       e.preventDefault();
-      if (items[props.activeIndex]) {
-        selectItem(items[props.activeIndex], props);
+      {
+        const item = items[props.activeIndex];
+        if (item) {
+          selectItem(item, props);
+        }
       }
       break;
     case "Escape":

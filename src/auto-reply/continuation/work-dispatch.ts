@@ -701,17 +701,20 @@ export function partitionSupersededWork(
   // order and the OLDEST stale wake could be kept while the newest is folded
   // (Codex #988 review :252).
   let newestIdx = 0;
-  for (let i = 1; i < works.length; i++) {
-    const w = works[i];
-    const best = works[newestIdx];
-    if (w.electedAt > best.electedAt || (w.electedAt === best.electedAt && w.hop > best.hop)) {
+  let newest: PendingContinuationWork | undefined;
+  for (const [i, work] of works.entries()) {
+    if (
+      !newest ||
+      work.electedAt > newest.electedAt ||
+      (work.electedAt === newest.electedAt && work.hop > newest.hop)
+    ) {
       newestIdx = i;
+      newest = work;
     }
   }
   const drive: PendingContinuationWork[] = [];
   const superseded: PendingContinuationWork[] = [];
-  for (let i = 0; i < works.length; i++) {
-    const work = works[i];
+  for (const [i, work] of works.entries()) {
     // #988-P2-1 fold-side write-guard: a recovered `running` member is live
     // intent already being driven (it may be observing requests-in-flight). It
     // is NEVER supersede-eligible, regardless of staleness or election order —

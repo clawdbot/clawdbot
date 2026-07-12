@@ -1174,8 +1174,7 @@ export function updateCronRunsFilter(
   state.cronRunsScope = patch.cronRunsScope ?? state.cronRunsScope;
   if (Array.isArray(patch.cronRunsStatuses)) {
     state.cronRunsStatuses = patch.cronRunsStatuses;
-    state.cronRunsStatusFilter =
-      patch.cronRunsStatuses.length === 1 ? patch.cronRunsStatuses[0] : "all";
+    state.cronRunsStatusFilter = patch.cronRunsStatuses[0] ?? "all";
   }
   if (Array.isArray(patch.cronRunsDeliveryStatuses)) {
     state.cronRunsDeliveryStatuses = patch.cronRunsDeliveryStatuses;

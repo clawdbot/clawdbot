@@ -713,7 +713,6 @@ describe("scripts/changed-lanes", () => {
     expectLanes(result.lanes, {
       core: true,
       coreTests: true,
-      strictRatchet: true,
     });
     expect(plan.commands.map((command) => command.args[0])).toContain(
       "check:database-first-legacy-stores",
@@ -1117,7 +1116,6 @@ describe("scripts/changed-lanes", () => {
 
     expectLanes(result.lanes, {
       coreTests: true,
-      strictRatchet: true,
     });
     expect(createChangedCheckPlan(result).commands.map((command) => command.args[0])).toContain(
       "tsgo:core:test",
@@ -2113,7 +2111,6 @@ describe("scripts/changed-lanes", () => {
       extensions: false,
       extensionTests: false,
       scripts: false,
-      strictRatchet: false,
       testRoot: false,
       apps: false,
       docs: false,

@@ -38,6 +38,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "systemSent",
   "abortedLastRun",
   "restartRecoveryRuns",
+  "restartRecoveryForceSafeTools",
   "goal",
   "pendingSkillSuggestion",
   "skillCaptureSignalHashes",

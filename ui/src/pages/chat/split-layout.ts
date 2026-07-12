@@ -1,3 +1,5 @@
+import { expectDefined } from "@openclaw/normalization-core";
+
 export type ChatSplitPane = { id: string; sessionKey: string };
 type ChatSplitColumn = { id: string; panes: ChatSplitPane[]; paneWeights: number[] };
 export type ChatSplitEdge = "left" | "right" | "up" | "down";
@@ -67,10 +69,13 @@ export function findPane(
   layout: ChatSplitLayout,
   paneId: string,
 ): { column: ChatSplitColumn; columnIndex: number; pane: ChatSplitPane; paneIndex: number } | null {
-  for (let columnIndex = 0; columnIndex < layout.columns.length; columnIndex += 1) {
-    const column = layout.columns[columnIndex];
+  for (const [columnIndex, column] of layout.columns.entries()) {
     const paneIndex = column.panes.findIndex((pane) => pane.id === paneId);
     if (paneIndex >= 0) {
+      const selectedPane = column.panes[paneIndex];
+      if (!selectedPane) {
+        continue;
+      }
       return {
         column: {
           ...column,
@@ -78,7 +83,7 @@ export function findPane(
           paneWeights: [...column.paneWeights],
         },
         columnIndex,
-        pane: { ...column.panes[paneIndex] },
+        pane: { ...selectedPane },
         paneIndex,
       };
     }
@@ -103,7 +108,10 @@ export function insertPane(
   }
   const newPaneId = nextPaneId(layout);
   if (edge === "left" || edge === "right") {
-    const sourceWeight = next.columnWeights[location.columnIndex];
+    const sourceWeight = expectDefined(
+      next.columnWeights[location.columnIndex],
+      "split column weight for located pane",
+    );
     const insertIndex = location.columnIndex + (edge === "right" ? 1 : 0);
     next.columns.splice(insertIndex, 0, {
       id: nextColumnId(layout),
@@ -113,7 +121,13 @@ export function insertPane(
     next.columnWeights.splice(location.columnIndex, 1, sourceWeight / 2, sourceWeight / 2);
   } else {
     const column = next.columns[location.columnIndex];
-    const sourceWeight = column.paneWeights[location.paneIndex];
+    if (!column) {
+      return next;
+    }
+    const sourceWeight = expectDefined(
+      column.paneWeights[location.paneIndex],
+      "split pane weight for located pane",
+    );
     const insertIndex = location.paneIndex + (edge === "down" ? 1 : 0);
     column.panes.splice(insertIndex, 0, { id: newPaneId, sessionKey });
     column.paneWeights.splice(location.paneIndex, 1, sourceWeight / 2, sourceWeight / 2);
@@ -129,6 +143,9 @@ export function closePane(layout: ChatSplitLayout, paneId: string): ChatSplitLay
   }
   const next = cloneLayout(layout);
   const column = next.columns[location.columnIndex];
+  if (!column) {
+    return next;
+  }
   const activeWasClosed = next.activePaneId === paneId;
   let nextActivePaneId = next.activePaneId;
   if (activeWasClosed) {
@@ -180,7 +197,12 @@ function resizePair(weights: number[], boundaryIndex: number, pairRatio: number)
   if (boundaryIndex < 0 || boundaryIndex + 1 >= weights.length) {
     return next;
   }
-  const pairSum = weights[boundaryIndex] + weights[boundaryIndex + 1];
+  const before = weights[boundaryIndex];
+  const after = weights[boundaryIndex + 1];
+  if (before === undefined || after === undefined) {
+    return next;
+  }
+  const pairSum = before + after;
   const ratio = Math.max(MIN_PAIR_SHARE, Math.min(1 - MIN_PAIR_SHARE, pairRatio));
   next[boundaryIndex] = pairSum * ratio;
   next[boundaryIndex + 1] = pairSum * (1 - ratio);
@@ -265,15 +287,13 @@ export function normalizeChatSplitLayout(value: unknown): ChatSplitLayout | unde
   const usedColumnIds = new Set<string>();
   const columns: ChatSplitColumn[] = [];
   const sourceColumnIndexes: number[] = [];
-  for (let columnIndex = 0; columnIndex < rawColumns.length; columnIndex += 1) {
-    const rawColumn = rawColumns[columnIndex];
+  for (const [columnIndex, rawColumn] of rawColumns.entries()) {
     if (!Array.isArray(rawColumn.panes)) {
       continue;
     }
     const panes: ChatSplitPane[] = [];
     const sourcePaneIndexes: number[] = [];
-    for (let paneIndex = 0; paneIndex < rawColumn.panes.length; paneIndex += 1) {
-      const rawPane = rawColumn.panes[paneIndex];
+    for (const [paneIndex, rawPane] of rawColumn.panes.entries()) {
       if (!isRecord(rawPane) || typeof rawPane.sessionKey !== "string") {
         continue;
       }
@@ -291,7 +311,11 @@ export function normalizeChatSplitLayout(value: unknown): ChatSplitLayout | unde
       continue;
     }
     const rawPaneWeights = readWeights(rawColumn.paneWeights, rawColumn.panes.length);
-    const paneWeights = normalizedWeights(sourcePaneIndexes.map((index) => rawPaneWeights[index]));
+    const paneWeights = normalizedWeights(
+      sourcePaneIndexes.map((index) =>
+        expectDefined(rawPaneWeights[index], "normalized split pane source weight"),
+      ),
+    );
     columns.push({
       id: uniqueId(rawColumn.id, usedColumnIds, () => `c${++columnSequence}`),
       panes,
@@ -304,7 +328,9 @@ export function normalizeChatSplitLayout(value: unknown): ChatSplitLayout | unde
   }
   const rawColumnWeights = readWeights(value.columnWeights, rawColumns.length);
   const columnWeights = normalizedWeights(
-    sourceColumnIndexes.map((index) => rawColumnWeights[index]),
+    sourceColumnIndexes.map((index) =>
+      expectDefined(rawColumnWeights[index], "normalized split column source weight"),
+    ),
   );
   const allPanes = columns.flatMap((column) => column.panes);
   if (allPanes.length < 2) {
@@ -314,6 +340,6 @@ export function normalizeChatSplitLayout(value: unknown): ChatSplitLayout | unde
     typeof value.activePaneId === "string" ? value.activePaneId.trim() : "";
   const activePaneId = allPanes.some((pane) => pane.id === requestedActivePaneId)
     ? requestedActivePaneId
-    : allPanes[0].id;
+    : expectDefined(allPanes[0], "normalized split layout first pane").id;
   return { columns, columnWeights, activePaneId };
 }

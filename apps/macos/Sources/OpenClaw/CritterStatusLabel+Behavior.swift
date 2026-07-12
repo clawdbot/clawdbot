@@ -41,7 +41,7 @@ extension CritterStatusLabel {
                 }
                 .onChange(of: self.sendCelebrationTick) { _, _ in
                     guard self.effectiveAnimationsEnabled, !self.earBoostActive else { return }
-                    self.wiggleLegs()
+                    self.celebrate()
                 }
                 .onChange(of: self.animationsEnabled) { _, enabled in
                     if enabled, !self.isSleeping {
@@ -145,11 +145,17 @@ extension CritterStatusLabel {
         }
 
         if self.isPaused {
-            return Image(nsImage: CritterIconRenderer.makeIcon(blink: 0, badge: nil))
+            // Paused reads as "off duty": awake but with drooped antennae, distinct
+            // from idle (perked) and sleeping (drooped + closed eyes).
+            return Image(nsImage: CritterIconRenderer.makeIcon(blink: 0, antennaDroop: 1, badge: nil))
         }
 
         if self.isSleeping {
-            return Image(nsImage: CritterIconRenderer.makeIcon(blink: 1, eyesClosedLines: true, badge: nil))
+            return Image(nsImage: CritterIconRenderer.makeIcon(
+                blink: 1,
+                antennaDroop: 1,
+                eyesClosedLines: true,
+                badge: nil))
         }
 
         return Image(nsImage: CritterIconRenderer.makeIcon(
@@ -157,16 +163,33 @@ extension CritterStatusLabel {
             legWiggle: max(self.legWiggle, self.isWorkingNow ? 0.6 : 0),
             earWiggle: self.earWiggle,
             earScale: self.earBoostActive ? 1.9 : 1.0,
-            earHoles: self.earBoostActive,
+            happyEyes: self.celebrating,
             badge: badge))
     }
 
     private func resetMotion() {
         self.blinkAmount = 0
+        self.celebrating = false
         self.wiggleAngle = 0
         self.wiggleOffset = 0
         self.legWiggle = 0
         self.earWiggle = 0
+    }
+
+    /// Message sent: flash happy "∩ ∩" eyes and kick the legs.
+    private func celebrate() {
+        self.celebrating = true
+        self.wiggleLegs()
+        // Generation advances only for celebrations that actually start, so the
+        // newest flash always owns the clear: older expiry tasks bail, and the
+        // eyes can never stick on after a skipped send tick.
+        self.celebrationGeneration += 1
+        let generation = self.celebrationGeneration
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 900_000_000)
+            guard self.celebrationGeneration == generation else { return }
+            self.celebrating = false
+        }
     }
 
     private func blink() {
@@ -290,6 +313,7 @@ extension CritterStatusLabel {
         label.wiggleLegs()
         label.wiggleEars()
         label.scurry()
+        label.celebrate()
         label.scheduleRandomTimers(from: Date())
         _ = label.gatewayNeedsAttention
         _ = label.gatewayBadgeColor
@@ -338,8 +362,9 @@ extension CritterStatusLabel {
             legWiggle: 0.8,
             earWiggle: 0.4,
             earScale: 1.4,
-            earHoles: true,
+            antennaDroop: 0.5,
             eyesClosedLines: true,
+            happyEyes: true,
             badge: .init(symbolName: "gearshape.fill", prominence: .secondary))
     }
 }

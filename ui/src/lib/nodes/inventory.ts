@@ -279,6 +279,9 @@ export function buildNodesInventory(params: {
   for (const [key, bucket] of groupsByKey) {
     const sorted = bucket.toSorted(compareEntries);
     const primary = sorted[0];
+    if (!primary) {
+      continue;
+    }
     groups.push({
       key,
       name: primary.name,

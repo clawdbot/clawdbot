@@ -196,9 +196,10 @@ function syncPendingPostCompactionDelegates(params: {
   if (params.sessionEntry) {
     params.sessionEntry.pendingPostCompactionDelegates = params.delegates;
   }
-  if (params.sessionStore?.[params.sessionKey]) {
+  const storedEntry = params.sessionStore?.[params.sessionKey];
+  if (storedEntry && params.sessionStore) {
     params.sessionStore[params.sessionKey] = {
-      ...params.sessionStore[params.sessionKey],
+      ...storedEntry,
       pendingPostCompactionDelegates: params.delegates,
     };
   }

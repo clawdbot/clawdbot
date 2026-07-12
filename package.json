@@ -1974,7 +1974,6 @@
     "tsgo:prod": "pnpm tsgo:core && pnpm tsgo:ui && pnpm tsgo:extensions",
     "tsgo:profile": "node scripts/profile-tsgo.mjs",
     "tsgo:scripts": "node scripts/run-tsgo.mjs -p tsconfig.scripts.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/scripts.tsbuildinfo",
-    "tsgo:strict-ratchet": "node scripts/run-tsgo.mjs -p tsconfig.strict-ratchet.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/strict-ratchet.tsbuildinfo",
     "tsgo:test": "pnpm tsgo:core:test && pnpm tsgo:extensions:test && pnpm tsgo:test:root",
     "tsgo:test:extensions": "pnpm tsgo:extensions:test",
     "tsgo:test:packages": "node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.test.packages.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/test-packages.tsbuildinfo",

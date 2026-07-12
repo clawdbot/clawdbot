@@ -18,6 +18,7 @@ const waitForQaChannelReady = vi.hoisted(() => vi.fn());
 const patchConfig = vi.hoisted(() => vi.fn());
 const applyConfig = vi.hoisted(() => vi.fn());
 const readConfigSnapshot = vi.hoisted(() => vi.fn());
+const restartGatewayWithConfigPatch = vi.hoisted(() => vi.fn());
 const waitForConfigRestartSettle = vi.hoisted(() => vi.fn());
 const createSession = vi.hoisted(() => vi.fn());
 const readEffectiveTools = vi.hoisted(() => vi.fn());
@@ -86,6 +87,7 @@ vi.mock("./suite-runtime-gateway.js", () => ({
   patchConfig,
   applyConfig,
   readConfigSnapshot,
+  restartGatewayWithConfigPatch,
 }));
 
 vi.mock("./suite-runtime-agent.js", () => ({

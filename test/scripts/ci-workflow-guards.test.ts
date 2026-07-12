@@ -60,6 +60,7 @@ function runCiManifestFixture(options: {
   iosBuildCapability?: boolean;
   nativeI18nCapabilities?: boolean;
   protocolCoverage?: boolean;
+  qaSmokePlan?: boolean;
   formatCheck?: boolean;
   releaseCandidateCompatibility?: boolean;
 }) {
@@ -125,6 +126,8 @@ function runCiManifestFixture(options: {
         path.join(scriptsDir, "plugin-contract-test-plan.mjs"),
         `export const createPluginContractTestShards = () => [{ checkName: "plugin-contracts" }];\n`,
       );
+    }
+    if (options.qaSmokePlan ?? options.bundledPlanner) {
       const smokePlan = path.join(root, "extensions", "qa-lab", "src", "ci-smoke-plan.ts");
       mkdirSync(path.dirname(smokePlan), { recursive: true });
       writeFileSync(smokePlan, "export {};\n");
@@ -1714,6 +1717,14 @@ describe("ci workflow guards", () => {
     expect(currentMissingIos.outputs.run_ios_build).toBe("true");
     expect(currentMissingIos.outputs.run_macos_swift).toBe("true");
 
+    const currentMissingQaPlan = runCiManifestFixture({
+      bundledPlanner: true,
+      eventName: "pull_request",
+      qaSmokePlan: false,
+    });
+    expect(currentMissingQaPlan.status, currentMissingQaPlan.output).toBe(0);
+    expect(currentMissingQaPlan.outputs.run_qa_smoke_ci).toBe("true");
+
     const frozenMissingCurrentCapabilities = runCiManifestFixture({
       bundledPlanner: true,
       historicalCompatibility: false,
@@ -1721,6 +1732,7 @@ describe("ci workflow guards", () => {
       iosBuildCapability: true,
       nativeI18nCapabilities: false,
       protocolCoverage: false,
+      qaSmokePlan: false,
       formatCheck: false,
     });
     expect(frozenMissingCurrentCapabilities.status, frozenMissingCurrentCapabilities.output).toBe(
@@ -1730,6 +1742,7 @@ describe("ci workflow guards", () => {
     expect(frozenMissingCurrentCapabilities.outputs.run_ios_build).toBe("false");
     expect(frozenMissingCurrentCapabilities.outputs.run_macos_swift).toBe("false");
     expect(frozenMissingCurrentCapabilities.outputs.run_native_i18n).toBe("false");
+    expect(frozenMissingCurrentCapabilities.outputs.run_qa_smoke_ci).toBe("false");
     expect(frozenMissingCurrentCapabilities.outputs.run_protocol_event_coverage).toBe("false");
     expect(frozenMissingCurrentCapabilities.outputs.run_format_check).toBe("false");
 
@@ -1865,7 +1878,6 @@ describe("ci workflow guards", () => {
       "${{ needs.preflight.outputs.compatibility_target }}",
     );
     expect(checkShard.run).toContain("pnpm tsgo:scripts");
-    expect(checkShard.run).toContain("pnpm tsgo:strict-ratchet");
     expect(checkShard.run).toContain('elif [[ "$HISTORICAL_TARGET" != "true" ]]');
 
     const uiInstall = workflow.jobs["checks-ui"].steps.find(

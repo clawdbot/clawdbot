@@ -876,11 +876,16 @@ export async function recoverPendingContinuationDelegates(
       }
       storeByPath.set(storePath, sessionStore);
     }
-    if (!params.chainState && !sessionStore[sessionKey]) {
-      log.warn(
-        `[continuation:delegate-recovery-session-missing] path=${storePath} session=${sessionKey} leaving queued/running delegates recoverable`,
-      );
-      continue;
+    const recoveredEntry = sessionStore[sessionKey];
+    let recoveryChainState = params.chainState;
+    if (!recoveryChainState) {
+      if (!recoveredEntry) {
+        log.warn(
+          `[continuation:delegate-recovery-session-missing] path=${storePath} session=${sessionKey} leaving queued/running delegates recoverable`,
+        );
+        continue;
+      }
+      recoveryChainState = loadContinuationChainState(recoveredEntry);
     }
     recoveredSessions++;
     // Persist the advanced chain state to BOTH the durable store and the
@@ -888,13 +893,15 @@ export async function recoverPendingContinuationDelegates(
     // `loadFreshChainState` fresh so sequential hedge fires for multiple delayed
     // delegates see the advancing basis instead of the stale pre-dispatch entry.
     // When the caller provides their own chainState they own persistence; skip.
-    const persistRecoveredChainState = params.chainState
-      ? undefined
-      : async (nextState: ChainState): Promise<void> => {
+    let persistRecoveredChainState:
+      | ((nextState: ChainState) => Promise<void>)
+      | undefined;
+    if (!params.chainState && recoveredEntry) {
+      persistRecoveredChainState = async (nextState: ChainState): Promise<void> => {
           await updateSessionStore(
             storePath,
             (store) => {
-              const sessionEntry = store[sessionKey] ?? {};
+              const sessionEntry = store[sessionKey] ?? recoveredEntry;
               persistContinuationChainState({
                 sessionEntry,
                 count: nextState.currentChainCount,
@@ -906,21 +913,21 @@ export async function recoverPendingContinuationDelegates(
             },
             { requireWriteSuccess: true },
           );
-          const inMemoryEntry = sessionStore[sessionKey] ?? {};
           persistContinuationChainState({
-            sessionEntry: inMemoryEntry,
+            sessionEntry: recoveredEntry,
             count: nextState.currentChainCount,
             startedAt: nextState.chainStartedAt,
             tokens: nextState.accumulatedChainTokens,
             ...(nextState.chainId ? { chainId: nextState.chainId } : {}),
           });
-          sessionStore[sessionKey] = inMemoryEntry;
+          sessionStore[sessionKey] = recoveredEntry;
         };
+    }
     let result: Awaited<ReturnType<typeof dispatchToolDelegates>>;
     try {
       result = await dispatchToolDelegates({
         sessionKey,
-        chainState: params.chainState ?? loadContinuationChainState(sessionStore[sessionKey]),
+        chainState: recoveryChainState,
         ctx: { ...params.ctx, sessionKey },
         maxChainLength: params.maxChainLength ?? runtimeConfig.maxChainLength,
         recoverRunningDelegates: true,
@@ -937,7 +944,7 @@ export async function recoverPendingContinuationDelegates(
           ? {
               persistChainState: persistRecoveredChainState,
               persistBeforeTerminalCommit: true,
-              loadFreshChainState: () => loadContinuationChainState(sessionStore[sessionKey]),
+              loadFreshChainState: () => loadContinuationChainState(recoveredEntry),
             }
           : {}),
       });
@@ -1384,7 +1391,7 @@ export async function recoverAndReleaseStagedPostCompactionDelegates(options: {
         await updateSessionStore(
           storePath,
           (store) => {
-            const sessionEntry = store[sessionKey] ?? {};
+            const sessionEntry = store[sessionKey] ?? entry;
             persistContinuationChainState({
               sessionEntry,
               count: result.chainState.currentChainCount,
@@ -1402,15 +1409,14 @@ export async function recoverAndReleaseStagedPostCompactionDelegates(options: {
         );
         continue;
       }
-      const inMemoryEntry = sessionStore[sessionKey] ?? {};
       persistContinuationChainState({
-        sessionEntry: inMemoryEntry,
+        sessionEntry: entry,
         count: result.chainState.currentChainCount,
         startedAt: result.chainState.chainStartedAt,
         tokens: result.chainState.accumulatedChainTokens,
         ...(result.chainState.chainId ? { chainId: result.chainState.chainId } : {}),
       });
-      sessionStore[sessionKey] = inMemoryEntry;
+      sessionStore[sessionKey] = entry;
       const finalized = finalizeStagedPostCompactionDelegates(result.dispatchedFlowIds);
       assertStagedPostCompactionFinalizationComplete({
         flowIds: result.dispatchedFlowIds,

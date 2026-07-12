@@ -452,8 +452,10 @@ class UsagePage extends OpenClawLightDomElement {
 
     if (this.usageSelectedSessions.length === 1) {
       const sessionKey = this.usageSelectedSessions[0];
-      void this.loadSessionTimeSeries(sessionKey);
-      void this.loadSessionLogs(sessionKey);
+      if (sessionKey) {
+        void this.loadSessionTimeSeries(sessionKey);
+        void this.loadSessionLogs(sessionKey);
+      }
     }
   }
 

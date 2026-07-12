@@ -330,6 +330,8 @@ export type SessionEntry = {
   abortedLastRun?: boolean;
   /** Interrupted run generations whose late lifecycle events must be ignored. */
   restartRecoveryRuns?: RestartRecoveryRun[];
+  /** Keeps automatic restart recovery limited to replay-safe tools until the run terminates. */
+  restartRecoveryForceSafeTools?: true;
   /** Durable guard state for automatic subagent orphan recovery. */
   subagentRecovery?: SubagentRecoveryState;
   /** Quota cascade protection and state-aware failover status. */

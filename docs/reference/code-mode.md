@@ -797,7 +797,14 @@ run is unavailable or expired.` or `code mode run belongs to a different
 session.`.
 - A run's snapshot is removed from the map as soon as it settles to
   `completed` or `failed`, or is dropped on Gateway shutdown (nothing
-  survives a restart, by design: this is transient runtime state).
+  survives a restart: this is transient runtime state).
+- For read-only work, `exec` can set `restartSafe: true`. OpenClaw then rejects
+  side-effecting catalog calls and plugin namespaces before execution and
+  marks suspended results as replay-safe. If a restart interrupts `wait`,
+  [restart recovery](/gateway/restart-recovery) reconstructs the turn from the
+  transcript instead of restoring the process-local snapshot. The recovery
+  turn itself remains limited to audited read-only core tools and explicitly
+  replay-safe plugin tools.
 - OpenClaw caps the number of concurrently suspended runs per process (64) and
   rejects new suspensions past that cap with `too many suspended code mode
 runs.`.

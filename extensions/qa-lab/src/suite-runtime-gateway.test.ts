@@ -1,4 +1,7 @@
 // Qa Lab tests cover suite runtime gateway plugin behavior.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   fetchJson,
@@ -7,6 +10,7 @@ import {
   isConfigHashConflict,
   isConfigPatchNoopForSnapshot,
   patchConfig,
+  restartGatewayWithConfigPatch,
   waitForConfigRestartSettle,
 } from "./suite-runtime-gateway.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
@@ -49,6 +53,49 @@ function createConfigMutationEnv(
 }
 
 describe("qa suite gateway helpers", () => {
+  it("replaces the gateway process after writing the requested config", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-qa-gateway-restart-"));
+    const configPath = path.join(tempDir, "openclaw.json");
+    await fs.writeFile(configPath, '{"gateway":{"auth":{"token":"keep-me"}}}\n', "utf8");
+    const restartAfterStateMutation = vi.fn(
+      async (
+        mutateState: (context: {
+          configPath: string;
+          runtimeEnv: NodeJS.ProcessEnv;
+          stateDir: string;
+          tempRoot: string;
+        }) => Promise<void>,
+      ) => {
+        await mutateState({
+          configPath,
+          runtimeEnv: {},
+          stateDir: path.join(tempDir, "state"),
+          tempRoot: tempDir,
+        });
+      },
+    );
+    try {
+      await restartGatewayWithConfigPatch({
+        env: { gateway: { restartAfterStateMutation } } as never,
+        patch: { tools: { codeMode: { enabled: false } } },
+      });
+
+      await expect(fs.readFile(configPath, "utf8")).resolves.toBe(
+        `${JSON.stringify(
+          {
+            gateway: { auth: { token: "keep-me" } },
+            tools: { codeMode: { enabled: false } },
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      expect(restartAfterStateMutation).toHaveBeenCalledOnce();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("bounds oversized suite gateway JSON responses", async () => {
     let chunksRead = 0;
     const response = new Response(

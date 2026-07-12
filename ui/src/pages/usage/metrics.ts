@@ -87,6 +87,7 @@ function buildPeakErrorHours(sessions: UsageSessionEntry[], timeZone: "local" | 
     if (!usage?.messageCounts || usage.messageCounts.total === 0) {
       continue;
     }
+    const messageCounts = usage.messageCounts;
 
     // Prefer precise quarter-hour message counts when available.
     // Data is stored as UTC quarter-hour buckets (quarterIndex 0-95) with UTC date keys.
@@ -102,22 +103,22 @@ function buildPeakErrorHours(sessions: UsageSessionEntry[], timeZone: "local" | 
         if (!mapped) {
           continue;
         }
-        hourErrors[mapped.hour] += quarterHour.errors;
-        hourMsgs[mapped.hour] += quarterHour.total;
+        hourErrors[mapped.hour] = (hourErrors[mapped.hour] ?? 0) + quarterHour.errors;
+        hourMsgs[mapped.hour] = (hourMsgs[mapped.hour] ?? 0) + quarterHour.total;
       }
       continue;
     }
 
     // Fallback: time-based proportional allocation (legacy algorithm)
     forEachSessionHourSlice(session, timeZone, ({ hour, share }) => {
-      hourErrors[hour] += usage.messageCounts!.errors * share;
-      hourMsgs[hour] += usage.messageCounts!.total * share;
+      hourErrors[hour] = (hourErrors[hour] ?? 0) + (messageCounts.errors ?? 0) * share;
+      hourMsgs[hour] = (hourMsgs[hour] ?? 0) + messageCounts.total * share;
     });
   }
 
   return hourMsgs
     .map((msgs, hour) => {
-      const errors = hourErrors[hour];
+      const errors = hourErrors[hour] ?? 0;
       const rate = msgs > 0 ? errors / msgs : 0;
       return {
         hour,
@@ -286,8 +287,8 @@ function buildUsageMosaicStats(
 
     if (
       forEachSessionTokenUsageBucket(session, timeZone, ({ hour, weekday, tokens }) => {
-        hourTotals[hour] += tokens;
-        weekdayTotals[weekday] += tokens;
+        hourTotals[hour] = (hourTotals[hour] ?? 0) + tokens;
+        weekdayTotals[weekday] = (weekdayTotals[weekday] ?? 0) + tokens;
       })
     ) {
       hasData = true;
@@ -296,8 +297,8 @@ function buildUsageMosaicStats(
 
     if (
       !forEachSessionHourSlice(session, timeZone, ({ usage: usageLocal, hour, weekday, share }) => {
-        hourTotals[hour] += usageLocal.totalTokens * share;
-        weekdayTotals[weekday] += usageLocal.totalTokens * share;
+        hourTotals[hour] = (hourTotals[hour] ?? 0) + usageLocal.totalTokens * share;
+        weekdayTotals[weekday] = (weekdayTotals[weekday] ?? 0) + usageLocal.totalTokens * share;
       })
     ) {
       continue;
@@ -315,7 +316,7 @@ function buildUsageMosaicStats(
     t("usage.mosaic.sat"),
   ].map((label, index) => ({
     label,
-    tokens: weekdayTotals[index],
+    tokens: weekdayTotals[index] ?? 0,
   }));
 
   return {

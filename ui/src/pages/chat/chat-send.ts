@@ -210,7 +210,9 @@ function dataUrlToBase64(dataUrl: string): { content: string; mimeType: string }
   if (!match) {
     return null;
   }
-  return { mimeType: match[1], content: match[2] };
+  const mimeType = match[1];
+  const content = match[2];
+  return mimeType && content ? { mimeType, content } : null;
 }
 
 function buildApiAttachments(attachments?: ChatAttachment[]) {
@@ -1277,11 +1279,13 @@ function clearSubmittedComposerState(
 } {
   const attachmentsUnchanged =
     host.chatAttachments.length === submittedAttachments.length &&
-    host.chatAttachments.every(
-      (attachment, index) =>
-        attachmentSubmitSignature(attachment) ===
-        attachmentSubmitSignature(submittedAttachments[index]),
-    );
+    host.chatAttachments.every((attachment, index) => {
+      const submitted = submittedAttachments[index];
+      return (
+        submitted !== undefined &&
+        attachmentSubmitSignature(attachment) === attachmentSubmitSignature(submitted)
+      );
+    });
   const clearedDraft = host.chatMessage === submittedDraft && attachmentsUnchanged;
   const clearedAttachments = clearedDraft;
   if (clearedDraft) {

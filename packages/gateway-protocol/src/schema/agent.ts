@@ -255,6 +255,9 @@ export const AgentParamsSchema = Type.Object(
       Type.Union([Type.Literal("automatic"), Type.Literal("message_tool_only")]),
     ),
     disableMessageTool: Type.Optional(Type.Boolean()),
+    // Host-owned recovery turns can force every Code Mode exec onto the
+    // restart-safe path even if the model omits or clears the tool argument.
+    forceRestartSafeTools: Type.Optional(Type.Boolean()),
     voiceWakeTrigger: Type.Optional(Type.String()),
     idempotencyKey: NonEmptyString,
     label: Type.Optional(SessionLabelString),

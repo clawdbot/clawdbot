@@ -472,7 +472,8 @@ export function renderNode(params: {
     );
 
     if (nonNull.length === 1) {
-      return renderNode({ ...params, schema: nonNull[0] });
+      const selectedSchema = nonNull[0];
+      return selectedSchema ? renderNode({ ...params, schema: selectedSchema }) : nothing;
     }
 
     // Check if it's a set of literal values (enum-like)

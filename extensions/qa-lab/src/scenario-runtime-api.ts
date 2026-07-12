@@ -58,6 +58,7 @@ export type QaScenarioRuntimeDeps = {
   patchConfig: QaScenarioRuntimeFunction;
   applyConfig: QaScenarioRuntimeFunction;
   readConfigSnapshot: QaScenarioRuntimeFunction;
+  restartGatewayWithConfigPatch: QaScenarioRuntimeFunction;
   createSession: QaScenarioRuntimeFunction;
   readEffectiveTools: QaScenarioRuntimeFunction;
   readSkillStatus: QaScenarioRuntimeFunction;
@@ -153,6 +154,7 @@ type QaScenarioRuntimeApi<
   patchConfig: TDeps["patchConfig"];
   applyConfig: TDeps["applyConfig"];
   readConfigSnapshot: TDeps["readConfigSnapshot"];
+  restartGatewayWithConfigPatch: TDeps["restartGatewayWithConfigPatch"];
   createSession: TDeps["createSession"];
   readEffectiveTools: TDeps["readEffectiveTools"];
   readSkillStatus: TDeps["readSkillStatus"];
@@ -265,6 +267,7 @@ export function createQaScenarioRuntimeApi<
     patchConfig: params.deps.patchConfig,
     applyConfig: params.deps.applyConfig,
     readConfigSnapshot: params.deps.readConfigSnapshot,
+    restartGatewayWithConfigPatch: params.deps.restartGatewayWithConfigPatch,
     createSession: params.deps.createSession,
     readEffectiveTools: params.deps.readEffectiveTools,
     readSkillStatus: params.deps.readSkillStatus,

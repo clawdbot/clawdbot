@@ -160,7 +160,7 @@ describe("oxlint config", () => {
     ]);
   });
 
-  it("keeps lint overrides limited to the strict-ratchet and test-file policies", () => {
+  it("keeps lint overrides limited to the indexed-access and test-file policies", () => {
     const config = readJson(".oxlintrc.json") as OxlintConfig;
 
     expect(config.overrides).toEqual([

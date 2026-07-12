@@ -16,6 +16,9 @@ export function reorderSessionCustomGroups(
     return ordered;
   }
   const [moved] = ordered.splice(sourceIndex, 1);
+  if (!moved) {
+    return ordered;
+  }
   const targetInsertionIndex = ordered.indexOf(target) + (position === "after" ? 1 : 0);
   ordered.splice(targetInsertionIndex, 0, moved);
   return ordered;

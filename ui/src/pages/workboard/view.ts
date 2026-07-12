@@ -282,7 +282,7 @@ function focusWorkboardDialog(root: HTMLElement, initialFocusSelector?: string) 
       preferred && isFocusableWorkboardElement(preferred)
         ? preferred
         : initialFocusSelector
-          ? getFocusableWorkboardElements(root)[0]
+          ? (getFocusableWorkboardElements(root)[0] ?? root)
           : root;
     focusElement(target);
   });
@@ -323,6 +323,9 @@ function trapWorkboardDialogFocus(event: KeyboardEvent, root: HTMLElement) {
   const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   const first = focusable[0];
   const last = focusable[focusable.length - 1];
+  if (!first || !last) {
+    return;
+  }
   const focusInside = active ? root.contains(active) : false;
 
   if (event.shiftKey && (!focusInside || active === first || active === root)) {
@@ -907,7 +910,10 @@ function focusRelativeWorkboardSelectOption(
         ? (activeIndex + 1) % options.length
         : (activeIndex - 1 + options.length) % options.length;
   }
-  focusWorkboardSelectOption(details, options[nextIndex] ?? options[0]);
+  const option = options[nextIndex] ?? options[0];
+  if (option) {
+    focusWorkboardSelectOption(details, option);
+  }
 }
 
 function focusWorkboardSelectTypeaheadOption(details: HTMLDetailsElement, key: string) {

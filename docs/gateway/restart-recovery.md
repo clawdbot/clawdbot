@@ -66,6 +66,16 @@ continue from. If it is not (for example, the turn ended on a stale pending
 approval), the session is not blindly re-run; the agent instead posts a short
 notice asking the user to resend the last request.
 
+OpenClaw can also reconstruct interrupted read-only [Code Mode](/reference/code-mode)
+work. Code Mode marks these runs as restart-safe and rejects side-effecting
+catalog tools or plugin namespaces before they execute. If a restart lands on
+the `wait` control, the new gateway reconstructs the turn from its transcript
+and forces the reconstructed execution to remain restart-safe even if the
+model omits or clears that flag. The host filters the entire reconstructed
+turn to audited read-only core tools and explicitly replay-safe plugin tools,
+including when Code Mode is disabled after the restart. Side-effecting work
+remains guarded by the resend notice rather than risking a duplicate write.
+
 ### Subagents
 
 Subagent runs are persisted in the shared SQLite state database, so the

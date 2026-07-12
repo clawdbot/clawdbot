@@ -131,6 +131,19 @@ function findQaBundledPluginDirsByManifestId(params: {
   return candidates;
 }
 
+function resolveQaBundledPluginManifestPath(params: {
+  repoRoot: string;
+  pluginId: string;
+}): string | null {
+  const sourceExtensionsRoot = path.join(params.repoRoot, "extensions");
+  const manifestDirs = findQaBundledPluginDirsByManifestId(params);
+  const sourceDir = manifestDirs.find(
+    (candidate) => path.dirname(candidate) === sourceExtensionsRoot,
+  );
+  const manifestDir = sourceDir ?? manifestDirs[0];
+  return manifestDir ? path.join(manifestDir, "openclaw.plugin.json") : null;
+}
+
 export async function resolveQaOwnerPluginIdsForProviderIds(params: {
   repoRoot: string;
   providerIds: readonly string[];
@@ -448,7 +461,17 @@ export async function createQaBundledPluginsDir(params: {
     if (!sourceDir) {
       throw new Error(`qa bundled plugin not found: ${pluginId}`);
     }
-    await fs.cp(sourceDir, path.join(bundledPluginsDir, pluginId), { recursive: true });
+    const targetDir = path.join(bundledPluginsDir, pluginId);
+    await fs.cp(sourceDir, targetDir, { recursive: true });
+    // Compiled extension trees omit static manifests. Restore the canonical
+    // source manifest so activation and tool metadata match the built code.
+    const manifestPath = resolveQaBundledPluginManifestPath({
+      repoRoot: params.repoRoot,
+      pluginId,
+    });
+    if (manifestPath) {
+      await fs.copyFile(manifestPath, path.join(targetDir, "openclaw.plugin.json"));
+    }
   }
   await symlinkQaStagedDirEntry({
     sourcePath: path.join(stagedRoot, "dist"),

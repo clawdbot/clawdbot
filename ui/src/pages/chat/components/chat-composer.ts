@@ -566,8 +566,12 @@ function updateSlashMenu(
     if (!opts.skipSlashIntent) {
       requestSlashCommandRefresh(value, props, requestUpdate, getCurrentValue);
     }
-    const cmdName = argMatch[1].toLowerCase();
-    const argFilter = argMatch[2].toLowerCase();
+    const cmdName = argMatch[1]?.toLowerCase();
+    const argFilter = argMatch[2]?.toLowerCase();
+    if (cmdName === undefined || argFilter === undefined) {
+      closeSlashMenuIfNeeded(state, requestUpdate);
+      return;
+    }
     const cmd = SLASH_COMMANDS.find((entry) => entry.name === cmdName);
     if (cmd?.argOptions?.length) {
       const filtered = argFilter
@@ -593,7 +597,7 @@ function updateSlashMenu(
     if (!opts.skipSlashIntent) {
       requestSlashCommandRefresh(value, props, requestUpdate, getCurrentValue);
     }
-    const items = getSlashCommandCompletions(match[1], {
+    const items = getSlashCommandCompletions(match[1] ?? "", {
       showAll: state.slashMenuExpanded,
     });
     state.slashMenuItems = items;
@@ -843,8 +847,7 @@ function renderSlashMenu(
     SlashCommandCategory,
     Array<{ cmd: SlashCommandDef; globalIdx: number }>
   >();
-  for (let i = 0; i < state.slashMenuItems.length; i++) {
-    const cmd = state.slashMenuItems[i];
+  for (const [i, cmd] of state.slashMenuItems.entries()) {
     const cat = cmd.category ?? "session";
     let list = grouped.get(cat);
     if (!list) {
@@ -1087,11 +1090,15 @@ function dataImageClipboardFile(
   if (!match) {
     return null;
   }
-  const mimeType = match[1].toLowerCase();
+  const mimeType = match[1]?.toLowerCase();
+  const base64Source = match[2];
+  if (!mimeType || !base64Source) {
+    return null;
+  }
   if (!isSupportedChatAttachmentFile({ name: baseName, type: mimeType })) {
     return null;
   }
-  const base64 = match[2].replace(/\s+/g, "");
+  const base64 = base64Source.replace(/\s+/g, "");
   try {
     const binary = atob(base64);
     const bytes = new Uint8Array(binary.length);
@@ -1566,7 +1573,7 @@ function formatUsageWindowLabel(label: string): string {
   }
   const hours = /^(\d+)h$/.exec(label);
   if (hours) {
-    return t("chat.composer.contextUsage.limitHours", { hours: hours[1] });
+    return t("chat.composer.contextUsage.limitHours", { hours: hours[1] ?? "" });
   }
   return label;
 }
@@ -2179,16 +2186,21 @@ export function renderChatComposer(props: ChatComposerProps) {
           return;
         case "Tab":
           event.preventDefault();
-          selectSlashArg(
-            state.slashMenuArgItems[state.slashMenuIndex],
-            props,
-            requestUpdate,
-            false,
-          );
+          {
+            const arg = state.slashMenuArgItems[state.slashMenuIndex];
+            if (arg !== undefined) {
+              selectSlashArg(arg, props, requestUpdate, false);
+            }
+          }
           return;
         case "Enter":
           event.preventDefault();
-          selectSlashArg(state.slashMenuArgItems[state.slashMenuIndex], props, requestUpdate, true);
+          {
+            const arg = state.slashMenuArgItems[state.slashMenuIndex];
+            if (arg !== undefined) {
+              selectSlashArg(arg, props, requestUpdate, true);
+            }
+          }
           return;
         case "Escape":
           event.preventDefault();
@@ -2216,11 +2228,21 @@ export function renderChatComposer(props: ChatComposerProps) {
           return;
         case "Tab":
           event.preventDefault();
-          tabCompleteSlashCommand(state.slashMenuItems[state.slashMenuIndex], props, requestUpdate);
+          {
+            const command = state.slashMenuItems[state.slashMenuIndex];
+            if (command) {
+              tabCompleteSlashCommand(command, props, requestUpdate);
+            }
+          }
           return;
         case "Enter":
           event.preventDefault();
-          selectSlashCommand(state.slashMenuItems[state.slashMenuIndex], props, requestUpdate);
+          {
+            const command = state.slashMenuItems[state.slashMenuIndex];
+            if (command) {
+              selectSlashCommand(command, props, requestUpdate);
+            }
+          }
           return;
         case "Escape":
           event.preventDefault();

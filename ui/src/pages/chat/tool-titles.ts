@@ -206,7 +206,8 @@ async function flushTitleQueue(): Promise<void> {
     const titles = result?.titles ?? {};
     let changed = false;
     for (const item of batch) {
-      const title = typeof titles[item.key] === "string" ? titles[item.key].trim() : "";
+      const rawTitle = titles[item.key];
+      const title = typeof rawTitle === "string" ? rawTitle.trim() : "";
       if (title) {
         titlesByKey.set(item.key, title);
         changed = true;

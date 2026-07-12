@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Control UI view renders usage render details screen content.
 import { html, svg, nothing } from "lit";
@@ -201,6 +202,8 @@ function computeFilteredUsage(
       userMessages++;
     }
   }
+  const first = expectDefined(filtered[0], "filtered usage first point");
+  const last = expectDefined(filtered.at(-1), "filtered usage last point");
 
   return {
     ...baseUsage,
@@ -210,9 +213,9 @@ function computeFilteredUsage(
     output: totalOutput,
     cacheRead: totalCacheRead,
     cacheWrite: totalCacheWrite,
-    durationMs: filtered[filtered.length - 1].timestamp - filtered[0].timestamp,
-    firstActivity: filtered[0].timestamp,
-    lastActivity: filtered[filtered.length - 1].timestamp,
+    durationMs: last.timestamp - first.timestamp,
+    firstActivity: first.timestamp,
+    lastActivity: last.timestamp,
     messageCounts: {
       total: filtered.length,
       user: userMessages,
@@ -582,13 +585,13 @@ function renderTimeSeriesCompact(
           <!-- X axis labels (first and last) -->
           ${points.length > 0
             ? svg`
-            <text x="${padding.left}" y="${padding.top + chartHeight + 10}" text-anchor="start" class="ts-axis-label">${formatTimeMs(points[0].timestamp, { hour: "2-digit", minute: "2-digit" }, "")}</text>
-            <text x="${width - padding.right}" y="${padding.top + chartHeight + 10}" text-anchor="end" class="ts-axis-label">${formatTimeMs(points[points.length - 1].timestamp, { hour: "2-digit", minute: "2-digit" }, "")}</text>
+            <text x="${padding.left}" y="${padding.top + chartHeight + 10}" text-anchor="start" class="ts-axis-label">${formatTimeMs(expectDefined(points[0], "time series first point").timestamp, { hour: "2-digit", minute: "2-digit" }, "")}</text>
+            <text x="${width - padding.right}" y="${padding.top + chartHeight + 10}" text-anchor="end" class="ts-axis-label">${formatTimeMs(expectDefined(points.at(-1), "time series last point").timestamp, { hour: "2-digit", minute: "2-digit" }, "")}</text>
           `
             : nothing}
           <!-- Bars -->
           ${points.map((p, i) => {
-            const val = barTotals[i];
+            const val = expectDefined(barTotals[i], "time series bar total");
             const x = padding.left + i * (barWidth + barGap);
             const bh = (val / maxValue) * chartHeight;
             const y = padding.top + chartHeight - bh;
@@ -707,11 +710,15 @@ function renderTimeSeriesCompact(
                 return;
               }
               if (side === "left") {
-                const endTs = cursorEnd ?? points[points.length - 1].timestamp;
+                const endTs =
+                  cursorEnd ??
+                  expectDefined(points.at(-1), "time series right cursor point").timestamp;
                 // Don't let left go past right
                 onCursorRangeChange(Math.min(pt.timestamp, endTs), endTs);
               } else {
-                const startTs = cursorStart ?? points[0].timestamp;
+                const startTs =
+                  cursorStart ??
+                  expectDefined(points[0], "time series left cursor point").timestamp;
                 // Don't let right go past left
                 onCursorRangeChange(startTs, Math.max(pt.timestamp, startTs));
               }

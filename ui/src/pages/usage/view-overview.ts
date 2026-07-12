@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Control UI view renders usage render overview screen content.
 import { html, nothing } from "lit";
@@ -94,18 +95,19 @@ function renderFilterChips(
     return nothing;
   }
 
+  const selectedSessionKey = selectedSessions.at(0) ?? "";
   const selectedSession =
-    selectedSessions.length === 1 ? sessions.find((s) => s.key === selectedSessions[0]) : null;
+    selectedSessions.length === 1 ? sessions.find((s) => s.key === selectedSessionKey) : null;
   const sessionsLabel = selectedSession
     ? truncateUtf16Safe(selectedSession.label || selectedSession.key, 20) +
       ((selectedSession.label || selectedSession.key).length > 20 ? "…" : "")
     : selectedSessions.length === 1
-      ? selectedSessions[0].slice(0, 8) + "…"
+      ? selectedSessionKey.slice(0, 8) + "…"
       : t("usage.filters.sessionsCount", { count: String(selectedSessions.length) });
   const sessionsFullName = selectedSession
     ? selectedSession.label || selectedSession.key
     : selectedSessions.length === 1
-      ? selectedSessions[0]
+      ? selectedSessionKey
       : selectedSessions.join(", ");
 
   const daysLabel =
@@ -335,7 +337,7 @@ function renderDailyChartCompact(
           </div>
           <div class="daily-chart-bars" style="--bar-max-width: ${barMaxWidth}px">
             ${daily.map((d, idx) => {
-              const heightPx = barHeights[idx];
+              const heightPx = expectDefined(barHeights[idx], "daily usage bar height");
               const isSelected = selectedDaySet.has(d.date);
               const label = formatDayLabel(d.date);
               // Shorter label for many days (just day number)

@@ -540,8 +540,9 @@ export function parseContinuationSignal(text: string | undefined): ContinuationS
   const delegateMatch = trimmed.match(
     /\[\[\s*CONTINUE_DELEGATE:\s*((?:(?!\]\])[\s\S])+?)\s*\]\]\s*$/,
   );
-  if (delegateMatch) {
-    let taskBody = delegateMatch[1].trim();
+  const delegateBody = delegateMatch?.[1];
+  if (delegateBody) {
+    let taskBody = delegateBody.trim();
     const parsedBody = parseDelegateBodyDirectives(taskBody);
     if (!parsedBody) {
       return null;
@@ -561,9 +562,11 @@ export function parseContinuationSignal(text: string | undefined): ContinuationS
     // Parse optional +Ns delay suffix (e.g. "+30s", "+5s")
     let delayMs: number | undefined;
     const delayMatch = taskBody.match(/\s+\+(\d+)s\s*$/);
-    if (delayMatch) {
-      delayMs = Number.parseInt(delayMatch[1], 10) * 1000;
-      taskBody = taskBody.slice(0, -delayMatch[0].length).trimEnd();
+    const delaySuffix = delayMatch?.[0];
+    const delaySeconds = delayMatch?.[1];
+    if (delaySuffix && delaySeconds) {
+      delayMs = Number.parseInt(delaySeconds, 10) * 1000;
+      taskBody = taskBody.slice(0, -delaySuffix.length).trimEnd();
     }
     if (taskBody) {
       // Truncate overly long task strings to prevent context-dumping patterns.

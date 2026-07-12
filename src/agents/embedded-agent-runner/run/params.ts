@@ -137,6 +137,8 @@ export type RunEmbeddedAgentParams = {
   requireExplicitMessageTarget?: boolean;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
+  /** Restrict this reconstructed run to restart-safe tools. */
+  forceRestartSafeTools?: boolean;
   /** Internal one-shot model probe mode: no tools, no workspace/chat prompt policy. */
   modelRun?: boolean;
   /** Explicit system prompt mode override for trusted callers. */

@@ -465,6 +465,7 @@ function clearPendingFinalDeliveryFields(entry: SessionEntry, updatedAt: number)
     pendingFinalDeliveryLastError: undefined,
     pendingFinalDeliveryContext: undefined,
     pendingFinalDeliveryIntentId: undefined,
+    restartRecoveryForceSafeTools: undefined,
     updatedAt,
   };
 }
@@ -2642,6 +2643,9 @@ async function agentCommandInternal(
             preserveRuntimeModel:
               fallbackExhausted || isHeartbeatLifecycleRun || preserveUserFacingSessionModelState,
             preserveUserFacingSessionModelState,
+            // Delivered recovery runs clear the guard with pending-delivery state below.
+            clearRestartRecoveryForceSafeTools:
+              opts.forceRestartSafeTools === true && opts.deliver !== true,
           });
           sessionEntry = sessionStore[sessionKey] ?? sessionEntry;
         }

@@ -550,7 +550,11 @@ function refreshOpenCallIds(
       openCallIndexes.delete(callId);
     }
   }
-  for (const callId of unresolvedToolCallIds(coalesced[callIndex])) {
+  const item = coalesced[callIndex];
+  if (!item) {
+    return;
+  }
+  for (const callId of unresolvedToolCallIds(item)) {
     openCallIndexes.set(callId, callIndex);
   }
 }
@@ -567,8 +571,9 @@ function coalesceToolActivityMessages(items: ChatItem[]): ChatItem[] {
     for (const resultItem of resultItems) {
       const callId = resolveToolResultCallId(resultItem);
       const callIndex = callId ? openCallIndexes.get(callId) : undefined;
+      const callItem = callIndex === undefined ? undefined : coalesced[callIndex];
       const merged =
-        callIndex === undefined ? null : mergeToolCallResultPair(coalesced[callIndex], resultItem);
+        callIndex === undefined || !callItem ? null : mergeToolCallResultPair(callItem, resultItem);
       if (!merged || callIndex === undefined) {
         unmatchedResultItems.push(resultItem);
         continue;
@@ -588,10 +593,8 @@ function coalesceToolActivityMessages(items: ChatItem[]): ChatItem[] {
     if (unresolvedCallIds.size === 1) {
       const callId = unresolvedCallIds.values().next().value;
       const previousIndex = callId ? openCallIndexes.get(callId) : undefined;
-      if (
-        previousIndex !== undefined &&
-        unresolvedToolCallIds(coalesced[previousIndex]).size === 1
-      ) {
+      const previous = previousIndex === undefined ? undefined : coalesced[previousIndex];
+      if (previousIndex !== undefined && previous && unresolvedToolCallIds(previous).size === 1) {
         coalesced[previousIndex] = item;
         refreshOpenCallIds(openCallIndexes, coalesced, previousIndex);
         continue;
@@ -633,7 +636,7 @@ function annotateToolTurnOutcome(
   let sawAssistantReply = false;
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index];
-    if (item.kind !== "group") {
+    if (!item || item.kind !== "group") {
       continue;
     }
     const role = item.role.toLowerCase();
@@ -1240,6 +1243,9 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   for (let i = 0; i < maxLen; i++) {
     if (i < indexedSegments.length) {
       const segment = indexedSegments[i];
+      if (!segment) {
+        continue;
+      }
       const text = sanitizeStreamText(segment.text);
       const usesAccumulatedText = streamSegmentUsesAccumulatedText(segment);
       const visibleText = usesAccumulatedText

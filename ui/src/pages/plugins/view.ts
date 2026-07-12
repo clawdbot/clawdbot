@@ -422,7 +422,7 @@ function pluginMenuItems(
   rowKey: string,
   options: { details: boolean },
 ): PluginMenuItem[] {
-  const blocked = !props.canMutate || props.busy[rowKey];
+  const blocked = !props.canMutate || (props.busy[rowKey] ?? false);
   const items: PluginMenuItem[] = [];
   if (options.details) {
     items.push({
@@ -620,7 +620,7 @@ function renderInventoryPulse(props: PluginsViewProps) {
 
 function renderInstalledRow(plugin: PluginCatalogItem, props: PluginsViewProps): TemplateResult {
   const key = pluginRowKey(plugin.id);
-  const busy = props.busy[key];
+  const busy = props.busy[key] ?? false;
   return html`
     <article
       class="plugins-row plugins-row--${plugin.state} plugins-row--clickable"
@@ -855,7 +855,7 @@ function renderInstalled(props: PluginsViewProps) {
 
 function renderCatalogCard(plugin: PluginCatalogItem, props: PluginsViewProps): TemplateResult {
   const key = pluginRowKey(plugin.id);
-  const busy = props.busy[key];
+  const busy = props.busy[key] ?? false;
   return html`
     <article
       class="plugins-card plugins-card--clickable"
@@ -900,7 +900,7 @@ function renderConnectorCard(
   props: PluginsViewProps,
 ): TemplateResult {
   const key = connectorRowKey(connector.id);
-  const busy = props.busy[key];
+  const busy = props.busy[key] ?? false;
   const isMcp = connector.action.kind === "mcp";
   const installed =
     isMcp &&
@@ -1006,7 +1006,7 @@ function renderClawHubResult(item: PluginSearchResult, props: PluginsViewProps):
   const pkg = item.package;
   const installed = findInstalledSearchPlugin(item, props.result?.plugins ?? []);
   const key = clawHubRowKey(pkg.name);
-  const busy = props.busy[key];
+  const busy = props.busy[key] ?? false;
   const artSlug = pkg.runtimeId ?? pkg.name;
   return html`
     <article
@@ -1192,7 +1192,7 @@ function renderDetailOverlay(props: PluginsViewProps) {
     return nothing;
   }
   const key = pluginRowKey(plugin.id);
-  const busy = props.busy[key];
+  const busy = props.busy[key] ?? false;
   return html`
     <div
       class="plugins-detail-backdrop"

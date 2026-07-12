@@ -71,8 +71,9 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     this.audio.style.display = "none";
     document.body.append(this.audio);
     peer.addEventListener("track", (event) => {
-      if (this.audio) {
-        this.audio.srcObject = event.streams[0];
+      const stream = event.streams[0];
+      if (this.audio && stream) {
+        this.audio.srcObject = stream;
       }
     });
     const media = await this.awaitSetupStep(peer, openRealtimeTalkInput(this.ctx.inputDeviceId));

@@ -543,7 +543,10 @@ function scopeSchemaSections(
     if (exclude && exclude.size > 0 && exclude.has(key)) {
       continue;
     }
-    nextProps[key] = schema.properties[key];
+    const property = schema.properties[key];
+    if (property) {
+      nextProps[key] = property;
+    }
   }
   return { ...schema, properties: nextProps };
 }

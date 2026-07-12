@@ -153,6 +153,8 @@ export type AgentCommandOpts = {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   /** Internal runs can omit the channel message tool entirely. */
   disableMessageTool?: boolean;
+  /** Restrict this reconstructed run to restart-safe tools. */
+  forceRestartSafeTools?: boolean;
   /** Gateway ingress that already persisted visible activity can skip the duplicate pre-run touch. */
   skipInitialSessionTouch?: boolean;
   /** Per-call stream param overrides (best-effort). */

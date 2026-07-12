@@ -1,4 +1,5 @@
 import { consume } from "@lit/context";
+import { expectDefined } from "@openclaw/normalization-core";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
@@ -32,6 +33,16 @@ import {
   type ChatSplitLayout,
   type ChatSplitPane,
 } from "./split-layout.ts";
+
+function splitWeight(weights: number[], index: number, context: string): number {
+  return expectDefined(weights[index], context);
+}
+
+function splitRatio(weights: number[], index: number, context: string): number {
+  const before = splitWeight(weights, index, `${context} before divider`);
+  const after = splitWeight(weights, index + 1, `${context} after divider`);
+  return before / (before + after);
+}
 
 type ChatRouteData = {
   sessionKey: string;
@@ -453,7 +464,11 @@ export class ChatPage extends OpenClawLightDomElement {
           (column, columnIndex) => html`
             <div
               class="chat-split-view__column"
-              style="flex: ${layout.columnWeights[columnIndex]} 1 0"
+              style="flex: ${splitWeight(
+                layout.columnWeights,
+                columnIndex,
+                "rendered split column weight",
+              )} 1 0"
             >
               ${repeat(
                 column.panes,
@@ -462,14 +477,17 @@ export class ChatPage extends OpenClawLightDomElement {
                   ${this.renderPaneCell(
                     pane,
                     pane.id === layout.activePaneId,
-                    column.paneWeights[paneIndex],
+                    splitWeight(column.paneWeights, paneIndex, "rendered split pane weight"),
                   )}
                   ${paneIndex < column.panes.length - 1
                     ? html`
                         <resizable-divider
                           orientation="horizontal"
-                          .splitRatio=${column.paneWeights[paneIndex] /
-                          (column.paneWeights[paneIndex] + column.paneWeights[paneIndex + 1])}
+                          .splitRatio=${splitRatio(
+                            column.paneWeights,
+                            paneIndex,
+                            "split pane weight",
+                          )}
                           .minRatio=${0.15}
                           .maxRatio=${0.85}
                           .label=${t("nav.resize")}
@@ -490,8 +508,11 @@ export class ChatPage extends OpenClawLightDomElement {
             ${columnIndex < layout.columns.length - 1
               ? html`
                   <resizable-divider
-                    .splitRatio=${layout.columnWeights[columnIndex] /
-                    (layout.columnWeights[columnIndex] + layout.columnWeights[columnIndex + 1])}
+                    .splitRatio=${splitRatio(
+                      layout.columnWeights,
+                      columnIndex,
+                      "split column weight",
+                    )}
                     .minRatio=${0.15}
                     .maxRatio=${0.85}
                     .label=${t("nav.resize")}

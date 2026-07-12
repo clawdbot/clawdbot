@@ -354,7 +354,7 @@ export function unwrapShellWrapperCommand(command: string): string {
   const match = command.match(
     /^\s*(?:\/(?:usr\/)?bin\/)?(?:ba|z|da)?sh\s+-l?c\s+(['"])([\s\S]+)\1\s*$/,
   );
-  return match ? match[2] : command;
+  return match?.[2] ?? command;
 }
 
 function buildToolCallView(

@@ -460,7 +460,7 @@ jobs:
           const compactPullRequest = isCanonicalRepository && eventName === "pull_request";
           const runQaSmokeCi =
             runNodeFull &&
-            (!compatibilityTarget || existsSync("extensions/qa-lab/src/ci-smoke-plan.ts"));
+            (!frozenTarget || existsSync("extensions/qa-lab/src/ci-smoke-plan.ts"));
           const nodeTestShards = runNodeFull
             ? createNodeTestPlan({
                 includeReleaseOnlyPluginShards: false,
@@ -1541,12 +1541,6 @@ jobs:
                 pnpm tsgo:scripts
               elif [[ "$HISTORICAL_TARGET" != "true" ]]; then
                 echo "Current CI targets must provide the tsgo:scripts package script." >&2
-                exit 1
-              fi
-              if pnpm run --silent 2>/dev/null | grep -q '^  tsgo:strict-ratchet$'; then
-                pnpm tsgo:strict-ratchet
-              elif [[ "$HISTORICAL_TARGET" != "true" ]]; then
-                echo "Current CI targets must provide the tsgo:strict-ratchet package script." >&2
                 exit 1
               fi
               if pnpm run --silent 2>/dev/null | grep -q '^  tsgo:test:root$'; then

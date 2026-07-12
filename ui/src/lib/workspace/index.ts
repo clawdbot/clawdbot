@@ -329,8 +329,9 @@ export function resolveActiveSlug(
     return requestedTab.slug;
   }
   const visible = visibleTabs(workspace);
-  if (visible.length > 0) {
-    return visible[0].slug;
+  const firstVisible = visible[0];
+  if (firstVisible) {
+    return firstVisible.slug;
   }
   return orderedTabs(workspace)[0]?.slug ?? null;
 }

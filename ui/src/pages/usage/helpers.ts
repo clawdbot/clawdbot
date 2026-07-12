@@ -42,11 +42,14 @@ export function toggleUsageRangeSelection<T>(
   append: boolean,
 ): T[] {
   if (shiftKey && selected.length > 0) {
-    const lastIndex = orderedValues.indexOf(selected[selected.length - 1]);
-    const nextIndex = orderedValues.indexOf(value);
-    if (lastIndex !== -1 && nextIndex !== -1) {
-      const [start, end] = lastIndex < nextIndex ? [lastIndex, nextIndex] : [nextIndex, lastIndex];
-      return [...new Set([...selected, ...orderedValues.slice(start, end + 1)])];
+    for (const lastSelected of selected.slice(-1)) {
+      const lastIndex = orderedValues.indexOf(lastSelected);
+      const nextIndex = orderedValues.indexOf(value);
+      if (lastIndex !== -1 && nextIndex !== -1) {
+        const [start, end] =
+          lastIndex < nextIndex ? [lastIndex, nextIndex] : [nextIndex, lastIndex];
+        return [...new Set([...selected, ...orderedValues.slice(start, end + 1)])];
+      }
     }
   }
   if (selected.includes(value)) {
@@ -72,7 +75,7 @@ export function selectUsageSessionKeys(
         return rightValue - leftValue;
       })
       .map((session) => session.key);
-    const lastIndex = orderedKeys.indexOf(selected[selected.length - 1]);
+    const lastIndex = orderedKeys.indexOf(selected.at(-1) ?? "");
     const nextIndex = orderedKeys.indexOf(key);
     if (lastIndex !== -1 && nextIndex !== -1) {
       const [start, end] = lastIndex < nextIndex ? [lastIndex, nextIndex] : [nextIndex, lastIndex];
@@ -349,8 +352,8 @@ export function parseToolSummary(content: string) {
   const nonToolLines: string[] = [];
   for (const line of lines) {
     const match = /^\[Tool:\s*([^\]]+)\]/.exec(line.trim());
-    if (match) {
-      const name = match[1];
+    const name = match?.[1];
+    if (name) {
       toolCounts.set(name, (toolCounts.get(name) ?? 0) + 1);
       continue;
     }

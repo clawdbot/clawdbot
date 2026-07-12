@@ -168,14 +168,19 @@ function normalizeSecretInputUnion(
     return null;
   }
   const nonString = remaining.filter((_, index) => index !== stringIndex);
-  if (nonString.length !== 1 || !isSecretRefUnion(nonString[0])) {
+  const secretRefSchema = nonString[0];
+  const stringSchema = remaining[stringIndex];
+  if (nonString.length !== 1 || !secretRefSchema || !stringSchema) {
+    return null;
+  }
+  if (!isSecretRefUnion(secretRefSchema)) {
     return null;
   }
   return normalizeSchemaNode(
     {
       ...schema,
-      ...remaining[stringIndex],
-      nullable: nullable || remaining[stringIndex].nullable,
+      ...stringSchema,
+      nullable: nullable || stringSchema.nullable,
       anyOf: undefined,
       oneOf: undefined,
       allOf: undefined,
@@ -249,11 +254,15 @@ function normalizeUnion(
   }
 
   if (remaining.length === 1) {
+    const remainingSchema = remaining[0];
+    if (!remainingSchema) {
+      return null;
+    }
     return normalizeSchemaNode(
       {
         ...schema,
-        ...remaining[0],
-        nullable: nullable || remaining[0].nullable,
+        ...remainingSchema,
+        nullable: nullable || remainingSchema.nullable,
         anyOf: undefined,
         oneOf: undefined,
         allOf: undefined,

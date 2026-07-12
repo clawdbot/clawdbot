@@ -136,9 +136,12 @@ const buildQuerySuggestions = (
     return [];
   }
   const tokens = trimmed.length ? trimmed.split(/\s+/) : [];
-  const lastToken = tokens.length ? tokens[tokens.length - 1] : "";
-  const [rawKey, rawValue] = lastToken.includes(":")
-    ? [lastToken.slice(0, lastToken.indexOf(":")), lastToken.slice(lastToken.indexOf(":") + 1)]
+  const lastQueryWord = tokens.at(-1) ?? "";
+  const [rawKey, rawValue] = lastQueryWord.includes(":")
+    ? [
+        lastQueryWord.slice(0, lastQueryWord.indexOf(":")),
+        lastQueryWord.slice(lastQueryWord.indexOf(":") + 1),
+      ]
     : ["", ""];
 
   const key = normalizeLowercaseStringOrEmpty(rawKey);

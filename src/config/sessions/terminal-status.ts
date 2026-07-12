@@ -16,5 +16,6 @@ export function recoverTerminalSessionEntryForVisibleTurn(entry: SessionEntry): 
     endedAt: undefined,
     runtimeMs: undefined,
     abortedLastRun: undefined,
+    restartRecoveryForceSafeTools: undefined,
   };
 }
