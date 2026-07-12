@@ -11,6 +11,7 @@ import type {
   GoogleMeetModeInput,
   GoogleMeetTransport,
 } from "./config.js";
+import { normalizeMeetUrl } from "./meet-url.js";
 import { addGoogleMeetSetupCheck, getGoogleMeetSetupStatus } from "./setup.js";
 import { isSameMeetUrlForReuse, resolveChromeNodeInfo } from "./transports/chrome-browser-proxy.js";
 import { createMeetWithBrowserProxyOnNode } from "./transports/chrome-create.js";
@@ -40,6 +41,8 @@ import {
   speakMeetViaVoiceCallGateway,
 } from "./voice-call-gateway.js";
 
+export { normalizeMeetUrl } from "./meet-url.js";
+
 type ChromeAudioBridgeResult = NonNullable<
   | Awaited<ReturnType<typeof launchChromeMeet>>["audioBridge"]
   | Awaited<ReturnType<typeof launchChromeMeetOnNode>>["audioBridge"]
@@ -51,26 +54,6 @@ function nowIso(): string {
 
 function buildTwilioVoiceCallSessionKey(meetingSessionId: string): string {
   return `voice:google-meet:${meetingSessionId}`;
-}
-
-export function normalizeMeetUrl(input: unknown): string {
-  const raw = normalizeOptionalString(input);
-  if (!raw) {
-    throw new Error("url required");
-  }
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    throw new Error("url must be a valid Google Meet URL");
-  }
-  if (url.protocol !== "https:" || url.hostname.toLowerCase() !== "meet.google.com") {
-    throw new Error("url must be an explicit https://meet.google.com/... URL");
-  }
-  if (!/^\/[a-z]{3}-[a-z]{4}-[a-z]{3}(?:$|[/?#])/i.test(url.pathname)) {
-    throw new Error("url must include a Google Meet meeting code");
-  }
-  return url.toString();
 }
 
 function resolveTransport(input: GoogleMeetTransport | undefined, config: GoogleMeetConfig) {
