@@ -135,13 +135,12 @@ describe("hydrateViewer", () => {
     fileDiffHydrateMock.mockImplementationOnce(() => {
       throw new Error("broken card");
     });
-    const { controllers, hydrateViewer } = await import("./viewer-client.js");
-    controllers.splice(0);
+    const { hydrateViewer } = await import("./viewer-client.js");
 
     await hydrateViewer();
 
     expect(fileDiffHydrateMock).toHaveBeenCalledTimes(2);
-    expect(controllers).toHaveLength(1);
+    expect(fileDiffRerenderMock).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(
       "Skipping diff card that failed to hydrate",
       expect.any(Error),
@@ -157,14 +156,13 @@ describe("hydrateViewer", () => {
     fileDiffSetOptionsMock.mockImplementationOnce(() => {
       throw new Error("broken options");
     });
-    const { controllers, hydrateViewer } = await import("./viewer-client.js");
-    controllers.splice(0);
+    const { hydrateViewer } = await import("./viewer-client.js");
 
     await hydrateViewer();
 
     expect(fileDiffHydrateMock).toHaveBeenCalledTimes(2);
     expect(fileDiffSetOptionsMock).toHaveBeenCalledTimes(2);
-    expect(controllers).toHaveLength(1);
+    expect(fileDiffRerenderMock).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(
       "Skipping diff card that failed to hydrate",
       expect.any(Error),
@@ -175,30 +173,22 @@ describe("hydrateViewer", () => {
 
   it("replaces stale controllers when hydrating the current cards again", async () => {
     renderCard();
-    const { controllers, hydrateViewer } = await import("./viewer-client.js");
-    controllers.splice(0);
+    const { hydrateViewer } = await import("./viewer-client.js");
 
     await hydrateViewer();
-    expect(controllers).toHaveLength(1);
-    const firstController = controllers[0];
 
     document.body.innerHTML = "";
     renderCard();
     await hydrateViewer();
 
-    expect(controllers).toHaveLength(1);
-    expect(controllers[0]).not.toBe(firstController);
     expect(fileDiffHydrateMock).toHaveBeenCalledTimes(2);
-  });
-});
+    const currentOptions = fileDiffSetOptionsMock.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    const renderHeaderMetadata = currentOptions.renderHeaderMetadata as () => HTMLElement;
+    fileDiffRerenderMock.mockClear();
 
-describe("resolveViewerLanguagePackAvailability", () => {
-  it("resolves defined and undefined build flags", async () => {
-    const { resolveViewerLanguagePackAvailability } = await import("./viewer-client.js");
+    renderHeaderMetadata().querySelector<HTMLButtonElement>("button")?.click();
 
-    expect(resolveViewerLanguagePackAvailability(true)).toBe(true);
-    expect(resolveViewerLanguagePackAvailability(false)).toBe(false);
-    expect(resolveViewerLanguagePackAvailability(undefined)).toBe(false);
+    expect(fileDiffRerenderMock).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -447,12 +437,10 @@ describe("header metadata", () => {
       '<nav class="oc-diff-card oc-diff-nav" aria-label="Changed files"><ol></ol></nav>',
     );
     renderCard();
-    const { controllers, hydrateViewer } = await import("./viewer-client.js");
-    controllers.splice(0);
+    const { hydrateViewer } = await import("./viewer-client.js");
 
     await hydrateViewer();
 
-    expect(controllers).toHaveLength(1);
     expect(fileDiffHydrateMock).toHaveBeenCalledTimes(1);
   });
 });

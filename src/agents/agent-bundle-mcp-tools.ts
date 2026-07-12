@@ -11,6 +11,7 @@ export type {
 export {
   testing,
   testing as __testing,
+  completeDeferredSessionMcpRuntimeRetirement,
   createSessionMcpRuntime,
   disposeAllSessionMcpRuntimes,
   disposeSessionMcpRuntime,

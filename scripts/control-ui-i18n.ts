@@ -8,8 +8,21 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { completeSimple, type AssistantMessage, type Model } from "openclaw/plugin-sdk/llm";
 import * as ts from "typescript";
 import { formatErrorMessage } from "../src/infra/errors.ts";
+import {
+  compareStringArrays,
+  createControlUiLocaleSyncPlan,
+  flattenTranslations,
+  type GlossaryEntry,
+  type LocaleEntry,
+  type LocaleMeta,
+  type TranslationBatchItem,
+  type TranslationMap,
+  type TranslationMemoryEntry,
+} from "./lib/control-ui-i18n-sync-plan.ts";
 import { sleep } from "./lib/sleep.mjs";
 import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
+
+export { shouldReuseExistingTranslation } from "./lib/control-ui-i18n-sync-plan.ts";
 
 const { formatGeneratedModule } = (await import(
   new URL("./lib/format-generated-module.mjs", import.meta.url).href
@@ -24,60 +37,9 @@ const { formatGeneratedModule } = (await import(
   ) => string;
 };
 
-interface TranslationMap {
-  [key: string]: string | TranslationMap;
-}
-
-type TranslationValue = string | { [key: string]: TranslationValue };
-
-type LocaleEntry = {
-  exportName: string;
-  fileName: string;
-  languageKey: string;
-  locale: string;
-};
-
-type GlossaryEntry = {
-  source: string;
-  target: string;
-};
-
 type RunProcessParentSignalState = {
   done: boolean;
   signal: NodeJS.Signals | null;
-};
-
-type TranslationMemoryEntry = {
-  cache_key: string;
-  model: string;
-  provider: string;
-  segment_id: string;
-  source_path: string;
-  src_lang: string;
-  text: string;
-  text_hash: string;
-  tgt_lang: string;
-  translated: string;
-  updated_at: string;
-};
-
-type LocaleMeta = {
-  fallbackKeys: string[];
-  generatedAt: string;
-  locale: string;
-  model: string;
-  provider: string;
-  sourceHash: string;
-  totalKeys: number;
-  translatedKeys: number;
-  workflow: number;
-};
-
-type TranslationBatchItem = {
-  cacheKey: string;
-  key: string;
-  text: string;
-  textHash: string;
 };
 
 type RawCopyFinding = {
@@ -390,42 +352,6 @@ async function loadLocaleMap(filePath: string, exportName: string): Promise<Tran
   return mod[exportName] ?? null;
 }
 
-function flattenTranslations(value: TranslationMap, prefix = "", out = new Map<string, string>()) {
-  for (const [key, nested] of Object.entries(value)) {
-    const fullKey = prefix ? `${prefix}.${key}` : key;
-    if (typeof nested === "string") {
-      out.set(fullKey, nested);
-      continue;
-    }
-    flattenTranslations(nested, fullKey, out);
-  }
-  return out;
-}
-
-function setNestedValue(root: TranslationMap, dottedKey: string, value: string) {
-  const parts = dottedKey.split(".");
-  let cursor: TranslationMap = root;
-  for (let index = 0; index < parts.length - 1; index += 1) {
-    const key = parts[index];
-    const next = cursor[key];
-    if (!next || typeof next === "string") {
-      const replacement: TranslationMap = {};
-      cursor[key] = replacement;
-      cursor = replacement;
-      continue;
-    }
-    cursor = next;
-  }
-  cursor[parts.at(-1)!] = value;
-}
-
-function compareStringArrays(left: string[], right: string[]) {
-  if (left.length !== right.length) {
-    return false;
-  }
-  return left.every((value, index) => value === right[index]);
-}
-
 type PlaceholderMismatch = {
   key: string;
   locale: string;
@@ -488,41 +414,6 @@ function assertPlaceholderParity(
   );
 }
 
-function isIdentifier(value: string): boolean {
-  return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(value);
-}
-
-function renderTranslationValue(value: TranslationValue, indent = 0): string {
-  if (typeof value === "string") {
-    return JSON.stringify(value);
-  }
-
-  const entries = Object.entries(value);
-  if (entries.length === 0) {
-    return "{}";
-  }
-
-  const pad = "  ".repeat(indent);
-  const innerPad = "  ".repeat(indent + 1);
-  return `{\n${entries
-    .map(([key, nested]) => {
-      const renderedKey = isIdentifier(key) ? key : JSON.stringify(key);
-      return `${innerPad}${renderedKey}: ${renderTranslationValue(nested, indent + 1)},`;
-    })
-    .join("\n")}\n${pad}}`;
-}
-
-function renderLocaleModule(entry: LocaleEntry, value: TranslationMap): string {
-  return [
-    "// Generated locale bundle for Control UI translations.",
-    "// Run `pnpm ui:i18n:sync` instead of editing this file directly.",
-    'import type { TranslationMap } from "../lib/types.ts";',
-    "",
-    `export const ${entry.exportName}: TranslationMap = ${renderTranslationValue(value)};`,
-    "",
-  ].join("\n");
-}
-
 async function loadGlossary(filePath: string): Promise<GlossaryEntry[]> {
   if (!existsSync(filePath)) {
     return [];
@@ -532,20 +423,12 @@ async function loadGlossary(filePath: string): Promise<GlossaryEntry[]> {
   return Array.isArray(parsed) ? parsed : [];
 }
 
-function renderGlossary(entries: readonly GlossaryEntry[]): string {
-  return `${JSON.stringify(entries, null, 2)}\n`;
-}
-
 async function loadMeta(filePath: string): Promise<LocaleMeta | null> {
   if (!existsSync(filePath)) {
     return null;
   }
   const raw = await readFile(filePath, "utf8");
   return JSON.parse(raw) as LocaleMeta;
-}
-
-function renderMeta(meta: LocaleMeta): string {
-  return `${JSON.stringify(meta, null, 2)}\n`;
 }
 
 async function loadTranslationMemory(
@@ -567,30 +450,6 @@ async function loadTranslationMemory(
     }
   }
   return entries;
-}
-
-function renderTranslationMemory(entries: Map<string, TranslationMemoryEntry>): string {
-  const ordered = [...entries.values()].toSorted((left, right) =>
-    left.cache_key.localeCompare(right.cache_key),
-  );
-  if (ordered.length === 0) {
-    return "";
-  }
-  return `${ordered.map((entry) => JSON.stringify(entry)).join("\n")}\n`;
-}
-
-function buildTranslationMemoryByTextHash(
-  entries: Map<string, TranslationMemoryEntry>,
-  locale: string,
-): Map<string, TranslationMemoryEntry> {
-  const byTextHash = new Map<string, TranslationMemoryEntry>();
-  for (const entry of entries.values()) {
-    if (entry.tgt_lang !== locale || !entry.text_hash || !entry.translated.trim()) {
-      continue;
-    }
-    byTextHash.set(entry.text_hash, entry);
-  }
-  return byTextHash;
 }
 
 function buildGlossaryPrompt(glossary: readonly GlossaryEntry[]): string {
@@ -1301,6 +1160,23 @@ type ClientAccess = {
   resetClient: () => Promise<void>;
 };
 
+function createTranslationClientAccess(
+  targetLocale: string,
+  glossary: readonly GlossaryEntry[],
+): ClientAccess {
+  let client: TranslationClient | null = null;
+  return {
+    async getClient() {
+      client ??= await TranslationClient.create(buildSystemPrompt(targetLocale, glossary));
+      return client;
+    },
+    async resetClient() {
+      await client?.close();
+      client = null;
+    },
+  };
+}
+
 function formatLocaleLabel(locale: string, context: LocaleRunContext): string {
   return `[${context.localeIndex}/${context.localeCount}] ${locale}`;
 }
@@ -1526,22 +1402,7 @@ export async function translateNativeEntries(
     textHash: hashText(entry.source),
   }));
   const batches = buildTranslationBatches(pending);
-  let client: TranslationClient | null = null;
-  const clientAccess: ClientAccess = {
-    async getClient() {
-      if (!client) {
-        client = await TranslationClient.create(buildSystemPrompt(targetLocale, glossary));
-      }
-      return client;
-    },
-    async resetClient() {
-      if (!client) {
-        return;
-      }
-      await client.close();
-      client = null;
-    },
-  };
+  const clientAccess = createTranslationClientAccess(targetLocale, glossary);
   try {
     const translated = new Map<string, string>();
     for (const [batchIndex, batch] of batches.entries()) {
@@ -1569,14 +1430,6 @@ type SyncOutcome = {
   wrote: boolean;
 };
 
-export function shouldReuseExistingTranslation(options: {
-  allowTranslate: boolean;
-  force: boolean;
-  isFallback: boolean;
-}): boolean {
-  return !options.isFallback || (!options.allowTranslate && !options.force);
-}
-
 async function syncLocale(
   entry: LocaleEntry,
   options: { checkOnly: boolean; force: boolean; write: boolean },
@@ -1592,64 +1445,22 @@ async function syncLocale(
   const existingMap = (await loadLocaleMap(existingPath, entry.exportName)) ?? {};
   const existingFlat = flattenTranslations(existingMap);
   const previousMeta = await loadMeta(metaPath(entry));
-  const previousFallbackKeys = new Set(previousMeta?.fallbackKeys ?? []);
   const glossaryFilePath = glossaryPath(entry);
   const glossary = await loadGlossary(glossaryFilePath);
   const tm = await loadTranslationMemory(tmPath(entry));
-  const tmByTextHash = buildTranslationMemoryByTextHash(tm, entry.locale);
   const allowTranslate = hasTranslationProvider();
-
-  const nextFlat = new Map<string, string>();
-  const pending: TranslationBatchItem[] = [];
-  const fallbackKeys: string[] = [];
-
-  for (const [key, text] of sourceFlat.entries()) {
-    const textHash = hashText(text);
-    const segmentCacheKey = cacheKey(key, textHash, entry.locale);
-    const cached = tm.get(segmentCacheKey);
-    const cachedByText = tmByTextHash.get(textHash);
-    const existing = existingFlat.get(key);
-    const shouldRefreshFallback = previousFallbackKeys.has(key);
-    const shouldReuse = shouldReuseExistingTranslation({
-      allowTranslate,
-      force: options.force,
-      isFallback: shouldRefreshFallback,
-    });
-
-    if (cached && shouldReuse) {
-      nextFlat.set(key, cached.translated);
-      if (shouldRefreshFallback) {
-        fallbackKeys.push(key);
-      }
-      continue;
-    }
-
-    if (cachedByText && (shouldRefreshFallback || existing === undefined)) {
-      nextFlat.set(key, cachedByText.translated);
-      tm.set(segmentCacheKey, {
-        ...cachedByText,
-        cache_key: segmentCacheKey,
-        segment_id: key,
-        source_path: `ui/src/i18n/locales/${entry.fileName}`,
-      });
-      continue;
-    }
-
-    if (existing !== undefined && shouldReuse) {
-      nextFlat.set(key, existing);
-      if (shouldRefreshFallback) {
-        fallbackKeys.push(key);
-      }
-      continue;
-    }
-
-    pending.push({
-      cacheKey: segmentCacheKey,
-      key,
-      text,
-      textHash,
-    });
-  }
+  const plan = createControlUiLocaleSyncPlan({
+    allowTranslate,
+    cacheKeyFor: (key, textHash) => cacheKey(key, textHash, entry.locale),
+    entry,
+    existingFlat,
+    force: options.force,
+    hashText,
+    previousMeta,
+    sourceFlat,
+    sourceHash,
+    translationMemory: tm,
+  });
 
   // Writing NEW English fallbacks trips the shipped-fallback CI gate
   // (test/scripts/control-ui-i18n.test.ts), and post-merge translation is owned
@@ -1657,10 +1468,9 @@ async function syncLocale(
   // must fail here instead of silently recording fallback bundles; refreshing
   // already-recorded fallback copy (force mode) stays allowed.
   if (!allowTranslate && options.write && !options.checkOnly && !isProviderAuthOptional()) {
-    const newFallbackKeys = pending.filter((item) => !previousFallbackKeys.has(item.key));
-    if (newFallbackKeys.length > 0) {
+    if (plan.newFallbackCount > 0) {
       throw new Error(
-        `${localeLabel}: ${newFallbackKeys.length} new key(s) need translation but no provider is configured. ` +
+        `${localeLabel}: ${plan.newFallbackCount} new key(s) need translation but no provider is configured. ` +
           `Commit only locales/en.ts and let the control-ui-locale-refresh workflow translate after merge, ` +
           `or export ANTHROPIC_API_KEY/OPENAI_API_KEY and rerun. ` +
           `Set ${ENV_AUTH_OPTIONAL}=1 to record English fallbacks anyway.`,
@@ -1668,28 +1478,13 @@ async function syncLocale(
     }
   }
 
-  if (allowTranslate && pending.length > 0) {
-    const batches = buildTranslationBatches(pending);
+  if (allowTranslate && plan.pending.length > 0) {
+    const batches = buildTranslationBatches(plan.pending);
     const batchCount = batches.length;
     logProgress(
-      `${localeLabel}: start keys=${sourceFlat.size} pending=${pending.length} batches=${batchCount} provider=${resolveConfiguredProvider()} model=${resolveConfiguredModel()} thinking=${resolveThinkingLevel()} timeout=${formatDuration(resolvePromptTimeoutMs())} batch_chars=${resolveBatchCharBudget()}`,
+      `${localeLabel}: start keys=${sourceFlat.size} pending=${plan.pending.length} batches=${batchCount} provider=${resolveConfiguredProvider()} model=${resolveConfiguredModel()} thinking=${resolveThinkingLevel()} timeout=${formatDuration(resolvePromptTimeoutMs())} batch_chars=${resolveBatchCharBudget()}`,
     );
-    let client: TranslationClient | null = null;
-    const clientAccess: ClientAccess = {
-      async getClient() {
-        if (!client) {
-          client = await TranslationClient.create(buildSystemPrompt(entry.locale, glossary));
-        }
-        return client;
-      },
-      async resetClient() {
-        if (!client) {
-          return;
-        }
-        await client.close();
-        client = null;
-      },
-    };
+    const clientAccess = createTranslationClientAccess(entry.locale, glossary);
     try {
       for (const [batchIndex, batch] of batches.entries()) {
         const translated = await translateBatch(clientAccess, batch, {
@@ -1698,26 +1493,12 @@ async function syncLocale(
           batchIndex: batchIndex + 1,
           locale: entry.locale,
         });
-        for (const item of batch) {
-          const value = translated.get(item.key);
-          if (!value) {
-            continue;
-          }
-          nextFlat.set(item.key, value);
-          tm.set(item.cacheKey, {
-            cache_key: item.cacheKey,
-            model: resolveConfiguredModel(),
-            provider: resolveConfiguredProvider(),
-            segment_id: item.key,
-            source_path: `ui/src/i18n/locales/${entry.fileName}`,
-            src_lang: SOURCE_LOCALE,
-            text: item.text,
-            text_hash: item.textHash,
-            tgt_lang: entry.locale,
-            translated: value,
-            updated_at: new Date().toISOString(),
-          });
-        }
+        plan.recordTranslations(batch, translated, {
+          model: resolveConfiguredModel(),
+          provider: resolveConfiguredProvider(),
+          sourceLocale: SOURCE_LOCALE,
+          updatedAt: () => new Date().toISOString(),
+        });
       }
     } catch (error) {
       const failure = error instanceof Error ? error : new Error(String(error));
@@ -1742,72 +1523,29 @@ async function syncLocale(
     logProgress(`${localeLabel}: no provider configured, using English fallback for pending keys`);
   }
 
-  for (const item of pending) {
-    if (nextFlat.has(item.key)) {
-      continue;
-    }
-    const existing = existingFlat.get(item.key);
-    if (existing !== undefined && !options.force) {
-      nextFlat.set(item.key, existing);
-      if (previousFallbackKeys.has(item.key)) {
-        fallbackKeys.push(item.key);
-      }
-      continue;
-    }
-    nextFlat.set(item.key, item.text);
-    fallbackKeys.push(item.key);
-  }
-
   // Do not infer fallback state from source-text equality alone.
   // Product names, config keys, and other intentional carry-through strings may
   // legitimately stay identical to English. Track fallback keys from actual
   // fallback decisions and previous fallback metadata instead.
 
-  assertPlaceholderParity(sourceFlat, nextFlat, entry.locale);
-
-  const nextMap: TranslationMap = {};
-  for (const [key, value] of sourceFlat.entries()) {
-    setNestedValue(nextMap, key, nextFlat.get(key) ?? value);
-  }
-
   const nextProvider = allowTranslate
     ? resolveConfiguredProvider()
     : (previousMeta?.provider ?? "");
   const nextModel = allowTranslate ? resolveConfiguredModel() : (previousMeta?.model ?? "");
-  const sortedFallbackKeys = [...new Set(fallbackKeys)].toSorted((left, right) =>
-    left.localeCompare(right),
-  );
-  const translatedKeys = sourceFlat.size - sortedFallbackKeys.length;
-  const semanticMetaChanged =
-    !previousMeta ||
-    previousMeta.locale !== entry.locale ||
-    previousMeta.sourceHash !== sourceHash ||
-    previousMeta.provider !== nextProvider ||
-    previousMeta.model !== nextModel ||
-    previousMeta.totalKeys !== sourceFlat.size ||
-    previousMeta.translatedKeys !== translatedKeys ||
-    previousMeta.workflow !== CONTROL_UI_I18N_WORKFLOW ||
-    !compareStringArrays(previousMeta.fallbackKeys, sortedFallbackKeys);
-
-  const nextMeta: LocaleMeta = {
-    fallbackKeys: sortedFallbackKeys,
-    generatedAt: semanticMetaChanged ? new Date().toISOString() : previousMeta.generatedAt,
-    locale: entry.locale,
+  const artifacts = plan.render({
+    defaultGlossary: DEFAULT_GLOSSARY,
+    generatedAt: new Date().toISOString(),
+    glossary,
     model: nextModel,
     provider: nextProvider,
-    sourceHash,
-    totalKeys: sourceFlat.size,
-    translatedKeys,
     workflow: CONTROL_UI_I18N_WORKFLOW,
-  };
+  });
+  assertPlaceholderParity(sourceFlat, artifacts.nextFlat, entry.locale);
 
-  const expectedLocale = await formatGeneratedTypeScript(
-    existingPath,
-    renderLocaleModule(entry, nextMap),
-  );
-  const expectedMeta = renderMeta(nextMeta);
-  const expectedGlossary = renderGlossary(glossary.length === 0 ? DEFAULT_GLOSSARY : glossary);
-  const expectedTm = renderTranslationMemory(tm);
+  const expectedLocale = await formatGeneratedTypeScript(existingPath, artifacts.localeModule);
+  const expectedMeta = artifacts.meta;
+  const expectedGlossary = artifacts.glossary;
+  const expectedTm = artifacts.translationMemory;
 
   const currentLocale = existsSync(existingPath) ? await readFile(existingPath, "utf8") : "";
   const currentMeta = existsSync(metaPath(entry)) ? await readFile(metaPath(entry), "utf8") : "";
@@ -1830,11 +1568,11 @@ async function syncLocale(
       !options.write)
   ) {
     logProgress(
-      `${localeLabel}: done changed=${changed} fallbacks=${nextMeta.fallbackKeys.length} elapsed=${formatDuration(Date.now() - localeStartedAt)}`,
+      `${localeLabel}: done changed=${changed} fallbacks=${artifacts.fallbackCount} elapsed=${formatDuration(Date.now() - localeStartedAt)}`,
     );
     return {
       changed,
-      fallbackCount: nextMeta.fallbackKeys.length,
+      fallbackCount: artifacts.fallbackCount,
       locale: entry.locale,
       wrote: false,
     } satisfies SyncOutcome;
@@ -1854,11 +1592,11 @@ async function syncLocale(
   }
 
   logProgress(
-    `${localeLabel}: done changed=${changed} fallbacks=${nextMeta.fallbackKeys.length} elapsed=${formatDuration(Date.now() - localeStartedAt)}${!options.checkOnly && options.write && changed ? " wrote" : ""}`,
+    `${localeLabel}: done changed=${changed} fallbacks=${artifacts.fallbackCount} elapsed=${formatDuration(Date.now() - localeStartedAt)}${!options.checkOnly && options.write && changed ? " wrote" : ""}`,
   );
   return {
     changed,
-    fallbackCount: nextMeta.fallbackKeys.length,
+    fallbackCount: artifacts.fallbackCount,
     locale: entry.locale,
     wrote: !options.checkOnly && options.write && changed,
   } satisfies SyncOutcome;

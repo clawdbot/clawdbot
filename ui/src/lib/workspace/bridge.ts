@@ -21,54 +21,12 @@ import type { WidgetManifestView } from "./types.ts";
 
 export const BRIDGE_ENVELOPE_VERSION = 1;
 
-/**
- * Browser-safe mirror of the plugin's write-time rpc allowlist
- * (`extensions/workspaces/src/binding-contract.ts` `DATA_READ_RPC_ALLOWLIST`).
- * KEEP IN SYNC — a `bridge.test.ts` guard asserts this equals the server const so
- * drift is caught in CI. Mirrored (not imported) because the server module pulls in
- * `node:path`, which must never enter the browser bundle. This enables the
- * resolve-time re-check below (defense-in-depth over the write-time gate).
- */
-export const RPC_METHOD_ALLOWLIST: readonly string[] = [
-  "health",
-  "system-presence",
-  "usage.status",
-  "usage.cost",
-  "agents.list",
-  "sessions.list",
-  "sessions.resolve",
-  "sessions.get",
-  "sessions.usage",
-  "sessions.usage.timeseries",
-  "sessions.usage.logs",
-  "node.list",
-  "node.describe",
-  "cron.get",
-  "cron.list",
-  "cron.status",
-  "cron.runs",
-];
-
-const RPC_METHOD_ALLOWLIST_SET = new Set(RPC_METHOD_ALLOWLIST);
-
-/** True when an rpc binding method is in the allowlist (resolve-time re-check). */
-export function isRpcMethodAllowed(method: string): boolean {
-  return RPC_METHOD_ALLOWLIST_SET.has(method);
-}
-
 /** child→parent message types. */
 export type WidgetInboundType =
   | "workspace:ready"
   | "workspace:getData"
   | "workspace:getTheme"
   | "workspace:sendPrompt";
-
-/** parent→child message types. */
-export type WidgetOutboundType =
-  | "workspace:data"
-  | "workspace:push"
-  | "workspace:theme"
-  | "workspace:error";
 
 export type WidgetErrorCode =
   | "binding_denied"
@@ -88,13 +46,12 @@ export type WidgetOutboundMessage =
 /** Injected side effects — real implementations live in the browser host. */
 export type WidgetBridgeDeps = {
   manifest: WidgetManifestView;
-  /** Resolve a manifest-declared binding by id (file/static via data.read, rpc via gateway). */
+  /** Resolve a manifest-declared binding by id. */
   resolveBinding: (bindingId: string) => Promise<unknown>;
   /**
-   * Resolve-time gate run BEFORE `resolveBinding` (defense-in-depth). Return a
-   * WidgetErrorCode to deny WITHOUT touching the gateway (e.g. an rpc binding whose
-   * method is not allowlisted → "binding_denied"), or null to allow. Optional; when
-   * omitted, every declared binding is allowed to resolve.
+   * Resolve-time gate run BEFORE `resolveBinding`. Return a WidgetErrorCode to
+   * deny without resolving the binding, or null to allow. Optional; when omitted,
+   * every declared binding is allowed to resolve.
    */
   assertBindingAllowed?: (bindingId: string) => WidgetErrorCode | null;
   /** Current theme tokens (CSS custom-property values from the document root). */
@@ -211,9 +168,8 @@ export function createWidgetBridge(deps: WidgetBridgeDeps): WidgetBridge {
       error("binding_denied", `binding not declared in manifest: ${bindingId}`, requestId);
       return;
     }
-    // Resolve-time gate (defense-in-depth): e.g. an rpc binding whose method is not
-    // allowlisted is denied here WITHOUT touching the gateway, even though the
-    // write-time schema should already have rejected it.
+    // Resolve-time gate: host-specific grant mismatches are denied before any
+    // resolver or gateway access.
     const denied = deps.assertBindingAllowed?.(bindingId);
     if (denied) {
       error(denied, `binding not allowed: ${bindingId}`, requestId);

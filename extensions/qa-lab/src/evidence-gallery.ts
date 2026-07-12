@@ -148,7 +148,7 @@ async function resolveContainedFileIfExists(
   return stats?.isFile() ? realFile : null;
 }
 
-export async function resolveQaEvidenceFile(params: {
+async function resolveQaEvidenceFile(params: {
   inputPath: string;
   repoRoot: string;
 }): Promise<string> {

@@ -62,6 +62,9 @@ export function buildControlUiCspHeader(opts?: {
     "base-uri 'none'",
     "object-src 'none'",
     "frame-ancestors 'none'",
+    // Gateway selection can move to a remote dedicated MCP Apps origin after
+    // this document loads. The component still validates the exact endpoint.
+    "frame-src 'self' http: https:",
     `script-src ${scriptTokens.join(" ")}`,
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "img-src 'self' data: blob:",

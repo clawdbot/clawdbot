@@ -86,7 +86,11 @@ import {
 } from "./scorecard-taxonomy.js";
 import { isQaSelfCheckSuccessful } from "./self-check.js";
 import { runQaFlowSuiteFromRuntime, runQaSuite } from "./suite-launch.runtime.js";
-import { resolveQaSuiteScenarioChannel, scenarioMatchesQaProviderLane } from "./suite-planning.js";
+import {
+  resolveQaSuiteScenarioChannel,
+  resolveQaSuiteScenarioChannels,
+  scenarioMatchesQaProviderLane,
+} from "./suite-planning.js";
 import { readQaSuiteFailedOrSkippedScenarioCountFromFile } from "./suite-summary.js";
 import {
   buildTokenEfficiencyReport,
@@ -956,22 +960,44 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
   if (opts.preflight === true && runner !== "host") {
     throw new Error("--preflight requires --runner host.");
   }
-  const channelDriverSelection =
+  const channelDriverScenarios =
     channelDriver === "crabline"
+      ? selectQaScenarioDefinitionsForChannelResolution({
+          scenarioIds,
+          providerMode,
+          primaryModel: primaryModel ?? defaultQaModelForMode(providerMode),
+          channelDriver,
+          claudeCliAuthMode,
+        })
+      : [];
+  const channelDriverChannels =
+    channelDriver === "crabline"
+      ? resolveQaSuiteScenarioChannels({
+          defaultChannel: OPENCLAW_CRABLINE_DEFAULT_CHANNEL,
+          explicitChannel: opts.channel,
+          scenarios: channelDriverScenarios,
+        })
+      : [];
+  if (runner === "multipass" && channelDriverChannels.length > 1) {
+    resolveQaSuiteScenarioChannel({
+      defaultChannel: OPENCLAW_CRABLINE_DEFAULT_CHANNEL,
+      explicitChannel: opts.channel,
+      scenarios: channelDriverScenarios,
+    });
+  }
+  const [singleChannelDriverChannel] = channelDriverChannels;
+  const channelDriverSelection =
+    channelDriver === "crabline" && channelDriverChannels.length === 1 && singleChannelDriverChannel
       ? resolveOpenClawCrablineChannelDriverSelection({
-          channel: resolveQaSuiteScenarioChannel({
-            defaultChannel: OPENCLAW_CRABLINE_DEFAULT_CHANNEL,
-            explicitChannel: opts.channel,
-            scenarios: selectQaScenarioDefinitionsForChannelResolution({
-              scenarioIds,
-              providerMode,
-              primaryModel: primaryModel ?? defaultQaModelForMode(providerMode),
-              channelDriver,
-              claudeCliAuthMode,
-            }),
-          }),
+          channel: singleChannelDriverChannel,
         })
       : undefined;
+  const hostScenarioIds =
+    runner === "host" && channelDriverChannels.length > 1 && scenarioIds.length === 0
+      ? channelDriverScenarios
+          .filter((scenario) => scenario.execution.kind === "flow")
+          .map((scenario) => scenario.id)
+      : scenarioIds;
   if (
     runner === "host" &&
     (opts.image !== undefined ||
@@ -1065,7 +1091,7 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
       fastMode: opts.fastMode,
       ...(thinkingDefault ? { thinkingDefault } : {}),
       ...(claudeCliAuthMode ? { claudeCliAuthMode } : {}),
-      scenarioIds: liveChannelId ? liveScenarioIds : scenarioIds,
+      scenarioIds: liveChannelId ? liveScenarioIds : hostScenarioIds,
       ...(opts.enabledPluginIds !== undefined ? { enabledPluginIds: opts.enabledPluginIds } : {}),
       ...(liveChannelId
         ? { concurrency: 1 }

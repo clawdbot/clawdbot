@@ -15,6 +15,7 @@ import {
   highlightCountError,
   persistGithubSnapshot,
   releaseNoteReferences,
+  renderedContributionRecordReferences,
   standardRevertedHash,
   subtractShippedPullRequests,
   withoutExcludedContributionRecords,
@@ -56,7 +57,8 @@ describe("release-note verification", () => {
       authorName: "Maintainer",
       changedPaths: new Set(["src/channel.ts"]),
       hash: "a".repeat(40),
-      subject: "fix(channel): preserve durable replies (#123)",
+      pullRequests: [123],
+      subject: "fix(channel): preserve durable replies",
     };
     const explicitBackport = {
       authorEmail: "other@example.com",
@@ -74,9 +76,71 @@ describe("release-note verification", () => {
       hash: "c".repeat(40),
       subject: "fix(channel): preserve durable replies",
     };
+    const pullRequestBackport = {
+      authorEmail: mainCommit.authorEmail,
+      authorName: mainCommit.authorName,
+      body: "Backport of #123 to release/2026.7.1.",
+      changedPaths: new Set(["src/channel.ts"]),
+      hash: "d".repeat(40),
+      subject: "fix(channel): keep replies after renewal",
+    };
 
     expect(canonicalMainCommitMatches(explicitBackport, [mainCommit])).toEqual([mainCommit.hash]);
     expect(canonicalMainCommitMatches(integratedBackport, [mainCommit])).toEqual([mainCommit.hash]);
+    expect(canonicalMainCommitMatches(pullRequestBackport, [mainCommit])).toEqual([
+      mainCommit.hash,
+    ]);
+    expect(
+      canonicalMainCommitMatches(pullRequestBackport, [
+        {
+          ...mainCommit,
+          pullRequests: [],
+          body: "Original main PR #123.",
+          subject: "fix(channel): preserve durable replies",
+        },
+      ]),
+    ).toEqual([]);
+    expect(
+      canonicalMainCommitMatches(pullRequestBackport, [
+        {
+          ...mainCommit,
+          pullRequests: [999],
+          subject: "fix(channel): keep replies after renewal",
+        },
+      ]),
+    ).toEqual([]);
+    expect(
+      canonicalMainCommitMatches(
+        { ...pullRequestBackport, authorEmail: "other@example.com", authorName: "Other" },
+        [mainCommit],
+      ),
+    ).toEqual([]);
+    expect(
+      canonicalMainCommitMatches(
+        { ...pullRequestBackport, changedPaths: new Set(["src/other.ts"]) },
+        [mainCommit],
+      ),
+    ).toEqual([]);
+    expect(
+      canonicalMainCommitMatches({ ...pullRequestBackport, body: "Related #123." }, [mainCommit]),
+    ).toEqual([]);
+    expect(
+      canonicalMainCommitMatches(pullRequestBackport, [
+        mainCommit,
+        { ...mainCommit, hash: "e".repeat(40), pullRequests: [123] },
+      ]),
+    ).toEqual([]);
+    expect(
+      canonicalMainCommitMatches(pullRequestBackport, [
+        mainCommit,
+        {
+          ...mainCommit,
+          body: "Original main PR #123.",
+          hash: "f".repeat(40),
+          pullRequests: [],
+        },
+      ]),
+    ).toEqual([mainCommit.hash]);
     expect(canonicalPullRequests([456], [123])).toEqual([123]);
   });
 
@@ -334,6 +398,16 @@ describe("release-note verification", () => {
         seededPullRequests: new Set([97118]),
       }),
     ).toEqual([]);
+  });
+
+  it("ignores the stale generated record while rewriting it", () => {
+    const record = {
+      pullRequests: new Map([[104732, { references: [102289], thanks: ["fuller-stack-dev"] }]]),
+      legacyIssues: new Map(),
+    };
+
+    expect(renderedContributionRecordReferences(record, true)).toEqual([]);
+    expect(renderedContributionRecordReferences(record, false)).toEqual([104732, 102289]);
   });
 
   it("excludes Unreleased records from a cumulative shipped tag boundary", () => {

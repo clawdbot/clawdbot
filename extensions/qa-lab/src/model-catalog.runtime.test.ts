@@ -2,11 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  loadQaRunnerModelOptions,
-  parseQaRunnerModelOptionsOutput,
-  selectQaRunnerModelOptions,
-} from "./model-catalog.runtime.js";
+import { loadQaRunnerModelOptions } from "./model-catalog.runtime.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const { cleanup, makeTempDir } = createTempDirHarness();
@@ -51,46 +47,22 @@ async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
 }
 
 describe("qa runner model catalog", () => {
-  it("filters to available rows and prefers gpt-5.6-luna first", () => {
-    expect(
-      selectQaRunnerModelOptions([
-        {
-          key: "anthropic/claude-sonnet-4-6",
-          name: "Claude Sonnet 4.6",
-          input: "text",
-          available: true,
-          missing: false,
-        },
-        {
-          key: "openai/gpt-5.6-luna",
-          name: "gpt-5.6-luna",
-          input: "text,image",
-          available: true,
-          missing: false,
-        },
-        {
-          key: "openrouter/auto",
-          name: "OpenRouter Auto",
-          input: "text",
-          available: false,
-          missing: false,
-        },
-      ]).map((entry) => entry.key),
-    ).toEqual(["openai/gpt-5.6-luna", "anthropic/claude-sonnet-4-6"]);
-  });
-
-  it("reports malformed catalog JSON with an owned error", () => {
-    expect(() => parseQaRunnerModelOptionsOutput("{not json")).toThrow(
-      "qa model catalog returned malformed JSON",
-    );
-  });
-
-  it("ignores invalid catalog rows without failing the model picker", () => {
-    expect(
-      parseQaRunnerModelOptionsOutput(
+  it("filters catalog output and prefers gpt-5.6-luna first", async () => {
+    const repoRoot = await makeTempDir("openclaw-qa-model-catalog-output-");
+    await fs.mkdir(path.join(repoRoot, "dist"), { recursive: true });
+    await fs.writeFile(
+      path.join(repoRoot, "dist", "index.js"),
+      `process.stdout.write(${JSON.stringify(
         JSON.stringify({
           models: [
             null,
+            {
+              key: "anthropic/claude-sonnet-4-6",
+              name: "Claude Sonnet 4.6",
+              input: "text",
+              available: true,
+              missing: false,
+            },
             {
               key: "openai/gpt-5.6-luna",
               name: "gpt-5.6-luna",
@@ -98,10 +70,37 @@ describe("qa runner model catalog", () => {
               available: true,
               missing: false,
             },
+            {
+              key: "openrouter/auto",
+              name: "OpenRouter Auto",
+              input: "text",
+              available: false,
+              missing: false,
+            },
           ],
         }),
-      ).map((entry) => entry.key),
-    ).toEqual(["openai/gpt-5.6-luna"]);
+      )});\n`,
+      "utf8",
+    );
+
+    await expect(loadQaRunnerModelOptions({ repoRoot })).resolves.toEqual([
+      expect.objectContaining({ key: "openai/gpt-5.6-luna" }),
+      expect.objectContaining({ key: "anthropic/claude-sonnet-4-6" }),
+    ]);
+  });
+
+  it("reports malformed catalog JSON with an owned error", async () => {
+    const repoRoot = await makeTempDir("openclaw-qa-model-catalog-malformed-");
+    await fs.mkdir(path.join(repoRoot, "dist"), { recursive: true });
+    await fs.writeFile(
+      path.join(repoRoot, "dist", "index.js"),
+      `process.stdout.write("{not json");\n`,
+      "utf8",
+    );
+
+    await expect(loadQaRunnerModelOptions({ repoRoot })).rejects.toThrow(
+      "qa model catalog returned malformed JSON",
+    );
   });
 
   it.runIf(process.platform !== "win32")(

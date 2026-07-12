@@ -792,6 +792,56 @@ describe("qa cli runtime", () => {
     });
   });
 
+  it("defers mixed Crabline channels to the host suite launcher", async () => {
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      providerMode: "mock-openai",
+      channelDriver: "crabline",
+      scenarioIds: ["telegram-help-command", "matrix-restart-resume"],
+    });
+
+    expect(runQaSuite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelDriver: "crabline",
+        channelDriverSelection: undefined,
+        scenarioIds: ["telegram-help-command", "matrix-restart-resume"],
+      }),
+    );
+  });
+
+  it("forwards resolved catalog scenarios for automatic mixed-channel host runs", async () => {
+    await runQaSuiteCommand({
+      providerMode: "mock-openai",
+      channelDriver: "crabline",
+    });
+
+    const suiteArgs = mockFirstObjectArg(runQaSuite);
+    expect(suiteArgs.channelDriverSelection).toBeUndefined();
+    expect(suiteArgs.scenarioIds).toEqual(
+      expect.arrayContaining(["telegram-help-command", "matrix-restart-resume"]),
+    );
+    const scenarioById = new Map(
+      readQaScenarioPack().scenarios.map((scenario) => [scenario.id, scenario]),
+    );
+    expect(
+      (suiteArgs.scenarioIds as string[]).every(
+        (scenarioId) => scenarioById.get(scenarioId)?.execution.kind === "flow",
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps mixed Crabline channels unsupported on the Multipass runner", async () => {
+    await expect(
+      runQaSuiteCommand({
+        providerMode: "mock-openai",
+        channelDriver: "crabline",
+        runner: "multipass",
+        scenarioIds: ["telegram-help-command", "matrix-restart-resume"],
+      }),
+    ).rejects.toThrow("Selected QA scenarios require multiple channels (telegram, matrix)");
+    expect(runQaMultipass).not.toHaveBeenCalled();
+  });
+
   it("passes Crabline channel-driver selection through to the multipass runner", async () => {
     await runQaSuiteCommand({
       repoRoot: "/tmp/openclaw-repo",

@@ -124,4 +124,29 @@ describe("createGatewayRuntimeState", () => {
     expect(runtimeState.httpBindHosts).toEqual(["127.0.0.1"]);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("failed to bind loopback alias ::1"));
   });
+
+  it("starts MCP Apps on a dedicated adjacent-port origin", async () => {
+    const runtimeState = await createGatewayRuntimeStateForTest(undefined, {
+      cfg: { mcp: { apps: { enabled: true } } },
+      port: 18789,
+    });
+
+    expect(runtimeState.getMcpAppSandboxPort()).toBeUndefined();
+    await runtimeState.startListening();
+
+    expect(runtimeState.getMcpAppSandboxPort()).toBe(18790);
+    expect(runtimeState.httpServers).toHaveLength(2);
+    expect(mocks.listenGatewayHttpServer).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ bindHost: "127.0.0.1", port: 18789 }),
+    );
+    expect(mocks.listenGatewayHttpServer).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        bindHost: "127.0.0.1",
+        port: 18790,
+        retryEaddrinuse: false,
+      }),
+    );
+  });
 });

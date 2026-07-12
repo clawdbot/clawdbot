@@ -612,9 +612,16 @@ setInterval(() => {}, 1000);
       stdio: "ignore",
     });
     try {
-      await waitFor(() => fs.existsSync(descendantPidPath));
-      descendantPid = Number.parseInt(fs.readFileSync(descendantPidPath, "utf8"), 10);
-      expect(isProcessAlive(descendantPid)).toBe(true);
+      await waitFor(() => {
+        if (!fs.existsSync(descendantPidPath)) {
+          return false;
+        }
+        descendantPid = Number.parseInt(fs.readFileSync(descendantPidPath, "utf8"), 10);
+        return (
+          Number.isInteger(descendantPid) && descendantPid > 1 && isProcessAlive(descendantPid)
+        );
+      });
+      expect(Number.isInteger(descendantPid)).toBe(true);
       await waitFor(() => fs.existsSync(commandSettledPath));
       if (!runner.pid) {
         throw new Error("runner did not start");

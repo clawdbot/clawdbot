@@ -255,6 +255,10 @@ const loadToolsInvokeHandlers = lazyHandlerModule(
   () => import("./server-methods/tools-invoke.js"),
   (module) => module.toolsInvokeHandlers,
 );
+const loadMcpAppHandlers = lazyHandlerModule(
+  () => import("./server-methods/mcp-app.js"),
+  (module) => module.mcpAppHandlers,
+);
 const loadTtsHandlers = lazyHandlerModule(
   () => import("./server-methods/tts.js"),
   (module) => module.ttsHandlers,
@@ -585,6 +589,17 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: ["tools.invoke"],
     loadHandlers: loadToolsInvokeHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: [
+      "mcp.app.view",
+      "mcp.app.callTool",
+      "mcp.app.listTools",
+      "mcp.app.listResources",
+      "mcp.app.listResourceTemplates",
+      "mcp.app.readResource",
+    ],
+    loadHandlers: loadMcpAppHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: [

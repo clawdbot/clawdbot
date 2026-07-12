@@ -192,7 +192,6 @@ vi.mock("../../web-search/runtime.js", () => ({
 }));
 
 vi.mock("../../skills/runtime/cron-snapshot.runtime.js", () => ({
-  canExecRequestNode: vi.fn(() => false),
   resolveNodeExecEligibility: vi.fn(() => ({ canExec: false })),
   getRemoteSkillEligibility: getRemoteSkillEligibilityMock,
   resolveEffectiveAgentSkillFilter: resolveAgentSkillsFilterMock,

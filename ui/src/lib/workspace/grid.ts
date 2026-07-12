@@ -67,10 +67,6 @@ export function clampRect(rect: WorkspaceGridRect): WorkspaceGridRect {
   return { x, y, w, h };
 }
 
-export function rectsEqual(a: WorkspaceGridRect, b: WorkspaceGridRect): boolean {
-  return a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
-}
-
 /** Do two grid rects share any cell? Touching edges do NOT overlap. */
 export function rectsOverlap(a: WorkspaceGridRect, b: WorkspaceGridRect): boolean {
   return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;

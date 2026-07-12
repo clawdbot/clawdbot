@@ -38,6 +38,15 @@ const FULL_SHA_RE = /^[0-9a-f]{40}$/u;
 const GATEWAY_READINESS_ATTEMPTS = 3;
 const GATEWAY_READINESS_RETRY_DELAY_MS = 5_000;
 const GATEWAY_SUSPEND_TIMEOUT_MS = 10_000;
+const GENERATED_LAUNCH_AGENT_ENV_WRAPPER = `#!/bin/sh
+set -eu
+env_file="$1"
+shift
+if [ -f "$env_file" ]; then
+  . "$env_file"
+fi
+exec "$@"
+`;
 const DEPENDENCY_INPUT_RE =
   /^(?:\.npmrc$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|patches\/)|(?:^|\/)package\.json$/u;
 
@@ -521,6 +530,164 @@ function defaultRunCommand(command, args, checkout) {
   });
 }
 
+export function isOwnedGatewayEntrypoint(checkout, home, entrypoint) {
+  const sourceEntrypoint = path.join(checkout, "dist/index.js");
+  if (entrypoint === sourceEntrypoint) {
+    return true;
+  }
+
+  const runtimeRoot = path.join(home, ".openclaw/runtime");
+  const snapshotRoot = path.dirname(path.dirname(entrypoint));
+  const snapshotName = path.basename(snapshotRoot);
+  if (
+    path.dirname(snapshotRoot) !== runtimeRoot ||
+    !/^gateway-[0-9a-f]{7}$/u.test(snapshotName) ||
+    path.basename(path.dirname(entrypoint)) !== "dist" ||
+    path.basename(entrypoint) !== "index.js"
+  ) {
+    return false;
+  }
+
+  try {
+    if (
+      realpathSync(snapshotRoot) !== snapshotRoot ||
+      realpathSync(entrypoint) !== entrypoint ||
+      !originMatches(gitText(snapshotRoot, ["remote", "get-url", "origin"])) ||
+      gitText(snapshotRoot, ["status", "--porcelain"]) !== ""
+    ) {
+      return false;
+    }
+    try {
+      git(snapshotRoot, ["symbolic-ref", "-q", "HEAD"]);
+      return false;
+    } catch {
+      // Immutable runtime snapshots are detached from every mutable branch.
+    }
+    const snapshotHead = gitText(snapshotRoot, ["rev-parse", "HEAD"]);
+    if (
+      !FULL_SHA_RE.test(snapshotHead) ||
+      snapshotName !== `gateway-${snapshotHead.slice(0, 7)}` ||
+      !commitExists(checkout, snapshotHead) ||
+      !inspectBuildState(snapshotRoot, snapshotHead).current
+    ) {
+      return false;
+    }
+    git(checkout, ["merge-base", "--is-ancestor", snapshotHead, "HEAD"]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function resolveManagedGatewayCommand(
+  programArguments,
+  home,
+  stateDir,
+  label = "ai.openclaw.gateway",
+) {
+  if (!Array.isArray(programArguments)) {
+    return null;
+  }
+  const defaultEnvDir = path.join(stateDir ?? path.join(home, ".openclaw"), "service-env");
+  let envDir = defaultEnvDir;
+  let envFilePath = null;
+  let commandStartIndex = 0;
+  let executable = programArguments[0];
+  let prefix = [];
+  let wrapperPath = null;
+  const acceptsGeneratedWrapper = (candidateWrapper, candidateEnvFile) => {
+    const candidateDir = path.dirname(candidateWrapper);
+    return (
+      path.basename(candidateDir) === "service-env" &&
+      path.dirname(candidateEnvFile) === candidateDir &&
+      path.basename(candidateWrapper) === `${label}-env-wrapper.sh` &&
+      path.basename(candidateEnvFile) === `${label}.env`
+    );
+  };
+  if (
+    programArguments[0] === "/bin/sh" &&
+    typeof programArguments[1] === "string" &&
+    typeof programArguments[2] === "string" &&
+    acceptsGeneratedWrapper(programArguments[1], programArguments[2])
+  ) {
+    wrapperPath = programArguments[1];
+    envFilePath = programArguments[2];
+    envDir = path.dirname(wrapperPath);
+    commandStartIndex = 3;
+    prefix = [wrapperPath, envFilePath];
+  } else if (
+    typeof programArguments[0] === "string" &&
+    typeof programArguments[1] === "string" &&
+    acceptsGeneratedWrapper(programArguments[0], programArguments[1])
+  ) {
+    wrapperPath = programArguments[0];
+    envFilePath = programArguments[1];
+    envDir = path.dirname(wrapperPath);
+    commandStartIndex = 2;
+    executable = wrapperPath;
+    prefix = [envFilePath];
+  }
+  const runtime = programArguments[commandStartIndex];
+  const entrypoint = programArguments[commandStartIndex + 1];
+  const command = programArguments[commandStartIndex + 2];
+  // Arbitrary --wrapper executables contain no checkout entrypoint, so their
+  // ownership cannot be proven and conversion must remain a manual operation.
+  return typeof runtime === "string" &&
+    ["bun", "node"].includes(path.basename(runtime)) &&
+    typeof entrypoint === "string" &&
+    command === "gateway"
+    ? {
+        entrypoint,
+        entrypointIndex: commandStartIndex + 1,
+        envFilePath,
+        executable,
+        invocationPrefix: wrapperPath ? [...prefix, runtime, entrypoint] : [entrypoint],
+        runtime,
+        stateDir: path.dirname(envDir),
+        wrapperPath,
+      }
+    : null;
+}
+
+export function resolveManagedGatewayEntrypoint(programArguments, home, stateDir) {
+  return resolveManagedGatewayCommand(programArguments, home, stateDir)?.entrypoint ?? null;
+}
+
+function isTrustedGeneratedEnvironmentWrapper(command) {
+  if (!command.wrapperPath || !command.envFilePath) {
+    return true;
+  }
+  try {
+    const wrapperStat = lstatSync(command.wrapperPath);
+    const envFileStat = lstatSync(command.envFilePath);
+    const owner = process.getuid();
+    return (
+      wrapperStat.isFile() &&
+      !wrapperStat.isSymbolicLink() &&
+      envFileStat.isFile() &&
+      !envFileStat.isSymbolicLink() &&
+      wrapperStat.uid === owner &&
+      envFileStat.uid === owner &&
+      (wrapperStat.mode & 0o022) === 0 &&
+      (envFileStat.mode & 0o077) === 0 &&
+      realpathSync(command.wrapperPath) === command.wrapperPath &&
+      realpathSync(command.envFilePath) === command.envFilePath &&
+      readFileSync(command.wrapperPath, "utf8") === GENERATED_LAUNCH_AGENT_ENV_WRAPPER
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isTrustedOwnedRegularFile(fileStat) {
+  return (
+    fileStat.isFile() &&
+    !fileStat.isSymbolicLink() &&
+    fileStat.uid === process.getuid() &&
+    (fileStat.mode & 0o022) === 0
+  );
+}
+
 function readManagedGatewayLaunchAgent(checkout) {
   if (process.platform !== "darwin" || typeof process.getuid !== "function") {
     throw new UpdateInvariantError(
@@ -533,6 +700,21 @@ function readManagedGatewayLaunchAgent(checkout) {
     throw new UpdateInvariantError("gateway_launchagent_failed", "HOME is unavailable");
   }
   const plistPath = path.join(home, "Library/LaunchAgents/ai.openclaw.gateway.plist");
+  let plistStat;
+  try {
+    plistStat = lstatSync(plistPath);
+  } catch (error) {
+    throw new UpdateInvariantError(
+      "gateway_launchagent_failed",
+      `could not inspect the managed Gateway LaunchAgent: ${String(error)}`,
+    );
+  }
+  if (!isTrustedOwnedRegularFile(plistStat)) {
+    throw new UpdateInvariantError(
+      "gateway_launchagent_failed",
+      "managed Gateway LaunchAgent is not a regular owned plist file",
+    );
+  }
   const plistResult = spawnSync("/usr/bin/plutil", ["-convert", "json", "-o", "-", plistPath], {
     encoding: "utf8",
   });
@@ -545,13 +727,25 @@ function readManagedGatewayLaunchAgent(checkout) {
   const plist = JSON.parse(plistResult.stdout);
   const label = plist?.Label;
   const programArguments = plist?.ProgramArguments;
+  const environmentVariables = plist?.EnvironmentVariables;
+  const serviceEnvironment = Object.fromEntries(
+    Object.entries(environmentVariables ?? {}).filter((entry) => typeof entry[1] === "string"),
+  );
+  const stateDir =
+    typeof environmentVariables?.OPENCLAW_STATE_DIR === "string"
+      ? environmentVariables.OPENCLAW_STATE_DIR
+      : path.join(home, ".openclaw");
+  const gatewayCommand = resolveManagedGatewayCommand(programArguments, home, stateDir, label);
+  const gatewayEntrypoint = gatewayCommand?.entrypoint ?? null;
+  const ownsGatewayEntrypoint =
+    gatewayEntrypoint !== null && isOwnedGatewayEntrypoint(checkout, home, gatewayEntrypoint);
   const portFlag = Array.isArray(programArguments) ? programArguments.indexOf("--port") : -1;
   const port = Number(portFlag >= 0 ? programArguments[portFlag + 1] : Number.NaN);
   if (
     typeof label !== "string" ||
     !Array.isArray(programArguments) ||
-    !programArguments.includes(path.join(checkout, "dist/index.js")) ||
-    !programArguments.includes("gateway") ||
+    !ownsGatewayEntrypoint ||
+    !isTrustedGeneratedEnvironmentWrapper(gatewayCommand) ||
     !Number.isInteger(port) ||
     port < 1 ||
     port > 65_535
@@ -564,63 +758,283 @@ function readManagedGatewayLaunchAgent(checkout) {
   const configPath =
     typeof plist?.EnvironmentVariables?.OPENCLAW_CONFIG_PATH === "string"
       ? plist.EnvironmentVariables.OPENCLAW_CONFIG_PATH
-      : path.join(home, ".openclaw/openclaw.json");
-  return { configPath, label, port };
+      : path.join(gatewayCommand.stateDir, "openclaw.json");
+  return {
+    configPath,
+    entrypoint: gatewayEntrypoint,
+    entrypointIndex: gatewayCommand.entrypointIndex,
+    envFilePath: gatewayCommand.envFilePath,
+    executable: gatewayCommand.executable,
+    invocationPrefix: gatewayCommand.invocationPrefix,
+    label,
+    plistPath,
+    port,
+    runtime: gatewayCommand.runtime,
+    serviceEnvironment,
+    stateDir: gatewayCommand.stateDir,
+    wrapperPath: gatewayCommand.wrapperPath,
+  };
 }
 
-function runBuiltGatewayCall(checkout, method, params) {
-  const { configPath, port } = readManagedGatewayLaunchAgent(checkout);
+function inspectManagedGatewayDeployment(checkout) {
+  if (process.platform !== "darwin") {
+    return null;
+  }
+  const home = process.env.HOME;
+  if (!home || !existsSync(path.join(home, "Library/LaunchAgents/ai.openclaw.gateway.plist"))) {
+    return null;
+  }
+  return readManagedGatewayLaunchAgent(checkout);
+}
+
+export function repointManagedGatewayDeployment(
+  checkout,
+  deployment,
+  replaceEntrypoint,
+  inspectDeployment = inspectManagedGatewayDeployment,
+) {
+  const sourceEntrypoint = path.join(checkout, "dist/index.js");
+  if (deployment.entrypoint === sourceEntrypoint) {
+    return { changed: false, ...deployment };
+  }
+  replaceEntrypoint(deployment, sourceEntrypoint);
+  const installed = inspectDeployment(checkout);
+  if (
+    !installed ||
+    installed.configPath !== deployment.configPath ||
+    installed.entrypoint !== sourceEntrypoint ||
+    installed.label !== deployment.label ||
+    installed.port !== deployment.port
+  ) {
+    throw new UpdateInvariantError(
+      "gateway_repoint_failed",
+      "managed Gateway LaunchAgent was not retargeted to the exact source build",
+    );
+  }
+  return {
+    changed: true,
+    ...installed,
+    previousEntrypoint: deployment.entrypoint,
+  };
+}
+
+function replaceLaunchAgentEntrypoint(deployment, entrypoint) {
+  const original = readFileSync(deployment.plistPath);
+  const temporaryPath = `${deployment.plistPath}.openclaw-live-updater-${randomUUID()}`;
+  writeFileSync(temporaryPath, original, {
+    flag: "wx",
+    mode: statSync(deployment.plistPath).mode,
+  });
+  try {
+    execFileSync(
+      "/usr/bin/plutil",
+      [
+        "-replace",
+        `ProgramArguments.${deployment.entrypointIndex}`,
+        "-string",
+        entrypoint,
+        temporaryPath,
+      ],
+      { stdio: ["ignore", "ignore", "pipe"] },
+    );
+    execFileSync("/usr/bin/plutil", ["-lint", temporaryPath], {
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    renameSync(temporaryPath, deployment.plistPath);
+  } finally {
+    rmSync(temporaryPath, { force: true });
+  }
+}
+
+function verifyManagedGatewayRuntime(checkout, expectedSha) {
+  if (process.platform !== "darwin") {
+    return null;
+  }
+  assertExactBuild(checkout, expectedSha);
+  const deployment = inspectManagedGatewayDeployment(checkout);
+  if (!deployment) {
+    return null;
+  }
+  const sourceEntrypoint = path.join(checkout, "dist/index.js");
+  if (deployment.entrypoint !== sourceEntrypoint) {
+    throw new UpdateInvariantError(
+      "gateway_runtime_mismatch",
+      "managed Gateway still targets an immutable ancestor snapshot after maintenance",
+    );
+  }
+  const launchctl = spawnSync(
+    "/bin/launchctl",
+    ["print", `gui/${process.getuid()}/${deployment.label}`],
+    { encoding: "utf8" },
+  );
+  const pidMatch =
+    launchctl.status === 0 ? String(launchctl.stdout).match(/\bpid = (\d+)\b/u) : null;
+  const pid = Number(pidMatch?.[1] ?? Number.NaN);
+  const loadedArguments = parseLaunchctlArguments(String(launchctl.stdout));
+  const loadedCommand = resolveManagedGatewayCommand(
+    loadedArguments,
+    process.env.HOME,
+    deployment.stateDir,
+    deployment.label,
+  );
+  const loadedPortFlag = loadedArguments.indexOf("--port");
+  const loadedPort = Number(loadedPortFlag >= 0 ? loadedArguments[loadedPortFlag + 1] : Number.NaN);
+  if (
+    !loadedCommand ||
+    loadedCommand.entrypoint !== sourceEntrypoint ||
+    loadedCommand.executable !== deployment.executable ||
+    loadedCommand.runtime !== deployment.runtime ||
+    loadedCommand.wrapperPath !== deployment.wrapperPath ||
+    loadedPort !== deployment.port
+  ) {
+    throw new UpdateInvariantError(
+      "gateway_runtime_mismatch",
+      "loaded Gateway LaunchAgent arguments do not use the exact source entrypoint",
+    );
+  }
+  if (!Number.isInteger(pid) || pid < 1) {
+    throw new UpdateInvariantError(
+      "gateway_runtime_mismatch",
+      "managed Gateway LaunchAgent has no running process after maintenance",
+    );
+  }
+  const listeners = spawnSync(
+    "/usr/sbin/lsof",
+    ["-nP", `-iTCP:${deployment.port}`, "-sTCP:LISTEN", "-t"],
+    { encoding: "utf8" },
+  );
+  const listenerPids = String(listeners.stdout).trim().split(/\s+/u).filter(Boolean).map(Number);
+  // The Gateway overwrites process.title, so ps cannot prove argv. The owned
+  // LaunchAgent arguments plus its exact listener PID remain stable evidence.
+  if (listeners.status !== 0 || !listenerPids.includes(pid)) {
+    throw new UpdateInvariantError(
+      "gateway_runtime_mismatch",
+      "managed Gateway LaunchAgent PID does not own its configured listener",
+    );
+  }
+  return { commit: expectedSha, entrypoint: sourceEntrypoint, pid, port: deployment.port };
+}
+
+export function parseLaunchctlArguments(output) {
+  const block = output.match(/\n\s*arguments = \{\n(?<body>[\s\S]*?)\n\s*\}/u)?.groups?.body;
+  return block
+    ? block
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean)
+    : [];
+}
+
+function runBuiltGatewayCli(checkout, args, deployment) {
+  const managedDeployment = deployment ?? readManagedGatewayLaunchAgent(checkout);
+  const {
+    configPath,
+    entrypoint,
+    envFilePath,
+    executable,
+    invocationPrefix,
+    port,
+    runtime,
+    serviceEnvironment = {},
+    wrapperPath,
+  } = managedDeployment;
+  const baseEnv = { ...process.env };
+  delete baseEnv.OPENCLAW_GATEWAY_URL;
+  delete baseEnv.OPENCLAW_GATEWAY_TOKEN;
+  delete baseEnv.OPENCLAW_GATEWAY_PASSWORD;
+  delete baseEnv.OPENCLAW_CONFIG_PATH;
+  delete baseEnv.OPENCLAW_GATEWAY_PORT;
+  Object.assign(baseEnv, serviceEnvironment);
+  delete baseEnv.OPENCLAW_GATEWAY_URL;
+  let effectiveConfigPath = configPath;
+  if (wrapperPath && envFilePath) {
+    delete baseEnv.OPENCLAW_CONFIG_PATH;
+    delete baseEnv.OPENCLAW_GATEWAY_PORT;
+    const wrapperPrefix = executable === "/bin/sh" ? [wrapperPath, envFilePath] : [envFilePath];
+    try {
+      const configuredPath = execFileSync(
+        executable,
+        [...wrapperPrefix, "/usr/bin/printenv", "OPENCLAW_CONFIG_PATH"],
+        { encoding: "utf8", env: baseEnv, stdio: ["ignore", "pipe", "ignore"] },
+      ).trim();
+      if (configuredPath) {
+        effectiveConfigPath = configuredPath;
+      }
+    } catch {
+      // The service environment may rely on the state-directory default.
+    }
+  }
   const overlayPath = path.join(
-    path.dirname(configPath),
+    path.dirname(effectiveConfigPath),
     `.openclaw-live-updater-config-${randomUUID()}.json`,
   );
   writeFileSync(
     overlayPath,
     `${JSON.stringify({
-      $include: `./${path.basename(configPath)}`,
+      $include: `./${path.basename(effectiveConfigPath)}`,
       gateway: { mode: "local", port },
     })}\n`,
     { flag: "wx", mode: 0o600 },
   );
-  const env = {
-    ...process.env,
+  const envOverrides = [`OPENCLAW_CONFIG_PATH=${overlayPath}`, `OPENCLAW_GATEWAY_PORT=${port}`];
+  const env = Object.assign(baseEnv, {
     OPENCLAW_CONFIG_PATH: overlayPath,
     OPENCLAW_GATEWAY_PORT: String(port),
-  };
-  delete env.OPENCLAW_GATEWAY_URL;
-  delete env.OPENCLAW_GATEWAY_TOKEN;
-  delete env.OPENCLAW_GATEWAY_PASSWORD;
+  });
   try {
-    return execFileSync(
-      process.execPath,
-      [
-        "dist/index.js",
-        "gateway",
-        "call",
-        method,
-        "--params",
-        JSON.stringify(params),
-        "--json",
-        "--timeout",
-        String(GATEWAY_SUSPEND_TIMEOUT_MS),
-      ],
-      {
-        cwd: checkout,
-        encoding: "utf8",
-        env,
-        stdio: ["ignore", "pipe", "inherit"],
-      },
-    );
+    const callArgs =
+      wrapperPath && envFilePath
+        ? [
+            ...(executable === "/bin/sh" ? [wrapperPath, envFilePath] : [envFilePath]),
+            "/usr/bin/env",
+            "-u",
+            "OPENCLAW_GATEWAY_URL",
+            ...envOverrides,
+            runtime,
+            entrypoint,
+            ...args,
+          ]
+        : [...invocationPrefix, ...args];
+    return execFileSync(executable, callArgs, {
+      cwd: path.dirname(path.dirname(entrypoint)),
+      encoding: "utf8",
+      env,
+      stdio: ["ignore", "pipe", "inherit"],
+    });
   } finally {
     rmSync(overlayPath, { force: true });
   }
 }
 
-export function prepareGatewaySuspension(checkout, callGateway = runBuiltGatewayCall) {
+export function runBuiltGatewayCall(checkout, method, params, deployment) {
+  const managedDeployment = deployment ?? readManagedGatewayLaunchAgent(checkout);
+  return runBuiltGatewayCli(
+    checkout,
+    [
+      "gateway",
+      "call",
+      method,
+      "--params",
+      JSON.stringify(params),
+      "--json",
+      "--timeout",
+      String(GATEWAY_SUSPEND_TIMEOUT_MS),
+    ],
+    managedDeployment,
+  );
+}
+
+export function prepareGatewaySuspension(
+  checkout,
+  callGateway = runBuiltGatewayCall,
+  deployment = null,
+) {
   const requestId = `openclaw-live-updater-${randomUUID()}`;
   let result;
   try {
-    result = JSON.parse(callGateway(checkout, "gateway.suspend.prepare", { requestId }));
+    result = JSON.parse(
+      callGateway(checkout, "gateway.suspend.prepare", { requestId }, deployment),
+    );
   } catch (error) {
     throw new UpdateInvariantError(
       "gateway_suspend_prepare_failed",
@@ -639,8 +1053,63 @@ export function prepareGatewaySuspension(checkout, callGateway = runBuiltGateway
   );
 }
 
-function defaultResumeGatewaySuspension(checkout, suspensionId) {
-  runBuiltGatewayCall(checkout, "gateway.suspend.resume", { suspensionId });
+function defaultResumeGatewaySuspension(checkout, suspensionId, deployment) {
+  runBuiltGatewayCall(checkout, "gateway.suspend.resume", { suspensionId }, deployment);
+}
+
+function stopManagedGateway(runCommand, checkout, deployment) {
+  if (!deployment) {
+    runCommand(process.execPath, ["dist/index.js", "gateway", "stop"], checkout);
+    return;
+  }
+  runCommand(
+    "/bin/launchctl",
+    ["bootout", `gui/${process.getuid()}/${deployment.label}`],
+    checkout,
+  );
+}
+
+function isTrustedSourceControlBuild(checkout, buildState, currentHead) {
+  if (buildState.current) {
+    return true;
+  }
+  const commit = buildState.commit;
+  if (
+    buildState.state !== "stale" ||
+    !commit ||
+    buildState.buildStampHead !== commit ||
+    buildState.runtimePostBuildStampHead !== commit ||
+    buildState.missingUiAssets.length > 0 ||
+    !commitExists(checkout, commit)
+  ) {
+    return false;
+  }
+  try {
+    git(checkout, ["merge-base", "--is-ancestor", commit, currentHead]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function resolveGatewayControlDeployment(checkout, deployment, buildBefore, currentHead) {
+  if (!deployment) {
+    return null;
+  }
+  const sourceEntrypoint = path.join(checkout, "dist/index.js");
+  if (deployment.entrypoint === sourceEntrypoint) {
+    return deployment;
+  }
+  if (!isTrustedSourceControlBuild(checkout, buildBefore, currentHead)) {
+    return null;
+  }
+  return {
+    ...deployment,
+    entrypoint: sourceEntrypoint,
+    invocationPrefix: deployment.invocationPrefix.map((argument) =>
+      argument === deployment.entrypoint ? sourceEntrypoint : argument,
+    ),
+  };
 }
 
 function proveMacLaunchdGatewayStopped(checkout) {
@@ -823,15 +1292,55 @@ function runBuildWithPreservedMacApp(runCommand, checkout, sleep = defaultSleep)
   }
 }
 
-function restartGateway(runCommand, checkout, expectedSha) {
+function restartGateway(
+  runCommand,
+  checkout,
+  expectedSha,
+  startedAtMs = Date.now(),
+  deployment = null,
+  bootstrap = false,
+) {
   assertExactBuild(checkout, expectedSha);
-  const startedAtMs = Date.now();
-  runCommand("pnpm", ["openclaw", "gateway", "restart"], checkout);
+  if (!deployment) {
+    runCommand("pnpm", ["openclaw", "gateway", "restart"], checkout);
+    return startedAtMs;
+  }
+  if (bootstrap) {
+    const plistStat = lstatSync(deployment.plistPath);
+    if (!isTrustedOwnedRegularFile(plistStat)) {
+      throw new UpdateInvariantError(
+        "gateway_launchagent_failed",
+        "managed Gateway LaunchAgent ownership or permissions changed before bootstrap",
+      );
+    }
+    const domain = `gui/${process.getuid()}`;
+    runCommand("/bin/launchctl", ["enable", `${domain}/${deployment.label}`], checkout);
+    runCommand("/bin/launchctl", ["bootstrap", domain, deployment.plistPath], checkout);
+    return startedAtMs;
+  }
+  runCommand(
+    deployment.executable,
+    [...deployment.invocationPrefix, "gateway", "restart"],
+    path.dirname(path.dirname(deployment.entrypoint)),
+  );
   return startedAtMs;
 }
 
-function verifyGateway(runCommand, checkout, expectedSha) {
+function verifyGateway(runCommand, checkout, expectedSha, deployment = null) {
   assertExactBuild(checkout, expectedSha);
+  if (deployment) {
+    runBuiltGatewayCli(
+      checkout,
+      ["gateway", "status", "--deep", "--require-rpc", "--json"],
+      deployment,
+    );
+    runBuiltGatewayCli(
+      checkout,
+      ["health", "--port", String(deployment.port), "--verbose", "--json"],
+      deployment,
+    );
+    return;
+  }
   runCommand(
     "pnpm",
     ["openclaw", "gateway", "status", "--deep", "--require-rpc", "--json"],
@@ -844,11 +1353,17 @@ function defaultSleep(ms) {
   execFileSync("sleep", [String(ms / 1_000)]);
 }
 
-export function verifyGatewayReadiness(runCommand, checkout, expectedSha, sleep = defaultSleep) {
+export function verifyGatewayReadiness(
+  runCommand,
+  checkout,
+  expectedSha,
+  sleep = defaultSleep,
+  deployment = null,
+) {
   let lastError;
   for (let attempt = 1; attempt <= GATEWAY_READINESS_ATTEMPTS; attempt += 1) {
     try {
-      verifyGateway(runCommand, checkout, expectedSha);
+      verifyGateway(runCommand, checkout, expectedSha, deployment);
       return;
     } catch (error) {
       lastError = error;
@@ -977,12 +1492,13 @@ function verifyAndAuditGateway({
   auditGatewayLogs,
   checkout,
   expectedSha,
+  deployment,
   sinceMs,
   sleep,
 }) {
   let verificationError;
   try {
-    verifyGatewayReadiness(runCommand, checkout, expectedSha, sleep);
+    verifyGatewayReadiness(runCommand, checkout, expectedSha, sleep, deployment);
   } catch (error) {
     verificationError = error;
   }
@@ -1030,6 +1546,35 @@ export function maintainMain(options, dependencies = {}) {
   }
 
   try {
+    const verifiedBefore = verifyCheckout(options.checkout, { remote: options.remote });
+    const runCommand = dependencies.runCommand ?? defaultRunCommand;
+    const inspectGatewayDeployment =
+      dependencies.inspectGatewayDeployment ?? inspectManagedGatewayDeployment;
+    const repointGatewayDeployment =
+      dependencies.repointGatewayDeployment ?? repointManagedGatewayDeployment;
+    const replaceGatewayEntrypoint =
+      dependencies.replaceGatewayEntrypoint ?? replaceLaunchAgentEntrypoint;
+    const verifyGatewayRuntime = dependencies.verifyGatewayRuntime ?? verifyManagedGatewayRuntime;
+    const prepareSuspension =
+      dependencies.prepareGatewaySuspension ??
+      ((checkout, deployment) =>
+        prepareGatewaySuspension(checkout, runBuiltGatewayCall, deployment));
+    const resumeSuspension = dependencies.resumeGatewaySuspension ?? defaultResumeGatewaySuspension;
+    const proveGatewayStopped = dependencies.proveGatewayStopped ?? defaultProveGatewayStopped;
+    const verifyMacTarget = dependencies.verifyMacTarget ?? defaultVerifyMacTarget;
+    const auditGatewayLogs = dependencies.auditGatewayLogs ?? defaultAuditGatewayLogs;
+    const sleep = dependencies.sleep ?? defaultSleep;
+    const gatewayDeploymentBefore = inspectGatewayDeployment(verifiedBefore.checkout);
+    const sourceBuildBeforeUpdate = inspectBuildState(
+      verifiedBefore.checkout,
+      verifiedBefore.headSha,
+    );
+    let gatewayControlDeployment = resolveGatewayControlDeployment(
+      verifiedBefore.checkout,
+      gatewayDeploymentBefore,
+      sourceBuildBeforeUpdate,
+      verifiedBefore.headSha,
+    );
     const update = updateMain(options, dependencies);
     const statePath = options.statePath ?? defaultStatePath(update.checkout);
     const maintenanceState = readMaintenanceState(statePath);
@@ -1055,14 +1600,12 @@ export function maintainMain(options, dependencies = {}) {
       actions.macAppRebuild = true;
       actions.macUiVerification ||= maintenanceState.macUiVerification === true;
     }
-    const runCommand = dependencies.runCommand ?? defaultRunCommand;
-    const prepareSuspension = dependencies.prepareGatewaySuspension ?? prepareGatewaySuspension;
-    const resumeSuspension = dependencies.resumeGatewaySuspension ?? defaultResumeGatewaySuspension;
-    const proveGatewayStopped = dependencies.proveGatewayStopped ?? defaultProveGatewayStopped;
-    const verifyMacTarget = dependencies.verifyMacTarget ?? defaultVerifyMacTarget;
-    const auditGatewayLogs = dependencies.auditGatewayLogs ?? defaultAuditGatewayLogs;
-    const sleep = dependencies.sleep ?? defaultSleep;
+    const gatewayRuntimeRepointRequired =
+      gatewayDeploymentBefore !== null &&
+      gatewayDeploymentBefore.entrypoint !== path.join(update.checkout, "dist/index.js");
     let gatewayLogAudit = null;
+    let gatewayDeployment = null;
+    let gatewayRuntime = null;
     let queuedMacState = null;
     if (actions.macAppRebuild) {
       queuedMacState = {
@@ -1075,21 +1618,85 @@ export function maintainMain(options, dependencies = {}) {
       writeMaintenanceState(statePath, queuedMacState);
     }
 
-    if (actions.gatewayBuild || actions.dependencyInstall) {
+    if (actions.gatewayBuild || actions.dependencyInstall || gatewayRuntimeRepointRequired) {
+      actions.gatewayRestart = true;
+      let controlBuildPrepared = false;
+      let controlDependenciesInstalled = false;
       let gatewaySuspension;
-      try {
-        gatewaySuspension = prepareSuspension(update.checkout);
-      } catch (prepareError) {
+      const controlUnavailable =
+        gatewayDeploymentBefore !== null && gatewayControlDeployment === null;
+      if (controlUnavailable) {
         try {
           gatewaySuspension = {
             status: "offline",
             proof: proveGatewayStopped(update.checkout),
           };
         } catch (proofError) {
-          throw new AggregateError(
-            [prepareError, proofError],
-            "Gateway suspension failed and the managed Gateway could not be proven stopped",
-          );
+          try {
+            if (!gatewayRuntimeRepointRequired) {
+              throw new UpdateInvariantError(
+                "gateway_live_source_build_forbidden",
+                "refusing to rebuild the source entrypoint while its managed Gateway is still running",
+              );
+            }
+            // The running Gateway is isolated in its immutable snapshot, so a
+            // clean source build cannot mutate its code. Build only to obtain
+            // an exact trusted client for the suspension RPC.
+            if (actions.dependencyInstall) {
+              runCommand("pnpm", ["install", "--frozen-lockfile"], update.checkout);
+              controlDependenciesInstalled = true;
+            }
+            if (!actions.gatewayBuild) {
+              throw new UpdateInvariantError(
+                "gateway_snapshot_control_unavailable",
+                "managed Gateway snapshot has no exact trusted source control build",
+              );
+            }
+            runBuildWithPreservedMacApp(runCommand, update.checkout, sleep);
+            assertExactBuild(update.checkout, update.afterSha);
+            controlBuildPrepared = true;
+            gatewayControlDeployment = resolveGatewayControlDeployment(
+              update.checkout,
+              gatewayDeploymentBefore,
+              inspectBuildState(update.checkout, update.afterSha),
+              update.afterSha,
+            );
+            if (!gatewayControlDeployment) {
+              throw new UpdateInvariantError(
+                "gateway_snapshot_control_unavailable",
+                "source build did not produce an exact trusted Gateway control client",
+              );
+            }
+            gatewaySuspension = prepareSuspension(update.checkout, gatewayControlDeployment);
+          } catch (controlError) {
+            throw new AggregateError(
+              [
+                new UpdateInvariantError(
+                  "gateway_snapshot_control_unavailable",
+                  "managed Gateway uses a snapshot but the source checkout has no exact trusted control build",
+                ),
+                proofError,
+                controlError,
+              ],
+              "Gateway control is unavailable and the managed Gateway could not be proven stopped",
+            );
+          }
+        }
+      } else {
+        try {
+          gatewaySuspension = prepareSuspension(update.checkout, gatewayControlDeployment);
+        } catch (prepareError) {
+          try {
+            gatewaySuspension = {
+              status: "offline",
+              proof: proveGatewayStopped(update.checkout),
+            };
+          } catch (proofError) {
+            throw new AggregateError(
+              [prepareError, proofError],
+              "Gateway suspension failed and the managed Gateway could not be proven stopped",
+            );
+          }
         }
       }
       if (gatewaySuspension.status === "busy") {
@@ -1106,13 +1713,20 @@ export function maintainMain(options, dependencies = {}) {
         };
       }
       if (gatewaySuspension.status === "ready") {
-        // Use the existing built CLI directly. Source launchers may auto-build a
-        // stale dist before dispatching `gateway stop`, recreating the live-import race.
+        // Native bootout prevents launchd from retaining old ProgramArguments
+        // and avoids source launchers that can rebuild stale dist before stopping.
         try {
-          runCommand(process.execPath, ["dist/index.js", "gateway", "stop"], update.checkout);
+          stopManagedGateway(runCommand, update.checkout, gatewayDeploymentBefore);
+          // Retarget only after launchd has discarded the old ProgramArguments.
+          // Otherwise a later kickstart can revive its cached snapshot command.
+          proveGatewayStopped(update.checkout);
         } catch (error) {
           try {
-            resumeSuspension(update.checkout, gatewaySuspension.suspensionId);
+            resumeSuspension(
+              update.checkout,
+              gatewaySuspension.suspensionId,
+              gatewayControlDeployment,
+            );
           } catch (resumeError) {
             throw new AggregateError(
               [error, resumeError],
@@ -1122,37 +1736,64 @@ export function maintainMain(options, dependencies = {}) {
           throw error;
         }
       }
-      if (actions.dependencyInstall) {
+      if (actions.dependencyInstall && !controlDependenciesInstalled) {
         runCommand("pnpm", ["install", "--frozen-lockfile"], update.checkout);
       }
-      if (actions.gatewayBuild) {
+      if (actions.gatewayBuild && !controlBuildPrepared) {
         runBuildWithPreservedMacApp(runCommand, update.checkout, sleep);
       }
       assertExactBuild(update.checkout, update.afterSha);
-      const restartStartedAt = restartGateway(runCommand, update.checkout, update.afterSha);
+      const restartStartedAt = Date.now();
+      gatewayDeployment = gatewayDeploymentBefore
+        ? repointGatewayDeployment(
+            update.checkout,
+            gatewayDeploymentBefore,
+            replaceGatewayEntrypoint,
+            inspectGatewayDeployment,
+          )
+        : null;
+      restartGateway(
+        runCommand,
+        update.checkout,
+        update.afterSha,
+        restartStartedAt,
+        gatewayDeployment,
+        gatewayDeployment !== null,
+      );
       gatewayLogAudit = verifyAndAuditGateway({
         runCommand,
         auditGatewayLogs,
         checkout: update.checkout,
         expectedSha: update.afterSha,
+        deployment: gatewayDeployment,
         sinceMs: restartStartedAt,
         sleep,
       });
+      gatewayRuntime = verifyGatewayRuntime(update.checkout, update.afterSha);
     } else {
       try {
-        verifyGateway(runCommand, update.checkout, update.afterSha);
+        verifyGateway(runCommand, update.checkout, update.afterSha, gatewayControlDeployment);
+        gatewayRuntime = verifyGatewayRuntime(update.checkout, update.afterSha);
       } catch {
         actions.gatewayRestart = true;
         actions.gatewaySelfHeal = true;
-        const restartStartedAt = restartGateway(runCommand, update.checkout, update.afterSha);
+        const restartStartedAt = restartGateway(
+          runCommand,
+          update.checkout,
+          update.afterSha,
+          Date.now(),
+          gatewayControlDeployment,
+        );
         gatewayLogAudit = verifyAndAuditGateway({
           runCommand,
           auditGatewayLogs,
           checkout: update.checkout,
           expectedSha: update.afterSha,
+          deployment: gatewayControlDeployment,
           sinceMs: restartStartedAt,
           sleep,
         });
+        gatewayRuntime = verifyGatewayRuntime(update.checkout, update.afterSha);
       }
     }
     if (actions.macAppRebuild) {
@@ -1180,7 +1821,12 @@ export function maintainMain(options, dependencies = {}) {
           update.checkout,
         );
         const macTarget = verifyMacTarget(update.checkout);
-        verifyGateway(runCommand, update.checkout, update.afterSha);
+        verifyGateway(
+          runCommand,
+          update.checkout,
+          update.afterSha,
+          gatewayDeployment ?? gatewayControlDeployment,
+        );
         rmSync(statePath, { force: true });
         maintenanceState.macTarget = macTarget;
       } catch (error) {
@@ -1199,7 +1845,21 @@ export function maintainMain(options, dependencies = {}) {
       buildBefore,
       buildChangedPaths,
       actions,
+      ...(gatewayDeployment
+        ? {
+            gatewayDeployment: {
+              changed: gatewayDeployment.changed,
+              entrypoint: gatewayDeployment.entrypoint,
+              label: gatewayDeployment.label,
+              port: gatewayDeployment.port,
+              ...(gatewayDeployment.previousEntrypoint
+                ? { previousEntrypoint: gatewayDeployment.previousEntrypoint }
+                : {}),
+            },
+          }
+        : {}),
       ...(gatewayLogAudit ? { gatewayLogAudit } : {}),
+      ...(gatewayRuntime ? { gatewayRuntime } : {}),
       ...(maintenanceState.macTarget ? { macTarget: maintenanceState.macTarget } : {}),
     };
   } finally {

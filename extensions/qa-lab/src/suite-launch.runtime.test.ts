@@ -132,6 +132,176 @@ describe("qa suite runtime launcher", () => {
     expect(runQaTestFileScenarios).not.toHaveBeenCalled();
   });
 
+  it("partitions mixed Crabline flow channels into one aggregate suite", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-crabline-channels-");
+    const defaultFlowImplementation = runQaFlowSuite.getMockImplementation();
+    if (!defaultFlowImplementation) {
+      throw new Error("expected default QA flow suite mock implementation");
+    }
+    runQaFlowSuite.mockImplementation(async (params) => {
+      const result = await defaultFlowImplementation(params);
+      const scenarioIds: readonly string[] = params?.scenarioIds ?? [];
+      result.evidence = {
+        kind: "openclaw.qa.evidence-summary",
+        schemaVersion: 2,
+        generatedAt: "2026-06-14T00:00:00.000Z",
+        evidenceMode: "full",
+        entries: scenarioIds.map((scenarioId) => ({
+          test: {
+            kind: "qa-scenario",
+            id: scenarioId,
+            title: scenarioId,
+          },
+          coverage: [],
+          execution: {
+            runner: "host",
+            environment: {
+              ref: null,
+              os: "linux",
+              nodeVersion: "v24.0.0",
+            },
+            provider: {
+              id: "mock-openai",
+              live: false,
+              model: {
+                name: "gpt-5.6-luna",
+                ref: "mock-openai/gpt-5.6-luna",
+              },
+              fixture: "mock-openai",
+            },
+            channel: {
+              id: params?.channelDriverSelection?.channel ?? "qa-channel",
+              live: false,
+              driver: "crabline",
+            },
+            packageSource: {
+              kind: "source-checkout",
+            },
+            artifacts: [
+              {
+                kind: "report",
+                path: "qa-suite-report.md",
+                source: "qa-suite",
+              },
+            ],
+          },
+          result: {
+            status: "pass",
+          },
+        })),
+      };
+      return result;
+    });
+    const result = await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/crabline-channels",
+      providerMode: "mock-openai",
+      channelDriver: "crabline",
+      scenarioIds: ["telegram-help-command", "matrix-restart-resume"],
+    });
+
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "crabline-channels");
+    expect(result).toMatchObject({
+      executionKind: "suite",
+      result: {
+        evidencePath: path.join(outputDir, "qa-evidence.json"),
+        summaryPath: path.join(outputDir, "qa-suite-summary.json"),
+      },
+    });
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(2);
+    expect(runQaFlowSuite).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        outputDir: path.join(outputDir, "flow", "telegram"),
+        channelDriverSelection: expect.objectContaining({ channel: "telegram" }),
+        scenarioIds: ["telegram-help-command"],
+      }),
+    );
+    expect(runQaFlowSuite).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        outputDir: path.join(outputDir, "flow", "matrix"),
+        channelDriverSelection: expect.objectContaining({ channel: "matrix" }),
+        scenarioIds: ["matrix-restart-resume"],
+      }),
+    );
+    const summary = JSON.parse(
+      await fs.readFile(path.join(outputDir, "qa-suite-summary.json"), "utf8"),
+    ) as { run?: { channel?: unknown; channelDriver?: unknown; scenarioIds?: unknown } };
+    expect(summary.run?.channelDriver).toBe("crabline");
+    expect(summary.run?.channel).toBeNull();
+    expect(summary.run?.scenarioIds).toEqual(["telegram-help-command", "matrix-restart-resume"]);
+    const evidence = JSON.parse(
+      await fs.readFile(path.join(outputDir, "qa-evidence.json"), "utf8"),
+    ) as {
+      entries?: Array<{ execution?: { artifacts?: Array<{ path?: unknown }> } }>;
+    };
+    expect(evidence.entries?.map((entry) => entry.execution?.artifacts?.[0]?.path)).toEqual([
+      ".artifacts/qa-e2e/crabline-channels/flow/telegram/qa-suite-report.md",
+      ".artifacts/qa-e2e/crabline-channels/flow/matrix/qa-suite-report.md",
+    ]);
+  });
+
+  it("preserves runtime parity options across mixed Crabline flow channels", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-crabline-runtime-pair-");
+    await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/crabline-runtime-pair",
+      providerMode: "mock-openai",
+      channelDriver: "crabline",
+      runtimePair: ["openclaw", "codex"],
+      scenarioIds: ["telegram-help-command", "matrix-restart-resume"],
+    });
+
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(2);
+    for (const call of runQaFlowSuite.mock.calls) {
+      expect(call[0]).toEqual(
+        expect.objectContaining({
+          runtimePair: ["openclaw", "codex"],
+        }),
+      );
+    }
+    const summary = JSON.parse(
+      await fs.readFile(
+        path.join(
+          repoRoot,
+          ".artifacts",
+          "qa-e2e",
+          "crabline-runtime-pair",
+          "qa-suite-summary.json",
+        ),
+        "utf8",
+      ),
+    ) as { run?: { runtimePair?: unknown } };
+    expect(summary.run?.runtimePair).toEqual(["openclaw", "codex"]);
+    await expect(
+      fs.access(
+        path.join(
+          repoRoot,
+          ".artifacts",
+          "qa-e2e",
+          "crabline-runtime-pair",
+          "flow",
+          "telegram",
+          "qa-evidence.json",
+        ),
+      ),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      fs.access(
+        path.join(
+          repoRoot,
+          ".artifacts",
+          "qa-e2e",
+          "crabline-runtime-pair",
+          "flow",
+          "matrix",
+          "qa-evidence.json",
+        ),
+      ),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("routes selected Playwright scenarios to the Playwright scenario runner", async () => {
     const repoRoot = await makeTempRepo("qa-suite-launch-");
     const result = await runQaSuite({

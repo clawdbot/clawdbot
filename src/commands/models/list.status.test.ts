@@ -1221,6 +1221,13 @@ describe("modelsStatusCommand auth overview", () => {
         value: "plugin-owned",
         source: "codex-app-server",
       });
+      // #104713: the summary must ship only the projected fields; the runtime
+      // synthetic-auth object also carries the raw credential and must never
+      // reach the JSON payload.
+      expect(
+        Object.keys(requireRecord(codexProvider.syntheticAuth, "codex synthetic auth")),
+      ).toStrictEqual(["value", "source"]);
+      expect(JSON.stringify(payload)).not.toContain("codex-runtime-token");
       expectRecordFields(requireRecord(codexProvider.effective, "codex effective auth"), {
         kind: "synthetic",
         detail: "codex-app-server",

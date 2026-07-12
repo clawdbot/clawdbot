@@ -8,7 +8,6 @@
     "src/agents/subagent-announce.test-support.ts": 2,
     "src/agents/tools/transcripts-tool.ts": 2,
     "src/auto-reply/reply/commands-session-store.ts": 2,
-    "src/auto-reply/reply/get-reply-run.ts": 2,
     "src/commands/doctor-heartbeat-session-target.ts": 2,
     "src/commands/doctor-state-integrity.ts": 2,
     "src/commands/doctor/shared/codex-route-warnings.ts": 3,

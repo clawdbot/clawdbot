@@ -12,7 +12,9 @@ import {
   collectQaSuiteTransportPolicy,
   mapQaSuiteWithConcurrency,
   normalizeQaSuiteConcurrency,
+  normalizeQaSuiteScenarioChannel,
   resolveQaSuiteScenarioChannel,
+  resolveQaSuiteScenarioChannels,
   resolveQaSuiteWorkerStartStaggerMs,
   resolveQaSuiteOutputDir,
   scenarioRequiresControlUi,
@@ -33,6 +35,17 @@ function makePlaywrightQaSuiteTestScenario(id: string): ReturnType<typeof makeQa
 }
 
 describe("qa suite planning helpers", () => {
+  it("normalizes blank scenario channels as unpinned", () => {
+    expect(
+      normalizeQaSuiteScenarioChannel(makeQaSuiteTestScenario("blank-channel", { channel: "   " })),
+    ).toBeUndefined();
+    expect(
+      normalizeQaSuiteScenarioChannel(
+        makeQaSuiteTestScenario("matrix-channel", { channel: " Matrix " }),
+      ),
+    ).toBe("matrix");
+  });
+
   it("normalizes suite concurrency to a bounded integer", () => {
     const previous = process.env.OPENCLAW_QA_SUITE_CONCURRENCY;
     delete process.env.OPENCLAW_QA_SUITE_CONCURRENCY;
@@ -310,6 +323,16 @@ describe("qa suite planning helpers", () => {
         ],
       }),
     ).toThrow("Selected QA scenarios require multiple channels");
+    expect(
+      resolveQaSuiteScenarioChannels({
+        defaultChannel: "telegram",
+        scenarios: [
+          makeQaSuiteTestScenario("plain"),
+          makeQaSuiteTestScenario("matrix-flow", { channel: "matrix" }),
+          makeQaSuiteTestScenario("slack-flow", { channel: "slack" }),
+        ],
+      }),
+    ).toEqual(["telegram", "matrix", "slack"]);
   });
 
   it("isolates flow scenarios with explicit suite isolation metadata", () => {

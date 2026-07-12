@@ -142,6 +142,11 @@ export class CronService implements CronServiceContract {
     return this.state.store?.jobs.find((job) => job.id === id);
   }
 
+  /** In-memory job snapshot; undefined until the store is loaded. */
+  getLoadedJobs(): readonly CronJob[] | undefined {
+    return this.state.store?.jobs;
+  }
+
   async readJob(id: string): Promise<CronJob | undefined> {
     return await ops.readJob(this.state, id);
   }

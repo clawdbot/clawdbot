@@ -397,12 +397,17 @@ describe("handleControlUiHttpRequest", () => {
         )?.[1];
         expect(typeof csp).toBe("string");
         expect(String(csp)).toContain("frame-ancestors 'none'");
+        expect(String(csp)).toContain("frame-src 'self'");
         expect(String(csp)).toContain("script-src 'self'");
         expect(String(csp)).toContain(
           "connect-src 'self' ws: wss: https://api.openai.com https://tweakcn.com",
         );
         expect(String(csp)).not.toContain("https://*.tweakcn.com");
         expect(String(csp)).not.toContain("script-src 'self' 'unsafe-inline'");
+        expect(setHeader).toHaveBeenCalledWith(
+          "Permissions-Policy",
+          "camera=*, microphone=*, geolocation=*, clipboard-write=*",
+        );
         expect(responseBody(end)).toContain('data-openclaw-terminal-enabled="false"');
       },
     });

@@ -63,7 +63,6 @@ function createProps(overrides: Partial<PluginsViewProps> = {}): PluginsViewProp
     mcpMessage: null,
     mcpBusy: false,
     mcpFormOpen: false,
-    onTabChange: () => undefined,
     onQueryChange: () => undefined,
     onFilterChange: () => undefined,
     onRefresh: () => undefined,
@@ -566,23 +565,6 @@ describe("renderPlugins", () => {
       false,
       clawHubRowKey(packageName),
     );
-  });
-
-  it("uses roving focus and arrow-key activation for the catalog tabs", () => {
-    const onTabChange = vi.fn();
-    const container = mount(createProps({ activeTab: "installed", onTabChange }));
-    const installed = container.querySelector<HTMLButtonElement>("#plugins-tab-installed")!;
-    const discover = container.querySelector<HTMLButtonElement>("#plugins-tab-discover")!;
-
-    expect([installed.tabIndex, discover.tabIndex]).toEqual([0, -1]);
-    installed.focus();
-    installed.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
-    expect(onTabChange).toHaveBeenLastCalledWith("discover");
-    expect(document.activeElement).toBe(discover);
-
-    discover.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true }));
-    expect(onTabChange).toHaveBeenLastCalledWith("installed");
-    expect(document.activeElement).toBe(installed);
   });
 
   it("does not present an empty catalog alongside an initial list failure", () => {

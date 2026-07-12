@@ -453,6 +453,34 @@ with Example Deck
     expect(card?.outputText).toBe("Opened page");
   });
 
+  it("extracts MCP App previews from sanitized result details", () => {
+    const [card] = extractToolCards(
+      {
+        role: "tool",
+        toolName: "demo__show",
+        content: [{ type: "text", text: "original result" }],
+        details: {
+          mcpAppPreview: {
+            kind: "canvas",
+            view: {
+              id: "cv_app",
+            },
+            presentation: { target: "assistant_message", sandbox: "scripts" },
+            mcpApp: { viewId: "cv_app" },
+          },
+        },
+      },
+      "msg:mcp-app",
+    );
+
+    expect(card?.outputText).toBe("original result");
+    expect(card?.preview).toMatchObject({
+      viewId: "cv_app",
+      mcpApp: { viewId: "cv_app" },
+      sandbox: "scripts",
+    });
+  });
+
   it("does not create previews for non-assistant canvas or generic outputs", () => {
     const cases = [
       {

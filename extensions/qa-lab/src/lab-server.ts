@@ -73,7 +73,7 @@ export type {
   QaLabServerStartParams,
 } from "./lab-server.types.js";
 
-export function writeQaLabServerError(res: Parameters<typeof writeError>[0], error: unknown): void {
+function writeQaLabServerError(res: Parameters<typeof writeError>[0], error: unknown): void {
   if (writeQaRequestBodyLimitError(res, error)) {
     return;
   }

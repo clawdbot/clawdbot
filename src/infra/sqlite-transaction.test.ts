@@ -1,18 +1,20 @@
 // Covers synchronous SQLite transaction helpers.
 import { spawn, type ChildProcessByStdio } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
-import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
+import {
+  runSqliteDeferredTransactionSync,
+  runSqliteImmediateTransactionSync,
+} from "./sqlite-transaction.js";
 
 const openDatabases: Array<import("node:sqlite").DatabaseSync> = [];
 type WriterLockChild = ChildProcessByStdio<null, Readable, Readable>;
 
 const openChildren: WriterLockChild[] = [];
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createDatabase(): import("node:sqlite").DatabaseSync {
   const { DatabaseSync } = requireNodeSqlite();
@@ -92,10 +94,36 @@ afterEach(() => {
       db.close();
     }
   }
-  for (const tempDir of tempDirs.splice(0)) {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  }
   vi.restoreAllMocks();
+});
+
+describe("runSqliteDeferredTransactionSync", () => {
+  it("keeps multiple reads on one snapshot while another connection commits", () => {
+    const tempDir = tempDirs.make("openclaw-sqlite-read-snapshot-");
+    const databasePath = path.join(tempDir, "snapshot.sqlite");
+    const { DatabaseSync } = requireNodeSqlite();
+    const reader = new DatabaseSync(databasePath);
+    const writer = new DatabaseSync(databasePath);
+    openDatabases.push(reader, writer);
+    reader.exec(
+      "PRAGMA journal_mode = WAL; CREATE TABLE entries (id TEXT PRIMARY KEY); INSERT INTO entries VALUES ('first');",
+    );
+    writer.exec("PRAGMA busy_timeout = 1000;");
+
+    const counts = runSqliteDeferredTransactionSync(reader, () => {
+      const before = reader.prepare("SELECT COUNT(*) AS count FROM entries").get() as {
+        count: number;
+      };
+      writer.prepare("INSERT INTO entries(id) VALUES (?)").run("second");
+      const after = reader.prepare("SELECT COUNT(*) AS count FROM entries").get() as {
+        count: number;
+      };
+      return [before.count, after.count];
+    });
+
+    expect(counts).toEqual([1, 1]);
+    expect(writer.prepare("SELECT COUNT(*) AS count FROM entries").get()).toEqual({ count: 2 });
+  });
 });
 
 describe("runSqliteImmediateTransactionSync", () => {
@@ -257,8 +285,7 @@ describe("runSqliteImmediateTransactionSync", () => {
 
   it("waits for a separate writer and exposes the synchronous event-loop cost", async () => {
     const holdMs = 200;
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-contention-"));
-    tempDirs.push(tempDir);
+    const tempDir = tempDirs.make("openclaw-sqlite-contention-");
     const databasePath = path.join(tempDir, "contention.sqlite");
     const { DatabaseSync } = requireNodeSqlite();
     const db = new DatabaseSync(databasePath);
@@ -293,8 +320,7 @@ describe("runSqliteImmediateTransactionSync", () => {
   });
 
   it("fails a real separate-writer wait after the single SQLite busy timeout", async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-timeout-"));
-    tempDirs.push(tempDir);
+    const tempDir = tempDirs.make("openclaw-sqlite-timeout-");
     const databasePath = path.join(tempDir, "contention.sqlite");
     const { DatabaseSync } = requireNodeSqlite();
     const db = new DatabaseSync(databasePath);

@@ -1,6 +1,7 @@
 // Covers task registry store persistence, in-memory behavior, and observer notifications.
 import { statSync } from "node:fs";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import {
@@ -8,6 +9,8 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
@@ -109,6 +112,22 @@ function createStoredTask(): TaskRecord {
     createdAt: 100,
     lastEventAt: 100,
   };
+}
+
+function createUnsafeTaskOwnerIndex(database: DatabaseSync): void {
+  database.exec(`
+    DROP INDEX idx_task_runs_owner_key;
+    CREATE INDEX idx_task_runs_owner_key ON task_runs(status);
+  `);
+  database.enableDefensive?.(false);
+  database.exec("PRAGMA writable_schema = ON;");
+  database
+    .prepare(
+      "UPDATE sqlite_schema SET sql = 'CREATE INDEX idx_task_runs_owner_key ON task_runs(owner_key)' WHERE name = 'idx_task_runs_owner_key'",
+    )
+    .run();
+  const schemaVersion = readSqliteNumberPragma(database, "schema_version");
+  database.exec(`PRAGMA writable_schema = OFF; PRAGMA schema_version = ${schemaVersion + 1};`);
 }
 
 describe("task-registry store runtime", () => {
@@ -313,6 +332,123 @@ describe("task-registry store runtime", () => {
 
         const restored = loadTaskRegistryStateFromSqlite();
         expect(restored.deliveryStates.get(created.taskId)?.requesterOrigin).toBeUndefined();
+      },
+    );
+  });
+
+  it("loads task and delivery rows from one sqlite read snapshot", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-task-store-read-snapshot-" },
+      async () => {
+        resetTaskRegistryForTests();
+        const created = createTaskRecord({
+          runtime: "acp",
+          ownerKey: "agent:main:main",
+          scopeKind: "session",
+          childSessionKey: "agent:main:acp:snapshot",
+          runId: "run-read-snapshot",
+          task: "Read one task registry snapshot",
+          status: "running",
+          deliveryStatus: "pending",
+          requesterOrigin: {
+            channel: "test-channel",
+            to: "C1234567890",
+          },
+        });
+        const database = openOpenClawStateDatabase();
+        database.db
+          .prepare("UPDATE task_delivery_state SET last_notified_event_at = ? WHERE task_id = ?")
+          .run(100, created.taskId);
+        const { DatabaseSync } = requireNodeSqlite();
+        const writer = new DatabaseSync(database.path);
+        writer.exec("PRAGMA busy_timeout = 1000;");
+        const originalPrepare = database.db.prepare.bind(database.db);
+        let writerCommitted = false;
+        const prepareSpy = vi.spyOn(database.db, "prepare").mockImplementation((sql: string) => {
+          if (sql.includes('from "task_delivery_state"') && !writerCommitted) {
+            writerCommitted = true;
+            writer
+              .prepare(
+                "UPDATE task_delivery_state SET last_notified_event_at = ? WHERE task_id = ?",
+              )
+              .run(200, created.taskId);
+          }
+          return originalPrepare(sql);
+        });
+
+        try {
+          const restored = loadTaskRegistryStateFromSqlite();
+          expect(restored.deliveryStates.get(created.taskId)?.lastNotifiedEventAt).toBe(100);
+          expect(
+            writer
+              .prepare("SELECT last_notified_event_at FROM task_delivery_state WHERE task_id = ?")
+              .get(created.taskId),
+          ).toEqual({ last_notified_event_at: 200 });
+        } finally {
+          prepareSpy.mockRestore();
+          writer.close();
+        }
+      },
+    );
+  });
+
+  it("bypasses stale owner indexes for complete fresh results", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-task-store-owner-index-" },
+      async () => {
+        resetTaskRegistryForTests();
+        const ownerKey = "agent:main:main";
+        const target = createTaskRecord({
+          runtime: "cron",
+          ownerKey,
+          scopeKind: "session",
+          sourceId: "owner-index-target",
+          runId: "run-owner-index-target",
+          task: "Find the target owner task",
+          status: "running",
+          deliveryStatus: "not_applicable",
+          notifyPolicy: "silent",
+        });
+        createTaskRecord({
+          runtime: "cron",
+          ownerKey: "agent:other:main",
+          scopeKind: "session",
+          sourceId: "owner-index-other",
+          runId: "run-owner-index-other",
+          task: "Ignore another owner task",
+          status: "queued",
+          deliveryStatus: "not_applicable",
+          notifyPolicy: "silent",
+        });
+        expect(listFreshTasksForOwnerKey(ownerKey).map((task) => task.taskId)).toContain(
+          target.taskId,
+        );
+
+        const database = openOpenClawStateDatabase();
+        createUnsafeTaskOwnerIndex(database.db);
+        expect(database.db.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
+        expect(database.db.prepare("PRAGMA integrity_check('task_runs')").all()).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              integrity_check: expect.stringMatching(/idx_task_runs_owner_key/),
+            }),
+          ]),
+        );
+        expect(
+          database.db
+            .prepare(
+              "SELECT task_id FROM task_runs INDEXED BY idx_task_runs_owner_key WHERE owner_key = ?",
+            )
+            .all(ownerKey),
+        ).toEqual([]);
+        expect(() => loadTaskRegistryStateFromSqlite()).toThrow(
+          /integrity_check failed.*idx_task_runs_owner_key/iu,
+        );
+        expect(listFreshTasksForOwnerKey(ownerKey).map((task) => task.taskId)).toContain(
+          target.taskId,
+        );
+
+        resetTaskRegistryForTests({ persist: false });
       },
     );
   });

@@ -53,7 +53,7 @@ function splitModelKey(key: string) {
   };
 }
 
-export function selectQaRunnerModelOptions(rows: ModelRow[]): QaRunnerModelOption[] {
+function selectQaRunnerModelOptions(rows: ModelRow[]): QaRunnerModelOption[] {
   const options = rows
     .filter((row) => row.available === true && !row.missing)
     .map((row) => {
@@ -93,7 +93,7 @@ function isModelRow(value: unknown): value is ModelRow {
   );
 }
 
-export function parseQaRunnerModelOptionsOutput(stdout: string): QaRunnerModelOption[] {
+function parseQaRunnerModelOptionsOutput(stdout: string): QaRunnerModelOption[] {
   let payload: unknown;
   try {
     payload = JSON.parse(stdout) as unknown;

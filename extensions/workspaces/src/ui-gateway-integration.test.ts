@@ -6,9 +6,8 @@
 // `request`. Neither exercised the REAL client param-builder against the REAL
 // handler against a REAL store, so drift between them was invisible.
 //
-// This test closes that gap. It is node-rooted (same pattern as
-// rpc-allowlist-sync.test.ts, which likewise imports the UI `.ts` client) and
-// wires three real components with NO mocked responses:
+// This test closes that gap. It is node-rooted so it can import the UI `.ts`
+// client and wires three real components with NO mocked responses:
 //   1. a real WorkspaceStore over a temp stateDir, seeded via the store's real
 //      replace() API, plus a real JSON data file under `<stateDir>/workspace/data`;
 //   2. the real gateway handlers from registerWorkspaceGatewayMethods();

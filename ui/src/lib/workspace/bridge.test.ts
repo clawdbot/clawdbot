@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createWidgetBridge,
-  isRpcMethodAllowed,
   isWellFormedInbound,
   resetPromptRateStatesForTest,
   type WidgetBridgeDeps,
@@ -354,17 +353,7 @@ describe("rate-limit state persists across bridge re-instantiation (remount)", (
   });
 });
 
-describe("resolve-time rpc allowlist re-check (defense-in-depth)", () => {
-  // The mirror-vs-server keep-in-sync guard lives in the node-rooted extension
-  // suite (extensions/workspaces/src/rpc-allowlist-sync.test.ts), which can import
-  // both the browser mirror and the node-side binding-contract; the browser-rooted
-  // UI vitest cannot resolve imports outside ui/.
-  it("isRpcMethodAllowed accepts allowlisted and rejects non-allowlisted methods", () => {
-    expect(isRpcMethodAllowed("sessions.list")).toBe(true);
-    expect(isRpcMethodAllowed("sessions.delete")).toBe(false);
-    expect(isRpcMethodAllowed("")).toBe(false);
-  });
-
+describe("resolve-time binding re-check", () => {
   it("denies a getData whose gate returns a code and NEVER calls resolveBinding", async () => {
     const resolveBinding = vi.fn(async () => ({ ok: true }));
     const assertBindingAllowed = (bindingId: string): WidgetErrorCode | null =>

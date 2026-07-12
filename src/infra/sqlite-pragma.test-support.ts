@@ -6,6 +6,7 @@ export type SqliteNumberPragma =
   | "auto_vacuum"
   | "busy_timeout"
   | "foreign_keys"
+  | "schema_version"
   | "synchronous"
   | "user_version"
   | "wal_autocheckpoint";

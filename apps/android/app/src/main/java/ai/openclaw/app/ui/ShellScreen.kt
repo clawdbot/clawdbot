@@ -255,7 +255,6 @@ fun ShellScreen(
           Tab.Sessions ->
             SessionsScreen(
               viewModel = viewModel,
-              onOpenCommand = { commandOpen = true },
               onOpenChat = { nav.selectTab(Tab.Chat) },
             )
           Tab.Files ->

@@ -279,6 +279,18 @@ export function collectGatewayConfigFindings(
     });
   }
 
+  if (cfg.mcp?.apps?.enabled === true) {
+    findings.push({
+      checkId: "mcp.apps.enabled",
+      severity: "warn",
+      title: "MCP Apps UI bridge enabled",
+      detail:
+        "mcp.apps.enabled=true allows configured MCP servers to provide interactive HTML. Views are CSP-restricted and origin-isolated, but they can call app-visible tools on their owning MCP server while the session runtime remains active.",
+      remediation:
+        "Keep this enabled only for MCP servers you trust. Disable with `openclaw config set mcp.apps.enabled false --strict-json` when it is not needed.",
+    });
+  }
+
   const enabledDangerousFlags = (
     options.collectDangerousConfigFlags ?? collectCoreInsecureOrDangerousFlags
   )(cfg);

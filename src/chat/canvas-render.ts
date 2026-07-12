@@ -20,6 +20,7 @@ type CanvasPreview = {
   className?: string;
   style?: string;
   sandbox?: CanvasSandbox;
+  mcpApp?: { viewId: string };
 };
 
 function getRecordStringField(
@@ -73,6 +74,8 @@ function coerceCanvasPreview(
   const presentation = getNestedRecord(record, "presentation");
   const view = getNestedRecord(record, "view");
   const source = getNestedRecord(record, "source");
+  const mcpAppRecord = getNestedRecord(record, "mcpApp");
+  const mcpAppViewId = getRecordStringField(mcpAppRecord, "viewId");
   const requestedSurface =
     getRecordStringField(presentation, "target") ?? getRecordStringField(record, "target");
   const surface = requestedSurface ? normalizeSurface(requestedSurface) : "assistant_message";
@@ -93,6 +96,18 @@ function coerceCanvasPreview(
   const sandbox = normalizeSandbox(getRecordStringField(presentation, "sandbox"));
   const viewUrl = getRecordStringField(view, "url") ?? getRecordStringField(view, "entryUrl");
   const viewId = getRecordStringField(view, "id") ?? getRecordStringField(view, "docId");
+  if (mcpAppViewId && viewId === mcpAppViewId) {
+    return {
+      kind: "canvas",
+      surface,
+      render: "url",
+      viewId,
+      ...(title ? { title } : {}),
+      ...(preferredHeight ? { preferredHeight } : {}),
+      ...(sandbox ? { sandbox } : {}),
+      mcpApp: { viewId: mcpAppViewId },
+    };
+  }
   if (viewUrl) {
     return {
       kind: "canvas",
@@ -105,6 +120,7 @@ function coerceCanvasPreview(
       ...(className ? { className } : {}),
       ...(style ? { style } : {}),
       ...(sandbox ? { sandbox } : {}),
+      ...(mcpAppViewId ? { mcpApp: { viewId: mcpAppViewId } } : {}),
     };
   }
   const sourceType = getRecordStringField(source, "type")?.trim().toLowerCase();
@@ -123,9 +139,16 @@ function coerceCanvasPreview(
       ...(className ? { className } : {}),
       ...(style ? { style } : {}),
       ...(sandbox ? { sandbox } : {}),
+      ...(mcpAppViewId ? { mcpApp: { viewId: mcpAppViewId } } : {}),
     };
   }
   return undefined;
+}
+
+/** Extracts an MCP App Canvas preview from sanitized tool-result details. */
+export function extractCanvasFromDetails(value: unknown): CanvasPreview | undefined {
+  const details = asOptionalRecord(value);
+  return coerceCanvasPreview(asOptionalRecord(details?.mcpAppPreview));
 }
 
 function parseCanvasAttributes(raw: string): Record<string, string> {

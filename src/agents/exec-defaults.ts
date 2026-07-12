@@ -65,8 +65,8 @@ function applySessionLegacyExecPolicyLayer(
   return base;
 }
 
-// Gather the shared config state once so canExecRequestNode and
-// resolveExecDefaults stay aligned on agent/global/session precedence.
+// Gather the shared config state once so exec resolution applies one
+// agent/global/session precedence order.
 function resolveExecConfigState(params: {
   cfg?: OpenClawConfig;
   sessionEntry?: ExecSessionDefaults;
@@ -104,34 +104,6 @@ function resolveExecConfigState(params: {
     agentExec,
     globalExec,
   };
-}
-
-function resolveExecSandboxAvailability(params: {
-  cfg: OpenClawConfig;
-  sessionKey?: string;
-  sandboxAvailable?: boolean;
-}) {
-  return (
-    params.sandboxAvailable ??
-    (params.sessionKey
-      ? resolveSandboxRuntimeStatus({
-          cfg: params.cfg,
-          sessionKey: params.sessionKey,
-        }).sandboxed
-      : false)
-  );
-}
-
-/** Returns whether the current exec policy allows requesting host node execution. */
-export function canExecRequestNode(params: {
-  cfg?: OpenClawConfig;
-  sessionEntry?: ExecSessionDefaults;
-  execOverrides?: ExecPolicyOverrides;
-  agentId?: string;
-  sessionKey?: string;
-  sandboxAvailable?: boolean;
-}): boolean {
-  return resolveNodeExecEligibility(params).canExec;
 }
 
 /** Resolves whether node exec is usable and any effective node binding. */
@@ -178,11 +150,14 @@ export function resolveExecDefaults(params: {
     agentExec,
     globalExec,
   } = resolveExecConfigState(params);
-  const sandboxAvailable = resolveExecSandboxAvailability({
-    cfg,
-    sessionKey: params.sessionKey,
-    sandboxAvailable: params.sandboxAvailable,
-  });
+  const sandboxAvailable =
+    params.sandboxAvailable ??
+    (params.sessionKey
+      ? resolveSandboxRuntimeStatus({
+          cfg,
+          sessionKey: params.sessionKey,
+        }).sandboxed
+      : false);
   const resolved = resolveExecTarget({
     configuredTarget: host,
     elevatedRequested: params.elevatedRequested === true,

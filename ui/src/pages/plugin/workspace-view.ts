@@ -232,11 +232,6 @@ function getViewState(host: object): WorkspaceViewState {
   return state;
 }
 
-/** Read the current data-refresh counter for a host (used by the poll timer). */
-export function workspaceDataVersion(host: object): number {
-  return getViewState(host).dataVersion;
-}
-
 /** Advance the data-refresh counter so the next render re-resolves bindings. */
 export function bumpWorkspaceDataVersion(host: object): void {
   getViewState(host).dataVersion += 1;

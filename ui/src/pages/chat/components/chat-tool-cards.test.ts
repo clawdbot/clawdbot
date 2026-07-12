@@ -28,13 +28,14 @@ vi.mock("../tool-display.ts", () => ({
   },
 }));
 
+import { resolveMcpAppSandboxUrl } from "../../../components/mcp-app-view.ts";
 import {
   formatDistinctCollapsedToolSummaryText,
   formatCollapsedToolPreviewText,
   formatCollapsedToolSummaryText,
   isToolErrorOutput,
 } from "../../../lib/chat/tool-cards.ts";
-import { renderToolCard } from "./chat-tool-cards.ts";
+import { renderToolCard, renderToolPreview } from "./chat-tool-cards.ts";
 
 function requireFirstMockArg(
   mock: ReturnType<typeof vi.fn>,
@@ -64,6 +65,102 @@ function pointerClick(element: Element) {
 }
 
 describe("tool-cards", () => {
+  it("accepts only the dedicated-origin MCP App sandbox endpoint", () => {
+    expect(
+      resolveMcpAppSandboxUrl(
+        "/mcp-app-sandbox?csp=abc",
+        8444,
+        undefined,
+        "wss://gateway.example:8443/openclaw",
+        "https://gateway.example:8443",
+      ),
+    ).toBe("https://gateway.example:8444/mcp-app-sandbox?csp=abc");
+    expect(
+      resolveMcpAppSandboxUrl(
+        "/mcp-app-sandbox",
+        18790,
+        "https://apps.example.com",
+        "wss://gateway.example",
+        "https://gateway.example",
+      ),
+    ).toBe("https://apps.example.com/mcp-app-sandbox");
+    expect(() =>
+      resolveMcpAppSandboxUrl(
+        "https://attacker.example/mcp-app-sandbox",
+        8444,
+        undefined,
+        "wss://gateway.example:8443/openclaw",
+        "https://gateway.example:8443",
+      ),
+    ).toThrow("MCP App sandbox URL is invalid");
+    expect(() =>
+      resolveMcpAppSandboxUrl(
+        "data:text/html;base64,cHJveHk=",
+        8444,
+        undefined,
+        "wss://gateway.example:8443/openclaw",
+        "https://gateway.example:8443",
+      ),
+    ).toThrow("MCP App sandbox URL is invalid");
+    expect(() =>
+      resolveMcpAppSandboxUrl(
+        "/mcp-app-sandbox",
+        8443,
+        undefined,
+        "wss://gateway.example:8443/openclaw",
+        "https://gateway.example:8443",
+      ),
+    ).toThrow("MCP App sandbox URL is invalid");
+    expect(() =>
+      resolveMcpAppSandboxUrl(
+        "/mcp-app-sandbox",
+        8444,
+        "https://gateway.example:8443",
+        "wss://gateway.example:8443/openclaw",
+        "https://control.example",
+      ),
+    ).toThrow("MCP App sandbox URL is invalid");
+  });
+
+  it("routes MCP App previews through the dedicated double-iframe host", async () => {
+    const container = document.createElement("div");
+    render(
+      renderToolPreview(
+        {
+          kind: "canvas",
+          surface: "assistant_message",
+          render: "url",
+          viewId: "cv_app",
+          mcpApp: { viewId: "cv_app" },
+        },
+        "chat_message",
+        { sessionKey: "agent:main:main" },
+      ),
+      container,
+    );
+
+    const view = container.querySelector("mcp-app-view");
+    expect(view).not.toBeNull();
+    expect(view?.getAttribute("src")).toBeNull();
+    expect((view as { viewId?: string }).viewId).toBe("cv_app");
+
+    const toolContainer = document.createElement("div");
+    render(
+      renderToolPreview(
+        {
+          kind: "canvas",
+          surface: "assistant_message",
+          render: "url",
+          mcpApp: { viewId: "cv_app" },
+        },
+        "chat_tool",
+        { sessionKey: "agent:main:main" },
+      ),
+      toolContainer,
+    );
+    expect(toolContainer.querySelector("mcp-app-view")).toBeNull();
+  });
+
   it("keeps selected summary text from toggling the disclosure", () => {
     const container = document.createElement("div");
     document.body.append(container);

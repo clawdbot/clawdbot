@@ -39,7 +39,6 @@ vi.mock("../plugin-sdk/browser-control-auth.js", () => browserControlAuthMock);
 vi.mock("../plugin-sdk/browser-profiles.js", () => browserProfilesMock);
 
 vi.mock("./exec-defaults.js", () => ({
-  canExecRequestNode: vi.fn(() => false),
   resolveNodeExecEligibility: resolveNodeExecEligibilityMock,
 }));
 

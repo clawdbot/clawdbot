@@ -74,6 +74,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { disableCronJobsBoundToSession } from "../../cron/job-session-bindings.js";
 import {
   measureDiagnosticsTimelineSpan,
   measureDiagnosticsTimelineSpanSync,
@@ -2420,6 +2421,35 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       sessionKey: target.canonicalKey ?? key,
       patch: p,
     });
+
+    // Cron mutations are operator.admin surface while archive is write-scoped;
+    // only cascade for internal callers (client == null) or admin operators so
+    // write-scoped archiving cannot flip admin-managed schedules.
+    const callerScopes = client?.connect ? (client.connect.scopes ?? []) : null;
+    const callerCanManageCron = callerScopes === null || callerScopes.includes(ADMIN_SCOPE);
+    if (p.archived === true && callerCanManageCron) {
+      // Archived sessions reject new work, so schedules bound to them would
+      // only accumulate failing runs; disable them with the archive.
+      try {
+        const disabledJobIds = await disableCronJobsBoundToSession({
+          cron: context.cron,
+          cfg,
+          sessionKey: target.canonicalKey ?? key,
+        });
+        if (disabledJobIds.length > 0) {
+          log.info(
+            `sessions.patch: disabled cron jobs bound to archived session ${target.canonicalKey ?? key}: ${disabledJobIds.join(", ")}`,
+          );
+        }
+      } catch (error) {
+        // Best-effort by design: archive is the primary action and must not
+        // fail or roll back on cron-store errors. Any job left enabled fails
+        // closed at run start because archived sessions reject new work.
+        log.warn(
+          `sessions.patch: failed to disable cron jobs for archived session ${target.canonicalKey ?? key}: ${formatErrorMessage(error)}`,
+        );
+      }
+    }
 
     // Absorb ad-hoc categories into the gateway group catalog so ordering
     // covers every group an operator UI can observe.

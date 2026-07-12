@@ -6,11 +6,12 @@
 
 FROM node:24-bookworm-slim@sha256:242549cd46785b480c832479a730f4f2a20865d61ea2e404fdb2a5c3d3b73ecf AS e2e-runner
 
-# python3 covers package/plugin install paths that execute helper scripts.
+# openssl provisions short-lived fixture certificates for HTTPS-only provider
+# routes. python3 covers package/plugin install paths that execute helper scripts.
 # procps provides pgrep for E2E watchdogs that assert no package-manager work is
 # still running after Gateway readiness.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates git procps python3 \
+ && apt-get install -y --no-install-recommends ca-certificates git openssl procps python3 \
  && rm -rf /var/lib/apt/lists/*
 
 RUN corepack enable

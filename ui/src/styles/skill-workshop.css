@@ -26,7 +26,22 @@
   flex-shrink: 0;
 }
 
-.content--skill-workshop > .skill-workshop {
+/* Hub tab strip stays fixed; the board scrolls inside the panel below it. */
+.content--skill-workshop .plugins-tabs {
+  flex-shrink: 0;
+}
+
+.sw-hub-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* Replaces the old .content--skill-workshop > .skill-workshop rule: the board
+   nests inside the hub tabpanel now, and dropping min-height: 0 at either
+   level would let tall boards grow the page instead of scrolling internally. */
+.sw-hub-panel > .skill-workshop {
   flex: 1 1 auto;
   min-height: 0;
 }
@@ -37,7 +52,12 @@
   padding-bottom: 32px;
 }
 
-.content--skill-workshop-today > .skill-workshop,
+.content--skill-workshop-today .sw-hub-panel {
+  display: block;
+  min-height: auto;
+}
+
+.content--skill-workshop-today .skill-workshop,
 .content--skill-workshop-today .sw-view,
 .content--skill-workshop-today .sw-view__pane {
   display: block;
@@ -45,6 +65,10 @@
 }
 
 .sw-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   margin: 0 0 12px;
   border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
   border-radius: 10px;

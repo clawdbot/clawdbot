@@ -11,6 +11,7 @@ import {
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { renderPluginsHubTabs, type PluginsHubTab } from "../../components/plugins-hub-tabs.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveEditableSnapshotConfig } from "../../lib/config/index.ts";
@@ -47,6 +48,8 @@ export type PluginsRouteData = {
   gatewaySnapshot: ApplicationGatewaySnapshot;
   result: PluginListResult | null;
   error: string | null;
+  /** Tab requested via ?tab=; lets other hub pages deep-link Discover. */
+  initialTab: PluginsTab | null;
 };
 
 function errorMessage(error: unknown): string {
@@ -288,6 +291,13 @@ class PluginsPage extends OpenClawLightDomElement {
       this.ensureInitialData();
       return;
     }
+    // Honor ?tab= even when the loader snapshot is stale; the tab choice is
+    // navigation intent, not catalog data. A bare URL means Installed so
+    // history back/forward always restores the tab the URL describes.
+    const urlTab = data.initialTab ?? "installed";
+    if (urlTab !== this.activeTab) {
+      this.changeTab(urlTab);
+    }
     const snapshot = this.context.gateway.snapshot;
     if (data.gateway !== this.context.gateway || data.gatewaySnapshot !== snapshot) {
       this.ensureInitialData();
@@ -400,6 +410,20 @@ class PluginsPage extends OpenClawLightDomElement {
   private syncMcpServers() {
     const snapshot = this.context?.runtimeConfig.state.configSnapshot;
     this.mcpServers = summarizeMcpServers(resolveEditableSnapshotConfig(snapshot));
+  }
+
+  private selectHubTab(tab: PluginsHubTab) {
+    if (tab === "installed" || tab === "discover") {
+      // Switch locally for instant feedback, then navigate so the URL and
+      // history match the documented ?tab=discover deep link.
+      this.changeTab(tab);
+      this.context.navigate(
+        "plugins",
+        tab === "discover" ? { search: "?tab=discover" } : undefined,
+      );
+      return;
+    }
+    this.context.navigate(tab === "skills" ? "skills" : "skill-workshop");
   }
 
   private changeTab(tab: PluginsTab) {
@@ -841,8 +865,13 @@ class PluginsPage extends OpenClawLightDomElement {
           <div class="page-sub">${subtitleForRoute("plugins")}</div>
         </div>
       </section>
-      ${renderSettingsWorkspace(
-        renderPlugins({
+      ${renderSettingsWorkspace(html`
+        ${renderPluginsHubTabs({
+          active: this.activeTab,
+          installedCount: this.result?.plugins.filter((plugin) => plugin.installed).length ?? 0,
+          onSelect: (tab) => this.selectHubTab(tab),
+        })}
+        ${renderPlugins({
           connected: this.connected,
           loading: this.loading,
           result: this.result,
@@ -866,7 +895,6 @@ class PluginsPage extends OpenClawLightDomElement {
           mcpMessage: this.mcpMessage,
           mcpBusy: this.mcpBusy,
           mcpFormOpen: this.mcpFormOpen,
-          onTabChange: (tab) => this.changeTab(tab),
           onQueryChange: (query) => this.changeQuery(query),
           onFilterChange: (filter) => {
             this.installedFilter = filter;
@@ -896,8 +924,8 @@ class PluginsPage extends OpenClawLightDomElement {
             }
           },
           onMcpAdd: (form) => void this.addMcpServer(form),
-        }),
-      )}
+        })}
+      `)}
     `;
   }
 }

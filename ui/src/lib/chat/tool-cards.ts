@@ -1,6 +1,9 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Control UI chat domain owns pure tool-card extraction rules.
-import { extractCanvasFromText } from "../../../../src/chat/canvas-render.js";
+import {
+  extractCanvasFromDetails,
+  extractCanvasFromText,
+} from "../../../../src/chat/canvas-render.js";
 import {
   isToolCallContentType,
   isToolResultContentType,
@@ -319,9 +322,9 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
       const callId = resolveToolCallId(item, m);
       const existing = findFirstUnmatchedCard(cards, cardId, name, fallbackMatchedCards);
       const text = extractToolText(item);
-      const preview = extractToolPreview(text, name);
-      const isError = readToolErrorFlag(item) ?? messageIsError;
       const details = item.details ?? m.details;
+      const preview = extractCanvasFromDetails(details) ?? extractToolPreview(text, name);
+      const isError = readToolErrorFlag(item) ?? messageIsError;
       if (existing) {
         fallbackMatchedCards.add(existing);
         existing.callId ??= callId;
@@ -374,7 +377,7 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
       ...(m.details !== undefined ? { details: m.details } : {}),
       messageId: transcriptMessageId,
       ...(messageIsError !== undefined ? { isError: messageIsError } : {}),
-      preview: extractToolPreview(text, name),
+      preview: extractCanvasFromDetails(m.details) ?? extractToolPreview(text, name),
     });
   }
 

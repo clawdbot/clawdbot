@@ -823,6 +823,60 @@ Notes:
 - the page does not start MCP transports by itself
 - active runtimes may need `openclaw mcp reload`, Gateway config publish, or process restart depending on which process owns the MCP clients
 
+## MCP Apps
+
+OpenClaw can render tools that implement the stable [MCP Apps extension](https://modelcontextprotocol.io/extensions/apps). Apps are opt-in because their HTML comes from the configured MCP server and can request app-visible tools or resources from that same server.
+
+Enable the host bridge:
+
+```bash
+openclaw config set mcp.apps.enabled true --strict-json
+```
+
+Restart the Gateway after changing this setting. When enabled, OpenClaw starts a sandbox-only HTTP(S) listener on the Gateway port plus one (for the default Gateway, `18790`). The Control UI loads Apps from that separate origin; the listener never serves Control UI, authenticated Gateway routes, or user data.
+
+Direct Gateway connections need access to both ports. If a reverse proxy or TLS terminator exposes the Control UI, give Apps a dedicated public origin and proxy only that origin to the sandbox listener:
+
+```json5
+{
+  mcp: {
+    apps: {
+      enabled: true,
+      sandboxOrigin: "https://mcp-apps.example.com",
+      sandboxPort: 18790,
+    },
+  },
+}
+```
+
+The sandbox origin must differ from the Control UI origin. Do not host other authenticated or sensitive content on it.
+
+For example, the official basic React demo can be configured as:
+
+```json5
+{
+  mcp: {
+    apps: { enabled: true },
+    servers: {
+      "basic-react": {
+        command: "npx",
+        args: ["-y", "@modelcontextprotocol/server-basic-react", "--stdio"],
+      },
+    },
+  },
+}
+```
+
+Behavior and security boundaries:
+
+- OpenClaw advertises the `io.modelcontextprotocol/ui` extension only when Apps are enabled.
+- Only `ui://` resources with the exact `text/html;profile=mcp-app` MIME type render.
+- UI resources are capped at 2 MiB, placed behind a double-iframe proxy on a dedicated outer origin, loaded into an opaque inner App origin, and constrained by CSP derived from the resource metadata.
+- App-only tools (`_meta.ui.visibility: ["app"]`) stay out of model tool lists. Apps can call only app-visible tools on their owning server.
+- Origin-bound App permissions such as camera, microphone, and geolocation are not granted while inner App documents use opaque origins for cross-App isolation.
+- App HTML, complete tool arguments, and raw results live in a bounded ten-minute in-memory view lease. They are not written to disk or copied into transcript preview metadata, and an expired view does not restart its MCP runtime.
+- `openclaw security audit` warns while the bridge is enabled. Disable it with `openclaw config set mcp.apps.enabled false --strict-json` when it is not needed.
+
 ## Current limits
 
 This page documents the bridge as shipped today.

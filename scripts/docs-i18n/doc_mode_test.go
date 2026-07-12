@@ -197,6 +197,21 @@ func (uppercaseWrapperTranslator) TranslateRaw(_ context.Context, text, _, _ str
 
 func (uppercaseWrapperTranslator) Close() {}
 
+type boundaryWrapperTranslator struct{}
+
+func (boundaryWrapperTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
+	return text, nil
+}
+
+func (boundaryWrapperTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
+	if strings.Contains(text, "Intro paragraph") {
+		return "<body>\nEinleitung\n</body>", nil
+	}
+	return strings.NewReplacer("First item", "Erster Eintrag", "Second item", "Zweiter Eintrag").Replace(text), nil
+}
+
+func (boundaryWrapperTranslator) Close() {}
+
 type oversizedBlockTranslator struct {
 	rawInputs []string
 }
@@ -510,6 +525,73 @@ func TestValidateDocChunkTranslationAcceptsTranslatedHeadingText(t *testing.T) {
 
 	if err := validateDocChunkTranslation(source, translated); err != nil {
 		t.Fatalf("expected translated heading text with the same level to pass, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationRejectsAccidentalOrderedListFromTranslatedDate(t *testing.T) {
+	t.Parallel()
+
+	source := "Catalog pricing uses the introductory rate through August 31, 2026, then the standard rate from\nSeptember 1. The regional endpoints use a premium.\n"
+	translated := "Die Katalogpreise verwenden den Einführungstarif bis zum 31. August 2026 und danach den Standardtarif ab\n1. September. Für die regionalen Endpunkte gilt ein Aufschlag.\n"
+
+	err := validateDocChunkTranslation(source, translated)
+	if err == nil {
+		t.Fatal("expected an accidental ordered list from a translated date to be rejected")
+	}
+	if !strings.Contains(err.Error(), "list structure mismatch") {
+		t.Fatalf("expected list structure mismatch, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationAcceptsTranslatedDateWithoutListChange(t *testing.T) {
+	t.Parallel()
+
+	source := "Catalog pricing uses the introductory rate through August 31, 2026, then the standard rate from\nSeptember 1. The regional endpoints use a premium.\n"
+	translated := "Die Katalogpreise verwenden den Einführungstarif bis zum 31. August 2026. Ab dem 1. September gilt der Standardtarif.\nFür die regionalen Endpunkte gilt ein Aufschlag.\n"
+
+	if err := validateDocChunkTranslation(source, translated); err != nil {
+		t.Fatalf("expected translated prose without a list-shape change to pass, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationPreservesNestedListShape(t *testing.T) {
+	t.Parallel()
+
+	source := "- First\n  3. Nested first\n  4. Nested second\n- Second\n"
+	translated := "- Erstens\n  3. Verschachtelt eins\n  4. Verschachtelt zwei\n- Zweitens\n"
+
+	if err := validateDocChunkTranslation(source, translated); err != nil {
+		t.Fatalf("expected equivalent translated list structure to pass, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationRejectsChangedListNesting(t *testing.T) {
+	t.Parallel()
+
+	source := "- First\n  - Nested\n- Second\n"
+	translated := "- Erstens\n- Nicht mehr verschachtelt\n- Zweitens\n"
+
+	err := validateDocChunkTranslation(source, translated)
+	if err == nil {
+		t.Fatal("expected changed list nesting to be rejected")
+	}
+	if !strings.Contains(err.Error(), "list structure mismatch") {
+		t.Fatalf("expected list structure mismatch, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationRejectsNestedListMovedToDifferentParentItem(t *testing.T) {
+	t.Parallel()
+
+	source := "- First\n  - Nested under first\n- Second\n"
+	translated := "- Erstens\n- Zweitens\n  - Unter dem zweiten verschachtelt\n"
+
+	err := validateDocChunkTranslation(source, translated)
+	if err == nil {
+		t.Fatal("expected a nested list moved to another parent item to be rejected")
+	}
+	if !strings.Contains(err.Error(), "list structure mismatch") {
+		t.Fatalf("expected list structure mismatch, got %v", err)
 	}
 }
 
@@ -1589,6 +1671,19 @@ func TestTranslateDocBodyChunkedStripsUppercaseBodyWrapper(t *testing.T) {
 	}
 }
 
+func TestTranslateDocBodyChunkedRejectsListCorruptionAcrossSanitizedChunkBoundary(t *testing.T) {
+	body := "Intro paragraph.\n\n1. First item\n2. Second item\n\n"
+
+	t.Setenv("OPENCLAW_DOCS_I18N_DOC_CHUNK_MAX_BYTES", "20")
+	_, err := translateDocBodyChunked(context.Background(), boundaryWrapperTranslator{}, "example.md", body, "en", "de")
+	if err == nil {
+		t.Fatal("expected final-document list corruption across chunk boundaries to be rejected")
+	}
+	if !strings.Contains(err.Error(), "final document validation: list structure mismatch") {
+		t.Fatalf("expected final list structure mismatch, got %v", err)
+	}
+}
+
 func TestSanitizeDocChunkProtocolWrappersKeepsBodyOnlyWrapperWhenSourceMentionsBodyTag(t *testing.T) {
 	t.Parallel()
 
@@ -1932,8 +2027,8 @@ func TestProcessFileDocUsesFieldLevelFrontmatterTranslation(t *testing.T) {
 	if !strings.Contains(text, "在 Fly.io 上部署 OpenClaw") {
 		t.Fatalf("expected translated read_when entry in output:\n%s", text)
 	}
-	if !strings.Contains(text, "prompt_version: 10") {
-		t.Fatalf("expected prompt version 10 in output metadata:\n%s", text)
+	if !strings.Contains(text, "prompt_version: 11") {
+		t.Fatalf("expected prompt version 11 in output metadata:\n%s", text)
 	}
 }
 

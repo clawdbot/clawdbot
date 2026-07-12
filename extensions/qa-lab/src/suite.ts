@@ -791,6 +791,7 @@ async function runQaRuntimeParitySuite(params: {
   progressEnabled: boolean;
   scenarioIds?: readonly string[];
   runtimePair: [RuntimeId, RuntimeId];
+  writeEvidenceFile?: boolean;
 }) {
   const ownsLab = !params.lab;
   const startLab = requireQaSuiteStartLab(params.startLab);
@@ -891,6 +892,7 @@ async function runQaRuntimeParitySuite(params: {
               controlUiEnabled: scenarioRequiresControlUi(scenario),
               forcedRuntime: runtime,
               captureRuntimeParityCell: true,
+              writeEvidenceFile: params.writeEvidenceFile,
             });
             const scenarioResult =
               cellResult.scenarios[0] ??
@@ -981,6 +983,7 @@ async function runQaRuntimeParitySuite(params: {
             ? params.selectedScenarios.map((scenario) => scenario.id)
             : undefined,
         runtimePair: params.runtimePair,
+        writeEvidenceFile: params.writeEvidenceFile,
       },
     );
     lab.setLatestReport({
@@ -1368,6 +1371,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
       progressEnabled,
       scenarioIds: params.scenarioIds,
       runtimePair: params.runtimePair,
+      writeEvidenceFile: params.writeEvidenceFile,
     });
   }
 

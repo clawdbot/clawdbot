@@ -25,6 +25,7 @@ export type SqliteTransactionOptions = {
 };
 
 type SqliteTransactionStep = "begin" | "commit";
+type SqliteTransactionMode = "deferred" | "immediate";
 
 function nextSavepointName(): string {
   nextSavepointId += 1;
@@ -164,14 +165,15 @@ function execTimedTransactionStep(params: {
   }
 }
 
-function beginImmediateTransaction(
+function beginTransaction(
   db: DatabaseSync,
   options: SqliteTransactionOptions | undefined,
+  mode: SqliteTransactionMode,
 ): void {
   execTimedTransactionStep({
     db,
     options,
-    sql: "BEGIN IMMEDIATE",
+    sql: mode === "immediate" ? "BEGIN IMMEDIATE" : "BEGIN",
     step: "begin",
   });
 }
@@ -214,9 +216,10 @@ function setTransactionDepth(db: DatabaseSync, depth: number): void {
   transactionDepthByDatabase.set(db, depth);
 }
 
-export function runSqliteImmediateTransactionSync<T>(
+function runSqliteTransactionSync<T>(
   db: DatabaseSync,
   operation: () => T,
+  mode: SqliteTransactionMode,
   options?: SqliteTransactionOptions,
 ): T {
   const depth = getTransactionDepth(db);
@@ -241,7 +244,7 @@ export function runSqliteImmediateTransactionSync<T>(
     }
   }
 
-  beginImmediateTransaction(db, options);
+  beginTransaction(db, options, mode);
   setTransactionDepth(db, 1);
   let transactionStillActive = true;
   let result: T;
@@ -284,4 +287,21 @@ export function runSqliteImmediateTransactionSync<T>(
       setTransactionDepth(db, 0);
     }
   }
+}
+
+/** Run synchronous reads against one deferred SQLite snapshot. */
+export function runSqliteDeferredTransactionSync<T>(
+  db: DatabaseSync,
+  operation: () => T,
+  options?: SqliteTransactionOptions,
+): T {
+  return runSqliteTransactionSync(db, operation, "deferred", options);
+}
+
+export function runSqliteImmediateTransactionSync<T>(
+  db: DatabaseSync,
+  operation: () => T,
+  options?: SqliteTransactionOptions,
+): T {
+  return runSqliteTransactionSync(db, operation, "immediate", options);
 }

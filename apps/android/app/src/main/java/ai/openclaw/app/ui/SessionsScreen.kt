@@ -3,6 +3,7 @@ package ai.openclaw.app.ui
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.ui.design.ClawEmptyState
+import ai.openclaw.app.ui.design.ClawLoadingState
 import ai.openclaw.app.ui.design.ClawPlainIconButton
 import ai.openclaw.app.ui.design.ClawPrimaryButton
 import ai.openclaw.app.ui.design.ClawScaffold
@@ -30,6 +31,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.PushPin
@@ -45,6 +47,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -61,8 +64,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -73,13 +79,14 @@ import kotlinx.coroutines.launch
 @Composable
 internal fun SessionsScreen(
   viewModel: MainViewModel,
-  onOpenCommand: () -> Unit,
   onOpenChat: () -> Unit,
 ) {
   val sessions by viewModel.chatSessions.collectAsState()
   val chatSessionKey by viewModel.chatSessionKey.collectAsState()
   val isConnected by viewModel.isConnected.collectAsState()
   val coroutineScope = rememberCoroutineScope()
+  val searchFocusRequester = remember { FocusRequester() }
+  val keyboardController = LocalSoftwareKeyboardController.current
   var filter by rememberSaveable { mutableStateOf(SessionFilter.Recent) }
   var compactLayout by rememberSaveable { mutableStateOf(false) }
   var recentFirst by rememberSaveable { mutableStateOf(true) }
@@ -89,6 +96,7 @@ internal fun SessionsScreen(
   var deleteSessionKey by rememberSaveable { mutableStateOf<String?>(null) }
   var searchText by rememberSaveable { mutableStateOf("") }
   var searchResults by remember { mutableStateOf<List<ChatSessionEntry>>(emptyList()) }
+  var searchLoading by remember { mutableStateOf(false) }
   val searchQuery = searchText.trim()
   var renameGroupName by rememberSaveable { mutableStateOf<String?>(null) }
   var deleteGroupName by rememberSaveable { mutableStateOf<String?>(null) }
@@ -129,16 +137,23 @@ internal fun SessionsScreen(
   LaunchedEffect(searchQuery, filter, sessions) {
     if (searchQuery.isEmpty()) {
       searchResults = emptyList()
+      searchLoading = false
       return@LaunchedEffect
     }
-    // Debounce keystrokes; the key change cancels superseded fetches, and the
-    // controller falls back to local filtering when the gateway is unreachable.
-    delay(250)
-    searchResults =
-      viewModel.fetchChatSessionList(
-        search = searchQuery,
-        archived = filter == SessionFilter.Archived,
-      )
+    searchResults = emptyList()
+    searchLoading = true
+    try {
+      // Debounce keystrokes; the key change cancels superseded fetches, and the
+      // controller falls back to local filtering when the gateway is unreachable.
+      delay(250)
+      searchResults =
+        viewModel.fetchChatSessionList(
+          search = searchQuery,
+          archived = filter == SessionFilter.Archived,
+        )
+    } finally {
+      searchLoading = false
+    }
   }
 
   ClawScaffold(
@@ -157,7 +172,14 @@ internal fun SessionsScreen(
           horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
           Text(text = "Sessions", style = ClawTheme.type.display.copy(fontSize = 24.sp, lineHeight = 28.sp), color = ClawTheme.colors.text, modifier = Modifier.weight(1f))
-          ClawPlainIconButton(icon = Icons.Default.Search, contentDescription = "Search sessions", onClick = onOpenCommand)
+          ClawPlainIconButton(
+            icon = Icons.Default.Search,
+            contentDescription = "Focus session search",
+            onClick = {
+              searchFocusRequester.requestFocus()
+              keyboardController?.show()
+            },
+          )
         }
       }
 
@@ -173,9 +195,16 @@ internal fun SessionsScreen(
         OutlinedTextField(
           value = searchText,
           onValueChange = { searchText = it },
-          modifier = Modifier.fillMaxWidth(),
+          modifier = Modifier.fillMaxWidth().focusRequester(searchFocusRequester),
           placeholder = { Text(text = "Search sessions", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted) },
           singleLine = true,
+          trailingIcon = {
+            if (searchText.isNotEmpty()) {
+              IconButton(onClick = { searchText = "" }) {
+                Icon(imageVector = Icons.Default.Close, contentDescription = "Clear session search")
+              }
+            }
+          },
         )
       }
 
@@ -245,11 +274,21 @@ internal fun SessionsScreen(
             modifier = Modifier.fillParentMaxHeight(0.56f).fillMaxWidth(),
             contentAlignment = Alignment.Center,
           ) {
-            ClawEmptyState(
-              title = emptySessionTitle(filter),
-              body = emptySessionBody(filter),
-              action = { ClawPrimaryButton(text = "Start Chat", onClick = onOpenChat) },
-            )
+            when (sessionEmptyMode(searchQuery, searchLoading)) {
+              SessionEmptyMode.SearchLoading -> ClawLoadingState(title = "Searching sessions")
+              SessionEmptyMode.SearchNoMatches ->
+                ClawEmptyState(
+                  title = "No matching sessions",
+                  body = "Try a different search or clear the current query.",
+                  action = { ClawPrimaryButton(text = "Clear Search", onClick = { searchText = "" }) },
+                )
+              SessionEmptyMode.Filter ->
+                ClawEmptyState(
+                  title = emptySessionTitle(filter),
+                  body = emptySessionBody(filter),
+                  action = { ClawPrimaryButton(text = "Start Chat", onClick = onOpenChat) },
+                )
+            }
           }
         }
       } else {
@@ -803,6 +842,23 @@ internal fun groupSessionEntries(
     }
   }
 }
+
+internal enum class SessionEmptyMode {
+  Filter,
+  SearchLoading,
+  SearchNoMatches,
+}
+
+/** Keeps transient search loading distinct from both filter-empty and settled no-match states. */
+internal fun sessionEmptyMode(
+  query: String,
+  loading: Boolean,
+): SessionEmptyMode =
+  when {
+    query.isBlank() -> SessionEmptyMode.Filter
+    loading -> SessionEmptyMode.SearchLoading
+    else -> SessionEmptyMode.SearchNoMatches
+  }
 
 /** Empty-state title selected by the active session browser filter. */
 private fun emptySessionTitle(filter: SessionFilter): String =

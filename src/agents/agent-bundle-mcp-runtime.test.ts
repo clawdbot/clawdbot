@@ -5,9 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createBundleMcpJsonSchemaValidator } from "./agent-bundle-mcp-runtime.js";
 import { cleanupBundleMcpHarness } from "./agent-bundle-mcp-test-harness.js";
 import {
+  completeDeferredSessionMcpRuntimeRetirement,
   createSessionMcpRuntime,
   getOrCreateSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
@@ -28,6 +30,7 @@ vi.mock("./embedded-agent-mcp.js", () => ({
 }));
 
 const tempDirs: string[] = [];
+const appMetadataTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 type RuntimeFactoryOptions = NonNullable<
   Parameters<typeof testing.createSessionMcpRuntimeManager>[0]
@@ -44,7 +47,12 @@ async function writeListToolsMcpServer(params: {
   initializeDelayMs?: number;
   hang?: boolean;
   inputSchema?: unknown;
-  tools?: Array<{ name: string; description?: string; inputSchema?: unknown }>;
+  tools?: Array<{
+    name: string;
+    description?: string;
+    inputSchema?: unknown;
+    _meta?: Record<string, unknown>;
+  }>;
   capabilities?: Record<string, unknown>;
   pidPath?: string;
   notifyListChangedOnInitialized?: boolean;
@@ -346,6 +354,76 @@ afterEach(async () => {
 });
 
 describe("session MCP runtime", () => {
+  it("advertises the stable MCP Apps client extension only when enabled", () => {
+    expect(testing.buildMcpClientCapabilities(false)).toEqual({});
+    expect(testing.buildMcpClientCapabilities(true)).toEqual({
+      extensions: {
+        "io.modelcontextprotocol/ui": {
+          mimeTypes: ["text/html;profile=mcp-app"],
+        },
+      },
+    });
+  });
+
+  it("catalogs canonical and deprecated MCP App tool metadata", async () => {
+    const tempDir = appMetadataTempDirs.make("bundle-mcp-app-metadata-");
+    const serverPath = path.join(tempDir, "app-metadata.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      tools: [
+        {
+          name: "canonical",
+          inputSchema: { type: "object" },
+          _meta: { ui: { resourceUri: "ui://demo/app", visibility: ["app"] } },
+        },
+        {
+          name: "deprecated",
+          inputSchema: { type: "object" },
+          _meta: { "ui/resourceUri": "ui://demo/legacy" },
+        },
+        {
+          name: "hidden",
+          inputSchema: { type: "object" },
+          _meta: { ui: { visibility: [] } },
+        },
+      ],
+    });
+    const runtime = createSessionMcpRuntime({
+      sessionId: "session-app-metadata",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          apps: { enabled: true },
+          servers: {
+            demo: { command: process.execPath, args: [serverPath] },
+          },
+        },
+      },
+    });
+    try {
+      const catalog = await runtime.getCatalog();
+      expect(catalog.tools).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            toolName: "canonical",
+            uiResourceUri: "ui://demo/app",
+            uiVisibility: ["app"],
+          }),
+          expect.objectContaining({
+            toolName: "deprecated",
+            uiResourceUri: "ui://demo/legacy",
+          }),
+          expect.objectContaining({ toolName: "hidden", uiVisibility: [] }),
+        ]),
+      );
+    } finally {
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("accepts draft-2020-12 tool output schemas from external MCP catalogs", () => {
     const validator = createBundleMcpJsonSchemaValidator().getValidator<{
       format: string;
@@ -1864,6 +1942,51 @@ process.on("SIGINT", shutdown);`,
     expect(testing.getCachedSessionIds()).not.toContain("session-retire");
 
     await expect(retireSessionMcpRuntime({ sessionId: " ", reason: "test" })).resolves.toBe(false);
+  });
+
+  it("preserves a runtime while a bounded app view lease is active", async () => {
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-view-lease",
+      sessionKey: "agent:test:session-view-lease",
+      workspaceDir: "/workspace",
+      cfg: { mcp: { sessionIdleTtlMs: 0 } },
+    });
+    const release = runtime.acquireLease?.();
+
+    await expect(
+      retireSessionMcpRuntime({
+        sessionId: "session-view-lease",
+        reason: "embedded-run-end",
+        preserveActiveLeases: true,
+      }),
+    ).resolves.toBe(true);
+    expect(testing.getCachedSessionIds()).toContain("session-view-lease");
+
+    release?.();
+    await completeDeferredSessionMcpRuntimeRetirement(runtime);
+    expect(testing.getCachedSessionIds()).not.toContain("session-view-lease");
+  });
+
+  it("cancels deferred retirement when a later run reuses the runtime", async () => {
+    const manager = testing.createSessionMcpRuntimeManager({ enableIdleSweepTimer: false });
+    const params = {
+      sessionId: "session-reused-after-view",
+      sessionKey: "agent:test:session-reused-after-view",
+      workspaceDir: "/workspace",
+      cfg: { mcp: { servers: {}, sessionIdleTtlMs: 0 } },
+    };
+    const runtime = await manager.getOrCreate(params);
+    const release = runtime.acquireLease?.();
+
+    expect(manager.deferRetirement(params.sessionId)).toBe(true);
+    await expect(manager.getOrCreate(params)).resolves.toBe(runtime);
+
+    release?.();
+    await expect(manager.completeDeferredRetirement(params.sessionId, runtime)).resolves.toBe(
+      false,
+    );
+    expect(manager.listSessionIds()).toContain(params.sessionId);
+    await manager.disposeAll();
   });
 
   it("retires global session runtimes by session key", async () => {

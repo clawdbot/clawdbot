@@ -38,6 +38,15 @@ function requireFinding(
 }
 
 describe("security audit gateway exposure findings", () => {
+  it("warns when the MCP Apps bridge is enabled", () => {
+    const cfg: OpenClawConfig = { mcp: { apps: { enabled: true } } };
+    expect(collectGatewayConfigFindings(cfg, cfg, {})).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ checkId: "mcp.apps.enabled", severity: "warn" }),
+      ]),
+    );
+  });
+
   it("warns on insecure or dangerous flags", () => {
     const cases = [
       {

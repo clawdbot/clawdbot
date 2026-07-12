@@ -1,4 +1,4 @@
-import type { CronJob, GatewaySessionRow, PresenceEntry } from "../api/types.ts";
+import type { CronJob, GatewaySessionRow } from "../api/types.ts";
 // Control UI module implements presenter behavior.
 import { t } from "../i18n/index.ts";
 import { resolveCronJobLastRunStatus } from "../lib/cron-status.ts";
@@ -9,11 +9,6 @@ import {
   formatMs,
   formatUnknownText,
 } from "../lib/format.ts";
-
-export function formatPresenceAge(entry: PresenceEntry): string {
-  const ts = entry.ts ?? null;
-  return ts ? formatRelativeTimestamp(ts) : t("common.na");
-}
 
 export function formatNextRun(ms?: number | null) {
   if (!ms) {

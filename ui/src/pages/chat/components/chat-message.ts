@@ -2166,6 +2166,7 @@ function renderGroupedMessage(
             rawText: block.rawText ?? null,
             canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
             embedSandboxMode: opts.embedSandboxMode ?? "scripts",
+            sessionKey: opts.sessionKey,
           })}
           ${block.rawText ? renderRawOutputToggle(block.rawText) : nothing}`,
         )}`

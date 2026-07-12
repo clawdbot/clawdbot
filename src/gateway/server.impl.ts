@@ -1017,6 +1017,7 @@ export async function startGatewayServer(
     chatQueuedTurns,
     toolEventRecipients,
     getWorkerIngressEndpoint,
+    getMcpAppSandboxPort,
   } = await startupTrace.measure("runtime.state", () =>
     createGatewayRuntimeState({
       cfg: cfgAtStart,
@@ -1647,6 +1648,7 @@ export async function startGatewayServer(
           deps,
           runtimeState,
           getRuntimeConfig,
+          getMcpAppSandboxPort,
           resolveTerminalLaunchPolicy: terminalLaunchPolicy.resolve,
           isTerminalEnabled: terminalLaunchPolicy.isEnabled,
           execApprovalManager,

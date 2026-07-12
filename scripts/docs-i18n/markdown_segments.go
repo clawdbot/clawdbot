@@ -2,6 +2,7 @@ package main
 
 import (
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/yuin/goldmark"
@@ -109,6 +110,75 @@ func extractMarkdownHeadingLevels(body string) []int {
 		return ast.WalkContinue, nil
 	})
 	return levels
+}
+
+type markdownListShape struct {
+	ordered        bool
+	start          int
+	depth          int
+	items          int
+	parentItemPath string
+}
+
+func extractMarkdownListShapes(body string) []markdownListShape {
+	parseSource := []byte(normalizeDocComponentsForMarkdownParse(body))
+	doc := goldmark.New(goldmark.WithExtensions(extension.GFM)).Parser().Parse(text.NewReader(parseSource))
+	shapes := []markdownListShape{}
+	_ = ast.Walk(doc, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		list, ok := node.(*ast.List)
+		if !ok {
+			return ast.WalkContinue, nil
+		}
+		depth := 0
+		for parent := list.Parent(); parent != nil; parent = parent.Parent() {
+			if _, ok := parent.(*ast.List); ok {
+				depth++
+			}
+		}
+		items := 0
+		for child := list.FirstChild(); child != nil; child = child.NextSibling() {
+			if _, ok := child.(*ast.ListItem); ok {
+				items++
+			}
+		}
+		shapes = append(shapes, markdownListShape{
+			ordered:        list.IsOrdered(),
+			start:          list.Start,
+			depth:          depth,
+			items:          items,
+			parentItemPath: markdownListParentItemPath(list),
+		})
+		return ast.WalkContinue, nil
+	})
+	return shapes
+}
+
+func markdownListParentItemPath(list *ast.List) string {
+	indices := []int{}
+	for parent := list.Parent(); parent != nil; parent = parent.Parent() {
+		item, ok := parent.(*ast.ListItem)
+		if !ok {
+			continue
+		}
+		index := 0
+		for sibling := item.Parent().FirstChild(); sibling != item; sibling = sibling.NextSibling() {
+			if _, ok := sibling.(*ast.ListItem); ok {
+				index++
+			}
+		}
+		indices = append(indices, index)
+	}
+	for left, right := 0, len(indices)-1; left < right; left, right = left+1, right-1 {
+		indices[left], indices[right] = indices[right], indices[left]
+	}
+	parts := make([]string, len(indices))
+	for index, itemIndex := range indices {
+		parts[index] = strconv.Itoa(itemIndex)
+	}
+	return strings.Join(parts, ".")
 }
 
 func extractMarkdownInlineCodeValues(body string) []string {

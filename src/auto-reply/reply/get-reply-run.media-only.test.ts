@@ -35,8 +35,6 @@ vi.mock("../../config/sessions/paths.js", () => ({
   resolveSessionFilePathOptions: vi.fn().mockReturnValue({}),
 }));
 
-const storeRuntimeLoads = vi.hoisted(() => vi.fn());
-const updateSessionStore = vi.hoisted(() => vi.fn());
 const drainFormattedSystemEventsMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const loadSessionEntryMock = vi.hoisted(() => vi.fn());
 const updateAmbientTranscriptWatermarkMock = vi.hoisted(() => vi.fn().mockResolvedValue(null));
@@ -57,13 +55,6 @@ vi.mock("../../config/sessions/ambient-transcript-watermark.js", () => ({
 vi.mock("../../config/sessions/skill-suggestions.js", () => ({
   consumeSessionSkillSuggestion: consumeSessionSkillSuggestionMock,
 }));
-
-vi.mock("../../config/sessions/store.runtime.js", () => {
-  storeRuntimeLoads();
-  return {
-    updateSessionStore,
-  };
-});
 
 vi.mock("../../globals.js", () => ({
   logVerbose: vi.fn(),
@@ -316,8 +307,6 @@ describe("runPreparedReply media-only handling", () => {
   });
 
   beforeEach(async () => {
-    storeRuntimeLoads.mockClear();
-    updateSessionStore.mockReset();
     loadSessionEntryMock.mockReset();
     consumeSessionSkillSuggestionMock.mockReset();
     updateAmbientTranscriptWatermarkMock.mockClear();

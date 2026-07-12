@@ -29,6 +29,7 @@ type docChunkStructure struct {
 	fenceCount            int
 	tagCounts             map[string]int
 	headingLevels         []int
+	listShapes            []markdownListShape
 	inlineCodeSpans       []string
 	fencedPlaceholders    []string
 	fencedProtocolTokens  []string
@@ -69,6 +70,9 @@ func validateDocBodyFencedLiterals(source, translated string) error {
 	}
 	sourceStructure := summarizeDocChunkStructure(source)
 	translatedStructure := summarizeDocChunkStructure(translated)
+	if !slices.Equal(sourceStructure.listShapes, translatedStructure.listShapes) {
+		return fmt.Errorf("list structure mismatch: source=%v translated=%v", sourceStructure.listShapes, translatedStructure.listShapes)
+	}
 	if !slices.Equal(sourceStructure.fencedPlaceholders, translatedStructure.fencedPlaceholders) {
 		return fmt.Errorf("fenced placeholder mismatch: source=%d translated=%d", len(sourceStructure.fencedPlaceholders), len(translatedStructure.fencedPlaceholders))
 	}
@@ -234,6 +238,9 @@ func validateDocChunkTranslation(source, translated string) error {
 	if !slices.Equal(sourceStructure.headingLevels, translatedStructure.headingLevels) {
 		return fmt.Errorf("heading structure mismatch: source=%v translated=%v", sourceStructure.headingLevels, translatedStructure.headingLevels)
 	}
+	if !slices.Equal(sourceStructure.listShapes, translatedStructure.listShapes) {
+		return fmt.Errorf("list structure mismatch: source=%v translated=%v", sourceStructure.listShapes, translatedStructure.listShapes)
+	}
 	if !sameStringMultiset(sourceStructure.inlineCodeSpans, translatedStructure.inlineCodeSpans) {
 		return fmt.Errorf("inline code mismatch: source=%d translated=%d", len(sourceStructure.inlineCodeSpans), len(translatedStructure.inlineCodeSpans))
 	}
@@ -392,6 +399,7 @@ func summarizeDocChunkStructure(text string) docChunkStructure {
 		fenceCount:            counts["__fence_toggle__"],
 		tagCounts:             countsWithoutFence(counts),
 		headingLevels:         extractMarkdownHeadingLevels(text),
+		listShapes:            extractMarkdownListShapes(text),
 		inlineCodeSpans:       extractMarkdownInlineCodeValues(text),
 		fencedPlaceholders:    fencedPlaceholders,
 		fencedProtocolTokens:  fencedProtocolTokens,

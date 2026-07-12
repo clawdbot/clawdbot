@@ -5064,12 +5064,16 @@ async function runEmbeddedAgentInternal(
               const retiredBySessionKey = await retireSessionMcpRuntimeForSessionKey({
                 sessionKey: params.sessionKey,
                 reason: "embedded-run-end",
+                // MCP App views hold bounded leases so their bridge can remain
+                // usable after a one-shot gateway run returns.
+                preserveActiveLeases: true,
                 onError,
               });
               if (!retiredBySessionKey) {
                 await retireSessionMcpRuntime({
                   sessionId: params.sessionId,
                   reason: "embedded-run-end",
+                  preserveActiveLeases: true,
                   onError,
                 });
               }

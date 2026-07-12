@@ -139,19 +139,38 @@ function selectQaFlowSuiteScenarios(params: {
   );
 }
 
+function normalizeQaSuiteScenarioChannel(scenario: QaSeedScenario) {
+  return scenario.execution.channel?.trim().toLowerCase() || undefined;
+}
+
 function listQaSuiteScenarioChannels(
   scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"],
 ) {
   return [
     ...new Set(
       scenarios
-        .map((scenario) => scenario.execution.channel?.trim().toLowerCase())
+        .map(normalizeQaSuiteScenarioChannel)
         .filter((channel): channel is string => Boolean(channel)),
     ),
   ];
 }
 
 function resolveQaSuiteScenarioChannel(params: {
+  defaultChannel: string;
+  explicitChannel?: string | null;
+  scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"];
+}) {
+  const scenarioChannels = resolveQaSuiteScenarioChannels(params);
+  const [scenarioChannel] = scenarioChannels;
+  if (scenarioChannels.length === 1 && scenarioChannel) {
+    return scenarioChannel;
+  }
+  throw new Error(
+    `Selected QA scenarios require multiple channels (${scenarioChannels.join(", ")}); split the run by channel.`,
+  );
+}
+
+function resolveQaSuiteScenarioChannels(params: {
   defaultChannel: string;
   explicitChannel?: string | null;
   scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"];
@@ -165,17 +184,20 @@ function resolveQaSuiteScenarioChannel(params: {
         `--channel ${explicitChannel} conflicts with selected scenario execution.channel ${conflictingChannels.join(", ")}.`,
       );
     }
-    return explicitChannel;
+    return [explicitChannel];
   }
   if (scenarioChannels.length === 0) {
-    return params.defaultChannel;
+    return [params.defaultChannel];
   }
   if (scenarioChannels.length === 1) {
-    return scenarioChannels[0];
+    return scenarioChannels;
   }
-  throw new Error(
-    `Selected QA scenarios require multiple channels (${scenarioChannels.join(", ")}); split the run by channel.`,
+  const hasUnpinnedScenario = params.scenarios.some(
+    (scenario) => !normalizeQaSuiteScenarioChannel(scenario),
   );
+  return hasUnpinnedScenario && !scenarioChannels.includes(params.defaultChannel)
+    ? [params.defaultChannel, ...scenarioChannels]
+    : scenarioChannels;
 }
 
 function collectQaSuitePluginIds(
@@ -460,7 +482,9 @@ export {
   collectQaSuitePluginIds,
   mapQaSuiteWithConcurrency,
   normalizeQaSuiteConcurrency,
+  normalizeQaSuiteScenarioChannel,
   resolveQaSuiteScenarioChannel,
+  resolveQaSuiteScenarioChannels,
   resolveQaSuiteWorkerStartStaggerMs,
   resolveQaSuiteOutputDir,
   scenarioRequiresControlUi,

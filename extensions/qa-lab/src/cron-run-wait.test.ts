@@ -1,7 +1,6 @@
 // Qa Lab tests cover cron run wait plugin behavior.
-import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { resolveCronRunPollIntervalMs, waitForCronRunCompletion } from "./cron-run-wait.js";
+import { waitForCronRunCompletion } from "./cron-run-wait.js";
 
 describe("waitForCronRunCompletion", () => {
   it("ignores older entries and returns the newly finished run", async () => {
@@ -51,10 +50,6 @@ describe("waitForCronRunCompletion", () => {
         intervalMs: 0,
       }),
     ).rejects.toThrow(/timed out waiting for cron run completion/);
-  });
-
-  it("clamps oversized poll intervals before sleeping", () => {
-    expect(resolveCronRunPollIntervalMs(Number.MAX_SAFE_INTEGER)).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 
   it("keeps oversized poll intervals within the overall timeout", async () => {

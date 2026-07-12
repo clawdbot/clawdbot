@@ -23,8 +23,9 @@ import { runCronCommandJob } from "../cron/command-runner.js";
 import { resolveCronStoredDeliveryContext } from "../cron/delivery-context.js";
 import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
+import { resolveCronJobBoundSessionKeys } from "../cron/job-session-bindings.js";
 import { appendCronRunLog, resolveCronRunLogPruneOptions } from "../cron/run-log.js";
-import { CronService } from "../cron/service.js";
+import { CronService, type CronEvent } from "../cron/service.js";
 import {
   resolveCronDeliverySessionKey,
   resolveCronSessionTargetSessionKey,
@@ -63,6 +64,14 @@ import {
   dispatchGatewayCronFinishedNotifications,
   sendGatewayCronFailureAlert,
 } from "./server-cron-notifications.js";
+import {
+  bumpSessionAutomationVersion,
+  claimSessionAutomationEpoch,
+  registerSessionAutomationSource,
+  unregisterSessionAutomationSource,
+} from "./session-automation-index.js";
+import { buildGatewaySessionEventFields } from "./session-event-payload.js";
+import { loadGatewaySessionRow } from "./session-utils.js";
 
 export type GatewayCronState = {
   cron: GatewayCronServiceContract;
@@ -414,6 +423,35 @@ export function buildGatewayCronService(params: {
     }
   };
 
+  // Cron job changes flip session automation badges; push refreshed rows so
+  // subscribed session lists update without waiting for unrelated session events.
+  const broadcastCronBoundSessionChanges = (evt: CronEvent) => {
+    const job = evt.job ?? cron.getJob(evt.jobId);
+    if (!job) {
+      return;
+    }
+    const boundKeys = resolveCronJobBoundSessionKeys(job, {
+      cfg: getRuntimeConfig(),
+      defaultAgentId: cron.getDefaultAgentId(),
+    });
+    for (const sessionKey of boundKeys) {
+      // Emit even without a stored row: clients run a canonical list refresh on
+      // every sessions.changed, which also clears badges on prior bindings
+      // (e.g. after retargeting a job to a not-yet-created session).
+      const sessionRow = loadGatewaySessionRow(sessionKey);
+      params.broadcast(
+        "sessions.changed",
+        {
+          sessionKey,
+          reason: "cron-binding",
+          ts: Date.now(),
+          ...(sessionRow ? buildGatewaySessionEventFields({ sessionRow }) : {}),
+        },
+        { dropIfSlow: true },
+      );
+    }
+  };
+
   const cron = new CronService({
     storePath,
     cronEnabled,
@@ -686,6 +724,9 @@ export function buildGatewayCronService(params: {
       }),
     log: getChildLogger({ module: "cron", storePath }),
     onEvent: (evt) => {
+      // Any job/store change can alter session automation bindings, including
+      // in-place enable flips during runs; run/schedule events bump too (cheap).
+      bumpSessionAutomationVersion();
       params.broadcast("cron", evt, { dropIfSlow: true });
       // Build hook event from CronEvent. The job snapshot is carried on the
       // internal event so it's available even for "removed" actions where
@@ -728,7 +769,16 @@ export function buildGatewayCronService(params: {
       runCronChangedHook(hookEvt);
       // Re-arm / cancel on-exit watchers when the job set changes.
       if (evt.action === "added" || evt.action === "updated" || evt.action === "removed") {
+        broadcastCronBoundSessionChanges(evt);
         void reconcileExitWatchers();
+      } else if (evt.action === "finished") {
+        // Runs can flip enabled without an "updated" event (one-shot success,
+        // trigger.once, schedule-error auto-disable); refresh badges then too.
+        // Fully deleted jobs emit their own "removed" event instead.
+        const finishedJob = evt.job ?? cron.getJob(evt.jobId);
+        if (finishedJob?.enabled === false) {
+          broadcastCronBoundSessionChanges(evt);
+        }
       }
       if (evt.action === "finished") {
         const job = evt.job ?? cron.getJob(evt.jobId);
@@ -804,10 +854,33 @@ export function buildGatewayCronService(params: {
     exitWatcherGeneration += 1;
     exitWatchersRef.current?.cancelAll();
   };
+  const automationSource = {
+    getJobs: () => cron.getLoadedJobs(),
+    getDefaultAgentId: () => cron.getDefaultAgentId(),
+  };
+  const automationEpoch = claimSessionAutomationEpoch();
   const stopCron = cron.stop.bind(cron);
   cron.stop = () => {
     stopCron();
     stopExitWatchers();
+    // Session rows must stop reporting automation from a stopped scheduler,
+    // but a reload's replacement service may already own the registration.
+    unregisterSessionAutomationSource(automationSource);
+  };
+  const startCron = cron.start.bind(cron);
+  cron.start = async () => {
+    await startCron();
+    // Register only once started, under the build-time epoch, so a stale lazy
+    // service resolving after a config reload cannot clobber the replacement.
+    registerSessionAutomationSource(automationSource, automationEpoch);
+    // Nudge subscribed clients into a canonical list refresh so automation
+    // badges match this scheduler's bindings — including clearing them when a
+    // reload lands on an empty or disabled store.
+    params.broadcast(
+      "sessions.changed",
+      { reason: "cron-bindings-loaded", ts: Date.now() },
+      { dropIfSlow: true },
+    );
   };
 
   return {

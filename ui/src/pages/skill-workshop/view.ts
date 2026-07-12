@@ -5,6 +5,7 @@ import { keyed } from "lit/directives/keyed.js";
 import { styleMap } from "lit/directives/style-map.js";
 import "../../components/file-preview-modal.ts";
 import "../../components/tooltip.ts";
+import { t } from "../../i18n/index.ts";
 import {
   filterSkillWorkshopProposals,
   type SkillWorkshopActionBusy,
@@ -36,6 +37,7 @@ type SkillWorkshopProps = {
   workshopAgentName: string;
   counts: Record<SkillWorkshopStatusFilter, number>;
   onStatusFilterChange: (status: SkillWorkshopStatusFilter) => void;
+  onRetry: () => void;
   onQueryChange: (query: string) => void;
   onFilePreviewQueryChange: (query: string) => void;
   onQueueWidthChange: (width: number) => void;
@@ -103,7 +105,14 @@ export function renderSkillWorkshop(props: SkillWorkshopProps) {
 
   return html`
     <section class="skill-workshop sw-mode-${props.mode}">
-      ${props.error ? html`<div class="sw-error" role="status">${props.error}</div>` : nothing}
+      ${props.error
+        ? html`<div class="sw-error" role="status">
+            <span>${props.error}</span>
+            <button type="button" class="btn btn--sm" @click=${props.onRetry}>
+              ${t("pluginsPage.tryAgain")}
+            </button>
+          </div>`
+        : nothing}
       <div class="sw-view" data-mode=${props.mode}>
         ${keyed(props.mode, html`<div class="sw-view__pane">${body}</div>`)}
       </div>

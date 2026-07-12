@@ -21,10 +21,15 @@ import {
   classifyActions,
   findExactMacTarget,
   inspectBuildState,
+  isOwnedGatewayEntrypoint,
   maintainMain,
   originMatches,
   parseGatewayLogAudit,
+  parseLaunchctlArguments,
   prepareGatewaySuspension,
+  repointManagedGatewayDeployment,
+  resolveManagedGatewayEntrypoint,
+  runBuiltGatewayCall,
   verifyGatewayReadiness,
 } from "../../.agents/skills/openclaw-live-updater/scripts/update-main.mjs";
 import {
@@ -55,6 +60,8 @@ function maintainFixture(
 ) {
   return maintainMain(options, {
     fetchMain: fetchFixtureMain,
+    inspectGatewayDeployment: () => null,
+    verifyGatewayRuntime: () => null,
     auditGatewayLogs: () => ({
       entries: 0,
       errorCount: 0,
@@ -66,12 +73,18 @@ function maintainFixture(
       status: "ready",
       suspensionId: "fixture-suspension",
     }),
+    proveGatewayStopped: () => ({
+      runtimeStatus: "stopped",
+      port: 18789,
+      portStatus: "free",
+      proofSource: "fixture",
+    }),
     ...dependencies,
   });
 }
 
 function makeFixture() {
-  const root = mkdtempSync(path.join(tmpdir(), "openclaw-live-updater-"));
+  const root = realpathSync(mkdtempSync(path.join(tmpdir(), "openclaw-live-updater-")));
   const origin = path.join(root, "origin.git");
   const seed = path.join(root, "seed");
   const mirror = path.join(root, "mirror");
@@ -183,6 +196,34 @@ describe("openclaw live updater", () => {
     });
   });
 
+  test("parses the loaded launchd ProgramArguments block", () => {
+    expect(
+      parseLaunchctlArguments(`gui/501/ai.openclaw.gateway = {
+\tprogram = /bin/sh
+\targuments = {
+\t\t/bin/sh
+\t\t/Users/test/.openclaw/service-env/ai.openclaw.gateway-env-wrapper.sh
+\t\t/Users/test/.openclaw/service-env/ai.openclaw.gateway.env
+\t\t/opt/homebrew/bin/node
+\t\t/Users/test/openclaw/dist/index.js
+\t\tgateway
+\t\t--port
+\t\t18789
+\t}
+\tpid = 123
+}`),
+    ).toEqual([
+      "/bin/sh",
+      "/Users/test/.openclaw/service-env/ai.openclaw.gateway-env-wrapper.sh",
+      "/Users/test/.openclaw/service-env/ai.openclaw.gateway.env",
+      "/opt/homebrew/bin/node",
+      "/Users/test/openclaw/dist/index.js",
+      "gateway",
+      "--port",
+      "18789",
+    ]);
+  });
+
   test("audits raw file logs when RPC log retrieval is unavailable", () => {
     const output = [
       {
@@ -240,14 +281,22 @@ describe("openclaw live updater", () => {
   });
 
   test("parses ready and busy atomic Gateway suspension responses", () => {
+    const deployment = { entrypoint: "/snapshot/dist/index.js" };
     expect(
       prepareGatewaySuspension(
         "/checkout",
-        (_checkout: string, method: string, params: { requestId: string }) => {
+        (
+          _checkout: string,
+          method: string,
+          params: { requestId: string },
+          selectedDeployment: unknown,
+        ) => {
           expect(method).toBe("gateway.suspend.prepare");
           expect(params.requestId).toMatch(/^openclaw-live-updater-/u);
+          expect(selectedDeployment).toBe(deployment);
           return JSON.stringify({ status: "ready", suspensionId: "suspension-1" });
         },
+        deployment,
       ),
     ).toEqual({ status: "ready", suspensionId: "suspension-1" });
 
@@ -264,10 +313,164 @@ describe("openclaw live updater", () => {
     ).toMatchObject({ status: "busy", activeCount: 1 });
   });
 
+  test("pins managed Gateway calls with a backward-compatible local overlay", () => {
+    const root = realpathSync(mkdtempSync(path.join(tmpdir(), "openclaw-gateway-call-")));
+    const checkout = path.join(root, "checkout");
+    const entrypoint = path.join(checkout, "dist/index.js");
+    const capture = path.join(root, "capture.mjs");
+    const configPath = path.join(root, "openclaw.json");
+    mkdirSync(path.dirname(entrypoint), { recursive: true });
+    writeFileSync(configPath, "{}\n");
+    writeFileSync(
+      capture,
+      'import fs from "node:fs"; console.log(JSON.stringify({ argv: process.argv.slice(2), config: JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH, "utf8")), hasToken: Boolean(process.env.OPENCLAW_GATEWAY_TOKEN), url: process.env.OPENCLAW_GATEWAY_URL ?? null }));\n',
+    );
+
+    const result = JSON.parse(
+      runBuiltGatewayCall(
+        checkout,
+        "gateway.suspend.prepare",
+        { requestId: "request-1" },
+        {
+          configPath,
+          entrypoint,
+          executable: process.execPath,
+          invocationPrefix: [capture],
+          port: 19001,
+          serviceEnvironment: { OPENCLAW_GATEWAY_TOKEN: ["fixture", "value"].join("-") },
+          wrapperPath: null,
+        },
+      ),
+    );
+
+    expect(result.config).toMatchObject({ gateway: { mode: "local", port: 19001 } });
+    expect(result.argv).not.toContain("--port");
+    expect(result.argv).not.toContain("--url");
+    expect(result.hasToken).toBe(true);
+    expect(result.url).toBeNull();
+  });
+
   test("accepts supported OpenClaw GitHub origins", () => {
     expect(originMatches("https://github.com/openclaw/openclaw.git")).toBe(true);
     expect(originMatches("git@github.com:openclaw/openclaw.git")).toBe(true);
     expect(originMatches("https://github.com/example/openclaw.git")).toBe(false);
+  });
+
+  test("accepts only immutable canonical runtime snapshots owned by the checkout", () => {
+    const { root, mirror, origin } = makeFixture();
+    const head = git(mirror, "rev-parse", "HEAD");
+    const home = path.join(root, "home");
+    const runtimeRoot = path.join(home, ".openclaw/runtime");
+    const snapshot = path.join(runtimeRoot, `gateway-${head.slice(0, 7)}`);
+    mkdirSync(runtimeRoot, { recursive: true });
+    git(runtimeRoot, "clone", origin, snapshot);
+    git(snapshot, "remote", "set-url", "origin", "https://github.com/openclaw/openclaw.git");
+    git(snapshot, "checkout", "--detach", head);
+    writeBuild(snapshot);
+    const entrypoint = path.join(snapshot, "dist/index.js");
+
+    expect(isOwnedGatewayEntrypoint(mirror, home, entrypoint)).toBe(true);
+    expect(isOwnedGatewayEntrypoint(mirror, home, path.join(mirror, "dist/index.js"))).toBe(true);
+
+    git(snapshot, "switch", "-c", "mutable");
+    expect(isOwnedGatewayEntrypoint(mirror, home, entrypoint)).toBe(false);
+    git(snapshot, "checkout", "--detach", head);
+    writeFileSync(path.join(snapshot, "README.md"), "dirty\n");
+    expect(isOwnedGatewayEntrypoint(mirror, home, entrypoint)).toBe(false);
+    git(snapshot, "checkout", "--", "README.md");
+    writeFileSync(
+      path.join(snapshot, "dist", BUILD_STAMP_FILE),
+      `${JSON.stringify({ head: "0".repeat(40) })}\n`,
+    );
+    expect(isOwnedGatewayEntrypoint(mirror, home, entrypoint)).toBe(false);
+  });
+
+  test("accepts owned entrypoints only in supported LaunchAgent command layouts", () => {
+    const home = "/Users/test";
+    const entrypoint = "/Users/test/.openclaw/runtime/gateway-1234567/dist/index.js";
+    const wrapper = `${home}/.openclaw/service-env/ai.openclaw.gateway-env-wrapper.sh`;
+    const envFile = `${home}/.openclaw/service-env/ai.openclaw.gateway.env`;
+    const nodeCommand = ["/opt/homebrew/bin/node", entrypoint, "gateway", "--port", "18789"];
+
+    expect(resolveManagedGatewayEntrypoint(nodeCommand, home)).toBe(entrypoint);
+    expect(
+      resolveManagedGatewayEntrypoint(["/opt/homebrew/bin/bun", entrypoint, "gateway"], home),
+    ).toBe(entrypoint);
+    expect(
+      resolveManagedGatewayEntrypoint(["/bin/sh", wrapper, envFile, ...nodeCommand], home),
+    ).toBe(entrypoint);
+    expect(resolveManagedGatewayEntrypoint([wrapper, envFile, ...nodeCommand], home)).toBe(
+      entrypoint,
+    );
+    const customState = "/Users/test/state";
+    const customWrapper = `${customState}/service-env/ai.openclaw.gateway-env-wrapper.sh`;
+    const customEnvFile = `${customState}/service-env/ai.openclaw.gateway.env`;
+    expect(
+      resolveManagedGatewayEntrypoint(
+        ["/bin/sh", customWrapper, customEnvFile, ...nodeCommand],
+        home,
+      ),
+    ).toBe(entrypoint);
+    expect(
+      resolveManagedGatewayEntrypoint(["/usr/bin/python3", "/tmp/foreign.py", entrypoint], home),
+    ).toBeNull();
+    expect(
+      resolveManagedGatewayEntrypoint(["/bin/sh", "/tmp/wrapper.sh", entrypoint, "gateway"], home),
+    ).toBeNull();
+  });
+
+  test("retargets an accepted snapshot to the exact source build", () => {
+    const checkout = "/Users/test/openclaw";
+    const snapshot = "/Users/test/.openclaw/runtime/gateway-1234567/dist/index.js";
+    const source = path.join(checkout, "dist/index.js");
+    const replacements: string[] = [];
+    const deployment = {
+      configPath: "/Users/test/config/openclaw.json",
+      entrypoint: snapshot,
+      entrypointIndex: 1,
+      label: "ai.openclaw.gateway",
+      plistPath: "/Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist",
+      port: 18789,
+    };
+    const result = repointManagedGatewayDeployment(
+      checkout,
+      deployment,
+      (_current, replacement: string) => replacements.push(replacement),
+      () => ({ ...deployment, entrypoint: source }),
+    );
+
+    expect(replacements).toEqual([source]);
+    expect(result).toMatchObject({
+      changed: true,
+      configPath: deployment.configPath,
+      entrypoint: source,
+      label: "ai.openclaw.gateway",
+      port: 18789,
+      previousEntrypoint: snapshot,
+    });
+  });
+
+  test("fails closed when Gateway service retargeting does not stick", () => {
+    const checkout = "/Users/test/openclaw";
+    const snapshot = "/Users/test/.openclaw/runtime/gateway-1234567/dist/index.js";
+    expect(() =>
+      repointManagedGatewayDeployment(
+        checkout,
+        {
+          configPath: "/Users/test/.openclaw/openclaw.json",
+          entrypoint: snapshot,
+          label: "ai.openclaw.gateway",
+          port: 18789,
+        },
+        () => {},
+        () => ({
+          configPath: "/Users/test/.openclaw/openclaw.json",
+          entrypoint: snapshot,
+          label: "ai.openclaw.gateway",
+          port: 18789,
+        }),
+      ),
+    ).toThrow(/not retargeted/u);
   });
 
   test("production fetch refreshes the remote-tracking main ref", () => {
@@ -737,6 +940,278 @@ describe("openclaw live updater", () => {
     ]);
   });
 
+  test("repoints an ancestor snapshot across the next source update", () => {
+    const { root, mirror, seed } = makeFixture();
+    mkdirSync(path.join(mirror, "node_modules"));
+    writeBuild(mirror);
+    writeFileSync(path.join(seed, "README.md"), "snapshot update\n");
+    git(seed, "add", "README.md");
+    git(seed, "commit", "-m", "snapshot update");
+    git(seed, "push");
+    const commands = fakeCommands(mirror);
+    const snapshot = path.join(root, "gateway-ancestor/dist/index.js");
+    const source = path.join(mirror, "dist/index.js");
+    const configPath = path.join(root, "openclaw.json");
+    const plistPath = path.join(root, "ai.openclaw.gateway.plist");
+    writeFileSync(configPath, "{}\n");
+    writeFileSync(plistPath, "plist\n", { mode: 0o600 });
+    let deployedEntrypoint = snapshot;
+    let controlEntrypoint: string | undefined;
+    const inspectGatewayDeployment = () => ({
+      configPath,
+      entrypoint: deployedEntrypoint,
+      entrypointIndex: 1,
+      executable: process.execPath,
+      invocationPrefix: [deployedEntrypoint],
+      label: "ai.openclaw.gateway",
+      plistPath,
+      port: 18789,
+      runtime: process.execPath,
+      serviceEnvironment: { PRIVATE_MARKER: "not-serialized" },
+    });
+
+    const deferred = maintainFixture(
+      { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
+      {
+        runCommand: commands.runCommand,
+        inspectGatewayDeployment,
+        prepareGatewaySuspension: () => ({
+          status: "busy",
+          reason: "active-work",
+          retryAfterMs: 20_000,
+          activeCount: 1,
+          blockers: [{ kind: "agent-run", count: 1, message: "busy" }],
+        }),
+      },
+    );
+    expect(deferred).toMatchObject({ deferred: true, reason: "gateway_active_work" });
+    expect(commands.calls).toEqual([]);
+
+    const output = maintainFixture(
+      { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
+      {
+        runCommand: commands.runCommand,
+        prepareGatewaySuspension: (_checkout: string, deployment: { entrypoint: string }) => {
+          controlEntrypoint = deployment.entrypoint;
+          return { status: "ready", suspensionId: "fixture-suspension" };
+        },
+        inspectGatewayDeployment,
+        repointGatewayDeployment: (
+          _checkout: string,
+          deployment: { entrypoint: string; label: string; port: number },
+        ) => {
+          deployedEntrypoint = source;
+          return {
+            changed: true,
+            ...deployment,
+            entrypoint: source,
+            invocationPrefix: [source],
+            previousEntrypoint: deployment.entrypoint,
+          };
+        },
+        verifyGatewayRuntime: () => ({
+          commit: git(mirror, "rev-parse", "HEAD"),
+          entrypoint: source,
+          pid: 123,
+          port: 18789,
+        }),
+        proveGatewayStopped: () => {
+          commands.calls.push("prove gateway stopped");
+          return {
+            runtimeStatus: "stopped",
+            port: 18789,
+            portStatus: "free",
+            proofSource: "fixture",
+          };
+        },
+      },
+    );
+
+    expect(output.actions).toMatchObject({
+      gatewayBuild: true,
+      gatewayRestart: true,
+      gatewaySelfHeal: false,
+    });
+    expect(output.gatewayDeployment).toMatchObject({
+      changed: true,
+      entrypoint: source,
+      previousEntrypoint: snapshot,
+    });
+    expect(output.gatewayRuntime).toMatchObject({ entrypoint: source, pid: 123 });
+    expect(JSON.stringify(output)).not.toContain("not-serialized");
+    expect(controlEntrypoint).toBe(source);
+    const uid = process.getuid?.() ?? 501;
+    expect(commands.calls).toEqual([
+      `/bin/launchctl bootout gui/${uid}/ai.openclaw.gateway`,
+      "prove gateway stopped",
+      "pnpm build",
+      `/bin/launchctl enable gui/${uid}/ai.openclaw.gateway`,
+      `/bin/launchctl bootstrap gui/${uid} ${plistPath}`,
+    ]);
+  });
+
+  test("builds a trusted source control client while a snapshot is still running", () => {
+    const { root, mirror } = makeFixture();
+    mkdirSync(path.join(mirror, "node_modules"));
+    const commands = fakeCommands(mirror);
+    const snapshot = path.join(root, "gateway-ancestor/dist/index.js");
+    const source = path.join(mirror, "dist/index.js");
+    const configPath = path.join(root, "openclaw.json");
+    const plistPath = path.join(root, "ai.openclaw.gateway.plist");
+    writeFileSync(configPath, "{}\n");
+    writeFileSync(plistPath, "plist\n", { mode: 0o600 });
+    let deployedEntrypoint = snapshot;
+    let controlEntrypoint = "";
+    let stoppedProofAttempts = 0;
+
+    const output = maintainFixture(
+      { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
+      {
+        runCommand: commands.runCommand,
+        prepareGatewaySuspension: (_checkout: string, deployment: { entrypoint: string }) => {
+          controlEntrypoint = deployment.entrypoint;
+          return { status: "ready", suspensionId: "fixture-suspension" };
+        },
+        inspectGatewayDeployment: () => ({
+          configPath,
+          entrypoint: deployedEntrypoint,
+          entrypointIndex: 1,
+          executable: process.execPath,
+          invocationPrefix: [deployedEntrypoint],
+          label: "ai.openclaw.gateway",
+          plistPath,
+          port: 18789,
+          runtime: process.execPath,
+        }),
+        proveGatewayStopped: () => {
+          stoppedProofAttempts += 1;
+          commands.calls.push("prove gateway stopped");
+          if (stoppedProofAttempts === 1) {
+            throw new Error("snapshot still owns its listener");
+          }
+          return {
+            runtimeStatus: "stopped",
+            port: 18789,
+            portStatus: "free",
+            proofSource: "fixture",
+          };
+        },
+        repointGatewayDeployment: (
+          _checkout: string,
+          deployment: { entrypoint: string; invocationPrefix: string[] },
+        ) => {
+          deployedEntrypoint = source;
+          return {
+            changed: true,
+            ...deployment,
+            entrypoint: source,
+            invocationPrefix: [source],
+            previousEntrypoint: deployment.entrypoint,
+          };
+        },
+        verifyGatewayRuntime: () => ({
+          commit: git(mirror, "rev-parse", "HEAD"),
+          entrypoint: source,
+          pid: 123,
+          port: 18789,
+        }),
+      },
+    );
+
+    expect(controlEntrypoint).toBe(source);
+    expect(stoppedProofAttempts).toBe(2);
+    expect(output.gatewayDeployment).toMatchObject({
+      changed: true,
+      entrypoint: source,
+      previousEntrypoint: snapshot,
+    });
+    const uid = process.getuid?.() ?? 501;
+    expect(commands.calls).toEqual([
+      "prove gateway stopped",
+      "pnpm install --frozen-lockfile",
+      "pnpm build",
+      `/bin/launchctl bootout gui/${uid}/ai.openclaw.gateway`,
+      "prove gateway stopped",
+      `/bin/launchctl enable gui/${uid}/ai.openclaw.gateway`,
+      `/bin/launchctl bootstrap gui/${uid} ${plistPath}`,
+    ]);
+  });
+
+  test("recovers a stopped snapshot when the source control build is missing", () => {
+    const { root, mirror } = makeFixture();
+    mkdirSync(path.join(mirror, "node_modules"));
+    const commands = fakeCommands(mirror);
+    const snapshot = path.join(root, "gateway-ancestor/dist/index.js");
+    const source = path.join(mirror, "dist/index.js");
+    const configPath = path.join(root, "openclaw.json");
+    const plistPath = path.join(root, "ai.openclaw.gateway.plist");
+    writeFileSync(configPath, "{}\n");
+    writeFileSync(plistPath, "plist\n", { mode: 0o600 });
+    let deployedEntrypoint = snapshot;
+    let prepareCalled = false;
+
+    const output = maintainFixture(
+      { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
+      {
+        runCommand: commands.runCommand,
+        prepareGatewaySuspension: () => {
+          prepareCalled = true;
+          throw new Error("must not execute an unavailable control build");
+        },
+        inspectGatewayDeployment: () => ({
+          configPath,
+          entrypoint: deployedEntrypoint,
+          entrypointIndex: 1,
+          executable: process.execPath,
+          invocationPrefix: [deployedEntrypoint],
+          label: "ai.openclaw.gateway",
+          plistPath,
+          port: 18789,
+          runtime: process.execPath,
+        }),
+        proveGatewayStopped: () => ({
+          runtimeStatus: "stopped",
+          port: 18789,
+          portStatus: "free",
+          proofSource: "fixture",
+        }),
+        repointGatewayDeployment: (
+          _checkout: string,
+          deployment: { entrypoint: string; invocationPrefix: string[] },
+        ) => {
+          deployedEntrypoint = source;
+          return {
+            changed: true,
+            ...deployment,
+            entrypoint: source,
+            invocationPrefix: [source],
+            previousEntrypoint: deployment.entrypoint,
+          };
+        },
+        verifyGatewayRuntime: () => ({
+          commit: git(mirror, "rev-parse", "HEAD"),
+          entrypoint: source,
+          pid: 123,
+          port: 18789,
+        }),
+      },
+    );
+
+    expect(prepareCalled).toBe(false);
+    expect(output.gatewayDeployment).toMatchObject({
+      changed: true,
+      entrypoint: source,
+      previousEntrypoint: snapshot,
+    });
+    const uid = process.getuid?.() ?? 501;
+    expect(commands.calls).toEqual([
+      "pnpm install --frozen-lockfile",
+      "pnpm build",
+      `/bin/launchctl enable gui/${uid}/ai.openclaw.gateway`,
+      `/bin/launchctl bootstrap gui/${uid} ${plistPath}`,
+    ]);
+  });
+
   test("restores missing dependencies before probing a current build", () => {
     const { root, mirror } = makeFixture();
     writeBuild(mirror);
@@ -866,7 +1341,9 @@ describe("openclaw live updater", () => {
             auditCalls += 1;
             return { entries: 1, errorCount: 0, warningCount: 0, errors: [], warnings: [] };
           },
+          inspectGatewayDeployment: () => null,
           sleep() {},
+          verifyGatewayRuntime: () => null,
         },
       ),
     ).toThrow("RPC unavailable");

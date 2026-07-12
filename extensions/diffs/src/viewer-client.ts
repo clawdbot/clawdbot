@@ -21,7 +21,7 @@ function readInjectedLanguagePackFlag(): boolean | undefined {
     : undefined;
 }
 
-export function resolveViewerLanguagePackAvailability(
+function resolveViewerLanguagePackAvailability(
   buildFlag: boolean | undefined = readInjectedLanguagePackFlag(),
 ): boolean {
   return buildFlag === true;
@@ -39,7 +39,7 @@ type DiffController = {
   diff: FileDiff;
 };
 
-export const controllers: DiffController[] = [];
+const controllers: DiffController[] = [];
 
 const viewerState: ViewerState = {
   theme: "dark",
@@ -372,7 +372,7 @@ async function main(): Promise<void> {
   }
 }
 
-export const disableAutoStartKey = Symbol.for("openclaw.diffs.disableAutoStart");
+const disableAutoStartKey = Symbol.for("openclaw.diffs.disableAutoStart");
 
 const autoStartDisabled = Boolean(
   (globalThis as typeof globalThis & Record<symbol, unknown>)[disableAutoStartKey],

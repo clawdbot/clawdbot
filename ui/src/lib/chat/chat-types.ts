@@ -163,6 +163,7 @@ export type ToolCard = {
     className?: string;
     style?: string;
     sandbox?: "strict" | "scripts";
+    mcpApp?: { viewId: string };
   };
 };
 

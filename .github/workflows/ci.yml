@@ -1042,7 +1042,14 @@ jobs:
           install-bun: "false"
 
       - name: Install Playwright Chromium
-        run: node scripts/ensure-playwright-chromium.mjs
+        run: |
+          if [[ "$COMPATIBILITY_TARGET" == "true" ]]; then
+            # Legacy Vitest configs cannot pass a discovered system browser to Playwright.
+            # Install the managed browser revision pinned by the selected target instead.
+            pnpm --dir ui exec playwright install chromium
+          else
+            node scripts/ensure-playwright-chromium.mjs
+          fi
 
       - name: Lint Control UI window.open usage
         run: pnpm lint:ui:no-raw-window-open

@@ -343,7 +343,6 @@ const qaScenarioPackFileSchema = z.object({
 export type QaScenarioExecution = z.infer<typeof qaScenarioExecutionSchema>;
 export type QaScenarioFlow = z.infer<typeof qaFlowSchema>;
 export type QaRuntimeParityTier = z.infer<typeof qaRuntimeParityTierSchema>;
-export type QaRuntimeParityUsage = z.infer<typeof qaRuntimeParityUsageSchema>;
 export type QaSeedScenario = z.infer<typeof qaSeedScenarioSchema>;
 export type QaSeedScenarioWithSource = QaSeedScenario & {
   sourcePath: string;

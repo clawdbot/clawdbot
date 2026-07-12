@@ -8,7 +8,6 @@ import {
   resolveQaEvidenceArtifactFileByIndex,
   resolveQaEvidenceArtifactFile,
   resolveQaEvidenceProducerFile,
-  resolveQaEvidenceFile,
 } from "./evidence-gallery.js";
 import {
   QA_EVIDENCE_FILENAME,
@@ -616,9 +615,11 @@ describe("evidence gallery", () => {
       }),
     );
 
-    await expect(resolveQaEvidenceFile({ inputPath: outputDir, repoRoot })).resolves.toBe(
-      await fs.realpath(evidencePath),
-    );
+    await expect(
+      buildQaEvidenceGalleryModel({ evidencePath: outputDir, repoRoot }),
+    ).resolves.toMatchObject({
+      counts: { blocked: 0, fail: 0, pass: 1, skipped: 0 },
+    });
     await expect(
       resolveQaEvidenceArtifactFile({
         artifactPath: "artifact.log",
@@ -694,7 +695,10 @@ describe("evidence gallery", () => {
       }),
     ).rejects.toThrow("Evidence artifact not found.");
     await expect(
-      resolveQaEvidenceFile({ inputPath: "/tmp/not-openclaw-evidence.json", repoRoot }),
+      buildQaEvidenceGalleryModel({
+        evidencePath: "/tmp/not-openclaw-evidence.json",
+        repoRoot,
+      }),
     ).rejects.toThrow("Evidence path not found.");
   });
 });

@@ -12,11 +12,14 @@ import {
   appendTranscriptMessageSync,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import type { CronJob } from "../cron/types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withStateDirEnv as withRawStateDirEnv } from "../test-helpers/state-dir-env.js";
+import { registerSessionAutomationSource } from "./session-automation-index.js";
+import { buildGatewaySessionEventFields } from "./session-event-payload.js";
 import {
   canonicalizeSpawnedByForAgent,
   buildGatewaySessionRow,
@@ -488,6 +491,39 @@ describe("gateway session utils", () => {
     ]);
     expect(defaults.thinkingDefault).toBe("medium");
     expect(row.thinkingDefault).toBe("medium");
+  });
+
+  test("session rows project automation bindings and event fields forward them", () => {
+    const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
+    registerSessionAutomationSource({
+      getJobs: () => [{ id: "job1", enabled: true, sessionTarget: "isolated" } as CronJob],
+      getDefaultAgentId: () => "main",
+    });
+    try {
+      const bound = buildGatewaySessionRow({
+        cfg,
+        storePath: "",
+        store: {},
+        key: "agent:main:cron:job1",
+        lightweightListRow: true,
+        skipTranscriptUsageFallback: true,
+      });
+      expect(bound.hasAutomation).toBe(true);
+      expect(buildGatewaySessionEventFields({ sessionRow: bound }).hasAutomation).toBe(true);
+
+      const plain = buildGatewaySessionRow({
+        cfg,
+        storePath: "",
+        store: {},
+        key: "agent:main:other",
+        lightweightListRow: true,
+        skipTranscriptUsageFallback: true,
+      });
+      expect(plain.hasAutomation).toBeUndefined();
+      expect(buildGatewaySessionEventFields({ sessionRow: plain }).hasAutomation).toBe(false);
+    } finally {
+      registerSessionAutomationSource(null);
+    }
   });
 
   test("session rows ignore malformed compaction checkpoints", () => {

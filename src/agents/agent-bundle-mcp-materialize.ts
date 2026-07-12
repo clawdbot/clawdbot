@@ -19,8 +19,13 @@ import type {
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
 import { mcpContentBlockToAgentContent } from "./mcp-content.js";
+import { buildMcpAppCanvasPayload, fetchMcpAppView } from "./mcp-ui-resource.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import type { AnyAgentTool } from "./tools/common.js";
+
+function isAppOnlyTool(tool: McpCatalogTool): boolean {
+  return tool.uiVisibility !== undefined && !tool.uiVisibility.includes("model");
+}
 
 function toAgentToolResult(params: {
   serverName: string;
@@ -206,6 +211,9 @@ export function buildBundleMcpToolsFromCatalog(params: {
   });
 
   for (const tool of sortedCatalogTools) {
+    if (isAppOnlyTool(tool)) {
+      continue;
+    }
     const originalName = tool.toolName.trim();
     if (!originalName) {
       continue;
@@ -358,11 +366,26 @@ export async function materializeBundleMcpToolsForRun(params: {
     createExecute: (tool) => async (_toolCallId: string, input: unknown) => {
       params.runtime.markUsed();
       const result = await params.runtime.callTool(tool.serverName, tool.toolName, input);
-      return toAgentToolResult({
+      const agentResult = toAgentToolResult({
         serverName: tool.serverName,
         toolName: tool.toolName,
         result,
       });
+      if (params.runtime.mcpAppsEnabled && tool.uiResourceUri) {
+        const view = await fetchMcpAppView({
+          runtime: params.runtime,
+          serverName: tool.serverName,
+          toolName: tool.toolName,
+          uiResourceUri: tool.uiResourceUri,
+          toolInput: input,
+          toolResult: result,
+        });
+        if (view) {
+          (agentResult.details as Record<string, unknown>).mcpAppPreview =
+            buildMcpAppCanvasPayload(view);
+        }
+      }
+      return agentResult;
     },
     createResourceListExecute: params.runtime.listResources
       ? (serverName) => async () => {

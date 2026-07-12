@@ -54,6 +54,7 @@ import {
 } from "./plugin-registry-contributions.js";
 import type { PluginRegistrySnapshot } from "./plugin-registry-snapshot.js";
 import { normalizePluginIdScope } from "./plugin-scope.js";
+import { CORE_BUILT_IN_MODEL_APIS } from "./provider-config-owner.js";
 import type { PluginRegistry } from "./registry-types.js";
 import {
   collectConfiguredWorkerProviderIds,
@@ -78,16 +79,6 @@ type VoiceProviderContractKey =
   | "realtimeVoiceProviders";
 type ConfiguredGenerationProviderIds = Record<GenerationProviderContractKey, ReadonlySet<string>>;
 type ConfiguredVoiceProviderIds = Record<VoiceProviderContractKey, ReadonlySet<string>>;
-const CORE_BUILT_IN_MODEL_APIS = new Set([
-  "anthropic-messages",
-  "azure-openai-responses",
-  "google-generative-ai",
-  "google-vertex",
-  "mistral-conversations",
-  "openai-chatgpt-responses",
-  "openai-completions",
-  "openai-responses",
-]);
 
 function sortUniquePluginIds(values: Iterable<string>): string[] {
   return [...new Set([...values].map((value) => value.trim()).filter(Boolean))].toSorted(

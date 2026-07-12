@@ -1,0 +1,299 @@
+import { randomUUID } from "node:crypto";
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { logWarn } from "../logger.js";
+import { completeDeferredSessionMcpRuntimeRetirement } from "./agent-bundle-mcp-runtime.js";
+import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import { type McpAppCsp, normalizeMcpAppCsp } from "./mcp-app-sandbox.js";
+
+export const MCP_APP_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
+export const MCP_APP_RESOURCE_MAX_BYTES = 2 * 1024 * 1024;
+const MCP_APP_VIEW_TTL_MS = 10 * 60_000;
+const MCP_APP_VIEW_MAX_ENTRIES = 32;
+const MCP_APP_VIEW_MAX_BYTES = 6 * 1024 * 1024;
+const MCP_APP_VIEW_STORE_MAX_BYTES = 64 * 1024 * 1024;
+const MCP_APP_VIEW_STORE_KEY = Symbol.for("openclaw.mcpAppViewStore");
+
+type McpAppPermissions = Partial<
+  Record<"camera" | "clipboardWrite" | "geolocation" | "microphone", Record<string, never>>
+>;
+
+export type McpAppViewLease = {
+  viewId: string;
+  runtime: SessionMcpRuntime;
+  sessionId: string;
+  serverName: string;
+  toolName: string;
+  uiResourceUri: string;
+  html: string;
+  csp?: McpAppCsp;
+  permissions?: McpAppPermissions;
+  toolInput: unknown;
+  toolResult: CallToolResult;
+  expiresAtMs: number;
+  requestWindowStartedAtMs: number;
+  requestCount: number;
+  toolCallCount: number;
+  activeRequests: number;
+  byteSize: number;
+  expiryTimer?: ReturnType<typeof setTimeout>;
+  releaseRuntimeLease?: () => void;
+};
+
+type McpAppViewStore = Map<string, McpAppViewLease>;
+
+function getViewStore(): McpAppViewStore {
+  const globalStore = globalThis as Record<PropertyKey, unknown>;
+  const existing = globalStore[MCP_APP_VIEW_STORE_KEY] as McpAppViewStore | undefined;
+  if (existing) {
+    return existing;
+  }
+  const store = new Map<string, McpAppViewLease>();
+  globalStore[MCP_APP_VIEW_STORE_KEY] = store;
+  return store;
+}
+
+function deleteView(viewId: string, expected?: McpAppViewLease): void {
+  const store = getViewStore();
+  const view = store.get(viewId);
+  if (!view || (expected && view !== expected)) {
+    return;
+  }
+  clearTimeout(view.expiryTimer);
+  view.releaseRuntimeLease?.();
+  store.delete(viewId);
+  void completeDeferredSessionMcpRuntimeRetirement(view.runtime).catch((error: unknown) => {
+    logWarn(`mcp-app: deferred runtime cleanup failed: ${formatErrorMessage(error)}`);
+  });
+}
+
+function pruneViewStore(
+  additionalBytes = 0,
+  options?: { reserveEntry?: boolean; nowMs?: number },
+): void {
+  const store = getViewStore();
+  const nowMs = options?.nowMs ?? Date.now();
+  for (const [viewId, view] of store) {
+    if (view.expiresAtMs <= nowMs) {
+      deleteView(viewId, view);
+    }
+  }
+  let totalBytes = Array.from(store.values()).reduce((sum, view) => sum + (view.byteSize ?? 0), 0);
+  while (
+    store.size + (options?.reserveEntry ? 1 : 0) > MCP_APP_VIEW_MAX_ENTRIES ||
+    totalBytes + additionalBytes > MCP_APP_VIEW_STORE_MAX_BYTES
+  ) {
+    const oldest = store.keys().next().value;
+    if (oldest === undefined) {
+      return;
+    }
+    const evicted = store.get(oldest);
+    totalBytes -= evicted?.byteSize ?? 0;
+    if (evicted) {
+      deleteView(oldest, evicted);
+    }
+  }
+}
+
+function measureViewBytes(html: string, toolInput: unknown, toolResult: CallToolResult): number {
+  const toolData = JSON.stringify({ toolInput, toolResult });
+  const byteSize = Buffer.byteLength(html, "utf8") + Buffer.byteLength(toolData, "utf8");
+  if (byteSize > MCP_APP_VIEW_MAX_BYTES) {
+    throw new Error(`MCP App view data exceeds ${MCP_APP_VIEW_MAX_BYTES} bytes`);
+  }
+  return byteSize;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function normalizePermissions(value: unknown): McpAppPermissions | undefined {
+  const record = asRecord(value);
+  if (!record) {
+    return undefined;
+  }
+  const permissions: McpAppPermissions = {};
+  for (const key of ["camera", "clipboardWrite", "geolocation", "microphone"] as const) {
+    if (asRecord(record[key])) {
+      permissions[key] = {};
+    }
+  }
+  return Object.keys(permissions).length > 0 ? permissions : undefined;
+}
+
+function decodeResourceHtml(content: Record<string, unknown>): string {
+  if (typeof content.text === "string") {
+    if (Buffer.byteLength(content.text, "utf8") > MCP_APP_RESOURCE_MAX_BYTES) {
+      throw new Error(`MCP App resource exceeds ${MCP_APP_RESOURCE_MAX_BYTES} bytes`);
+    }
+    return content.text;
+  }
+  if (typeof content.blob !== "string") {
+    throw new Error("MCP App resource must provide text or base64 blob content");
+  }
+  const maxEncodedBytes = Math.ceil(MCP_APP_RESOURCE_MAX_BYTES / 3) * 4 + 4;
+  if (content.blob.length > maxEncodedBytes) {
+    throw new Error(`MCP App resource exceeds ${MCP_APP_RESOURCE_MAX_BYTES} bytes`);
+  }
+  const decoded = Buffer.from(content.blob, "base64");
+  if (decoded.byteLength > MCP_APP_RESOURCE_MAX_BYTES) {
+    throw new Error(`MCP App resource exceeds ${MCP_APP_RESOURCE_MAX_BYTES} bytes`);
+  }
+  return decoded.toString("utf8");
+}
+
+async function resolveListingUiMeta(
+  runtime: SessionMcpRuntime,
+  serverName: string,
+  uri: string,
+): Promise<Record<string, unknown> | undefined> {
+  const listed = await runtime.listResources?.(serverName);
+  const resources = Array.isArray(listed)
+    ? listed
+    : Array.isArray(asRecord(listed)?.resources)
+      ? (asRecord(listed)?.resources as unknown[])
+      : [];
+  const resource = resources.map(asRecord).find((entry) => entry?.uri === uri);
+  const { _meta: metadata } = resource ?? {};
+  return asRecord(asRecord(metadata)?.ui);
+}
+
+export async function fetchMcpAppView(params: {
+  runtime: SessionMcpRuntime;
+  serverName: string;
+  toolName: string;
+  uiResourceUri: string;
+  toolInput: unknown;
+  toolResult: CallToolResult;
+}): Promise<{ viewId: string; title: string } | undefined> {
+  let releaseRuntimeLease: (() => void) | undefined;
+  try {
+    if (!params.runtime.readResource || !params.uiResourceUri.startsWith("ui://")) {
+      return undefined;
+    }
+    const result = asRecord(
+      await params.runtime.readResource(params.serverName, params.uiResourceUri),
+    );
+    const contents = Array.isArray(result?.contents) ? result.contents : [];
+    if (contents.length !== 1) {
+      throw new Error(`expected one MCP App resource, received ${contents.length}`);
+    }
+    const content = asRecord(contents[0]);
+    if (!content || content.mimeType !== MCP_APP_RESOURCE_MIME_TYPE) {
+      throw new Error(`resource must use ${MCP_APP_RESOURCE_MIME_TYPE}`);
+    }
+    const html = decodeResourceHtml(content);
+    const byteSize = measureViewBytes(html, params.toolInput, params.toolResult);
+    const { _meta: metadata, meta: deprecatedMetadata } = content;
+    const contentUiMeta = asRecord(asRecord(metadata ?? deprecatedMetadata)?.ui);
+    const listingUiMeta = contentUiMeta
+      ? undefined
+      : await resolveListingUiMeta(params.runtime, params.serverName, params.uiResourceUri);
+    const uiMeta = contentUiMeta ?? listingUiMeta;
+    const csp = normalizeMcpAppCsp(uiMeta?.csp);
+    const permissions = normalizePermissions(uiMeta?.permissions);
+    const title = `${params.toolName} UI`;
+    const viewId = `mcp-app-${randomUUID()}`;
+    releaseRuntimeLease = params.runtime.acquireLease?.();
+    pruneViewStore(byteSize, { reserveEntry: true });
+    const view: McpAppViewLease = {
+      viewId,
+      runtime: params.runtime,
+      sessionId: params.runtime.sessionId,
+      serverName: params.serverName,
+      toolName: params.toolName,
+      uiResourceUri: params.uiResourceUri,
+      html,
+      ...(csp ? { csp } : {}),
+      ...(permissions ? { permissions } : {}),
+      toolInput: params.toolInput,
+      toolResult: params.toolResult,
+      expiresAtMs: Date.now() + MCP_APP_VIEW_TTL_MS,
+      requestWindowStartedAtMs: Date.now(),
+      requestCount: 0,
+      toolCallCount: 0,
+      activeRequests: 0,
+      byteSize,
+      ...(releaseRuntimeLease ? { releaseRuntimeLease } : {}),
+    };
+    releaseRuntimeLease = undefined;
+    view.expiryTimer = setTimeout(() => {
+      deleteView(view.viewId, view);
+    }, MCP_APP_VIEW_TTL_MS);
+    view.expiryTimer.unref?.();
+    getViewStore().set(viewId, view);
+    return { viewId, title };
+  } catch (error) {
+    releaseRuntimeLease?.();
+    logWarn(
+      `mcp-app: failed to prepare ${params.uiResourceUri} from "${params.serverName}": ${formatErrorMessage(error)}`,
+    );
+    return undefined;
+  }
+}
+
+export function getMcpAppViewLease(
+  viewId: string,
+  runtime: SessionMcpRuntime,
+): McpAppViewLease | undefined {
+  pruneViewStore();
+  const view = getViewStore().get(viewId);
+  return view?.runtime === runtime ? view : undefined;
+}
+
+export function acquireMcpAppViewRequest(
+  view: McpAppViewLease,
+  kind: "read" | "tool",
+  nowMs = Date.now(),
+): () => void {
+  if (nowMs - view.requestWindowStartedAtMs >= 60_000) {
+    view.requestWindowStartedAtMs = nowMs;
+    view.requestCount = 0;
+    view.toolCallCount = 0;
+  }
+  if (view.activeRequests >= 4) {
+    throw new Error("MCP App request concurrency limit reached");
+  }
+  if (view.requestCount >= 120 || (kind === "tool" && view.toolCallCount >= 30)) {
+    throw new Error("MCP App request rate limit reached");
+  }
+  view.requestCount += 1;
+  if (kind === "tool") {
+    view.toolCallCount += 1;
+  }
+  view.activeRequests += 1;
+  let released = false;
+  return () => {
+    if (!released) {
+      released = true;
+      view.activeRequests = Math.max(0, view.activeRequests - 1);
+    }
+  };
+}
+
+export function buildMcpAppCanvasPayload(view: { viewId: string; title: string }) {
+  return {
+    kind: "canvas",
+    view: { id: view.viewId, title: view.title },
+    presentation: {
+      target: "assistant_message",
+      title: view.title,
+      preferred_height: 600,
+      sandbox: "scripts",
+    },
+    mcpApp: { viewId: view.viewId },
+  };
+}
+
+const testing = {
+  clearViewStore() {
+    for (const [viewId, view] of getViewStore()) {
+      deleteView(viewId, view);
+    }
+  },
+};
+
+export { testing as __testing };

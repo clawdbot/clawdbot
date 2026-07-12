@@ -18,12 +18,25 @@ export function assertSqliteIntegrity(
   };
 }
 
+/** Require table and associated index consistency before trusting indexed reads. */
+export function assertSqliteTableIntegrity(
+  database: DatabaseSync,
+  databaseLabel: string,
+  tableName: string,
+): void {
+  runSqliteCheck(database, `${databaseLabel} table ${tableName}`, "integrity_check", tableName);
+}
+
 function runSqliteCheck(
   database: DatabaseSync,
   databaseLabel: string,
   pragma: SqliteCheckPragma,
+  tableName?: string,
 ): "ok" {
-  const rows = database.prepare(`PRAGMA ${pragma};`).all() as Array<Record<string, unknown>>;
+  const argument = tableName ? `('${tableName.replaceAll("'", "''")}')` : "";
+  const rows = database.prepare(`PRAGMA ${pragma}${argument};`).all() as Array<
+    Record<string, unknown>
+  >;
   const results = rows.map((row) => row[pragma] ?? Object.values(row)[0]);
   if (results.length === 1 && results[0] === "ok") {
     return "ok";

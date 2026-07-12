@@ -3,6 +3,7 @@
 ## Unreleased
 
 Routes exec approval review through the Gateway's durable approval records, including first-answer-wins results from other authorized surfaces, fail-closed reconciliation after ambiguous writes, and compatibility with older Gateway v4 peers.
+Keeps Android session search in the Sessions screen with direct focus, clear controls, and accurate loading and no-match states. Thanks @IWhatsskill.
 Shows the localized app version, Git commit, and build date together on the About screen, with real provenance in repository-backed debug builds.
 
 Recovers Android permission prompts after timeouts or cancellation without exhausting future requests. Thanks @NianJiuZst.

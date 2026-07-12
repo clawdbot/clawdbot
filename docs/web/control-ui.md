@@ -123,6 +123,12 @@ the Control UI. For example, a base path of `/openclaw` uses
 `/openclaw/settings/plugins`. The page is always available, even when every
 optional plugin is disabled.
 
+Plugins is a hub with four tabs: **Installed** and **Discover** manage plugin
+code at `/settings/plugins`, **Skills** hosts the per-agent skill manager at
+`/skills`, and **Workshop** hosts Skill Workshop proposal review at
+`/skills/workshop`. Each tab keeps its own URL, and the sidebar shows the
+single Plugins entry for all of them.
+
 The **Installed** tab shows the full local inventory grouped by category, with
 overview counts. Each row opens a detail view; its overflow (`…`) menu enables
 or disables the plugin and offers **Remove** for externally installed plugins.
@@ -131,7 +137,13 @@ and removing them inline. The **Discover** tab is the store: featured plugins
 included with OpenClaw, official external plugins, and one-click MCP connectors
 for popular services. Typing in the search box queries
 [ClawHub](https://clawhub.ai/plugins) inline and appends a **From ClawHub**
-section with download counts and source-verification badges.
+section with download counts and source-verification badges. Deep links can
+target the store directly with `/settings/plugins?tab=discover`.
+
+The **Skills** tab keeps the skill status report, enable/disable toggles, API
+key entry, and inline ClawHub skill search, scoped to the selected agent. The
+**Workshop** tab keeps the Skill Workshop board and Today review flow for
+[skill proposals](/tools/skill-workshop).
 
 Included plugins are already present on the Gateway and show **Enable** or
 **Disable** instead of **Install**. For example, Workboard is included with

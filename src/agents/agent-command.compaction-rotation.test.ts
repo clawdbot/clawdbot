@@ -125,7 +125,6 @@ vi.mock("../skills/runtime/session-snapshot.js", () => ({
 }));
 
 vi.mock("./exec-defaults.js", () => ({
-  canExecRequestNode: () => false,
   resolveNodeExecEligibility: () => ({ canExec: false }),
 }));
 

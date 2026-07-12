@@ -5,6 +5,7 @@ import { keyed } from "lit/directives/keyed.js";
 import { icons, type IconName } from "../../../components/icons.ts";
 import { isMarkdownBlockArtText } from "../../../components/markdown.ts";
 import "../../../components/tooltip.ts";
+import "../../../components/mcp-app-view.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
 import { resolveToolCallView, type ToolCallView } from "../../../lib/chat/tool-call-view.ts";
@@ -236,12 +237,17 @@ export function renderToolPreview(
     canvasPluginSurfaceUrl?: string | null;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
+    sessionKey?: string;
   },
 ) {
   if (!preview) {
     return nothing;
   }
-  if (preview.kind !== "canvas" || surface === "chat_tool") {
+  if (
+    preview.kind !== "canvas" ||
+    surface === "chat_tool" ||
+    (preview.mcpApp && surface !== "chat_message")
+  ) {
     return nothing;
   }
   if (preview.surface !== "assistant_message") {
@@ -253,16 +259,23 @@ export function renderToolPreview(
         <span class="chat-tool-card__preview-label">${preview.title?.trim() || "Canvas"}</span>
       </div>
       <div class="chat-tool-card__preview-panel" data-side="canvas">
-        ${renderPreviewFrame({
-          title: preview.title?.trim() || "Canvas",
-          src: resolveCanvasIframeUrl(
-            preview.url,
-            options?.canvasPluginSurfaceUrl,
-            options?.allowExternalEmbedUrls ?? false,
-          ),
-          height: preview.preferredHeight,
-          sandbox: resolveEmbedSandbox(options?.embedSandboxMode ?? "scripts", preview.sandbox),
-        })}
+        ${preview.mcpApp
+          ? html`<mcp-app-view
+              .sessionKey=${options?.sessionKey ?? ""}
+              .viewId=${preview.mcpApp.viewId}
+              .height=${preview.preferredHeight ?? 600}
+              .title=${preview.title?.trim() || "MCP App"}
+            ></mcp-app-view>`
+          : renderPreviewFrame({
+              title: preview.title?.trim() || "Canvas",
+              src: resolveCanvasIframeUrl(
+                preview.url,
+                options?.canvasPluginSurfaceUrl,
+                options?.allowExternalEmbedUrls ?? false,
+              ),
+              height: preview.preferredHeight,
+              sandbox: resolveEmbedSandbox(options?.embedSandboxMode ?? "scripts", preview.sandbox),
+            })}
       </div>
     </div>
   `;
@@ -826,6 +839,7 @@ export function renderExpandedToolCardContent(
         canvasPluginSurfaceUrl,
         embedSandboxMode,
         allowExternalEmbedUrls,
+        sessionKey,
       })
     : nothing;
   const sidebarAction = canOpenSidebar

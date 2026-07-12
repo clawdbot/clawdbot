@@ -1,9 +1,13 @@
 /** Session-scoped MCP runtime manager, catalog loader, and transport lifecycle. */
 import crypto from "node:crypto";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { Client, type ClientOptions } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { ErrorCode, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import {
+  ErrorCode,
+  type CallToolResult,
+  type ClientCapabilities,
+} from "@modelcontextprotocol/sdk/types.js";
 import type { ServerCapabilities } from "@modelcontextprotocol/sdk/types.js";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -53,6 +57,8 @@ type CreateSessionMcpRuntime = (
 ) => SessionMcpRuntime;
 
 const SESSION_MCP_RUNTIME_MANAGER_KEY = Symbol.for("openclaw.sessionMcpRuntimeManager");
+const MCP_APPS_CLIENT_EXTENSION = "io.modelcontextprotocol/ui";
+const MCP_APP_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 const DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS = 10 * 60 * 1000;
 const SESSION_MCP_RUNTIME_SWEEP_INTERVAL_MS = 60 * 1000;
 const BUNDLE_MCP_FAILURE_THRESHOLD = 3;
@@ -187,6 +193,21 @@ function setBundleMcpDisposeTimeoutMsForTest(timeoutMs?: number): void {
       ? Math.floor(timeoutMs)
       : undefined;
 }
+
+function buildMcpClientCapabilities(mcpAppsEnabled: boolean): ClientCapabilities {
+  return mcpAppsEnabled
+    ? {
+        extensions: {
+          [MCP_APPS_CLIENT_EXTENSION]: { mimeTypes: [MCP_APP_RESOURCE_MIME_TYPE] },
+        },
+      }
+    : {};
+}
+
+function buildMcpClientOptions(mcpAppsEnabled: boolean): ClientOptions {
+  return { capabilities: buildMcpClientCapabilities(mcpAppsEnabled) };
+}
+
 async function listAllResources(client: Client, timeoutMs: number) {
   const resources: unknown[] = [];
   let cursor: string | undefined;
@@ -217,6 +238,16 @@ function normalizeStringList(value: unknown): string[] | undefined {
   }
   const entries = value.filter((entry): entry is string => typeof entry === "string");
   return entries.length > 0 ? entries : undefined;
+}
+
+function normalizeToolUiVisibility(value: unknown): Array<"app" | "model"> | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const normalized = value.filter(
+    (entry): entry is "app" | "model" => entry === "app" || entry === "model",
+  );
+  return [...new Set(normalized)].toSorted();
 }
 
 function getMcpToolSelection(rawServer: unknown): McpToolSelection {
@@ -301,10 +332,13 @@ async function disposeSession(session: BundleMcpSession) {
   }
 }
 
-function createCatalogFingerprint(servers: Record<string, unknown>): string {
+function createCatalogFingerprint(params: {
+  servers: Record<string, unknown>;
+  mcpAppsEnabled: boolean;
+}): string {
   // Session MCP fingerprints only invalidate in-memory runtime catalogs.
   // Algorithm changes can cause one cache miss, but no persisted state migration.
-  return crypto.createHash("sha256").update(JSON.stringify(servers)).digest("hex");
+  return crypto.createHash("sha256").update(JSON.stringify(params)).digest("hex");
 }
 
 function loadSessionMcpConfig(params: {
@@ -328,7 +362,10 @@ function loadSessionMcpConfig(params: {
   }
   return {
     loaded,
-    fingerprint: createCatalogFingerprint(loaded.mcpServers),
+    fingerprint: createCatalogFingerprint({
+      servers: loaded.mcpServers,
+      mcpAppsEnabled: params.cfg?.mcp?.apps?.enabled === true,
+    }),
   };
 }
 
@@ -379,6 +416,7 @@ export function createSessionMcpRuntime(params: {
     logDiagnostics: true,
     manifestRegistry: params.manifestRegistry,
   });
+  const mcpAppsEnabled = params.cfg?.mcp?.apps?.enabled === true;
   const createdAt = Date.now();
   let lastUsedAt = createdAt;
   let activeLeases = 0;
@@ -557,6 +595,7 @@ export function createSessionMcpRuntime(params: {
                     version: "0.0.0",
                   },
                   {
+                    ...buildMcpClientOptions(mcpAppsEnabled),
                     jsonSchemaValidator: createMcpJsonSchemaValidator(),
                     listChanged: {
                       tools: {
@@ -660,6 +699,17 @@ export function createSessionMcpRuntime(params: {
                   if (!toolName) {
                     continue;
                   }
+                  const { _meta: metadata } = tool;
+                  const uiMeta =
+                    metadata?.ui && typeof metadata.ui === "object" && !Array.isArray(metadata.ui)
+                      ? (metadata.ui as { resourceUri?: unknown; visibility?: unknown })
+                      : undefined;
+                  const rawResourceUri = uiMeta?.resourceUri ?? metadata?.["ui/resourceUri"];
+                  const uiResourceUri =
+                    typeof rawResourceUri === "string" && rawResourceUri.startsWith("ui://")
+                      ? rawResourceUri
+                      : undefined;
+                  const uiVisibility = normalizeToolUiVisibility(uiMeta?.visibility);
                   toolEntries.push({
                     serverName,
                     safeServerName,
@@ -668,6 +718,8 @@ export function createSessionMcpRuntime(params: {
                     description: sanitizeMcpMetadataText(tool.description),
                     inputSchema: tool.inputSchema,
                     fallbackDescription: `Provided by bundle MCP server "${serverName}" (${resolved.description}).`,
+                    ...(uiResourceUri ? { uiResourceUri } : {}),
+                    ...(uiVisibility ? { uiVisibility } : {}),
                   });
                 }
                 return {
@@ -777,6 +829,7 @@ export function createSessionMcpRuntime(params: {
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     configFingerprint,
+    mcpAppsEnabled,
     createdAt,
     get lastUsedAt() {
       return lastUsedAt;
@@ -821,6 +874,14 @@ export function createSessionMcpRuntime(params: {
           )) as CallToolResult,
       );
     },
+    async listTools(serverName, requestParams) {
+      failIfDisposed();
+      await getCatalog();
+      const session = requireConnectedSession(serverName);
+      return await runGuardedServerRequest(serverName, async () =>
+        session.client.listTools(requestParams, { timeout: session.requestTimeoutMs }),
+      );
+    },
     async listResources(serverName) {
       failIfDisposed();
       await getCatalog();
@@ -837,6 +898,16 @@ export function createSessionMcpRuntime(params: {
         serverName,
         async () =>
           await session.client.readResource({ uri }, { timeout: session.requestTimeoutMs }),
+      );
+    },
+    async listResourceTemplates(serverName, requestParams) {
+      failIfDisposed();
+      await getCatalog();
+      const session = requireConnectedSession(serverName);
+      return await runGuardedServerRequest(serverName, async () =>
+        session.client.listResourceTemplates(requestParams, {
+          timeout: session.requestTimeoutMs,
+        }),
       );
     },
     async listPrompts(serverName) {
@@ -885,6 +956,7 @@ function createSessionMcpRuntimeManager(
   const runtimesBySessionId = new Map<string, SessionMcpRuntime>();
   const sessionIdBySessionKey = new Map<string, string>();
   const idleTtlMsBySessionId = new Map<string, number>();
+  const deferredRetirementSessionIds = new Set<string>();
   const createRuntime = opts.createRuntime ?? createSessionMcpRuntime;
   const now = opts.now ?? Date.now;
   const createInFlight = new Map<
@@ -922,6 +994,7 @@ function createSessionMcpRuntimeManager(
       }
       runtimesBySessionId.delete(sessionId);
       idleTtlMsBySessionId.delete(sessionId);
+      deferredRetirementSessionIds.delete(sessionId);
       forgetSessionKeysForSessionId(sessionId);
       expired.push(runtime);
     }
@@ -959,6 +1032,24 @@ function createSessionMcpRuntimeManager(
     idleSweepTimer = undefined;
   };
 
+  const disposeManagedSession = async (sessionId: string): Promise<void> => {
+    deferredRetirementSessionIds.delete(sessionId);
+    const inFlight = createInFlight.get(sessionId);
+    createInFlight.delete(sessionId);
+    let runtime = runtimesBySessionId.get(sessionId);
+    if (!runtime && inFlight) {
+      runtime = await inFlight.promise.catch(() => undefined);
+    }
+    runtimesBySessionId.delete(sessionId);
+    idleTtlMsBySessionId.delete(sessionId);
+    if (!runtime) {
+      forgetSessionKeysForSessionId(sessionId);
+      return;
+    }
+    forgetSessionKeysForSessionId(sessionId);
+    await runtime.dispose();
+  };
+
   return {
     async getOrCreate(params) {
       const idleTtlMs = resolveSessionMcpRuntimeIdleTtlMs(params.cfg);
@@ -985,8 +1076,12 @@ function createSessionMcpRuntimeManager(
           existing.configFingerprint !== nextFingerprint
         ) {
           runtimesBySessionId.delete(params.sessionId);
+          deferredRetirementSessionIds.delete(params.sessionId);
           await existing.dispose();
         } else {
+          // A new run now owns this runtime. Cancel an earlier one-shot retirement
+          // so an old app view cannot dispose the runtime out from under this run.
+          deferredRetirementSessionIds.delete(params.sessionId);
           existing.markUsed();
           idleTtlMsBySessionId.set(params.sessionId, idleTtlMs);
           return existing;
@@ -1005,6 +1100,7 @@ function createSessionMcpRuntimeManager(
         const staleRuntime = await inFlight.promise.catch(() => undefined);
         runtimesBySessionId.delete(params.sessionId);
         idleTtlMsBySessionId.delete(params.sessionId);
+        deferredRetirementSessionIds.delete(params.sessionId);
         await staleRuntime?.dispose();
       }
       const created = Promise.resolve(
@@ -1017,6 +1113,7 @@ function createSessionMcpRuntimeManager(
           configFingerprint: nextFingerprint,
         }),
       ).then((runtime) => {
+        deferredRetirementSessionIds.delete(params.sessionId);
         runtime.markUsed();
         runtimesBySessionId.set(params.sessionId, runtime);
         idleTtlMsBySessionId.set(params.sessionId, idleTtlMs);
@@ -1048,20 +1145,25 @@ function createSessionMcpRuntimeManager(
       return sessionId ? runtimesBySessionId.get(sessionId) : undefined;
     },
     async disposeSession(sessionId) {
-      const inFlight = createInFlight.get(sessionId);
-      createInFlight.delete(sessionId);
-      let runtime = runtimesBySessionId.get(sessionId);
-      if (!runtime && inFlight) {
-        runtime = await inFlight.promise.catch(() => undefined);
+      await disposeManagedSession(sessionId);
+    },
+    deferRetirement(sessionId) {
+      if (!runtimesBySessionId.has(sessionId)) {
+        return false;
       }
-      runtimesBySessionId.delete(sessionId);
-      idleTtlMsBySessionId.delete(sessionId);
-      if (!runtime) {
-        forgetSessionKeysForSessionId(sessionId);
-        return;
+      deferredRetirementSessionIds.add(sessionId);
+      return true;
+    },
+    async completeDeferredRetirement(sessionId, runtime) {
+      if (
+        !deferredRetirementSessionIds.has(sessionId) ||
+        runtimesBySessionId.get(sessionId) !== runtime ||
+        (runtime.activeLeases ?? 0) > 0
+      ) {
+        return false;
       }
-      forgetSessionKeysForSessionId(sessionId);
-      await runtime.dispose();
+      await disposeManagedSession(sessionId);
+      return true;
     },
     async disposeAll() {
       clearIdleSweepTimer();
@@ -1071,6 +1173,7 @@ function createSessionMcpRuntimeManager(
       runtimesBySessionId.clear();
       sessionIdBySessionKey.clear();
       idleTtlMsBySessionId.clear();
+      deferredRetirementSessionIds.clear();
       const lateRuntimes = await Promise.all(
         inFlightRuntimes.map(async ({ promise }) => await promise.catch(() => undefined)),
       );
@@ -1123,11 +1226,17 @@ export async function disposeSessionMcpRuntime(sessionId: string): Promise<void>
 export async function retireSessionMcpRuntime(params: {
   sessionId?: string | null;
   reason: string;
+  preserveActiveLeases?: boolean;
   onError?: (error: unknown, sessionId: string, reason: string) => void;
 }): Promise<boolean> {
   const sessionId = normalizeOptionalString(params.sessionId);
   if (!sessionId) {
     return false;
+  }
+  const runtime = peekSessionMcpRuntime({ sessionId });
+  if (params.preserveActiveLeases === true && (runtime?.activeLeases ?? 0) > 0) {
+    getSessionMcpRuntimeManager().deferRetirement(sessionId);
+    return true;
   }
   try {
     await disposeSessionMcpRuntime(sessionId);
@@ -1138,9 +1247,17 @@ export async function retireSessionMcpRuntime(params: {
   }
 }
 
+/** Completes a one-shot retirement after its final run, view, or request lease releases. */
+export async function completeDeferredSessionMcpRuntimeRetirement(
+  runtime: SessionMcpRuntime,
+): Promise<boolean> {
+  return await getSessionMcpRuntimeManager().completeDeferredRetirement(runtime.sessionId, runtime);
+}
+
 export async function retireSessionMcpRuntimeForSessionKey(params: {
   sessionKey?: string | null;
   reason: string;
+  preserveActiveLeases?: boolean;
   onError?: (error: unknown, sessionId: string, reason: string) => void;
 }): Promise<boolean> {
   const sessionKey = normalizeOptionalString(params.sessionKey);
@@ -1151,6 +1268,7 @@ export async function retireSessionMcpRuntimeForSessionKey(params: {
   return await retireSessionMcpRuntime({
     sessionId,
     reason: params.reason,
+    preserveActiveLeases: params.preserveActiveLeases,
     onError: params.onError,
   });
 }
@@ -1160,6 +1278,7 @@ export async function disposeAllSessionMcpRuntimes(): Promise<void> {
 }
 
 export const testing = {
+  buildMcpClientCapabilities,
   createSessionMcpRuntimeManager,
   async resetSessionMcpRuntimeManager() {
     await disposeAllSessionMcpRuntimes();

@@ -6067,9 +6067,10 @@ td.data-table-key-col {
 
 /* ── Session row primitives ──
    Shared by the sidebar recents list and the chat session picker. Rows read
-   as plain text lines: the trailing aside stacks a relative time (or the run
-   spinner) and the management actions in one grid cell, so hovering swaps
-   them without any layout shift. */
+   as plain text lines: transient state (run spinner, unread dot) leads the
+   title, attribute badges follow it, and the trailing aside stacks a relative
+   time and the management actions in one grid cell, so hovering swaps them
+   without any layout shift. */
 .session-row-host {
   position: relative;
 }
@@ -6109,6 +6110,32 @@ td.data-table-key-col {
   /* Display-only, and its opacity transition forms a stacking context that
      would otherwise sit above the action buttons and swallow their clicks. */
   pointer-events: none;
+}
+
+/* Attribute badges (worktree fork, attached automation): muted metadata that
+   sits after the title inside the row link, outside the trail/action overlap
+   cell, so touch devices (which hide the trail) and hovered rows keep them. */
+.session-row-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.session-row-badge {
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted);
+}
+
+.session-row-badge svg {
+  width: 12px;
+  height: 12px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.6px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .session-row-actions {

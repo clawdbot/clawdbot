@@ -110,6 +110,7 @@ interface PackageFilter {
 }
 
 type ResourceType = "extensions" | "skills" | "prompts" | "themes";
+type TopLevelAutoResourceType = Extract<ResourceType, "prompts" | "themes">;
 
 const RESOURCE_TYPES: ResourceType[] = ["extensions", "skills", "prompts", "themes"];
 
@@ -351,7 +352,10 @@ function collectAncestorAgentsSkillDirs(startDir: string): string[] {
   return skillDirs;
 }
 
-function collectAutoPromptEntries(dir: string): string[] {
+function collectTopLevelAutoResourceEntries(
+  dir: string,
+  resourceType: TopLevelAutoResourceType,
+): string[] {
   const entries: string[] = [];
   if (!existsSync(dir)) {
     return entries;
@@ -388,55 +392,7 @@ function collectAutoPromptEntries(dir: string): string[] {
         continue;
       }
 
-      if (isFile && entry.name.endsWith(".md")) {
-        entries.push(fullPath);
-      }
-    }
-  } catch {
-    // Ignore errors
-  }
-
-  return entries;
-}
-
-function collectAutoThemeEntries(dir: string): string[] {
-  const entries: string[] = [];
-  if (!existsSync(dir)) {
-    return entries;
-  }
-
-  const ig = ignore();
-  addIgnoreRules(ig, dir, dir);
-
-  try {
-    const dirEntries = readdirSync(dir, { withFileTypes: true });
-    for (const entry of dirEntries) {
-      if (entry.name.startsWith(".")) {
-        continue;
-      }
-      if (entry.name === "node_modules") {
-        continue;
-      }
-
-      const fullPath = join(dir, entry.name);
-      if (!isRealPathWithinRoot(dir, fullPath)) {
-        continue;
-      }
-      let isFile = entry.isFile();
-      if (entry.isSymbolicLink()) {
-        try {
-          isFile = statSync(fullPath).isFile();
-        } catch {
-          continue;
-        }
-      }
-
-      const relPath = toPosixPath(relative(dir, fullPath));
-      if (ig.ignores(relPath)) {
-        continue;
-      }
-
-      if (isFile && entry.name.endsWith(".json")) {
+      if (isFile && FILE_PATTERNS[resourceType].test(entry.name)) {
         entries.push(fullPath);
       }
     }
@@ -1415,14 +1371,14 @@ export class DefaultPackageManager implements PackageManager {
 
     addResources(
       "prompts",
-      collectAutoPromptEntries(projectDirs.prompts),
+      collectTopLevelAutoResourceEntries(projectDirs.prompts, "prompts"),
       projectMetadata,
       projectOverrides.prompts,
       projectBaseDir,
     );
     addResources(
       "themes",
-      collectAutoThemeEntries(projectDirs.themes),
+      collectTopLevelAutoResourceEntries(projectDirs.themes, "themes"),
       projectMetadata,
       projectOverrides.themes,
       projectBaseDir,
@@ -1462,14 +1418,14 @@ export class DefaultPackageManager implements PackageManager {
 
     addResources(
       "prompts",
-      collectAutoPromptEntries(userDirs.prompts),
+      collectTopLevelAutoResourceEntries(userDirs.prompts, "prompts"),
       userMetadata,
       userOverrides.prompts,
       globalBaseDir,
     );
     addResources(
       "themes",
-      collectAutoThemeEntries(userDirs.themes),
+      collectTopLevelAutoResourceEntries(userDirs.themes, "themes"),
       userMetadata,
       userOverrides.themes,
       globalBaseDir,

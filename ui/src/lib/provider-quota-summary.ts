@@ -2,13 +2,6 @@
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { ModelAuthStatusProvider, ModelAuthStatusResult } from "../api/types.ts";
 
-export type QuotaWindowSummary = {
-  displayName: string;
-  label: string;
-  remaining: number;
-  resetAt?: number;
-};
-
 export function formatQuotaReset(resetAt?: number): string | null {
   const timestampMs = asDateTimestampMs(resetAt);
   if (timestampMs === undefined) {
@@ -33,28 +26,6 @@ export function formatQuotaReset(resetAt?: number): string | null {
     return remainingHours > 0 ? `${days}d ${remainingHours}h` : `${days}d`;
   }
   return new Date(timestampMs).toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
-
-export function collectQuotaWindows(
-  providers: ReadonlyArray<ModelAuthStatusProvider>,
-): QuotaWindowSummary[] {
-  return providers
-    .flatMap((provider) =>
-      (provider.usage?.windows ?? []).map((window) => ({
-        displayName: provider.displayName,
-        label: (window.label || "").trim(),
-        remaining: Math.max(0, Math.min(100, Math.round(100 - window.usedPercent))),
-        resetAt: window.resetAt,
-      })),
-    )
-    .toSorted((a, b) => a.remaining - b.remaining || a.displayName.localeCompare(b.displayName));
-}
-
-export function collectQuotaWindowsFromAuthStatus(
-  status: ModelAuthStatusResult | null,
-  filter: (provider: ModelAuthStatusProvider) => boolean,
-): QuotaWindowSummary[] {
-  return collectQuotaWindows((status?.providers ?? []).filter(filter));
 }
 
 /** Auth-status source props for surfaces that render provider plan usage. */

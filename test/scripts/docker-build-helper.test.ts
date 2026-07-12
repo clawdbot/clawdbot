@@ -4324,11 +4324,17 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
     expect(runner).toContain(
       'PORT="$(docker_e2e_read_tcp_port_env OPENCLAW_OPENAI_WEB_SEARCH_MINIMAL_PORT 18789)"',
     );
-    expect(runner).toContain('MOCK_PORT="80"');
+    expect(runner).toContain('MOCK_PORT="443"');
     expect(runner).not.toContain("OPENCLAW_OPENAI_WEB_SEARCH_MINIMAL_MOCK_PORT");
     expect(runner).toContain('-e "PORT=$PORT"');
     expect(runner).toContain('-e "MOCK_PORT=$MOCK_PORT"');
     expect(runner).toContain("scripts/e2e/lib/openai-web-search-minimal/scenario.sh");
+    expect(scenario).toContain('export NODE_EXTRA_CA_CERTS="$TLS_CA_CERT"');
+    expect(scenario).toContain('MOCK_TLS_CERT="$TLS_SERVER_CERT"');
+    expect(scenario).toContain('MOCK_TLS_KEY="$TLS_SERVER_KEY"');
+    expect(scenario).toContain(
+      'openclaw_e2e_wait_mock_openai "$MOCK_PORT" 80 400 "https://api.openai.com:$MOCK_PORT"',
+    );
     expect(scenario).toContain("scripts/e2e/lib/openai-web-search-minimal/client.mjs");
     expect(client).toContain("const callGateway = await loadCallGateway();");
     expect(client).toContain('method: "agent"');
@@ -4345,7 +4351,9 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
     expect(scenario).toContain(
       'gateway_pid="$(openclaw_e2e_start_gateway "$entry" "$PORT" "$GATEWAY_LOG")"',
     );
-    expect(scenario).toContain('openclaw_e2e_wait_mock_openai "$MOCK_PORT"');
+    expect(scenario).toContain(
+      'openclaw_e2e_wait_mock_openai "$MOCK_PORT" 80 400 "https://api.openai.com:$MOCK_PORT"',
+    );
     expect(scenario).toContain(
       'openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" 360 "$PORT"',
     );

@@ -1,5 +1,9 @@
 /** Shared bundle MCP catalog, runtime, and manager types. */
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import type {
+  CallToolResult,
+  ListResourceTemplatesResult,
+  ListToolsResult,
+} from "@modelcontextprotocol/sdk/types.js";
 import type { TSchema } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -44,6 +48,8 @@ export type McpCatalogTool = {
   description?: string;
   inputSchema: TSchema;
   fallbackDescription: string;
+  uiResourceUri?: string;
+  uiVisibility?: Array<"app" | "model">;
 };
 
 /** Complete tool catalog for a session-scoped MCP runtime. */
@@ -69,6 +75,7 @@ export type SessionMcpRuntime = {
   workspaceDir: string;
   agentDir?: string;
   configFingerprint: string;
+  mcpAppsEnabled?: boolean;
   createdAt: number;
   lastUsedAt: number;
   activeLeases?: number;
@@ -79,8 +86,13 @@ export type SessionMcpRuntime = {
   peekCatalog: () => McpToolCatalog | null;
   markUsed: () => void;
   callTool: (serverName: string, toolName: string, input: unknown) => Promise<CallToolResult>;
+  listTools?: (serverName: string, params?: { cursor?: string }) => Promise<ListToolsResult>;
   listResources?: (serverName: string) => Promise<unknown>;
   readResource?: (serverName: string, uri: string) => Promise<unknown>;
+  listResourceTemplates?: (
+    serverName: string,
+    params?: { cursor?: string },
+  ) => Promise<ListResourceTemplatesResult>;
   listPrompts?: (serverName: string) => Promise<unknown>;
   getPrompt?: (serverName: string, name: string, args?: Record<string, string>) => Promise<unknown>;
   dispose: () => Promise<void>;
@@ -103,6 +115,8 @@ export type SessionMcpRuntimeManager = {
     sessionKey?: string;
   }) => SessionMcpRuntime | undefined;
   disposeSession: (sessionId: string) => Promise<void>;
+  deferRetirement: (sessionId: string) => boolean;
+  completeDeferredRetirement: (sessionId: string, runtime: SessionMcpRuntime) => Promise<boolean>;
   disposeAll: () => Promise<void>;
   sweepIdleRuntimes: () => Promise<number>;
   listSessionIds: () => string[];

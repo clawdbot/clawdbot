@@ -105,7 +105,7 @@ function extractTextContent(content: unknown): string {
   return parts.join("\n").trim();
 }
 
-export function extractJsonlReplayUserTurns(transcriptBytes: string): JsonlReplayTurn[] {
+function extractJsonlReplayUserTurns(transcriptBytes: string): JsonlReplayTurn[] {
   const turns: JsonlReplayTurn[] = [];
   const acceptedLines: string[] = [];
   for (const [lineIndex, rawLine] of transcriptBytes.split(/\r?\n/u).entries()) {

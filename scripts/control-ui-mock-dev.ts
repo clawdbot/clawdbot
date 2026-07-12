@@ -250,6 +250,144 @@ function buildSessionDiffMock() {
   };
 }
 
+function buildPluginCatalogMock() {
+  const entry = (params: {
+    id: string;
+    name: string;
+    description: string;
+    category: string;
+    installed: boolean;
+    enabled?: boolean;
+    featured?: boolean;
+  }) => ({
+    id: params.id,
+    name: params.name,
+    description: params.description,
+    version: "1.4.0",
+    installed: params.installed,
+    enabled: params.installed && (params.enabled ?? true),
+    state: params.installed ? ((params.enabled ?? true) ? "enabled" : "disabled") : "not-installed",
+    category: params.category,
+    featured: params.featured ?? false,
+    removable: params.installed,
+  });
+  return {
+    plugins: [
+      entry({
+        id: "telegram",
+        name: "Telegram",
+        description: "Chat with your agent from Telegram DMs and groups.",
+        category: "channel",
+        installed: true,
+      }),
+      entry({
+        id: "discord",
+        name: "Discord",
+        description: "Bridge agents into Discord servers and DMs.",
+        category: "channel",
+        installed: true,
+        enabled: false,
+      }),
+      entry({
+        id: "memory-wiki",
+        name: "Memory Wiki",
+        description: "Long-term wiki-style memory for people and projects.",
+        category: "memory",
+        installed: true,
+      }),
+      entry({
+        id: "browser",
+        name: "Browser",
+        description: "Drive a managed browser profile for research and automation.",
+        category: "tool",
+        installed: false,
+        featured: true,
+      }),
+      entry({
+        id: "canvas",
+        name: "Canvas",
+        description: "Generate and preview visual artifacts from sessions.",
+        category: "tool",
+        installed: false,
+      }),
+    ],
+    diagnostics: [],
+    mutationAllowed: true,
+  };
+}
+
+function buildSkillWorkshopMocks(baseTime: number) {
+  const hour = 60 * 60 * 1000;
+  const day = 24 * hour;
+  const proposals = [
+    {
+      id: "prop-release-tweets",
+      kind: "update",
+      status: "pending",
+      title: "Tighten release tweet drafting",
+      description: "Capture the changelog-to-tweet flow the agent keeps re-deriving.",
+      skillName: "release-tweets",
+      skillKey: "release-tweets",
+      createdAt: new Date(baseTime - 2 * hour).toISOString(),
+      updatedAt: new Date(baseTime - hour).toISOString(),
+      scanState: "clean",
+    },
+    {
+      id: "prop-crawler-etiquette",
+      kind: "create",
+      status: "pending",
+      title: "Add crawler etiquette skill",
+      description: "Rate limits and robots.txt handling learned during the docs sweep.",
+      skillName: "crawler-etiquette",
+      skillKey: "crawler-etiquette",
+      createdAt: new Date(baseTime - 3 * day).toISOString(),
+      updatedAt: new Date(baseTime - 2 * day).toISOString(),
+      scanState: "clean",
+    },
+    {
+      id: "prop-changelog-style",
+      kind: "update",
+      status: "applied",
+      title: "Changelog bullet style",
+      description: "One bullet per entry, no hard wraps.",
+      skillName: "changelog-style",
+      skillKey: "changelog-style",
+      createdAt: new Date(baseTime - 6 * day).toISOString(),
+      updatedAt: new Date(baseTime - 5 * day).toISOString(),
+      scanState: "clean",
+    },
+  ];
+  return {
+    list: {
+      schema: "openclaw.skill-workshop.proposals-manifest.v1",
+      updatedAt: new Date(baseTime - hour).toISOString(),
+      proposals,
+    },
+    inspect: {
+      cases: proposals.map((proposal) => ({
+        match: { proposalId: proposal.id },
+        response: {
+          record: {
+            ...proposal,
+            proposedVersion: "2",
+            target: { skillName: proposal.skillName, skillKey: proposal.skillKey },
+          },
+          content: [
+            `# ${proposal.title}`,
+            "",
+            proposal.description,
+            "",
+            "## Steps",
+            "1. Gather the source material.",
+            "2. Apply the documented workflow.",
+          ].join("\n"),
+          supportFiles: [],
+        },
+      })),
+    },
+  };
+}
+
 function buildModelProviderMocks(baseTime: number) {
   const hour = 60 * 60 * 1000;
   const expiry = (remainingMs: number, label: string) => ({
@@ -827,6 +965,7 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
   // heatmap stay filled no matter when the mock harness runs.
   const profileUsage = buildProfileUsageMocks(Date.now());
   const modelProviders = buildModelProviderMocks(Date.now());
+  const skillWorkshop = buildSkillWorkshopMocks(Date.now());
   return {
     assistantAgentId: "openclaw-mock",
     assistantName: "OpenClaw mock",
@@ -835,6 +974,9 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
     historyMessages: buildScrollableChatHistory(baseTime),
     methodResponses: {
       "sessions.diff": buildSessionDiffMock(),
+      "plugins.list": buildPluginCatalogMock(),
+      "skills.proposals.list": skillWorkshop.list,
+      "skills.proposals.inspect": skillWorkshop.inspect,
       "usage.cost": profileUsage.cost,
       "sessions.usage": profileUsage.sessions,
       "models.authStatus": modelProviders.authStatus,

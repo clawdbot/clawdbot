@@ -229,6 +229,9 @@ function applyControlUiSecurityHeaders(res: ServerResponse) {
   res.setHeader("Content-Security-Policy", buildControlUiCspHeader());
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Referrer-Policy", "no-referrer");
+  // The active Gateway may differ from the server that delivered this UI.
+  // Exact sandbox policies and iframe allow attributes still narrow delegation.
+  res.setHeader("Permissions-Policy", "camera=*, microphone=*, geolocation=*, clipboard-write=*");
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown) {

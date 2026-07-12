@@ -224,6 +224,22 @@ write_gates_env_stamp() {
     > .local/gates.env
 }
 
+derive_prepare_gate_change_plan() {
+  PREPARE_GATE_CHANGED_FILES=$(git diff --name-only origin/main...HEAD)
+  PREPARE_GATE_DOCS_ONLY=false
+  if file_list_is_docsish_only "$PREPARE_GATE_CHANGED_FILES"; then
+    PREPARE_GATE_DOCS_ONLY=true
+  fi
+  PREPARE_GATE_CHANGELOG_ONLY=false
+  if [ "$PREPARE_GATE_CHANGED_FILES" = "CHANGELOG.md" ]; then
+    PREPARE_GATE_CHANGELOG_ONLY=true
+  fi
+  PREPARE_GATE_CHANGELOG_REQUIRED=false
+  if changelog_required_for_changed_files "$PREPARE_GATE_CHANGED_FILES"; then
+    PREPARE_GATE_CHANGELOG_REQUIRED=true
+  fi
+}
+
 run_prepare_push_retry_gates() {
   local docs_only="${1:-false}"
 
@@ -306,29 +322,11 @@ prepare_gates() {
   # shellcheck disable=SC1091
   source .local/pr-meta.env
 
-  local changed_files
-  changed_files=$(git diff --name-only origin/main...HEAD)
-  local non_docs
-  non_docs=$(printf '%s\n' "$changed_files" | while IFS= read -r path; do
-    [ -n "$path" ] || continue
-    if ! path_is_docsish "$path"; then
-      printf '%s\n' "$path"
-    fi
-  done)
-
-  local docs_only=false
-  if [ -n "$changed_files" ] && [ -z "$non_docs" ]; then
-    docs_only=true
-  fi
-  local changelog_only=false
-  if [ "$changed_files" = "CHANGELOG.md" ]; then
-    changelog_only=true
-  fi
-
-  local changelog_required=false
-  if changelog_required_for_changed_files "$changed_files"; then
-    changelog_required=true
-  fi
+  derive_prepare_gate_change_plan
+  local changed_files="$PREPARE_GATE_CHANGED_FILES"
+  local docs_only="$PREPARE_GATE_DOCS_ONLY"
+  local changelog_only="$PREPARE_GATE_CHANGELOG_ONLY"
+  local changelog_required="$PREPARE_GATE_CHANGELOG_REQUIRED"
 
   local has_changelog_update=false
   local unsupported_changelog_fragments=""

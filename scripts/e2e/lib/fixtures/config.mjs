@@ -64,7 +64,7 @@ function writeOpenAiWebSearchMinimalConfig() {
       providers: {
         openai: {
           api: "openai-responses",
-          baseUrl: "http://api.openai.com/v1",
+          baseUrl: "https://api.openai.com/v1",
           apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
           request: { allowPrivateNetwork: true },
           models: [

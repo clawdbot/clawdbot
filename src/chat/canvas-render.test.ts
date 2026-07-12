@@ -1,6 +1,43 @@
 // Canvas-render tests cover [embed] shortcode extraction and text stripping.
 import { describe, expect, it } from "vitest";
-import { extractCanvasShortcodes } from "./canvas-render.ts";
+import {
+  extractCanvasFromDetails,
+  extractCanvasFromText,
+  extractCanvasShortcodes,
+} from "./canvas-render.ts";
+
+describe("extractCanvasFromText", () => {
+  it("extracts safe MCP App preview metadata from tool details", () => {
+    expect(
+      extractCanvasFromDetails({
+        mcpAppPreview: {
+          kind: "canvas",
+          view: { id: "cv_app" },
+          presentation: { target: "assistant_message", sandbox: "scripts" },
+          mcpApp: { viewId: "cv_app" },
+        },
+      }),
+    ).toMatchObject({ viewId: "cv_app", mcpApp: { viewId: "cv_app" } });
+  });
+
+  it("keeps MCP App previews opaque while preserving model-visible results", () => {
+    const preview = extractCanvasFromText(
+      JSON.stringify({
+        kind: "canvas",
+        view: { id: "cv_app" },
+        presentation: { target: "assistant_message", sandbox: "scripts" },
+        mcpApp: { viewId: "cv_app" },
+        result: [{ type: "text", text: "model-visible result" }],
+      }),
+    );
+
+    expect(preview).toMatchObject({
+      viewId: "cv_app",
+      sandbox: "scripts",
+      mcpApp: { viewId: "cv_app" },
+    });
+  });
+});
 
 describe("extractCanvasShortcodes", () => {
   it("does not let a self-closing embed start a greedy block match", () => {

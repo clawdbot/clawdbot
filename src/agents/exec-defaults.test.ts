@@ -2,11 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import * as execApprovals from "../infra/exec-approvals.js";
-import {
-  canExecRequestNode,
-  resolveExecDefaults,
-  resolveNodeExecEligibility,
-} from "./exec-defaults.js";
+import { resolveExecDefaults, resolveNodeExecEligibility } from "./exec-defaults.js";
 
 describe("resolveExecDefaults", () => {
   beforeEach(() => {
@@ -296,21 +292,6 @@ describe("resolveExecDefaults", () => {
       security: "allowlist",
       ask: "off",
     });
-  });
-
-  it("blocks node advertising in helper calls when sandbox is available", () => {
-    expect(
-      canExecRequestNode({
-        cfg: {
-          tools: {
-            exec: {
-              host: "auto",
-            },
-          },
-        },
-        sandboxAvailable: true,
-      }),
-    ).toBe(false);
   });
 
   it("blocks node skill eligibility for deny policy and preserves node bindings", () => {
