@@ -14,13 +14,15 @@ import {
   shouldResolveConfiguredLocalOriginManagedProxyBypass,
   type ConfiguredLocalOriginManagedProxyBypass,
 } from "./configured-local-origin-bypass.js";
+import {
+  createLocalOneHopFetchDispatcher,
+  type FetchLike,
+  type OneHopFetchDispatcher,
+  type OneHopFetchRequest,
+} from "./one-hop-fetch-dispatcher.js";
 import { shouldUseEnvHttpProxyForUrl } from "./proxy-env.js";
 import { retainSafeHeadersForCrossOriginRedirect as retainSafeRedirectHeaders } from "./redirect-headers.js";
-import {
-  fetchWithRuntimeDispatcher,
-  isMockedFetch,
-  type DispatcherAwareRequestInit,
-} from "./runtime-fetch.js";
+import { fetchWithRuntimeDispatcher, isMockedFetch } from "./runtime-fetch.js";
 import {
   assertHostnameAllowedWithPolicy,
   closeDispatcher,
@@ -51,8 +53,6 @@ function resolveDispatcherTimeoutMs(fromParams: number | undefined): number | un
   }
   return undefined;
 }
-
-type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 export const GUARDED_FETCH_MODE = {
   STRICT: "strict",
@@ -620,7 +620,7 @@ async function fetchWithSsrFGuardInternal(
         dispatcher = createPinnedDispatcher(pinned, dispatcherPolicy, policyForUrl, timeoutMs);
       }
 
-      const init: DispatcherAwareRequestInit = {
+      const init: OneHopFetchRequest["init"] = {
         ...(currentInit ? { ...currentInit } : {}),
         redirect: "manual",
         ...(dispatcher ? { dispatcher } : {}),
@@ -639,9 +639,13 @@ async function fetchWithSsrFGuardInternal(
       // because the default global fetch path will not honor per-request
       // dispatchers.
       const shouldUseRuntimeFetch = Boolean(dispatcher) && !supportsDispatcherInit;
-      const response = shouldUseRuntimeFetch
-        ? await fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
-        : await defaultFetch(parsedUrl.toString(), init);
+      const oneHopDispatcher: OneHopFetchDispatcher = createLocalOneHopFetchDispatcher(
+        shouldUseRuntimeFetch ? fetchWithRuntimeDispatcher : defaultFetch,
+      );
+      const response = await oneHopDispatcher.dispatch({
+        url: parsedUrl.toString(),
+        init,
+      });
       const capturedByGlobalFetchPatch =
         !shouldUseRuntimeFetch &&
         isAmbientGlobalFetch({
