@@ -201,6 +201,11 @@ import {
   setContinuationTracer,
 } from "../../infra/continuation-tracer.js";
 import {
+  isGatewaySubordinateWorkAdmissionClosed,
+  resetGatewayWorkAdmission,
+  runWithGatewayRootWorkAdmission,
+} from "../../process/gateway-work-admission.js";
+import {
   dispatchToolDelegates,
   recoverAndReleaseStagedPostCompactionDelegates,
   recoverPendingContinuationDelegates,
@@ -303,6 +308,7 @@ beforeEach(() => {
   finishFlowShouldPersistFail = false;
   updateSessionStoreForRecoveryRequiredWriteCalls = 0;
   updateSessionStoreForRecoveryThrowOnRequiredWriteCall = undefined;
+  resetGatewayWorkAdmission();
   vi.useFakeTimers();
 });
 
@@ -322,6 +328,7 @@ afterEach(() => {
   finishFlowShouldPersistFail = false;
   updateSessionStoreForRecoveryRequiredWriteCalls = 0;
   updateSessionStoreForRecoveryThrowOnRequiredWriteCall = undefined;
+  resetGatewayWorkAdmission();
   vi.useRealTimers();
 });
 
@@ -518,6 +525,34 @@ describe("trusted delegate task echoes", () => {
 });
 
 describe("hedge timer ref/handle cleanup", () => {
+  it("enters fresh gateway admission when a delayed delegate outlives its request", async () => {
+    const sessionKey = "session-hedge-released-parent";
+    const observedAdmissionClosed: boolean[] = [];
+    spawnSubagentDirectMock.mockImplementation(async () => {
+      observedAdmissionClosed.push(isGatewaySubordinateWorkAdmissionClosed());
+      return { status: "accepted" };
+    });
+
+    await runWithGatewayRootWorkAdmission(async () => {
+      enqueuePendingDelegate(sessionKey, { task: "deferred work", delayMs: 30_000 });
+      await dispatchToolDelegates({
+        sessionKey,
+        chainState: {
+          currentChainCount: 0,
+          chainStartedAt: Date.now(),
+          accumulatedChainTokens: 0,
+        },
+        ctx: { sessionKey },
+        maxChainLength: 10,
+      });
+    });
+
+    await vi.advanceTimersByTimeAsync(30_100);
+    await vi.runAllTimersAsync();
+
+    expect(observedAdmissionClosed).toEqual([false]);
+  });
+
   it("releases the timer ref + handle after a natural hedge fire", async () => {
     const sessionKey = "session-hedge-natural";
 

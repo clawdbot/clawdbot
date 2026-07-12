@@ -19,6 +19,8 @@ let activeQueueHandleAvailable = true;
 const mockSessionStore: Record<string, unknown> = {};
 const loadSessionEntryMock = vi.fn();
 let mockStorePath = "test-store";
+let observeSubordinateAdmission = false;
+const observedSubordinateAdmissionClosed: boolean[] = [];
 // #1144 test state: toggle continuation enablement (disabled-gate), capture the
 // active diagnostic traceparent at reply time (traceparent re-entry), and force
 // a revision race after the turn ran (failed durable delivered-mark).
@@ -224,6 +226,11 @@ vi.mock("../../process/command-queue.js", () => ({
 
 vi.mock("../reply/get-reply.js", () => ({
   getReplyFromConfig: vi.fn(async (context: unknown, options: unknown, cfg: unknown) => {
+    if (observeSubordinateAdmission) {
+      const { isGatewaySubordinateWorkAdmissionClosed } =
+        await import("../../process/gateway-work-admission.js");
+      observedSubordinateAdmissionClosed.push(isGatewaySubordinateWorkAdmissionClosed());
+    }
     // Capture the active diagnostic traceparent so tests can assert the
     // continuation turn re-enters the persisted work.traceparent (#1144).
     const { formatActiveDiagnosticTraceparent } =
@@ -415,6 +422,10 @@ import {
   deleteSubagentSessionForCleanup,
   resetSubagentSessionCleanupForTests,
 } from "../../agents/subagent-session-cleanup.js";
+import {
+  resetGatewayWorkAdmission,
+  runWithGatewayRootWorkAdmission,
+} from "../../process/gateway-work-admission.js";
 import { getReplyFromConfig } from "../reply/get-reply.js";
 import {
   DEFAULT_NO_OP_REARM_THRESHOLD,
@@ -494,6 +505,8 @@ describe("durable continuation_work dispatch", () => {
     replyPayloadOverride = undefined;
     activeQueueMode = "delivered";
     activeQueueHandleAvailable = true;
+    observeSubordinateAdmission = false;
+    observedSubordinateAdmissionClosed.length = 0;
     for (const key of Object.keys(mockSessionStore)) {
       delete mockSessionStore[key];
     }
@@ -512,6 +525,7 @@ describe("durable continuation_work dispatch", () => {
     bumpWorkRevisionOnReply = false;
     resetContinuationWorkDispatchForTests();
     resetSubagentSessionCleanupForTests();
+    resetGatewayWorkAdmission();
   });
 
   afterEach(() => {
@@ -520,6 +534,7 @@ describe("durable continuation_work dispatch", () => {
     laneIdleWaiters.clear();
     resetContinuationWorkDispatchForTests();
     resetSubagentSessionCleanupForTests();
+    resetGatewayWorkAdmission();
     commandLaneIdleError = undefined;
     vi.useRealTimers();
   });
@@ -1200,6 +1215,63 @@ describe("durable continuation_work dispatch", () => {
         }),
       }),
     ]);
+  });
+
+  it("enters fresh gateway admission when delayed work fires after its request ends", async () => {
+    const sessionKey = "agent:main:released-parent-timer";
+    mockSessionStore[sessionKey] = { sessionKey };
+    observeSubordinateAdmission = true;
+    const immediateConfig = {
+      ...config,
+      defaultDelayMs: 0,
+      minDelayMs: 0,
+    } satisfies ContinuationRuntimeConfig;
+
+    await runWithGatewayRootWorkAdmission(async () => {
+      await scheduleContinuationWork({
+        sessionKey,
+        chainState: {
+          currentChainCount: 0,
+          chainStartedAt: Date.now(),
+          accumulatedChainTokens: 0,
+        },
+        request: { delaySeconds: 0, reason: "fire after request release" },
+        config: immediateConfig,
+      });
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    await flushTimers();
+
+    expect(observedSubordinateAdmissionClosed).toEqual([false]);
+    expect(turnGrants).toHaveLength(1);
+  });
+
+  it("enters fresh gateway admission when an idle retry outlives its request", async () => {
+    const sessionKey = "agent:main:released-parent-idle-retry";
+    mockSessionStore[sessionKey] = { sessionKey };
+    activeSessions.add(sessionKey);
+    observeSubordinateAdmission = true;
+    enqueuePendingWork({
+      sessionKey,
+      hop: 2,
+      delayMs: 0,
+      electedAt: Date.now(),
+      dueAt: Date.now(),
+      maxChainLength: 8,
+      reason: "idle retry after request release",
+    });
+
+    await runWithGatewayRootWorkAdmission(async () => {
+      await dispatchPendingContinuationWork({ sessionKey });
+      await waitForMockWaiter(replyIdleWaiters, sessionKey);
+    });
+
+    resolveReplyRunIdle(sessionKey);
+    await waitForTurnGrantCount(1);
+
+    expect(observedSubordinateAdmissionClosed).toEqual([false]);
+    expect(turnGrants).toHaveLength(1);
   });
 
   it("retries main-session work from the command-lane idle event instead of polling queue busy", async () => {

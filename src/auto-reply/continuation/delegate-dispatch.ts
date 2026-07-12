@@ -36,6 +36,7 @@ import {
 } from "../../infra/session-delivery-queue-storage.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { runWithGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
 import { sanitizeInboundSystemTags } from "../../security/system-tags.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { resolveContinuationRuntimeConfig } from "./config.js";
@@ -172,73 +173,70 @@ function armHedgeTimer(
     // alive past its useful lifetime.
     unregisterContinuationTimerHandle(sessionKey, handle);
     log.info(`[continuation:delegate-hedge-fired] session=${sessionKey}`);
-    // Re-load chain state at fire time when the caller supplies a
-    // fresh-loader. The originally-captured `params.chainState`
-    // is a snapshot from when the hedge was armed and may understate
-    // currentChainCount if other dispatches advanced it in between. The
-    // hedge must enforce the chain-budget against the latest persisted
-    // state, not the snapshot.
-    const refreshedChainState = params.loadFreshChainState
-      ? params.loadFreshChainState()
-      : params.chainState;
-    void dispatchToolDelegates({
-      sessionKey,
-      chainState: refreshedChainState,
-      ctx: params.ctx,
-      maxChainLength: params.maxChainLength,
-      ...(params.config ? { config: params.config } : {}),
-      loadFreshChainState: params.loadFreshChainState,
-      // Carry the recovery fold flag across the hedge: a recovered delayed
-      // delegate annotated with `chainTokensFold` after a child chain-cost
-      // persist failure must still be checked against the folded (not stale)
-      // basis when its delay elapses and the hedge re-dispatches it (#1144).
-      ...(params.applyDelegateChainTokensFold ? { applyDelegateChainTokensFold: true } : {}),
-      persistChainState: params.persistChainState,
-      ...(params.persistBeforeTerminalCommit || params.persistChainState
-        ? { persistBeforeTerminalCommit: true }
-        : {}),
-      ...(params.recoverRunningDelegates ? { recoverRunningDelegates: true } : {}),
-      ...(params.queuedCreatedAtOrBefore !== undefined
-        ? { queuedCreatedAtOrBefore: params.queuedCreatedAtOrBefore }
-        : {}),
-      ...(params.includeRunningUpdatedAtOrBefore !== undefined
-        ? { includeRunningUpdatedAtOrBefore: params.includeRunningUpdatedAtOrBefore }
-        : {}),
-      // Inherited silent/wake policy must survive the hedge: a delayed delegate
-      // armed by a silent/wake parent chain must still spawn internal when the
-      // hedge finally dispatches it, not announce to the channel (#1158).
-      ...(params.inheritedSilent ? { inheritedSilent: true } : {}),
-      ...(params.inheritedWake ? { inheritedWake: true } : {}),
-    })
-      .then(async (result) => {
-        if (params.persistChainState && (result.dispatched > 0 || result.rejected > 0)) {
-          if (!result.chainStatePersistedBeforeTerminalCommit) {
-            await params.persistChainState(result.chainState);
-          }
-          if (result.appliedChainTokensFold && result.appliedChainTokensFold > 0) {
-            clearRecoverableDelegatesChainTokensFold(sessionKey);
-          }
-        }
-      })
-      .catch((err: unknown) => {
-        const errorMessage = formatErrorMessage(err);
-        log.error(
-          `[continuation:delegate-hedge-error] error=${errorMessage} session=${sessionKey}`,
-        );
-        surfaceHedgeDispatchFailure(sessionKey, errorMessage);
-        try {
-          armHedgeTimer(sessionKey, Date.now() + HEDGE_DISPATCH_FAILURE_RETRY_MS, {
-            ...params,
-            ...(params.persistChainState ? { persistBeforeTerminalCommit: true } : {}),
-            recoverRunningDelegates: true,
-            includeRunningUpdatedAtOrBefore: Date.now(),
-          });
-        } catch (rearmErr) {
-          log.error(
-            `[continuation:delegate-hedge-rearm-error] error=${formatErrorMessage(rearmErr)} session=${sessionKey}`,
-          );
-        }
+    void runWithGatewayIndependentRootWorkAdmission(async () => {
+      // Re-load chain state at fire time when the caller supplies a
+      // fresh-loader. The originally-captured `params.chainState`
+      // is a snapshot from when the hedge was armed and may understate
+      // currentChainCount if other dispatches advanced it in between. The
+      // hedge must enforce the chain-budget against the latest persisted
+      // state, not the snapshot.
+      const refreshedChainState = params.loadFreshChainState
+        ? params.loadFreshChainState()
+        : params.chainState;
+      const result = await dispatchToolDelegates({
+        sessionKey,
+        chainState: refreshedChainState,
+        ctx: params.ctx,
+        maxChainLength: params.maxChainLength,
+        ...(params.config ? { config: params.config } : {}),
+        loadFreshChainState: params.loadFreshChainState,
+        // Carry the recovery fold flag across the hedge: a recovered delayed
+        // delegate annotated with `chainTokensFold` after a child chain-cost
+        // persist failure must still be checked against the folded (not stale)
+        // basis when its delay elapses and the hedge re-dispatches it (#1144).
+        ...(params.applyDelegateChainTokensFold ? { applyDelegateChainTokensFold: true } : {}),
+        persistChainState: params.persistChainState,
+        ...(params.persistBeforeTerminalCommit || params.persistChainState
+          ? { persistBeforeTerminalCommit: true }
+          : {}),
+        ...(params.recoverRunningDelegates ? { recoverRunningDelegates: true } : {}),
+        ...(params.queuedCreatedAtOrBefore !== undefined
+          ? { queuedCreatedAtOrBefore: params.queuedCreatedAtOrBefore }
+          : {}),
+        ...(params.includeRunningUpdatedAtOrBefore !== undefined
+          ? { includeRunningUpdatedAtOrBefore: params.includeRunningUpdatedAtOrBefore }
+          : {}),
+        // Inherited silent/wake policy must survive the hedge: a delayed delegate
+        // armed by a silent/wake parent chain must still spawn internal when the
+        // hedge finally dispatches it, not announce to the channel (#1158).
+        ...(params.inheritedSilent ? { inheritedSilent: true } : {}),
+        ...(params.inheritedWake ? { inheritedWake: true } : {}),
       });
+      if (params.persistChainState && (result.dispatched > 0 || result.rejected > 0)) {
+        if (!result.chainStatePersistedBeforeTerminalCommit) {
+          await params.persistChainState(result.chainState);
+        }
+        if (result.appliedChainTokensFold && result.appliedChainTokensFold > 0) {
+          clearRecoverableDelegatesChainTokensFold(sessionKey);
+        }
+      }
+    }).catch((err: unknown) => {
+      const errorMessage = formatErrorMessage(err);
+      log.error(`[continuation:delegate-hedge-error] error=${errorMessage} session=${sessionKey}`);
+      surfaceHedgeDispatchFailure(sessionKey, errorMessage);
+      try {
+        armHedgeTimer(sessionKey, Date.now() + HEDGE_DISPATCH_FAILURE_RETRY_MS, {
+          ...params,
+          ...(params.persistChainState ? { persistBeforeTerminalCommit: true } : {}),
+          recoverRunningDelegates: true,
+          includeRunningUpdatedAtOrBefore: Date.now(),
+        });
+      } catch (rearmErr) {
+        log.error(
+          `[continuation:delegate-hedge-rearm-error] error=${formatErrorMessage(rearmErr)} session=${sessionKey}`,
+        );
+      }
+    });
   }, fireIn);
   registerContinuationTimerHandle(sessionKey, handle);
   handle.unref();

@@ -9,6 +9,7 @@ import { runWithDiagnosticTraceparent } from "../../infra/diagnostic-trace-conte
 import { isRetryableHeartbeatBusySkipReason } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { runWithGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
 import { evaluateNoOpRearmAdmission, type NoOpRearmDecision } from "../reply/no-op-rearm-guard.js";
 import { clampDelayMs, resolveContinuationRuntimeConfig } from "./config.js";
 import { checkContinuationBudget } from "./scheduler.js";
@@ -78,6 +79,24 @@ function formatErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+type DispatchPendingContinuationWorkParams = {
+  sessionKey: string;
+  recoverRunning?: boolean;
+  includeRunningUpdatedAtOrBefore?: number;
+  includeIdleRetry?: boolean;
+  includeRunningIdleRetry?: boolean;
+};
+
+// Timer and idle-wait callbacks inherit the request context that armed them.
+// Re-enter at fire time so a released parent root cannot reject the new turn.
+function dispatchPendingContinuationWorkFromDetachedCallback(
+  params: DispatchPendingContinuationWorkParams,
+): Promise<{ dispatched: number; failed: number; reaped: number }> {
+  return runWithGatewayIndependentRootWorkAdmission(
+    async () => await dispatchPendingContinuationWork(params),
+  );
+}
+
 function clearWorkTimer(sessionKey: string): void {
   const existing = workTimers.get(sessionKey);
   if (!existing) {
@@ -116,7 +135,7 @@ function armWorkTimer(
   const handle = setTimeout(() => {
     workTimers.delete(sessionKey);
     log.info(`[continuation:work-hedge-fired] session=${sessionKey}`);
-    void dispatchPendingContinuationWork({
+    void dispatchPendingContinuationWorkFromDetachedCallback({
       sessionKey,
       recoverRunning: true,
       includeRunningUpdatedAtOrBefore: Date.now() - RUNNING_WORK_RECOVERY_STALE_MS,
@@ -147,7 +166,7 @@ function armIdleRetryFailureTimer(sessionKey: string, fireAt: number): void {
   const handle = setTimeout(() => {
     idleRetryFailureTimers.delete(sessionKey);
     log.info(`[continuation:work-idle-retry-recovery-fired] session=${sessionKey}`);
-    void dispatchPendingContinuationWork({
+    void dispatchPendingContinuationWorkFromDetachedCallback({
       sessionKey,
       includeIdleRetry: true,
       recoverRunning: true,
@@ -387,7 +406,10 @@ function registerIdleRetry(sessionKey: string, trigger: ContinuationIdleRetryTri
       `[continuation:work-idle-retry-fired] trigger=${idleRetryTriggerLabel(trigger)} waitMs=${Date.now() - armedAt} session=${sessionKey}`,
     );
     clearIdleRetryFailureTimer(sessionKey);
-    await dispatchPendingContinuationWork({ sessionKey, includeIdleRetry: true });
+    await dispatchPendingContinuationWorkFromDetachedCallback({
+      sessionKey,
+      includeIdleRetry: true,
+    });
   })().catch((err: unknown) => {
     idleRetryControllers.delete(key);
     if (controller.signal.aborted) {
@@ -835,13 +857,9 @@ async function foldMaturedWorkIntoActiveTurn(
   return folded;
 }
 
-export async function dispatchPendingContinuationWork(params: {
-  sessionKey: string;
-  recoverRunning?: boolean;
-  includeRunningUpdatedAtOrBefore?: number;
-  includeIdleRetry?: boolean;
-  includeRunningIdleRetry?: boolean;
-}): Promise<{ dispatched: number; failed: number; reaped: number }> {
+export async function dispatchPendingContinuationWork(
+  params: DispatchPendingContinuationWorkParams,
+): Promise<{ dispatched: number; failed: number; reaped: number }> {
   const recoverRunning = params.recoverRunning === true;
   // #1144: honor a hot-disabled continuation feature on the LIVE callback path.
   // Startup recovery (recoverPendingContinuationWork) already skips disabled
