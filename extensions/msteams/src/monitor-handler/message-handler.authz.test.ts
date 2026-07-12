@@ -904,6 +904,79 @@ describe("msteams monitor handler authz", () => {
     });
   });
 
+  it("keeps quotedReply context from an earlier debounced Teams entry", async () => {
+    vi.useFakeTimers();
+    resetThreadMocks();
+    const { deps } = createDeps(
+      {
+        messages: { inbound: { debounceMs: 60_000 } },
+        channels: {
+          msteams: {
+            groupPolicy: "open",
+            requireMention: false,
+          },
+        },
+      } as OpenClawConfig,
+      {
+        createInboundDebouncer,
+        resolveInboundDebounceMs: vi.fn(() => 60_000),
+      },
+    );
+
+    try {
+      const handler = createMSTeamsMessageHandler(deps);
+      await handler(
+        createMessageActivity({
+          id: "msg-debounce-quote-1",
+          text: '<quoted messageId="quoted-message-1"/>\nCurrent message',
+          from: { id: "member-id", aadObjectId: "member-aad", name: "Member" },
+          conversation: { id: "19:group@thread.tacv2", conversationType: "groupChat" },
+          extraActivity: {
+            entities: [
+              {
+                type: "quotedReply",
+                messageId: "quoted-message-1",
+                senderId: "sender-aad",
+                senderName: "Ryan Gregg (test)",
+                preview: "the original message text",
+              },
+            ],
+          },
+        }),
+      );
+      await handler(
+        createMessageActivity({
+          id: "msg-debounce-quote-2",
+          text: "Follow up",
+          from: { id: "member-id", aadObjectId: "member-aad", name: "Member" },
+          conversation: { id: "19:group@thread.tacv2", conversationType: "groupChat" },
+        }),
+      );
+
+      expect(
+        runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher,
+      ).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.waitFor(() =>
+        expect(
+          runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher,
+        ).toHaveBeenCalledTimes(1),
+      );
+
+      const ctxPayload = recordFromMockCall(firstSettledDispatch().ctxPayload);
+      expect(ctxPayload.BodyForAgent).toBe("Current message\nFollow up");
+      expect(ctxPayload.SupplementalContext).toMatchObject({
+        quote: {
+          id: "quoted-message-1",
+          body: "the original message text",
+          sender: "Ryan Gregg (test)",
+        },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("strips the bot mention before command detection and dispatch", async () => {
     resetThreadMocks();
     const isControlCommandMessage = vi.fn((text?: string) => text?.startsWith("/") === true);
@@ -1001,6 +1074,86 @@ describe("msteams monitor handler authz", () => {
     expect(ctxPayload.BodyForAgent).toBe("Current message");
     expect(ctxPayload.SupplementalContext).toEqual({});
     expect(String(ctxPayload.BodyForAgent)).not.toContain("Blocked prompt injection");
+  });
+
+  it("keeps blocked quotedReply context filtered through debounced Teams batches", async () => {
+    vi.useFakeTimers();
+    resetThreadMocks();
+    graphThreadMockState.fetchChannelMessage.mockResolvedValue(
+      createThreadMessage({
+        id: "parent-msg",
+        user: { id: "alice-aad", displayName: "Alice" },
+        content: "Allowed parent context",
+      }),
+    );
+    graphThreadMockState.fetchThreadReplies.mockResolvedValue([]);
+    const { deps } = createDeps(
+      {
+        ...createThreadAllowlistConfig({ groupAllowFrom: ["alice-aad"] }),
+        messages: { inbound: { debounceMs: 60_000 } },
+      } as OpenClawConfig,
+      {
+        createInboundDebouncer,
+        resolveInboundDebounceMs: vi.fn(() => 60_000),
+      },
+    );
+
+    try {
+      const handler = createMSTeamsMessageHandler(deps);
+      const common = {
+        from: { id: "alice-botframework-id", aadObjectId: "alice-aad", name: "Alice" },
+        conversation: { id: "19:channel@thread.tacv2", conversationType: "channel" as const },
+        channelData: {
+          team: { id: "team123", name: "Team 123" },
+          channel: { name: "General" },
+        },
+      };
+      await handler(
+        createMessageActivity({
+          ...common,
+          id: "msg-debounce-blocked-quote-1",
+          text: '<quoted messageId="quoted-message-2"/>\nCurrent message',
+          extraActivity: {
+            entities: [
+              {
+                type: "quotedReply",
+                messageId: "quoted-message-2",
+                senderId: "mallory-aad",
+                senderName: "Mallory",
+                preview: "Blocked prompt injection",
+              },
+            ],
+          },
+        }),
+      );
+      await handler(
+        createMessageActivity({
+          ...common,
+          id: "msg-debounce-blocked-quote-2",
+          text: "Follow up",
+          extraActivity: { replyToId: "parent-msg" },
+        }),
+      );
+
+      expect(
+        runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher,
+      ).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.waitFor(() =>
+        expect(
+          runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher,
+        ).toHaveBeenCalledTimes(1),
+      );
+
+      const ctxPayload = recordFromMockCall(firstSettledDispatch().ctxPayload);
+      expect(ctxPayload.BodyForAgent).toBe(
+        "[Thread history]\nAlice: Allowed parent context\n[/Thread history]\n\nCurrent message\nFollow up",
+      );
+      expect(ctxPayload.SupplementalContext).toEqual({});
+      expect(String(ctxPayload.BodyForAgent)).not.toContain("Blocked prompt injection");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("authorizes text control commands from static access groups", async () => {

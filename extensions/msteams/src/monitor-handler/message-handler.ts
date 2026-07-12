@@ -219,6 +219,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     rawText: string;
     text: string;
     attachments: MSTeamsAttachmentLike[];
+    quoteInfo?: ReturnType<typeof extractMSTeamsQuoteInfo>;
+    quoteContext?: MSTeamsTurnContext;
+    quoteReplyToId?: string;
     wasMentioned: boolean;
     implicitMentionKinds: Array<"reply_to_bot">;
     turnAdoptionLifecycle?: MSTeamsIngressLifecycle;
@@ -238,7 +241,8 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const historyBody = [text, formatMediaPlaceholderText(advertisedMedia)]
       .filter(Boolean)
       .join("\n");
-    const quoteInfo = extractMSTeamsQuoteInfo(attachments, activity.entities);
+    const quoteInfo = params.quoteInfo;
+    const quoteContext = params.quoteContext;
     let quoteSenderId: string | undefined;
     let quoteSenderName: string | undefined;
     const from = activity.from;
@@ -773,11 +777,14 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           markParentContextInjected(route.sessionKey, threadParentId);
         }
         const allMessages = parentMsg ? [parentMsg, ...replies] : replies;
-        quoteSenderId = parentMsg?.from?.user?.id ?? parentMsg?.from?.application?.id ?? undefined;
-        quoteSenderName =
-          parentMsg?.from?.user?.displayName ??
-          parentMsg?.from?.application?.displayName ??
-          quoteInfo?.sender;
+        if (quoteContext === context) {
+          quoteSenderId =
+            parentMsg?.from?.user?.id ?? parentMsg?.from?.application?.id ?? undefined;
+          quoteSenderName =
+            parentMsg?.from?.user?.displayName ??
+            parentMsg?.from?.application?.displayName ??
+            quoteInfo?.sender;
+        }
         const { items: threadMessages } = filterSupplementalContextItems({
           items: allMessages,
           mode: contextVisibilityMode,
@@ -865,7 +872,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       supplemental: {
         quote: quoteInfo
           ? {
-              id: quoteInfo.id ?? activity.replyToId ?? undefined,
+              id: quoteInfo.id ?? params.quoteReplyToId ?? activity.replyToId ?? undefined,
               body: quoteBodyFull ?? quoteInfo.body,
               sender: quoteInfo.sender,
               senderAllowed: quoteSenderAllowed,
@@ -1084,11 +1091,15 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
               .join("\n");
             const wasMentioned = entries.some((entry) => entry.wasMentioned);
             const implicitMentionKinds = entries.flatMap((entry) => entry.implicitMentionKinds);
+            const quoteEntry = entries.findLast((entry) => entry.quoteInfo);
             await handleTeamsMessageNow({
               context: last.context,
               rawText: combinedRawText,
               text: combinedText,
               attachments: [],
+              quoteInfo: quoteEntry?.quoteInfo,
+              quoteContext: quoteEntry?.quoteContext,
+              quoteReplyToId: quoteEntry?.quoteReplyToId,
               wasMentioned,
               implicitMentionKinds,
               ...(lifecycle ? { turnAdoptionLifecycle: lifecycle } : {}),
@@ -1125,6 +1136,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       botId: activity.recipient?.id,
       botName: activity.recipient?.name,
     });
+    const quoteInfo = extractMSTeamsQuoteInfo(attachments, activity.entities);
     const wasMentioned = wasMSTeamsBotMentioned(activity);
     const conversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "");
     const replyToId = activity.replyToId ?? undefined;
@@ -1140,6 +1152,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       rawText,
       text,
       attachments,
+      quoteInfo,
+      quoteContext: quoteInfo ? context : undefined,
+      quoteReplyToId: replyToId,
       wasMentioned,
       implicitMentionKinds,
       turnAdoptionLifecycle,
