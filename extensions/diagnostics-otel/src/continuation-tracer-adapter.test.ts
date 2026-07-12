@@ -17,32 +17,36 @@ const startSpanCalls: Array<{
 }> = [];
 const recordedOnSpan: Array<{ method: string; args: unknown[] }> = [];
 
-const recordingSpan = {
-  spanContext() {
-    return {
-      traceId: "cccccccccccccccccccccccccccccccc",
-      spanId: "dddddddddddddddd",
-      traceFlags: 1,
-    };
-  },
-  setAttributes(attrs: unknown) {
-    recordedOnSpan.push({ method: "setAttributes", args: [attrs] });
-  },
-  setStatus(status: unknown) {
-    recordedOnSpan.push({ method: "setStatus", args: [status] });
-  },
-  recordException(err: unknown) {
-    recordedOnSpan.push({ method: "recordException", args: [err] });
-  },
-  end() {
-    recordedOnSpan.push({ method: "end", args: [] });
-  },
-};
-
 const recordingTracer = {
   startSpan(name: string, options: unknown, parentCtx?: unknown) {
     startSpanCalls.push({ name, options, parentCtx });
-    return recordingSpan;
+    const parentSpanContext = (parentCtx as { sc?: { traceId?: string } } | undefined)?.sc;
+    const callIndex = startSpanCalls.length - 1;
+    const spanContext = {
+      traceId: parentSpanContext?.traceId ?? "cccccccccccccccccccccccccccccccc",
+      spanId:
+        callIndex === 0
+          ? "dddddddddddddddd"
+          : callIndex === 1
+            ? "eeeeeeeeeeeeeeee"
+            : callIndex.toString(16).padStart(16, "0"),
+      traceFlags: 1,
+    };
+    return {
+      spanContext: () => spanContext,
+      setAttributes(attrs: unknown) {
+        recordedOnSpan.push({ method: "setAttributes", args: [attrs] });
+      },
+      setStatus(status: unknown) {
+        recordedOnSpan.push({ method: "setStatus", args: [status] });
+      },
+      recordException(err: unknown) {
+        recordedOnSpan.push({ method: "recordException", args: [err] });
+      },
+      end() {
+        recordedOnSpan.push({ method: "end", args: [] });
+      },
+    };
   },
 };
 
@@ -81,6 +85,24 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
 });
+
+function parseAndAssertValidTraceparent(traceparent: string | null | undefined): {
+  traceId: string;
+  spanId: string;
+} {
+  expect(traceparent).not.toBeNull();
+  expect(traceparent).not.toBeUndefined();
+  expect(traceparent).not.toBe("");
+  const match = /^00-([0-9a-f]{32})-([0-9a-f]{16})-[0-9a-f]{2}$/.exec(traceparent ?? "");
+  expect(match).not.toBeNull();
+  const traceId = match?.[1] ?? "";
+  const spanId = match?.[2] ?? "";
+  expect(traceId).not.toBe("");
+  expect(spanId).not.toBe("");
+  expect(traceId).not.toBe("00000000000000000000000000000000");
+  expect(spanId).not.toBe("0000000000000000");
+  return { traceId, spanId };
+}
 
 describe("continuation-tracer adapter :: tracer acquisition", () => {
   it("uses the dedicated 'openclaw.continuation' tracer scope", () => {
@@ -194,6 +216,25 @@ describe("continuation-tracer adapter :: startSpan with traceparent (parent stit
     adapter.startSpan("continuation.work", { traceparent: "not-a-valid-traceparent" });
     expect(startSpanCalls).toHaveLength(1);
     expect(startSpanCalls[0]?.parentCtx).toBeUndefined();
+  });
+
+  it.each([
+    ["continuation.delegate.fire", "continuation.delegate.dispatch"],
+    ["continuation.work.fire", "continuation.work"],
+  ])("keeps %s and %s on one valid trace with distinct span IDs", (fireName, pairedName) => {
+    const adapter = createContinuationOtelTracerAdapter();
+    const traceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+
+    const fire = parseAndAssertValidTraceparent(
+      adapter.startSpan(fireName, { traceparent }).traceparent?.(),
+    );
+    const paired = parseAndAssertValidTraceparent(
+      adapter.startSpan(pairedName, { traceparent }).traceparent?.(),
+    );
+
+    expect(fire.traceId).toBe("0af7651916cd43dd8448eb211c80319c");
+    expect(paired.traceId).toBe(fire.traceId);
+    expect(paired.spanId).not.toBe(fire.spanId);
   });
 });
 

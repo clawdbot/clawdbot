@@ -554,6 +554,44 @@ describe("hedge timer ref/handle cleanup", () => {
     expect(observedAdmissionClosed).toEqual([false]);
   });
 
+  it("forwards the resolved persisted traceparent to delayed delegate fire and dispatch spans", async () => {
+    const sessionKey = "session-hedge-traceparent";
+    const persistedTraceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+    const exportedTraceparent = "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01";
+    const started: Array<{ name: string; traceparent?: string }> = [];
+    setContinuationTracer({
+      formatTraceparent: () => exportedTraceparent,
+      startSpan: (name, options) => {
+        started.push({
+          name,
+          ...(options?.traceparent ? { traceparent: options.traceparent } : {}),
+        });
+        return noopTracer.startSpan(name, options);
+      },
+    });
+    enqueuePendingDelegate(sessionKey, {
+      task: "deferred traced work",
+      delayMs: 30_000,
+      traceparent: persistedTraceparent,
+    });
+
+    await dispatchToolDelegates({
+      sessionKey,
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+    });
+    await vi.advanceTimersByTimeAsync(30_100);
+    await vi.runAllTimersAsync();
+
+    expect(started).toEqual(
+      expect.arrayContaining([
+        { name: "continuation.delegate.fire", traceparent: exportedTraceparent },
+        { name: "continuation.delegate.dispatch", traceparent: exportedTraceparent },
+      ]),
+    );
+  });
+
   it("releases the timer ref + handle after a natural hedge fire", async () => {
     const sessionKey = "session-hedge-natural";
 

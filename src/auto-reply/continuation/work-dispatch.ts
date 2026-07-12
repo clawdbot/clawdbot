@@ -4,6 +4,7 @@ import type { SubagentRunLiveness } from "../../agents/subagent-run-liveness.js"
 import {
   emitContinuationWorkFireSpan,
   emitContinuationWorkSpan,
+  resolveContinuationTraceparent,
 } from "../../infra/continuation-tracer.js";
 import { runWithDiagnosticTraceparent } from "../../infra/diagnostic-trace-context.js";
 import { isRetryableHeartbeatBusySkipReason } from "../../infra/heartbeat-wake.js";
@@ -961,12 +962,14 @@ export async function dispatchPendingContinuationWork(
     try {
       const fireDeferredMs = Date.now() - work.electedAt;
       const fireChainId = work.chainId ?? work.flowId ?? work.sessionKey;
+      const outboundTraceparent = resolveContinuationTraceparent(work.traceparent);
       emitContinuationWorkFireSpan({
         chainId: fireChainId,
         chainStepRemainingAtDispatch: Math.max(0, work.maxChainLength - work.hop),
         delayMs: work.delayMs,
         fireDeferredMs,
         reason: work.reason,
+        traceparent: outboundTraceparent,
         log: (message) => log.info(message),
       });
       log.info(

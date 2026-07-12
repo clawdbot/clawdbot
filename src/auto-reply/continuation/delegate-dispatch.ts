@@ -644,6 +644,7 @@ export async function dispatchToolDelegates(params: {
           delayMs: delegateDelayMs,
           fireDeferredMs: Date.now() - (delegate.firstArmedAt ?? Date.now()),
           reason: delegate.task,
+          traceparent: outboundTraceparent,
           log: (message) => log.info(message),
         });
       }

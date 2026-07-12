@@ -27,6 +27,10 @@ const observedSubordinateAdmissionClosed: boolean[] = [];
 let continuationEnabledForTest = true;
 const capturedReplyTraceparents: Array<string | undefined> = [];
 let bumpWorkRevisionOnReply = false;
+const { emitContinuationWorkFireSpanMock, resolveContinuationTraceparentMock } = vi.hoisted(() => ({
+  emitContinuationWorkFireSpanMock: vi.fn(),
+  resolveContinuationTraceparentMock: vi.fn((traceparent: string | undefined) => traceparent),
+}));
 
 function removeWaiter(
   waiters: Map<string, Array<(idle: boolean) => void>>,
@@ -279,8 +283,9 @@ vi.mock("../../infra/system-events.js", () => ({
 }));
 
 vi.mock("../../infra/continuation-tracer.js", () => ({
-  emitContinuationWorkFireSpan: vi.fn(),
+  emitContinuationWorkFireSpan: emitContinuationWorkFireSpanMock,
   emitContinuationWorkSpan: vi.fn(),
+  resolveContinuationTraceparent: resolveContinuationTraceparentMock,
 }));
 
 vi.mock("./config.js", async (importOriginal) => {
@@ -523,6 +528,10 @@ describe("durable continuation_work dispatch", () => {
     continuationEnabledForTest = true;
     capturedReplyTraceparents.length = 0;
     bumpWorkRevisionOnReply = false;
+    emitContinuationWorkFireSpanMock.mockReset();
+    resolveContinuationTraceparentMock
+      .mockReset()
+      .mockImplementation((traceparent: string | undefined) => traceparent);
     resetContinuationWorkDispatchForTests();
     resetSubagentSessionCleanupForTests();
     resetGatewayWorkAdmission();
@@ -672,6 +681,32 @@ describe("durable continuation_work dispatch", () => {
     const grant = turnGrants[0] as { context: unknown; options: unknown };
     expect(JSON.stringify(grant.context)).not.toContain("0af7651916cd43dd8448eb211c80319c");
     expect(JSON.stringify(grant.options)).not.toContain("0af7651916cd43dd8448eb211c80319c");
+  });
+
+  it("forwards the resolved persisted traceparent to work fire spans", async () => {
+    const sessionKey = "agent:main:work-fire-traceparent";
+    const persistedTraceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+    const exportedTraceparent = "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01";
+    resolveContinuationTraceparentMock.mockReturnValue(exportedTraceparent);
+    mockSessionStore[sessionKey] = { sessionKey };
+    enqueuePendingWork({
+      sessionKey,
+      hop: 1,
+      delayMs: 1_000,
+      electedAt: Date.now(),
+      dueAt: Date.now() + 1_000,
+      maxChainLength: 8,
+      reason: "trace work fire",
+      traceparent: persistedTraceparent,
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await dispatchPendingContinuationWork({ sessionKey });
+
+    expect(resolveContinuationTraceparentMock).toHaveBeenCalledWith(persistedTraceparent);
+    expect(emitContinuationWorkFireSpanMock).toHaveBeenCalledWith(
+      expect.objectContaining({ traceparent: exportedTraceparent }),
+    );
   });
 
   it("does not replay a turn when the durable delivered-mark loses the revision race (#1144)", async () => {

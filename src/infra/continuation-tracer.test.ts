@@ -1076,6 +1076,22 @@ describe("continuation-tracer :: emitContinuationDelegateFireSpan helper", () =>
     expect(span.ended).toBe(true);
   });
 
+  it("forwards an internally resolved traceparent to delegate fire spans", () => {
+    const { tracer, spans } = makeRecordingTracer();
+    setContinuationTracer(tracer);
+    const traceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+    emitContinuationDelegateFireSpan({
+      chainId: "chain-delegate-fire",
+      chainStepRemainingAtDispatch: 4,
+      delegateMode: "normal",
+      delayMs: 1_000,
+      fireDeferredMs: 1_010,
+      traceparent,
+    });
+
+    expect(expectDefined(spans.at(0), "delegate fire span").options?.traceparent).toBe(traceparent);
+  });
+
   it("carries fire.deferred_ms with Math.floor (integer ms, drift formula consumer-ready)", () => {
     const { tracer, spans } = makeRecordingTracer();
     setContinuationTracer(tracer);
@@ -1247,6 +1263,27 @@ describe("continuation-tracer :: emitContinuationDelegateFireSpan helper", () =>
         fireDeferredMs: 0,
       }),
     ).not.toThrow();
+  });
+});
+
+describe("continuation-tracer :: emitContinuationWorkFireSpan helper", () => {
+  it("forwards an internally resolved traceparent to work fire spans", () => {
+    const traceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+    const startSpan = vi.fn(() => noopTracer.startSpan("continuation.work.fire"));
+    setContinuationTracer({ startSpan });
+
+    emitContinuationWorkFireSpan({
+      chainId: "chain-work-fire",
+      chainStepRemainingAtDispatch: 3,
+      delayMs: 2_000,
+      fireDeferredMs: 2_015,
+      traceparent,
+    });
+
+    expect(startSpan).toHaveBeenCalledWith(
+      "continuation.work.fire",
+      expect.objectContaining({ traceparent }),
+    );
   });
 });
 

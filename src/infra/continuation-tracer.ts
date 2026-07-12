@@ -757,6 +757,7 @@ export function emitContinuationDelegateFireSpan(args: {
   delayMs: number;
   fireDeferredMs: number;
   reason?: string | undefined;
+  traceparent?: string | undefined;
   log?: (message: string) => void;
 }): void {
   // Defense-in-depth: invariant says chainId is always defined at
@@ -782,6 +783,7 @@ export function emitContinuationDelegateFireSpan(args: {
     };
     const span = getContinuationTracer().startSpan("continuation.delegate.fire", {
       attributes: attrs,
+      ...(args.traceparent !== undefined ? { traceparent: args.traceparent } : {}),
     });
     span.setStatus("OK");
     span.end();
@@ -826,6 +828,7 @@ export function emitContinuationWorkFireSpan(args: {
   delayMs: number;
   fireDeferredMs: number;
   reason?: string | undefined;
+  traceparent?: string | undefined;
   log?: (message: string) => void;
 }): void {
   // Defense-in-depth: invariant says chainId is always defined at
@@ -849,6 +852,7 @@ export function emitContinuationWorkFireSpan(args: {
     };
     const span = getContinuationTracer().startSpan("continuation.work.fire", {
       attributes: attrs,
+      ...(args.traceparent !== undefined ? { traceparent: args.traceparent } : {}),
     });
     span.setStatus("OK");
     span.end();
