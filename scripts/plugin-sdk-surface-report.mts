@@ -361,7 +361,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: shared root/account DM policy refinement for channel schemas.
       // -1: add one tool policy object and retire two unused deprecated mode exports.
       // -1: one exec policy object replaces two deprecated comparator exports.
-      4445,
+      // +1: onModelDiagnosticEvent (plugin-sdk/diagnostic-runtime).
+      4446,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -459,7 +460,7 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: canonical session-model selection and auxiliary runtime-auth preparation.
       // +1: shared channel-account logout config cleanup.
       // +1: descriptor-based allowFrom authentication classifier for channel security audits.
-      // +1: downstream strength mappers need canonical ordering instead of duplicate rank tables.
+      // +1: downstream strength mappers need canonical ordering instead of duplicate rank targets.
       // +1: focused account media-limit resolver avoids the deprecated barrel on startup.
       // +1: shared bounded HTTP rejection transport replaces plugin-local close policies.
       // +1: prepared model-provider builder preserves the stable builder's return contract.
@@ -491,7 +492,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: shared root/account DM policy refinement for channel schemas.
       // -2: retire the deprecated mode projection callables.
       // -2: exec comparators are members of the shared policy object.
-      2627,
+      // +1: onModelDiagnosticEvent (plugin-sdk/diagnostic-runtime).
+      2628,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
