@@ -1423,7 +1423,7 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(turnStartCall?.[1]).not.toHaveProperty("config");
     expect(relayIdDuringFork).toBeDefined();
     expect(createOpenClawCodingToolsMock).toHaveBeenCalledWith(
-      expect.objectContaining({ runId: "run-side-1" }),
+      expect.objectContaining({ runId: "run-side-1", disableContinuationTools: true }),
     );
     expect(
       nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayIdDuringFork!),
